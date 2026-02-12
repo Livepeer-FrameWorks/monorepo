@@ -18,7 +18,6 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
-	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
@@ -68,10 +67,12 @@ type federationRPC interface {
 	QueryStream(ctx context.Context, peerClusterID, peerAddr string, req *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error)
 	NotifyOriginPull(ctx context.Context, peerClusterID, peerAddr string, req *pb.OriginPullNotification) (*pb.OriginPullAck, error)
 	PrepareArtifact(ctx context.Context, peerClusterID, peerAddr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error)
+	ForwardArtifactCommand(ctx context.Context, peerClusterID, peerAddr string, req *pb.ForwardArtifactCommandRequest) (*pb.ForwardArtifactCommandResponse, error)
 }
 
 type peerAddrResolver interface {
 	GetPeerAddr(clusterID string) string
+	GetPeers() map[string]string
 }
 
 // FoghornGRPCServer implements the Foghorn control plane gRPC services
@@ -81,6 +82,7 @@ type FoghornGRPCServer struct {
 	pb.UnimplementedViewerControlServiceServer
 	pb.UnimplementedVodControlServiceServer
 	pb.UnimplementedTenantControlServiceServer
+	pb.UnimplementedNodeControlServiceServer
 
 	db               *sql.DB
 	logger           logging.Logger
@@ -133,6 +135,7 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 	pb.RegisterViewerControlServiceServer(grpcServer, s)
 	pb.RegisterVodControlServiceServer(grpcServer, s)
 	pb.RegisterTenantControlServiceServer(grpcServer, s)
+	pb.RegisterNodeControlServiceServer(grpcServer, s)
 }
 
 // enrichClusterID returns the cluster for an operation. Prefers explicit
@@ -177,6 +180,54 @@ func (s *FoghornGRPCServer) SetFederationClient(fc *federation.FederationClient)
 // SetPeerManager enables peer address lookups for federation calls.
 func (s *FoghornGRPCServer) SetPeerManager(pm *federation.PeerManager) {
 	s.peerManager = pm
+}
+
+// forwardArtifactToFederation fans out a ForwardArtifactCommand to all known peers.
+// Returns (handled, error). If any peer reports handled=true, stops immediately.
+func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, command, artifactHash, tenantID, streamID string) (bool, error) {
+	if ctx.Value(ctxkeys.KeyNoForward) != nil {
+		return false, nil
+	}
+	if s.federationClient == nil || s.peerManager == nil {
+		return false, nil
+	}
+	peers := s.peerManager.GetPeers()
+	if len(peers) == 0 {
+		return false, nil
+	}
+
+	req := &pb.ForwardArtifactCommandRequest{
+		Command:      command,
+		ArtifactHash: artifactHash,
+		TenantId:     tenantID,
+		StreamId:     streamID,
+	}
+
+	for clusterID, addr := range peers {
+		if clusterID == s.clusterID {
+			continue
+		}
+		fwdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		resp, err := s.federationClient.ForwardArtifactCommand(fwdCtx, clusterID, addr, req)
+		cancel()
+		if err != nil {
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"peer_cluster":  clusterID,
+				"command":       command,
+				"artifact_hash": artifactHash,
+			}).Debug("Federation forward failed for peer")
+			continue
+		}
+		if resp.GetHandled() {
+			s.logger.WithFields(logging.Fields{
+				"peer_cluster":  clusterID,
+				"command":       command,
+				"artifact_hash": artifactHash,
+			}).Info("Artifact command handled by federation peer")
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // remoteArtifactAdapter wraps RemoteEdgeCache to satisfy control.RemoteArtifactLookup.
@@ -270,9 +321,8 @@ func (s *FoghornGRPCServer) emitDVRStartFailure(req *pb.StartDVRRequest, reason 
 	go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
 }
 
-// emitRoutingEvent sends a LoadBalancingData event with dual-tenant attribution
-// Called after successful viewer endpoint resolution to track routing decisions
-// durationMs is the time taken to resolve the routing decision (request processing latency)
+// emitRoutingEvent sends a routing decision event via the shared builder.
+// Delegates to handlers.SendRoutingEvent with the server's decklog client.
 func (s *FoghornGRPCServer) emitRoutingEvent(
 	primary *pb.ViewerEndpoint,
 	viewerLat, viewerLon, nodeLat, nodeLon float64,
@@ -290,134 +340,25 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 		selectedNode = primary.Url
 	}
 
-	// Calculate routing distance
-	routingDistanceKm := 0.0
-	if geo.IsValidLatLon(viewerLat, viewerLon) && geo.IsValidLatLon(nodeLat, nodeLon) {
-		const toRad = math.Pi / 180.0
-		lat1, lon1 := viewerLat*toRad, viewerLon*toRad
-		lat2, lon2 := nodeLat*toRad, nodeLon*toRad
-		val := math.Sin(lat1)*math.Sin(lat2) + math.Cos(lat1)*math.Cos(lat2)*math.Cos(lon1-lon2)
-		if val > 1 {
-			val = 1
-		} else if val < -1 {
-			val = -1
-		}
-		routingDistanceKm = 6371.0 * math.Acos(val)
-	}
-
-	// Get cached cluster info for dual-tenant attribution
-	clusterID, ownerTenantID := handlers.GetClusterInfo()
-
-	// Bucketize coordinates for privacy
-	clientBucket, clientCentLat, clientCentLon, hasClientBucket := geo.Bucket(viewerLat, viewerLon)
-	nodeBucket, nodeCentLat, nodeCentLon, hasNodeBucket := geo.Bucket(nodeLat, nodeLon)
-
-	event := &pb.LoadBalancingData{
-		SelectedNode:   selectedNode,
-		SelectedNodeId: func() *string { s := primary.NodeId; return &s }(),
-		Latitude: func() float64 {
-			if hasClientBucket {
-				return clientCentLat
-			}
-			return 0
-		}(),
-		Longitude: func() float64 {
-			if hasClientBucket {
-				return clientCentLon
-			}
-			return 0
-		}(),
-		Status:   "success",
-		Details:  "grpc_resolve",
-		Score:    uint64(primary.LoadScore),
-		ClientIp: "", // redacted
-		NodeLatitude: func() float64 {
-			if hasNodeBucket {
-				return nodeCentLat
-			}
-			return 0
-		}(),
-		NodeLongitude: func() float64 {
-			if hasNodeBucket {
-				return nodeCentLon
-			}
-			return 0
-		}(),
-		NodeName: primary.NodeId,
-		RoutingDistanceKm: func() *float64 {
-			if routingDistanceKm == 0 {
-				return nil
-			}
-			return &routingDistanceKm
-		}(),
-		InternalName: func() *string {
-			if internalName != "" {
-				return &internalName
-			}
-			return nil
-		}(),
-		ClientBucket: clientBucket,
-		NodeBucket:   nodeBucket,
-		// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
-		// TenantId = infra owner (cluster operator) for event storage
-		// StreamTenantId = stream owner (customer) for filtering
-		// ClusterId = emitting cluster identifier
-		TenantId: func() *string {
-			if ownerTenantID != "" {
-				return &ownerTenantID
-			}
-			return nil
-		}(),
-		StreamTenantId: func() *string {
-			if streamTenantID != "" {
-				return &streamTenantID
-			}
-			return nil
-		}(),
-		StreamId: func() *string {
-			if streamID != "" {
-				return &streamID
-			}
-			return nil
-		}(),
-		CandidatesCount: func() *uint32 {
-			if candidatesCount > 0 {
-				v := uint32(candidatesCount)
-				return &v
-			}
-			return nil
-		}(),
-		EventType: func() *string {
-			if eventType != "" {
-				return &eventType
-			}
-			return nil
-		}(),
-		Source: func() *string {
-			if source != "" {
-				return &source
-			}
-			return nil
-		}(),
-		ClusterId: func() *string {
-			if clusterID != "" {
-				return &clusterID
-			}
-			return nil
-		}(),
-		LatencyMs: func() *float32 {
-			if durationMs > 0 {
-				return &durationMs
-			}
-			return nil
-		}(),
-	}
-
-	go func() {
-		if err := s.decklogClient.SendLoadBalancing(event); err != nil {
-			s.logger.WithError(err).WithField("internal_name", internalName).Warn("Failed to send gRPC routing event to Decklog")
-		}
-	}()
+	go handlers.SendRoutingEvent(s.decklogClient, &handlers.RoutingEvent{
+		Status:          "success",
+		Details:         "grpc_resolve",
+		Score:           uint64(primary.LoadScore),
+		InternalName:    internalName,
+		StreamID:        streamID,
+		StreamTenantID:  streamTenantID,
+		ClientLat:       viewerLat,
+		ClientLon:       viewerLon,
+		SelectedNode:    selectedNode,
+		SelectedNodeID:  primary.NodeId,
+		NodeLat:         nodeLat,
+		NodeLon:         nodeLon,
+		NodeName:        primary.NodeId,
+		LatencyMs:       durationMs,
+		CandidatesCount: candidatesCount,
+		EventType:       eventType,
+		Source:          source,
+	})
 }
 
 // StartGRPCServer starts the Foghorn gRPC server
@@ -727,10 +668,13 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	err := s.db.QueryRowContext(ctx, `
 		SELECT status, size_bytes, retention_until, internal_name, tenant_id, user_id
 		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'clip'
-	`, req.ClipHash).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID)
+		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
+	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID)
 
 	if errors.Is(err, sql.ErrNoRows) {
+		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), ""); handled {
+			return &pb.DeleteClipResponse{Success: true, Message: "clip deleted via federation"}, nil
+		}
 		return nil, status.Error(codes.NotFound, "clip not found")
 	} else if err != nil {
 		return nil, status.Error(codes.Internal, "failed to check clip existence")
@@ -1141,10 +1085,17 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 	err := s.db.QueryRowContext(ctx, `
 		SELECT status, COALESCE(internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
 		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, req.DvrHash).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
+		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
+	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
 
 	if errors.Is(err, sql.ErrNoRows) {
+		streamID := ""
+		if req.StreamId != nil {
+			streamID = *req.StreamId
+		}
+		if handled, _ := s.forwardArtifactToFederation(ctx, "stop_dvr", req.DvrHash, req.GetTenantId(), streamID); handled {
+			return &pb.StopDVRResponse{Success: true, Message: "DVR stopped via federation"}, nil
+		}
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch DVR artifact")
@@ -1217,10 +1168,13 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	err := s.db.QueryRowContext(ctx, `
 		SELECT status, COALESCE(internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
 		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, req.DvrHash).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
+		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
+	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
 
 	if errors.Is(err, sql.ErrNoRows) {
+		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), ""); handled {
+			return &pb.DeleteDVRResponse{Success: true, Message: "DVR deleted via federation"}, nil
+		}
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch DVR artifact")
@@ -2533,10 +2487,13 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		SELECT a.status, COALESCE(v.s3_key, ''), a.size_bytes, a.retention_until, a.user_id
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod'
-	`, req.ArtifactHash).Scan(&currentStatus, &s3Key, &sizeBytes, &retentionUntil, &userID)
+		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.tenant_id = $2
+	`, req.ArtifactHash, req.GetTenantId()).Scan(&currentStatus, &s3Key, &sizeBytes, &retentionUntil, &userID)
 
 	if errors.Is(err, sql.ErrNoRows) {
+		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), ""); handled {
+			return &pb.DeleteVodAssetResponse{Success: true, Message: "VOD deleted via federation"}, nil
+		}
 		return nil, status.Error(codes.NotFound, "VOD asset not found")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to check VOD asset")
@@ -3102,4 +3059,93 @@ func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *pb.I
 	return &pb.InvalidateTenantCacheResponse{
 		EntriesInvalidated: int32(entriesInvalidated),
 	}, nil
+}
+
+// SetNodeOperationalMode changes a node's operational mode with tenant ownership validation.
+func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *pb.SetNodeModeRequest) (*pb.SetNodeModeResponse, error) {
+	nodeID := strings.TrimSpace(req.GetNodeId())
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+
+	ns := state.DefaultManager().GetNodeState(nodeID)
+	if ns == nil {
+		return nil, status.Error(codes.NotFound, "node not found")
+	}
+
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID != "" && ns.TenantID != "" && ns.TenantID != tenantID {
+		return nil, status.Error(codes.PermissionDenied, "node is not owned by this tenant")
+	}
+
+	mode := state.NodeOperationalMode(strings.ToLower(strings.TrimSpace(req.GetMode())))
+	if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, mode, strings.TrimSpace(req.GetSetBy())); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid mode: %v", err)
+	}
+
+	protoMode := handlers.StateToProtoMode(mode)
+	if err := control.PushOperationalMode(nodeID, protoMode); err != nil {
+		s.logger.WithFields(logging.Fields{
+			"node_id": nodeID,
+			"mode":    mode,
+			"error":   err,
+		}).Warn("Failed to push operational mode to node (may not be connected)")
+	}
+
+	return &pb.SetNodeModeResponse{
+		NodeId:  nodeID,
+		Mode:    string(state.DefaultManager().GetNodeOperationalMode(nodeID)),
+		Message: fmt.Sprintf("Node %s set to %s", nodeID, mode),
+		Status:  pb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS,
+	}, nil
+}
+
+// GetNodeHealth returns real-time health and routing state for a node.
+func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, error) {
+	nodeID := strings.TrimSpace(req.GetNodeId())
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+
+	ns := state.DefaultManager().GetNodeState(nodeID)
+	if ns == nil {
+		return nil, status.Error(codes.NotFound, "node not found")
+	}
+
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID != "" && ns.TenantID != "" && ns.TenantID != tenantID {
+		return nil, status.Error(codes.PermissionDenied, "node is not owned by this tenant")
+	}
+
+	lastHB := ""
+	if !ns.LastHeartbeat.IsZero() {
+		lastHB = ns.LastHeartbeat.UTC().Format(time.RFC3339)
+	}
+
+	resp := &pb.GetNodeHealthResponse{
+		NodeId:            nodeID,
+		OperationalMode:   string(state.DefaultManager().GetNodeOperationalMode(nodeID)),
+		IsHealthy:         ns.IsHealthy && !ns.IsStale,
+		ActiveViewers:     int32(state.DefaultManager().GetNodeActiveViewers(nodeID)),
+		ActiveStreams:     int32(state.DefaultManager().GetNodeActiveStreams(nodeID)),
+		LastHeartbeat:     lastHB,
+		ClusterId:         ns.ClusterID,
+		TenantId:          ns.TenantID,
+		CpuPercent:        ns.CPU,
+		RamUsedMb:         ns.RAMCurrent,
+		RamMaxMb:          ns.RAMMax,
+		BandwidthUpMbps:   ns.UpSpeed,
+		BandwidthDownMbps: ns.DownSpeed,
+		BwLimitMbps:       ns.BWLimit,
+		DiskTotalBytes:    ns.DiskTotalBytes,
+		DiskUsedBytes:     ns.DiskUsedBytes,
+		Location:          ns.Location,
+	}
+	if ns.Latitude != nil {
+		resp.Latitude = ns.Latitude
+	}
+	if ns.Longitude != nil {
+		resp.Longitude = ns.Longitude
+	}
+	return resp, nil
 }

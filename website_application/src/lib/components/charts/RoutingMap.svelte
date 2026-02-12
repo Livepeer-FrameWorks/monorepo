@@ -10,6 +10,14 @@
   // Leaflet is client-side only
   let L: typeof import("leaflet") | null = null;
 
+  function escapeHtml(s: string): string {
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
   // Icons for controls
   const MaximizeIcon = getIconComponent("Maximize2");
   const MinimizeIcon = getIconComponent("Minimize2");
@@ -45,12 +53,40 @@
     color?: string;
   }
 
+  interface ClusterMarker {
+    id: string;
+    name: string;
+    region: string;
+    lat: number;
+    lng: number;
+    nodeCount: number;
+    healthyNodeCount: number;
+    status: string;
+    activeStreams: number;
+    activeViewers: number;
+  }
+
+  interface RelationshipLine {
+    from: [number, number];
+    to: [number, number];
+    type: "peering" | "traffic" | "replication";
+    active: boolean;
+    weight?: number;
+    metrics?: {
+      eventCount?: number;
+      avgLatencyMs?: number;
+      successRate?: number;
+    };
+  }
+
   interface Props {
     routes: Route[];
     nodes: NodeLocation[];
     buckets?: BucketPolygon[];
     onBucketClick?: (id: string) => void;
     flows?: Flow[];
+    clusters?: ClusterMarker[];
+    relationships?: RelationshipLine[]; // TODO: wire up from federation API
     height?: number;
     zoom?: number;
     center?: [number, number];
@@ -63,6 +99,8 @@
     buckets = [],
     onBucketClick = undefined,
     flows = [],
+    clusters = [],
+    relationships = [],
     height = 500,
     zoom = 2,
     center = [20, 0],
@@ -75,6 +113,8 @@
   let layerGroup: LayerGroup | null = null;
   let bucketLayer: LayerGroup | null = null;
   let flowLayer: LayerGroup | null = null;
+  let clusterLayer: LayerGroup | null = null;
+  let relationshipLayer: LayerGroup | null = null;
 
   // UX state
   let isFullscreen = $state(false);
@@ -127,9 +167,11 @@
     // Order matters: First added is at the bottom
     bucketLayer = L.layerGroup().addTo(map);
     flowLayer = L.layerGroup().addTo(map);
+    relationshipLayer = L.layerGroup().addTo(map);
+    clusterLayer = L.layerGroup().addTo(map);
     layerGroup = L.layerGroup().addTo(map);
 
-    drawMap(routes, nodes, buckets, flows);
+    drawMap(routes, nodes, buckets, flows, clusters, relationships);
   }
 
   function handleWheel(e: WheelEvent) {
@@ -157,36 +199,24 @@
     currentRoutes: Route[],
     currentNodes: NodeLocation[],
     currentBuckets: BucketPolygon[],
-    currentFlows: Flow[]
+    currentFlows: Flow[],
+    currentClusters: ClusterMarker[] = [],
+    currentRelationships: RelationshipLine[] = []
   ) {
-    console.log("[drawMap] called with:", {
-      routes: currentRoutes.length,
-      nodes: currentNodes.length,
-      buckets: currentBuckets.length,
-      flows: currentFlows.length,
-    });
-
-    if (!map || !L) {
-      console.log("[drawMap] early return - no map or L");
-      return;
-    }
-
-    console.log("[drawMap] removing and recreating layers...");
+    if (!map || !L) return;
 
     // Remove old layer groups from map entirely
-    if (bucketLayer) {
-      map.removeLayer(bucketLayer);
-    }
-    if (flowLayer) {
-      map.removeLayer(flowLayer);
-    }
-    if (layerGroup) {
-      map.removeLayer(layerGroup);
-    }
+    if (bucketLayer) map.removeLayer(bucketLayer);
+    if (flowLayer) map.removeLayer(flowLayer);
+    if (relationshipLayer) map.removeLayer(relationshipLayer);
+    if (clusterLayer) map.removeLayer(clusterLayer);
+    if (layerGroup) map.removeLayer(layerGroup);
 
-    // Recreate layer groups
+    // Recreate layer groups (order = z-order)
     bucketLayer = L.layerGroup().addTo(map);
     flowLayer = L.layerGroup().addTo(map);
+    relationshipLayer = L.layerGroup().addTo(map);
+    clusterLayer = L.layerGroup().addTo(map);
     layerGroup = L.layerGroup().addTo(map);
 
     // 0. Draw bucket polygons first (optional)
@@ -271,27 +301,91 @@
 
       L.marker(route.from, { icon: clientIcon }).addTo(layerGroup!);
     });
+
+    // 3. Draw relationship lines between clusters
+    currentRelationships.forEach((rel) => {
+      const colorMap = {
+        peering: "rgba(59, 130, 246, 0.6)",
+        traffic: "rgba(34, 197, 94, 0.5)",
+        replication: "rgba(168, 85, 247, 0.5)",
+      };
+      const lineColor = colorMap[rel.type] || "rgba(148, 163, 184, 0.4)";
+      const lineWeight = rel.active ? Math.max(1.5, Math.min(4, (rel.weight ?? 1) * 0.5)) : 1;
+
+      const line = L.polyline([rel.from, rel.to], {
+        color: lineColor,
+        weight: lineWeight,
+        opacity: rel.active ? 0.7 : 0.3,
+        dashArray: rel.type === "peering" ? "8 4" : undefined,
+        smoothFactor: 1,
+      });
+
+      if (rel.metrics) {
+        const parts: string[] = [];
+        if (rel.metrics.eventCount != null) parts.push(`Events: ${rel.metrics.eventCount}`);
+        if (rel.metrics.avgLatencyMs != null)
+          parts.push(`Latency: ${rel.metrics.avgLatencyMs.toFixed(1)}ms`);
+        if (rel.metrics.successRate != null)
+          parts.push(`Success: ${(rel.metrics.successRate * 100).toFixed(1)}%`);
+        if (parts.length > 0) {
+          line.bindTooltip(parts.join("<br>"), {
+            direction: "center",
+            className: "dark-tooltip",
+          });
+        }
+      }
+
+      line.addTo(relationshipLayer!);
+    });
+
+    // 4. Draw cluster markers
+    currentClusters.forEach((cluster) => {
+      const statusColors: Record<string, string> = {
+        operational: "rgb(34, 197, 94)",
+        degraded: "rgb(234, 179, 8)",
+        down: "rgb(239, 68, 68)",
+      };
+      const color = statusColors[cluster.status] || "rgb(148, 163, 184)";
+      const radius = Math.max(8, Math.min(20, 8 + cluster.nodeCount * 2));
+
+      const icon = L.divIcon({
+        className: "cluster-marker",
+        html: `<div style="
+          width: ${radius * 2}px; height: ${radius * 2}px; border-radius: 50%;
+          background: radial-gradient(circle, ${color}40, ${color}15);
+          border: 2px solid ${color};
+          display: flex; align-items: center; justify-content: center;
+          font-size: 10px; font-weight: 600; color: ${color};
+        ">${cluster.nodeCount}</div>`,
+        iconSize: [radius * 2, radius * 2],
+        iconAnchor: [radius, radius],
+      });
+
+      L.marker([cluster.lat, cluster.lng], { icon })
+        .bindTooltip(
+          `<b>${escapeHtml(cluster.name)}</b><br>` +
+            `Region: ${escapeHtml(cluster.region)}<br>` +
+            `Nodes: ${cluster.healthyNodeCount}/${cluster.nodeCount}<br>` +
+            `Status: ${escapeHtml(cluster.status)}`,
+          { direction: "top", className: "dark-tooltip" }
+        )
+        .addTo(clusterLayer!);
+    });
   }
 
-  // Use $derived to force reactivity tracking
   let drawTrigger = $derived({
     routesLen: routes.length,
     nodesLen: nodes.length,
     bucketsLen: buckets.length,
     flowsLen: flows.length,
+    clustersLen: clusters.length,
+    relationshipsLen: relationships.length,
   });
 
   $effect(() => {
-    // Access drawTrigger to create dependency
-    const trigger = drawTrigger;
-
-    console.log("[RoutingMap] Effect triggered", {
-      mapExists: !!map,
-      trigger,
-    });
-
+    const _trigger = drawTrigger;
     if (map) {
-      drawMap(routes, nodes, buckets, flows);
+      drawMap(routes, nodes, buckets, flows, clusters, relationships);
     }
   });
 </script>
@@ -302,7 +396,7 @@
   class:map-wrapper--fullscreen={isFullscreen}
   style="height: {isFullscreen ? '100%' : `${height}px`};"
 >
-  {#if routes.length === 0 && nodes.length === 0}
+  {#if routes.length === 0 && nodes.length === 0 && clusters.length === 0}
     <div class="empty-state">
       <span class="text-muted-foreground text-sm">No routing data available</span>
     </div>

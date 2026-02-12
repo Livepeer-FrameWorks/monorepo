@@ -1057,6 +1057,18 @@ func (sm *StreamStateManager) GetNodeActiveViewers(nodeID string) int {
 	return total
 }
 
+func (sm *StreamStateManager) GetNodeActiveStreams(nodeID string) int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	total := 0
+	for _, nodes := range sm.streamInstances {
+		if inst := nodes[nodeID]; inst != nil && inst.TotalConnections > 0 {
+			total++
+		}
+	}
+	return total
+}
+
 // SetNodeGPUInfo updates GPU information for a node
 func (sm *StreamStateManager) SetNodeGPUInfo(nodeID string, gpuVendor string, gpuCount int, gpuMemMB int, gpuCC string) {
 	sm.mu.Lock()

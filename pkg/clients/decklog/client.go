@@ -553,6 +553,43 @@ func (c *BatchedClient) SendMessageLifecycle(data *pb.MessageLifecycleData) erro
 	return nil
 }
 
+// SendFederationEvent sends a federation operation event to Decklog
+func (c *BatchedClient) SendFederationEvent(data *pb.FederationEventData) error {
+	ctx := c.authContext()
+	trigger := &pb.MistTrigger{
+		TriggerType: "FEDERATION_EVENT",
+		TenantId:    data.TenantId,
+		TriggerPayload: &pb.MistTrigger_FederationEventData{
+			FederationEventData: data,
+		},
+	}
+	if data.GetStreamId() != "" {
+		streamID := data.GetStreamId()
+		trigger.StreamId = &streamID
+	}
+	if data.GetLocalCluster() != "" {
+		clusterID := data.GetLocalCluster()
+		trigger.ClusterId = &clusterID
+	}
+	_, err := c.client.SendEvent(ctx, trigger)
+	if err != nil {
+		c.logger.WithFields(logging.Fields{
+			"event_type":    data.GetEventType().String(),
+			"local_cluster": data.GetLocalCluster(),
+			"error":         err,
+		}).Error("Failed to send federation event to Decklog")
+		return fmt.Errorf("failed to send federation event: %w", err)
+	}
+
+	c.logger.WithFields(logging.Fields{
+		"event_type":     data.GetEventType().String(),
+		"local_cluster":  data.GetLocalCluster(),
+		"remote_cluster": data.GetRemoteCluster(),
+	}).Debug("Federation event sent to Decklog")
+
+	return nil
+}
+
 // SendServiceEvent sends a service-plane event to Decklog (service_events topic).
 func (c *BatchedClient) SendServiceEvent(event *pb.ServiceEvent) error {
 	ctx := c.authContext()

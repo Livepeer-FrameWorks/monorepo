@@ -18,7 +18,6 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
-	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
@@ -56,7 +55,21 @@ var (
 	// ownerTenantID = cluster operator tenant (infra owner) for event storage
 	clusterID     string
 	ownerTenantID string
+	// Self-geo: cached from infrastructure_nodes.external_ip via GeoIP on bootstrap
+	selfLat      float64
+	selfLon      float64
+	selfLocation string
 )
+
+func SetSelfGeo(lat, lon float64, location string) {
+	selfLat = lat
+	selfLon = lon
+	selfLocation = location
+}
+
+func GetSelfGeo() (float64, float64, string) {
+	return selfLat, selfLon, selfLocation
+}
 
 // GetClusterInfo returns cached cluster attribution info for dual-tenant routing events
 // Returns (clusterID, ownerTenantID) - used by gRPC server for event emission
@@ -70,7 +83,8 @@ func bootstrapClusterInfo(ctx context.Context) error {
 	}
 	advertiseHost := config.GetEnv("FOGHORN_HOST", "foghorn")
 	reqClusterID := config.GetEnv("CLUSTER_ID", "")
-	resp, err := quartermasterClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+	nodeID := config.GetEnv("NODE_ID", "")
+	req := &pb.BootstrapServiceRequest{
 		Type:           "foghorn",
 		Version:        version.Version,
 		Protocol:       "http",
@@ -83,7 +97,11 @@ func bootstrapClusterInfo(ctx context.Context) error {
 			}
 			return nil
 		}(),
-	})
+	}
+	if nodeID != "" {
+		req.NodeId = &nodeID
+	}
+	resp, err := quartermasterClient.BootstrapService(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -105,6 +123,25 @@ func bootstrapClusterInfo(ctx context.Context) error {
 		clusterID = resp.ClusterId
 		if triggerProcessor != nil {
 			triggerProcessor.SetClusterID(clusterID)
+		}
+	}
+
+	if node := resp.GetNode(); node != nil && node.ExternalIp != nil && geoipReader != nil {
+		if result := geoipReader.Lookup(*node.ExternalIp); result != nil {
+			loc := result.City
+			if result.CountryName != "" {
+				if loc != "" {
+					loc += ", "
+				}
+				loc += result.CountryName
+			}
+			SetSelfGeo(result.Latitude, result.Longitude, loc)
+			logger.WithFields(logging.Fields{
+				"lat":      result.Latitude,
+				"lon":      result.Longitude,
+				"location": loc,
+				"node_id":  nodeID,
+			}).Info("Foghorn self-geo resolved from infrastructure node")
 		}
 	}
 	return nil
@@ -1080,8 +1117,8 @@ type nodeOperationalModeRequest struct {
 	SetBy string `json:"set_by"`
 }
 
-// stateToProtoMode converts internal state mode to protobuf enum
-func stateToProtoMode(mode state.NodeOperationalMode) pb.NodeOperationalMode {
+// StateToProtoMode converts internal state mode to protobuf enum
+func StateToProtoMode(mode state.NodeOperationalMode) pb.NodeOperationalMode {
 	switch mode {
 	case state.NodeModeDraining:
 		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
@@ -1112,7 +1149,7 @@ func HandleSetNodeMaintenanceMode(c *gin.Context) {
 	}
 
 	// Push mode to connected Helmsman via ConfigSeed
-	protoMode := stateToProtoMode(mode)
+	protoMode := StateToProtoMode(mode)
 	if err := control.PushOperationalMode(nodeID, protoMode); err != nil {
 		// Log but don't fail - node might not be connected, will get mode on next connect
 		logger.WithFields(logging.Fields{
@@ -1253,9 +1290,9 @@ func handleListServers(c *gin.Context) {
 
 // resolveRemoteSource attempts cross-cluster source lookup when no local node has the stream.
 // Returns a DTSC URL from the origin cluster, or empty string if unavailable.
-func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float64) string {
+func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float64) (dtscURL, remoteCluster string) {
 	if federationClient == nil || peerManager == nil {
-		return ""
+		return "", ""
 	}
 
 	internalName := mist.ExtractInternalName(streamName)
@@ -1278,12 +1315,12 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 	}
 
 	if originClusterID == "" || originClusterID == clusterID {
-		return ""
+		return "", ""
 	}
 
 	addr := peerManager.GetPeerAddr(originClusterID)
 	if addr == "" {
-		return ""
+		return "", ""
 	}
 
 	resp, err := federationClient.QueryStream(ctx, originClusterID, addr, &pb.QueryStreamRequest{
@@ -1295,7 +1332,7 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 		IsSourceSelection: true,
 	})
 	if err != nil || resp == nil || len(resp.Candidates) == 0 {
-		return ""
+		return "", ""
 	}
 
 	// Prefer origin node (has active input), otherwise best scored
@@ -1307,7 +1344,7 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 		}
 	}
 
-	return best.DtscUrl
+	return best.DtscUrl, originClusterID
 }
 
 // handleGetSource implements /?source=<stream> (EXACT C++ implementation)
@@ -1339,7 +1376,8 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
 	if err != nil {
 		// Cross-cluster source lookup: check if stream origin is on a remote peer
-		if remoteDTSC := resolveRemoteSource(ctx, streamName, lat, lon); remoteDTSC != "" {
+		remoteDTSC, remoteCluster := resolveRemoteSource(ctx, streamName, lat, lon)
+		if remoteDTSC != "" {
 			durationMs := float32(time.Since(start).Milliseconds())
 			if metrics != nil {
 				metrics.RoutingDecisions.WithLabelValues("source", "remote").Inc()
@@ -1349,7 +1387,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 				"stream":   streamName,
 				"dtsc_url": remoteDTSC,
 			}).Info("Source lookup: resolved via cross-cluster federation")
-			go postBalancingEvent(c, streamName, "remote", 0, lat, lon, "remote_source", remoteDTSC, 0, 0, "", durationMs)
+			go postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "remote_source", remoteDTSC, 0, 0, "", durationMs, remoteCluster)
 			c.String(http.StatusOK, remoteDTSC)
 			return
 		}
@@ -1661,11 +1699,11 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 							if vars := c.Request.URL.RawQuery; vars != "" {
 								redirectURL += "?" + vars
 							}
-							go postBalancingEvent(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", redirectURL, bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs)
+							go postBalancingEventEx(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", redirectURL, bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs, bestRemote.ClusterID)
 							c.Header("Location", redirectURL)
 							c.String(http.StatusTemporaryRedirect, redirectURL)
 						} else {
-							go postBalancingEvent(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", "", bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs)
+							go postBalancingEventEx(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", "", bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs, bestRemote.ClusterID)
 							c.String(http.StatusOK, bestRemote.Host)
 						}
 						return
@@ -1688,7 +1726,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 					c.String(http.StatusOK, u.Host)
 
 					durationMs := float32(time.Since(start).Milliseconds())
-					go postBalancingEvent(c, internalName, u.Host, 0, lat, lon, "cross_cluster_dtsc", record.DTSCURL, 0, 0, "", durationMs)
+					go postBalancingEventEx(c, internalName, u.Host, 0, lat, lon, "cross_cluster_dtsc", record.DTSCURL, 0, 0, "", durationMs, record.SourceCluster)
 					return
 				}
 			}
@@ -1751,15 +1789,97 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	go postBalancingEvent(c, internalName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
 }
 
-// postBalancingEvent posts load balancing decisions to Decklog via gRPC
-// durationMs is the time taken to resolve the routing decision (request processing latency)
-func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32) {
+// emitFederationEvent sends a federation lifecycle event to Decklog.
+// Automatically enriches with local/remote geo from cached self-geo and peer geo.
+func emitFederationEvent(data *pb.FederationEventData) {
+	if decklogClient == nil {
+		return
+	}
+	if data.TenantId == nil && ownerTenantID != "" {
+		data.TenantId = &ownerTenantID
+	}
+	if data.LocalCluster == "" {
+		data.LocalCluster = clusterID
+	}
+	if data.LocalLat == nil && (selfLat != 0 || selfLon != 0) {
+		data.LocalLat = &selfLat
+		data.LocalLon = &selfLon
+	}
+	if data.RemoteLat == nil && data.RemoteCluster != "" && peerManager != nil {
+		rLat, rLon := peerManager.GetPeerGeo(data.RemoteCluster)
+		if rLat != 0 || rLon != 0 {
+			data.RemoteLat = &rLat
+			data.RemoteLon = &rLon
+		}
+	}
+	go func() {
+		if err := decklogClient.SendFederationEvent(data); err != nil {
+			logger.WithError(err).Debug("Failed to emit federation event")
+		}
+	}()
+}
 
-	// Extract client IP in priority order:
-	// 1. CF-Connecting-IP (Cloudflare's real client IP, most accurate when behind CF)
-	// 2. X-Forwarded-For (standard proxy header)
-	// 3. X-Real-IP (nginx convention)
-	// 4. Direct connection IP
+// sendRoutingEvent builds a LoadBalancingData proto from a RoutingEvent and
+// sends it to Decklog. Shared by all routing emission paths (legacy balance,
+// viewer playback HTTP, gRPC).
+func sendRoutingEvent(e *RoutingEvent) {
+	if decklogClient == nil {
+		logger.Error("Decklog gRPC client not initialized")
+		return
+	}
+
+	event := BuildLoadBalancingData(e)
+
+	if e.StreamID == "" {
+		logger.WithField("stream_name", e.StreamName).Warn("LoadBalancingData missing stream_id")
+	}
+
+	if err := decklogClient.SendLoadBalancing(event); err != nil {
+		logger.WithFields(logging.Fields{
+			"error":       err,
+			"stream_name": e.StreamName,
+			"node":        e.SelectedNode,
+		}).Error("Failed to send routing event to Decklog")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"stream_name": e.StreamName,
+		"node":        e.SelectedNode,
+		"status":      e.Status,
+	}).Info("Routing event sent to Decklog")
+}
+
+// SendRoutingEvent is the exported version for use by the gRPC server.
+// The caller must provide a *decklog.BatchedClient since the gRPC server
+// uses an instance-level client rather than the package-level one.
+func SendRoutingEvent(client *decklog.BatchedClient, e *RoutingEvent) {
+	if client == nil {
+		return
+	}
+
+	event := BuildLoadBalancingData(e)
+
+	if err := client.SendLoadBalancing(event); err != nil {
+		logger.WithFields(logging.Fields{
+			"error":       err,
+			"stream_name": e.StreamName,
+			"node":        e.SelectedNode,
+		}).Warn("Failed to send routing event to Decklog")
+	}
+}
+
+// postBalancingEvent enriches a routing decision with gin request context
+// (client IP, country, GeoIP fallback, Commodore tenant resolution) and
+// sends it to Decklog. Used by the legacy /balance HTTP endpoint.
+func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32) {
+	postBalancingEventEx(c, streamName, selectedNode, score, lat, lon, status, details, nodeLat, nodeLon, nodeName, durationMs, "")
+}
+
+// postBalancingEventEx is postBalancingEvent with an explicit remoteClusterID
+// for cross-cluster routing decisions.
+func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32, remoteClusterID string) {
+	// Extract client IP: CF-Connecting-IP > X-Forwarded-For > X-Real-IP > direct
 	clientIP := c.GetHeader("CF-Connecting-IP")
 	if clientIP == "" {
 		clientIP = c.GetHeader("X-Forwarded-For")
@@ -1771,13 +1891,11 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 		clientIP = c.ClientIP()
 	}
 
-	// Extract country/region from headers if available (set by Cloudflare/nginx)
+	// Country: CF-IPCountry > X-Country-Code > GeoIP fallback
 	country := c.GetHeader("CF-IPCountry")
 	if country == "" {
 		country = c.GetHeader("X-Country-Code")
 	}
-
-	// If no geo headers and geoip is available, use fallback geo enrichment
 	if country == "" && geoipReader != nil && clientIP != "" {
 		if geoData := geoip.LookupCached(c.Request.Context(), geoipReader, geoipCache, clientIP); geoData != nil {
 			country = geoData.CountryCode
@@ -1787,11 +1905,11 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 				"city":         geoData.City,
 				"latitude":     geoData.Latitude,
 				"longitude":    geoData.Longitude,
-			}).Info("Used GeoIP fallback for load balancing event")
+			}).Debug("GeoIP fallback for routing event")
 		}
 	}
 
-	// Determine NodeID for selected node if known
+	// Resolve node ID from load balancer
 	selectedNodeID := ""
 	if lb != nil {
 		if id := lb.GetNodeIDByHost(selectedNode); id != "" {
@@ -1799,28 +1917,8 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 		}
 	}
 
-	// Compute routing distance if we have both points
-	routingDistanceKm := 0.0
-	if geo.IsValidLatLon(lat, lon) && geo.IsValidLatLon(nodeLat, nodeLon) {
-		const toRad = math.Pi / 180.0
-		lat1 := lat * toRad
-		lon1 := lon * toRad
-		lat2 := nodeLat * toRad
-		lon2 := nodeLon * toRad
-		val := math.Sin(lat1)*math.Sin(lat2) + math.Cos(lat1)*math.Cos(lat2)*math.Cos(lon1-lon2)
-		if val > 1 {
-			val = 1
-		}
-		if val < -1 {
-			val = -1
-		}
-		angle := math.Acos(val)
-		routingDistanceKm = 6371.0 * angle
-	}
-
 	// Enrich with tenant info via Commodore
-	// MistServer sends stream names with live+/vod+ prefix; strip it for DB lookup
-	var tenantID, internalName, streamID string
+	var streamTenantID, internalName, streamID string
 	if commodoreClient != nil && streamName != "" {
 		bareInternal := mist.ExtractInternalName(streamName)
 		var resolveResp *pb.ResolveInternalNameResponse
@@ -1837,7 +1935,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 			}
 		}
 		if err == nil && resolveResp != nil {
-			tenantID = resolveResp.TenantId
+			streamTenantID = resolveResp.TenantId
 			internalName = resolveResp.InternalName
 			streamID = resolveResp.StreamId
 		} else {
@@ -1845,126 +1943,30 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 		}
 	}
 
-	// Bucketize client/node coords (privacy); also derive coarse centroids for compatibility
-	clientBucket, clientCentLat, clientCentLon, hasClientBucket := geo.Bucket(lat, lon)
-	nodeBucket, nodeCentLat, nodeCentLon, hasNodeBucket := geo.Bucket(nodeLat, nodeLon)
-
-	// Create LoadBalancingData event
-	event := &pb.LoadBalancingData{
-		SelectedNode:   selectedNode,
-		SelectedNodeId: func() *string { s := selectedNodeID; return &s }(),
-		// Use bucket centroids instead of raw coordinates
-		Latitude: func() float64 {
-			if hasClientBucket {
-				return clientCentLat
-			}
-			return 0
-		}(),
-		Longitude: func() float64 {
-			if hasClientBucket {
-				return clientCentLon
-			}
-			return 0
-		}(),
-		Status:        status,
-		Details:       details,
-		Score:         score,
-		ClientIp:      clientIP,
-		ClientCountry: country,
-		NodeLatitude: func() float64 {
-			if hasNodeBucket {
-				return nodeCentLat
-			}
-			return 0
-		}(),
-		NodeLongitude: func() float64 {
-			if hasNodeBucket {
-				return nodeCentLon
-			}
-			return 0
-		}(),
-		NodeName: nodeName,
-		RoutingDistanceKm: func() *float64 {
-			d := routingDistanceKm
-			if d == 0 {
-				return nil
-			}
-			return &d
-		}(),
-		ClientBucket: clientBucket,
-		NodeBucket:   nodeBucket,
-		InternalName: func() *string {
-			if internalName != "" {
-				return &internalName
-			}
-			return nil
-		}(),
-		// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
-		// TenantId = infra owner (cluster operator) for event storage
-		// StreamTenantId = stream owner (customer) for filtering
-		// ClusterId = emitting cluster identifier
-		TenantId: func() *string {
-			if ownerTenantID != "" {
-				return &ownerTenantID
-			}
-			return nil
-		}(),
-		StreamTenantId: func() *string {
-			if tenantID != "" {
-				return &tenantID
-			}
-			return nil
-		}(),
-		StreamId: func() *string {
-			if streamID != "" {
-				return &streamID
-			}
-			return nil
-		}(),
-		ClusterId: func() *string {
-			if clusterID != "" {
-				return &clusterID
-			}
-			return nil
-		}(),
-		LatencyMs: func() *float32 {
-			if durationMs > 0 {
-				return &durationMs
-			}
-			return nil
-		}(),
-	}
-
-	if decklogClient == nil {
-		logger.Error("Decklog gRPC client not initialized")
-		return
-	}
-
-	if streamID == "" {
-		logger.WithField("stream_name", streamName).Warn("LoadBalancingData missing stream_id")
-	}
-
-	// Send event via gRPC
-	err := decklogClient.SendLoadBalancing(event)
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"error":       err,
-			"stream_name": streamName,
-			"node":        selectedNode,
-		}).Error("Failed to send balancing event to Decklog")
-		return
-	}
-
-	logger.WithFields(logging.Fields{
-		"stream_name": streamName,
-		"node":        selectedNode,
-		"status":      status,
-	}).Info("Successfully sent balancing event to Decklog")
+	sendRoutingEvent(&RoutingEvent{
+		Status:          status,
+		Details:         details,
+		Score:           score,
+		StreamName:      streamName,
+		InternalName:    internalName,
+		StreamID:        streamID,
+		StreamTenantID:  streamTenantID,
+		ClientIP:        clientIP,
+		ClientCountry:   country,
+		ClientLat:       lat,
+		ClientLon:       lon,
+		SelectedNode:    selectedNode,
+		SelectedNodeID:  selectedNodeID,
+		NodeLat:         nodeLat,
+		NodeLon:         nodeLon,
+		NodeName:        nodeName,
+		LatencyMs:       durationMs,
+		RemoteClusterID: remoteClusterID,
+	})
 }
 
-// emitViewerRoutingEvent posts a routing decision for viewer playback (used by gRPC + generic HTTP helpers)
-// Keeps it minimal to avoid duplicating the legacy postBalancingEvent gin-specific code.
-// durationMs is the time taken to resolve the routing decision (request processing latency)
+// emitViewerRoutingEvent posts a routing decision for viewer playback.
+// Extracts node identity from the ViewerEndpoint proto and delegates to sendRoutingEvent.
 func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID string, durationMs float32, candidatesCount int32, eventType, source string) {
 	if decklogClient == nil || primary == nil {
 		return
@@ -1975,144 +1977,26 @@ func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEnd
 		selectedNode = primary.Url
 	}
 
-	selectedNodeID := primary.NodeId
-
-	routingDistanceKm := 0.0
-	if geo.IsValidLatLon(viewerLat, viewerLon) && geo.IsValidLatLon(nodeLat, nodeLon) {
-		const toRad = math.Pi / 180.0
-		lat1 := viewerLat * toRad
-		lon1 := viewerLon * toRad
-		lat2 := nodeLat * toRad
-		lon2 := nodeLon * toRad
-		val := math.Sin(lat1)*math.Sin(lat2) + math.Cos(lat1)*math.Cos(lat2)*math.Cos(lon1-lon2)
-		if val > 1 {
-			val = 1
-		}
-		if val < -1 {
-			val = -1
-		}
-		angle := math.Acos(val)
-		routingDistanceKm = 6371.0 * angle
-	}
-
-	var internalNamePtr *string
-	if internalName != "" {
-		internalNamePtr = &internalName
-	}
-
-	var selectedNodeIDPtr *string
-	if selectedNodeID != "" {
-		selectedNodeIDPtr = &selectedNodeID
-	}
-
-	clientBucket, clientCentLat, clientCentLon, hasClientBucket := geo.Bucket(viewerLat, viewerLon)
-	nodeBucket, nodeCentLat, nodeCentLon, hasNodeBucket := geo.Bucket(nodeLat, nodeLon)
-
-	event := &pb.LoadBalancingData{
-		SelectedNode: selectedNode,
-		Latitude: func() float64 {
-			if hasClientBucket {
-				return clientCentLat
-			}
-			return 0
-		}(),
-		Longitude: func() float64 {
-			if hasClientBucket {
-				return clientCentLon
-			}
-			return 0
-		}(),
-		Status:   "success",
-		Details:  "play_rewrite",
-		Score:    uint64(primary.LoadScore),
-		ClientIp: "", // redact
-		NodeLatitude: func() float64 {
-			if hasNodeBucket {
-				return nodeCentLat
-			}
-			return 0
-		}(),
-		NodeLongitude: func() float64 {
-			if hasNodeBucket {
-				return nodeCentLon
-			}
-			return 0
-		}(),
-		NodeName:       primary.NodeId,
-		SelectedNodeId: selectedNodeIDPtr,
-		RoutingDistanceKm: func() *float64 {
-			if routingDistanceKm == 0 {
-				return nil
-			}
-			return &routingDistanceKm
-		}(),
-		InternalName: internalNamePtr,
-		ClientBucket: clientBucket,
-		NodeBucket:   nodeBucket,
-		// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
-		// TenantId = infra owner (cluster operator) for event storage
-		// StreamTenantId = stream owner (customer) for filtering
-		// ClusterId = emitting cluster identifier
-		TenantId: func() *string {
-			if ownerTenantID != "" {
-				return &ownerTenantID
-			}
-			return nil
-		}(),
-		StreamTenantId: func() *string {
-			if streamTenantID != "" {
-				return &streamTenantID
-			}
-			return nil
-		}(),
-		StreamId: func() *string {
-			if streamID != "" {
-				return &streamID
-			}
-			return nil
-		}(),
-		CandidatesCount: func() *uint32 {
-			if candidatesCount > 0 {
-				v := uint32(candidatesCount)
-				return &v
-			}
-			return nil
-		}(),
-		EventType: func() *string {
-			if eventType != "" {
-				return &eventType
-			}
-			return nil
-		}(),
-		Source: func() *string {
-			if source != "" {
-				return &source
-			}
-			return nil
-		}(),
-		ClusterId: func() *string {
-			if clusterID != "" {
-				return &clusterID
-			}
-			return nil
-		}(),
-		LatencyMs: func() *float32 {
-			if durationMs > 0 {
-				return &durationMs
-			}
-			return nil
-		}(),
-	}
-
-	if streamID == "" {
-		logger.WithField("content_id", req.GetContentId()).Warn("LoadBalancingData missing stream_id")
-	}
-
-	go func() {
-		if err := decklogClient.SendLoadBalancing(event); err != nil {
-			logger.WithError(err).WithField("content_id", req.GetContentId()).Warn("Failed to send viewer routing event to Decklog")
-		}
-	}()
+	go sendRoutingEvent(&RoutingEvent{
+		Status:          "success",
+		Details:         "play_rewrite",
+		Score:           uint64(primary.LoadScore),
+		StreamName:      req.GetContentId(),
+		InternalName:    internalName,
+		StreamID:        streamID,
+		StreamTenantID:  streamTenantID,
+		ClientLat:       viewerLat,
+		ClientLon:       viewerLon,
+		SelectedNode:    selectedNode,
+		SelectedNodeID:  primary.NodeId,
+		NodeLat:         nodeLat,
+		NodeLon:         nodeLon,
+		NodeName:        primary.NodeId,
+		LatencyMs:       durationMs,
+		CandidatesCount: candidatesCount,
+		EventType:       eventType,
+		Source:          source,
+	})
 }
 
 // Helper functions
@@ -2484,6 +2368,13 @@ func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteClus
 	if replications, _ := remoteEdgeCache.GetRemoteReplications(ctx, internalName); len(replications) > 0 {
 		for _, r := range replications {
 			if r.ClusterID == remoteCluster {
+				emitFederationEvent(&pb.FederationEventData{
+					EventType:                  pb.FederationEventType_REPLICATION_LOOP_PREVENTED,
+					RemoteCluster:              remoteCluster,
+					StreamName:                 &internalName,
+					BlockedCluster:             &remoteCluster,
+					ExistingReplicationCluster: &r.ClusterID,
+				})
 				return nil
 			}
 		}
@@ -2516,6 +2407,17 @@ func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteClus
 		TenantId:      tenantID,
 	})
 	if err != nil || !ack.GetAccepted() {
+		reason := "rejected"
+		if err != nil {
+			reason = err.Error()
+		}
+		emitFederationEvent(&pb.FederationEventData{
+			EventType:     pb.FederationEventType_ORIGIN_PULL_FAILED,
+			RemoteCluster: remoteCluster,
+			StreamName:    &internalName,
+			SourceNode:    &remote.NodeId,
+			FailureReason: &reason,
+		})
 		return nil
 	}
 
@@ -2539,6 +2441,15 @@ func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteClus
 		"dest_node":      localNodeID,
 		"dtsc_url":       ack.DtscUrl,
 	}).Info("Origin-pull arranged, serving viewer from local edge")
+
+	emitFederationEvent(&pb.FederationEventData{
+		EventType:     pb.FederationEventType_ORIGIN_PULL_ARRANGED,
+		RemoteCluster: remoteCluster,
+		StreamName:    &internalName,
+		SourceNode:    &remote.NodeId,
+		DestNode:      &localNodeID,
+		DtscUrl:       &ack.DtscUrl,
+	})
 
 	endpoint := buildLocalEndpointFromReplication(record, viewKey)
 	if endpoint != nil {
@@ -2588,11 +2499,14 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 		return nil
 	}
 
+	fanOutStart := time.Now()
+
 	type result struct {
 		candidates []balancer.RemoteEdgeCandidate
 	}
 	ch := make(chan result, len(peers))
 	var wg sync.WaitGroup
+	var queriedCount uint32
 
 	for _, peer := range peers {
 		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" {
@@ -2602,6 +2516,7 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 		if addr == "" {
 			continue
 		}
+		queriedCount++
 		wg.Add(1)
 		go func(peerID, peerAddr string) {
 			defer wg.Done()
@@ -2638,9 +2553,27 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 	go func() { wg.Wait(); close(ch) }()
 
 	var all []balancer.RemoteEdgeCandidate
+	var respondingCount uint32
 	for r := range ch {
+		if len(r.candidates) > 0 {
+			respondingCount++
+		}
 		all = append(all, r.candidates...)
 	}
+
+	if queriedCount > 0 {
+		latMs := float32(time.Since(fanOutStart).Milliseconds())
+		totalCandidates := uint32(len(all))
+		emitFederationEvent(&pb.FederationEventData{
+			EventType:          pb.FederationEventType_FEDERATION_QUERY,
+			StreamName:         &internalName,
+			LatencyMs:          &latMs,
+			QueriedClusters:    &queriedCount,
+			RespondingClusters: &respondingCount,
+			TotalCandidates:    &totalCandidates,
+		})
+	}
+
 	return all
 }
 

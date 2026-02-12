@@ -20,6 +20,7 @@ import (
 // Config represents server configuration
 type Config struct {
 	Port         string
+	BindAddr     string // defaults to "" (all interfaces); set "127.0.0.1" for local-only
 	ServiceName  string
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
@@ -40,7 +41,7 @@ func DefaultConfig(serviceName, defaultPort string) Config {
 // Start starts the HTTP server with graceful shutdown
 func Start(cfg Config, router *gin.Engine, logger logging.Logger) error {
 	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
+		Addr:         cfg.BindAddr + ":" + cfg.Port,
 		Handler:      router,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,

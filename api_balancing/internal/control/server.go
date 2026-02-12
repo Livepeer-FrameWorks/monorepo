@@ -31,6 +31,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/version"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -247,6 +248,93 @@ func Init(logger logging.Logger, cClient *commodore.GRPCClient, processor MistTr
 	mistTriggerProcessor = processor
 }
 
+// CommandRelay forwards control commands to the Foghorn instance holding a node's stream.
+type CommandRelay struct {
+	store         *state.RedisStateStore
+	instanceID    string
+	advertiseAddr string
+	pool          CommandRelayPool
+	logger        logging.Logger
+}
+
+// CommandRelayPool is the subset of FoghornPool needed by the relay layer.
+type CommandRelayPool interface {
+	GetOrCreate(key, addr string) (CommandRelayClient, error)
+}
+
+// CommandRelayClient is the subset of foghorn.GRPCClient needed by the relay layer.
+type CommandRelayClient interface {
+	Relay() pb.FoghornRelayClient
+}
+
+var commandRelay *CommandRelay
+
+// InitRelay sets up the HA command relay. Pass nil to disable (single-instance mode).
+// advertiseAddr is the host:port that peer instances use to reach this instance's gRPC server.
+func InitRelay(store *state.RedisStateStore, instanceID, advertiseAddr string, pool CommandRelayPool, logger logging.Logger) {
+	if store == nil || pool == nil {
+		commandRelay = nil
+		return
+	}
+	commandRelay = &CommandRelay{
+		store:         store,
+		instanceID:    instanceID,
+		advertiseAddr: advertiseAddr,
+		pool:          pool,
+		logger:        logger,
+	}
+}
+
+// GetRedisStore returns the relay's RedisStateStore (used by lifecycle hooks).
+// Returns nil if relay is not configured.
+func GetRedisStore() *state.RedisStateStore {
+	if commandRelay == nil {
+		return nil
+	}
+	return commandRelay.store
+}
+
+// GetInstanceID returns the relay's instance ID.
+func GetInstanceID() string {
+	if commandRelay == nil {
+		return ""
+	}
+	return commandRelay.instanceID
+}
+
+// GetAdvertiseAddr returns the relay's advertise address (host:port).
+func GetAdvertiseAddr() string {
+	if commandRelay == nil {
+		return ""
+	}
+	return commandRelay.advertiseAddr
+}
+
+func (r *CommandRelay) forward(ctx context.Context, req *pb.ForwardCommandRequest) error {
+	owner, err := r.store.GetConnOwner(ctx, req.TargetNodeId)
+	if err != nil || owner.InstanceID == "" {
+		return ErrNotConnected
+	}
+	if owner.InstanceID == r.instanceID {
+		return ErrNotConnected
+	}
+	if owner.GRPCAddr == "" {
+		return fmt.Errorf("relay: no address for instance %s", owner.InstanceID)
+	}
+	client, err := r.pool.GetOrCreate(owner.InstanceID, owner.GRPCAddr)
+	if err != nil {
+		return fmt.Errorf("relay: dial %s: %w", owner.GRPCAddr, err)
+	}
+	resp, err := client.Relay().ForwardCommand(ctx, req)
+	if err != nil {
+		return fmt.Errorf("relay: forward to %s: %w", owner.InstanceID, err)
+	}
+	if !resp.Delivered {
+		return fmt.Errorf("relay: peer %s rejected: %s", owner.InstanceID, resp.Error)
+	}
+	return nil
+}
+
 // SetDB sets the database connection for clip operations
 func SetDB(database *sql.DB) {
 	db = database
@@ -434,11 +522,21 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			// Mark node healthy in unified state (baseURL unknown at register)
 			state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 
+			// HA: register connection ownership in Redis so peer instances can relay commands
+			if rs := GetRedisStore(); rs != nil {
+				if err := rs.SetConnOwner(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
+					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to set conn owner in Redis")
+				}
+			}
+
 			cleanup := func() {
 				registry.mu.Lock()
 				delete(registry.conns, nodeID)
 				registry.mu.Unlock()
 				state.DefaultManager().MarkNodeDisconnected(nodeID)
+				if rs := GetRedisStore(); rs != nil {
+					_ = rs.DeleteConnOwner(context.Background(), nodeID)
+				}
 			}
 
 			// Fingerprint-based tenant resolution (pre-provisioned mappings only; no creation here)
@@ -468,18 +566,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				// TenantID/ClusterID are resolved below via fingerprint or enrollment.
 				state.DefaultManager().SetNodeConnectionInfo(nodeID, host, tenantID, clusterID, nil)
 
-				var country, city string
-				var lat, lon float64
-				geoOnce.Do(func() { geoipReader = geoip.GetSharedReader() })
-				if geoipReader != nil {
-					if gd := geoip.LookupCached(stream.Context(), geoipReader, geoipCache, host); gd != nil {
-						country = gd.CountryCode
-						city = gd.City
-						lat = gd.Latitude
-						lon = gd.Longitude
-					}
-				}
-				fpReq := &pb.ResolveNodeFingerprintRequest{PeerIp: host, GeoCountry: country, GeoCity: city, GeoLatitude: lat, GeoLongitude: lon}
+				fpReq := &pb.ResolveNodeFingerprintRequest{PeerIp: host}
 				if x.Register != nil && x.Register.Fingerprint != nil {
 					fp := x.Register.Fingerprint
 					fpReq.LocalIpv4 = append(fpReq.LocalIpv4, fp.GetLocalIpv4()...)
@@ -614,6 +701,53 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					}
 				}(x.Register, canonicalNodeID)
 			}
+
+			// Register per-capability service instances for DNS routing
+			if quartermasterClient != nil && clusterID != "" {
+				go func(reg *pb.Register, nid, cid, addr string) {
+					peerHost, _, _ := net.SplitHostPort(addr)
+					if peerHost == "" {
+						peerHost = addr
+					}
+					caps := map[string]bool{
+						"edge-egress":     reg.GetCapEdge(),
+						"edge-ingest":     reg.GetCapIngest(),
+						"edge-storage":    reg.GetCapStorage(),
+						"edge-processing": reg.GetCapProcessing(),
+					}
+					healthEp := "/api"
+					for svcType, enabled := range caps {
+						if !enabled {
+							continue
+						}
+						capCtx, capCancel := context.WithTimeout(context.Background(), 5*time.Second)
+						_, err := quartermasterClient.BootstrapService(capCtx, &pb.BootstrapServiceRequest{
+							Type:           svcType,
+							Version:        version.Version,
+							Protocol:       "http",
+							HealthEndpoint: &healthEp,
+							Port:           18008,
+							AdvertiseHost:  &peerHost,
+							Host:           peerHost,
+							ClusterId:      &cid,
+							NodeId:         &nid,
+						})
+						capCancel()
+						if err != nil {
+							registry.log.WithFields(logging.Fields{
+								"node_id":      nid,
+								"service_type": svcType,
+								"error":        err,
+							}).Warn("Failed to register edge capability service instance")
+						} else {
+							registry.log.WithFields(logging.Fields{
+								"node_id":      nid,
+								"service_type": svcType,
+							}).Info("Registered edge capability service instance")
+						}
+					}
+				}(x.Register, canonicalNodeID, clusterID, peerAddr)
+			}
 		case *pb.ControlMessage_ClipProgress:
 			if clipProgressHandler != nil {
 				go clipProgressHandler(x.ClipProgress)
@@ -638,6 +772,10 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				registry.mu.Unlock()
 				// Refresh node health/last update
 				state.DefaultManager().TouchNode(nodeID, true)
+				// HA: refresh connection ownership TTL
+				if rs := GetRedisStore(); rs != nil {
+					_ = rs.RefreshConnOwner(context.Background(), nodeID)
+				}
 			}
 		case *pb.ControlMessage_DvrStartRequest:
 			// Handle DVR start requests from ingest Helmsman
@@ -676,6 +814,8 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		case *pb.ControlMessage_SyncComplete:
 			// Handle sync completion from Helmsman (dual-storage architecture)
 			go processSyncComplete(x.SyncComplete, nodeID, registry.log)
+		case *pb.ControlMessage_ModeChangeRequest:
+			go processModeChangeRequest(x.ModeChangeRequest, nodeID, stream, registry.log)
 		}
 	}
 	if nodeID != "" {
@@ -683,13 +823,15 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		delete(registry.conns, nodeID)
 		registry.mu.Unlock()
 		state.DefaultManager().MarkNodeDisconnected(nodeID)
+		if rs := GetRedisStore(); rs != nil {
+			_ = rs.DeleteConnOwner(context.Background(), nodeID)
+		}
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
 	return nil
 }
 
-// SendClipPull sends a ClipPullRequest to the given node if connected
-func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
+func SendLocalClipPull(nodeID string, req *pb.ClipPullRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -703,8 +845,27 @@ func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
 	return c.stream.Send(msg)
 }
 
-// SendDVRStart sends a DVRStartRequest to the given node if connected
-func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
+// SendClipPull sends a ClipPullRequest to the given node, relaying via HA if needed.
+func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
+	err := SendLocalClipPull(nodeID, req)
+	if err == nil {
+		return nil
+	}
+	if commandRelay == nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_ClipPull{ClipPull: req},
+	}); relayErr != nil {
+		return err
+	}
+	return nil
+}
+
+func SendLocalDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -718,8 +879,27 @@ func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 	return c.stream.Send(msg)
 }
 
-// SendDVRStop sends a DVRStopRequest to the given node if connected
-func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
+// SendDVRStart sends a DVRStartRequest to the given node, relaying via HA if needed.
+func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
+	err := SendLocalDVRStart(nodeID, req)
+	if err == nil {
+		return nil
+	}
+	if commandRelay == nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_DvrStart{DvrStart: req},
+	}); relayErr != nil {
+		return err
+	}
+	return nil
+}
+
+func SendLocalDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -733,8 +913,27 @@ func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 	return c.stream.Send(msg)
 }
 
-// SendClipDelete sends a ClipDeleteRequest to the given node to delete clip files
-func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
+// SendDVRStop sends a DVRStopRequest to the given node, relaying via HA if needed.
+func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
+	err := SendLocalDVRStop(nodeID, req)
+	if err == nil {
+		return nil
+	}
+	if commandRelay == nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: req},
+	}); relayErr != nil {
+		return err
+	}
+	return nil
+}
+
+func SendLocalClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -748,8 +947,27 @@ func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 	return c.stream.Send(msg)
 }
 
-// SendDVRDelete sends a DVRDeleteRequest to the given node to delete DVR recording files
-func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
+// SendClipDelete sends a ClipDeleteRequest to the given node, relaying via HA if needed.
+func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
+	err := SendLocalClipDelete(nodeID, req)
+	if err == nil {
+		return nil
+	}
+	if commandRelay == nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_ClipDelete{ClipDelete: req},
+	}); relayErr != nil {
+		return err
+	}
+	return nil
+}
+
+func SendLocalDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -763,8 +981,27 @@ func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 	return c.stream.Send(msg)
 }
 
-// SendVodDelete sends a VodDeleteRequest to the given node to delete VOD asset files
-func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
+// SendDVRDelete sends a DVRDeleteRequest to the given node, relaying via HA if needed.
+func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
+	err := SendLocalDVRDelete(nodeID, req)
+	if err == nil {
+		return nil
+	}
+	if commandRelay == nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_DvrDelete{DvrDelete: req},
+	}); relayErr != nil {
+		return err
+	}
+	return nil
+}
+
+func SendLocalVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -776,6 +1013,26 @@ func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
+}
+
+// SendVodDelete sends a VodDeleteRequest to the given node, relaying via HA if needed.
+func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
+	err := SendLocalVodDelete(nodeID, req)
+	if err == nil {
+		return nil
+	}
+	if commandRelay == nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_VodDelete{VodDelete: req},
+	}); relayErr != nil {
+		return err
+	}
+	return nil
 }
 
 // StopDVRByInternalName finds an active DVR for a stream and sends a stop to its storage node
@@ -1848,7 +2105,7 @@ func resolveClusterTLSBundle(nodeID string) *pb.TLSCertBundle {
 	return bundle
 }
 
-func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
+func SendLocalConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 	if seed == nil {
 		return fmt.Errorf("nil ConfigSeed")
 	}
@@ -1865,9 +2122,21 @@ func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 	return c.stream.Send(msg)
 }
 
-// PushOperationalMode sends a ConfigSeed with the specified operational mode to the node.
-// Used when admin sets mode via API to notify the connected Helmsman.
-func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
+// SendConfigSeed sends a ConfigSeed to the given node, relaying via HA if needed.
+func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
+	if err := SendLocalConfigSeed(nodeID, seed); !errors.Is(err, ErrNotConnected) {
+		return err
+	}
+	if commandRelay == nil || seed == nil {
+		return ErrNotConnected
+	}
+	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
+	})
+}
+
+func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -1875,7 +2144,7 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 		return ErrNotConnected
 	}
 
-	// Helmsan sidecar does NOT merge ConfigSeeds; ApplySeed overwrites lastSeed.
+	// Helmsman sidecar does NOT merge ConfigSeeds; ApplySeed overwrites lastSeed.
 	// Send a full seed to avoid wiping previously seeded fields.
 	seed := composeConfigSeed(nodeID, nil, c.peerAddr, mode)
 	msg := &pb.ControlMessage{
@@ -1883,6 +2152,62 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
+}
+
+// PushOperationalMode sends a ConfigSeed with the specified operational mode to the node,
+// relaying via HA if needed.
+func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
+	if err := SendLocalPushOperationalMode(nodeID, mode); !errors.Is(err, ErrNotConnected) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	// For relay: compose a full ConfigSeed (without peer addr, since we don't hold the conn)
+	seed := composeConfigSeed(nodeID, nil, "", mode)
+	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
+	})
+}
+
+// processModeChangeRequest handles an upstream mode change request from Helmsman.
+// Validates the mode and applies it via the existing SetNodeOperationalMode + PushOperationalMode path.
+func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, log logging.Logger) {
+	if req == nil {
+		return
+	}
+
+	protoMode := req.GetRequestedMode()
+	if protoMode == pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
+		protoMode = pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	}
+
+	log.WithFields(logging.Fields{
+		"node_id":        nodeID,
+		"requested_mode": protoMode.String(),
+		"reason":         req.GetReason(),
+	}).Info("Received mode change request from Helmsman")
+
+	var stateMode state.NodeOperationalMode
+	switch protoMode {
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
+		stateMode = state.NodeModeDraining
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
+		stateMode = state.NodeModeMaintenance
+	default:
+		stateMode = state.NodeModeNormal
+	}
+
+	setBy := "helmsman:" + req.GetReason()
+	if err := state.DefaultManager().SetNodeOperationalMode(context.Background(), nodeID, stateMode, setBy); err != nil {
+		log.WithError(err).WithField("node_id", nodeID).Error("Failed to set operational mode from Helmsman request")
+		return
+	}
+
+	if err := PushOperationalMode(nodeID, protoMode); err != nil {
+		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to push operational mode back to node")
+	}
 }
 
 // ==================== Cold Storage (Freeze/Defrost) Handlers ====================
@@ -2329,8 +2654,7 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 	notifyDefrostComplete(assetHash, status == "success", localPath)
 }
 
-// SendDefrostRequest sends a DefrostRequest to the given node with presigned URLs
-func SendDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
+func SendLocalDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -2344,8 +2668,21 @@ func SendDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
 	return c.stream.Send(msg)
 }
 
-// SendDtshSyncRequest sends a DtshSyncRequest to the given node to upload just the .dtsh file
-func SendDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
+// SendDefrostRequest sends a DefrostRequest to the given node, relaying via HA if needed.
+func SendDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
+	if err := SendLocalDefrostRequest(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_Defrost{Defrost: req},
+	})
+}
+
+func SendLocalDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -2359,9 +2696,21 @@ func SendDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
 	return c.stream.Send(msg)
 }
 
-// SendStopSessions sends a StopSessionsRequest to the given node to terminate stream sessions
-// Used when a tenant is suspended due to insufficient balance
-func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
+// SendDtshSyncRequest sends a DtshSyncRequest to the given node, relaying via HA if needed.
+func SendDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
+	if err := SendLocalDtshSyncRequest(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_DtshSync{DtshSync: req},
+	})
+}
+
+func SendLocalStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -2373,6 +2722,20 @@ func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
+}
+
+// SendStopSessions sends a StopSessionsRequest to the given node, relaying via HA if needed.
+func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
+	if err := SendLocalStopSessions(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_StopSessions{StopSessions: req},
+	})
 }
 
 // TriggerDtshSync is called when .dtsh appeared after the main asset was already synced
@@ -3305,9 +3668,8 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 	}
 
 	edgeDomain := fmt.Sprintf("edge-%s.%s.%s", nodeID, clusterSlug, rootDomain)
-	poolDomain := fmt.Sprintf("edge-egress.%s.%s", clusterSlug, rootDomain)
-
-	foghornAddr := strings.TrimSpace(os.Getenv("FOGHORN_EXTERNAL_ADDR"))
+	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
+	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18008", clusterSlug, rootDomain)
 
 	resp := &pb.PreRegisterEdgeResponse{
 		NodeId:          nodeID,

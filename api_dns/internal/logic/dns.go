@@ -21,7 +21,13 @@ type MonitorConfig struct {
 	Retries  int // Number of retries before marking unhealthy
 }
 
-// DNSManager handles DNS synchronization logic
+// CertChecker tests whether a cluster has a valid wildcard TLS certificate.
+// Used to gate granular edge service subdomains — without a wildcard cert,
+// edge nodes can't terminate TLS for service-specific domains.
+type CertChecker interface {
+	HasClusterWildcardCert(ctx context.Context, clusterSlug, rootDomain string) bool
+}
+
 type DNSManager struct {
 	cfClient      cloudflareClient
 	qmClient      quartermasterClient
@@ -33,6 +39,7 @@ type DNSManager struct {
 	staleAge      time.Duration
 	monitorConfig MonitorConfig
 	servicePorts  map[string]int // Service type -> HTTP health check port
+	certChecker   CertChecker    // optional; nil = no cert gating
 }
 
 type cloudflareClient interface {
@@ -56,7 +63,7 @@ type cloudflareClient interface {
 }
 
 type quartermasterClient interface {
-	ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int) (*proto.ListHealthyNodesForDNSResponse, error)
+	ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error)
 	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
 }
 
@@ -76,19 +83,39 @@ func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.L
 	}
 }
 
+// SetCertChecker configures the optional certificate checker for gating
+// granular edge service subdomains. When set, SyncServiceByCluster skips
+// creating DNS records for edge-egress/ingest/storage/processing when the
+// cluster lacks a valid wildcard cert.
+func (m *DNSManager) SetCertChecker(checker CertChecker) {
+	m.certChecker = checker
+}
+
+// isGranularEdgeService returns true for service types that require a wildcard
+// cert on the edge for TLS termination.
+func isGranularEdgeService(serviceType string) bool {
+	switch serviceType {
+	case "edge-egress", "edge-ingest", "edge-storage", "edge-processing":
+		return true
+	}
+	return false
+}
+
 // defaultServicePorts returns the default HTTP health check port for each service type
 func defaultServicePorts() map[string]int {
 	return map[string]int{
-		"edge":        18008, // Any edge node (nearest-node routing)
-		"edge-egress": 18008, // Direct to edge nodes (viewer delivery)
-		"edge-ingest": 18008, // Direct to edge nodes (stream receive)
-		"foghorn":     18008, // Foghorn viewer routing
-		"gateway":     18001, // Bridge HTTP port (alias)
-		"bridge":      18001, // Bridge HTTP port
-		"chartroom":   3000,  // SvelteKit dashboard
-		"website":     4321,  // Astro marketing (root domain)
-		"logbook":     4321,  // Astro docs
-		"steward":     18032, // Steward forms API
+		"edge":            18008, // Any edge node (nearest-node routing)
+		"edge-egress":     18008, // Direct to edge nodes (viewer delivery)
+		"edge-ingest":     18008, // Direct to edge nodes (stream receive)
+		"edge-storage":    18008, // Direct to edge nodes (artifact storage)
+		"edge-processing": 18008, // Direct to edge nodes (transcoding)
+		"foghorn":         18008, // Foghorn viewer routing
+		"gateway":         18001, // Bridge HTTP port (alias)
+		"bridge":          18001, // Bridge HTTP port
+		"chartroom":       3000,  // SvelteKit dashboard
+		"website":         4321,  // Astro marketing (root domain)
+		"logbook":         4321,  // Astro docs
+		"steward":         18032, // Steward forms API
 	}
 }
 
@@ -145,7 +172,14 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		return nil, fmt.Errorf("failed to list clusters: %w", err)
 	}
 
-	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, serviceType, int(m.staleAge.Seconds()))
+	var nodeTypeParam, serviceTypeParam string
+	switch serviceType {
+	case "edge-egress", "edge-ingest", "edge-storage", "edge-processing":
+		serviceTypeParam = serviceType
+	default:
+		nodeTypeParam = serviceType
+	}
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, nodeTypeParam, int(m.staleAge.Seconds()), serviceTypeParam)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
@@ -169,6 +203,18 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		}
 		clusterSlug := m.clusterSlug(cluster)
 		rootDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
+
+		// Granular edge services (edge-egress, edge-ingest, etc.) require a wildcard
+		// cert on the edge for TLS termination. Skip DNS records if no cert exists.
+		if m.certChecker != nil && isGranularEdgeService(serviceType) {
+			if !m.certChecker.HasClusterWildcardCert(ctx, clusterSlug, m.domain) {
+				m.logger.WithFields(logging.Fields{
+					"service_type": serviceType,
+					"cluster":      clusterSlug,
+				}).Debug("Skipping granular edge subdomain — no wildcard cert for cluster")
+				continue
+			}
+		}
 
 		nodes := nodesByCluster[cluster.GetClusterId()]
 		ips := make([]string, 0, len(nodes))
@@ -283,8 +329,14 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	log.Info("Starting DNS sync")
 
 	// 1. Fetch Inventory from Quartermaster via gRPC
-	// Filter by node_type which maps to our service types
-	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, serviceType, int(m.staleAge.Seconds()))
+	var nodeTypeParam, serviceTypeParam string
+	switch serviceType {
+	case "edge-egress", "edge-ingest", "edge-storage", "edge-processing":
+		serviceTypeParam = serviceType
+	default:
+		nodeTypeParam = serviceType
+	}
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, nodeTypeParam, int(m.staleAge.Seconds()), serviceTypeParam)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
@@ -310,6 +362,10 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 		subdomain = "edge-egress"
 	case "edge-ingest":
 		subdomain = "edge-ingest"
+	case "edge-storage":
+		subdomain = "edge-storage"
+	case "edge-processing":
+		subdomain = "edge-processing"
 	case "foghorn":
 		subdomain = "foghorn"
 	case "gateway", "bridge":

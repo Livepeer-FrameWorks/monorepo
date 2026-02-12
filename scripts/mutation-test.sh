@@ -46,6 +46,7 @@ CRITICAL_PACKAGES=(
     "api_realtime/internal/grpc"
     "api_forms/internal/handlers"
     "api_forms/internal/validation"
+    "api_balancing/internal/federation"
 )
 
 # Colors

@@ -516,6 +516,7 @@ message RoutingEvent {
   // Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
   optional string stream_tenant_id = 25;    // Subject tenant (stream/customer owner)
   optional string cluster_id = 26;          // Emitting cluster identifier
+  optional string remote_cluster_id = 27;   // Target cluster for cross-cluster routing
 }
 
 message GetRoutingEventsRequest {
@@ -815,6 +816,12 @@ service NodeAnalyticsService {
 service RoutingAnalyticsService {
   rpc GetRoutingEvents(GetRoutingEventsRequest) returns (GetRoutingEventsResponse);
   rpc GetRoutingEfficiency(GetRoutingEfficiencyRequest) returns (GetRoutingEfficiencyResponse);
+  rpc GetClusterTrafficMatrix(GetClusterTrafficMatrixRequest) returns (GetClusterTrafficMatrixResponse);
+}
+
+service FederationAnalyticsService {
+  rpc GetFederationEvents(GetFederationEventsRequest) returns (GetFederationEventsResponse);
+  rpc GetFederationSummary(GetFederationSummaryRequest) returns (GetFederationSummaryResponse);
 }
 
 service PlatformAnalyticsService {
@@ -1666,6 +1673,91 @@ message GetRoutingEfficiencyRequest {
 
 message GetRoutingEfficiencyResponse {
   RoutingEfficiencySummary summary = 1;
+}
+
+// Cluster traffic matrix (from routing_cluster_hourly MV)
+message ClusterPairTraffic {
+  string cluster_id = 1;
+  string remote_cluster_id = 2;
+  string status = 3;
+  uint64 event_count = 4;
+  uint64 success_count = 5;
+  double avg_latency_ms = 6;
+  double avg_distance_km = 7;
+  double success_rate = 8;
+  double max_latency_ms = 9;
+  optional double local_latitude = 10;
+  optional double local_longitude = 11;
+  optional double remote_latitude = 12;
+  optional double remote_longitude = 13;
+}
+
+message GetClusterTrafficMatrixRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+}
+
+message GetClusterTrafficMatrixResponse {
+  repeated ClusterPairTraffic pairs = 1;
+}
+
+// Federation events (from federation_events table)
+message FederationEvent {
+  google.protobuf.Timestamp timestamp = 1;
+  string event_type = 2;
+  string local_cluster = 3;
+  string remote_cluster = 4;
+  optional string stream_name = 5;
+  optional string stream_id = 6;
+  optional string source_node = 7;
+  optional string dest_node = 8;
+  optional string dtsc_url = 9;
+  optional float latency_ms = 10;
+  optional float time_to_live_ms = 11;
+  optional string failure_reason = 12;
+  optional uint32 queried_clusters = 13;
+  optional uint32 responding_clusters = 14;
+  optional uint32 total_candidates = 15;
+  optional uint64 best_remote_score = 16;
+  optional string peer_cluster = 17;
+  string role = 18;
+  optional string reason = 19;
+}
+
+message GetFederationEventsRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+  optional string event_type = 3;
+  int32 limit = 4;
+}
+
+message GetFederationEventsResponse {
+  repeated FederationEvent events = 1;
+  int32 total_count = 2;
+}
+
+// Federation summary (from federation_hourly MV)
+message FederationEventCount {
+  string event_type = 1;
+  uint64 count = 2;
+  uint64 failure_count = 3;
+  double avg_latency_ms = 4;
+}
+
+message FederationSummary {
+  repeated FederationEventCount event_counts = 1;
+  uint64 total_events = 2;
+  double overall_avg_latency_ms = 3;
+  double overall_failure_rate = 4;
+}
+
+message GetFederationSummaryRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+}
+
+message GetFederationSummaryResponse {
+  FederationSummary summary = 1;
 }
 
 // Stream health summary — aggregates stream_health_5m into dashboard scalars

@@ -502,8 +502,9 @@ func TestCollectActionItems(t *testing.T) {
 		{AlertType: InfraAlertDiskCritical},
 	}
 	items := collectActionItems(alerts)
-	if len(items) != 2 {
-		t.Fatalf("expected 2 action items, got %d: %v", len(items), items)
+	// 2 alert-specific items (CPU + disk critical, deduped) + 2 unconditional CLI items
+	if len(items) != 4 {
+		t.Fatalf("expected 4 action items, got %d: %v", len(items), items)
 	}
 }
 

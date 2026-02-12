@@ -158,6 +158,7 @@ func (f *fakeCloudflareClient) CreatePool(pool cloudflare.Pool) (*cloudflare.Poo
 
 type fakeQuartermasterClient struct {
 	nodeType         string
+	serviceType      string
 	staleAge         int
 	response         *proto.ListHealthyNodesForDNSResponse
 	err              error
@@ -166,9 +167,10 @@ type fakeQuartermasterClient struct {
 	clustersErr      error
 }
 
-func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int) (*proto.ListHealthyNodesForDNSResponse, error) {
+func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error) {
 	f.callCount++
 	f.nodeType = nodeType
+	f.serviceType = serviceType
 	f.staleAge = staleThresholdSeconds
 	return f.response, f.err
 }
@@ -190,8 +192,11 @@ func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from Quartermaster")
 	}
-	if qm.nodeType != "edge-egress" {
-		t.Fatalf("expected node type edge-egress, got %s", qm.nodeType)
+	if qm.nodeType != "" {
+		t.Fatalf("expected empty node type for capability-specific edge type, got %s", qm.nodeType)
+	}
+	if qm.serviceType != "edge-egress" {
+		t.Fatalf("expected service type edge-egress, got %s", qm.serviceType)
 	}
 	if qm.staleAge != 300 {
 		t.Fatalf("expected stale age 300 seconds, got %d", qm.staleAge)
@@ -1213,6 +1218,8 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 		{"edge", "edge.example.com"},
 		{"edge-egress", "edge-egress.example.com"},
 		{"edge-ingest", "edge-ingest.example.com"},
+		{"edge-storage", "edge-storage.example.com"},
+		{"edge-processing", "edge-processing.example.com"},
 		{"foghorn", "foghorn.example.com"},
 		{"gateway", "bridge.example.com"},
 		{"bridge", "bridge.example.com"},
@@ -1332,6 +1339,8 @@ func TestClusterServiceFQDN(t *testing.T) {
 		{"edge", "c1.example.com", "edge.c1.example.com"},
 		{"edge-egress", "c1.example.com", "edge-egress.c1.example.com"},
 		{"edge-ingest", "c1.example.com", "edge-ingest.c1.example.com"},
+		{"edge-storage", "c1.example.com", "edge-storage.c1.example.com"},
+		{"edge-processing", "c1.example.com", "edge-processing.c1.example.com"},
 		{"foghorn", "c1.example.com", "foghorn.c1.example.com"},
 		{"gateway", "c1.example.com", "bridge.c1.example.com"},
 		{"bridge", "c1.example.com", "bridge.c1.example.com"},

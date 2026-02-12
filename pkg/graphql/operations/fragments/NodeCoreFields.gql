@@ -16,8 +16,6 @@ fragment NodeCoreFields on InfrastructureNode {
   lastHeartbeat
   createdAt
   updatedAt
-  latitude
-  longitude
   tags
   metadata
   # Real-time state from live_nodes (ClickHouse ReplacingMergeTree)

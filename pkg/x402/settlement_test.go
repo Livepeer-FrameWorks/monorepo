@@ -86,7 +86,7 @@ func (m *mockCommodore) ResolveVodID(ctx context.Context, vodID string) (*pb.Res
 	return m.resolveVodIDFn(ctx, vodID)
 }
 
-func (m *mockCommodore) ValidateStreamKey(ctx context.Context, streamKey string) (*pb.ValidateStreamKeyResponse, error) {
+func (m *mockCommodore) ValidateStreamKey(ctx context.Context, streamKey string, _ ...string) (*pb.ValidateStreamKeyResponse, error) {
 	if m.validateStreamKeyFn == nil {
 		return nil, nil
 	}

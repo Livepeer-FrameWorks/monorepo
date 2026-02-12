@@ -104,6 +104,7 @@ func main() {
 	}
 	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, recordTTL, lbTTL, time.Duration(staleSeconds)*time.Second, monitorConfig)
 	certManager := logic.NewCertManager(certStore)
+	dnsManager.SetCertChecker(certManager)
 
 	// === Background Workers ===
 	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger)
@@ -114,6 +115,8 @@ func main() {
 		"edge",
 		"edge-egress",
 		"edge-ingest",
+		"edge-storage",
+		"edge-processing",
 		"foghorn",
 		"gateway",
 		"chartroom",

@@ -878,8 +878,9 @@ var NodeAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	RoutingAnalyticsService_GetRoutingEvents_FullMethodName     = "/periscope.RoutingAnalyticsService/GetRoutingEvents"
-	RoutingAnalyticsService_GetRoutingEfficiency_FullMethodName = "/periscope.RoutingAnalyticsService/GetRoutingEfficiency"
+	RoutingAnalyticsService_GetRoutingEvents_FullMethodName        = "/periscope.RoutingAnalyticsService/GetRoutingEvents"
+	RoutingAnalyticsService_GetRoutingEfficiency_FullMethodName    = "/periscope.RoutingAnalyticsService/GetRoutingEfficiency"
+	RoutingAnalyticsService_GetClusterTrafficMatrix_FullMethodName = "/periscope.RoutingAnalyticsService/GetClusterTrafficMatrix"
 )
 
 // RoutingAnalyticsServiceClient is the client API for RoutingAnalyticsService service.
@@ -888,6 +889,7 @@ const (
 type RoutingAnalyticsServiceClient interface {
 	GetRoutingEvents(ctx context.Context, in *GetRoutingEventsRequest, opts ...grpc.CallOption) (*GetRoutingEventsResponse, error)
 	GetRoutingEfficiency(ctx context.Context, in *GetRoutingEfficiencyRequest, opts ...grpc.CallOption) (*GetRoutingEfficiencyResponse, error)
+	GetClusterTrafficMatrix(ctx context.Context, in *GetClusterTrafficMatrixRequest, opts ...grpc.CallOption) (*GetClusterTrafficMatrixResponse, error)
 }
 
 type routingAnalyticsServiceClient struct {
@@ -918,12 +920,23 @@ func (c *routingAnalyticsServiceClient) GetRoutingEfficiency(ctx context.Context
 	return out, nil
 }
 
+func (c *routingAnalyticsServiceClient) GetClusterTrafficMatrix(ctx context.Context, in *GetClusterTrafficMatrixRequest, opts ...grpc.CallOption) (*GetClusterTrafficMatrixResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetClusterTrafficMatrixResponse)
+	err := c.cc.Invoke(ctx, RoutingAnalyticsService_GetClusterTrafficMatrix_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RoutingAnalyticsServiceServer is the server API for RoutingAnalyticsService service.
 // All implementations must embed UnimplementedRoutingAnalyticsServiceServer
 // for forward compatibility.
 type RoutingAnalyticsServiceServer interface {
 	GetRoutingEvents(context.Context, *GetRoutingEventsRequest) (*GetRoutingEventsResponse, error)
 	GetRoutingEfficiency(context.Context, *GetRoutingEfficiencyRequest) (*GetRoutingEfficiencyResponse, error)
+	GetClusterTrafficMatrix(context.Context, *GetClusterTrafficMatrixRequest) (*GetClusterTrafficMatrixResponse, error)
 	mustEmbedUnimplementedRoutingAnalyticsServiceServer()
 }
 
@@ -939,6 +952,9 @@ func (UnimplementedRoutingAnalyticsServiceServer) GetRoutingEvents(context.Conte
 }
 func (UnimplementedRoutingAnalyticsServiceServer) GetRoutingEfficiency(context.Context, *GetRoutingEfficiencyRequest) (*GetRoutingEfficiencyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRoutingEfficiency not implemented")
+}
+func (UnimplementedRoutingAnalyticsServiceServer) GetClusterTrafficMatrix(context.Context, *GetClusterTrafficMatrixRequest) (*GetClusterTrafficMatrixResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterTrafficMatrix not implemented")
 }
 func (UnimplementedRoutingAnalyticsServiceServer) mustEmbedUnimplementedRoutingAnalyticsServiceServer() {
 }
@@ -998,6 +1014,24 @@ func _RoutingAnalyticsService_GetRoutingEfficiency_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RoutingAnalyticsService_GetClusterTrafficMatrix_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterTrafficMatrixRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RoutingAnalyticsServiceServer).GetClusterTrafficMatrix(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RoutingAnalyticsService_GetClusterTrafficMatrix_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RoutingAnalyticsServiceServer).GetClusterTrafficMatrix(ctx, req.(*GetClusterTrafficMatrixRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RoutingAnalyticsService_ServiceDesc is the grpc.ServiceDesc for RoutingAnalyticsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1012,6 +1046,151 @@ var RoutingAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRoutingEfficiency",
 			Handler:    _RoutingAnalyticsService_GetRoutingEfficiency_Handler,
+		},
+		{
+			MethodName: "GetClusterTrafficMatrix",
+			Handler:    _RoutingAnalyticsService_GetClusterTrafficMatrix_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "periscope.proto",
+}
+
+const (
+	FederationAnalyticsService_GetFederationEvents_FullMethodName  = "/periscope.FederationAnalyticsService/GetFederationEvents"
+	FederationAnalyticsService_GetFederationSummary_FullMethodName = "/periscope.FederationAnalyticsService/GetFederationSummary"
+)
+
+// FederationAnalyticsServiceClient is the client API for FederationAnalyticsService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type FederationAnalyticsServiceClient interface {
+	GetFederationEvents(ctx context.Context, in *GetFederationEventsRequest, opts ...grpc.CallOption) (*GetFederationEventsResponse, error)
+	GetFederationSummary(ctx context.Context, in *GetFederationSummaryRequest, opts ...grpc.CallOption) (*GetFederationSummaryResponse, error)
+}
+
+type federationAnalyticsServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewFederationAnalyticsServiceClient(cc grpc.ClientConnInterface) FederationAnalyticsServiceClient {
+	return &federationAnalyticsServiceClient{cc}
+}
+
+func (c *federationAnalyticsServiceClient) GetFederationEvents(ctx context.Context, in *GetFederationEventsRequest, opts ...grpc.CallOption) (*GetFederationEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFederationEventsResponse)
+	err := c.cc.Invoke(ctx, FederationAnalyticsService_GetFederationEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *federationAnalyticsServiceClient) GetFederationSummary(ctx context.Context, in *GetFederationSummaryRequest, opts ...grpc.CallOption) (*GetFederationSummaryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFederationSummaryResponse)
+	err := c.cc.Invoke(ctx, FederationAnalyticsService_GetFederationSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FederationAnalyticsServiceServer is the server API for FederationAnalyticsService service.
+// All implementations must embed UnimplementedFederationAnalyticsServiceServer
+// for forward compatibility.
+type FederationAnalyticsServiceServer interface {
+	GetFederationEvents(context.Context, *GetFederationEventsRequest) (*GetFederationEventsResponse, error)
+	GetFederationSummary(context.Context, *GetFederationSummaryRequest) (*GetFederationSummaryResponse, error)
+	mustEmbedUnimplementedFederationAnalyticsServiceServer()
+}
+
+// UnimplementedFederationAnalyticsServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedFederationAnalyticsServiceServer struct{}
+
+func (UnimplementedFederationAnalyticsServiceServer) GetFederationEvents(context.Context, *GetFederationEventsRequest) (*GetFederationEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFederationEvents not implemented")
+}
+func (UnimplementedFederationAnalyticsServiceServer) GetFederationSummary(context.Context, *GetFederationSummaryRequest) (*GetFederationSummaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFederationSummary not implemented")
+}
+func (UnimplementedFederationAnalyticsServiceServer) mustEmbedUnimplementedFederationAnalyticsServiceServer() {
+}
+func (UnimplementedFederationAnalyticsServiceServer) testEmbeddedByValue() {}
+
+// UnsafeFederationAnalyticsServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to FederationAnalyticsServiceServer will
+// result in compilation errors.
+type UnsafeFederationAnalyticsServiceServer interface {
+	mustEmbedUnimplementedFederationAnalyticsServiceServer()
+}
+
+func RegisterFederationAnalyticsServiceServer(s grpc.ServiceRegistrar, srv FederationAnalyticsServiceServer) {
+	// If the following call panics, it indicates UnimplementedFederationAnalyticsServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&FederationAnalyticsService_ServiceDesc, srv)
+}
+
+func _FederationAnalyticsService_GetFederationEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFederationEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FederationAnalyticsServiceServer).GetFederationEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FederationAnalyticsService_GetFederationEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FederationAnalyticsServiceServer).GetFederationEvents(ctx, req.(*GetFederationEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FederationAnalyticsService_GetFederationSummary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFederationSummaryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FederationAnalyticsServiceServer).GetFederationSummary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FederationAnalyticsService_GetFederationSummary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FederationAnalyticsServiceServer).GetFederationSummary(ctx, req.(*GetFederationSummaryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// FederationAnalyticsService_ServiceDesc is the grpc.ServiceDesc for FederationAnalyticsService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var FederationAnalyticsService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "periscope.FederationAnalyticsService",
+	HandlerType: (*FederationAnalyticsServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetFederationEvents",
+			Handler:    _FederationAnalyticsService_GetFederationEvents_Handler,
+		},
+		{
+			MethodName: "GetFederationSummary",
+			Handler:    _FederationAnalyticsService_GetFederationSummary_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

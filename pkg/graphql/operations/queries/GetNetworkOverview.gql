@@ -1,0 +1,53 @@
+# Combined network topology + federation traffic for the network dashboard page
+# Requires authentication (returns tenant-scoped cluster traffic)
+query GetNetworkOverview($timeRange: TimeRangeInput!) {
+  networkStatus {
+    clusters {
+      clusterId
+      name
+      region
+      latitude
+      longitude
+      nodeCount
+      healthyNodeCount
+      peerCount
+      status
+    }
+    peerConnections {
+      sourceCluster
+      targetCluster
+      connected
+    }
+    totalNodes
+    healthyNodes
+    updatedAt
+  }
+  analytics {
+    infra {
+      clusterTrafficMatrix(timeRange: $timeRange) {
+        clusterId
+        remoteClusterId
+        eventCount
+        successCount
+        avgLatencyMs
+        avgDistanceKm
+        successRate
+        localLatitude
+        localLongitude
+        remoteLatitude
+        remoteLongitude
+      }
+      federationSummary(timeRange: $timeRange) {
+        eventCounts {
+          eventType
+          count
+          failureCount
+          avgLatencyMs
+        }
+        totalEvents
+        overallAvgLatencyMs
+        overallFailureRate
+      }
+    }
+  }
+}

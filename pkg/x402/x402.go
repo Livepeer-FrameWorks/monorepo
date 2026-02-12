@@ -12,6 +12,46 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+type paymentHeaderAuthorizationWire struct {
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Value       string `json:"value"`
+	ValidAfter  string `json:"validAfter"`
+	ValidBefore string `json:"validBefore"`
+	Nonce       string `json:"nonce"`
+}
+
+type paymentHeaderExactPayloadWire struct {
+	Signature     string                         `json:"signature"`
+	Authorization paymentHeaderAuthorizationWire `json:"authorization"`
+}
+
+type paymentHeaderWire struct {
+	X402Version int                           `json:"x402Version"`
+	Scheme      string                        `json:"scheme"`
+	Network     string                        `json:"network"`
+	Payload     paymentHeaderExactPayloadWire `json:"payload"`
+}
+
+func (w paymentHeaderWire) toProto() *pb.X402PaymentPayload {
+	return &pb.X402PaymentPayload{
+		X402Version: int32(w.X402Version),
+		Scheme:      w.Scheme,
+		Network:     w.Network,
+		Payload: &pb.X402ExactPayload{
+			Signature: w.Payload.Signature,
+			Authorization: &pb.X402Authorization{
+				From:        w.Payload.Authorization.From,
+				To:          w.Payload.Authorization.To,
+				Value:       w.Payload.Authorization.Value,
+				ValidAfter:  w.Payload.Authorization.ValidAfter,
+				ValidBefore: w.Payload.Authorization.ValidBefore,
+				Nonce:       w.Payload.Authorization.Nonce,
+			},
+		},
+	}
+}
+
 // GetPaymentHeaderFromRequest returns the x402 payment header from an HTTP request.
 // Accepts both X-PAYMENT and PAYMENT-SIGNATURE.
 func GetPaymentHeaderFromRequest(r *http.Request) string {
@@ -66,43 +106,13 @@ func ParsePaymentHeader(header string) (*pb.X402PaymentPayload, error) {
 		return nil, err
 	}
 
-	var payload struct {
-		X402Version int    `json:"x402Version"`
-		Scheme      string `json:"scheme"`
-		Network     string `json:"network"`
-		Payload     struct {
-			Signature     string `json:"signature"`
-			Authorization struct {
-				From        string `json:"from"`
-				To          string `json:"to"`
-				Value       string `json:"value"`
-				ValidAfter  string `json:"validAfter"`
-				ValidBefore string `json:"validBefore"`
-				Nonce       string `json:"nonce"`
-			} `json:"authorization"`
-		} `json:"payload"`
-	}
+	var payload paymentHeaderWire
 
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		return nil, err
 	}
 
-	return &pb.X402PaymentPayload{
-		X402Version: int32(payload.X402Version),
-		Scheme:      payload.Scheme,
-		Network:     payload.Network,
-		Payload: &pb.X402ExactPayload{
-			Signature: payload.Payload.Signature,
-			Authorization: &pb.X402Authorization{
-				From:        payload.Payload.Authorization.From,
-				To:          payload.Payload.Authorization.To,
-				Value:       payload.Payload.Authorization.Value,
-				ValidAfter:  payload.Payload.Authorization.ValidAfter,
-				ValidBefore: payload.Payload.Authorization.ValidBefore,
-				Nonce:       payload.Payload.Authorization.Nonce,
-			},
-		},
-	}, nil
+	return payload.toProto(), nil
 }
 
 func base64Decode(s string) ([]byte, error) {

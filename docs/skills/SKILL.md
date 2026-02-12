@@ -225,6 +225,20 @@ For stream diagnostics, collect data first, then interpret:
 | `optimize_costs`                             | Usage analysis and savings          |
 | `api_integration_assistant(goal)`            | GraphQL API integration help        |
 
+## Node Management
+
+Agents that provision their own edge infrastructure can manage node lifecycle:
+
+1. **Create cluster**: `create_private_cluster` — get bootstrap enrollment token
+2. **Add nodes**: `create_enrollment_token` for additional edges in the same cluster
+3. **Provision**: `frameworks edge provision --enrollment-token <token> --ssh user@host`
+4. **Check health**: `get_node_info` for registration data, `get_node_health` for live metrics (CPU, RAM, bandwidth, active viewers)
+5. **Set mode via API**: `set_node_mode` — no SSH needed, goes through Gateway → Commodore → Foghorn
+6. **Set mode via CLI**: `frameworks edge mode draining` / `maintenance` / `normal` (local or `--ssh user@host`)
+7. **Diagnose**: `frameworks edge doctor` + `frameworks edge logs`
+
+Two management paths: use `set_node_mode` / `get_node_health` MCP tools when you don't have SSH access. Use CLI commands when you're on the edge or have SSH. Use `manage_node` for guided CLI command generation.
+
 ## When to Alert Your Human
 
 **Do alert:**

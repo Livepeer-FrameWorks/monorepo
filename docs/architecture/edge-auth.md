@@ -72,7 +72,7 @@ to validate the enrollment token and receive node assignment data:
 1. Validates token via `ValidateBootstrapTokenEx` (with IP binding and consumption)
 2. Generates a 6-byte hex `node_id`
 3. Constructs edge FQDN: `edge-{node_id}.{cluster_slug}.{root_domain}`
-4. Constructs pool FQDN: `edge-egress.{cluster_slug}.{root_domain}`
+4. Constructs pool FQDN: `edge.{cluster_slug}.{root_domain}`
 5. Retrieves cluster wildcard TLS certificate from Navigator and returns it inline
 
 The CLI uses this to stage certs and config before starting Caddy/Helmsman.

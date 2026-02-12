@@ -37,7 +37,7 @@ func TestPublicOrJWTAuthAllowlistedQuery(t *testing.T) {
 		c.String(http.StatusOK, "ok")
 	})
 
-	body := []byte("query { serviceInstancesHealth }")
+	body := []byte(`{"query":"query { serviceInstancesHealth }"}`)
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
 	r.ServeHTTP(w, req)
@@ -108,7 +108,7 @@ func TestPublicOrJWTAuthRejectsUnauthenticatedMutation(t *testing.T) {
 		c.String(http.StatusOK, "ok")
 	})
 
-	body := []byte("mutation { updateStream(id: \"1\") { id } }")
+	body := []byte(`{"query":"mutation { updateStream(id: \"1\") { id } }"}`)
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
 	r.ServeHTTP(w, req)
@@ -127,7 +127,7 @@ func TestPublicOrJWTAuthAllowlistIgnoresInvalidToken(t *testing.T) {
 		c.String(http.StatusOK, "ok")
 	})
 
-	body := []byte("query { resolveViewerEndpoint }")
+	body := []byte(`{"query":"query { resolveViewerEndpoint }"}`)
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer invalid-token")
@@ -159,7 +159,7 @@ func TestPublicOrJWTAuthUsesJWTForProtectedQuery(t *testing.T) {
 		c.String(http.StatusOK, "ok")
 	})
 
-	body := []byte("query { streamsConnection { edges { node { id } } } }")
+	body := []byte(`{"query":"query { streamsConnection { edges { node { id } } } }"}`)
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)

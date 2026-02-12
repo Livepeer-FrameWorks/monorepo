@@ -868,6 +868,17 @@ type DeveloperTokensConnection struct {
 	TotalCount int                   `json:"totalCount"`
 }
 
+type FederationEventEdge struct {
+	Cursor string                 `json:"cursor"`
+	Node   *proto.FederationEvent `json:"node"`
+}
+
+type FederationEventsConnection struct {
+	Edges      []*FederationEventEdge `json:"edges"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
+}
+
 type InvoiceEdge struct {
 	Cursor string         `json:"cursor"`
 	Node   *proto.Invoice `json:"node"`
@@ -989,6 +1000,32 @@ type MySubscriptionsConnection struct {
 	Nodes      []*proto.InfrastructureCluster `json:"nodes"`
 	PageInfo   *PageInfo                      `json:"pageInfo"`
 	TotalCount int                            `json:"totalCount"`
+}
+
+type NetworkClusterStatus struct {
+	ClusterID        string  `json:"clusterId"`
+	Name             string  `json:"name"`
+	Region           string  `json:"region"`
+	Latitude         float64 `json:"latitude"`
+	Longitude        float64 `json:"longitude"`
+	NodeCount        int     `json:"nodeCount"`
+	HealthyNodeCount int     `json:"healthyNodeCount"`
+	PeerCount        int     `json:"peerCount"`
+	Status           string  `json:"status"`
+}
+
+type NetworkPeerConnection struct {
+	SourceCluster string `json:"sourceCluster"`
+	TargetCluster string `json:"targetCluster"`
+	Connected     bool   `json:"connected"`
+}
+
+type NetworkStatus struct {
+	Clusters        []*NetworkClusterStatus  `json:"clusters"`
+	PeerConnections []*NetworkPeerConnection `json:"peerConnections"`
+	TotalNodes      int                      `json:"totalNodes"`
+	HealthyNodes    int                      `json:"healthyNodes"`
+	UpdatedAt       time.Time                `json:"updatedAt"`
 }
 
 type NodeEdge struct {

@@ -122,6 +122,19 @@ func (c *FederationClient) ListTenantArtifacts(ctx context.Context, clusterID, a
 	return client.Federation().ListTenantArtifacts(ctx, req)
 }
 
+// ForwardArtifactCommand forwards an artifact lifecycle command to a peer cluster.
+func (c *FederationClient) ForwardArtifactCommand(ctx context.Context, clusterID, addr string, req *pb.ForwardArtifactCommandRequest) (*pb.ForwardArtifactCommandResponse, error) {
+	client, err := c.pool.GetOrCreate(clusterID, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
+	defer cancel()
+
+	return client.Federation().ForwardArtifactCommand(ctx, req)
+}
+
 // OpenPeerChannel opens a bidirectional PeerChannel stream to a peer cluster.
 // The caller is responsible for sending/receiving PeerMessages on the returned stream.
 func (c *FederationClient) OpenPeerChannel(ctx context.Context, clusterID, addr string) (pb.FoghornFederation_PeerChannelClient, error) {

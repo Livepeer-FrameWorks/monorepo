@@ -25,6 +25,7 @@ import (
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	pkgredis "frameworks/pkg/redis"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
@@ -129,9 +130,10 @@ func main() {
 			redisClient = client
 		}
 	}
+	var redisStore *state.RedisStateStore
 	if redisClient != nil {
-		store := state.NewRedisStateStore(redisClient, foghornCfg.ClusterID)
-		if err := state.DefaultManager().EnableRedisSync(context.Background(), store, instanceID, logger); err != nil {
+		redisStore = state.NewRedisStateStore(redisClient, foghornCfg.ClusterID)
+		if err := state.DefaultManager().EnableRedisSync(context.Background(), redisStore, instanceID, logger); err != nil {
 			logger.WithError(err).Warn("Failed to enable redis state synchronization")
 		}
 	}
@@ -488,12 +490,14 @@ func main() {
 		defer fedPool.Close()
 
 		peerManager = federation.NewPeerManager(federation.PeerManagerConfig{
-			ClusterID:  foghornCfg.ClusterID,
-			InstanceID: instanceID,
-			Pool:       fedPool,
-			QM:         qmClient,
-			Cache:      remoteEdgeCache,
-			Logger:     logger,
+			ClusterID:     foghornCfg.ClusterID,
+			InstanceID:    instanceID,
+			Pool:          fedPool,
+			QM:            qmClient,
+			Cache:         remoteEdgeCache,
+			Logger:        logger,
+			DecklogClient: decklogClient,
+			SelfGeoFunc:   handlers.GetSelfGeo,
 		})
 		defer peerManager.Close()
 
@@ -586,6 +590,54 @@ func main() {
 	if federationServer != nil {
 		federationServer.SetClipCreator(foghornServer)
 		federationServer.SetDVRCreator(foghornServer)
+		federationServer.SetArtifactCommandHandler(foghornServer)
+	}
+
+	// HA relay: register at QM to discover mesh address, enable cross-instance command forwarding.
+	// QM derives the advertise address from the node's mesh identity (wireguard_ip > internal_ip).
+	var relayServer *foghorngrpc.RelayServer
+	if redisStore != nil && qmClient != nil {
+		bsReq := &pb.BootstrapServiceRequest{
+			Type:      "foghorn",
+			Version:   version.Version,
+			Protocol:  "grpc",
+			Port:      int32(config.GetEnvInt("FOGHORN_GRPC_PORT", 18019)),
+			ClusterId: &foghornCfg.ClusterID,
+		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			bsReq.NodeId = &nodeID
+		}
+		if host := config.GetEnv("FOGHORN_HOST", ""); host != "" {
+			bsReq.AdvertiseHost = &host
+		}
+
+		bsCtx, bsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		bsResp, bsErr := qmClient.BootstrapService(bsCtx, bsReq)
+		bsCancel()
+
+		advertiseAddr := ""
+		if bsErr != nil {
+			logger.WithError(bsErr).Warn("BootstrapService failed — HA relay disabled")
+		} else {
+			advertiseAddr = bsResp.GetAdvertiseAddr()
+		}
+
+		if advertiseAddr != "" {
+			relayPool := foghornpool.NewPool(foghornpool.PoolConfig{
+				ServiceToken: serviceToken,
+				Timeout:      10 * time.Second,
+				Logger:       logger,
+			})
+			defer relayPool.Close()
+
+			control.InitRelay(redisStore, instanceID, advertiseAddr, &relayPoolAdapter{pool: relayPool}, logger)
+			relayServer = foghorngrpc.NewRelayServer(logger)
+
+			logger.WithFields(logging.Fields{
+				"instance_id":    instanceID,
+				"advertise_addr": advertiseAddr,
+			}).Info("HA command relay enabled")
+		}
 	}
 
 	// Start unified gRPC server with both Helmsman control and Foghorn control plane services
@@ -593,6 +645,9 @@ func main() {
 	registrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
 	if federationServer != nil {
 		registrars = append(registrars, federationServer.RegisterServices)
+	}
+	if relayServer != nil {
+		registrars = append(registrars, relayServer.RegisterServices)
 	}
 	if _, err := control.StartGRPCServer(control.GRPCServerConfig{
 		Addr:         controlAddr,
@@ -772,4 +827,17 @@ func startStorageSnapshotScheduler(p *triggers.Processor, logger logging.Logger)
 			logger.WithError(err).Error("Failed to generate and send storage snapshots")
 		}
 	}
+}
+
+// relayPoolAdapter wraps FoghornPool to satisfy control.CommandRelayPool.
+type relayPoolAdapter struct {
+	pool *foghornpool.FoghornPool
+}
+
+func (a *relayPoolAdapter) GetOrCreate(key, addr string) (control.CommandRelayClient, error) {
+	client, err := a.pool.GetOrCreate(key, addr)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }

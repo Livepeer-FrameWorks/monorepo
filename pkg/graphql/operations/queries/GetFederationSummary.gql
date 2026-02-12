@@ -1,0 +1,18 @@
+# Aggregated federation summary: event counts by type, latency, failure rate
+query GetFederationSummary($timeRange: TimeRangeInput!, $noCache: Boolean = false) {
+  analytics {
+    infra {
+      federationSummary(timeRange: $timeRange, noCache: $noCache) {
+        eventCounts {
+          eventType
+          count
+          failureCount
+          avgLatencyMs
+        }
+        totalEvents
+        overallAvgLatencyMs
+        overallFailureRate
+      }
+    }
+  }
+}

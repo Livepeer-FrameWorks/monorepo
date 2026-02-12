@@ -287,6 +287,30 @@ Key design choice: artifacts must be S3-synced before cross-cluster access works
 
 See `docs/architecture/federation.md` for the broader FoghornFederation protocol and `docs/architecture/stream-replication-topology.md` for how STREAM_SOURCE routes to PrepareArtifact for VOD/artifacts.
 
+### Cross-Cluster Artifact Command Routing
+
+Artifact **read** operations (playback) use `PrepareArtifact` (described above).
+Artifact **write** operations (delete, stop) use a hybrid push+forward model:
+
+**Push (Commodore → correct Foghorn):**
+
+- `origin_cluster_id` in `commodore.clips` / `commodore.dvr_recordings` / `commodore.vod_assets`
+  determines which cluster's Foghorn receives the command.
+- Commodore resolves Foghorn address from `GetClusterRouting` peer list
+  (`foghorn_grpc_addr` field on `TenantClusterPeer`).
+
+**Forward (Foghorn → federation peer):**
+
+- If a Foghorn receives a delete/stop for an artifact not in `foghorn.artifacts`,
+  it forwards via `ForwardArtifactCommand` to federation peers.
+- This handles stale `origin_cluster_id` (race between artifact migration and command).
+
+Related source files:
+
+- Command routing: `api_control/internal/grpc/server.go` (`resolveFoghornForArtifact`)
+- Forward handler: `api_balancing/internal/federation/server.go` (`ForwardArtifactCommand`)
+- Forward trigger: `api_balancing/internal/grpc/server.go` (`forwardArtifactToFederation`)
+
 ### Related Source Files
 
 - Federation server handler: `api_balancing/internal/federation/server.go` (`PrepareArtifact`)

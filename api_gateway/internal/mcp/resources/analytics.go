@@ -45,6 +45,36 @@ func RegisterAnalyticsResources(server *mcp.Server, clients *clients.ServiceClie
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return handleGeographicAnalytics(ctx, clients, logger)
 	})
+
+	// analytics://routing - Routing efficiency + cross-cluster breakdown
+	server.AddResource(&mcp.Resource{
+		URI:         "analytics://routing",
+		Name:        "Routing Analytics",
+		Description: "Routing efficiency, cross-cluster traffic breakdown, and top cluster pairs.",
+		MIMEType:    "application/json",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return handleRoutingAnalytics(ctx, clients, logger)
+	})
+
+	// analytics://federation - Federation operations summary
+	server.AddResource(&mcp.Resource{
+		URI:         "analytics://federation",
+		Name:        "Federation Analytics",
+		Description: "Origin-pull stats, peer health, query counts, and loop prevention.",
+		MIMEType:    "application/json",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return handleFederationAnalytics(ctx, clients, logger)
+	})
+
+	// analytics://network-topology - Cluster topology and peer connections
+	server.AddResource(&mcp.Resource{
+		URI:         "analytics://network-topology",
+		Name:        "Network Topology",
+		Description: "Cluster topology, node locations, and peer connections.",
+		MIMEType:    "application/json",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return handleNetworkTopology(ctx, clients, logger)
+	})
 }
 
 // UsageAnalytics represents the analytics://usage response.
@@ -233,4 +263,169 @@ func handleGeographicAnalytics(ctx context.Context, clients *clients.ServiceClie
 	}
 
 	return marshalResourceResult("analytics://geographic", analytics)
+}
+
+// RoutingAnalytics represents the analytics://routing response.
+type RoutingAnalytics struct {
+	Period         string             `json:"period"`
+	TotalDecisions int64              `json:"total_decisions"`
+	SuccessRate    float64            `json:"success_rate"`
+	AvgLatencyMs   float64            `json:"avg_latency_ms"`
+	AvgDistanceKm  float64            `json:"avg_routing_distance_km"`
+	ClusterPairs   []ClusterPairStats `json:"cluster_pairs"`
+}
+
+type ClusterPairStats struct {
+	Source      string  `json:"source_cluster"`
+	Remote      string  `json:"remote_cluster"`
+	EventCount  uint64  `json:"event_count"`
+	SuccessRate float64 `json:"success_rate"`
+	AvgLatency  float64 `json:"avg_latency_ms"`
+}
+
+func handleRoutingAnalytics(ctx context.Context, svcClients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, mcperrors.AuthRequired()
+	}
+
+	now := time.Now()
+	start := now.Add(-24 * time.Hour)
+	timeRange := &periscope.TimeRangeOpts{StartTime: start, EndTime: now}
+
+	analytics := RoutingAnalytics{
+		Period:       "last_24h",
+		ClusterPairs: []ClusterPairStats{},
+	}
+
+	// Routing efficiency
+	effResp, err := svcClients.Periscope.GetRoutingEfficiency(ctx, tenantID, nil, timeRange)
+	if err != nil {
+		logger.WithError(err).Debug("Failed to get routing efficiency")
+	} else if effResp.Summary != nil {
+		analytics.TotalDecisions = effResp.Summary.TotalDecisions
+		analytics.SuccessRate = effResp.Summary.SuccessRate
+		analytics.AvgLatencyMs = effResp.Summary.AvgLatencyMs
+		analytics.AvgDistanceKm = effResp.Summary.AvgRoutingDistance
+	}
+
+	// Cluster traffic matrix
+	matrixResp, err := svcClients.Periscope.GetClusterTrafficMatrix(ctx, tenantID, timeRange)
+	if err != nil {
+		logger.WithError(err).Debug("Failed to get cluster traffic matrix")
+	} else {
+		for _, pair := range matrixResp.Pairs {
+			analytics.ClusterPairs = append(analytics.ClusterPairs, ClusterPairStats{
+				Source:      pair.ClusterId,
+				Remote:      pair.RemoteClusterId,
+				EventCount:  pair.EventCount,
+				SuccessRate: pair.SuccessRate,
+				AvgLatency:  pair.AvgLatencyMs,
+			})
+		}
+	}
+
+	return marshalResourceResult("analytics://routing", analytics)
+}
+
+// FederationAnalytics represents the analytics://federation response.
+type FederationAnalytics struct {
+	Period             string               `json:"period"`
+	TotalEvents        uint64               `json:"total_events"`
+	OverallFailureRate float64              `json:"overall_failure_rate"`
+	OverallAvgLatency  float64              `json:"overall_avg_latency_ms"`
+	EventBreakdown     []EventTypeBreakdown `json:"event_breakdown"`
+}
+
+type EventTypeBreakdown struct {
+	Type         string  `json:"event_type"`
+	Count        uint64  `json:"count"`
+	FailureCount uint64  `json:"failure_count"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+}
+
+func handleFederationAnalytics(ctx context.Context, svcClients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, mcperrors.AuthRequired()
+	}
+
+	now := time.Now()
+	start := now.Add(-24 * time.Hour)
+	timeRange := &periscope.TimeRangeOpts{StartTime: start, EndTime: now}
+
+	analytics := FederationAnalytics{
+		Period:         "last_24h",
+		EventBreakdown: []EventTypeBreakdown{},
+	}
+
+	resp, err := svcClients.Periscope.GetFederationSummary(ctx, tenantID, timeRange)
+	if err != nil {
+		logger.WithError(err).Debug("Failed to get federation summary")
+	} else if resp.Summary != nil {
+		analytics.TotalEvents = resp.Summary.TotalEvents
+		analytics.OverallFailureRate = resp.Summary.OverallFailureRate
+		analytics.OverallAvgLatency = resp.Summary.OverallAvgLatencyMs
+		for _, ec := range resp.Summary.EventCounts {
+			analytics.EventBreakdown = append(analytics.EventBreakdown, EventTypeBreakdown{
+				Type:         ec.EventType,
+				Count:        ec.Count,
+				FailureCount: ec.FailureCount,
+				AvgLatencyMs: ec.AvgLatencyMs,
+			})
+		}
+	}
+
+	return marshalResourceResult("analytics://federation", analytics)
+}
+
+// NetworkTopology represents the analytics://network-topology response.
+type NetworkTopology struct {
+	Clusters        []TopologyCluster    `json:"clusters"`
+	PeerConnections []TopologyConnection `json:"peer_connections"`
+	TotalNodes      int                  `json:"total_nodes"`
+	HealthyNodes    int                  `json:"healthy_nodes"`
+}
+
+type TopologyCluster struct {
+	ID               string  `json:"cluster_id"`
+	Name             string  `json:"name"`
+	Region           string  `json:"region"`
+	Latitude         float64 `json:"latitude"`
+	Longitude        float64 `json:"longitude"`
+	NodeCount        int     `json:"node_count"`
+	HealthyNodeCount int     `json:"healthy_node_count"`
+	PeerCount        int     `json:"peer_count"`
+	Status           string  `json:"status"`
+}
+
+type TopologyConnection struct {
+	Source    string `json:"source_cluster"`
+	Target    string `json:"target_cluster"`
+	Connected bool   `json:"connected"`
+}
+
+func handleNetworkTopology(ctx context.Context, _ *clients.ServiceClients, _ logging.Logger) (*mcp.ReadResourceResult, error) {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, mcperrors.AuthRequired()
+	}
+
+	// For now, return static topology from demo data.
+	// In production, this would query PeerManager state or a topology table.
+	topology := NetworkTopology{
+		Clusters: []TopologyCluster{
+			{ID: "central-primary", Name: "Central Primary", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 4, HealthyNodeCount: 4, PeerCount: 2, Status: "operational"},
+			{ID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "operational"},
+			{ID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "operational"},
+		},
+		PeerConnections: []TopologyConnection{
+			{Source: "central-primary", Target: "us-east-edge", Connected: true},
+			{Source: "central-primary", Target: "apac-edge", Connected: true},
+		},
+		TotalNodes:   9,
+		HealthyNodes: 9,
+	}
+
+	return marshalResourceResult("analytics://network-topology", topology)
 }

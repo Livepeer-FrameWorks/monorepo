@@ -58,6 +58,7 @@ func mapSignalmanRoutingEvent(event *pb.SignalmanEvent) *pb.RoutingEvent {
 		EventType:       data.EventType,
 		Source:          data.Source,
 		RoutingDistance: data.RoutingDistanceKm,
+		RemoteClusterId: data.RemoteClusterId,
 	}
 
 	if data.TenantId != nil {

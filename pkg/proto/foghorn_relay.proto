@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package foghorn_relay;
+
+option go_package = "frameworks/pkg/proto";
+
+import "ipc.proto";
+
+// FoghornRelay enables intra-cluster command forwarding between Foghorn HA instances.
+// When a Foghorn instance receives a control-plane command for a node whose
+// bidirectional stream is held by a different instance, it forwards the command
+// via this service. Authenticated with service tokens (same as federation).
+service FoghornRelay {
+  // ForwardCommand relays a control command to the instance holding the target node's stream.
+  rpc ForwardCommand(ForwardCommandRequest) returns (ForwardCommandResponse);
+}
+
+message ForwardCommandRequest {
+  string target_node_id = 1;
+  oneof command {
+    helmsmancontrol.ConfigSeed config_seed = 10;
+    helmsmancontrol.ClipPullRequest clip_pull = 11;
+    helmsmancontrol.DVRStartRequest dvr_start = 12;
+    helmsmancontrol.DVRStopRequest dvr_stop = 13;
+    helmsmancontrol.ClipDeleteRequest clip_delete = 14;
+    helmsmancontrol.DVRDeleteRequest dvr_delete = 15;
+    helmsmancontrol.VodDeleteRequest vod_delete = 16;
+    helmsmancontrol.DefrostRequest defrost = 17;
+    helmsmancontrol.DtshSyncRequest dtsh_sync = 18;
+    helmsmancontrol.StopSessionsRequest stop_sessions = 19;
+  }
+}
+
+message ForwardCommandResponse {
+  bool delivered = 1;
+  string error = 2;
+}

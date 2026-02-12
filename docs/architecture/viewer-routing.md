@@ -226,10 +226,14 @@ type LoadBalancingPayload struct {
     NodeLongitude     float64
     Status            string   // "success", "redirect", "error"
     DurationMs        float32  // Decision latency
+    ClusterID         string   // Emitting cluster
+    RemoteClusterID   string   // Set when viewer was routed cross-cluster
 }
 ```
 
 Stored in: `periscope.routing_decisions` (ClickHouse)
+
+When `RemoteClusterID` is set and differs from `ClusterID`, the routing decision involved cross-cluster serving (origin-pull or redirect). The UI audience page uses this to render cross-cluster flows in amber on the routing map and tag routing events with a "cross-cluster" badge.
 
 ## Modifying the Algorithm
 

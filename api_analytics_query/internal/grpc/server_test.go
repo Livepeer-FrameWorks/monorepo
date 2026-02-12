@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"frameworks/pkg/logging"
+	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
 	"frameworks/pkg/ctxkeys"
@@ -364,4 +365,430 @@ func TestValidateRelatedTenantIDs(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
+
+func TestGetCursorPagination(t *testing.T) {
+	fixedTS := time.Unix(1730000000, 0).UTC()
+	after := pagination.EncodeCursor(fixedTS, "event-1")
+	before := pagination.EncodeCursor(fixedTS.Add(-time.Minute), "event-0")
+
+	t.Run("nil request uses defaults", func(t *testing.T) {
+		params, err := getCursorPagination(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.Limit != pagination.DefaultLimit {
+			t.Fatalf("expected default limit %d, got %d", pagination.DefaultLimit, params.Limit)
+		}
+		if params.Direction != pagination.Forward {
+			t.Fatalf("expected forward direction, got %v", params.Direction)
+		}
+		if params.Cursor != nil {
+			t.Fatalf("expected nil cursor, got %#v", params.Cursor)
+		}
+	})
+
+	t.Run("forward request parses first and after", func(t *testing.T) {
+		params, err := getCursorPagination(&pb.CursorPaginationRequest{
+			First: 25,
+			After: &after,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.Limit != 25 {
+			t.Fatalf("expected limit 25, got %d", params.Limit)
+		}
+		if params.Direction != pagination.Forward {
+			t.Fatalf("expected forward direction, got %v", params.Direction)
+		}
+		if params.Cursor == nil {
+			t.Fatal("expected parsed cursor")
+		}
+		if params.Cursor.ID != "event-1" {
+			t.Fatalf("expected cursor id event-1, got %s", params.Cursor.ID)
+		}
+		if !params.Cursor.Timestamp.Equal(fixedTS) {
+			t.Fatalf("expected cursor timestamp %s, got %s", fixedTS, params.Cursor.Timestamp)
+		}
+	})
+
+	t.Run("backward request takes precedence over forward fields", func(t *testing.T) {
+		params, err := getCursorPagination(&pb.CursorPaginationRequest{
+			First:  100,
+			After:  &after,
+			Last:   5,
+			Before: &before,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.Limit != 5 {
+			t.Fatalf("expected limit 5 from last, got %d", params.Limit)
+		}
+		if params.Direction != pagination.Backward {
+			t.Fatalf("expected backward direction, got %v", params.Direction)
+		}
+		if params.Cursor == nil || params.Cursor.ID != "event-0" {
+			t.Fatalf("expected parsed before cursor id event-0, got %#v", params.Cursor)
+		}
+	})
+
+	t.Run("invalid after cursor returns parse error", func(t *testing.T) {
+		invalid := "not-base64"
+		_, err := getCursorPagination(&pb.CursorPaginationRequest{
+			First: 10,
+			After: &invalid,
+		})
+		if err == nil {
+			t.Fatal("expected error for invalid after cursor")
+		}
+		if !strings.Contains(err.Error(), "invalid after cursor") {
+			t.Fatalf("expected invalid after cursor error, got %v", err)
+		}
+	})
+}
+
+func TestBuildCursorResponse(t *testing.T) {
+	t.Run("forward response sets has next page from overfetch", func(t *testing.T) {
+		resp := buildCursorResponse(11, 10, pagination.Forward, 120, "start", "end")
+		if !resp.HasNextPage {
+			t.Fatal("expected has_next_page=true when results are overfetched")
+		}
+		if !resp.HasPreviousPage {
+			t.Fatal("expected has_previous_page=true when cursors are present")
+		}
+		if resp.TotalCount != 120 {
+			t.Fatalf("expected total count 120, got %d", resp.TotalCount)
+		}
+		if resp.GetStartCursor() != "start" || resp.GetEndCursor() != "end" {
+			t.Fatalf("unexpected cursors: start=%q end=%q", resp.GetStartCursor(), resp.GetEndCursor())
+		}
+	})
+
+	t.Run("backward response flips page flags", func(t *testing.T) {
+		resp := buildCursorResponse(6, 5, pagination.Backward, 42, "start", "end")
+		if !resp.HasPreviousPage {
+			t.Fatal("expected has_previous_page=true when results are overfetched")
+		}
+		if !resp.HasNextPage {
+			t.Fatal("expected has_next_page=true when cursors are present")
+		}
+		if resp.TotalCount != 42 {
+			t.Fatalf("expected total count 42, got %d", resp.TotalCount)
+		}
+	})
+
+	t.Run("empty cursors stay unset", func(t *testing.T) {
+		resp := buildCursorResponse(5, 5, pagination.Forward, 10, "", "")
+		if resp.StartCursor != nil || resp.EndCursor != nil {
+			t.Fatalf("expected nil cursors, got start=%v end=%v", resp.StartCursor, resp.EndCursor)
+		}
+		if resp.HasPreviousPage {
+			t.Fatal("expected has_previous_page=false without cursors")
+		}
+	})
+}
+
+func TestBuildKeysetConditionN(t *testing.T) {
+	ts := time.Unix(1730000000, 0).UTC()
+	params := &pagination.Params{
+		Direction: pagination.Forward,
+		Cursor: &pagination.Cursor{
+			Timestamp: ts,
+			ID:        "row-1",
+		},
+	}
+
+	t.Run("returns empty condition without cursor", func(t *testing.T) {
+		noCursorParams := &pagination.Params{Direction: pagination.Forward}
+		cond, args, err := buildKeysetConditionN(noCursorParams, "timestamp", []string{"stream_id"}, []string{"stream-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cond != "" {
+			t.Fatalf("expected empty condition, got %q", cond)
+		}
+		if args != nil {
+			t.Fatalf("expected nil args, got %#v", args)
+		}
+	})
+
+	t.Run("returns invalid argument on tuple mismatch", func(t *testing.T) {
+		_, _, err := buildKeysetConditionN(params, "timestamp", []string{"tenant_id", "stream_id"}, []string{"tenant-a"})
+		if err == nil {
+			t.Fatal("expected tuple mismatch error")
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected invalid argument, got %v", err)
+		}
+	})
+
+	t.Run("builds forward tuple condition", func(t *testing.T) {
+		cond, args, err := buildKeysetConditionN(params, "timestamp", []string{"tenant_id", "stream_id"}, []string{"tenant-a", "stream-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := " AND (timestamp, tenant_id, stream_id) < (?, ?, ?)"
+		if cond != want {
+			t.Fatalf("expected %q, got %q", want, cond)
+		}
+		if len(args) != 3 {
+			t.Fatalf("expected 3 args, got %d", len(args))
+		}
+		gotTS, ok := args[0].(time.Time)
+		if !ok || !gotTS.Equal(ts) {
+			t.Fatalf("expected timestamp arg %s, got %#v", ts, args[0])
+		}
+		if args[1] != "tenant-a" || args[2] != "stream-1" {
+			t.Fatalf("unexpected tuple args: %#v", args[1:])
+		}
+	})
+
+	t.Run("builds backward tuple condition", func(t *testing.T) {
+		backward := &pagination.Params{
+			Direction: pagination.Backward,
+			Cursor: &pagination.Cursor{
+				Timestamp: ts,
+				ID:        "row-1",
+			},
+		}
+		cond, _, err := buildKeysetConditionN(backward, "timestamp", []string{"stream_id"}, []string{"stream-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := " AND (timestamp, stream_id) > (?, ?)"
+		if cond != want {
+			t.Fatalf("expected %q, got %q", want, cond)
+		}
+	})
+}
+
+func TestBuildOrderByN(t *testing.T) {
+	t.Run("returns empty order by when no columns provided", func(t *testing.T) {
+		orderBy := buildOrderByN(&pagination.Params{Direction: pagination.Forward}, "timestamp", nil)
+		if orderBy != "" {
+			t.Fatalf("expected empty order by, got %q", orderBy)
+		}
+	})
+
+	t.Run("uses descending order for forward pagination", func(t *testing.T) {
+		orderBy := buildOrderByN(&pagination.Params{Direction: pagination.Forward}, "timestamp", []string{"tenant_id", "stream_id"})
+		want := " ORDER BY timestamp DESC, tenant_id DESC, stream_id DESC"
+		if orderBy != want {
+			t.Fatalf("expected %q, got %q", want, orderBy)
+		}
+	})
+
+	t.Run("uses ascending order for backward pagination", func(t *testing.T) {
+		orderBy := buildOrderByN(&pagination.Params{Direction: pagination.Backward}, "timestamp", []string{"tenant_id", "stream_id"})
+		want := " ORDER BY timestamp ASC, tenant_id ASC, stream_id ASC"
+		if orderBy != want {
+			t.Fatalf("expected %q, got %q", want, orderBy)
+		}
+	})
+}
+
+func TestBuildKeysetCondition(t *testing.T) {
+	ts := time.Unix(1730000000, 0).UTC()
+
+	t.Run("no cursor returns empty condition", func(t *testing.T) {
+		cond, args := buildKeysetCondition(&pagination.Params{}, "timestamp", "event_id")
+		if cond != "" {
+			t.Fatalf("expected empty condition, got %q", cond)
+		}
+		if args != nil {
+			t.Fatalf("expected nil args, got %#v", args)
+		}
+	})
+
+	t.Run("forward condition uses less-than tuple", func(t *testing.T) {
+		cond, args := buildKeysetCondition(&pagination.Params{
+			Direction: pagination.Forward,
+			Cursor: &pagination.Cursor{
+				Timestamp: ts,
+				ID:        "event-1",
+			},
+		}, "timestamp", "event_id")
+		if cond != " AND (timestamp, event_id) < (?, ?)" {
+			t.Fatalf("unexpected condition: %q", cond)
+		}
+		if len(args) != 2 {
+			t.Fatalf("expected 2 args, got %d", len(args))
+		}
+	})
+
+	t.Run("backward condition uses greater-than tuple", func(t *testing.T) {
+		cond, args := buildKeysetCondition(&pagination.Params{
+			Direction: pagination.Backward,
+			Cursor: &pagination.Cursor{
+				Timestamp: ts,
+				ID:        "event-1",
+			},
+		}, "timestamp", "event_id")
+		if cond != " AND (timestamp, event_id) > (?, ?)" {
+			t.Fatalf("unexpected condition: %q", cond)
+		}
+		if len(args) != 2 {
+			t.Fatalf("expected 2 args, got %d", len(args))
+		}
+	})
+}
+
+func TestBuildOrderBy(t *testing.T) {
+	forward := buildOrderBy(&pagination.Params{Direction: pagination.Forward}, "timestamp", "event_id")
+	if forward != " ORDER BY timestamp DESC, event_id DESC" {
+		t.Fatalf("unexpected forward order by: %q", forward)
+	}
+
+	backward := buildOrderBy(&pagination.Params{Direction: pagination.Backward}, "timestamp", "event_id")
+	if backward != " ORDER BY timestamp ASC, event_id ASC" {
+		t.Fatalf("unexpected backward order by: %q", backward)
+	}
+}
+
+func TestBuildKeysetConditionSingle(t *testing.T) {
+	ts := time.Unix(1730000000, 0).UTC()
+
+	t.Run("no cursor returns empty condition", func(t *testing.T) {
+		cond, args := buildKeysetConditionSingle(&pagination.Params{}, "timestamp")
+		if cond != "" {
+			t.Fatalf("expected empty condition, got %q", cond)
+		}
+		if args != nil {
+			t.Fatalf("expected nil args, got %#v", args)
+		}
+	})
+
+	t.Run("forward uses less-than", func(t *testing.T) {
+		cond, args := buildKeysetConditionSingle(&pagination.Params{
+			Direction: pagination.Forward,
+			Cursor:    &pagination.Cursor{Timestamp: ts},
+		}, "timestamp")
+		if cond != " AND timestamp < ?" {
+			t.Fatalf("unexpected condition: %q", cond)
+		}
+		if len(args) != 1 || args[0] != ts {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("backward uses greater-than", func(t *testing.T) {
+		cond, args := buildKeysetConditionSingle(&pagination.Params{
+			Direction: pagination.Backward,
+			Cursor:    &pagination.Cursor{Timestamp: ts},
+		}, "timestamp")
+		if cond != " AND timestamp > ?" {
+			t.Fatalf("unexpected condition: %q", cond)
+		}
+		if len(args) != 1 || args[0] != ts {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+}
+
+func TestBuildOrderBySingle(t *testing.T) {
+	forward := buildOrderBySingle(&pagination.Params{Direction: pagination.Forward}, "timestamp")
+	if forward != " ORDER BY timestamp DESC" {
+		t.Fatalf("unexpected forward order by: %q", forward)
+	}
+
+	backward := buildOrderBySingle(&pagination.Params{Direction: pagination.Backward}, "timestamp")
+	if backward != " ORDER BY timestamp ASC" {
+		t.Fatalf("unexpected backward order by: %q", backward)
+	}
+}
+
+func TestCountAsync(t *testing.T) {
+	t.Run("returns count on query success", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		if err != nil {
+			t.Fatalf("failed to create sqlmock: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = db.Close()
+		})
+
+		server := &PeriscopeServer{
+			clickhouse: db,
+			logger:     logging.NewLoggerWithService("periscope-query-test"),
+		}
+		mock.ExpectQuery("SELECT count\\(\\*\\) FROM test_table WHERE tenant_id = \\?").
+			WithArgs("tenant-1").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(42)))
+
+		ch := server.countAsync(context.Background(), "SELECT count(*) FROM test_table WHERE tenant_id = ?", "tenant-1")
+		if got := <-ch; got != 42 {
+			t.Fatalf("expected count 42, got %d", got)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet mock expectations: %v", err)
+		}
+	})
+
+	t.Run("returns zero on query error", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		if err != nil {
+			t.Fatalf("failed to create sqlmock: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = db.Close()
+		})
+
+		server := &PeriscopeServer{
+			clickhouse: db,
+			logger:     logging.NewLoggerWithService("periscope-query-test"),
+		}
+		mock.ExpectQuery("SELECT count\\(\\*\\) FROM test_table WHERE tenant_id = \\?").
+			WithArgs("tenant-1").
+			WillReturnError(errors.New("db error"))
+
+		ch := server.countAsync(context.Background(), "SELECT count(*) FROM test_table WHERE tenant_id = ?", "tenant-1")
+		if got := <-ch; got != 0 {
+			t.Fatalf("expected count fallback 0, got %d", got)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet mock expectations: %v", err)
+		}
+	})
+}
+
+func TestJoinStrings(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    []string
+		sep      string
+		expected string
+	}{
+		{name: "empty", input: nil, sep: ",", expected: ""},
+		{name: "single", input: []string{"a"}, sep: ",", expected: "a"},
+		{name: "multiple", input: []string{"a", "b", "c"}, sep: "|", expected: "a|b|c"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := joinStrings(tc.input, tc.sep); got != tc.expected {
+				t.Fatalf("joinStrings(%v, %q) = %q, want %q", tc.input, tc.sep, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestNullInt64Value(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    sql.NullInt64
+		expected int64
+	}{
+		{name: "invalid null", input: sql.NullInt64{Int64: 22, Valid: false}, expected: 0},
+		{name: "valid value", input: sql.NullInt64{Int64: 22, Valid: true}, expected: 22},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nullInt64Value(tc.input); got != tc.expected {
+				t.Fatalf("nullInt64Value(%+v) = %d, want %d", tc.input, got, tc.expected)
+			}
+		})
+	}
 }

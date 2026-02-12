@@ -29,6 +29,7 @@ type GRPCClient struct {
 	dvr       pb.DVRServiceClient
 	viewer    pb.ViewerServiceClient
 	vod       pb.VodServiceClient
+	nodeMgmt  pb.NodeManagementServiceClient
 	logger    logging.Logger
 	cache     *cache.Cache
 }
@@ -119,6 +120,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		dvr:       pb.NewDVRServiceClient(conn),
 		viewer:    pb.NewViewerServiceClient(conn),
 		vod:       pb.NewVodServiceClient(conn),
+		nodeMgmt:  pb.NewNodeManagementServiceClient(conn),
 		logger:    config.Logger,
 		cache:     config.Cache,
 	}, nil
@@ -157,15 +159,25 @@ func (c *GRPCClient) InvalidateTenantCacheKeys(tenantID string) {
 // INTERNAL SERVICE OPERATIONS (Foghorn, Sidecar → Commodore)
 // ============================================================================
 
-// ValidateStreamKey validates a stream key (called by Foghorn on PUSH_REWRITE)
-func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string) (*pb.ValidateStreamKeyResponse, error) {
+// ValidateStreamKey validates a stream key (called by Foghorn on PUSH_REWRITE).
+// clusterID is optional — when provided, Commodore records which cluster the stream is ingesting on.
+func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*pb.ValidateStreamKeyResponse, error) {
+	cid := ""
+	if len(clusterID) > 0 {
+		cid = clusterID[0]
+	}
+	buildReq := func() *pb.ValidateStreamKeyRequest {
+		return &pb.ValidateStreamKeyRequest{
+			StreamKey: streamKey,
+			ClusterId: cid,
+		}
+	}
+
 	// Check cache first
 	if c.cache != nil {
 		cacheKey := "commodore:validate:" + streamKey
 		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ValidateStreamKey(ctx, &pb.ValidateStreamKeyRequest{
-				StreamKey: streamKey,
-			})
+			resp, err := c.internal.ValidateStreamKey(ctx, buildReq())
 			if err != nil || !resp.Valid {
 				return nil, false, err
 			}
@@ -175,9 +187,7 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string) (*
 		}
 	}
 
-	return c.internal.ValidateStreamKey(ctx, &pb.ValidateStreamKeyRequest{
-		StreamKey: streamKey,
-	})
+	return c.internal.ValidateStreamKey(ctx, buildReq())
 }
 
 // ResolvePlaybackID resolves a playback ID to internal stream name
@@ -873,4 +883,18 @@ func (c *GRPCClient) GetTenantPrimaryUser(ctx context.Context, tenantID string) 
 	return c.internal.GetTenantPrimaryUser(ctx, &pb.GetTenantPrimaryUserRequest{
 		TenantId: tenantID,
 	})
+}
+
+// ============================================================================
+// NODE MANAGEMENT (Gateway → Commodore → Foghorn proxy)
+// ============================================================================
+
+// SetNodeMode sets a node's operational mode via Foghorn.
+func (c *GRPCClient) SetNodeMode(ctx context.Context, req *pb.SetNodeModeRequest) (*pb.SetNodeModeResponse, error) {
+	return c.nodeMgmt.SetNodeOperationalMode(ctx, req)
+}
+
+// GetNodeHealth returns real-time health for a node via Foghorn.
+func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, error) {
+	return c.nodeMgmt.GetNodeHealth(ctx, req)
 }

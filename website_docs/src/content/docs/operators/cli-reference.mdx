@@ -1085,7 +1085,7 @@ frameworks edge provision --manifest edges.yaml
 
 - `--ssh string` - SSH target (user@host)
 - `--ssh-key` - SSH private key path
-- `--pool-domain string` - Shared LB pool domain (e.g., edge-egress.example.com)
+- `--pool-domain string` - Shared LB pool domain (e.g., edge.example.com)
 - `--node-domain string` - Individual node domain
 - `--node-name string` - Node name for registration
 - `--cluster-id string` - Cluster ID for registration
@@ -1105,7 +1105,7 @@ frameworks edge provision --manifest edges.yaml
 ```bash
 # Provision single node with explicit domains
 frameworks edge provision --ssh ubuntu@10.0.0.5 \
-  --pool-domain edge-egress.example.com \
+  --pool-domain edge.example.com \
   --node-domain edge-1.example.com \
   --register --fetch-cert --email admin@example.com
 

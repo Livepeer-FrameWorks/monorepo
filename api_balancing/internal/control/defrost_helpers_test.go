@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
+	"frameworks/pkg/logging"
 )
 
 type mockLoadBalancer struct {
@@ -52,5 +53,39 @@ func TestPickStorageNodeID(t *testing.T) {
 	}
 	if _, err := pickStorageNodeID(); err == nil {
 		t.Fatal("expected error when no storage nodes available")
+	}
+}
+
+func TestPickStorageNodeIDPublic(t *testing.T) {
+	original := loadBalancerInstance
+	defer func() { loadBalancerInstance = original }()
+
+	loadBalancerInstance = &mockLoadBalancer{
+		nodes: map[string]state.NodeState{
+			"node-storage": {NodeID: "node-storage", CapStorage: true, IsHealthy: true},
+		},
+	}
+	id, err := PickStorageNodeIDPublic()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "node-storage" {
+		t.Fatalf("expected node-storage, got %q", id)
+	}
+}
+
+func TestControlLogger(t *testing.T) {
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+
+	registry = nil
+	if got := controlLogger(); got == nil {
+		t.Fatal("expected fallback logger when registry is nil")
+	}
+
+	exp := logging.NewLoggerWithService("test-control")
+	registry = &Registry{log: exp}
+	if got := controlLogger(); got != exp {
+		t.Fatal("expected registry logger to be returned")
 	}
 }

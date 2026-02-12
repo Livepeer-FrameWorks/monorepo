@@ -118,19 +118,19 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         description: "Manage your Edge nodes and capacity",
       },
-      marketplace: {
-        name: "Marketplace",
-        href: "/infrastructure/marketplace",
-        icon: "Store",
+      clusters: {
+        name: "Clusters",
+        href: "/infrastructure/clusters",
+        icon: "Server",
         active: true,
-        description: "Browse and subscribe to global video clusters",
+        description: "Manage cluster connections and browse the marketplace",
       },
-      network: {
-        name: "My Network",
-        href: "/infrastructure/network",
-        icon: "Network",
+      federation: {
+        name: "Federation",
+        href: "/infrastructure/federation",
+        icon: "Globe",
         active: true,
-        description: "Manage your clusters, subscriptions, and connections",
+        description: "Cross-cluster topology, peering, and federation traffic",
       },
       devices: {
         name: "Devices",

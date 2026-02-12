@@ -1,0 +1,25 @@
+# Public network status for marketing site status page (no auth required)
+# Returns cluster topology, node counts, peer connections — no tenant data
+query GetNetworkStatus {
+  networkStatus {
+    clusters {
+      clusterId
+      name
+      region
+      latitude
+      longitude
+      nodeCount
+      healthyNodeCount
+      peerCount
+      status
+    }
+    peerConnections {
+      sourceCluster
+      targetCluster
+      connected
+    }
+    totalNodes
+    healthyNodes
+    updatedAt
+  }
+}

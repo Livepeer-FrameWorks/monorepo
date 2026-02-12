@@ -922,6 +922,158 @@ var EdgeProvisioningService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	NodeControlService_SetNodeOperationalMode_FullMethodName = "/foghorn.NodeControlService/SetNodeOperationalMode"
+	NodeControlService_GetNodeHealth_FullMethodName          = "/foghorn.NodeControlService/GetNodeHealth"
+)
+
+// NodeControlServiceClient is the client API for NodeControlService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// NodeControlService exposes node lifecycle operations.
+// Fronts the existing HTTP handlers with tenant ownership validation.
+// Commodore proxies this as NodeManagementService for Gateway access.
+type NodeControlServiceClient interface {
+	// SetNodeOperationalMode changes a node's operational mode (normal, draining, maintenance).
+	SetNodeOperationalMode(ctx context.Context, in *SetNodeModeRequest, opts ...grpc.CallOption) (*SetNodeModeResponse, error)
+	// GetNodeHealth returns real-time health and routing state for a node.
+	GetNodeHealth(ctx context.Context, in *GetNodeHealthRequest, opts ...grpc.CallOption) (*GetNodeHealthResponse, error)
+}
+
+type nodeControlServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewNodeControlServiceClient(cc grpc.ClientConnInterface) NodeControlServiceClient {
+	return &nodeControlServiceClient{cc}
+}
+
+func (c *nodeControlServiceClient) SetNodeOperationalMode(ctx context.Context, in *SetNodeModeRequest, opts ...grpc.CallOption) (*SetNodeModeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetNodeModeResponse)
+	err := c.cc.Invoke(ctx, NodeControlService_SetNodeOperationalMode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeControlServiceClient) GetNodeHealth(ctx context.Context, in *GetNodeHealthRequest, opts ...grpc.CallOption) (*GetNodeHealthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNodeHealthResponse)
+	err := c.cc.Invoke(ctx, NodeControlService_GetNodeHealth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NodeControlServiceServer is the server API for NodeControlService service.
+// All implementations must embed UnimplementedNodeControlServiceServer
+// for forward compatibility.
+//
+// NodeControlService exposes node lifecycle operations.
+// Fronts the existing HTTP handlers with tenant ownership validation.
+// Commodore proxies this as NodeManagementService for Gateway access.
+type NodeControlServiceServer interface {
+	// SetNodeOperationalMode changes a node's operational mode (normal, draining, maintenance).
+	SetNodeOperationalMode(context.Context, *SetNodeModeRequest) (*SetNodeModeResponse, error)
+	// GetNodeHealth returns real-time health and routing state for a node.
+	GetNodeHealth(context.Context, *GetNodeHealthRequest) (*GetNodeHealthResponse, error)
+	mustEmbedUnimplementedNodeControlServiceServer()
+}
+
+// UnimplementedNodeControlServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedNodeControlServiceServer struct{}
+
+func (UnimplementedNodeControlServiceServer) SetNodeOperationalMode(context.Context, *SetNodeModeRequest) (*SetNodeModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetNodeOperationalMode not implemented")
+}
+func (UnimplementedNodeControlServiceServer) GetNodeHealth(context.Context, *GetNodeHealthRequest) (*GetNodeHealthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNodeHealth not implemented")
+}
+func (UnimplementedNodeControlServiceServer) mustEmbedUnimplementedNodeControlServiceServer() {}
+func (UnimplementedNodeControlServiceServer) testEmbeddedByValue()                            {}
+
+// UnsafeNodeControlServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to NodeControlServiceServer will
+// result in compilation errors.
+type UnsafeNodeControlServiceServer interface {
+	mustEmbedUnimplementedNodeControlServiceServer()
+}
+
+func RegisterNodeControlServiceServer(s grpc.ServiceRegistrar, srv NodeControlServiceServer) {
+	// If the following call panics, it indicates UnimplementedNodeControlServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&NodeControlService_ServiceDesc, srv)
+}
+
+func _NodeControlService_SetNodeOperationalMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetNodeModeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeControlServiceServer).SetNodeOperationalMode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeControlService_SetNodeOperationalMode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeControlServiceServer).SetNodeOperationalMode(ctx, req.(*SetNodeModeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeControlService_GetNodeHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNodeHealthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeControlServiceServer).GetNodeHealth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeControlService_GetNodeHealth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeControlServiceServer).GetNodeHealth(ctx, req.(*GetNodeHealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// NodeControlService_ServiceDesc is the grpc.ServiceDesc for NodeControlService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var NodeControlService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "foghorn.NodeControlService",
+	HandlerType: (*NodeControlServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SetNodeOperationalMode",
+			Handler:    _NodeControlService_SetNodeOperationalMode_Handler,
+		},
+		{
+			MethodName: "GetNodeHealth",
+			Handler:    _NodeControlService_GetNodeHealth_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "foghorn.proto",
+}
+
+const (
 	TenantControlService_TerminateTenantStreams_FullMethodName = "/foghorn.TenantControlService/TerminateTenantStreams"
 	TenantControlService_InvalidateTenantCache_FullMethodName  = "/foghorn.TenantControlService/InvalidateTenantCache"
 )

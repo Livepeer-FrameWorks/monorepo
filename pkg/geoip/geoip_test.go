@@ -2,6 +2,7 @@ package geoip
 
 import (
 	"net"
+	"sync"
 	"testing"
 )
 
@@ -218,5 +219,55 @@ func TestLookupIPFormats(t *testing.T) {
 				t.Errorf("Lookup() with no database should return nil, got %v", result)
 			}
 		})
+	}
+}
+
+func TestGetSharedReader_EmptyEnvReturnsNil(t *testing.T) {
+	oldReader := sharedGeo.reader
+	t.Cleanup(func() {
+		sharedGeo = struct {
+			once   sync.Once
+			reader *Reader
+		}{reader: oldReader}
+		sharedGeo.once.Do(func() {})
+	})
+
+	sharedGeo = struct {
+		once   sync.Once
+		reader *Reader
+	}{}
+	t.Setenv("GEOIP_MMDB_PATH", "")
+
+	if got := GetSharedReader(); got != nil {
+		t.Fatalf("expected nil shared reader, got %+v", got)
+	}
+}
+
+func TestGetSharedReader_UsesExistingSingletonWhenInitialized(t *testing.T) {
+	oldReader := sharedGeo.reader
+	t.Cleanup(func() {
+		sharedGeo = struct {
+			once   sync.Once
+			reader *Reader
+		}{reader: oldReader}
+		sharedGeo.once.Do(func() {})
+	})
+
+	want := &Reader{provider: "manual", dbPath: "/tmp/manual.mmdb"}
+	sharedGeo = struct {
+		once   sync.Once
+		reader *Reader
+	}{
+		reader: want,
+	}
+	sharedGeo.once.Do(func() {})
+	t.Setenv("GEOIP_MMDB_PATH", "/does/not/matter.mmdb")
+
+	got := GetSharedReader()
+	if got != want {
+		t.Fatalf("expected existing singleton pointer, got %+v", got)
+	}
+	if got.GetProvider() != "manual" {
+		t.Fatalf("provider: got %q, want %q", got.GetProvider(), "manual")
 	}
 }

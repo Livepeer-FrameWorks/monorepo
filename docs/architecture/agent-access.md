@@ -282,24 +282,24 @@ Single private key used on all EVM chains (same address everywhere):
 
 Model Context Protocol integration for AI agent tool discovery, integrated into Gateway.
 
-**Summary**: 29 tools (12 categories), 18 resources (9 categories), 8 prompts. The Gateway acts as a **hub** — it owns 28 tools directly and proxies 1 tool from the Skipper spoke.
+**Summary**: 38 tools (13 categories), 18 resources (9 categories), 8 prompts. The Gateway acts as a **hub** — it owns 37 tools directly and proxies 1 tool (`ask_consultant`) from the Skipper spoke.
 
-| Category        | Tools                                                                              | Resources                                                            | Source        |
-| --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------- |
-| Account & Auth  | `update_billing_details`                                                           | `account://status`                                                   | Gateway       |
-| Payment         | `get_payment_options`, `submit_payment`                                            | —                                                                    | Gateway       |
-| Billing         | `topup_balance`, `check_topup`                                                     | `billing://balance`, `billing://pricing`, `billing://transactions`   | Gateway       |
-| Streams         | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`            | `streams://list`, `streams://{id}`, `streams://{id}/health`          | Gateway       |
-| Clips           | `create_clip`, `delete_clip`                                                       | —                                                                    | Gateway       |
-| DVR             | `start_dvr`, `stop_dvr`                                                            | —                                                                    | Gateway       |
-| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset` | `vod://list`, `vod://{artifact_hash}`                                | Gateway       |
-| Playback        | `resolve_playback_endpoint`                                                        | —                                                                    | Gateway       |
-| Analytics       | —                                                                                  | `analytics://usage`, `analytics://viewers`, `analytics://geographic` | Gateway       |
-| QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)          | —                                                                    | Gateway       |
-| Support         | `search_support_history`                                                           | `support://conversations`, `support://conversations/{id}`            | Gateway       |
-| Knowledge       | `ask_consultant`                                                                   | `knowledge://sources`                                                | Skipper spoke |
-| Schema          | `introspect_schema`, `generate_query`, `execute_query`                             | `schema://catalog`                                                   | Gateway       |
-| Infrastructure  | —                                                                                  | `nodes://list`, `nodes://{id}`                                       | Gateway       |
+| Category        | Tools                                                                                                                                                                                          | Resources                                                            | Source        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------- |
+| Account & Auth  | `update_billing_details`                                                                                                                                                                       | `account://status`                                                   | Gateway       |
+| Payment         | `get_payment_options`, `submit_payment`                                                                                                                                                        | —                                                                    | Gateway       |
+| Billing         | `topup_balance`, `check_topup`                                                                                                                                                                 | `billing://balance`, `billing://pricing`, `billing://transactions`   | Gateway       |
+| Streams         | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`                                                                                                                        | `streams://list`, `streams://{id}`, `streams://{id}/health`          | Gateway       |
+| Clips           | `create_clip`, `delete_clip`                                                                                                                                                                   | —                                                                    | Gateway       |
+| DVR             | `start_dvr`, `stop_dvr`                                                                                                                                                                        | —                                                                    | Gateway       |
+| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset`                                                                                                             | `vod://list`, `vod://{artifact_hash}`                                | Gateway       |
+| Playback        | `resolve_playback_endpoint`                                                                                                                                                                    | —                                                                    | Gateway       |
+| Analytics       | —                                                                                                                                                                                              | `analytics://usage`, `analytics://viewers`, `analytics://geographic` | Gateway       |
+| QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)                                                                                                                      | —                                                                    | Gateway       |
+| Support         | `search_support_history`                                                                                                                                                                       | `support://conversations`, `support://conversations/{id}`            | Gateway       |
+| Knowledge       | `ask_consultant`                                                                                                                                                                               | `knowledge://sources`                                                | Skipper spoke |
+| Schema          | `introspect_schema`, `generate_query`, `execute_query`                                                                                                                                         | `schema://catalog`                                                   | Gateway       |
+| Infrastructure  | `browse_marketplace`, `subscribe_to_cluster`, `set_preferred_cluster`, `create_private_cluster`, `create_enrollment_token`, `get_node_info`, `manage_node`, `set_node_mode`, `get_node_health` | `nodes://list`, `nodes://{id}`                                       | Gateway       |
 
 Code: `api_gateway/internal/mcp/` (tools, resources, prompts, preflight), `api_consultant/internal/` (mcpclient, mcpspoke, chat orchestrator). For full tool parameters, see the [public docs](https://logbook.frameworks.network/agents/mcp/).
 
@@ -336,6 +336,43 @@ The Gateway MCP acts as the **hub** — the single unified tool surface for exte
 **Heartbeat agent**: Skipper's background heartbeat agent still uses direct gRPC clients (Periscope, Commodore, Purser, Quartermaster) for proactive health monitoring. These run as system-level operations without user JWT context.
 
 Both directions degrade gracefully — if the other service is unavailable at startup, the dependent features log a warning and remain disabled.
+
+---
+
+## Node Provisioning
+
+Agents can provision and manage their own edge nodes. The full flow:
+
+1. **Create a private cluster** via MCP `create_private_cluster` — returns a bootstrap enrollment token
+2. **Generate additional tokens** via `create_enrollment_token` for the same cluster
+3. **Provision edge nodes** with the CLI:
+   ```
+   frameworks edge provision --enrollment-token <token> --ssh user@host
+   ```
+4. **Monitor node health** via `get_node_info` (static registration data) or `get_node_health` (live metrics from Foghorn)
+5. **Manage node lifecycle** — two paths:
+   - **CLI path** (local or SSH): `frameworks edge mode draining`, `frameworks edge mode maintenance`, `frameworks edge mode normal`
+   - **API path** (no SSH needed): `set_node_mode` MCP tool → Gateway → Commodore → Foghorn
+6. **Guided CLI** via `manage_node` — returns CLI commands for status, diagnose, logs
+
+### Two Management Paths
+
+| Path | Flow                                                 | Use case                              |
+| ---- | ---------------------------------------------------- | ------------------------------------- |
+| CLI  | Agent → Helmsman HTTP → Foghorn control stream       | Agent has shell access (local or SSH) |
+| API  | Agent → Gateway MCP → Commodore proxy → Foghorn gRPC | Agent has no shell access to the edge |
+
+Both paths update state in Foghorn's Redis-backed state store. The routing effect (stop assigning new viewers) is immediate across all Foghorn instances via Redis pub/sub. The CLI path additionally pushes a `ConfigSeed` to Helmsman over the bidirectional control stream.
+
+### Key Files
+
+- `cli/cmd/edge.go` — CLI commands (`provision`, `mode`, `status`, `doctor`, `logs`)
+- `api_sidecar/internal/handlers/handlers.go` — Helmsman HTTP endpoints (`/node/mode`)
+- `api_sidecar/internal/control/client.go` — Upstream mode change via control stream
+- `api_balancing/internal/control/server.go` — Foghorn handler for `ModeChangeRequest`
+- `api_balancing/internal/grpc/server.go` — Foghorn `NodeControlService` (SetNodeOperationalMode, GetNodeHealth)
+- `api_control/internal/grpc/server.go` — Commodore `NodeManagementService` proxy
+- `api_gateway/internal/mcp/tools/infrastructure.go` — MCP tools
 
 ---
 

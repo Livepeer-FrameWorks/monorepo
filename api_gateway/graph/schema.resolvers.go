@@ -257,6 +257,21 @@ func (r *analyticsInfraResolver) RoutingEfficiency(ctx context.Context, obj *mar
 	return r.DoGetRoutingEfficiency(ctx, streamID, timeRange, noCache)
 }
 
+// ClusterTrafficMatrix is the resolver for the clusterTrafficMatrix field.
+func (r *analyticsInfraResolver) ClusterTrafficMatrix(ctx context.Context, obj *markers.AnalyticsInfra, timeRange *model.TimeRangeInput, noCache *bool) ([]*proto.ClusterPairTraffic, error) {
+	return r.DoGetClusterTrafficMatrix(ctx, timeRange, noCache)
+}
+
+// FederationEventsConnection is the resolver for the federationEventsConnection field.
+func (r *analyticsInfraResolver) FederationEventsConnection(ctx context.Context, obj *markers.AnalyticsInfra, timeRange model.TimeRangeInput, first *int, eventType *string, noCache *bool) (*model.FederationEventsConnection, error) {
+	return r.DoGetFederationEventsConnection(ctx, &timeRange, first, eventType, noCache)
+}
+
+// FederationSummary is the resolver for the federationSummary field.
+func (r *analyticsInfraResolver) FederationSummary(ctx context.Context, obj *markers.AnalyticsInfra, timeRange model.TimeRangeInput, noCache *bool) (*proto.FederationSummary, error) {
+	return r.DoGetFederationSummary(ctx, &timeRange, noCache)
+}
+
 // StreamEventsConnection is the resolver for the streamEventsConnection field.
 func (r *analyticsLifecycleResolver) StreamEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -959,6 +974,16 @@ func (r *clusterInviteResolver) AcceptedAt(ctx context.Context, obj *proto.Clust
 	return &t, nil
 }
 
+// EventCount is the resolver for the eventCount field.
+func (r *clusterPairTrafficResolver) EventCount(ctx context.Context, obj *proto.ClusterPairTraffic) (int, error) {
+	return int(obj.EventCount), nil
+}
+
+// SuccessCount is the resolver for the successCount field.
+func (r *clusterPairTrafficResolver) SuccessCount(ctx context.Context, obj *proto.ClusterPairTraffic) (int, error) {
+	return int(obj.SuccessCount), nil
+}
+
 // ResourceLimits is the resolver for the resourceLimits field.
 func (r *clusterSubscriptionResolver) ResourceLimits(ctx context.Context, obj *proto.ClusterSubscription) (*string, error) {
 	if obj.ResourceLimits == nil {
@@ -1325,6 +1350,84 @@ func (r *developerTokenResolver) CreatedAt(ctx context.Context, obj *proto.APITo
 	return &t, nil
 }
 
+// Timestamp is the resolver for the timestamp field.
+func (r *federationEventResolver) Timestamp(ctx context.Context, obj *proto.FederationEvent) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// LatencyMs is the resolver for the latencyMs field.
+func (r *federationEventResolver) LatencyMs(ctx context.Context, obj *proto.FederationEvent) (*float64, error) {
+	if obj.LatencyMs == nil {
+		return nil, nil
+	}
+	v := float64(*obj.LatencyMs)
+	return &v, nil
+}
+
+// TimeToLiveMs is the resolver for the timeToLiveMs field.
+func (r *federationEventResolver) TimeToLiveMs(ctx context.Context, obj *proto.FederationEvent) (*float64, error) {
+	if obj.TimeToLiveMs == nil {
+		return nil, nil
+	}
+	v := float64(*obj.TimeToLiveMs)
+	return &v, nil
+}
+
+// QueriedClusters is the resolver for the queriedClusters field.
+func (r *federationEventResolver) QueriedClusters(ctx context.Context, obj *proto.FederationEvent) (*int, error) {
+	if obj.QueriedClusters == nil {
+		return nil, nil
+	}
+	v := int(*obj.QueriedClusters)
+	return &v, nil
+}
+
+// RespondingClusters is the resolver for the respondingClusters field.
+func (r *federationEventResolver) RespondingClusters(ctx context.Context, obj *proto.FederationEvent) (*int, error) {
+	if obj.RespondingClusters == nil {
+		return nil, nil
+	}
+	v := int(*obj.RespondingClusters)
+	return &v, nil
+}
+
+// TotalCandidates is the resolver for the totalCandidates field.
+func (r *federationEventResolver) TotalCandidates(ctx context.Context, obj *proto.FederationEvent) (*int, error) {
+	if obj.TotalCandidates == nil {
+		return nil, nil
+	}
+	v := int(*obj.TotalCandidates)
+	return &v, nil
+}
+
+// BestRemoteScore is the resolver for the bestRemoteScore field.
+func (r *federationEventResolver) BestRemoteScore(ctx context.Context, obj *proto.FederationEvent) (*int, error) {
+	if obj.BestRemoteScore == nil {
+		return nil, nil
+	}
+	v := int(*obj.BestRemoteScore)
+	return &v, nil
+}
+
+// Count is the resolver for the count field.
+func (r *federationEventCountResolver) Count(ctx context.Context, obj *proto.FederationEventCount) (int, error) {
+	return int(obj.Count), nil
+}
+
+// FailureCount is the resolver for the failureCount field.
+func (r *federationEventCountResolver) FailureCount(ctx context.Context, obj *proto.FederationEventCount) (int, error) {
+	return int(obj.FailureCount), nil
+}
+
+// TotalEvents is the resolver for the totalEvents field.
+func (r *federationSummaryResolver) TotalEvents(ctx context.Context, obj *proto.FederationSummary) (int, error) {
+	return int(obj.TotalEvents), nil
+}
+
 // H3Index is the resolver for the h3Index field.
 func (r *geoBucketResolver) H3Index(ctx context.Context, obj *proto.GeoBucket) (string, error) {
 	if obj == nil {
@@ -1475,27 +1578,18 @@ func (r *infrastructureNodeResolver) LiveState(ctx context.Context, obj *proto.I
 	if middleware.IsDemoMode(ctx) {
 		// Demo tenant ID - nodes belong to clusters which have owner_tenant_id
 		demoTenantID := "5eed517e-ba5e-da7a-517e-ba5eda7a0001"
-		var lat, lon float64
-		if obj.Latitude != nil {
-			lat = *obj.Latitude
-		}
-		if obj.Longitude != nil {
-			lon = *obj.Longitude
-		}
 		return &proto.LiveNode{
 			NodeId:         obj.NodeId,
-			TenantId:       demoTenantID, // Infra owner tenant (cluster operator)
+			TenantId:       demoTenantID,
 			CpuPercent:     35.5,
-			RamUsedBytes:   4 * 1024 * 1024 * 1024,   // 4GB
-			RamTotalBytes:  16 * 1024 * 1024 * 1024,  // 16GB
-			DiskUsedBytes:  50 * 1024 * 1024 * 1024,  // 50GB
-			DiskTotalBytes: 500 * 1024 * 1024 * 1024, // 500GB
-			UpSpeed:        125 * 1024 * 1024,        // 125MB/s
-			DownSpeed:      250 * 1024 * 1024,        // 250MB/s
+			RamUsedBytes:   4 * 1024 * 1024 * 1024,
+			RamTotalBytes:  16 * 1024 * 1024 * 1024,
+			DiskUsedBytes:  50 * 1024 * 1024 * 1024,
+			DiskTotalBytes: 500 * 1024 * 1024 * 1024,
+			UpSpeed:        125 * 1024 * 1024,
+			DownSpeed:      250 * 1024 * 1024,
 			ActiveStreams:  3,
 			IsHealthy:      true,
-			Latitude:       lat,
-			Longitude:      lon,
 			Location:       obj.GetRegion(),
 		}, nil
 	}
@@ -3477,6 +3571,11 @@ func (r *queryResolver) ServiceInstancesHealth(ctx context.Context, serviceID *s
 		return nil, fmt.Errorf("failed to get service health: %w", err)
 	}
 	return resp.Instances, nil
+}
+
+// NetworkStatus is the resolver for the networkStatus field.
+func (r *queryResolver) NetworkStatus(ctx context.Context) (*model.NetworkStatus, error) {
+	return r.DoGetNetworkStatus(ctx)
 }
 
 // MarketplaceClusters is the resolver for the marketplaceClusters field.
@@ -5796,6 +5895,11 @@ func (r *Resolver) Cluster() generated.ClusterResolver { return &clusterResolver
 // ClusterInvite returns generated.ClusterInviteResolver implementation.
 func (r *Resolver) ClusterInvite() generated.ClusterInviteResolver { return &clusterInviteResolver{r} }
 
+// ClusterPairTraffic returns generated.ClusterPairTrafficResolver implementation.
+func (r *Resolver) ClusterPairTraffic() generated.ClusterPairTrafficResolver {
+	return &clusterPairTrafficResolver{r}
+}
+
 // ClusterSubscription returns generated.ClusterSubscriptionResolver implementation.
 func (r *Resolver) ClusterSubscription() generated.ClusterSubscriptionResolver {
 	return &clusterSubscriptionResolver{r}
@@ -5818,6 +5922,21 @@ func (r *Resolver) DVRRequest() generated.DVRRequestResolver { return &dVRReques
 // DeveloperToken returns generated.DeveloperTokenResolver implementation.
 func (r *Resolver) DeveloperToken() generated.DeveloperTokenResolver {
 	return &developerTokenResolver{r}
+}
+
+// FederationEvent returns generated.FederationEventResolver implementation.
+func (r *Resolver) FederationEvent() generated.FederationEventResolver {
+	return &federationEventResolver{r}
+}
+
+// FederationEventCount returns generated.FederationEventCountResolver implementation.
+func (r *Resolver) FederationEventCount() generated.FederationEventCountResolver {
+	return &federationEventCountResolver{r}
+}
+
+// FederationSummary returns generated.FederationSummaryResolver implementation.
+func (r *Resolver) FederationSummary() generated.FederationSummaryResolver {
+	return &federationSummaryResolver{r}
 }
 
 // GeoBucket returns generated.GeoBucketResolver implementation.
@@ -6124,12 +6243,16 @@ type clipResolver struct{ *Resolver }
 type clipLifecycleResolver struct{ *Resolver }
 type clusterResolver struct{ *Resolver }
 type clusterInviteResolver struct{ *Resolver }
+type clusterPairTrafficResolver struct{ *Resolver }
 type clusterSubscriptionResolver struct{ *Resolver }
 type connectionEventResolver struct{ *Resolver }
 type countryMetricResolver struct{ *Resolver }
 type dVREventResolver struct{ *Resolver }
 type dVRRequestResolver struct{ *Resolver }
 type developerTokenResolver struct{ *Resolver }
+type federationEventResolver struct{ *Resolver }
+type federationEventCountResolver struct{ *Resolver }
+type federationSummaryResolver struct{ *Resolver }
 type geoBucketResolver struct{ *Resolver }
 type geographicDistributionResolver struct{ *Resolver }
 type infrastructureNodeResolver struct{ *Resolver }

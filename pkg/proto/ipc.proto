@@ -176,7 +176,17 @@ message ControlMessage {
     TranscodeJobComplete transcode_job_complete = 62;
     // Session termination (Foghorn -> Helmsman for billing suspension)
     StopSessionsRequest stop_sessions_request = 70;
+    // Node mode change request (Helmsman -> Foghorn, from local agent/CLI)
+    ModeChangeRequest mode_change_request = 71;
   }
+}
+
+// ModeChangeRequest is sent by Helmsman when a local agent or CLI requests
+// an operational mode change. Foghorn validates and applies the change,
+// then pushes an updated ConfigSeed back with the new mode.
+message ModeChangeRequest {
+  NodeOperationalMode requested_mode = 1;
+  string reason = 2;  // e.g. "agent_requested", "scheduled_maintenance"
 }
 
 // StopSessionsRequest tells Helmsman to stop all sessions for the given streams
@@ -313,6 +323,7 @@ message MistTrigger {
     VodLifecycleData vod_lifecycle_data = 32;
     APIRequestBatch api_request_batch = 34;
     MessageLifecycleData message_lifecycle_data = 35;
+    FederationEventData federation_event_data = 36;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier
@@ -1031,6 +1042,7 @@ message LoadBalancingData {
   optional uint32 candidates_count = 22;    // Number of eligible candidates considered
   optional string event_type = 23;          // "play_rewrite", "grpc_resolve", etc.
   optional string source = 24;              // "http", "grpc", "internal"
+  optional string remote_cluster_id = 25;   // Destination cluster on cross-cluster decisions (remote_redirect, cross_cluster_dtsc)
 }
 
 // Clip lifecycle specific data (separate from ClipProgress/ClipDone control messages)
@@ -1179,6 +1191,55 @@ message MessageLifecycleData {
   int64 timestamp = 8;                  // When event occurred
   optional string tenant_id = 9;        // Tenant context
   optional string user_id = 10;         // User context
+}
+
+// Federation operation events emitted by Foghorn for cross-cluster analytics.
+// Covers origin-pull replication lifecycle, peer topology changes,
+// QueryStream fan-out, and loop prevention.
+enum FederationEventType {
+  FEDERATION_EVENT_UNSPECIFIED = 0;
+  ORIGIN_PULL_ARRANGED = 1;         // arrangeOriginPull() succeeded; DTSC pull initiated
+  ORIGIN_PULL_COMPLETED = 2;        // Replicated stream detected as live on local edge
+  ORIGIN_PULL_FAILED = 3;           // arrangeOriginPull() failed (RPC error, rejected, no capacity)
+  FEDERATION_QUERY = 4;             // queryStreamFanOut() completed
+  PEER_CONNECTED = 5;               // PeerChannel established to remote cluster
+  PEER_DISCONNECTED = 6;            // PeerChannel lost (error or missed heartbeats)
+  LEADER_ACQUIRED = 7;              // Redis leader lease acquired for PeerManager
+  LEADER_LOST = 8;                  // Redis leader lease lost
+  REPLICATION_LOOP_PREVENTED = 9;   // Loop check blocked a redundant origin-pull
+}
+
+message FederationEventData {
+  FederationEventType event_type = 1;
+  optional string tenant_id = 2;
+  string local_cluster = 3;
+  string remote_cluster = 4;
+  optional string stream_name = 5;
+  optional string stream_id = 6;
+  // Replication fields
+  optional string source_node = 7;
+  optional string dest_node = 8;
+  optional string dtsc_url = 9;
+  optional float latency_ms = 10;
+  optional float time_to_live_ms = 11;
+  optional string failure_reason = 12;
+  // Query fan-out fields
+  optional uint32 queried_clusters = 13;
+  optional uint32 responding_clusters = 14;
+  optional uint32 total_candidates = 15;
+  optional uint64 best_remote_score = 16;
+  // Topology fields
+  optional string peer_cluster = 17;
+  optional string role = 18;
+  optional string reason = 19;
+  // Loop prevention fields
+  optional string blocked_cluster = 20;
+  optional string existing_replication_cluster = 21;
+  // Geo (from foghorn self-GeoIP + peer geo cache)
+  optional double local_lat = 22;
+  optional double local_lon = 23;
+  optional double remote_lat = 24;
+  optional double remote_lon = 25;
 }
 
 message NodeCapabilities {

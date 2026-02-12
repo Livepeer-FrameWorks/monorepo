@@ -13,6 +13,7 @@ This document explains the **current** attribution model:
 - `tenant_id` = **infra owner tenant** (cluster operator; dataset ownership / visibility boundary)
 - `stream_tenant_id` = **subject tenant** (stream/customer owner; relevance filter)
 - `cluster_id` = **emitting cluster** (Quartermaster cluster identifier; slicing/debugging)
+- `remote_cluster_id` = **remote cluster** (set when viewer was routed cross-cluster via origin-pull or redirect; empty for local-only decisions)
 
 ## Data model
 
@@ -47,6 +48,7 @@ Columns include:
 - `tenant_id UUID` (infra owner tenant)
 - `stream_tenant_id Nullable(UUID)` (subject tenant)
 - `cluster_id LowCardinality(String)` (emitting cluster)
+- `remote_cluster_id LowCardinality(String)` (remote cluster for cross-cluster decisions; empty for local)
 - `internal_name String` (stream identifier)
 
 ## Emission paths (Foghorn)

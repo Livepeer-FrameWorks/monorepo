@@ -182,12 +182,11 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     wireguard_public_key TEXT,
     wireguard_listen_port INTEGER DEFAULT 51820,
     
-    -- ===== GEOGRAPHIC LOCATION =====
     region VARCHAR(50),
     availability_zone VARCHAR(50),
-    latitude DECIMAL(10, 8),
-    longitude DECIMAL(11, 8),
-    
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+
     -- ===== HARDWARE RESOURCES =====
     cpu_cores INTEGER,
     memory_gb INTEGER,

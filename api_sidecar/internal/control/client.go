@@ -76,6 +76,11 @@ func getNodeID() string {
 	return c.nodeID
 }
 
+// GetNodeID returns the current node ID from the active control stream connection.
+func GetNodeID() string {
+	return getNodeID()
+}
+
 func storeConn(stream pb.HelmsmanControl_ConnectClient, nodeID string) {
 	activeConn.Store(&streamConn{stream: stream, nodeID: nodeID})
 }
@@ -428,6 +433,26 @@ func SendArtifactDeleted(artifactHash, filePath, reason, artifactType string, si
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: artifactDeleted}}
+	return stream.Send(msg)
+}
+
+// SendModeChangeRequest sends an operational mode change request upstream to Foghorn.
+// Called by the local HTTP API when an agent or CLI requests a mode change.
+func SendModeChangeRequest(mode pb.NodeOperationalMode, reason string) error {
+	stream := getStream()
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	msg := &pb.ControlMessage{
+		SentAt: timestamppb.Now(),
+		Payload: &pb.ControlMessage_ModeChangeRequest{
+			ModeChangeRequest: &pb.ModeChangeRequest{
+				RequestedMode: mode,
+				Reason:        reason,
+			},
+		},
+	}
 	return stream.Send(msg)
 }
 

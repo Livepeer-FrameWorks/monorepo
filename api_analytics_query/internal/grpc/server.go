@@ -39,6 +39,7 @@ type PeriscopeServer struct {
 	pb.UnimplementedConnectionAnalyticsServiceServer
 	pb.UnimplementedNodeAnalyticsServiceServer
 	pb.UnimplementedRoutingAnalyticsServiceServer
+	pb.UnimplementedFederationAnalyticsServiceServer
 	pb.UnimplementedPlatformAnalyticsServiceServer
 	pb.UnimplementedClipAnalyticsServiceServer
 	pb.UnimplementedAggregatedAnalyticsServiceServer
@@ -2024,7 +2025,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 		       client_country, client_latitude, client_longitude, client_bucket_h3, client_bucket_res,
 		       node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
 		       selected_node_id, routing_distance_km, tenant_id, stream_tenant_id, cluster_id,
-		       latency_ms, candidates_count, event_type, source
+		       latency_ms, candidates_count, event_type, source, remote_cluster_id
 		FROM periscope.routing_decisions
 		WHERE %s AND timestamp >= ? AND timestamp <= ?
 	`, inClause)
@@ -2095,12 +2096,13 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 		var candidatesCount *int32
 		var eventType *string
 		var source *string
+		var remoteClusterID string
 
 		err := rows.Scan(&ts, &streamID, &selectedNode, &statusStr, &details, &score,
 			&clientCountry, &clientLat, &clientLon, &clientBucketH3, &clientBucketRes,
 			&nodeLat, &nodeLon, &nodeName, &nodeBucketH3, &nodeBucketRes,
 			&selectedNodeID, &routingDistance, &rowTenantID, &streamTenantID, &clusterID,
-			&latencyMs, &candidatesCount, &eventType, &source)
+			&latencyMs, &candidatesCount, &eventType, &source, &remoteClusterID)
 		if err != nil {
 			s.logger.WithError(err).Info("Failed to scan routing event row")
 			continue
@@ -2186,6 +2188,9 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 		}
 		if clusterID != "" {
 			event.ClusterId = &clusterID
+		}
+		if remoteClusterID != "" {
+			event.RemoteClusterId = &remoteClusterID
 		}
 
 		events = append(events, event)
@@ -2293,6 +2298,279 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *pb.GetR
 			AvgRoutingDistance: avgDist,
 			AvgLatencyMs:       avgLat,
 			TopCountries:       countries,
+		},
+	}, nil
+}
+
+// ============================================================================
+// Cluster Traffic Matrix (routing_cluster_hourly MV)
+// ============================================================================
+
+func (s *PeriscopeServer) GetClusterTrafficMatrix(ctx context.Context, req *pb.GetClusterTrafficMatrixRequest) (*pb.GetClusterTrafficMatrixResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := `
+		SELECT
+			cluster_id, remote_cluster_id,
+			sum(event_count) AS event_count,
+			sum(success_count) AS success_count,
+			sum(sum_latency_ms) / greatest(sum(event_count), 1) AS avg_latency_ms,
+			sum(sum_distance_km) / greatest(sum(event_count), 1) AS avg_distance_km,
+			max(max_latency_ms) AS max_latency_ms
+		FROM periscope.routing_cluster_hourly
+		WHERE tenant_id = ? AND hour >= ? AND hour <= ?
+		GROUP BY cluster_id, remote_cluster_id
+		ORDER BY event_count DESC
+	`
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, startTime, endTime)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var pairs []*pb.ClusterPairTraffic
+	for rows.Next() {
+		var clusterID, remoteClusterID string
+		var eventCount, successCount uint64
+		var avgLatency, avgDistance, maxLatency float64
+		if err := rows.Scan(&clusterID, &remoteClusterID, &eventCount, &successCount, &avgLatency, &avgDistance, &maxLatency); err != nil {
+			s.logger.WithError(err).Warn("Failed to scan cluster traffic matrix row")
+			continue
+		}
+		var successRate float64
+		if eventCount > 0 {
+			successRate = float64(successCount) / float64(eventCount)
+		}
+		pairs = append(pairs, &pb.ClusterPairTraffic{
+			ClusterId:       clusterID,
+			RemoteClusterId: remoteClusterID,
+			EventCount:      eventCount,
+			SuccessCount:    successCount,
+			AvgLatencyMs:    avgLatency,
+			AvgDistanceKm:   avgDistance,
+			SuccessRate:     successRate,
+			MaxLatencyMs:    maxLatency,
+		})
+	}
+
+	return &pb.GetClusterTrafficMatrixResponse{Pairs: pairs}, nil
+}
+
+// ============================================================================
+// FederationAnalyticsService Implementation
+// ============================================================================
+
+func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFederationEventsRequest) (*pb.GetFederationEventsResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	limit := int32(100)
+	if req.GetLimit() > 0 && req.GetLimit() <= 1000 {
+		limit = req.GetLimit()
+	}
+
+	// Count total matching rows before applying LIMIT
+	countQuery := "SELECT count() FROM periscope.federation_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?"
+	countArgs := []interface{}{tenantID, startTime, endTime}
+	if eventType := req.GetEventType(); eventType != "" {
+		countQuery += " AND event_type = ?"
+		countArgs = append(countArgs, eventType)
+	}
+	var totalCount int32
+	_ = s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount)
+
+	query := `
+		SELECT
+			timestamp, event_type, local_cluster, remote_cluster,
+			stream_name, stream_id, source_node, dest_node, dtsc_url,
+			latency_ms, time_to_live_ms, failure_reason,
+			queried_clusters, responding_clusters, total_candidates,
+			best_remote_score, peer_cluster, role, reason
+		FROM periscope.federation_events
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
+	`
+	args := []interface{}{tenantID, startTime, endTime}
+
+	if eventType := req.GetEventType(); eventType != "" {
+		query += " AND event_type = ?"
+		args = append(args, eventType)
+	}
+
+	query += " ORDER BY timestamp DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []*pb.FederationEvent
+	for rows.Next() {
+		var ts time.Time
+		var eventType, localCluster, remoteCluster string
+		var streamName, streamID, sourceNode, destNode, dtscURL sql.NullString
+		var latencyMs, timeToLiveMs sql.NullFloat64
+		var failureReason sql.NullString
+		var queriedClusters, respondingClusters, totalCandidates sql.NullInt32
+		var bestRemoteScore sql.NullInt64
+		var peerCluster sql.NullString
+		var role string
+		var reason sql.NullString
+
+		if err := rows.Scan(&ts, &eventType, &localCluster, &remoteCluster,
+			&streamName, &streamID, &sourceNode, &destNode, &dtscURL,
+			&latencyMs, &timeToLiveMs, &failureReason,
+			&queriedClusters, &respondingClusters, &totalCandidates,
+			&bestRemoteScore, &peerCluster, &role, &reason); err != nil {
+			s.logger.WithError(err).Warn("Failed to scan federation event row")
+			continue
+		}
+
+		evt := &pb.FederationEvent{
+			Timestamp:     timestamppb.New(ts),
+			EventType:     eventType,
+			LocalCluster:  localCluster,
+			RemoteCluster: remoteCluster,
+			Role:          role,
+		}
+		if streamName.Valid && streamName.String != "" {
+			evt.StreamName = &streamName.String
+		}
+		if streamID.Valid && streamID.String != "" {
+			evt.StreamId = &streamID.String
+		}
+		if sourceNode.Valid {
+			evt.SourceNode = &sourceNode.String
+		}
+		if destNode.Valid {
+			evt.DestNode = &destNode.String
+		}
+		if dtscURL.Valid {
+			evt.DtscUrl = &dtscURL.String
+		}
+		if latencyMs.Valid {
+			v := float32(latencyMs.Float64)
+			evt.LatencyMs = &v
+		}
+		if timeToLiveMs.Valid {
+			v := float32(timeToLiveMs.Float64)
+			evt.TimeToLiveMs = &v
+		}
+		if failureReason.Valid && failureReason.String != "" {
+			evt.FailureReason = &failureReason.String
+		}
+		if queriedClusters.Valid {
+			v := uint32(queriedClusters.Int32)
+			evt.QueriedClusters = &v
+		}
+		if respondingClusters.Valid {
+			v := uint32(respondingClusters.Int32)
+			evt.RespondingClusters = &v
+		}
+		if totalCandidates.Valid {
+			v := uint32(totalCandidates.Int32)
+			evt.TotalCandidates = &v
+		}
+		if bestRemoteScore.Valid {
+			v := uint64(bestRemoteScore.Int64)
+			evt.BestRemoteScore = &v
+		}
+		if peerCluster.Valid {
+			evt.PeerCluster = &peerCluster.String
+		}
+		if reason.Valid {
+			evt.Reason = &reason.String
+		}
+
+		events = append(events, evt)
+	}
+
+	return &pb.GetFederationEventsResponse{
+		Events:     events,
+		TotalCount: totalCount,
+	}, nil
+}
+
+func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *pb.GetFederationSummaryRequest) (*pb.GetFederationSummaryResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := `
+		SELECT
+			event_type,
+			sum(event_count) AS total,
+			sum(failure_count) AS failures,
+			sum(sum_latency_ms) / greatest(sum(event_count), 1) AS avg_latency_ms
+		FROM periscope.federation_hourly
+		WHERE tenant_id = ? AND hour >= ? AND hour <= ?
+		GROUP BY event_type
+		ORDER BY total DESC
+	`
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, startTime, endTime)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var counts []*pb.FederationEventCount
+	var totalEvents, totalFailures uint64
+	var totalLatencyWeighted float64
+	for rows.Next() {
+		var eventType string
+		var total, failures uint64
+		var avgLatency float64
+		if err := rows.Scan(&eventType, &total, &failures, &avgLatency); err != nil {
+			s.logger.WithError(err).Warn("Failed to scan federation summary row")
+			continue
+		}
+		counts = append(counts, &pb.FederationEventCount{
+			EventType:    eventType,
+			Count:        total,
+			FailureCount: failures,
+			AvgLatencyMs: avgLatency,
+		})
+		totalEvents += total
+		totalFailures += failures
+		totalLatencyWeighted += avgLatency * float64(total)
+	}
+
+	var overallAvgLatency, overallFailureRate float64
+	if totalEvents > 0 {
+		overallAvgLatency = totalLatencyWeighted / float64(totalEvents)
+		overallFailureRate = float64(totalFailures) / float64(totalEvents)
+	}
+
+	return &pb.GetFederationSummaryResponse{
+		Summary: &pb.FederationSummary{
+			EventCounts:         counts,
+			TotalEvents:         totalEvents,
+			OverallAvgLatencyMs: overallAvgLatency,
+			OverallFailureRate:  overallFailureRate,
 		},
 	}, nil
 }
@@ -5783,6 +6061,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	pb.RegisterConnectionAnalyticsServiceServer(server, periscopeServer)
 	pb.RegisterNodeAnalyticsServiceServer(server, periscopeServer)
 	pb.RegisterRoutingAnalyticsServiceServer(server, periscopeServer)
+	pb.RegisterFederationAnalyticsServiceServer(server, periscopeServer)
 	pb.RegisterPlatformAnalyticsServiceServer(server, periscopeServer)
 	pb.RegisterClipAnalyticsServiceServer(server, periscopeServer)
 	pb.RegisterAggregatedAnalyticsServiceServer(server, periscopeServer)

@@ -46,6 +46,7 @@ query GetRoutingEventsDetailed(
             source
             streamTenantId
             clusterId
+            remoteClusterId
           }
         }
         pageInfo {

@@ -36,6 +36,11 @@ service FoghornFederation {
   // MigrateArtifactMetadata bulk-copies artifact records from a source cluster.
   // Destination calls ListTenantArtifacts on source, then inserts locally with origin_cluster_id.
   rpc MigrateArtifactMetadata(MigrateArtifactMetadataRequest) returns (MigrateArtifactMetadataResponse);
+
+  // ForwardArtifactCommand forwards an artifact operation to a peer cluster.
+  // Used as a safety net when a command arrives at the wrong cluster (stale cache, race).
+  // The receiving cluster tries to handle it locally and reports whether it succeeded.
+  rpc ForwardArtifactCommand(ForwardArtifactCommandRequest) returns (ForwardArtifactCommandResponse);
 }
 
 message QueryStreamRequest {
@@ -279,6 +284,11 @@ message PeerHeartbeat {
   uint32 edge_count = 4;             // Number of online edge nodes
   int64 uptime_seconds = 5;
   repeated string capabilities = 6;  // Feature flags: "stream_ad", "artifact_ad", etc.
+  // Foghorn geo (self-GeoIP'd on startup, exchanged for map visualization)
+  double foghorn_lat = 7;
+  double foghorn_lon = 8;
+  string foghorn_location = 9;
+  string foghorn_region = 10;
 }
 
 // CapacitySummary advertises cluster-wide aggregate capacity for dCDN
@@ -332,4 +342,17 @@ message MigrateArtifactMetadataResponse {
   int32 migrated_count = 1;
   int32 already_exists = 2;
   string error = 3;
+}
+
+// ForwardArtifactCommandRequest forwards an artifact operation to a peer cluster.
+message ForwardArtifactCommandRequest {
+  string command = 1;        // "stop_dvr", "delete_clip", "delete_dvr", "delete_vod"
+  string artifact_hash = 2;  // Clip hash, DVR hash, or VOD hash
+  string tenant_id = 3;
+  string stream_id = 4;      // Optional, used by StopDVR for stream context
+}
+
+message ForwardArtifactCommandResponse {
+  bool handled = 1;          // True if this cluster owned the artifact and processed the command
+  string error = 2;          // Error message if handled=false
 }

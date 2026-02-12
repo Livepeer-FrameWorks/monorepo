@@ -2019,8 +2019,13 @@ type PeerHeartbeat struct {
 	EdgeCount        uint32                 `protobuf:"varint,4,opt,name=edge_count,json=edgeCount,proto3" json:"edge_count,omitempty"`                        // Number of online edge nodes
 	UptimeSeconds    int64                  `protobuf:"varint,5,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
 	Capabilities     []string               `protobuf:"bytes,6,rep,name=capabilities,proto3" json:"capabilities,omitempty"` // Feature flags: "stream_ad", "artifact_ad", etc.
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Foghorn geo (self-GeoIP'd on startup, exchanged for map visualization)
+	FoghornLat      float64 `protobuf:"fixed64,7,opt,name=foghorn_lat,json=foghornLat,proto3" json:"foghorn_lat,omitempty"`
+	FoghornLon      float64 `protobuf:"fixed64,8,opt,name=foghorn_lon,json=foghornLon,proto3" json:"foghorn_lon,omitempty"`
+	FoghornLocation string  `protobuf:"bytes,9,opt,name=foghorn_location,json=foghornLocation,proto3" json:"foghorn_location,omitempty"`
+	FoghornRegion   string  `protobuf:"bytes,10,opt,name=foghorn_region,json=foghornRegion,proto3" json:"foghorn_region,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PeerHeartbeat) Reset() {
@@ -2093,6 +2098,34 @@ func (x *PeerHeartbeat) GetCapabilities() []string {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *PeerHeartbeat) GetFoghornLat() float64 {
+	if x != nil {
+		return x.FoghornLat
+	}
+	return 0
+}
+
+func (x *PeerHeartbeat) GetFoghornLon() float64 {
+	if x != nil {
+		return x.FoghornLon
+	}
+	return 0
+}
+
+func (x *PeerHeartbeat) GetFoghornLocation() string {
+	if x != nil {
+		return x.FoghornLocation
+	}
+	return ""
+}
+
+func (x *PeerHeartbeat) GetFoghornRegion() string {
+	if x != nil {
+		return x.FoghornRegion
+	}
+	return ""
 }
 
 // CapacitySummary advertises cluster-wide aggregate capacity for dCDN
@@ -2520,6 +2553,127 @@ func (x *MigrateArtifactMetadataResponse) GetError() string {
 	return ""
 }
 
+// ForwardArtifactCommandRequest forwards an artifact operation to a peer cluster.
+type ForwardArtifactCommandRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Command       string                 `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`                               // "stop_dvr", "delete_clip", "delete_dvr", "delete_vod"
+	ArtifactHash  string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"` // Clip hash, DVR hash, or VOD hash
+	TenantId      string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamId      string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"` // Optional, used by StopDVR for stream context
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardArtifactCommandRequest) Reset() {
+	*x = ForwardArtifactCommandRequest{}
+	mi := &file_foghorn_federation_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardArtifactCommandRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardArtifactCommandRequest) ProtoMessage() {}
+
+func (x *ForwardArtifactCommandRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_federation_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardArtifactCommandRequest.ProtoReflect.Descriptor instead.
+func (*ForwardArtifactCommandRequest) Descriptor() ([]byte, []int) {
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ForwardArtifactCommandRequest) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
+}
+
+func (x *ForwardArtifactCommandRequest) GetArtifactHash() string {
+	if x != nil {
+		return x.ArtifactHash
+	}
+	return ""
+}
+
+func (x *ForwardArtifactCommandRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ForwardArtifactCommandRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+type ForwardArtifactCommandResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Handled       bool                   `protobuf:"varint,1,opt,name=handled,proto3" json:"handled,omitempty"` // True if this cluster owned the artifact and processed the command
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`      // Error message if handled=false
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardArtifactCommandResponse) Reset() {
+	*x = ForwardArtifactCommandResponse{}
+	mi := &file_foghorn_federation_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardArtifactCommandResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardArtifactCommandResponse) ProtoMessage() {}
+
+func (x *ForwardArtifactCommandResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_federation_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardArtifactCommandResponse.ProtoReflect.Descriptor instead.
+func (*ForwardArtifactCommandResponse) Descriptor() ([]byte, []int) {
+	return file_foghorn_federation_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ForwardArtifactCommandResponse) GetHandled() bool {
+	if x != nil {
+		return x.Handled
+	}
+	return false
+}
+
+func (x *ForwardArtifactCommandResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_foghorn_federation_proto protoreflect.FileDescriptor
 
 const file_foghorn_federation_proto_rawDesc = "" +
@@ -2719,7 +2873,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\ageo_lat\x18\b \x01(\x01R\x06geoLat\x12\x17\n" +
 	"\ageo_lon\x18\t \x01(\x01R\x06geoLon\x12!\n" +
 	"\fbuffer_state\x18\n" +
-	" \x01(\tR\vbufferState\"\xf5\x01\n" +
+	" \x01(\tR\vbufferState\"\x89\x03\n" +
 	"\rPeerHeartbeat\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12!\n" +
 	"\fstream_count\x18\x02 \x01(\rR\vstreamCount\x12,\n" +
@@ -2727,7 +2881,14 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
 	"edge_count\x18\x04 \x01(\rR\tedgeCount\x12%\n" +
 	"\x0euptime_seconds\x18\x05 \x01(\x03R\ruptimeSeconds\x12\"\n" +
-	"\fcapabilities\x18\x06 \x03(\tR\fcapabilities\"\xab\x02\n" +
+	"\fcapabilities\x18\x06 \x03(\tR\fcapabilities\x12\x1f\n" +
+	"\vfoghorn_lat\x18\a \x01(\x01R\n" +
+	"foghornLat\x12\x1f\n" +
+	"\vfoghorn_lon\x18\b \x01(\x01R\n" +
+	"foghornLon\x12)\n" +
+	"\x10foghorn_location\x18\t \x01(\tR\x0ffoghornLocation\x12%\n" +
+	"\x0efoghorn_region\x18\n" +
+	" \x01(\tR\rfoghornRegion\"\xab\x02\n" +
 	"\x0fCapacitySummary\x12'\n" +
 	"\x0ftotal_bandwidth\x18\x01 \x01(\x04R\x0etotalBandwidth\x12/\n" +
 	"\x13available_bandwidth\x18\x02 \x01(\x04R\x12availableBandwidth\x12\x1f\n" +
@@ -2763,7 +2924,15 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x1fMigrateArtifactMetadataResponse\x12%\n" +
 	"\x0emigrated_count\x18\x01 \x01(\x05R\rmigratedCount\x12%\n" +
 	"\x0ealready_exists\x18\x02 \x01(\x05R\ralreadyExists\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error2\xd7\x06\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x98\x01\n" +
+	"\x1dForwardArtifactCommandRequest\x12\x18\n" +
+	"\acommand\x18\x01 \x01(\tR\acommand\x12#\n" +
+	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x1b\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12\x1b\n" +
+	"\tstream_id\x18\x04 \x01(\tR\bstreamId\"P\n" +
+	"\x1eForwardArtifactCommandResponse\x12\x18\n" +
+	"\ahandled\x18\x01 \x01(\bR\ahandled\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xd8\a\n" +
 	"\x11FoghornFederation\x12^\n" +
 	"\vQueryStream\x12&.foghorn_federation.QueryStreamRequest\x1a'.foghorn_federation.QueryStreamResponse\x12a\n" +
 	"\x10NotifyOriginPull\x12*.foghorn_federation.OriginPullNotification\x1a!.foghorn_federation.OriginPullAck\x12j\n" +
@@ -2772,7 +2941,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x0fCreateRemoteDVR\x12$.foghorn_federation.RemoteDVRRequest\x1a%.foghorn_federation.RemoteDVRResponse\x12S\n" +
 	"\vPeerChannel\x12\x1f.foghorn_federation.PeerMessage\x1a\x1f.foghorn_federation.PeerMessage(\x010\x01\x12v\n" +
 	"\x13ListTenantArtifacts\x12..foghorn_federation.ListTenantArtifactsRequest\x1a/.foghorn_federation.ListTenantArtifactsResponse\x12\x82\x01\n" +
-	"\x17MigrateArtifactMetadata\x122.foghorn_federation.MigrateArtifactMetadataRequest\x1a3.foghorn_federation.MigrateArtifactMetadataResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x17MigrateArtifactMetadata\x122.foghorn_federation.MigrateArtifactMetadataRequest\x1a3.foghorn_federation.MigrateArtifactMetadataResponse\x12\x7f\n" +
+	"\x16ForwardArtifactCommand\x121.foghorn_federation.ForwardArtifactCommandRequest\x1a2.foghorn_federation.ForwardArtifactCommandResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
 
 var (
 	file_foghorn_federation_proto_rawDescOnce sync.Once
@@ -2786,7 +2956,7 @@ func file_foghorn_federation_proto_rawDescGZIP() []byte {
 	return file_foghorn_federation_proto_rawDescData
 }
 
-var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_foghorn_federation_proto_goTypes = []any{
 	(*QueryStreamRequest)(nil),              // 0: foghorn_federation.QueryStreamRequest
 	(*QueryStreamResponse)(nil),             // 1: foghorn_federation.QueryStreamResponse
@@ -2816,11 +2986,13 @@ var file_foghorn_federation_proto_goTypes = []any{
 	(*ArtifactMetadata)(nil),                // 25: foghorn_federation.ArtifactMetadata
 	(*MigrateArtifactMetadataRequest)(nil),  // 26: foghorn_federation.MigrateArtifactMetadataRequest
 	(*MigrateArtifactMetadataResponse)(nil), // 27: foghorn_federation.MigrateArtifactMetadataResponse
-	nil,                                     // 28: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	(*ForwardArtifactCommandRequest)(nil),   // 28: foghorn_federation.ForwardArtifactCommandRequest
+	(*ForwardArtifactCommandResponse)(nil),  // 29: foghorn_federation.ForwardArtifactCommandResponse
+	nil,                                     // 30: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
 }
 var file_foghorn_federation_proto_depIdxs = []int32{
 	2,  // 0: foghorn_federation.QueryStreamResponse.candidates:type_name -> foghorn_federation.EdgeCandidate
-	28, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	30, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
 	13, // 2: foghorn_federation.PeerMessage.edge_telemetry:type_name -> foghorn_federation.EdgeTelemetry
 	14, // 3: foghorn_federation.PeerMessage.replication_event:type_name -> foghorn_federation.ReplicationEvent
 	15, // 4: foghorn_federation.PeerMessage.cluster_summary:type_name -> foghorn_federation.ClusterEdgeSummary
@@ -2841,16 +3013,18 @@ var file_foghorn_federation_proto_depIdxs = []int32{
 	11, // 19: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
 	23, // 20: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
 	26, // 21: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
-	1,  // 22: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
-	4,  // 23: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
-	6,  // 24: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
-	8,  // 25: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
-	10, // 26: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
-	11, // 27: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
-	24, // 28: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
-	27, // 29: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
-	22, // [22:30] is the sub-list for method output_type
-	14, // [14:22] is the sub-list for method input_type
+	28, // 22: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
+	1,  // 23: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
+	4,  // 24: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
+	6,  // 25: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
+	8,  // 26: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
+	10, // 27: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
+	11, // 28: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
+	24, // 29: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
+	27, // 30: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
+	29, // 31: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
+	23, // [23:32] is the sub-list for method output_type
+	14, // [14:23] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
 	14, // [14:14] is the sub-list for extension extendee
 	0,  // [0:14] is the sub-list for field type_name
@@ -2877,7 +3051,7 @@ func file_foghorn_federation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_federation_proto_rawDesc), len(file_foghorn_federation_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   29,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

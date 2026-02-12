@@ -238,6 +238,15 @@ func (m *CertManager) GetCertificate(ctx context.Context, tenantID, domain strin
 	return m.store.GetCertificate(ctx, tenantID, domain)
 }
 
+// HasClusterWildcardCert returns true if the cluster has a valid (non-expired)
+// wildcard TLS certificate. Implements the CertChecker interface used by DNSManager
+// to gate granular edge service subdomains.
+func (m *CertManager) HasClusterWildcardCert(ctx context.Context, clusterSlug, rootDomain string) bool {
+	domain := fmt.Sprintf("*.%s.%s", clusterSlug, rootDomain)
+	cert, err := m.GetCertificate(ctx, platformCertTenantID, domain)
+	return err == nil && cert != nil && cert.ExpiresAt.After(time.Now())
+}
+
 func (m *CertManager) EnsureClusterWildcardCertificate(ctx context.Context, clusterSlug, rootDomain, email string) (*store.Certificate, error) {
 	clusterSlug = strings.TrimSpace(clusterSlug)
 	rootDomain = strings.TrimSpace(rootDomain)

@@ -24,13 +24,13 @@ Cluster A (tenant's preferred)              Cluster B (origin)
 
 ## Service Responsibilities
 
-| Component        | Role                                                                                                                                                                     | Data                                                                                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| FederationServer | Handles inbound gRPC RPCs (QueryStream, NotifyOriginPull, PrepareArtifact, PeerChannel, CreateRemoteClip, CreateRemoteDVR, ListTenantArtifacts, MigrateArtifactMetadata) | Reads local LoadBalancer scores, writes ActiveReplication records                                                                       |
-| FederationClient | Pool wrapper for outbound unary RPCs to peer Foghorns                                                                                                                    | Uses FoghornPool lazy connections                                                                                                       |
-| PeerManager      | Manages PeerChannel lifecycles, peer discovery, telemetry push/recv, leader election                                                                                     | Redis leader lease, peer address map                                                                                                    |
-| RemoteEdgeCache  | Redis-backed cache for all cross-cluster state                                                                                                                           | remote_edges (30s TTL), remote_replications (5m), active_replications (5m), edge_summary (60s), stream_ads (15s), peer_heartbeats (30s) |
-| Quartermaster    | Peer discovery via `ListPeers(cluster_id)`                                                                                                                               | Returns peer cluster addresses and shared tenant lists                                                                                  |
+| Component        | Role                                                                                                                                                                                             | Data                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| FederationServer | Handles inbound gRPC RPCs (QueryStream, NotifyOriginPull, PrepareArtifact, PeerChannel, CreateRemoteClip, CreateRemoteDVR, ListTenantArtifacts, MigrateArtifactMetadata, ForwardArtifactCommand) | Reads local LoadBalancer scores, writes ActiveReplication records                                                                       |
+| FederationClient | Pool wrapper for outbound unary RPCs to peer Foghorns                                                                                                                                            | Uses FoghornPool lazy connections                                                                                                       |
+| PeerManager      | Manages PeerChannel lifecycles, peer discovery, telemetry push/recv, leader election                                                                                                             | Redis leader lease, peer address map                                                                                                    |
+| RemoteEdgeCache  | Redis-backed cache for all cross-cluster state                                                                                                                                                   | remote_edges (30s TTL), remote_replications (5m), active_replications (5m), edge_summary (60s), stream_ads (15s), peer_heartbeats (30s) |
+| Quartermaster    | Peer discovery via `ListPeers(cluster_id)`                                                                                                                                                       | Returns peer cluster addresses and shared tenant lists                                                                                  |
 
 ## Data Flows
 
@@ -94,6 +94,39 @@ For DVR: returns map of segment filename → presigned URL.
 For clip/VOD: returns single presigned URL.
 ```
 
+### Cross-Cluster Artifact Command Routing
+
+When Commodore needs to delete/stop an artifact, it routes to the cluster that
+owns it (push model). If the command arrives at the wrong Foghorn (stale cache,
+race condition), Foghorn forwards it via ForwardArtifactCommand (safety net).
+
+#### Push Model (Commodore → Foghorn)
+
+1. Foghorn sends `cluster_id` in `ValidateStreamKey` during ingest
+2. Commodore records `active_ingest_cluster_id` on the stream
+3. On CreateClip, Commodore routes to the ingest cluster (not primary)
+4. Clip/DVR/VOD DB records store `origin_cluster_id`
+5. On DeleteClip/StopDVR/DeleteDVR/DeleteVodAsset:
+   - Query `origin_cluster_id` from business registry
+   - Resolve Foghorn address via `GetClusterRouting` peer list
+   - Call the correct cluster directly
+
+#### Forward Model (Foghorn → Federation Peer)
+
+If Foghorn receives an artifact command for an artifact not in its local DB:
+
+1. Try local handler (existing logic)
+2. If `ErrNoRows` → iterate known federation peers
+3. Call `ForwardArtifactCommand(command, hash, tenant_id)` on each peer
+4. First peer that returns `handled=true` wins
+5. If no peer handles → return NotFound to caller
+
+#### Tenant Operations Fan-Out
+
+`TerminateTenantStreams` and `InvalidateTenantCache` fan out to ALL clusters
+the tenant has access to (via `clusterPeers`), not just the primary cluster.
+Results are aggregated; partial failures are logged but don't block the response.
+
 ### Artifact Migration
 
 ```
@@ -120,9 +153,40 @@ Peer B ──PeerChannel──→ [LB] ──→ Leader Instance ──writes─
                                   Replica Instance ──reads────┘
 ```
 
+## Federation Telemetry & Geo Enrichment
+
+Federation events are emitted by Foghorn for every cross-cluster operation (peering, replication, artifact access, redirect) and ingested into ClickHouse (`periscope.federation_events`) via the standard analytics pipeline.
+
+### Self-Geo Resolution
+
+Each Foghorn resolves its own geographic coordinates at bootstrap:
+
+1. Foghorn reads `NODE_ID` from env (set by CLI provisioning)
+2. Sends `NodeId` in `BootstrapServiceRequest` to Quartermaster
+3. Quartermaster JOINs `infrastructure_nodes`, returns full `InfrastructureNode` in response
+4. Foghorn reads `ExternalIp` → GeoIP lookup → caches lat/lon/location in `handlers.SetSelfGeo()`
+
+If `NODE_ID` is unset or the node has no `external_ip`, self-geo stays zero (graceful degradation).
+
+### Geo Exchange via PeerHeartbeat
+
+PeerHeartbeat messages (10s interval) carry `foghorn_lat`, `foghorn_lon`, and `foghorn_location`. Each peer caches the remote foghorn's geo in `peerState`. This enables:
+
+- Geo-aware federation topology visualization in the UI
+- Per-flow distance calculation for cross-cluster routing analytics
+- `GetPeerGeo(clusterID)` for enriching outbound federation events
+
+### Auto-Enrichment
+
+`emitFederationEvent()` in both `handlers.go` and `peer_manager.go` automatically sets `local_lat`, `local_lon` from self-geo and `remote_lat`, `remote_lon` from peer geo cache before emitting. All call sites (peering, replication, artifact, redirect events) get geo enrichment without per-site changes.
+
+### ClickHouse Columns
+
+Federation events carry `local_lat`, `local_lon`, `remote_lat`, `remote_lon` (all `Float64`). Periscope Ingest writes these in `processFederationEvent()`.
+
 ## Key Files
 
-- `pkg/proto/foghorn_federation.proto` - Service definition (8 RPCs, 9 PeerMessage types)
+- `pkg/proto/foghorn_federation.proto` - Service definition (9 RPCs, 9 PeerMessage types)
 - `api_balancing/internal/federation/server.go` - FederationServer: all RPC handlers
 - `api_balancing/internal/federation/client.go` - FederationClient: pool wrapper for outbound RPCs
 - `api_balancing/internal/federation/peer_manager.go` - PeerManager: lifecycle, discovery, telemetry, leader election

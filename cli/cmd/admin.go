@@ -1593,8 +1593,6 @@ func newAdminNodesCreateCmd() *cobra.Command {
 	var wireguardKey string
 	var region string
 	var availabilityZone string
-	var latitude float64
-	var longitude float64
 	var cpuCores int
 	var memoryGB int
 	var diskGB int
@@ -1679,12 +1677,6 @@ func newAdminNodesCreateCmd() *cobra.Command {
 		if availabilityZone != "" {
 			req.AvailabilityZone = &availabilityZone
 		}
-		if v := optionalFloat64Flag(cmd, "latitude", latitude); v != nil {
-			req.Latitude = v
-		}
-		if v := optionalFloat64Flag(cmd, "longitude", longitude); v != nil {
-			req.Longitude = v
-		}
 		if v := optionalInt32Flag(cmd, "cpu-cores", cpuCores); v != nil {
 			req.CpuCores = v
 		}
@@ -1717,8 +1709,6 @@ func newAdminNodesCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&wireguardKey, "wireguard-public-key", "", "wireguard public key (optional)")
 	cmd.Flags().StringVar(&region, "region", "", "region (optional)")
 	cmd.Flags().StringVar(&availabilityZone, "availability-zone", "", "availability zone (optional)")
-	cmd.Flags().Float64Var(&latitude, "latitude", 0, "latitude (optional)")
-	cmd.Flags().Float64Var(&longitude, "longitude", 0, "longitude (optional)")
 	cmd.Flags().IntVar(&cpuCores, "cpu-cores", 0, "CPU cores (optional)")
 	cmd.Flags().IntVar(&memoryGB, "memory-gb", 0, "memory GB (optional)")
 	cmd.Flags().IntVar(&diskGB, "disk-gb", 0, "disk GB (optional)")

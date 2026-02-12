@@ -827,6 +827,19 @@ func (e *EdgeProvisioner) buildEdgeVars(config EdgeProvisionConfig) templates.Ed
 		vars.CertPath = "/etc/frameworks/certs/cert.pem"
 		vars.KeyPath = "/etc/frameworks/certs/key.pem"
 	}
+
+	// Wildcard Caddyfile: when a wildcard cert is available and we know the pool domain,
+	// derive the cluster domain and use *.{cluster}.{root} so Caddy handles all
+	// service-specific subdomains (edge-egress, edge-ingest, etc.).
+	// Without a wildcard cert, fall back to the single primary domain (auto-ACME).
+	if vars.CertPath != "" && config.PoolDomain != "" {
+		if idx := strings.Index(config.PoolDomain, "."); idx >= 0 {
+			vars.SiteAddress = "*." + config.PoolDomain[idx+1:]
+		}
+	}
+	if vars.SiteAddress == "" {
+		vars.SiteAddress = domain
+	}
 	return vars
 }
 

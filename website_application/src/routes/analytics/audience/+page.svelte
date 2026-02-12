@@ -389,8 +389,10 @@
   // Aggregate bucket-to-bucket flows (client -> node)
   let bucketFlows = $derived.by(() => {
     const edges = $routingEventsStore.data?.analytics?.infra?.routingEventsConnection?.edges ?? [];
-    const flows: Record<string, { from: string; to: string; count: number; distanceSum: number }> =
-      {};
+    const flows: Record<
+      string,
+      { from: string; to: string; count: number; distanceSum: number; crossCluster: boolean }
+    > = {};
 
     for (const edge of edges) {
       const evt = edge.node;
@@ -399,10 +401,13 @@
       if (!from || !to) continue;
       const key = `${from}->${to}`;
       if (!flows[key]) {
-        flows[key] = { from, to, count: 0, distanceSum: 0 };
+        flows[key] = { from, to, count: 0, distanceSum: 0, crossCluster: false };
       }
       flows[key].count++;
       flows[key].distanceSum += evt.routingDistance ?? 0;
+      if (evt.remoteClusterId && evt.remoteClusterId !== evt.clusterId) {
+        flows[key].crossCluster = true;
+      }
     }
 
     return Object.values(flows)
@@ -419,12 +424,17 @@
         const from = bucketToCentroid({ h3Index: flow.from });
         const to = bucketToCentroid({ h3Index: flow.to });
         if (!from || !to) return null;
+        // Amber for cross-cluster, orange for long-haul (>1500km), purple for normal
+        const color = flow.crossCluster
+          ? "rgba(245,158,11,0.75)"
+          : flow.avgDistance > 1500
+            ? "rgba(249,115,22,0.65)"
+            : "rgba(168,85,247,0.6)";
         return {
           from,
           to,
           weight: Math.min(4, 1 + Math.log1p(flow.count)),
-          // Purple for normal, orange for long-haul (>1500km)
-          color: flow.avgDistance > 1500 ? "rgba(249,115,22,0.65)" : "rgba(168,85,247,0.6)",
+          color,
         };
       })
       .filter(Boolean) as {
@@ -1272,6 +1282,10 @@
                       <span class="inline-block w-6 h-0.5 bg-orange-500/60"></span>
                       <span>Long-haul flow (&gt;1500km) - consider adding closer edge</span>
                     </div>
+                    <div class="flex items-center gap-3">
+                      <span class="inline-block w-6 h-0.5 bg-amber-500/70"></span>
+                      <span>Cross-cluster flow (routed via remote cluster)</span>
+                    </div>
                     {#if bucketHotspots.length > 0}
                       {@const counts = bucketHotspots.map((b) => b.count)}
                       {@const minCount = Math.min(...counts)}
@@ -1524,6 +1538,7 @@
                         <th class="text-left py-2 px-4 text-muted-foreground font-medium"
                           >Selected Node</th
                         >
+                        <th class="text-left py-2 px-4 text-muted-foreground font-medium">Route</th>
                         <th class="text-left py-2 px-4 text-muted-foreground font-medium">Status</th
                         >
                       </tr>
@@ -1531,6 +1546,9 @@
                     <tbody>
                       {#each recentRoutingEvents as evt, i (i)}
                         {@const displayStreamId = evt.stream?.streamId ?? evt.streamId}
+                        {@const isCrossCluster = !!(
+                          evt.remoteClusterId && evt.remoteClusterId !== evt.clusterId
+                        )}
                         <tr class="border-b border-border/30 hover:bg-muted/15">
                           <td class="py-2 px-4 text-xs text-muted-foreground"
                             >{new Date(evt.timestamp).toLocaleTimeString()}</td
@@ -1553,6 +1571,18 @@
                               : "—"}
                           </td>
                           <td class="py-2 px-4 font-mono text-xs">{evt.selectedNode}</td>
+                          <td class="py-2 px-4">
+                            {#if isCrossCluster}
+                              <span
+                                class="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-400"
+                                title="Routed via {evt.remoteClusterId}"
+                              >
+                                cross-cluster
+                              </span>
+                            {:else}
+                              <span class="text-xs text-muted-foreground">local</span>
+                            {/if}
+                          </td>
                           <td class="py-2 px-4">
                             <span
                               class="px-2 py-0.5 rounded text-xs font-mono {evt.status ===

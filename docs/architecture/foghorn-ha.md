@@ -71,6 +71,52 @@ Viewer request → Foghorn instance (any)
 
 Reads never hit Redis directly. The in-memory cache is kept fresh by pub/sub sync from other instances' writes.
 
+### Command Relay (HA Forwarding)
+
+Each Helmsman's bidirectional control stream is pinned to one Foghorn instance. The in-memory connection registry (`registry.conns`) is local — a command targeting a node connected to another instance would silently fail with `ErrNotConnected`.
+
+The command relay solves this: on `ErrNotConnected`, the sending instance looks up who owns the node's stream (from Redis) and forwards the command via gRPC.
+
+```
+Control-plane RPC → Foghorn 1
+  → Send*(nodeID, cmd)
+  → Try local registry → ErrNotConnected (node on Foghorn 2)
+  → Redis GET {cluster_id}:conn_owner:{nodeID} → "foghorn-2|10.0.0.5:18019"
+  → gRPC ForwardCommand to 10.0.0.5:18019
+  → Foghorn 2: SendLocal*(nodeID, cmd) → stream.Send() → Helmsman
+```
+
+Loop prevention: the relay handler always calls `SendLocal*` (never `Send*`), so it cannot re-relay.
+
+#### Affected Operations
+
+All 11 push commands that depend on the specific Helmsman stream:
+
+| Severity  | Operation                                                           | Impact if unreachable            |
+| --------- | ------------------------------------------------------------------- | -------------------------------- |
+| Critical  | SendStopSessions                                                    | Billing: sessions keep running   |
+| Critical  | SendDVRStop                                                         | Disk fills, recording won't stop |
+| Critical  | PushOperationalMode                                                 | Node ignores drain/maintenance   |
+| Critical  | SendConfigSeed (TLS)                                                | Stale certs, eventual expiry     |
+| Important | SendDVRStart, SendClipPull, SendDefrostRequest, SendDtshSyncRequest | Feature doesn't work             |
+| Low       | SendClipDelete, SendDVRDelete, SendVodDelete                        | Orphan cleanup retries later     |
+
+#### Connection Ownership Keys
+
+| Key                                | Value                                                      | TTL |
+| ---------------------------------- | ---------------------------------------------------------- | --- |
+| `{cluster_id}:conn_owner:{nodeID}` | `instanceID\|grpcAddr` (e.g., `foghorn-1\|10.0.0.5:18019`) | 60s |
+
+Lifecycle: set on Helmsman connect, refreshed on every heartbeat, deleted on disconnect. If Foghorn crashes, keys expire within 60s.
+
+#### Address Discovery
+
+Foghorn registers at Quartermaster via `BootstrapService` on startup, passing its `node_id`. QM resolves the node's mesh address (`wireguard_ip > internal_ip > external_ip`) and returns the full `advertise_addr` (e.g., `10.0.0.5:18019`). No manual address configuration required.
+
+#### Cross-Cluster Interaction
+
+Federation commands (e.g., PrepareArtifact from Cluster A) land on a random Foghorn instance in Cluster B via DNS load balancing. If that instance doesn't hold the target node's stream, the relay transparently forwards to the correct instance within Cluster B. Federation callers are unaware of the relay hop.
+
 ### Rehydration on Startup
 
 ```
@@ -95,6 +141,7 @@ Merge-not-replace: rehydration merges Redis data with any state already received
 | `{cluster_id}:stream_instances:{stream_name}:{node_id}` | JSON: StreamInstanceState (per-node stream data)                              | None                 |
 | `{cluster_id}:nodes:{node_id}`                          | JSON: NodeState (base_url, geo, cpu, ram, bw, artifacts)                      | None                 |
 | `{cluster_id}:artifacts:{content_id}`                   | JSON: ArtifactState (node_id, size, type, cached_at)                          | None                 |
+| `{cluster_id}:conn_owner:{node_id}`                     | String: `instanceID\|grpcAddr`                                                | 60s                  |
 
 ### Federation State (RemoteEdgeCache)
 
@@ -129,6 +176,7 @@ foghorn:
     CLUSTER_ID: ${CLUSTER_ID}
     REDIS_URL: redis://foghorn-redis:6379
     FOGHORN_INSTANCE_ID: foghorn-1
+    NODE_ID: regional-1 # used by BootstrapService to resolve mesh address for relay
   ports: [18008, 18019]
 
 # foghorn-2 (instance 2): FOGHORN_INSTANCE_ID=foghorn-2
@@ -137,16 +185,20 @@ foghorn-2:
     CLUSTER_ID: ${CLUSTER_ID}
     REDIS_URL: redis://foghorn-redis:6379
     FOGHORN_INSTANCE_ID: foghorn-2
+    NODE_ID: regional-2
   ports: [18018, 18029]
 ```
 
-Both instances register independently with Quartermaster via `BootstrapService`. An upstream load balancer (Nginx, Caddy, or cloud LB) distributes requests across instances.
+Both instances register independently with Quartermaster via `BootstrapService`. QM resolves each instance's mesh address from its `NODE_ID` and returns a full `advertise_addr` used for relay forwarding. An upstream load balancer (Nginx, Caddy, or cloud LB) distributes requests across instances.
 
 ## Key Files
 
 - `api_balancing/internal/state/stream_state.go` - StreamStateManager: in-memory state + Redis write-through
 - `api_balancing/cmd/foghorn/main.go` - Wiring: Redis connection, CLUSTER_ID, FOGHORN_INSTANCE_ID
+- `api_balancing/internal/control/server.go` - CommandRelay, Send*/SendLocal* wrappers, connection lifecycle hooks
+- `api_balancing/internal/grpc/relay_server.go` - FoghornRelay gRPC handler (dispatches to SendLocal\*)
 - `api_balancing/internal/federation/cache.go` - RemoteEdgeCache: federation Redis state, leader lease
+- `pkg/proto/foghorn_relay.proto` - FoghornRelay service definition
 - `docker-compose.yml` - foghorn + foghorn-2 + foghorn-redis topology
 
 ## Redis Topology

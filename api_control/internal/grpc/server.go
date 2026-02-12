@@ -96,6 +96,7 @@ type CommodoreServer struct {
 	pb.UnimplementedDVRServiceServer
 	pb.UnimplementedViewerServiceServer
 	pb.UnimplementedVodServiceServer
+	pb.UnimplementedNodeManagementServiceServer
 	db                   *sql.DB
 	logger               logging.Logger
 	foghornPool          *foghornclient.FoghornPool
@@ -121,12 +122,107 @@ type clusterRoute struct {
 	baseURL     string
 	clusterName string
 	// Official cluster (from billing tier) — provides geographic coverage
-	officialClusterID   string
-	officialClusterSlug string
-	officialBaseURL     string
-	officialClusterName string
-	clusterPeers        []*pb.TenantClusterPeer // full tenant cluster context
-	resolvedAt          time.Time
+	officialClusterID       string
+	officialClusterSlug     string
+	officialBaseURL         string
+	officialClusterName     string
+	officialFoghornGrpcAddr string
+	clusterPeers            []*pb.TenantClusterPeer // full tenant cluster context (includes per-peer foghorn addrs)
+	resolvedAt              time.Time
+}
+
+type commodoreUserRecord struct {
+	ID           string
+	TenantID     string
+	Email        string
+	PasswordHash string
+	FirstName    sql.NullString
+	LastName     sql.NullString
+	Role         string
+	Permissions  []string
+	IsActive     bool
+	IsVerified   bool
+	LastLoginAt  sql.NullTime
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func scanCommodoreUserForLogin(row *sql.Row, user *commodoreUserRecord) error {
+	return row.Scan(
+		&user.ID,
+		&user.TenantID,
+		&user.Email,
+		&user.PasswordHash,
+		&user.FirstName,
+		&user.LastName,
+		&user.Role,
+		pq.Array(&user.Permissions),
+		&user.IsActive,
+		&user.IsVerified,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+}
+
+func scanCommodoreUserForGetMe(row *sql.Row, user *commodoreUserRecord) error {
+	return row.Scan(
+		&user.ID,
+		&user.TenantID,
+		&user.Email,
+		&user.FirstName,
+		&user.LastName,
+		&user.Role,
+		pq.Array(&user.Permissions),
+		&user.IsActive,
+		&user.IsVerified,
+		&user.LastLoginAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+}
+
+func scanCommodoreUserForRefresh(row *sql.Row, user *commodoreUserRecord) error {
+	return row.Scan(
+		&user.Email,
+		&user.Role,
+		pq.Array(&user.Permissions),
+		&user.FirstName,
+		&user.LastName,
+		&user.IsActive,
+		&user.IsVerified,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+}
+
+func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *pb.User {
+	id := u.ID
+	if userID != "" {
+		id = userID
+	}
+	tenant := u.TenantID
+	if tenantID != "" {
+		tenant = tenantID
+	}
+	email := u.Email
+
+	result := &pb.User{
+		Id:          id,
+		TenantId:    tenant,
+		Email:       &email,
+		FirstName:   u.FirstName.String,
+		LastName:    u.LastName.String,
+		Role:        u.Role,
+		Permissions: u.Permissions,
+		IsActive:    u.IsActive,
+		IsVerified:  u.IsVerified,
+		CreatedAt:   timestamppb.New(u.CreatedAt),
+		UpdatedAt:   timestamppb.New(u.UpdatedAt),
+	}
+	if u.LastLoginAt.Valid {
+		result.LastLoginAt = timestamppb.New(u.LastLoginAt.Time)
+	}
+	return result
 }
 
 // CommodoreServerConfig contains all dependencies for CommodoreServer
@@ -195,17 +291,18 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 	}
 
 	route := &clusterRoute{
-		clusterID:           resp.GetClusterId(),
-		foghornAddr:         resp.GetFoghornGrpcAddr(),
-		clusterSlug:         resp.GetClusterSlug(),
-		baseURL:             resp.GetBaseUrl(),
-		clusterName:         resp.GetClusterName(),
-		officialClusterID:   resp.GetOfficialClusterId(),
-		officialClusterSlug: resp.GetOfficialClusterSlug(),
-		officialBaseURL:     resp.GetOfficialBaseUrl(),
-		officialClusterName: resp.GetOfficialClusterName(),
-		clusterPeers:        resp.GetClusterPeers(),
-		resolvedAt:          time.Now(),
+		clusterID:               resp.GetClusterId(),
+		foghornAddr:             resp.GetFoghornGrpcAddr(),
+		clusterSlug:             resp.GetClusterSlug(),
+		baseURL:                 resp.GetBaseUrl(),
+		clusterName:             resp.GetClusterName(),
+		officialClusterID:       resp.GetOfficialClusterId(),
+		officialClusterSlug:     resp.GetOfficialClusterSlug(),
+		officialBaseURL:         resp.GetOfficialBaseUrl(),
+		officialClusterName:     resp.GetOfficialClusterName(),
+		officialFoghornGrpcAddr: resp.GetOfficialFoghornGrpcAddr(),
+		clusterPeers:            resp.GetClusterPeers(),
+		resolvedAt:              time.Now(),
 	}
 
 	s.routeCacheMu.Lock()
@@ -253,6 +350,68 @@ func (s *CommodoreServer) resolveFoghornForTenant(ctx context.Context, tenantID 
 		return client, route, nil
 	}
 	return nil, nil, retryErr
+}
+
+// resolveFoghornForCluster returns a Foghorn gRPC client for a specific cluster,
+// looking up the address from the tenant's cached routing data.
+// Used for artifact operations where origin_cluster_id may differ from primary.
+func (s *CommodoreServer) resolveFoghornForCluster(ctx context.Context, clusterID, tenantID string) (*foghornclient.GRPCClient, error) {
+	route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	addr := resolveAddrFromRoute(route, clusterID)
+	if addr == "" {
+		// Evict cache and retry once — Foghorn may have been assigned since last fill
+		s.routeCacheMu.Lock()
+		delete(s.routeCache, tenantID)
+		s.routeCacheMu.Unlock()
+
+		route, err = s.resolveClusterRouteForTenant(ctx, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		addr = resolveAddrFromRoute(route, clusterID)
+	}
+
+	if addr == "" {
+		return nil, status.Errorf(codes.NotFound,
+			"no foghorn address for cluster %s (tenant %s has access to %d clusters)",
+			clusterID, tenantID, len(route.clusterPeers))
+	}
+
+	client, err := s.foghornPool.GetOrCreate(clusterID, addr)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", clusterID, err)
+	}
+	return client, nil
+}
+
+// resolveAddrFromRoute looks up a Foghorn address for clusterID within cached route data.
+func resolveAddrFromRoute(route *clusterRoute, clusterID string) string {
+	if route.clusterID == clusterID {
+		return route.foghornAddr
+	}
+	if route.officialClusterID == clusterID && route.officialFoghornGrpcAddr != "" {
+		return route.officialFoghornGrpcAddr
+	}
+	for _, peer := range route.clusterPeers {
+		if peer.ClusterId == clusterID && peer.FoghornGrpcAddr != "" {
+			return peer.FoghornGrpcAddr
+		}
+	}
+	return ""
+}
+
+// resolveFoghornForArtifact returns a Foghorn client routed to the artifact's origin cluster.
+// Falls back to the tenant's primary cluster if originClusterID is empty (legacy data).
+func (s *CommodoreServer) resolveFoghornForArtifact(ctx context.Context, tenantID, originClusterID string) (*foghornclient.GRPCClient, error) {
+	if originClusterID == "" {
+		client, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+		return client, err
+	}
+	return s.resolveFoghornForCluster(ctx, originClusterID, tenantID)
 }
 
 // ============================================================================
@@ -342,6 +501,16 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 			resp.OfficialClusterId = &route.officialClusterID
 		}
 		resp.ClusterPeers = route.clusterPeers
+	}
+
+	// Track which cluster this stream is ingesting on (Foghorn reports its own cluster_id)
+	if ingestClusterID := req.GetClusterId(); ingestClusterID != "" {
+		if _, updateErr := s.db.ExecContext(ctx, `
+			UPDATE commodore.streams SET active_ingest_cluster_id = $1, updated_at = NOW()
+			WHERE stream_key = $2
+		`, ingestClusterID, streamKey); updateErr != nil {
+			s.logger.WithError(updateErr).WithField("stream_key", streamKey).Warn("Failed to record ingest cluster")
+		}
 	}
 
 	return resp, nil
@@ -1659,26 +1828,11 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 	}
 
 	// Find user by email
-	var user struct {
-		ID           string
-		TenantID     string
-		Email        string
-		PasswordHash string
-		FirstName    sql.NullString
-		LastName     sql.NullString
-		Role         string
-		Permissions  []string
-		IsActive     bool
-		IsVerified   bool
-		CreatedAt    time.Time
-		UpdatedAt    time.Time
-	}
-	err := s.db.QueryRowContext(ctx, `
+	var user commodoreUserRecord
+	err := scanCommodoreUserForLogin(s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified, created_at, updated_at
 		FROM commodore.users WHERE email = $1
-	`, email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash,
-		&user.FirstName, &user.LastName, &user.Role, pq.Array(&user.Permissions),
-		&user.IsActive, &user.IsVerified, &user.CreatedAt, &user.UpdatedAt)
+	`, email), &user)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
@@ -1735,20 +1889,8 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 	return &pb.AuthResponse{
 		Token:        token,
 		RefreshToken: refreshToken,
-		User: &pb.User{
-			Id:          user.ID,
-			TenantId:    user.TenantID,
-			Email:       &user.Email,
-			FirstName:   user.FirstName.String,
-			LastName:    user.LastName.String,
-			Role:        user.Role,
-			Permissions: user.Permissions,
-			IsActive:    user.IsActive,
-			IsVerified:  user.IsVerified,
-			CreatedAt:   timestamppb.New(user.CreatedAt),
-			UpdatedAt:   timestamppb.New(user.UpdatedAt),
-		},
-		ExpiresAt: timestamppb.New(expiresAt),
+		User:         user.toProtoUser("", ""),
+		ExpiresAt:    timestamppb.New(expiresAt),
 	}, nil
 }
 
@@ -1922,27 +2064,12 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.
 		return nil, err
 	}
 
-	var user struct {
-		ID          string
-		TenantID    string
-		Email       string
-		FirstName   sql.NullString
-		LastName    sql.NullString
-		Role        string
-		Permissions []string
-		IsActive    bool
-		IsVerified  bool
-		LastLoginAt sql.NullTime
-		CreatedAt   time.Time
-		UpdatedAt   time.Time
-	}
+	var user commodoreUserRecord
 
-	err = s.db.QueryRowContext(ctx, `
+	err = scanCommodoreUserForGetMe(s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, email, first_name, last_name, role, permissions, is_active, verified, last_login_at, created_at, updated_at
 		FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID).Scan(&user.ID, &user.TenantID, &user.Email, &user.FirstName, &user.LastName,
-		&user.Role, pq.Array(&user.Permissions), &user.IsActive, &user.IsVerified, &user.LastLoginAt,
-		&user.CreatedAt, &user.UpdatedAt)
+	`, userID, tenantID), &user)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "user not found")
@@ -1951,22 +2078,7 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	result := &pb.User{
-		Id:          user.ID,
-		TenantId:    user.TenantID,
-		Email:       &user.Email,
-		FirstName:   user.FirstName.String,
-		LastName:    user.LastName.String,
-		Role:        user.Role,
-		Permissions: user.Permissions,
-		IsActive:    user.IsActive,
-		IsVerified:  user.IsVerified,
-		CreatedAt:   timestamppb.New(user.CreatedAt),
-		UpdatedAt:   timestamppb.New(user.UpdatedAt),
-	}
-	if user.LastLoginAt.Valid {
-		result.LastLoginAt = timestamppb.New(user.LastLoginAt.Time)
-	}
+	result := user.toProtoUser("", "")
 
 	// Fetch linked wallets
 	walletRows, err := s.db.QueryContext(ctx, `
@@ -2073,23 +2185,11 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	`, tokenID)
 
 	// Look up user details
-	var user struct {
-		Email       string
-		Role        string
-		Permissions []string
-		FirstName   sql.NullString
-		LastName    sql.NullString
-		IsActive    bool
-		IsVerified  bool
-		CreatedAt   time.Time
-		UpdatedAt   time.Time
-	}
-	err = s.db.QueryRowContext(ctx, `
+	var user commodoreUserRecord
+	err = scanCommodoreUserForRefresh(s.db.QueryRowContext(ctx, `
 		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at
 		FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID).Scan(&user.Email, &user.Role, pq.Array(&user.Permissions),
-		&user.FirstName, &user.LastName, &user.IsActive, &user.IsVerified,
-		&user.CreatedAt, &user.UpdatedAt)
+	`, userID, tenantID), &user)
 
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "user not found")
@@ -2126,20 +2226,8 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	return &pb.AuthResponse{
 		Token:        token,
 		RefreshToken: newRefreshToken,
-		User: &pb.User{
-			Id:          userID,
-			TenantId:    tenantID,
-			Email:       &user.Email,
-			FirstName:   user.FirstName.String,
-			LastName:    user.LastName.String,
-			Role:        user.Role,
-			Permissions: user.Permissions,
-			IsActive:    user.IsActive,
-			IsVerified:  user.IsVerified,
-			CreatedAt:   timestamppb.New(user.CreatedAt),
-			UpdatedAt:   timestamppb.New(user.UpdatedAt),
-		},
-		ExpiresAt: timestamppb.New(expiresAt),
+		User:         user.toProtoUser(userID, tenantID),
+		ExpiresAt:    timestamppb.New(expiresAt),
 	}, nil
 }
 
@@ -4300,15 +4388,9 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		return nil, err
 	}
 
-	foghornClient, clipRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
 	// Check if tenant is suspended (prepaid balance < -$10)
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
 		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
-		// Continue anyway - don't block on suspension check failure
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to create clips")
 	}
@@ -4318,16 +4400,34 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	// Resolve internal_name for Foghorn/Mist (internal use only)
+	// Resolve internal_name and active ingest cluster for routing
 	var internalName string
+	var activeIngestClusterID sql.NullString
 	err = s.db.QueryRowContext(ctx, `
-		SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2
-	`, streamID, tenantID).Scan(&internalName)
+		SELECT internal_name, active_ingest_cluster_id FROM commodore.streams WHERE id = $1 AND tenant_id = $2
+	`, streamID, tenantID).Scan(&internalName, &activeIngestClusterID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Route to the cluster where the stream is ingesting (if known), else primary
+	var foghornClient *foghornclient.GRPCClient
+	var clipClusterID string
+	if activeIngestClusterID.Valid && activeIngestClusterID.String != "" {
+		foghornClient, err = s.resolveFoghornForCluster(ctx, activeIngestClusterID.String, tenantID)
+		clipClusterID = activeIngestClusterID.String
+	} else {
+		var clipRoute *clusterRoute
+		foghornClient, clipRoute, err = s.resolveFoghornForTenant(ctx, tenantID)
+		if clipRoute != nil {
+			clipClusterID = clipRoute.clusterID
+		}
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	// Generate clip hash (Commodore is authoritative)
@@ -4386,7 +4486,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
 	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
-		clipRoute.clusterID, retentionUntil)
+		clipClusterID, retentionUntil)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -4673,17 +4773,18 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 		return nil, err
 	}
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	// Look up clip info for deletion event and cluster-aware routing
+	var streamID string
+	var originClusterID sql.NullString
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT stream_id::text, origin_cluster_id FROM commodore.clips
+		WHERE clip_hash = $1 AND tenant_id = $2
+	`, req.ClipHash, tenantID).Scan(&streamID, &originClusterID)
+
+	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, originClusterID.String)
 	if err != nil {
 		return nil, err
 	}
-
-	// Look up clip info for deletion event
-	var streamID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT stream_id::text FROM commodore.clips
-		WHERE clip_hash = $1 AND tenant_id = $2
-	`, req.ClipHash, tenantID).Scan(&streamID)
 
 	resp, trailers, err := foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID)
 	if err != nil {
@@ -4718,19 +4819,20 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (
 		return nil, err
 	}
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
 	var streamID *string
 	var streamIDValue string
+	var originClusterID sql.NullString
 	if streamErr := s.db.QueryRowContext(ctx, `
-		SELECT stream_id::text
+		SELECT stream_id::text, origin_cluster_id
 		FROM commodore.dvr_recordings
 		WHERE dvr_hash = $1 AND tenant_id = $2
-	`, req.DvrHash, tenantID).Scan(&streamIDValue); streamErr == nil && streamIDValue != "" {
+	`, req.DvrHash, tenantID).Scan(&streamIDValue, &originClusterID); streamErr == nil && streamIDValue != "" {
 		streamID = &streamIDValue
+	}
+
+	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, originClusterID.String)
+	if err != nil {
+		return nil, err
 	}
 
 	resp, trailers, err := foghornClient.StopDVR(ctx, req.DvrHash, &tenantID, streamID)
@@ -4749,17 +4851,18 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRReques
 		return nil, err
 	}
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	// Look up DVR info for deletion event and cluster-aware routing
+	var streamID string
+	var originClusterID sql.NullString
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT stream_id::text, origin_cluster_id FROM commodore.dvr_recordings
+		WHERE dvr_hash = $1 AND tenant_id = $2
+	`, req.DvrHash, tenantID).Scan(&streamID, &originClusterID)
+
+	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, originClusterID.String)
 	if err != nil {
 		return nil, err
 	}
-
-	// Look up DVR info for deletion event
-	var streamID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT stream_id::text FROM commodore.dvr_recordings
-		WHERE dvr_hash = $1 AND tenant_id = $2
-	`, req.DvrHash, tenantID).Scan(&streamID)
 
 	resp, trailers, err := foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID)
 	if err != nil {
@@ -5048,6 +5151,77 @@ func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *pb.Ing
 }
 
 // ============================================================================
+// NODE MANAGEMENT SERVICE (Commodore → Foghorn proxy)
+// ============================================================================
+
+// resolveFoghornForNode resolves the Foghorn managing a specific node's cluster.
+// Unlike resolveFoghornForTenant (tenant's primary cluster), this resolves the
+// node's cluster and validates the requesting tenant owns the node.
+func (s *CommodoreServer) resolveFoghornForNode(ctx context.Context, nodeID, requestingTenantID string) (*foghornclient.GRPCClient, error) {
+	if s.quartermasterClient == nil {
+		return nil, status.Error(codes.Unavailable, "quartermaster not available")
+	}
+
+	owner, err := s.quartermasterClient.GetNodeOwner(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	if owner.OwnerTenantId == nil || *owner.OwnerTenantId != requestingTenantID {
+		return nil, status.Error(codes.PermissionDenied, "node is not owned by this tenant")
+	}
+
+	foghornAddr := owner.GetFoghornGrpcAddr()
+	if foghornAddr == "" {
+		return nil, status.Errorf(codes.Unavailable, "no foghorn registered for cluster %s", owner.ClusterId)
+	}
+
+	client, err := s.foghornPool.GetOrCreate(owner.ClusterId, foghornAddr)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", owner.ClusterId, err)
+	}
+	return client, nil
+}
+
+// SetNodeOperationalMode proxies mode changes to Foghorn via the node's cluster.
+func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *pb.SetNodeModeRequest) (*pb.SetNodeModeResponse, error) {
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	foghornClient, err := s.resolveFoghornForNode(ctx, req.GetNodeId(), tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, trailers, err := foghornClient.SetNodeMode(ctx, req)
+	if err != nil {
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
+	}
+	return resp, nil
+}
+
+// GetNodeHealth proxies health queries to Foghorn via the node's cluster.
+func (s *CommodoreServer) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, error) {
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	foghornClient, err := s.resolveFoghornForNode(ctx, req.GetNodeId(), tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, trailers, err := foghornClient.GetNodeHealth(ctx, req)
+	if err != nil {
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
+	}
+	return resp, nil
+}
+
+// ============================================================================
 // SERVER SETUP
 // ============================================================================
 
@@ -5082,6 +5256,7 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	pb.RegisterDVRServiceServer(server, commodoreServer)
 	pb.RegisterViewerServiceServer(server, commodoreServer)
 	pb.RegisterVodServiceServer(server, commodoreServer)
+	pb.RegisterNodeManagementServiceServer(server, commodoreServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
@@ -5595,7 +5770,14 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodA
 		return nil, err
 	}
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	// Look up origin cluster for cluster-aware routing
+	var originClusterID sql.NullString
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT origin_cluster_id FROM commodore.vod_assets
+		WHERE vod_hash = $1 AND tenant_id = $2
+	`, req.ArtifactHash, tenantID).Scan(&originClusterID)
+
+	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, originClusterID.String)
 	if err != nil {
 		return nil, err
 	}
@@ -5642,28 +5824,61 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 		"reason":    req.Reason,
 	}).Info("Received tenant stream termination request from Purser")
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, req.TenantId)
+	// Fan out to ALL clusters the tenant has access to
+	route, err := s.resolveClusterRouteForTenant(ctx, req.TenantId)
 	if err != nil {
 		return nil, err
 	}
 
-	// Forward to Foghorn
-	foghornResp, trailers, err := foghornClient.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
-	if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", req.TenantId).Error("Failed to terminate tenant streams via Foghorn")
-		return nil, grpcutil.PropagateError(ctx, err, trailers)
+	var totalStreams, totalSessions int32
+	var allStreamNames []string
+	var lastErr error
+	var contacted int
+	for _, peer := range route.clusterPeers {
+		if peer.FoghornGrpcAddr == "" {
+			continue
+		}
+		contacted++
+		client, dialErr := s.foghornPool.GetOrCreate(peer.ClusterId, peer.FoghornGrpcAddr)
+		if dialErr != nil {
+			s.logger.WithError(dialErr).WithField("cluster_id", peer.ClusterId).Warn("Failed to connect to cluster for tenant termination")
+			continue
+		}
+		foghornResp, _, callErr := client.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
+		if callErr != nil {
+			s.logger.WithError(callErr).WithFields(logging.Fields{
+				"tenant_id":  req.TenantId,
+				"cluster_id": peer.ClusterId,
+			}).Warn("Failed to terminate tenant streams on cluster")
+			lastErr = callErr
+			continue
+		}
+		totalStreams += foghornResp.StreamsTerminated
+		totalSessions += foghornResp.SessionsTerminated
+		allStreamNames = append(allStreamNames, foghornResp.StreamNames...)
+	}
+
+	if contacted == 0 {
+		return nil, status.Errorf(codes.Unavailable, "no reachable clusters for tenant %s", req.TenantId)
+	}
+	if totalStreams == 0 && totalSessions == 0 && lastErr != nil {
+		return nil, status.Errorf(codes.Unavailable, "failed to terminate streams on any cluster: %v", lastErr)
+	}
+	if lastErr != nil && (totalStreams > 0 || totalSessions > 0) {
+		s.logger.WithError(lastErr).WithField("tenant_id", req.TenantId).Warn("Tenant termination partially failed: some clusters unreachable")
 	}
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":           req.TenantId,
-		"streams_terminated":  foghornResp.StreamsTerminated,
-		"sessions_terminated": foghornResp.SessionsTerminated,
-	}).Info("Tenant streams terminated successfully")
+		"streams_terminated":  totalStreams,
+		"sessions_terminated": totalSessions,
+		"clusters_contacted":  len(route.clusterPeers),
+	}).Info("Tenant streams terminated across all clusters")
 
 	return &pb.TerminateTenantStreamsResponse{
-		StreamsTerminated:  foghornResp.StreamsTerminated,
-		SessionsTerminated: foghornResp.SessionsTerminated,
-		StreamNames:        foghornResp.StreamNames,
+		StreamsTerminated:  totalStreams,
+		SessionsTerminated: totalSessions,
+		StreamNames:        allStreamNames,
 	}, nil
 }
 
@@ -5678,25 +5893,52 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.Inv
 		"reason":    req.Reason,
 	}).Info("Received tenant cache invalidation request from Purser")
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, req.TenantId)
+	// Fan out to ALL clusters the tenant has access to
+	route, err := s.resolveClusterRouteForTenant(ctx, req.TenantId)
 	if err != nil {
 		return nil, err
 	}
 
-	// Forward to Foghorn
-	foghornResp, trailers, err := foghornClient.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
-	if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", req.TenantId).Error("Failed to invalidate tenant cache via Foghorn")
-		return nil, grpcutil.PropagateError(ctx, err, trailers)
+	var totalInvalidated int32
+	var lastErr error
+	var contacted int
+	for _, peer := range route.clusterPeers {
+		if peer.FoghornGrpcAddr == "" {
+			continue
+		}
+		contacted++
+		client, dialErr := s.foghornPool.GetOrCreate(peer.ClusterId, peer.FoghornGrpcAddr)
+		if dialErr != nil {
+			s.logger.WithError(dialErr).WithField("cluster_id", peer.ClusterId).Warn("Failed to connect to cluster for cache invalidation")
+			continue
+		}
+		foghornResp, _, callErr := client.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
+		if callErr != nil {
+			s.logger.WithError(callErr).WithFields(logging.Fields{
+				"tenant_id":  req.TenantId,
+				"cluster_id": peer.ClusterId,
+			}).Warn("Failed to invalidate tenant cache on cluster")
+			lastErr = callErr
+			continue
+		}
+		totalInvalidated += foghornResp.EntriesInvalidated
+	}
+
+	if contacted == 0 {
+		return nil, status.Errorf(codes.Unavailable, "no reachable clusters for tenant %s", req.TenantId)
+	}
+	if totalInvalidated == 0 && lastErr != nil {
+		return nil, status.Errorf(codes.Unavailable, "failed to invalidate cache on any cluster: %v", lastErr)
 	}
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":           req.TenantId,
-		"entries_invalidated": foghornResp.EntriesInvalidated,
-	}).Info("Tenant cache invalidated successfully")
+		"entries_invalidated": totalInvalidated,
+		"clusters_contacted":  len(route.clusterPeers),
+	}).Info("Tenant cache invalidated across all clusters")
 
 	return &pb.InvalidateTenantCacheResponse{
-		EntriesInvalidated: foghornResp.EntriesInvalidated,
+		EntriesInvalidated: totalInvalidated,
 	}, nil
 }
 

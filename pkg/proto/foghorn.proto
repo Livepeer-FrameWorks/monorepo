@@ -69,12 +69,69 @@ message PreRegisterEdgeRequest {
 message PreRegisterEdgeResponse {
   string node_id = 1;           // Assigned node ID
   string edge_domain = 2;       // e.g., edge-{node_id}.{cluster_slug}.{root_domain}
-  string pool_domain = 3;       // e.g., edge-egress.{cluster_slug}.{root_domain}
+  string pool_domain = 3;       // e.g., edge.{cluster_slug}.{root_domain}
   string cluster_slug = 4;
   string foghorn_grpc_addr = 5; // Address for Helmsman's FOGHORN_CONTROL_ADDR
   string cert_pem = 6;          // Wildcard TLS certificate (PEM) for the cluster
   string key_pem = 7;           // Corresponding private key (PEM)
   string cluster_id = 8;        // Raw cluster ID (may differ from DNS-safe cluster_slug)
+}
+
+// NodeControlService exposes node lifecycle operations.
+// Fronts the existing HTTP handlers with tenant ownership validation.
+// Commodore proxies this as NodeManagementService for Gateway access.
+service NodeControlService {
+  // SetNodeOperationalMode changes a node's operational mode (normal, draining, maintenance).
+  rpc SetNodeOperationalMode(SetNodeModeRequest) returns (SetNodeModeResponse);
+  // GetNodeHealth returns real-time health and routing state for a node.
+  rpc GetNodeHealth(GetNodeHealthRequest) returns (GetNodeHealthResponse);
+}
+
+message SetNodeModeRequest {
+  string node_id = 1;
+  string mode = 2;    // "normal", "draining", "maintenance"
+  string set_by = 3;  // caller identity for audit trail
+}
+
+enum SetNodeModeStatus {
+  SET_NODE_MODE_STATUS_UNSPECIFIED = 0;
+  SET_NODE_MODE_STATUS_SUCCESS = 1;
+  SET_NODE_MODE_STATUS_INVALID_MODE = 2;
+  SET_NODE_MODE_STATUS_NOT_FOUND = 3;
+  SET_NODE_MODE_STATUS_ALREADY_IN_MODE = 4;
+}
+
+message SetNodeModeResponse {
+  string node_id = 1;
+  string mode = 2;
+  string message = 3;
+  SetNodeModeStatus status = 4;
+}
+
+message GetNodeHealthRequest {
+  string node_id = 1;
+}
+
+message GetNodeHealthResponse {
+  string node_id = 1;
+  string operational_mode = 2;
+  bool is_healthy = 3;
+  int32 active_viewers = 4;
+  int32 active_streams = 5;
+  string last_heartbeat = 6;  // ISO8601
+  string cluster_id = 7;
+  string tenant_id = 8;       // owning tenant (empty for operator nodes)
+  double cpu_percent = 9;
+  double ram_used_mb = 10;
+  double ram_max_mb = 11;
+  double bandwidth_up_mbps = 12;
+  double bandwidth_down_mbps = 13;
+  double bw_limit_mbps = 14;
+  uint64 disk_total_bytes = 15;
+  uint64 disk_used_bytes = 16;
+  string location = 17;
+  optional double latitude = 18;
+  optional double longitude = 19;
 }
 
 // TenantControlService handles tenant-level operations called by Purser

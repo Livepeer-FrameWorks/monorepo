@@ -14,7 +14,7 @@ and real-time subscriptions.
 ## Authentication
 Most queries require a valid JWT or API token in the Authorization header.
 The dashboard may also authenticate via httpOnly cookies.
-Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndpoint`, `serviceInstancesHealth`.
+Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndpoint`, `serviceInstancesHealth`, `networkStatus`.
 Tenant isolation is enforced - you can only access your own data.
 """
 schema {
@@ -380,6 +380,12 @@ type Query {
     """
     serviceId: String
   ): [ServiceInstanceHealth!]
+
+  """
+  Public network status: cluster topology, node counts, peer connections.
+  No tenant data exposed. Part of public allowlist.
+  """
+  networkStatus: NetworkStatus
 
   """
   List clusters available in the marketplace.
@@ -921,6 +927,29 @@ type AnalyticsInfra {
     timeRange: TimeRangeInput
     noCache: Boolean = false
   ): RoutingEfficiency!
+  """
+  Cross-cluster routing traffic matrix from hourly rollups.
+  """
+  clusterTrafficMatrix(
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): [ClusterPairTraffic!]!
+  """
+  Federation events: origin pulls, peer connections, leader elections, etc.
+  """
+  federationEventsConnection(
+    timeRange: TimeRangeInput!
+    first: Int
+    eventType: String
+    noCache: Boolean = false
+  ): FederationEventsConnection!
+  """
+  Aggregated federation summary: event counts by type, latency, failure rate.
+  """
+  federationSummary(
+    timeRange: TimeRangeInput!
+    noCache: Boolean = false
+  ): FederationSummary!
 }
 
 """
@@ -4703,10 +4732,6 @@ type InfrastructureNode implements Node {
   region: String
   "Availability zone within region."
   availabilityZone: String
-  "Geographic latitude."
-  latitude: Float
-  "Geographic longitude."
-  longitude: Float
   "Number of CPU cores."
   cpuCores: Int
   "Memory in gigabytes."
@@ -5019,6 +5044,100 @@ type RoutingEvent {
   # clusterId = emitting cluster identifier
   streamTenantId: ID
   clusterId: String
+  remoteClusterId: String
+}
+
+# Cross-cluster routing traffic pair from routing_cluster_hourly MV
+type ClusterPairTraffic {
+  clusterId: String!
+  remoteClusterId: String!
+  eventCount: Int!
+  successCount: Int!
+  avgLatencyMs: Float!
+  avgDistanceKm: Float!
+  successRate: Float!
+  maxLatencyMs: Float!
+  localLatitude: Float
+  localLongitude: Float
+  remoteLatitude: Float
+  remoteLongitude: Float
+}
+
+# Federation event (origin pulls, peer topology, leader elections)
+type FederationEvent {
+  timestamp: Time!
+  eventType: String!
+  localCluster: String!
+  remoteCluster: String!
+  streamName: String
+  streamId: ID
+  sourceNode: String
+  destNode: String
+  dtscUrl: String
+  latencyMs: Float
+  timeToLiveMs: Float
+  failureReason: String
+  queriedClusters: Int
+  respondingClusters: Int
+  totalCandidates: Int
+  bestRemoteScore: Int
+  peerCluster: String
+  role: String!
+  reason: String
+}
+
+type FederationEventEdge {
+  cursor: String!
+  node: FederationEvent!
+}
+
+type FederationEventsConnection {
+  edges: [FederationEventEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Per-event-type count with failure and latency stats
+type FederationEventCount {
+  eventType: String!
+  count: Int!
+  failureCount: Int!
+  avgLatencyMs: Float!
+}
+
+# Aggregated federation summary across all event types
+type FederationSummary {
+  eventCounts: [FederationEventCount!]!
+  totalEvents: Int!
+  overallAvgLatencyMs: Float!
+  overallFailureRate: Float!
+}
+
+# Public network status (no tenant data)
+type NetworkClusterStatus {
+  clusterId: String!
+  name: String!
+  region: String!
+  latitude: Float!
+  longitude: Float!
+  nodeCount: Int!
+  healthyNodeCount: Int!
+  peerCount: Int!
+  status: String!
+}
+
+type NetworkPeerConnection {
+  sourceCluster: String!
+  targetCluster: String!
+  connected: Boolean!
+}
+
+type NetworkStatus {
+  clusters: [NetworkClusterStatus!]!
+  peerConnections: [NetworkPeerConnection!]!
+  totalNodes: Int!
+  healthyNodes: Int!
+  updatedAt: Time!
 }
 
 # Connection event for viewer connections/disconnections

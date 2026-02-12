@@ -830,17 +830,16 @@ message InfrastructureNode {
   optional string wireguard_public_key = 9; // json:"wireguard_public_key,omitempty"
   optional string region = 10;          // json:"region,omitempty"
   optional string availability_zone = 11; // json:"availability_zone,omitempty"
-  optional double latitude = 12;        // json:"latitude,omitempty"
-  optional double longitude = 13;       // json:"longitude,omitempty"
-  optional int32 cpu_cores = 14;        // json:"cpu_cores,omitempty"
-  optional int32 memory_gb = 15;        // json:"memory_gb,omitempty"
-  optional int32 disk_gb = 16;          // json:"disk_gb,omitempty"
-  // Field 17 removed (status) - Field 18 was already removed (health_score)
-  optional google.protobuf.Timestamp last_heartbeat = 19; // json:"last_heartbeat,omitempty"
-  google.protobuf.Struct tags = 20;     // json:"tags,omitempty"
-  google.protobuf.Struct metadata = 21; // json:"metadata,omitempty"
-  google.protobuf.Timestamp created_at = 22; // json:"created_at"
-  google.protobuf.Timestamp updated_at = 23; // json:"updated_at"
+  optional int32 cpu_cores = 12;        // json:"cpu_cores,omitempty"
+  optional int32 memory_gb = 13;        // json:"memory_gb,omitempty"
+  optional int32 disk_gb = 14;          // json:"disk_gb,omitempty"
+  optional google.protobuf.Timestamp last_heartbeat = 15; // json:"last_heartbeat,omitempty"
+  google.protobuf.Struct tags = 16;     // json:"tags,omitempty"
+  google.protobuf.Struct metadata = 17; // json:"metadata,omitempty"
+  google.protobuf.Timestamp created_at = 18; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 19; // json:"updated_at"
+  optional double latitude = 20;        // json:"latitude,omitempty"
+  optional double longitude = 21;       // json:"longitude,omitempty"
 }
 
 message NodeResponse {
@@ -865,6 +864,7 @@ message ListNodesResponse {
 message ListHealthyNodesForDNSRequest {
   string node_type = 1;
   int32 stale_threshold_seconds = 2;
+  optional string service_type = 3; // Filter by services.type instead of node_type (takes precedence when set)
 }
 
 message ListHealthyNodesForDNSResponse {
@@ -885,13 +885,11 @@ message CreateNodeRequest {
   optional string wireguard_public_key = 8; // json:"wireguard_public_key,omitempty"
   optional string region = 9;           // json:"region,omitempty"
   optional string availability_zone = 10; // json:"availability_zone,omitempty"
-  optional double latitude = 11;        // json:"latitude,omitempty"
-  optional double longitude = 12;       // json:"longitude,omitempty"
-  optional int32 cpu_cores = 13;        // json:"cpu_cores,omitempty"
-  optional int32 memory_gb = 14;        // json:"memory_gb,omitempty"
-  optional int32 disk_gb = 15;          // json:"disk_gb,omitempty"
-  google.protobuf.Struct tags = 16;     // json:"tags,omitempty"
-  google.protobuf.Struct metadata = 17; // json:"metadata,omitempty"
+  optional int32 cpu_cores = 11;        // json:"cpu_cores,omitempty"
+  optional int32 memory_gb = 12;        // json:"memory_gb,omitempty"
+  optional int32 disk_gb = 13;          // json:"disk_gb,omitempty"
+  google.protobuf.Struct tags = 14;     // json:"tags,omitempty"
+  google.protobuf.Struct metadata = 15; // json:"metadata,omitempty"
 }
 
 // UpdateNodeHealthRequest removed - health tracking moved to Lookout
@@ -899,14 +897,10 @@ message CreateNodeRequest {
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest (lines 180-190)
 message ResolveNodeFingerprintRequest {
   string peer_ip = 1;                   // json:"peer_ip"
-  string geo_country = 2;               // json:"geo_country,omitempty"
-  string geo_city = 3;                  // json:"geo_city,omitempty"
-  double geo_latitude = 4;              // json:"geo_latitude,omitempty"
-  double geo_longitude = 5;             // json:"geo_longitude,omitempty"
-  repeated string local_ipv4 = 6;       // json:"local_ipv4,omitempty"
-  repeated string local_ipv6 = 7;       // json:"local_ipv6,omitempty"
-  optional string macs_sha256 = 8;      // json:"macs_sha256,omitempty"
-  optional string machine_id_sha256 = 9; // json:"machine_id_sha256,omitempty"
+  repeated string local_ipv4 = 2;       // json:"local_ipv4,omitempty"
+  repeated string local_ipv6 = 3;       // json:"local_ipv6,omitempty"
+  optional string macs_sha256 = 4;      // json:"macs_sha256,omitempty"
+  optional string machine_id_sha256 = 5; // json:"machine_id_sha256,omitempty"
 }
 
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintResponse (lines 192-195)
@@ -941,6 +935,7 @@ message NodeOwnerResponse {
   string cluster_name = 3;              // json:"cluster_name"
   optional string owner_tenant_id = 4;  // json:"owner_tenant_id,omitempty"
   optional string tenant_name = 5;      // json:"tenant_name,omitempty"
+  optional string foghorn_grpc_addr = 6; // Foghorn gRPC address for the node's cluster
 }
 
 // ============================================================================
@@ -1000,6 +995,7 @@ message BootstrapServiceRequest {
   // Explicit cluster binding - required when multiple clusters exist
   // If omitted, falls back to token-bound cluster or single active cluster (dev only)
   optional string cluster_id = 11;      // json:"cluster_id,omitempty"
+  optional string node_id = 12;         // json:"node_id,omitempty" - links service instance to physical node
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapServiceResponse (lines 267-272)
@@ -1009,6 +1005,8 @@ message BootstrapServiceResponse {
   string cluster_id = 3;                // json:"cluster_id"
   optional string node_id = 4;          // json:"node_id,omitempty"
   optional string owner_tenant_id = 5;  // json:"owner_tenant_id,omitempty" - Cluster owner tenant for dual-tenant attribution
+  optional InfrastructureNode node = 6; // linked infrastructure node (when node_id set)
+  optional string advertise_addr = 7;   // resolved advertise_host:port for this instance
 }
 
 message ServiceDiscoveryRequest {
@@ -1397,6 +1395,7 @@ message TenantClusterPeer {
   string cluster_name = 4;      // Human label for UX
   string role = 5;              // "preferred", "official", "subscribed"
   string cluster_type = 6;      // "shared-community", "shared-lb", "dedicated", "self-hosted"
+  string foghorn_grpc_addr = 7; // Resolved Foghorn gRPC address (host:port) from service_instances
   string s3_bucket = 20;        // Cluster S3 bucket (for cross-cluster artifact affinity)
   string s3_endpoint = 21;      // S3 endpoint URL
   string s3_region = 22;        // S3 region

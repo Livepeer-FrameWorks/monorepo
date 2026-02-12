@@ -740,6 +740,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
 
     stream_tenant_id Nullable(UUID),
     cluster_id LowCardinality(String) DEFAULT '',
+    remote_cluster_id LowCardinality(String) DEFAULT '',
 
     latency_ms Nullable(Float32),
     candidates_count Nullable(Int32),
@@ -749,6 +750,106 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
+
+-- Hourly routing by cluster pair (for traffic matrix and dashboards)
+CREATE TABLE IF NOT EXISTS routing_cluster_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String),
+    remote_cluster_id LowCardinality(String),
+    status LowCardinality(String),
+    event_count UInt32,
+    success_count UInt32,
+    sum_latency_ms Float32,
+    sum_distance_km Float64,
+    max_latency_ms Float32,
+    avg_score Float64
+) ENGINE = SummingMergeTree((event_count, success_count, sum_latency_ms, sum_distance_km))
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, cluster_id, remote_cluster_id, status)
+TTL hour + INTERVAL 365 DAY;
+
+ALTER TABLE routing_decisions ADD COLUMN IF NOT EXISTS remote_cluster_id LowCardinality(String) DEFAULT '';
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS routing_cluster_hourly_mv TO routing_cluster_hourly AS
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    cluster_id,
+    remote_cluster_id,
+    status,
+    count() AS event_count,
+    countIf(status = 'success') AS success_count,
+    sum(latency_ms) AS sum_latency_ms,
+    sum(routing_distance_km) AS sum_distance_km,
+    max(latency_ms) AS max_latency_ms,
+    avg(score) AS avg_score
+FROM routing_decisions
+GROUP BY hour, tenant_id, cluster_id, remote_cluster_id, status;
+
+-- ============================================================================
+-- FEDERATION EVENTS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS federation_events (
+    timestamp DateTime,
+    tenant_id UUID,
+    event_type LowCardinality(String),
+    local_cluster LowCardinality(String),
+    remote_cluster LowCardinality(String),
+    stream_name String DEFAULT '',
+    stream_id Nullable(UUID),
+    source_node Nullable(String),
+    dest_node Nullable(String),
+    dtsc_url Nullable(String),
+    latency_ms Nullable(Float32),
+    time_to_live_ms Nullable(Float32),
+    failure_reason Nullable(String),
+    queried_clusters Nullable(UInt32),
+    responding_clusters Nullable(UInt32),
+    total_candidates Nullable(UInt32),
+    best_remote_score Nullable(UInt64),
+    peer_cluster Nullable(String),
+    role LowCardinality(String) DEFAULT '',
+    reason Nullable(String),
+    local_lat Nullable(Float64),
+    local_lon Nullable(Float64),
+    remote_lat Nullable(Float64),
+    remote_lon Nullable(Float64)
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, local_cluster, event_type, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- Hourly rollup for federation summary dashboards
+CREATE TABLE IF NOT EXISTS federation_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    local_cluster LowCardinality(String),
+    remote_cluster LowCardinality(String),
+    event_type LowCardinality(String),
+    event_count UInt32,
+    sum_latency_ms Float32,
+    sum_time_to_live_ms Float32,
+    failure_count UInt32
+) ENGINE = SummingMergeTree((event_count, sum_latency_ms, sum_time_to_live_ms, failure_count))
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, local_cluster, remote_cluster, event_type)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS federation_hourly_mv TO federation_hourly AS
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    local_cluster,
+    remote_cluster,
+    event_type,
+    count() AS event_count,
+    sum(latency_ms) AS sum_latency_ms,
+    sum(time_to_live_ms) AS sum_time_to_live_ms,
+    countIf(failure_reason != '' AND failure_reason IS NOT NULL) AS failure_count
+FROM federation_events
+GROUP BY hour, tenant_id, local_cluster, remote_cluster, event_type;
 
 -- ============================================================================
 -- NODE STATE + METRICS
@@ -918,10 +1019,6 @@ CREATE TABLE IF NOT EXISTS artifact_events (
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, request_id)
 TTL timestamp + INTERVAL 90 DAY;
-
--- Migration: add cluster columns to existing artifact_events tables
-ALTER TABLE artifact_events ADD COLUMN IF NOT EXISTS cluster_id LowCardinality(String) DEFAULT '' AFTER internal_name;
-ALTER TABLE artifact_events ADD COLUMN IF NOT EXISTS origin_cluster_id LowCardinality(String) DEFAULT '' AFTER cluster_id;
 
 
 CREATE TABLE IF NOT EXISTS artifact_state_current (

@@ -62,11 +62,11 @@ By default, the CLI assumes `frameworks.network` if `--domain` is not provided.
 | `bridge.example.com`      | GraphQL API      | Bridge             |
 | `foghorn.example.com`     | Viewer routing   | Foghorn            |
 | `edge-ingest.example.com` | Stream ingest    | Edge nodes         |
-| `edge-egress.example.com` | Edge pool domain | Edge nodes         |
+| `edge.example.com`        | Edge pool domain | Edge nodes         |
 | `logbook.example.com`     | Docs site        | Logbook            |
 | `steward.example.com`     | Forms API        | Steward            |
 
-Navigator only manages subdomains for service types that exist in Quartermaster inventory. If you want separate `edge-ingest` or `foghorn` domains, register nodes with those types; otherwise use the `edge-egress` pool.
+Navigator only manages subdomains for service types that exist in Quartermaster inventory. Granular subdomains like `edge-egress` and `edge-ingest` are only created when the cluster has a wildcard TLS certificate; otherwise all edge traffic routes through the `edge` pool.
 
 ### Internal Services (Private Network / Mesh)
 
@@ -107,7 +107,7 @@ In multi-cluster deployments, each cluster gets its own set of service subdomain
 | Pattern                     | Purpose                                       |
 | --------------------------- | --------------------------------------------- |
 | `edge-ingest.{slug}.{base}` | RTMP/SRT/WHIP ingest for this cluster's edges |
-| `edge-egress.{slug}.{base}` | Edge pool domain (viewer delivery)            |
+| `edge.{slug}.{base}`        | Edge pool domain (any edge in cluster)        |
 | `foghorn.{slug}.{base}`     | Viewer routing / playback resolution          |
 | `bridge.{slug}.{base}`      | GraphQL API                                   |
 
@@ -130,7 +130,7 @@ Once issued, certificates are distributed to edge nodes via **ConfigSeed** — F
 Tenant-specific subdomains CNAME to the shared infrastructure:
 
 ```
-tenant1.example.com         → CNAME → foghorn.example.com (or edge-egress.example.com)
+tenant1.example.com         → CNAME → foghorn.example.com (or edge.example.com)
 tenant1.edge-ingest.example.com  → CNAME → edge-ingest.example.com
 ```
 

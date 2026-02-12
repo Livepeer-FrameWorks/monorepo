@@ -3,8 +3,10 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	pkgredis "frameworks/pkg/redis"
 
@@ -174,6 +176,54 @@ func (r *RedisStateStore) GetAllNodeArtifacts() (map[string][]*NodeArtifactState
 		}
 		return artifacts, artifacts[0].NodeID, nil
 	})
+}
+
+// Connection ownership for HA relay: tracks which Foghorn instance holds each node's control stream.
+// Value is "instanceID:grpcAddr" so the relay can look up both in a single GET.
+
+func (r *RedisStateStore) keyConnOwner(nodeID string) string {
+	return fmt.Sprintf("{%s}:conn_owner:%s", r.clusterID, nodeID)
+}
+
+// ConnOwner is the compound value stored in the conn_owner Redis key.
+type ConnOwner struct {
+	InstanceID string
+	GRPCAddr   string
+}
+
+func encodeConnOwner(instanceID, grpcAddr string) string {
+	return instanceID + "|" + grpcAddr
+}
+
+func decodeConnOwner(val string) ConnOwner {
+	parts := strings.SplitN(val, "|", 2)
+	if len(parts) != 2 {
+		return ConnOwner{InstanceID: val}
+	}
+	return ConnOwner{InstanceID: parts[0], GRPCAddr: parts[1]}
+}
+
+func (r *RedisStateStore) SetConnOwner(ctx context.Context, nodeID, instanceID, grpcAddr string) error {
+	return r.client.Set(ctx, r.keyConnOwner(nodeID), encodeConnOwner(instanceID, grpcAddr), 60*time.Second).Err()
+}
+
+func (r *RedisStateStore) GetConnOwner(ctx context.Context, nodeID string) (ConnOwner, error) {
+	val, err := r.client.Get(ctx, r.keyConnOwner(nodeID)).Result()
+	if errors.Is(err, goredis.Nil) {
+		return ConnOwner{}, nil
+	}
+	if err != nil {
+		return ConnOwner{}, err
+	}
+	return decodeConnOwner(val), nil
+}
+
+func (r *RedisStateStore) DeleteConnOwner(ctx context.Context, nodeID string) error {
+	return r.client.Del(ctx, r.keyConnOwner(nodeID)).Err()
+}
+
+func (r *RedisStateStore) RefreshConnOwner(ctx context.Context, nodeID string) error {
+	return r.client.Expire(ctx, r.keyConnOwner(nodeID), 60*time.Second).Err()
 }
 
 func (r *RedisStateStore) PublishStateChange(change StateChange) error {

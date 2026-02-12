@@ -1,4 +1,4 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper \
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-cli \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper \
 	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
 	lint lint-all lint-fix lint-report lint-analyze \
@@ -44,6 +44,8 @@ build: proto graphql
 		echo "Building $$service..."; \
 		$(MAKE) build-bin-$$service; \
 	done
+	@echo "Building cli..."
+	@$(MAKE) build-bin-cli
 
 # Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
 verify: proto graphql
@@ -220,6 +222,8 @@ build-bin-steward: proto
 build-bin-skipper: proto
 	cd api_consultant && go build $(LDFLAGS) -o ../bin/skipper ./cmd/skipper
 
+build-bin-cli: proto
+	cd cli && go build $(LDFLAGS) -o ../bin/cli .
 
 # Clean build artifacts
 clean:

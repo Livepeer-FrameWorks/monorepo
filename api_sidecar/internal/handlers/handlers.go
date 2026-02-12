@@ -1698,3 +1698,73 @@ func boolPtr(b bool) *bool {
 func float64Ptr(f float64) *float64 {
 	return &f
 }
+
+// HandleGetNodeMode returns the current operational mode from the last ConfigSeed.
+func HandleGetNodeMode(c *gin.Context) {
+	mode := config.GetOperationalMode()
+	c.JSON(http.StatusOK, gin.H{
+		"mode":    modeToString(mode),
+		"node_id": control.GetNodeID(),
+	})
+}
+
+// HandleSetNodeMode requests an operational mode change via the Foghorn control stream.
+// Foghorn validates and applies the change, then pushes an updated ConfigSeed back.
+func HandleSetNodeMode(c *gin.Context) {
+	var req struct {
+		Mode   string `json:"mode" binding:"required"`
+		Reason string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mode is required (normal, draining, maintenance)"})
+		return
+	}
+
+	mode, ok := parseMode(req.Mode)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid mode %q: must be normal, draining, or maintenance", req.Mode)})
+		return
+	}
+
+	reason := req.Reason
+	if reason == "" {
+		reason = "local_request"
+	}
+
+	if err := control.SendModeChangeRequest(mode, reason); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("failed to send mode change request: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":         "requested",
+		"requested_mode": req.Mode,
+		"message":        "Mode change requested. Foghorn will validate and push the updated mode via ConfigSeed.",
+	})
+}
+
+func parseMode(s string) (pb.NodeOperationalMode, bool) {
+	switch strings.ToLower(s) {
+	case "normal":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL, true
+	case "draining":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING, true
+	case "maintenance":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE, true
+	default:
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED, false
+	}
+}
+
+func modeToString(m pb.NodeOperationalMode) string {
+	switch m {
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL:
+		return "normal"
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
+		return "draining"
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
+		return "maintenance"
+	default:
+		return "normal"
+	}
+}

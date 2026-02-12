@@ -17,7 +17,7 @@ func TestEdgeProvisionConfig_PrimaryDomain(t *testing.T) {
 		nodeDomain string
 		want       string
 	}{
-		{"pool takes precedence", "edge-egress.example.com", "edge-1.example.com", "edge-egress.example.com"},
+		{"pool takes precedence", "edge.example.com", "edge-1.example.com", "edge.example.com"},
 		{"falls back to node domain", "", "edge-1.example.com", "edge-1.example.com"},
 		{"both empty", "", "", ""},
 	}
@@ -56,7 +56,7 @@ func TestBuildEdgeVars_Docker(t *testing.T) {
 	config := EdgeProvisionConfig{
 		Mode:            "docker",
 		NodeID:          "node-123",
-		PoolDomain:      "edge-egress.example.com",
+		PoolDomain:      "edge.example.com",
 		Email:           "ops@example.com",
 		FoghornHTTPBase: "https://foghorn.example.com",
 		FoghornGRPCAddr: "foghorn.example.com:18008",
@@ -73,11 +73,29 @@ func TestBuildEdgeVars_Docker(t *testing.T) {
 	if vars.NodeID != "node-123" {
 		t.Errorf("NodeID = %q, want node-123", vars.NodeID)
 	}
-	if vars.EdgeDomain != "edge-egress.example.com" {
-		t.Errorf("EdgeDomain = %q, want edge-egress.example.com", vars.EdgeDomain)
+	if vars.EdgeDomain != "edge.example.com" {
+		t.Errorf("EdgeDomain = %q, want edge.example.com", vars.EdgeDomain)
 	}
 	if vars.CertPath == "" || vars.KeyPath == "" {
 		t.Error("CertPath/KeyPath should be set when CertPEM/KeyPEM are provided")
+	}
+	if vars.SiteAddress != "*.example.com" {
+		t.Errorf("SiteAddress = %q, want *.example.com (wildcard when cert + pool domain set)", vars.SiteAddress)
+	}
+}
+
+func TestBuildEdgeVars_NoCertFallsBackToSingleDomain(t *testing.T) {
+	ep := NewEdgeProvisioner(nil)
+	config := EdgeProvisionConfig{
+		Mode:       "docker",
+		PoolDomain: "edge.us-west.example.com",
+		NodeDomain: "edge-abc123.us-west.example.com",
+	}
+
+	vars := ep.buildEdgeVars(config)
+
+	if vars.SiteAddress != "edge.us-west.example.com" {
+		t.Errorf("SiteAddress = %q, want edge.us-west.example.com (single domain when no cert)", vars.SiteAddress)
 	}
 }
 
@@ -103,6 +121,7 @@ func TestWriteEdgeTemplates_DockerMode(t *testing.T) {
 	vars := templates.EdgeVars{
 		NodeID:          "test-node",
 		EdgeDomain:      "edge-1.example.com",
+		SiteAddress:     "edge-1.example.com",
 		AcmeEmail:       "ops@example.com",
 		FoghornHTTPBase: "https://foghorn.example.com",
 		FoghornGRPCAddr: "foghorn.example.com:18008",
@@ -150,6 +169,7 @@ func TestWriteEdgeTemplates_NativeMode(t *testing.T) {
 	vars := templates.EdgeVars{
 		NodeID:          "test-node",
 		EdgeDomain:      "edge-1.example.com",
+		SiteAddress:     "edge-1.example.com",
 		AcmeEmail:       "ops@example.com",
 		FoghornHTTPBase: "https://foghorn.example.com",
 		FoghornGRPCAddr: "foghorn.example.com:18008",
@@ -201,11 +221,12 @@ func TestWriteEdgeTemplates_NativeMode(t *testing.T) {
 func TestWriteEdgeTemplates_TLSDirective(t *testing.T) {
 	tmpDir := t.TempDir()
 	vars := templates.EdgeVars{
-		EdgeDomain: "edge-1.example.com",
-		AcmeEmail:  "ops@example.com",
-		Mode:       "docker",
-		CertPath:   "/etc/frameworks/certs/cert.pem",
-		KeyPath:    "/etc/frameworks/certs/key.pem",
+		EdgeDomain:  "edge-1.example.com",
+		SiteAddress: "*.us-west.example.com",
+		AcmeEmail:   "ops@example.com",
+		Mode:        "docker",
+		CertPath:    "/etc/frameworks/certs/cert.pem",
+		KeyPath:     "/etc/frameworks/certs/key.pem",
 	}
 
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
@@ -217,15 +238,19 @@ func TestWriteEdgeTemplates_TLSDirective(t *testing.T) {
 	if !strings.Contains(content, "tls /etc/frameworks/certs/cert.pem /etc/frameworks/certs/key.pem") {
 		t.Error("Caddyfile should contain TLS directive with cert paths")
 	}
+	if !strings.Contains(content, "*.us-west.example.com {") {
+		t.Error("Caddyfile should use wildcard site address when cert is available")
+	}
 }
 
 func TestWriteEdgeTemplates_NoTLSDirective(t *testing.T) {
 	tmpDir := t.TempDir()
 	vars := templates.EdgeVars{
-		EdgeDomain: "edge-1.example.com",
-		AcmeEmail:  "ops@example.com",
-		Mode:       "docker",
-		// No CertPath/KeyPath
+		EdgeDomain:  "edge-1.example.com",
+		SiteAddress: "edge-1.example.com",
+		AcmeEmail:   "ops@example.com",
+		Mode:        "docker",
+		// No CertPath/KeyPath — single domain, auto-ACME
 	}
 
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
@@ -236,6 +261,9 @@ func TestWriteEdgeTemplates_NoTLSDirective(t *testing.T) {
 	content := string(caddyfile)
 	if strings.Contains(content, "tls /etc") {
 		t.Error("Caddyfile should NOT contain TLS directive when no cert paths provided")
+	}
+	if !strings.Contains(content, "edge-1.example.com {") {
+		t.Error("Caddyfile should use single domain when no cert (auto-ACME)")
 	}
 }
 

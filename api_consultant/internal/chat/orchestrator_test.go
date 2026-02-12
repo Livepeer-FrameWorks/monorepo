@@ -9,6 +9,7 @@ import (
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/skipper"
 	"frameworks/pkg/llm"
+	"frameworks/pkg/search"
 )
 
 type fakeKnowledgeStore struct {
@@ -456,5 +457,74 @@ func TestSearchLimitCap(t *testing.T) {
 				t.Errorf("limit = %d, want %d", limit, tt.want)
 			}
 		})
+	}
+}
+
+type recordingSearchProviderWithOptions struct {
+	queries []string
+	options []search.SearchOptions
+}
+
+func (p *recordingSearchProviderWithOptions) Search(_ context.Context, query string, opts search.SearchOptions) ([]search.Result, error) {
+	p.queries = append(p.queries, query)
+	p.options = append(p.options, opts)
+	return []search.Result{
+		{Title: "Result", URL: "https://example.com", Content: "content", Score: 0.9},
+	}, nil
+}
+
+func TestSearchWebTool_InvalidArgumentsReturnParseError(t *testing.T) {
+	provider := &recordingSearchProvider{}
+	orchestrator := &Orchestrator{
+		searchWeb: NewSearchWebTool(provider),
+		queryRewriter: NewQueryRewriter(&fakeProvider{
+			sequences: [][]llm.Chunk{{{Content: "rewritten query"}}},
+		}),
+	}
+
+	_, err := orchestrator.searchWebTool(context.Background(), `{"query":`)
+	if err == nil || !strings.Contains(err.Error(), "parse search_web arguments") {
+		t.Fatalf("expected parse error, got %v", err)
+	}
+	if len(provider.queries) != 0 {
+		t.Fatalf("expected search provider not called, got %v", provider.queries)
+	}
+}
+
+func TestSearchWebTool_RewritesInlineInputQuery(t *testing.T) {
+	provider := &recordingSearchProviderWithOptions{}
+	searchTool := NewSearchWebTool(provider)
+
+	orchestrator := &Orchestrator{
+		searchWeb: searchTool,
+		queryRewriter: NewQueryRewriter(&fakeProvider{
+			sequences: [][]llm.Chunk{{{Content: "rewritten troubleshooting query"}}},
+		}),
+	}
+
+	outcome, err := orchestrator.searchWebTool(context.Background(), `{"query":"original question","limit":5,"search_depth":"advanced"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(provider.queries) != 1 || provider.queries[0] != "rewritten troubleshooting query" {
+		t.Fatalf("expected rewritten query, got %v", provider.queries)
+	}
+	if len(provider.options) != 1 {
+		t.Fatalf("expected one search options call, got %d", len(provider.options))
+	}
+	if provider.options[0].Limit != 5 {
+		t.Fatalf("expected limit=5, got %d", provider.options[0].Limit)
+	}
+	if provider.options[0].SearchDepth != "advanced" {
+		t.Fatalf("expected search_depth advanced, got %q", provider.options[0].SearchDepth)
+	}
+
+	resp, ok := outcome.Detail.Payload.(SearchWebResponse)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", outcome.Detail.Payload)
+	}
+	if resp.Query != "rewritten troubleshooting query" {
+		t.Fatalf("expected payload query rewritten, got %q", resp.Query)
 	}
 }

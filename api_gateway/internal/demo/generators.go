@@ -3184,8 +3184,6 @@ func GenerateNodesConnection() *model.NodesConnection {
 			InternalIp:    stringPtr("10.0.1.10"),
 			ExternalIp:    stringPtr("203.0.113.10"),
 			Region:        stringPtr("us-west-2"),
-			Latitude:      float64Ptr(37.7749),
-			Longitude:     float64Ptr(-122.4194),
 			CpuCores:      int32Ptr(8),
 			MemoryGb:      int32Ptr(16),
 			DiskGb:        int32Ptr(500),
@@ -3202,8 +3200,6 @@ func GenerateNodesConnection() *model.NodesConnection {
 			InternalIp:    stringPtr("10.0.2.10"),
 			ExternalIp:    stringPtr("203.0.113.20"),
 			Region:        stringPtr("eu-west-1"),
-			Latitude:      float64Ptr(51.5074),
-			Longitude:     float64Ptr(-0.1278),
 			CpuCores:      int32Ptr(8),
 			MemoryGb:      int32Ptr(16),
 			DiskGb:        int32Ptr(500),
@@ -3220,8 +3216,6 @@ func GenerateNodesConnection() *model.NodesConnection {
 			InternalIp:    stringPtr("10.0.3.10"),
 			ExternalIp:    stringPtr("203.0.113.30"),
 			Region:        stringPtr("ap-northeast-1"),
-			Latitude:      float64Ptr(35.6762),
-			Longitude:     float64Ptr(139.6503),
 			CpuCores:      int32Ptr(4),
 			MemoryGb:      int32Ptr(8),
 			DiskGb:        int32Ptr(250),
@@ -4632,6 +4626,96 @@ func GenerateClientQoeSummary() *model.ClientQoeSummary {
 		AvgBandwidthOut:     850000,
 		AvgConnectionTime:   1.2,
 		TotalActiveSessions: 42,
+	}
+}
+
+// GenerateClusterTrafficMatrix returns demo cross-cluster traffic data.
+func GenerateClusterTrafficMatrix() []*pb.ClusterPairTraffic {
+	centralLat, centralLon := float64Ptr(41.8781), float64Ptr(-87.6298)
+	usEastLat, usEastLon := float64Ptr(40.7128), float64Ptr(-74.0060)
+	apacLat, apacLon := float64Ptr(35.6762), float64Ptr(139.6503)
+
+	return []*pb.ClusterPairTraffic{
+		{ClusterId: "central-primary", RemoteClusterId: "", EventCount: 850, SuccessCount: 842, AvgLatencyMs: 8.2, AvgDistanceKm: 120.5, SuccessRate: 0.991, MaxLatencyMs: 45.0, LocalLatitude: centralLat, LocalLongitude: centralLon},
+		{ClusterId: "central-primary", RemoteClusterId: "us-east-edge", EventCount: 180, SuccessCount: 174, AvgLatencyMs: 22.5, AvgDistanceKm: 1250.0, SuccessRate: 0.967, MaxLatencyMs: 85.0, LocalLatitude: centralLat, LocalLongitude: centralLon, RemoteLatitude: usEastLat, RemoteLongitude: usEastLon},
+		{ClusterId: "central-primary", RemoteClusterId: "apac-edge", EventCount: 95, SuccessCount: 88, AvgLatencyMs: 145.3, AvgDistanceKm: 9800.0, SuccessRate: 0.926, MaxLatencyMs: 320.0, LocalLatitude: centralLat, LocalLongitude: centralLon, RemoteLatitude: apacLat, RemoteLongitude: apacLon},
+		{ClusterId: "us-east-edge", RemoteClusterId: "", EventCount: 420, SuccessCount: 415, AvgLatencyMs: 6.1, AvgDistanceKm: 85.0, SuccessRate: 0.988, MaxLatencyMs: 35.0, LocalLatitude: usEastLat, LocalLongitude: usEastLon},
+		{ClusterId: "us-east-edge", RemoteClusterId: "central-primary", EventCount: 65, SuccessCount: 62, AvgLatencyMs: 24.0, AvgDistanceKm: 1250.0, SuccessRate: 0.954, MaxLatencyMs: 92.0, LocalLatitude: usEastLat, LocalLongitude: usEastLon, RemoteLatitude: centralLat, RemoteLongitude: centralLon},
+		{ClusterId: "apac-edge", RemoteClusterId: "", EventCount: 310, SuccessCount: 305, AvgLatencyMs: 5.8, AvgDistanceKm: 95.0, SuccessRate: 0.984, MaxLatencyMs: 28.0, LocalLatitude: apacLat, LocalLongitude: apacLon},
+		{ClusterId: "apac-edge", RemoteClusterId: "central-primary", EventCount: 42, SuccessCount: 38, AvgLatencyMs: 148.0, AvgDistanceKm: 9800.0, SuccessRate: 0.905, MaxLatencyMs: 340.0, LocalLatitude: apacLat, LocalLongitude: apacLon, RemoteLatitude: centralLat, RemoteLongitude: centralLon},
+	}
+}
+
+// GenerateFederationEventsConnection returns demo federation events in connection format.
+func GenerateFederationEventsConnection() *model.FederationEventsConnection {
+	now := time.Now()
+
+	events := []*pb.FederationEvent{
+		{Timestamp: timestamppb.New(now.Add(-5 * time.Minute)), EventType: "origin_pull_arranged", LocalCluster: "us-east-edge", RemoteCluster: "central-primary", StreamName: stringPtr("demo_live_stream_001"), SourceNode: stringPtr("edge-node-3"), DestNode: stringPtr("primary-node-1"), DtscUrl: stringPtr("dtsc://primary-node-1:4200/demo_live_stream_001"), LatencyMs: float32Ptr(22.5), Role: "leader"},
+		{Timestamp: timestamppb.New(now.Add(-4 * time.Minute)), EventType: "origin_pull_completed", LocalCluster: "us-east-edge", RemoteCluster: "central-primary", StreamName: stringPtr("demo_live_stream_001"), LatencyMs: float32Ptr(1850.0), TimeToLiveMs: float32Ptr(3600000), Role: "leader"},
+		{Timestamp: timestamppb.New(now.Add(-15 * time.Minute)), EventType: "federation_query", LocalCluster: "apac-edge", RemoteCluster: "central-primary", StreamName: stringPtr("demo_vod_stream_003"), QueriedClusters: uint32Ptr(3), RespondingClusters: uint32Ptr(2), TotalCandidates: uint32Ptr(5), LatencyMs: float32Ptr(145.0), Role: "leader"},
+		{Timestamp: timestamppb.New(now.Add(-30 * time.Minute)), EventType: "peer_connected", LocalCluster: "central-primary", RemoteCluster: "us-east-edge", PeerCluster: stringPtr("us-east-edge"), Role: "leader"},
+		{Timestamp: timestamppb.New(now.Add(-45 * time.Minute)), EventType: "peer_connected", LocalCluster: "central-primary", RemoteCluster: "apac-edge", PeerCluster: stringPtr("apac-edge"), Role: "leader"},
+		{Timestamp: timestamppb.New(now.Add(-1 * time.Hour)), EventType: "leader_acquired", LocalCluster: "central-primary", RemoteCluster: "", Role: "leader"},
+		{Timestamp: timestamppb.New(now.Add(-2 * time.Hour)), EventType: "origin_pull_failed", LocalCluster: "apac-edge", RemoteCluster: "central-primary", StreamName: stringPtr("demo_private_stream_002"), FailureReason: stringPtr("no capacity on remote cluster"), Role: "leader"},
+		{Timestamp: timestamppb.New(now.Add(-3 * time.Hour)), EventType: "replication_loop_prevented", LocalCluster: "central-primary", RemoteCluster: "us-east-edge", StreamName: stringPtr("demo_live_stream_001"), Reason: stringPtr("stream already replicating from us-east-edge"), Role: "leader"},
+	}
+
+	edges := make([]*model.FederationEventEdge, len(events))
+	for i, evt := range events {
+		cursor := fmt.Sprintf("fed:%d", i)
+		edges[i] = &model.FederationEventEdge{Cursor: cursor, Node: evt}
+	}
+
+	endCursor := edges[len(edges)-1].Cursor
+	startCursor := edges[0].Cursor
+	return &model.FederationEventsConnection{
+		Edges: edges,
+		PageInfo: &model.PageInfo{
+			HasNextPage:     false,
+			HasPreviousPage: false,
+			StartCursor:     &startCursor,
+			EndCursor:       &endCursor,
+		},
+		TotalCount: len(events),
+	}
+}
+
+// GenerateFederationSummary returns demo federation summary data.
+func GenerateFederationSummary() *pb.FederationSummary {
+	return &pb.FederationSummary{
+		EventCounts: []*pb.FederationEventCount{
+			{EventType: "origin_pull_arranged", Count: 24, FailureCount: 0, AvgLatencyMs: 22.5},
+			{EventType: "origin_pull_completed", Count: 22, FailureCount: 0, AvgLatencyMs: 1850.0},
+			{EventType: "origin_pull_failed", Count: 2, FailureCount: 2, AvgLatencyMs: 0},
+			{EventType: "federation_query", Count: 85, FailureCount: 0, AvgLatencyMs: 120.0},
+			{EventType: "peer_connected", Count: 6, FailureCount: 0, AvgLatencyMs: 0},
+			{EventType: "peer_disconnected", Count: 1, FailureCount: 0, AvgLatencyMs: 0},
+			{EventType: "leader_acquired", Count: 3, FailureCount: 0, AvgLatencyMs: 0},
+			{EventType: "leader_lost", Count: 0, FailureCount: 0, AvgLatencyMs: 0},
+			{EventType: "replication_loop_prevented", Count: 4, FailureCount: 0, AvgLatencyMs: 0},
+		},
+		TotalEvents:         147,
+		OverallAvgLatencyMs: 95.3,
+		OverallFailureRate:  0.014,
+	}
+}
+
+// GenerateNetworkStatus returns demo public network topology (no tenant data).
+func GenerateNetworkStatus() *model.NetworkStatus {
+	return &model.NetworkStatus{
+		Clusters: []*model.NetworkClusterStatus{
+			{ClusterID: "central-primary", Name: "Central Primary", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 4, HealthyNodeCount: 4, PeerCount: 2, Status: "operational"},
+			{ClusterID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "operational"},
+			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "operational"},
+		},
+		PeerConnections: []*model.NetworkPeerConnection{
+			{SourceCluster: "central-primary", TargetCluster: "us-east-edge", Connected: true},
+			{SourceCluster: "central-primary", TargetCluster: "apac-edge", Connected: true},
+		},
+		TotalNodes:   9,
+		HealthyNodes: 9,
+		UpdatedAt:    time.Now(),
 	}
 }
 

@@ -1,0 +1,46 @@
+# Federation events: origin pulls, peer connections, leader elections
+query GetFederationEvents(
+  $timeRange: TimeRangeInput!
+  $first: Int = 50
+  $eventType: String
+) {
+  analytics {
+    infra {
+      federationEventsConnection(
+        timeRange: $timeRange
+        first: $first
+        eventType: $eventType
+      ) {
+        edges {
+          cursor
+          node {
+            timestamp
+            eventType
+            localCluster
+            remoteCluster
+            streamName
+            streamId
+            sourceNode
+            destNode
+            dtscUrl
+            latencyMs
+            timeToLiveMs
+            failureReason
+            queriedClusters
+            respondingClusters
+            totalCandidates
+            bestRemoteScore
+            peerCluster
+            role
+            reason
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

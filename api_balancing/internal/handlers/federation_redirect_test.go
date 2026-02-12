@@ -35,6 +35,10 @@ func (m *mockPeerResolver) GetPeerAddr(clusterID string) string {
 	return m.addrs[clusterID]
 }
 
+func (m *mockPeerResolver) GetPeerGeo(_ string) (float64, float64) {
+	return 0, 0
+}
+
 // setupFederationTestDeps starts a stub gRPC server, creates a FederationClient backed
 // by a FoghornPool pointing at it, and returns a mock peer resolver. Cleanup stops everything.
 func setupFederationTestDeps(t *testing.T, stub *stubFederationService, peerClusterID string) (

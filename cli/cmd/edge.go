@@ -49,6 +49,7 @@ func newEdgeCmd() *cobra.Command {
 	edge.AddCommand(newEdgeCertCmd())
 	edge.AddCommand(newEdgeLogsCmd())
 	edge.AddCommand(newEdgeDoctorCmd())
+	edge.AddCommand(newEdgeModeCmd())
 	return edge
 }
 
@@ -374,7 +375,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 
 Single node example:
   frameworks edge provision --ssh ubuntu@edge-1.example.com \
-    --pool-domain edge-egress.example.com \
+    --pool-domain edge.example.com \
     --node-domain edge-1.example.com \
     --node-name edge-us-east-1 \
     --email ops@example.com \
@@ -552,7 +553,7 @@ Multi-node manifest example:
 
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host, required)")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
-	cmd.Flags().StringVar(&poolDomain, "pool-domain", "", "Load balancer pool domain (e.g., edge-egress.example.com)")
+	cmd.Flags().StringVar(&poolDomain, "pool-domain", "", "Load balancer pool domain (e.g., edge.example.com)")
 	cmd.Flags().StringVar(&nodeDomain, "node-domain", "", "Individual node domain (e.g., edge-1.example.com)")
 	cmd.Flags().StringVar(&nodeName, "node-name", "", "Node name for registration (default: derived from domain/ssh)")
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "Cluster ID for node registration")
@@ -1535,6 +1536,68 @@ func newEdgeDoctorCmd() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&domain, "domain", "", "edge domain to validate (DNS and HTTPS)")
 	cmd.Flags().StringVar(&dir, "dir", ".", "directory with edge templates")
+	return cmd
+}
+
+func newEdgeModeCmd() *cobra.Command {
+	var sshTarget string
+	var sshKey string
+	var reason string
+	cmd := &cobra.Command{Use: "mode [normal|draining|maintenance]", Short: "Get or set node operational mode", Long: `Query or change the edge node's operational mode via Helmsman.
+
+Without arguments, prints the current mode. With an argument, requests a mode change:
+  normal      - accept new viewers and ingest
+  draining    - finish existing sessions, reject new ones
+  maintenance - fully isolated, no traffic
+
+The mode change is sent upstream to Foghorn for validation. Foghorn applies
+the change and pushes an updated ConfigSeed back to the node.`, Args: cobra.RangeArgs(0, 1), RunE: func(cmd *cobra.Command, args []string) error {
+		helmsmanBase := "http://localhost:18007"
+
+		if len(args) == 0 {
+			// GET current mode
+			curlArgs := []string{"-s", "-f", helmsmanBase + "/node/mode"}
+			var out, errOut string
+			var err error
+			if strings.TrimSpace(sshTarget) != "" {
+				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "curl", curlArgs, "")
+			} else {
+				_, out, errOut, err = xexec.Run("curl", curlArgs, "")
+			}
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "failed to get node mode: %v\n%s\n", err, errOut)
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), out+"\n")
+			return nil
+		}
+
+		mode := strings.ToLower(args[0])
+		switch mode {
+		case "normal", "draining", "maintenance":
+		default:
+			return fmt.Errorf("invalid mode %q: must be normal, draining, or maintenance", mode)
+		}
+
+		body := fmt.Sprintf(`{"mode":%q,"reason":%q}`, mode, reason)
+		curlArgs := []string{"-s", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", body, helmsmanBase + "/node/mode"}
+		var out, errOut string
+		var err error
+		if strings.TrimSpace(sshTarget) != "" {
+			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "curl", curlArgs, "")
+		} else {
+			_, out, errOut, err = xexec.Run("curl", curlArgs, "")
+		}
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "failed to set node mode: %v\n%s\n", err, errOut)
+			return err
+		}
+		fmt.Fprint(cmd.OutOrStdout(), out+"\n")
+		return nil
+	}}
+	cmd.Flags().StringVar(&reason, "reason", "cli_request", "reason for mode change (for audit)")
+	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run on remote edge node via SSH (user@host)")
+	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
 	return cmd
 }
 

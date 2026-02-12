@@ -592,6 +592,9 @@ type PeerHeartbeatRecord struct {
 	EdgeCount        uint32   `json:"edge_count"`
 	UptimeSeconds    int64    `json:"uptime_seconds"`
 	Capabilities     []string `json:"capabilities"`
+	Lat              float64  `json:"lat,omitempty"`
+	Lon              float64  `json:"lon,omitempty"`
+	Location         string   `json:"location,omitempty"`
 	ReceivedAt       int64    `json:"received_at"`
 }
 

@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -69,17 +70,33 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 	}
 }
 
+// allowlistedOperations lists the read-only operations permitted without authentication.
+var allowlistedOperations = []string{"serviceinstanceshealth", "resolveviewerendpoint", "resolveingestendpoint", "networkstatus"}
+
 // isAllowlistedQuery returns true if the GraphQL request body contains one of the
 // read-only operations we allow without authentication.
 func isAllowlistedQuery(body []byte) bool {
-	s := strings.ToLower(string(body))
-	// Disallow mutations entirely on unauthenticated requests
-	if strings.Contains(s, "mutation") {
+	var req struct {
+		Query         string `json:"query"`
+		OperationName string `json:"operationName"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
 		return false
 	}
-	// Minimal allowlist for public access
-	if strings.Contains(s, "serviceinstanceshealth") || strings.Contains(s, "resolveviewerendpoint") || strings.Contains(s, "resolveingestendpoint") {
-		return true
+	q := strings.ToLower(req.Query)
+	if strings.Contains(q, "mutation") {
+		return false
+	}
+	op := strings.ToLower(req.OperationName)
+	for _, a := range allowlistedOperations {
+		if op == a {
+			return true
+		}
+	}
+	for _, a := range allowlistedOperations {
+		if strings.Contains(q, a) {
+			return true
+		}
 	}
 	return false
 }

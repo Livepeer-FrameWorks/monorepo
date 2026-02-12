@@ -183,6 +183,99 @@ func TestHandleChat_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateConversation_InvalidJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := newTestContext(w)
+
+	req := httptest.NewRequest(http.MethodPatch, "/conversations/conv-1", strings.NewReader("{bad json"))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	ctx = skipper.WithUserID(ctx, "user-a")
+	c.Request = req.WithContext(ctx)
+	c.Params = gin.Params{{Key: "id", Value: "conv-1"}}
+
+	handler := &ChatHandler{}
+	handler.HandleUpdateConversation(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["error"] != "invalid request payload" {
+		t.Fatalf("expected 'invalid request payload', got %q", resp["error"])
+	}
+}
+
+func TestHandleUpdateConversation_EmptyTitleAfterTrim(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := newTestContext(w)
+
+	req := httptest.NewRequest(http.MethodPatch, "/conversations/conv-1", strings.NewReader(`{"title":"   "}`))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	ctx = skipper.WithUserID(ctx, "user-a")
+	c.Request = req.WithContext(ctx)
+	c.Params = gin.Params{{Key: "id", Value: "conv-1"}}
+
+	handler := &ChatHandler{}
+	handler.HandleUpdateConversation(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["error"] != "title is required" {
+		t.Fatalf("expected 'title is required', got %q", resp["error"])
+	}
+}
+
+func TestHandleUpdateConversation_TrimmedTitlePersists(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("UPDATE skipper\\.skipper_conversations").
+		WithArgs("New title", "conv-1", "tenant-a", "user-a").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	w := httptest.NewRecorder()
+	c, _ := newTestContext(w)
+
+	req := httptest.NewRequest(http.MethodPatch, "/conversations/conv-1", strings.NewReader(`{"title":"  New title  "}`))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	ctx = skipper.WithUserID(ctx, "user-a")
+	c.Request = req.WithContext(ctx)
+	c.Params = gin.Params{{Key: "id", Value: "conv-1"}}
+
+	handler := &ChatHandler{
+		Conversations: NewConversationStore(db),
+	}
+	handler.HandleUpdateConversation(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["title"] != "New title" {
+		t.Fatalf("expected trimmed title, got %q", resp["title"])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("db expectations: %v", err)
+	}
+}
+
 func TestHandleChat_NilHandler(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := newTestContext(w)

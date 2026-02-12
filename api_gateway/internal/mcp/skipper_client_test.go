@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -266,5 +267,86 @@ func TestLazySkipperClient_UnavailableSpoke(t *testing.T) {
 	_, err := lc.CallTool(context.Background(), "search_knowledge", args)
 	if err == nil {
 		t.Fatal("expected error for unavailable spoke")
+	}
+}
+
+func TestSkipperClient_CallTool_InvalidJSONArguments(t *testing.T) {
+	ts := testSpokeServer(t)
+	sc, err := NewSkipperClient(context.Background(), SkipperClientConfig{
+		SpokeURL:     ts.URL,
+		ServiceToken: "test-token",
+	})
+	if err != nil {
+		t.Fatalf("NewSkipperClient: %v", err)
+	}
+	defer func() { _ = sc.Close() }()
+
+	_, err = sc.CallTool(context.Background(), "search_knowledge", json.RawMessage(`{"tenant_id":`))
+	if err == nil {
+		t.Fatal("expected error for malformed JSON arguments")
+	}
+	if !strings.Contains(err.Error(), "mcp: unmarshal skipper args for search_knowledge") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSkipperClient_CallTool_NonObjectArguments(t *testing.T) {
+	ts := testSpokeServer(t)
+	sc, err := NewSkipperClient(context.Background(), SkipperClientConfig{
+		SpokeURL:     ts.URL,
+		ServiceToken: "test-token",
+	})
+	if err != nil {
+		t.Fatalf("NewSkipperClient: %v", err)
+	}
+	defer func() { _ = sc.Close() }()
+
+	_, err = sc.CallTool(context.Background(), "search_knowledge", json.RawMessage(`"not-an-object"`))
+	if err == nil {
+		t.Fatal("expected error for non-object arguments")
+	}
+	if !strings.Contains(err.Error(), "mcp: unmarshal skipper args for search_knowledge") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSkipperClient_CallTool_ToolErrorIncludesText(t *testing.T) {
+	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "test-spoke", Version: "1.0.0"}, nil)
+	srv.AddTool(
+		&sdkmcp.Tool{
+			Name:        "search_knowledge",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+		func(_ context.Context, _ *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+			return &sdkmcp.CallToolResult{
+				IsError: true,
+				Content: []sdkmcp.Content{
+					&sdkmcp.TextContent{Text: "skipper downstream rejected"},
+				},
+			}, nil
+		},
+	)
+	handler := sdkmcp.NewStreamableHTTPHandler(
+		func(_ *http.Request) *sdkmcp.Server { return srv },
+		&sdkmcp.StreamableHTTPOptions{Stateless: true},
+	)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	sc, err := NewSkipperClient(context.Background(), SkipperClientConfig{
+		SpokeURL:     ts.URL,
+		ServiceToken: "test-token",
+	})
+	if err != nil {
+		t.Fatalf("NewSkipperClient: %v", err)
+	}
+	defer func() { _ = sc.Close() }()
+
+	_, err = sc.CallTool(context.Background(), "search_knowledge", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("expected tool error")
+	}
+	if !strings.Contains(err.Error(), "mcp: skipper tool search_knowledge error: skipper downstream rejected") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

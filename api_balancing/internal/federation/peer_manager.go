@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/pkg/clients/decklog"
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
@@ -22,20 +23,24 @@ import (
 // In multi-replica deployments, only the leader instance runs the active
 // peering loop (Redis-based leader lease).
 type PeerManager struct {
-	clusterID  string
-	instanceID string // unique per-process, for leader election
-	pool       *foghorn.FoghornPool
-	qm         *quartermaster.GRPCClient
-	cache      *RemoteEdgeCache
-	logger     logging.Logger
+	clusterID     string
+	instanceID    string // unique per-process, for leader election
+	pool          federationPeerPool
+	peerDiscovery clusterPeerDiscovery
+	cache         *RemoteEdgeCache
+	logger        logging.Logger
+	decklogClient *decklog.BatchedClient
+	ownerTenantID string
+	selfGeoFunc   func() (float64, float64, string)
 
-	mu            sync.RWMutex
-	peers         map[string]*peerState      // cluster_id -> peer state
-	streamPeers   map[string]map[string]bool // cluster_id -> set of active stream names
-	metricHistory map[string][]metricSample  // node_id -> recent BW/CPU samples for 30s averaging
-	done          chan struct{}
-	isLeader      bool
-	startTime     time.Time
+	mu               sync.RWMutex
+	peers            map[string]*peerState      // cluster_id -> peer state
+	streamPeers      map[string]map[string]bool // cluster_id -> set of active stream names
+	metricHistory    map[string][]metricSample  // node_id -> recent BW/CPU samples for 30s averaging
+	done             chan struct{}
+	isLeader         bool
+	startTime        time.Time
+	reconnectBackoff time.Duration
 }
 
 // metricSample stores a single BW/CPU observation for moving-average computation.
@@ -62,35 +67,138 @@ type peerState struct {
 	lastRefresh time.Time
 	connected   bool
 	s3Config    *ClusterS3Config
+	lat         float64
+	lon         float64
+	location    string
+}
+
+type clusterPeerDiscovery interface {
+	ListPeers(ctx context.Context, clusterID string) (*pb.ListPeersResponse, error)
+}
+
+type federationPeerClient interface {
+	OpenPeerChannel(ctx context.Context) (pb.FoghornFederation_PeerChannelClient, error)
+}
+
+type federationPeerPool interface {
+	GetOrCreate(clusterID, addr string) (federationPeerClient, error)
+	Touch(clusterID string)
+}
+
+type foghornPoolAdapter struct {
+	pool *foghorn.FoghornPool
+}
+
+type foghornPeerClient struct {
+	client *foghorn.GRPCClient
+}
+
+func newFoghornPoolAdapter(pool *foghorn.FoghornPool) federationPeerPool {
+	if pool == nil {
+		return nil
+	}
+	return &foghornPoolAdapter{pool: pool}
+}
+
+func (a *foghornPoolAdapter) GetOrCreate(clusterID, addr string) (federationPeerClient, error) {
+	client, err := a.pool.GetOrCreate(clusterID, addr)
+	if err != nil {
+		return nil, err
+	}
+	return &foghornPeerClient{client: client}, nil
+}
+
+func (a *foghornPoolAdapter) Touch(clusterID string) {
+	a.pool.Touch(clusterID)
+}
+
+func (c *foghornPeerClient) OpenPeerChannel(ctx context.Context) (pb.FoghornFederation_PeerChannelClient, error) {
+	return c.client.Federation().PeerChannel(ctx)
 }
 
 // PeerManagerConfig holds dependencies for the peer manager.
 type PeerManagerConfig struct {
-	ClusterID  string
-	InstanceID string // unique per-process; used for leader lease
-	Pool       *foghorn.FoghornPool
-	QM         *quartermaster.GRPCClient
-	Cache      *RemoteEdgeCache
-	Logger     logging.Logger
+	ClusterID     string
+	InstanceID    string // unique per-process; used for leader lease
+	Pool          *foghorn.FoghornPool
+	QM            *quartermaster.GRPCClient
+	PeerDiscovery clusterPeerDiscovery
+	Cache         *RemoteEdgeCache
+	Logger        logging.Logger
+	DecklogClient *decklog.BatchedClient
+	OwnerTenantID string
+	SelfGeoFunc   func() (float64, float64, string) // lat, lon, location — avoids import cycle with handlers
 }
 
 // NewPeerManager creates and starts a new peer manager.
 func NewPeerManager(cfg PeerManagerConfig) *PeerManager {
+	peerDiscovery := cfg.PeerDiscovery
+	if peerDiscovery == nil {
+		peerDiscovery = cfg.QM
+	}
+
 	pm := &PeerManager{
-		clusterID:     cfg.ClusterID,
-		instanceID:    cfg.InstanceID,
-		pool:          cfg.Pool,
-		qm:            cfg.QM,
-		cache:         cfg.Cache,
-		logger:        cfg.Logger,
-		peers:         make(map[string]*peerState),
-		streamPeers:   make(map[string]map[string]bool),
-		metricHistory: make(map[string][]metricSample),
-		done:          make(chan struct{}),
-		startTime:     time.Now(),
+		clusterID:        cfg.ClusterID,
+		instanceID:       cfg.InstanceID,
+		pool:             newFoghornPoolAdapter(cfg.Pool),
+		peerDiscovery:    peerDiscovery,
+		cache:            cfg.Cache,
+		logger:           cfg.Logger,
+		decklogClient:    cfg.DecklogClient,
+		ownerTenantID:    cfg.OwnerTenantID,
+		selfGeoFunc:      cfg.SelfGeoFunc,
+		peers:            make(map[string]*peerState),
+		streamPeers:      make(map[string]map[string]bool),
+		metricHistory:    make(map[string][]metricSample),
+		done:             make(chan struct{}),
+		startTime:        time.Now(),
+		reconnectBackoff: peerReconnectBackoff,
 	}
 	go pm.run()
 	return pm
+}
+
+// emitFederationEvent sends a topology/lifecycle event to Decklog (fire-and-forget).
+// Automatically enriches with local/remote geo from self-geo and peer cache.
+func (pm *PeerManager) emitFederationEvent(data *pb.FederationEventData) {
+	if pm.decklogClient == nil {
+		return
+	}
+	if data.TenantId == nil && pm.ownerTenantID != "" {
+		data.TenantId = &pm.ownerTenantID
+	}
+	if data.LocalCluster == "" {
+		data.LocalCluster = pm.clusterID
+	}
+	if data.LocalLat == nil && pm.selfGeoFunc != nil {
+		lat, lon, _ := pm.selfGeoFunc()
+		if lat != 0 || lon != 0 {
+			data.LocalLat = &lat
+			data.LocalLon = &lon
+		}
+	}
+	if data.RemoteLat == nil && data.RemoteCluster != "" {
+		rLat, rLon := pm.GetPeerGeo(data.RemoteCluster)
+		if rLat != 0 || rLon != 0 {
+			data.RemoteLat = &rLat
+			data.RemoteLon = &rLon
+		}
+	}
+	go func() {
+		if err := pm.decklogClient.SendFederationEvent(data); err != nil {
+			pm.logger.WithError(err).Debug("Failed to emit federation event")
+		}
+	}()
+}
+
+// GetPeerGeo returns the cached geo coordinates for a peer cluster's foghorn.
+func (pm *PeerManager) GetPeerGeo(clusterID string) (float64, float64) {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if ps, ok := pm.peers[clusterID]; ok {
+		return ps.lat, ps.lon
+	}
+	return 0, 0
 }
 
 // Close stops the peer manager and all PeerChannel streams.
@@ -173,7 +281,10 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 			lifecycle = peerAlwaysOn
 		}
 
-		addr := "foghorn." + peer.GetClusterSlug() + "." + peer.GetBaseUrl() + ":" + federationPort
+		addr := peer.GetFoghornGrpcAddr()
+		if addr == "" {
+			addr = "foghorn." + peer.GetClusterSlug() + "." + peer.GetBaseUrl() + ":" + federationPort
+		}
 		if existing, known := pm.peers[peer.GetClusterId()]; known {
 			if existing.addr != addr {
 				changed = true
@@ -397,7 +508,17 @@ func (pm *PeerManager) runAsLeader() {
 	pm.isLeader = true
 	pm.mu.Unlock()
 
+	pm.emitFederationEvent(&pb.FederationEventData{
+		EventType: pb.FederationEventType_LEADER_ACQUIRED,
+		Role:      strPtr("peer_manager"),
+	})
+
 	defer func() {
+		pm.emitFederationEvent(&pb.FederationEventData{
+			EventType: pb.FederationEventType_LEADER_LOST,
+			Role:      strPtr("peer_manager"),
+		})
+
 		pm.mu.Lock()
 		pm.isLeader = false
 		pm.mu.Unlock()
@@ -459,10 +580,15 @@ func (pm *PeerManager) runAsLeader() {
 
 // refreshPeers queries Quartermaster for peer clusters and manages connections.
 func (pm *PeerManager) refreshPeers() {
+	if pm.peerDiscovery == nil {
+		pm.logger.Warn("Skipping federation peer refresh: peer discovery source is nil")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := pm.qm.ListPeers(ctx, pm.clusterID)
+	resp, err := pm.peerDiscovery.ListPeers(ctx, pm.clusterID)
 	if err != nil {
 		pm.logger.WithError(err).Warn("Failed to refresh federation peers")
 		return
@@ -592,6 +718,15 @@ func (pm *PeerManager) loadPeerAddressesFromRedis() {
 
 // connectPeer opens a PeerChannel to the given peer and runs the receive loop.
 func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
+	if pm.pool == nil {
+		pm.logger.WithField("peer_cluster", clusterID).Warn("Skipping peer connect: foghorn pool is nil")
+		return
+	}
+	backoff := pm.reconnectBackoff
+	if backoff <= 0 {
+		backoff = peerReconnectBackoff
+	}
+
 	for {
 		select {
 		case <-pm.done:
@@ -616,15 +751,15 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 		if err != nil {
 			pm.logger.WithError(err).WithField("peer_cluster", clusterID).Warn("Failed to get Foghorn client for peer")
 			cancel()
-			time.Sleep(peerReconnectBackoff)
+			time.Sleep(backoff)
 			continue
 		}
 
-		stream, err := client.Federation().PeerChannel(ctx)
+		stream, err := client.OpenPeerChannel(ctx)
 		if err != nil {
 			pm.logger.WithError(err).WithField("peer_cluster", clusterID).Warn("Failed to open PeerChannel")
 			cancel()
-			time.Sleep(peerReconnectBackoff)
+			time.Sleep(backoff)
 			continue
 		}
 
@@ -634,6 +769,10 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 		pm.mu.Unlock()
 
 		pm.logger.WithField("peer_cluster", clusterID).Info("PeerChannel connected")
+		pm.emitFederationEvent(&pb.FederationEventData{
+			EventType:   pb.FederationEventType_PEER_CONNECTED,
+			PeerCluster: &clusterID,
+		})
 
 		// Receive loop — processes incoming messages until the stream closes
 		pm.recvLoop(clusterID, stream)
@@ -646,7 +785,17 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 		cancel()
 
 		pm.logger.WithField("peer_cluster", clusterID).Info("PeerChannel disconnected, will reconnect")
-		time.Sleep(peerReconnectBackoff)
+		pm.emitFederationEvent(&pb.FederationEventData{
+			EventType:   pb.FederationEventType_PEER_DISCONNECTED,
+			PeerCluster: &clusterID,
+		})
+		time.Sleep(backoff)
+	}
+}
+
+func (pm *PeerManager) touchPool(clusterID string) {
+	if pm.pool != nil {
+		pm.pool.Touch(clusterID)
 	}
 }
 
@@ -812,10 +961,20 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 					EdgeCount:        hb.EdgeCount,
 					UptimeSeconds:    hb.UptimeSeconds,
 					Capabilities:     hb.Capabilities,
+					Lat:              hb.FoghornLat,
+					Lon:              hb.FoghornLon,
+					Location:         hb.FoghornLocation,
 				}
 				if err := pm.cache.SetPeerHeartbeat(ctx, peerClusterID, record); err != nil {
 					pm.logger.WithError(err).Debug("Failed to cache peer heartbeat from PeerChannel")
 				}
+				pm.mu.Lock()
+				if ps, ok := pm.peers[peerClusterID]; ok {
+					ps.lat = hb.FoghornLat
+					ps.lon = hb.FoghornLon
+					ps.location = hb.FoghornLocation
+				}
+				pm.mu.Unlock()
 			}
 
 		case *pb.PeerMessage_CapacitySummary:
@@ -884,7 +1043,7 @@ func (pm *PeerManager) pushTelemetry() {
 		if !ps.connected || ps.stream == nil {
 			continue
 		}
-		pm.pool.Touch(peerID)
+		pm.touchPool(peerID)
 		for _, msg := range messages {
 			tel, ok := msg.GetPayload().(*pb.PeerMessage_EdgeTelemetry)
 			if !ok || tel.EdgeTelemetry == nil {
@@ -1030,7 +1189,7 @@ func (pm *PeerManager) pushSummary() {
 		if !ps.connected || ps.stream == nil {
 			continue
 		}
-		pm.pool.Touch(peerID)
+		pm.touchPool(peerID)
 		if err := ps.stream.Send(msg); err != nil {
 			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send cluster summary to peer")
 		}
@@ -1110,7 +1269,7 @@ func (pm *PeerManager) pushArtifacts() {
 		if !ps.connected || ps.stream == nil {
 			continue
 		}
-		pm.pool.Touch(peerID)
+		pm.touchPool(peerID)
 		if err := ps.stream.Send(msg); err != nil {
 			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send artifact advertisement to peer")
 		}
@@ -1201,7 +1360,7 @@ func (pm *PeerManager) pushStreamAds() {
 		if !ps.connected || ps.stream == nil {
 			continue
 		}
-		pm.pool.Touch(peerID)
+		pm.touchPool(peerID)
 		for _, msg := range messages {
 			ad, ok := msg.GetPayload().(*pb.PeerMessage_StreamAd)
 			if !ok {
@@ -1250,18 +1409,20 @@ func (pm *PeerManager) pushHeartbeat() {
 		totalBW += snap.BWAvailable
 	}
 
+	hb := &pb.PeerHeartbeat{
+		ProtocolVersion:  protocolVersion,
+		StreamCount:      streamCount,
+		TotalBwAvailable: totalBW,
+		EdgeCount:        edgeCount,
+		UptimeSeconds:    pm.uptimeSeconds(),
+		Capabilities:     []string{"stream_ad", "artifact_ad", "capacity_summary"},
+	}
+	if pm.selfGeoFunc != nil {
+		hb.FoghornLat, hb.FoghornLon, hb.FoghornLocation = pm.selfGeoFunc()
+	}
 	msg := &pb.PeerMessage{
 		ClusterId: pm.clusterID,
-		Payload: &pb.PeerMessage_PeerHeartbeat{
-			PeerHeartbeat: &pb.PeerHeartbeat{
-				ProtocolVersion:  protocolVersion,
-				StreamCount:      streamCount,
-				TotalBwAvailable: totalBW,
-				EdgeCount:        edgeCount,
-				UptimeSeconds:    pm.uptimeSeconds(),
-				Capabilities:     []string{"stream_ad", "artifact_ad", "capacity_summary"},
-			},
-		},
+		Payload:   &pb.PeerMessage_PeerHeartbeat{PeerHeartbeat: hb},
 	}
 
 	pm.mu.RLock()
@@ -1327,6 +1488,14 @@ func (pm *PeerManager) checkReplicationCompletion() {
 			},
 		})
 		pm.logger.WithField("stream", record.StreamName).Info("Replication complete, ActiveReplication cleared")
+		pm.emitFederationEvent(&pb.FederationEventData{
+			EventType:     pb.FederationEventType_ORIGIN_PULL_COMPLETED,
+			RemoteCluster: record.SourceCluster,
+			StreamName:    &record.StreamName,
+			SourceNode:    &record.SourceNodeID,
+			DestNode:      &record.DestNodeID,
+			DtscUrl:       &record.DTSCURL,
+		})
 	}
 }
 
@@ -1390,3 +1559,5 @@ func (pm *PeerManager) BroadcastStreamLifecycle(internalName, tenantID string, i
 		}
 	}
 }
+
+func strPtr(s string) *string { return &s }

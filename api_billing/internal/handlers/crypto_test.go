@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +83,113 @@ func TestIsValidPaymentForNetworkHonorsConfirmations(t *testing.T) {
 	if amount != 1.0 {
 		t.Fatalf("expected amount 1.0, got %f", amount)
 	}
+}
+
+func TestGetETHTransactions_InlineDecodeAndMapping(t *testing.T) {
+	t.Setenv("TEST_EXPLORER_API_KEY", "key")
+	network := NetworkConfig{
+		Name:           "base",
+		DisplayName:    "Base",
+		ExplorerAPIURL: "",
+		ExplorerAPIEnv: "TEST_EXPLORER_API_KEY",
+	}
+	cm := &CryptoMonitor{logger: logrus.New()}
+
+	t.Run("malformed response", func(t *testing.T) {
+		network.ExplorerAPIURL = "https://explorer.test/api"
+		withDefaultHTTPClient(t, &http.Client{
+			Transport: testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return newJSONResponse(http.StatusOK, `{"result":`), nil
+			}),
+		})
+
+		_, err := cm.getETHTransactions(context.Background(), network, "0xabc")
+		if err == nil || !strings.Contains(err.Error(), "failed to parse response") {
+			t.Fatalf("expected parse error, got %v", err)
+		}
+	})
+
+	t.Run("maps incoming non-zero tx", func(t *testing.T) {
+		network.ExplorerAPIURL = "https://explorer.test/api"
+		withDefaultHTTPClient(t, &http.Client{
+			Transport: testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return newJSONResponse(http.StatusOK, `{
+				"status":"1",
+				"result":[
+					{"hash":"0x1","to":"0xABC","value":"1000000000000000000","confirmations":"12","blockNumber":"100","timeStamp":"1700000000"},
+					{"hash":"0x2","to":"0xdef","value":"42","confirmations":"5","blockNumber":"101","timeStamp":"1700000100"},
+					{"hash":"0x3","to":"0xabc","value":"0","confirmations":"99","blockNumber":"102","timeStamp":"1700000200"}
+				]
+			}`), nil
+			}),
+		})
+
+		txs, err := cm.getETHTransactions(context.Background(), network, "0xabc")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(txs) != 1 {
+			t.Fatalf("expected one incoming tx, got %d", len(txs))
+		}
+		if txs[0].Hash != "0x1" || txs[0].To != "0xABC" || txs[0].Confirmations != 12 || txs[0].BlockNumber != 100 {
+			t.Fatalf("unexpected mapped tx: %+v", txs[0])
+		}
+		if txs[0].BlockTime.Unix() != 1700000000 {
+			t.Fatalf("unexpected block time: %v", txs[0].BlockTime)
+		}
+	})
+}
+
+func TestGetERC20TransactionsForNetwork_InlineDecodeAndMapping(t *testing.T) {
+	t.Setenv("TEST_EXPLORER_API_KEY", "key")
+	network := NetworkConfig{
+		Name:           "arbitrum",
+		DisplayName:    "Arbitrum One",
+		ExplorerAPIURL: "",
+		ExplorerAPIEnv: "TEST_EXPLORER_API_KEY",
+	}
+	cm := &CryptoMonitor{logger: logrus.New()}
+
+	t.Run("malformed response", func(t *testing.T) {
+		network.ExplorerAPIURL = "https://explorer.test/api"
+		withDefaultHTTPClient(t, &http.Client{
+			Transport: testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return newJSONResponse(http.StatusOK, `{"message":`), nil
+			}),
+		})
+
+		_, err := cm.getERC20TransactionsForNetwork(context.Background(), network, "0xabc", "0xcontract")
+		if err == nil || !strings.Contains(err.Error(), "failed to parse response") {
+			t.Fatalf("expected parse error, got %v", err)
+		}
+	})
+
+	t.Run("maps incoming non-zero tx", func(t *testing.T) {
+		network.ExplorerAPIURL = "https://explorer.test/api"
+		withDefaultHTTPClient(t, &http.Client{
+			Transport: testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return newJSONResponse(http.StatusOK, `{
+				"status":"1",
+				"message":"OK",
+				"result":[
+					{"hash":"0xa","from":"0xfrom","to":"0xAbC","value":"1000000","confirmations":"7","blockNumber":"200","timeStamp":"1700000300"},
+					{"hash":"0xb","from":"0xfrom2","to":"0xother","value":"1000000","confirmations":"7","blockNumber":"201","timeStamp":"1700000400"}
+				]
+			}`), nil
+			}),
+		})
+
+		txs, err := cm.getERC20TransactionsForNetwork(context.Background(), network, "0xabc", "0xcontract")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(txs) != 1 {
+			t.Fatalf("expected one incoming tx, got %d", len(txs))
+		}
+		if txs[0].Hash != "0xa" || txs[0].From != "0xfrom" || txs[0].To != "0xAbC" || txs[0].BlockNumber != 200 {
+			t.Fatalf("unexpected mapped tx: %+v", txs[0])
+		}
+	})
 }
 
 func int64Ptr(val int64) *int64 {

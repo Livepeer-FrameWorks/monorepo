@@ -1,0 +1,17 @@
+# Cross-cluster routing traffic matrix from hourly rollups
+query GetClusterTrafficMatrix($timeRange: TimeRangeInput, $noCache: Boolean = false) {
+  analytics {
+    infra {
+      clusterTrafficMatrix(timeRange: $timeRange, noCache: $noCache) {
+        clusterId
+        remoteClusterId
+        eventCount
+        successCount
+        avgLatencyMs
+        avgDistanceKm
+        successRate
+        maxLatencyMs
+      }
+    }
+  }
+}

@@ -91,6 +91,25 @@ Each cluster elects one Foghorn instance (via Redis `SET NX`, 15s TTL) to run Pe
 
 For architecture details, see `docs/architecture/federation.md` and `docs/architecture/stream-replication-topology.md`.
 
+### Artifact Command Routing
+
+When a tenant deletes a clip, stops a DVR, or removes a VOD asset, Commodore
+routes the command to the cluster that owns the artifact — not necessarily the
+tenant's primary cluster. This uses a **push+forward** model:
+
+1. **Push**: Commodore tracks which cluster ingested each stream
+   (`active_ingest_cluster_id`). Artifact operations read `origin_cluster_id`
+   from the business registry and route directly to that cluster's Foghorn.
+
+2. **Forward (safety net)**: If the command arrives at a Foghorn that doesn't
+   own the artifact (stale routing data, race condition), Foghorn forwards it
+   to federation peers via `ForwardArtifactCommand`. The first peer that owns
+   the artifact handles it.
+
+**Tenant suspension** (`TerminateTenantStreams`, `InvalidateTenantCache`) fans out
+to **all clusters** the tenant has access to, ensuring streams are terminated and
+caches invalidated everywhere.
+
 ---
 
 ## Marketplace
@@ -134,6 +153,21 @@ The invited tenant sees the cluster in their dashboard and can accept with one c
 
 ---
 
+## Dashboard Pages
+
+The webapp provides dedicated infrastructure pages for multi-cluster operations:
+
+| Page                        | Route                         | Purpose                                                                                                                                                  |
+| --------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Infrastructure Overview** | `/infrastructure`             | Tenant info, platform performance (CPU/memory/nodes), service health summary, clickable cluster cards                                                    |
+| **Cluster Detail**          | `/infrastructure/[clusterId]` | Per-cluster metrics, node cards with live health, service instances, health checks                                                                       |
+| **Node Detail**             | `/nodes/[id]`                 | Per-node CPU/memory/disk/streams, 5-minute performance history, service instances                                                                        |
+| **Clusters**                | `/infrastructure/clusters`    | Merged view — "My Clusters" tab (subscriptions, invitations, approvals, private cluster creation) and "Marketplace" tab (browse and connect to clusters) |
+| **Federation**              | `/infrastructure/federation`  | Federation overview — topology map with peering/traffic relationships, traffic matrix, event type breakdown, recent federation events                    |
+| **Audience Analytics**      | `/analytics/audience`         | Routing map with cross-cluster flow visualization (amber lines for cross-cluster routes), routing events tagged with local/cross-cluster badges          |
+
+---
+
 ## Edge Enrollment
 
 Edge nodes enroll into a specific cluster using bootstrap tokens.
@@ -142,7 +176,7 @@ Edge nodes enroll into a specific cluster using bootstrap tokens.
 
 **Via Dashboard (tenant owner):**
 
-1. Go to **Infrastructure -> Network**
+1. Go to **Infrastructure -> Clusters**
 2. Click **Create Private Cluster** or select an existing cluster
 3. Copy the bootstrap token
 
@@ -185,7 +219,7 @@ Each cluster gets its own set of DNS records under `{cluster_slug}.{base_domain}
 | Record                         | Purpose                                  |
 | ------------------------------ | ---------------------------------------- |
 | `edge-ingest.{slug}.{base}`    | RTMP/SRT/WHIP ingest                     |
-| `edge-egress.{slug}.{base}`    | Edge pool (viewer delivery)              |
+| `edge.{slug}.{base}`           | Edge pool (any edge in cluster)          |
 | `foghorn.{slug}.{base}`        | Viewer routing / playback resolution     |
 | `edge-{node_id}.{slug}.{base}` | Per-edge A records for direct addressing |
 
@@ -230,6 +264,8 @@ Monitor peer connectivity and replication state:
 - **PeerChannel status**: Each Foghorn logs peer connections and heartbeat latency
 - **Stream advertisements**: Exchanged every 5 seconds via PeerChannel; stale advertisements indicate peer issues
 - **Active replications**: In-flight cross-cluster DTSC pulls tracked in Redis (5-min TTL)
+- **Federation events**: All cross-cluster operations (peering, replication, artifact access, redirects) emit geo-enriched events to ClickHouse (`federation_events` table). View them on the **Federation** dashboard page (`/infrastructure/federation`)
+- **PeerHeartbeat geo exchange**: Foghorn peers exchange their geographic coordinates (resolved from `infrastructure_nodes.external_ip` at bootstrap). This enables topology map visualization with real geographic positions
 
 ### Per-Cluster Metrics
 
@@ -239,3 +275,4 @@ ClickHouse tables partition by `cluster_id`, enabling per-cluster dashboards for
 - Stream health and QoE
 - Edge node utilization
 - Cross-cluster replication events
+- Federation event geo data (local/remote lat/lon for topology visualization)

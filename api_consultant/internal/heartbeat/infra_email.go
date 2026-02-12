@@ -87,6 +87,10 @@ func collectActionItems(alerts []InfraAlert) []string {
 		seen[a.AlertType] = true
 		items = append(items, actionItemsFor(a.AlertType)...)
 	}
+	items = append(items,
+		"Run <code>frameworks edge doctor</code> to diagnose the node.",
+		"Check <code>frameworks edge logs</code> for service errors.",
+	)
 	return items
 }
 

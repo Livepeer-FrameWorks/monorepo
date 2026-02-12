@@ -32,21 +32,31 @@ type DVRCreator interface {
 	StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error)
 }
 
+// ArtifactCommandHandler dispatches artifact lifecycle commands locally.
+// Implemented by FoghornGRPCServer; used by ForwardArtifactCommand.
+type ArtifactCommandHandler interface {
+	DeleteClip(ctx context.Context, req *pb.DeleteClipRequest) (*pb.DeleteClipResponse, error)
+	StopDVR(ctx context.Context, req *pb.StopDVRRequest) (*pb.StopDVRResponse, error)
+	DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequest) (*pb.DeleteDVRResponse, error)
+	DeleteVodAsset(ctx context.Context, req *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error)
+}
+
 // FederationServer implements the FoghornFederation gRPC service.
 // It handles cross-cluster stream queries, origin-pull notifications,
 // artifact preparation, and bidirectional telemetry via PeerChannel.
 type FederationServer struct {
 	pb.UnimplementedFoghornFederationServer
-	logger      logging.Logger
-	lb          *balancer.LoadBalancer
-	clusterID   string
-	cache       *RemoteEdgeCache
-	db          *sql.DB
-	s3Client    *storage.S3Client
-	clipCreator ClipCreator
-	dvrCreator  DVRCreator
-	peerManager PeerAddrResolver
-	fedClient   *FederationClient
+	logger          logging.Logger
+	lb              *balancer.LoadBalancer
+	clusterID       string
+	cache           *RemoteEdgeCache
+	db              *sql.DB
+	s3Client        *storage.S3Client
+	clipCreator     ClipCreator
+	dvrCreator      DVRCreator
+	artifactHandler ArtifactCommandHandler
+	peerManager     PeerAddrResolver
+	fedClient       *FederationClient
 }
 
 // PeerAddrResolver resolves gRPC addresses for peer clusters.
@@ -56,31 +66,33 @@ type PeerAddrResolver interface {
 
 // FederationServerConfig holds dependencies for the federation server.
 type FederationServerConfig struct {
-	Logger      logging.Logger
-	LB          *balancer.LoadBalancer
-	ClusterID   string
-	Cache       *RemoteEdgeCache
-	DB          *sql.DB
-	S3Client    *storage.S3Client
-	ClipCreator ClipCreator
-	DVRCreator  DVRCreator
-	PeerManager PeerAddrResolver
-	FedClient   *FederationClient
+	Logger          logging.Logger
+	LB              *balancer.LoadBalancer
+	ClusterID       string
+	Cache           *RemoteEdgeCache
+	DB              *sql.DB
+	S3Client        *storage.S3Client
+	ClipCreator     ClipCreator
+	DVRCreator      DVRCreator
+	ArtifactHandler ArtifactCommandHandler
+	PeerManager     PeerAddrResolver
+	FedClient       *FederationClient
 }
 
 // NewFederationServer creates a new federation gRPC server.
 func NewFederationServer(cfg FederationServerConfig) *FederationServer {
 	return &FederationServer{
-		logger:      cfg.Logger,
-		lb:          cfg.LB,
-		clusterID:   cfg.ClusterID,
-		cache:       cfg.Cache,
-		db:          cfg.DB,
-		s3Client:    cfg.S3Client,
-		clipCreator: cfg.ClipCreator,
-		dvrCreator:  cfg.DVRCreator,
-		peerManager: cfg.PeerManager,
-		fedClient:   cfg.FedClient,
+		logger:          cfg.Logger,
+		lb:              cfg.LB,
+		clusterID:       cfg.ClusterID,
+		cache:           cfg.Cache,
+		db:              cfg.DB,
+		s3Client:        cfg.S3Client,
+		clipCreator:     cfg.ClipCreator,
+		dvrCreator:      cfg.DVRCreator,
+		artifactHandler: cfg.ArtifactHandler,
+		peerManager:     cfg.PeerManager,
+		fedClient:       cfg.FedClient,
 	}
 }
 
@@ -89,6 +101,11 @@ func (s *FederationServer) SetClipCreator(cc ClipCreator) { s.clipCreator = cc }
 
 // SetDVRCreator wires the DVR creation delegate (set after FoghornGRPCServer is created).
 func (s *FederationServer) SetDVRCreator(dc DVRCreator) { s.dvrCreator = dc }
+
+// SetArtifactCommandHandler wires the artifact command delegate (set after FoghornGRPCServer is created).
+func (s *FederationServer) SetArtifactCommandHandler(h ArtifactCommandHandler) {
+	s.artifactHandler = h
+}
 
 // RegisterServices registers the FoghornFederation service on the gRPC server.
 func (s *FederationServer) RegisterServices(srv *grpc.Server) {
@@ -949,6 +966,97 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *pb.
 		MigratedCount: migrated,
 		AlreadyExists: exists,
 	}, nil
+}
+
+// ForwardArtifactCommand handles a peer forwarding an artifact command it couldn't
+// handle locally. Dispatches to the local handler based on the command field.
+func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *pb.ForwardArtifactCommandRequest) (*pb.ForwardArtifactCommandResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetArtifactHash() == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_hash required")
+	}
+	if req.GetCommand() == "" {
+		return nil, status.Error(codes.InvalidArgument, "command required")
+	}
+	if s.artifactHandler == nil {
+		return &pb.ForwardArtifactCommandResponse{Handled: false, Error: "artifact handler not available"}, nil
+	}
+
+	log := s.logger.WithFields(logging.Fields{
+		"command":       req.GetCommand(),
+		"artifact_hash": req.GetArtifactHash(),
+		"tenant_id":     req.GetTenantId(),
+	})
+
+	// Suppress re-forwarding: this request already came from a peer
+	ctx = context.WithValue(ctx, ctxkeys.KeyNoForward, true)
+
+	switch req.GetCommand() {
+	case "delete_clip":
+		resp, err := s.artifactHandler.DeleteClip(ctx, &pb.DeleteClipRequest{
+			ClipHash: req.GetArtifactHash(),
+			TenantId: req.GetTenantId(),
+		})
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+			}
+			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+		}
+		log.Info("Forwarded delete_clip handled locally")
+		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
+
+	case "stop_dvr":
+		resp, err := s.artifactHandler.StopDVR(ctx, &pb.StopDVRRequest{
+			DvrHash:  req.GetArtifactHash(),
+			TenantId: req.GetTenantId(),
+			StreamId: &req.StreamId,
+		})
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+			}
+			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+		}
+		log.Info("Forwarded stop_dvr handled locally")
+		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
+
+	case "delete_dvr":
+		resp, err := s.artifactHandler.DeleteDVR(ctx, &pb.DeleteDVRRequest{
+			DvrHash:  req.GetArtifactHash(),
+			TenantId: req.GetTenantId(),
+		})
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+			}
+			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+		}
+		log.Info("Forwarded delete_dvr handled locally")
+		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
+
+	case "delete_vod":
+		resp, err := s.artifactHandler.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
+			ArtifactHash: req.GetArtifactHash(),
+			TenantId:     req.GetTenantId(),
+		})
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+			}
+			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+		}
+		log.Info("Forwarded delete_vod handled locally")
+		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
+
+	default:
+		return &pb.ForwardArtifactCommandResponse{
+			Handled: false,
+			Error:   "unknown command: " + req.GetCommand(),
+		}, nil
+	}
 }
 
 // AvailBandwidthFromNodeState returns available bandwidth for a NodeState.

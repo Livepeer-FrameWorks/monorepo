@@ -334,7 +334,7 @@ INSERT INTO periscope.routing_decisions (
     node_latitude, node_longitude, node_name,
     node_bucket_h3, node_bucket_res,
     selected_node_id, routing_distance_km,
-    stream_tenant_id, cluster_id,
+    stream_tenant_id, cluster_id, remote_cluster_id,
     latency_ms, candidates_count, event_type, source
 )
 SELECT
@@ -361,11 +361,188 @@ SELECT
     toFloat64(350 + rand()%500) as routing_distance_km,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as stream_tenant_id,
     'central-primary' as cluster_id,
+    '' as remote_cluster_id,
     toFloat32(12 + rand()%30) as latency_ms,
     toInt32(3 + rand()%5) as candidates_count,
     'resolve_playback' as event_type,
     'foghorn' as source
 FROM numbers(0, 2016);
+
+-- 4b. Cross-cluster routing decisions (remote_redirect + cross_cluster_dtsc)
+INSERT INTO periscope.routing_decisions (
+    timestamp, tenant_id, stream_id, internal_name,
+    selected_node, status, details, score,
+    client_ip, client_country, client_latitude, client_longitude,
+    node_latitude, node_longitude, node_name,
+    routing_distance_km, stream_tenant_id,
+    cluster_id, remote_cluster_id,
+    latency_ms, candidates_count, event_type, source
+)
+SELECT
+    toDateTime(now() - INTERVAL (number * 15) MINUTE) as timestamp,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
+    'demo_live_stream_001' as internal_name,
+    arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2) as selected_node,
+    arrayElement(['remote_redirect', 'cross_cluster_dtsc'], 1 + number%2) as status,
+    if(number%2 = 0,
+        concat('https://', arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2), '/demo_live_stream_001'),
+        concat('dtsc://', arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2), ':4200/demo_live_stream_001')
+    ) as details,
+    600 + rand() % 300 as score,
+    concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as client_ip,
+    arrayElement(['US', 'JP', 'DE', 'GB'], 1 + rand()%4) as client_country,
+    arrayElement([40.71, 35.68, 52.52, 51.50], 1 + rand()%4) as client_latitude,
+    arrayElement([-74.00, 139.69, 13.40, -0.12], 1 + rand()%4) as client_longitude,
+    arrayElement([39.04, 1.35], 1 + number%2) as node_latitude,
+    arrayElement([-77.49, 103.82], 1 + number%2) as node_longitude,
+    arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2) as node_name,
+    toFloat64(5000 + rand()%8000) as routing_distance_km,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as stream_tenant_id,
+    'central-primary' as cluster_id,
+    arrayElement(['us-east-edge', 'apac-edge'], 1 + number%2) as remote_cluster_id,
+    toFloat32(45 + rand()%80) as latency_ms,
+    toInt32(5 + rand()%8) as candidates_count,
+    'resolve_playback' as event_type,
+    'foghorn' as source
+FROM numbers(0, 336);
+
+-- 4c. Federation Events (federation_events) - 7 days of lifecycle events
+INSERT INTO periscope.federation_events (
+    timestamp, tenant_id, event_type, local_cluster, remote_cluster,
+    stream_name, stream_id, source_node, dest_node, dtsc_url,
+    latency_ms, queried_clusters, responding_clusters, total_candidates,
+    peer_cluster, role, reason,
+    local_lat, local_lon, remote_lat, remote_lon
+)
+SELECT
+    ts, tenant_id, event_type, local_cluster, remote_cluster,
+    stream_name, stream_id, source_node, dest_node, dtsc_url,
+    latency_ms, queried_clusters, responding_clusters, total_candidates,
+    peer_cluster, role, reason,
+    local_lat, local_lon, remote_lat, remote_lon
+FROM (
+    -- Origin-pull arranged events (once per hour)
+    SELECT
+        toDateTime(now() - INTERVAL (number * 60) MINUTE) as ts,
+        '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+        'origin_pull_arranged' as event_type,
+        'central-primary' as local_cluster,
+        arrayElement(['us-east-edge', 'apac-edge'], 1 + number%2) as remote_cluster,
+        'demo_live_stream_001' as stream_name,
+        toNullable('5eedfeed-11fe-ca57-feed-11feca570001') as stream_id,
+        toNullable(arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2)) as source_node,
+        toNullable('edge-leiden') as dest_node,
+        toNullable(concat('dtsc://', arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2), ':4200/demo_live_stream_001')) as dtsc_url,
+        toNullable(toFloat32(0)) as latency_ms,
+        toNullable(toUInt32(0)) as queried_clusters,
+        toNullable(toUInt32(0)) as responding_clusters,
+        toNullable(toUInt32(0)) as total_candidates,
+        toNullable('') as peer_cluster, '' as role,
+        toNullable('') as reason,
+        toNullable(41.8781) as local_lat, toNullable(-87.6298) as local_lon,
+        toNullable(arrayElement([40.7128, 35.6762], 1 + number%2)) as remote_lat,
+        toNullable(arrayElement([-74.0060, 139.6503], 1 + number%2)) as remote_lon
+    FROM numbers(0, 168)
+
+    UNION ALL
+
+    -- Origin-pull completed events (slightly after arranged)
+    SELECT
+        toDateTime(now() - INTERVAL (number * 60 - 3) MINUTE) as ts,
+        '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+        'origin_pull_completed',
+        'central-primary',
+        arrayElement(['us-east-edge', 'apac-edge'], 1 + number%2),
+        'demo_live_stream_001',
+        toNullable('5eedfeed-11fe-ca57-feed-11feca570001'),
+        toNullable(arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2)),
+        toNullable('edge-leiden'),
+        toNullable(concat('dtsc://', arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2), ':4200/demo_live_stream_001')),
+        toNullable(toFloat32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
+        toNullable(''), '', toNullable(''),
+        toNullable(41.8781), toNullable(-87.6298),
+        toNullable(arrayElement([40.7128, 35.6762], 1 + number%2)),
+        toNullable(arrayElement([-74.0060, 139.6503], 1 + number%2))
+    FROM numbers(0, 168)
+
+    UNION ALL
+
+    -- Federation query events (every 15 minutes)
+    SELECT
+        toDateTime(now() - INTERVAL (number * 15) MINUTE) as ts,
+        '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+        'federation_query',
+        'central-primary',
+        '',
+        'demo_live_stream_001',
+        toNullable('5eedfeed-11fe-ca57-feed-11feca570001'),
+        toNullable(''), toNullable(''), toNullable(''),
+        toNullable(toFloat32(25 + rand()%50)),
+        toNullable(toUInt32(2)),
+        toNullable(toUInt32(1 + rand()%2)),
+        toNullable(toUInt32(2 + rand()%6)),
+        toNullable(''), '', toNullable(''),
+        toNullable(41.8781), toNullable(-87.6298),
+        null, null
+    FROM numbers(0, 672)
+
+    UNION ALL
+
+    -- Peer connected/disconnected events (daily cycle)
+    SELECT
+        toDateTime(now() - INTERVAL (number * 360) MINUTE) as ts,
+        '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+        arrayElement(['peer_connected', 'peer_disconnected'], 1 + number%2),
+        'central-primary',
+        '',
+        '', toNullable(''), toNullable(''), toNullable(''), toNullable(''),
+        toNullable(toFloat32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
+        toNullable(arrayElement(['us-east-edge', 'apac-edge'], 1 + (number/2)%2)),
+        '', toNullable(''),
+        toNullable(41.8781), toNullable(-87.6298),
+        null, null
+    FROM numbers(0, 28)
+
+    UNION ALL
+
+    -- Leader acquired/lost events (once per day)
+    SELECT
+        toDateTime(now() - INTERVAL (number * 1440) MINUTE) as ts,
+        '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+        arrayElement(['leader_acquired', 'leader_lost'], 1 + number%2),
+        'central-primary',
+        '',
+        '', toNullable(''), toNullable(''), toNullable(''), toNullable(''),
+        toNullable(toFloat32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
+        toNullable(''),
+        'peer_manager',
+        toNullable(''),
+        toNullable(41.8781), toNullable(-87.6298),
+        null, null
+    FROM numbers(0, 14)
+
+    UNION ALL
+
+    -- Replication loop prevented events (rare, ~2 per day)
+    SELECT
+        toDateTime(now() - INTERVAL (number * 720 + 180) MINUTE) as ts,
+        '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+        'replication_loop_prevented',
+        'central-primary',
+        arrayElement(['us-east-edge', 'apac-edge'], 1 + number%2),
+        'demo_live_stream_001',
+        toNullable('5eedfeed-11fe-ca57-feed-11feca570001'),
+        toNullable(''), toNullable(''), toNullable(''),
+        toNullable(toFloat32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
+        toNullable(''),
+        '',
+        toNullable(''),
+        toNullable(41.8781), toNullable(-87.6298),
+        toNullable(arrayElement([40.7128, 35.6762], 1 + number%2)),
+        toNullable(arrayElement([-74.0060, 139.6503], 1 + number%2))
+    FROM numbers(0, 14)
+);
 
 -- =================================================================================================
 -- 5. Track List Events (track_list_events)
@@ -1009,3 +1186,5 @@ OPTIMIZE TABLE periscope.storage_usage_hourly FINAL;
 OPTIMIZE TABLE periscope.processing_daily FINAL;
 OPTIMIZE TABLE periscope.api_usage_hourly FINAL;
 OPTIMIZE TABLE periscope.api_usage_daily FINAL;
+OPTIMIZE TABLE periscope.routing_cluster_hourly FINAL;
+OPTIMIZE TABLE periscope.federation_hourly FINAL;

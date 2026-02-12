@@ -22,6 +22,7 @@ var federationClient *federation.FederationClient
 // peerAddrResolver is satisfied by *federation.PeerManager.
 type peerAddrResolver interface {
 	GetPeerAddr(clusterID string) string
+	GetPeerGeo(clusterID string) (float64, float64)
 }
 
 var peerManager peerAddrResolver

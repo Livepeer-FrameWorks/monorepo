@@ -162,6 +162,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.processVodLifecycle(ctx, event)
 	case "api_request_batch":
 		err = h.processAPIRequestBatch(ctx, event)
+	case "federation_event":
+		err = h.processFederationEvent(ctx, event)
 	default:
 		h.logger.WithFields(logging.Fields{
 			"event_type": event.EventType,
@@ -777,6 +779,12 @@ func nilIfZeroFloat32(v float32) interface{} {
 	}
 	return v
 }
+func nilIfZeroFloat64(v float64) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
 func nilIfZeroBool(v bool) interface{} {
 	if !v {
 		return nil
@@ -1164,13 +1172,15 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 	internalName := mist.ExtractInternalName(loadBalancing.GetInternalName())
 
 	// Write to ClickHouse routing_events table - using ACTUAL fields from LoadBalancingPayload
+	remoteClusterID := loadBalancing.GetRemoteClusterId()
+
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO routing_decisions (
             timestamp, tenant_id, stream_id, internal_name, selected_node, status, details, score,
             client_ip, client_country, client_latitude, client_longitude, client_bucket_h3, client_bucket_res,
             node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
             selected_node_id, routing_distance_km,
-            stream_tenant_id, cluster_id, latency_ms,
+            stream_tenant_id, cluster_id, remote_cluster_id, latency_ms,
             candidates_count, event_type, source
         )`)
 	if err != nil {
@@ -1244,6 +1254,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		routeKm,
 		streamTenantID,
 		clusterID,
+		remoteClusterID,
 		loadBalancing.GetLatencyMs(),
 		candidatesCount,
 		nilIfEmptyString(eventType),
@@ -2598,6 +2609,74 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 
 	if err := batch.Send(); err != nil {
 		h.logger.Errorf("Failed to send storage_events batch: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+// processFederationEvent handles federation operation events (origin-pull, peer topology, query fan-out)
+func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing federation event: %s", event.EventID)
+
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_FederationEventData)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for federation_event")
+	}
+	fed := tp.FederationEventData
+
+	eventType := strings.ToLower(fed.GetEventType().String())
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO federation_events (
+			timestamp, tenant_id, event_type, local_cluster, remote_cluster,
+			stream_name, stream_id,
+			source_node, dest_node, dtsc_url, latency_ms, time_to_live_ms, failure_reason,
+			queried_clusters, responding_clusters, total_candidates, best_remote_score,
+			peer_cluster, role, reason,
+			local_lat, local_lon, remote_lat, remote_lon
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare federation_events batch: %v", err)
+		return err
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		event.TenantID,
+		eventType,
+		fed.GetLocalCluster(),
+		fed.GetRemoteCluster(),
+		fed.GetStreamName(),
+		parseUUIDOrNil(fed.GetStreamId()),
+		nilIfEmptyString(fed.GetSourceNode()),
+		nilIfEmptyString(fed.GetDestNode()),
+		nilIfEmptyString(fed.GetDtscUrl()),
+		nilIfZeroFloat32(fed.GetLatencyMs()),
+		nilIfZeroFloat32(fed.GetTimeToLiveMs()),
+		nilIfEmptyString(fed.GetFailureReason()),
+		nilIfZeroUint32(fed.GetQueriedClusters()),
+		nilIfZeroUint32(fed.GetRespondingClusters()),
+		nilIfZeroUint32(fed.GetTotalCandidates()),
+		nilIfZeroUint64(fed.GetBestRemoteScore()),
+		nilIfEmptyString(fed.GetPeerCluster()),
+		fed.GetRole(),
+		nilIfEmptyString(fed.GetReason()),
+		nilIfZeroFloat64(fed.GetLocalLat()),
+		nilIfZeroFloat64(fed.GetLocalLon()),
+		nilIfZeroFloat64(fed.GetRemoteLat()),
+		nilIfZeroFloat64(fed.GetRemoteLon()),
+	); err != nil {
+		h.logger.Errorf("Failed to append to federation_events batch: %v", err)
+		return err
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send federation_events batch: %v", err)
 		return err
 	}
 

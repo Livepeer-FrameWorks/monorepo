@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -24,20 +25,40 @@ func PublicGraphQLAllowlist() gin.HandlerFunc {
 		// Restore body for downstream handler
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 
-		s := strings.ToLower(string(body))
+		var req struct {
+			Query         string `json:"query"`
+			OperationName string `json:"operationName"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
+			c.Abort()
+			return
+		}
 
-		// No mutations allowed
-		if strings.Contains(s, "mutation") {
+		q := strings.ToLower(req.Query)
+		if strings.Contains(q, "mutation") {
 			c.JSON(http.StatusForbidden, gin.H{"error": "mutations not allowed"})
 			c.Abort()
 			return
 		}
 
-		// Allowlist minimal safe operations for public use
-		// - serviceInstancesHealth: for public status page
-		// - resolveViewerEndpoint: for player endpoint discovery by playback id/content id
-		// - resolveIngestEndpoint: for StreamCrafter ingest endpoint discovery by stream key
-		if strings.Contains(s, "serviceinstanceshealth") || strings.Contains(s, "resolveviewerendpoint") || strings.Contains(s, "resolveingestendpoint") {
+		op := strings.ToLower(req.OperationName)
+		allowed := false
+		for _, a := range allowlistedOperations {
+			if op == a {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			for _, a := range allowlistedOperations {
+				if strings.Contains(q, a) {
+					allowed = true
+					break
+				}
+			}
+		}
+		if allowed {
 			c.Next()
 			return
 		}

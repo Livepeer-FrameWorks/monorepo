@@ -156,7 +156,7 @@ type ServiceConfig struct {
 type EdgeManifest struct {
 	Version         string     `yaml:"version"`
 	RootDomain      string     `yaml:"root_domain"`
-	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge-egress.example.com)
+	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
 	Email           string     `yaml:"email"`       // ACME email
 	ClusterID       string     `yaml:"cluster_id,omitempty"`
 	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap

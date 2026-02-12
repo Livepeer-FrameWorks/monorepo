@@ -59,7 +59,7 @@ type CommodoreClient interface {
 	ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error)
 	ResolveIdentifier(ctx context.Context, identifier string) (*pb.ResolveIdentifierResponse, error)
 	ResolveVodID(ctx context.Context, vodID string) (*pb.ResolveVodIDResponse, error)
-	ValidateStreamKey(ctx context.Context, streamKey string) (*pb.ValidateStreamKeyResponse, error)
+	ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*pb.ValidateStreamKeyResponse, error)
 }
 
 type ResourceResolution struct {

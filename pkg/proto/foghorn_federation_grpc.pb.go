@@ -27,6 +27,7 @@ const (
 	FoghornFederation_PeerChannel_FullMethodName             = "/foghorn_federation.FoghornFederation/PeerChannel"
 	FoghornFederation_ListTenantArtifacts_FullMethodName     = "/foghorn_federation.FoghornFederation/ListTenantArtifacts"
 	FoghornFederation_MigrateArtifactMetadata_FullMethodName = "/foghorn_federation.FoghornFederation/MigrateArtifactMetadata"
+	FoghornFederation_ForwardArtifactCommand_FullMethodName  = "/foghorn_federation.FoghornFederation/ForwardArtifactCommand"
 )
 
 // FoghornFederationClient is the client API for FoghornFederation service.
@@ -58,6 +59,10 @@ type FoghornFederationClient interface {
 	// MigrateArtifactMetadata bulk-copies artifact records from a source cluster.
 	// Destination calls ListTenantArtifacts on source, then inserts locally with origin_cluster_id.
 	MigrateArtifactMetadata(ctx context.Context, in *MigrateArtifactMetadataRequest, opts ...grpc.CallOption) (*MigrateArtifactMetadataResponse, error)
+	// ForwardArtifactCommand forwards an artifact operation to a peer cluster.
+	// Used as a safety net when a command arrives at the wrong cluster (stale cache, race).
+	// The receiving cluster tries to handle it locally and reports whether it succeeded.
+	ForwardArtifactCommand(ctx context.Context, in *ForwardArtifactCommandRequest, opts ...grpc.CallOption) (*ForwardArtifactCommandResponse, error)
 }
 
 type foghornFederationClient struct {
@@ -151,6 +156,16 @@ func (c *foghornFederationClient) MigrateArtifactMetadata(ctx context.Context, i
 	return out, nil
 }
 
+func (c *foghornFederationClient) ForwardArtifactCommand(ctx context.Context, in *ForwardArtifactCommandRequest, opts ...grpc.CallOption) (*ForwardArtifactCommandResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ForwardArtifactCommandResponse)
+	err := c.cc.Invoke(ctx, FoghornFederation_ForwardArtifactCommand_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FoghornFederationServer is the server API for FoghornFederation service.
 // All implementations must embed UnimplementedFoghornFederationServer
 // for forward compatibility.
@@ -180,6 +195,10 @@ type FoghornFederationServer interface {
 	// MigrateArtifactMetadata bulk-copies artifact records from a source cluster.
 	// Destination calls ListTenantArtifacts on source, then inserts locally with origin_cluster_id.
 	MigrateArtifactMetadata(context.Context, *MigrateArtifactMetadataRequest) (*MigrateArtifactMetadataResponse, error)
+	// ForwardArtifactCommand forwards an artifact operation to a peer cluster.
+	// Used as a safety net when a command arrives at the wrong cluster (stale cache, race).
+	// The receiving cluster tries to handle it locally and reports whether it succeeded.
+	ForwardArtifactCommand(context.Context, *ForwardArtifactCommandRequest) (*ForwardArtifactCommandResponse, error)
 	mustEmbedUnimplementedFoghornFederationServer()
 }
 
@@ -213,6 +232,9 @@ func (UnimplementedFoghornFederationServer) ListTenantArtifacts(context.Context,
 }
 func (UnimplementedFoghornFederationServer) MigrateArtifactMetadata(context.Context, *MigrateArtifactMetadataRequest) (*MigrateArtifactMetadataResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MigrateArtifactMetadata not implemented")
+}
+func (UnimplementedFoghornFederationServer) ForwardArtifactCommand(context.Context, *ForwardArtifactCommandRequest) (*ForwardArtifactCommandResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForwardArtifactCommand not implemented")
 }
 func (UnimplementedFoghornFederationServer) mustEmbedUnimplementedFoghornFederationServer() {}
 func (UnimplementedFoghornFederationServer) testEmbeddedByValue()                           {}
@@ -368,6 +390,24 @@ func _FoghornFederation_MigrateArtifactMetadata_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FoghornFederation_ForwardArtifactCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForwardArtifactCommandRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FoghornFederationServer).ForwardArtifactCommand(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FoghornFederation_ForwardArtifactCommand_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FoghornFederationServer).ForwardArtifactCommand(ctx, req.(*ForwardArtifactCommandRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FoghornFederation_ServiceDesc is the grpc.ServiceDesc for FoghornFederation service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -402,6 +442,10 @@ var FoghornFederation_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MigrateArtifactMetadata",
 			Handler:    _FoghornFederation_MigrateArtifactMetadata_Handler,
+		},
+		{
+			MethodName: "ForwardArtifactCommand",
+			Handler:    _FoghornFederation_ForwardArtifactCommand_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

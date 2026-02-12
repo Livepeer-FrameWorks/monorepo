@@ -19,3 +19,18 @@ func TestIsSameBucketRejectsDifferentEndpoints(t *testing.T) {
 		t.Fatal("expected affinity rejection for different endpoints")
 	}
 }
+
+func TestNormalizeEndpoint_StripsDefaultPorts(t *testing.T) {
+	if got := normalizeEndpoint("https://s3.example.com:443/"); got != "s3.example.com" {
+		t.Fatalf("expected default https port stripped, got %q", got)
+	}
+	if got := normalizeEndpoint("http://s3.example.com:80/"); got != "s3.example.com" {
+		t.Fatalf("expected default http port stripped, got %q", got)
+	}
+}
+
+func TestNormalizeEndpoint_InvalidURLFallsBackToLowercase(t *testing.T) {
+	if got := normalizeEndpoint("https://[::1"); got != "https://[::1" {
+		t.Fatalf("expected lowercase fallback for invalid URL, got %q", got)
+	}
+}

@@ -128,6 +128,7 @@ service InternalService {
 
 message ValidateStreamKeyRequest {
   string stream_key = 1;
+  string cluster_id = 2;  // Cluster where Foghorn is processing this ingest (for stream→cluster tracking)
 }
 
 // Matches pkg/api/commodore/types.go:ValidateStreamKeyResponse exactly
@@ -1025,4 +1026,16 @@ service VodService {
   rpc ListVodAssets(shared.ListVodAssetsRequest) returns (shared.ListVodAssetsResponse);
   // Delete VOD asset
   rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
+}
+
+// ============================================================================
+// NODE MANAGEMENT SERVICE (Gateway → Commodore → Foghorn proxy)
+// Proxies node lifecycle operations to the Foghorn that owns the node's cluster.
+// ============================================================================
+
+service NodeManagementService {
+  // Set a node's operational mode (normal, draining, maintenance)
+  rpc SetNodeOperationalMode(foghorn.SetNodeModeRequest) returns (foghorn.SetNodeModeResponse);
+  // Get real-time health and routing state for a node
+  rpc GetNodeHealth(foghorn.GetNodeHealthRequest) returns (foghorn.GetNodeHealthResponse);
 }

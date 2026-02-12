@@ -14,12 +14,13 @@
 # - deckhand.proto: Support messaging (Chatwoot integration)
 # - skipper.proto: AI consultant chat service
 # - foghorn_federation.proto: Cross-cluster federation (Foghorn ↔ Foghorn)
+# - foghorn_relay.proto: Intra-cluster HA command relay (Foghorn ↔ Foghorn)
 proto: clean
 	protoc --go_out=. \
 		--go_opt=paths=source_relative \
 		--go-grpc_out=. \
 		--go-grpc_opt=paths=source_relative \
-		common.proto shared.proto ipc.proto dns.proto commodore.proto quartermaster.proto purser.proto periscope.proto signalman.proto foghorn.proto foghorn_federation.proto deckhand.proto skipper.proto
+		common.proto shared.proto ipc.proto dns.proto commodore.proto quartermaster.proto purser.proto periscope.proto signalman.proto foghorn.proto foghorn_federation.proto foghorn_relay.proto deckhand.proto skipper.proto
 
 # Clean generated files
 clean:

@@ -51,6 +51,11 @@ const (
 	KeyReadOnly     Key = "read_only"
 )
 
+// Federation context keys
+const (
+	KeyNoForward Key = "no_forward"
+)
+
 // Misc context keys
 const (
 	KeyGinContext           Key = "GinContext"

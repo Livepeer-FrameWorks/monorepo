@@ -43,7 +43,9 @@ type GRPCClient struct {
 	vod        pb.VodControlServiceClient
 	tenant     pb.TenantControlServiceClient
 	edge       pb.EdgeProvisioningServiceClient
+	nodeMgmt   pb.NodeControlServiceClient
 	federation pb.FoghornFederationClient
+	relay      pb.FoghornRelayClient
 	logger     logging.Logger
 	timeout    time.Duration
 }
@@ -163,7 +165,9 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		vod:        pb.NewVodControlServiceClient(conn),
 		tenant:     pb.NewTenantControlServiceClient(conn),
 		edge:       pb.NewEdgeProvisioningServiceClient(conn),
+		nodeMgmt:   pb.NewNodeControlServiceClient(conn),
 		federation: pb.NewFoghornFederationClient(conn),
+		relay:      pb.NewFoghornRelayClient(conn),
 		logger:     config.Logger,
 		timeout:    config.Timeout,
 	}, nil
@@ -172,6 +176,11 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 // Federation returns the FoghornFederation client for cross-cluster RPCs.
 func (c *GRPCClient) Federation() pb.FoghornFederationClient {
 	return c.federation
+}
+
+// Relay returns the FoghornRelay client for intra-cluster HA command forwarding.
+func (c *GRPCClient) Relay() pb.FoghornRelayClient {
+	return c.relay
 }
 
 // Close closes the gRPC connection
@@ -419,4 +428,26 @@ func (c *GRPCClient) PreRegisterEdge(ctx context.Context, req *pb.PreRegisterEdg
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	return c.edge.PreRegisterEdge(ctx, req)
+}
+
+// =============================================================================
+// NODE MANAGEMENT
+// =============================================================================
+
+// SetNodeMode changes the operational mode of a node (normal, draining, maintenance).
+func (c *GRPCClient) SetNodeMode(ctx context.Context, req *pb.SetNodeModeRequest) (*pb.SetNodeModeResponse, metadata.MD, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	var trailers metadata.MD
+	resp, err := c.nodeMgmt.SetNodeOperationalMode(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
+}
+
+// GetNodeHealth returns real-time health and routing state for a node.
+func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, metadata.MD, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	var trailers metadata.MD
+	resp, err := c.nodeMgmt.GetNodeHealth(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }

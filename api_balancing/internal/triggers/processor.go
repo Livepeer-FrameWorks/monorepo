@@ -647,8 +647,8 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		"hostname":   pushRewrite.GetHostname(),
 	}).Debug("Processing PUSH_REWRITE trigger")
 
-	// Call Commodore to validate stream key
-	streamValidation, err := p.commodoreClient.ValidateStreamKey(context.Background(), pushRewrite.GetStreamName())
+	// Call Commodore to validate stream key (pass our cluster_id for stream→cluster tracking)
+	streamValidation, err := p.commodoreClient.ValidateStreamKey(context.Background(), pushRewrite.GetStreamName(), p.clusterID)
 	if err != nil {
 		p.logger.WithFields(logging.Fields{
 			"stream_key": pushRewrite.GetStreamName(),

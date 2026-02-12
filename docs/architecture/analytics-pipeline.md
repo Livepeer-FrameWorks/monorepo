@@ -153,6 +153,7 @@ Periscope Ingest routes on Kafka `event_type` (the canonical strings emitted by 
 | `storage_snapshot`                     | `processStorageSnapshot`  | `storage_snapshots`                                                          |
 | `process_billing`                      | `processProcessBilling`   | `processing_events`                                                          |
 | `vod_lifecycle`                        | `processVodLifecycle`     | `artifact_state_current` + `artifact_events` (`content_type='vod'`)          |
+| `federation_event`                     | `processFederationEvent`  | `federation_events`                                                          |
 | `api_request_batch`                    | `processAPIRequestBatch`  | `api_requests`                                                               |
 
 _Note: `api_request_batch` also arrives via `service_events` and is written to `api_requests` (with audit rows in `api_events`)._
@@ -173,6 +174,7 @@ The exact schema is in `pkg/database/sql/clickhouse/periscope.sql`, but conceptu
 - `routing_decisions`: Load balancing decision telemetry (routing maps, etc.).
 - `processing_events`: Transcoding/processing usage events (billing + analytics).
 - `storage_snapshots` and `storage_events`: Storage capacity snapshots and lifecycle actions.
+- `federation_events`: Cross-cluster federation telemetry (peering, replication, artifact access, redirects) with geo coordinates (`local_lat`/`local_lon`/`remote_lat`/`remote_lon`).
 - `api_requests` and `api_events`: GraphQL/API usage aggregates + audit trail (from `service_events` / `api_request_batch`).
 
 ### Error handling: commits must not skip failures

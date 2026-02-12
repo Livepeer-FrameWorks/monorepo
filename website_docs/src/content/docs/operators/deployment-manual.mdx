@@ -139,11 +139,11 @@ Configure your DNS provider with the following records. Exact steps vary by prov
 
 ### Streaming Records
 
-| Type    | Name        | Content                  | Notes              |
-| ------- | ----------- | ------------------------ | ------------------ |
-| A/CNAME | edge-egress | Load balancer or edge IP | Edge node delivery |
-| A/CNAME | edge-ingest | Load balancer or edge IP | RTMP/WHIP ingest   |
-| A/CNAME | foghorn     | `<regional-ip>`          | Viewer routing     |
+| Type    | Name        | Content                  | Notes            |
+| ------- | ----------- | ------------------------ | ---------------- |
+| A/CNAME | edge        | Load balancer or edge IP | Edge pool domain |
+| A/CNAME | edge-ingest | Load balancer or edge IP | RTMP/WHIP ingest |
+| A/CNAME | foghorn     | `<regional-ip>`          | Viewer routing   |
 
 ### Multi-Cluster Streaming Records
 
@@ -152,7 +152,7 @@ In multi-cluster deployments, each cluster gets its own set of streaming records
 | Type | Name                                    | Content            | Notes                      |
 | ---- | --------------------------------------- | ------------------ | -------------------------- |
 | A    | `edge-ingest.{slug}.your-domain.com`    | Edge node IP(s)    | Cluster-scoped ingest      |
-| A    | `edge-egress.{slug}.your-domain.com`    | Edge node IP(s)    | Cluster-scoped delivery    |
+| A    | `edge.{slug}.your-domain.com`           | Edge node IP(s)    | Cluster-scoped edge pool   |
 | A    | `foghorn.{slug}.your-domain.com`        | Foghorn IP         | Cluster-scoped routing     |
 | A    | `edge-{node_id}.{slug}.your-domain.com` | Individual edge IP | Per-edge direct addressing |
 
@@ -695,6 +695,21 @@ GEOIP_CACHE_MAX=50000
 REDIS_URL=redis://<redis-host>:6379
 FOGHORN_INSTANCE_ID=foghorn-1
 
+# HA relay (enables cross-instance command forwarding)
+
+# NODE_ID is used by BootstrapService to resolve the mesh address for relay.
+
+# FOGHORN_GRPC_PORT defaults to 18019 if not set.
+
+NODE_ID=<node-id>
+FOGHORN_GRPC_PORT=18019
+
+# FOGHORN_HOST overrides the advertise address if NODE_ID is not registered
+
+# with a mesh IP in Quartermaster. Normally not needed.
+
+# FOGHORN_HOST=<explicit-ip-or-hostname>
+
 # Cache settings
 
 COMMODORE_CACHE_TTL=60s
@@ -1135,7 +1150,7 @@ VITE_GRAPHQL_HTTP_URL=https://bridge.your-domain.com/graphql
 VITE_GRAPHQL_WS_URL=wss://bridge.your-domain.com/graphql/ws
 VITE_STREAMING_INGEST_URL=https://edge-ingest.your-domain.com
 VITE_STREAMING_PLAY_URL=https://foghorn.your-domain.com
-VITE_STREAMING_EDGE_URL=https://edge-egress.your-domain.com
+VITE_STREAMING_EDGE_URL=https://edge.your-domain.com
 VITE_STREAMING_RTMP_PORT=1935
 VITE_STREAMING_SRT_PORT=8889
 VITE_STREAMING_RTMP_PATH=/live
@@ -1180,7 +1195,7 @@ WEBAPP_PUBLIC_URL=https://chartroom.your-domain.com
 MARKETING_PUBLIC_URL=https://your-domain.com
 GATEWAY_PUBLIC_URL=https://bridge.your-domain.com
 STREAMING_INGEST_URL=https://edge-ingest.your-domain.com
-STREAMING_EDGE_URL=https://edge-egress.your-domain.com
+STREAMING_EDGE_URL=https://edge.your-domain.com
 STREAMING_HLS_PATH=/hls
 STREAMING_WEBRTC_PATH=/webrtc
 DISCORD_URL=https://discord.gg/your-invite
@@ -1405,8 +1420,8 @@ server {
 ```
 
 <Aside type="tip">
-  For streaming endpoints (`edge-egress.your-domain.com`, `edge-ingest.your-domain.com`), use
-  DNS-only mode without proxying to avoid interference with RTMP, SRT, and WebRTC protocols.
+  For streaming endpoints (`edge.your-domain.com`, `edge-ingest.your-domain.com`), use DNS-only mode
+  without proxying to avoid interference with RTMP, SRT, and WebRTC protocols.
 </Aside>
 
 ---

@@ -11,8 +11,6 @@ fragment NodeListFields on InfrastructureNode {
   diskGb
   lastHeartbeat
   tags
-  latitude
-  longitude
   liveState {
     cpuPercent
     ramUsedBytes

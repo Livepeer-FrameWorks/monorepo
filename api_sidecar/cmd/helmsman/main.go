@@ -119,6 +119,10 @@ func main() {
 		r.GET("/prometheus/nodes", handlers.GetPrometheusNodes)
 		r.POST("/prometheus/nodes", handlers.AddPrometheusNode)
 		r.DELETE("/prometheus/nodes/:node_id", handlers.RemovePrometheusNode)
+
+		// Node management (local agent/CLI)
+		r.GET("/node/mode", handlers.HandleGetNodeMode)
+		r.POST("/node/mode", handlers.HandleSetNodeMode)
 	}
 
 	// Webhook routes - MistServer triggers and webhooks
@@ -178,8 +182,9 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Start server with graceful shutdown
+	// Start server with graceful shutdown — local-only (no auth on mode endpoints)
 	serverConfig := server.DefaultConfig("helmsman", "18007")
+	serverConfig.BindAddr = "127.0.0.1"
 	if err := server.Start(serverConfig, r, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}

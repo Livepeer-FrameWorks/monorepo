@@ -1,6 +1,7 @@
 package balancer
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -260,4 +261,184 @@ func TestGetTopNodesWithScores_ClusterScope(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestHostToBinaryIPv4Mapped(t *testing.T) {
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+	bin := lb.hostToBinary("203.0.113.10")
+
+	if bin[10] != 0xff || bin[11] != 0xff {
+		t.Fatalf("expected IPv4-mapped marker bytes, got %x %x", bin[10], bin[11])
+	}
+	if !bytes.Equal(bin[12:16], []byte{203, 0, 113, 10}) {
+		t.Fatalf("unexpected IPv4 bytes: %v", bin[12:16])
+	}
+}
+
+func TestNodeLookupHelpers(t *testing.T) {
+	sm := setupTestManager(t)
+	addTestNode(t, sm, "node-1", "edge-1.example.com", 0, 0, true)
+
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+
+	nodes := lb.GetNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node in map, got %d", len(nodes))
+	}
+	if _, ok := nodes["edge-1.example.com"]; !ok {
+		t.Fatalf("expected host key edge-1.example.com, got keys=%v", keys(nodes))
+	}
+
+	allNodes := lb.GetAllNodes()
+	if len(allNodes) != 1 {
+		t.Fatalf("expected 1 node in all nodes snapshot, got %d", len(allNodes))
+	}
+
+	baseURL, err := lb.GetNodeByID("node-1")
+	if err != nil {
+		t.Fatalf("GetNodeByID returned error: %v", err)
+	}
+	if baseURL != "edge-1.example.com" {
+		t.Fatalf("expected base URL edge-1.example.com, got %q", baseURL)
+	}
+
+	if got := lb.GetNodeIDByHost("edge-1.example.com"); got != "node-1" {
+		t.Fatalf("expected node id node-1, got %q", got)
+	}
+	if got := lb.GetNodeIDByHost("missing.example.com"); got != "" {
+		t.Fatalf("expected empty node id for missing host, got %q", got)
+	}
+
+	if _, err := lb.GetNodeByID("node-missing"); err == nil {
+		t.Fatal("expected error for missing node id")
+	}
+}
+
+func TestGetBestNode(t *testing.T) {
+	sm := setupTestManager(t)
+	sm.SetWeights(0, 0, 1000, 0, 0)
+
+	addTestNode(t, sm, "node-1", "edge-1.example.com", 0, 0, true)
+	addTestNode(t, sm, "node-2", "edge-2.example.com", 0, 0, true)
+
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+	host, err := lb.GetBestNode(context.Background(), "", 0, 0, nil)
+	if err != nil {
+		t.Fatalf("GetBestNode returned error: %v", err)
+	}
+	if host != "edge-1.example.com" && host != "edge-2.example.com" {
+		t.Fatalf("unexpected host selected: %q", host)
+	}
+}
+
+func TestScoreRemoteEdges(t *testing.T) {
+	sm := setupTestManager(t)
+	sm.SetWeights(100, 100, 100, 100, 0)
+
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+	scored := lb.ScoreRemoteEdges([]RemoteEdgeCandidate{
+		{
+			ClusterID:   "remote-a",
+			NodeID:      "node-a",
+			BaseURL:     "edge-a.example.com",
+			GeoLat:      10,
+			GeoLon:      20,
+			BWAvailable: remoteBWRefCapacity,
+			CPUPercent:  0,
+			RAMUsed:     0,
+			RAMMax:      100,
+		},
+		{
+			ClusterID:   "remote-b",
+			NodeID:      "node-b",
+			BaseURL:     "edge-b.example.com",
+			GeoLat:      10,
+			GeoLon:      20,
+			BWAvailable: 1,
+			CPUPercent:  100,
+			RAMUsed:     100,
+			RAMMax:      100,
+		},
+		{
+			ClusterID:   "remote-c",
+			NodeID:      "node-c",
+			BaseURL:     "edge-c.example.com",
+			GeoLat:      10,
+			GeoLon:      20,
+			BWAvailable: remoteBWRefCapacity,
+			CPUPercent:  0,
+			RAMUsed:     0,
+			RAMMax:      0,
+		},
+	}, 10, 20)
+
+	if len(scored) != 1 {
+		t.Fatalf("expected only one viable remote edge, got %d", len(scored))
+	}
+	if scored[0].ClusterID != "remote-a" || scored[0].NodeID != "node-a" {
+		t.Fatalf("unexpected scored node: %+v", scored[0])
+	}
+	if scored[0].Score == 0 {
+		t.Fatal("expected positive remote score after penalty")
+	}
+}
+
+func TestApplyAdjustment(t *testing.T) {
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+	tags := []string{"edge", "premium"}
+
+	if got := lb.applyAdjustment(tags, "", 50); got != 0 {
+		t.Fatalf("empty match should return 0, got %d", got)
+	}
+	if got := lb.applyAdjustment(tags, "edge", 50); got != 50 {
+		t.Fatalf("single tag match should apply adjustment, got %d", got)
+	}
+	if got := lb.applyAdjustment(tags, "storage,premium", 30); got != 30 {
+		t.Fatalf("comma match should apply adjustment, got %d", got)
+	}
+	if got := lb.applyAdjustment(tags, "-edge", 40); got != 0 {
+		t.Fatalf("inverted match with present tag should not apply, got %d", got)
+	}
+	if got := lb.applyAdjustment(tags, "-storage", 40); got != 40 {
+		t.Fatalf("inverted match with missing tag should apply, got %d", got)
+	}
+}
+
+func TestWeightAndStreamAccessors(t *testing.T) {
+	sm := setupTestManager(t)
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+
+	lb.SetWeights(11, 22, 33, 44, 55)
+	gotWeights := lb.GetWeights()
+	if gotWeights["cpu"] != 11 || gotWeights["ram"] != 22 || gotWeights["bw"] != 33 || gotWeights["geo"] != 44 || gotWeights["bonus"] != 55 {
+		t.Fatalf("unexpected weights: %+v", gotWeights)
+	}
+
+	if err := sm.UpdateStreamFromBuffer("stream-a", "stream-a", "node-a", "tenant-a", "FULL", ""); err != nil {
+		t.Fatalf("failed to seed stream-a: %v", err)
+	}
+	if err := sm.UpdateStreamFromBuffer("stream-b", "stream-b", "node-b", "tenant-b", "FULL", ""); err != nil {
+		t.Fatalf("failed to seed stream-b: %v", err)
+	}
+
+	streams := lb.GetStreamsByTenant("tenant-a")
+	if len(streams) != 1 || streams[0].InternalName != "stream-a" {
+		t.Fatalf("unexpected streams for tenant-a: %+v", streams)
+	}
+
+	instances := lb.GetStreamInstances("stream-a")
+	if len(instances) != 1 {
+		t.Fatalf("expected one stream instance, got %d", len(instances))
+	}
+	if _, ok := instances["node-a"]; !ok {
+		t.Fatalf("expected instance on node-a, got keys=%v", keys(instances))
+	}
+}
+
+func keys[M ~map[K]V, K comparable, V any](m M) []K {
+	out := make([]K, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

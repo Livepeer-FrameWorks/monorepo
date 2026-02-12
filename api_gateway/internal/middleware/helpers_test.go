@@ -111,20 +111,23 @@ func TestIsDemoMode(t *testing.T) {
 func TestIsAllowlistedQuery(t *testing.T) {
 	cases := []struct {
 		name     string
-		query    string
+		body     string
 		expected bool
 	}{
-		{name: "mutation blocked", query: "mutation { serviceInstancesHealth }", expected: false},
-		{name: "serviceInstancesHealth allowed", query: "query { serviceInstancesHealth }", expected: true},
-		{name: "resolveViewerEndpoint allowed", query: "query { ResolveViewerEndpoint }", expected: true},
-		{name: "resolveIngestEndpoint allowed", query: "query { resolveIngestEndpoint }", expected: true},
-		{name: "not allowlisted", query: "query { other }", expected: false},
+		{name: "mutation blocked", body: `{"query":"mutation { serviceInstancesHealth }"}`, expected: false},
+		{name: "serviceInstancesHealth allowed", body: `{"query":"query { serviceInstancesHealth }"}`, expected: true},
+		{name: "resolveViewerEndpoint allowed", body: `{"query":"query { ResolveViewerEndpoint }"}`, expected: true},
+		{name: "resolveIngestEndpoint allowed", body: `{"query":"query { resolveIngestEndpoint }"}`, expected: true},
+		{name: "not allowlisted", body: `{"query":"query { other }"}`, expected: false},
+		{name: "operationName match", body: `{"query":"query ServiceInstancesHealth { serviceInstancesHealth { status } }","operationName":"ServiceInstancesHealth"}`, expected: true},
+		{name: "invalid JSON rejected", body: "not json", expected: false},
+		{name: "networkStatus allowed", body: `{"query":"query { networkStatus { clusters } }","operationName":"NetworkStatus"}`, expected: true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isAllowlistedQuery([]byte(tc.query)); got != tc.expected {
-				t.Fatalf("isAllowlistedQuery(%q) = %t, want %t", tc.query, got, tc.expected)
+			if got := isAllowlistedQuery([]byte(tc.body)); got != tc.expected {
+				t.Fatalf("isAllowlistedQuery(%q) = %t, want %t", tc.body, got, tc.expected)
 			}
 		})
 	}

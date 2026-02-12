@@ -698,6 +698,116 @@ func TestSanitizeServiceEventData(t *testing.T) {
 	}
 }
 
+func TestGetMap(t *testing.T) {
+	nested := map[string]interface{}{"stream_id": "stream-1", "count": float64(2)}
+	cases := []struct {
+		name     string
+		data     map[string]interface{}
+		key      string
+		expected map[string]interface{}
+	}{
+		{name: "nil map", data: nil, key: "value", expected: nil},
+		{name: "missing key", data: map[string]interface{}{}, key: "value", expected: nil},
+		{name: "wrong type", data: map[string]interface{}{"value": "not-a-map"}, key: "value", expected: nil},
+		{name: "valid nested map", data: map[string]interface{}{"value": nested}, key: "value", expected: nested},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := getMap(tc.data, tc.key)
+			if !reflect.DeepEqual(got, tc.expected) {
+				t.Fatalf("getMap(%v, %q) = %#v, want %#v", tc.data, tc.key, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestGetString(t *testing.T) {
+	cases := []struct {
+		name     string
+		data     map[string]interface{}
+		key      string
+		expected string
+	}{
+		{name: "nil map", data: nil, key: "value", expected: ""},
+		{name: "missing key", data: map[string]interface{}{}, key: "value", expected: ""},
+		{name: "wrong type", data: map[string]interface{}{"value": 123}, key: "value", expected: ""},
+		{name: "valid string", data: map[string]interface{}{"value": "hello"}, key: "value", expected: "hello"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := getString(tc.data, tc.key); got != tc.expected {
+				t.Fatalf("getString(%v, %q) = %q, want %q", tc.data, tc.key, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestGetBool(t *testing.T) {
+	cases := []struct {
+		name     string
+		data     map[string]interface{}
+		key      string
+		expected bool
+	}{
+		{name: "nil map", data: nil, key: "value", expected: false},
+		{name: "missing key", data: map[string]interface{}{}, key: "value", expected: false},
+		{name: "wrong type", data: map[string]interface{}{"value": "true"}, key: "value", expected: false},
+		{name: "false value", data: map[string]interface{}{"value": false}, key: "value", expected: false},
+		{name: "true value", data: map[string]interface{}{"value": true}, key: "value", expected: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := getBool(tc.data, tc.key); got != tc.expected {
+				t.Fatalf("getBool(%v, %q) = %t, want %t", tc.data, tc.key, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestBoolToUInt8(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    bool
+		expected uint8
+	}{
+		{name: "false", input: false, expected: 0},
+		{name: "true", input: true, expected: 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := boolToUInt8(tc.input); got != tc.expected {
+				t.Fatalf("boolToUInt8(%t) = %d, want %d", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestBoolToNullableUInt8(t *testing.T) {
+	trueValue := true
+	falseValue := false
+	cases := []struct {
+		name     string
+		input    *bool
+		expected interface{}
+	}{
+		{name: "nil", input: nil, expected: nil},
+		{name: "false", input: &falseValue, expected: uint8(0)},
+		{name: "true", input: &trueValue, expected: uint8(1)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := boolToNullableUInt8(tc.input); !reflect.DeepEqual(got, tc.expected) {
+				t.Fatalf("boolToNullableUInt8(%v) = %#v, want %#v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
 func TestParseProtobufData(t *testing.T) {
 	handler := &AnalyticsHandler{}
 

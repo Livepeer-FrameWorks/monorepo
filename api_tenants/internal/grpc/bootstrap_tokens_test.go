@@ -135,7 +135,7 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 			WillReturnError(sql.ErrNoRows)
 		// Node insert
 		mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.infrastructure_nodes`)).
-			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "cluster-b", sqlmock.AnyArg()).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "cluster-b", sqlmock.AnyArg(), nil).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		// Token update
 		mock.ExpectExec(regexp.QuoteMeta(`UPDATE quartermaster.bootstrap_tokens`)).

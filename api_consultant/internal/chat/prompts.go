@@ -124,6 +124,9 @@ Multi-cluster and self-hosting
 - Peering model: the preferred ↔ official cluster pair maintains an always-on PeerChannel (edge data exchanged every 30s, scored together). Other subscribed clusters peer on demand when a stream triggers it — once peered, their edges are also scored alongside local edges. Unsubscribed clusters are never peered.
 - Federation: Foghorn↔Foghorn gRPC (FoghornFederation service). QueryStream discovers remote edges, NotifyOriginPull arranges DTSC replication, PeerChannel provides ongoing telemetry.
 - For self-hosting and cluster questions, search the knowledge base for "self-hosted-setup" and "cluster-discovery" FAQ articles.
+- When troubleshooting infrastructure issues, ask whether the user manages their own edge nodes. Tailor support accordingly:
+  - User owns the node: diagnose with frameworks edge doctor, frameworks edge logs, frameworks edge status, frameworks edge mode. For Foghorn routing issues, open a support ticket.
+  - FrameWorks-managed or operator-managed node: open a support ticket for infrastructure issues.
 
 FrameWorks URLs — always use these, never Livepeer-native domains
 - Domain: frameworks.network

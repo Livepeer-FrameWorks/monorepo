@@ -3320,3 +3320,307 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 		TotalActiveSessions: int(s.TotalActiveSessions),
 	}, nil
 }
+
+// DoGetClusterTrafficMatrix returns cross-cluster routing traffic.
+func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *model.TimeRangeInput, noCache *bool) ([]*pb.ClusterPairTraffic, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateClusterTrafficMatrix(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+	keyParts := []string{tenantID, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "cluster_traffic_matrix", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetClusterTrafficMatrix(ctx, tenantID, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*pb.GetClusterTrafficMatrixResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for cluster traffic matrix: %T", val)
+	}
+
+	pairs := resp.GetPairs()
+	r.enrichTrafficMatrixGeo(ctx, pairs)
+	return pairs, nil
+}
+
+// enrichTrafficMatrixGeo attaches cluster lat/lon to traffic matrix pairs
+// by averaging node geo per cluster.
+func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*pb.ClusterPairTraffic) {
+	if len(pairs) == 0 {
+		return
+	}
+	nodesResp, err := r.Clients.Quartermaster.ListNodes(ctx, "", "", "", &pb.CursorPaginationRequest{First: 500})
+	if err != nil || nodesResp == nil {
+		return
+	}
+
+	type geo struct{ lat, lon float64 }
+	clusterGeo := make(map[string]geo)
+	type acc struct {
+		latSum, lonSum float64
+		n              int
+	}
+	accum := make(map[string]*acc)
+	for _, n := range nodesResp.Nodes {
+		if n.Latitude == nil || n.Longitude == nil {
+			continue
+		}
+		a, ok := accum[n.ClusterId]
+		if !ok {
+			a = &acc{}
+			accum[n.ClusterId] = a
+		}
+		a.latSum += *n.Latitude
+		a.lonSum += *n.Longitude
+		a.n++
+	}
+	for cid, a := range accum {
+		if a.n > 0 {
+			clusterGeo[cid] = geo{lat: a.latSum / float64(a.n), lon: a.lonSum / float64(a.n)}
+		}
+	}
+
+	for _, p := range pairs {
+		if g, ok := clusterGeo[p.ClusterId]; ok {
+			p.LocalLatitude = &g.lat
+			p.LocalLongitude = &g.lon
+		}
+		if p.RemoteClusterId != "" {
+			if g, ok := clusterGeo[p.RemoteClusterId]; ok {
+				p.RemoteLatitude = &g.lat
+				p.RemoteLongitude = &g.lon
+			}
+		}
+	}
+}
+
+// DoGetFederationEventsConnection returns federation events as a connection.
+func (r *Resolver) DoGetFederationEventsConnection(ctx context.Context, timeRange *model.TimeRangeInput, first *int, eventType *string, noCache *bool) (*model.FederationEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateFederationEventsConnection(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+
+	limit := int32(100)
+	if first != nil && *first > 0 {
+		limit = int32(*first)
+	}
+
+	evtTypeStr := ""
+	if eventType != nil {
+		evtTypeStr = *eventType
+	}
+	keyParts := []string{tenantID, timeKey(startTime), timeKey(endTime), evtTypeStr, fmt.Sprintf("%d", limit)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "federation_events", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetFederationEvents(ctx, tenantID, timePtrsToTimeRangeOpts(startTime, endTime), eventType, limit)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*pb.GetFederationEventsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for federation events: %T", val)
+	}
+
+	events := resp.GetEvents()
+	edges := make([]*model.FederationEventEdge, len(events))
+	for i, evt := range events {
+		cursor := fmt.Sprintf("fed:%d", i)
+		edges[i] = &model.FederationEventEdge{
+			Cursor: cursor,
+			Node:   evt,
+		}
+	}
+
+	var startCursor, endCursor *string
+	if len(edges) > 0 {
+		startCursor = &edges[0].Cursor
+		endCursor = &edges[len(edges)-1].Cursor
+	}
+
+	return &model.FederationEventsConnection{
+		Edges: edges,
+		PageInfo: &model.PageInfo{
+			HasNextPage:     len(events) >= int(limit),
+			HasPreviousPage: false,
+			StartCursor:     startCursor,
+			EndCursor:       endCursor,
+		},
+		TotalCount: int(resp.GetTotalCount()),
+	}, nil
+}
+
+// DoGetFederationSummary returns aggregated federation event counts.
+func (r *Resolver) DoGetFederationSummary(ctx context.Context, timeRange *model.TimeRangeInput, noCache *bool) (*pb.FederationSummary, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateFederationSummary(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+	keyParts := []string{tenantID, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "federation_summary", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetFederationSummary(ctx, tenantID, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*pb.GetFederationSummaryResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for federation summary: %T", val)
+	}
+	return resp.GetSummary(), nil
+}
+
+// DoGetNetworkStatus returns public network topology (no tenant data).
+func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus, error) {
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateNetworkStatus(), nil
+	}
+
+	// Fetch all active clusters (gateway uses service token → sees all active)
+	clustersResp, err := r.Clients.Quartermaster.ListClusters(ctx, &pb.CursorPaginationRequest{First: 500})
+	if err != nil {
+		r.Logger.WithError(err).Warn("networkStatus: Quartermaster unavailable, returning demo topology")
+		return demo.GenerateNetworkStatus(), nil
+	}
+
+	// Fetch foghorn pool for peer connection derivation
+	poolStatus, _ := r.Clients.Quartermaster.GetFoghornPoolStatus(ctx)
+
+	// Fetch all nodes (for geo + counts)
+	nodesResp, _ := r.Clients.Quartermaster.ListNodes(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
+
+	// Group nodes by cluster: count and average geo
+	type clusterGeo struct {
+		nodeCount int
+		latSum    float64
+		lonSum    float64
+		geoCount  int
+	}
+	nodesByCluster := make(map[string]*clusterGeo)
+	if nodesResp != nil {
+		for _, n := range nodesResp.Nodes {
+			cg, ok := nodesByCluster[n.ClusterId]
+			if !ok {
+				cg = &clusterGeo{}
+				nodesByCluster[n.ClusterId] = cg
+			}
+			cg.nodeCount++
+			if n.Latitude != nil && n.Longitude != nil {
+				cg.latSum += *n.Latitude
+				cg.lonSum += *n.Longitude
+				cg.geoCount++
+			}
+		}
+	}
+
+	// Track which clusters have foghorn instances (for peer connection derivation)
+	foghornClusters := make(map[string]bool)
+	if poolStatus != nil {
+		for _, entry := range poolStatus.Clusters {
+			if entry.ClusterId != "" && entry.InstanceCount > 0 {
+				foghornClusters[entry.ClusterId] = true
+			}
+		}
+	}
+
+	var clusters []*model.NetworkClusterStatus
+	var totalNodes, healthyNodes int
+	for _, c := range clustersResp.Clusters {
+		if !c.IsActive {
+			continue
+		}
+		var lat, lon float64
+		nc := 0
+		hn := 0
+		if cg, ok := nodesByCluster[c.ClusterId]; ok {
+			nc = cg.nodeCount
+			hn = cg.nodeCount // healthy determined by presence
+			if cg.geoCount > 0 {
+				lat = cg.latSum / float64(cg.geoCount)
+				lon = cg.lonSum / float64(cg.geoCount)
+			}
+		}
+
+		peerCount := 0
+		if foghornClusters[c.ClusterId] {
+			// peers = other clusters that also have foghorn instances
+			for otherID := range foghornClusters {
+				if otherID != c.ClusterId {
+					peerCount++
+				}
+			}
+		}
+
+		clusters = append(clusters, &model.NetworkClusterStatus{
+			ClusterID:        c.ClusterId,
+			Name:             c.ClusterName,
+			Region:           c.ClusterType,
+			Latitude:         lat,
+			Longitude:        lon,
+			NodeCount:        nc,
+			HealthyNodeCount: hn,
+			PeerCount:        peerCount,
+			Status:           c.HealthStatus,
+		})
+		totalNodes += nc
+		healthyNodes += hn
+	}
+
+	// Build peer connections: every pair of clusters with foghorn instances
+	var peerConnections []*model.NetworkPeerConnection
+	foghornList := make([]string, 0, len(foghornClusters))
+	for id := range foghornClusters {
+		foghornList = append(foghornList, id)
+	}
+	for i := 0; i < len(foghornList); i++ {
+		for j := i + 1; j < len(foghornList); j++ {
+			peerConnections = append(peerConnections, &model.NetworkPeerConnection{
+				SourceCluster: foghornList[i],
+				TargetCluster: foghornList[j],
+				Connected:     true,
+			})
+		}
+	}
+
+	return &model.NetworkStatus{
+		Clusters:        clusters,
+		PeerConnections: peerConnections,
+		TotalNodes:      totalNodes,
+		HealthyNodes:    healthyNodes,
+		UpdatedAt:       time.Now(),
+	}, nil
+}

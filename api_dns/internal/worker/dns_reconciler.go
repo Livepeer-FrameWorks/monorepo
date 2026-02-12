@@ -66,7 +66,7 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 			r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("DNS reconciliation completed with partial errors")
 		}
 
-		if serviceType == "edge" || serviceType == "edge-egress" || serviceType == "edge-ingest" || serviceType == "foghorn" {
+		if serviceType == "edge" || serviceType == "edge-egress" || serviceType == "edge-ingest" || serviceType == "edge-storage" || serviceType == "edge-processing" || serviceType == "foghorn" {
 			clusterPartialErrors, clusterErr := r.dnsManager.SyncServiceByCluster(ctx, serviceType)
 			if clusterErr != nil {
 				r.logger.WithError(clusterErr).WithField("service_type", serviceType).Error("Cluster DNS reconciliation failed")

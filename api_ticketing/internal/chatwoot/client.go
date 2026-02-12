@@ -85,6 +85,34 @@ type Message struct {
 	} `json:"sender,omitempty"`
 }
 
+type contactListEnvelope struct {
+	Payload []Contact `json:"payload"`
+}
+
+type contactEnvelope struct {
+	Payload Contact `json:"payload"`
+}
+
+type createContactEnvelope struct {
+	Payload struct {
+		Contact Contact `json:"contact"`
+	} `json:"payload"`
+}
+
+type conversationListEnvelope struct {
+	Payload []Conversation `json:"payload"`
+}
+
+type conversationSearchEnvelope struct {
+	Data struct {
+		Payload []Conversation `json:"payload"`
+	} `json:"data"`
+}
+
+type messageListEnvelope struct {
+	Payload []Message `json:"payload"`
+}
+
 // MessageType constants matching Chatwoot's enum
 const (
 	MessageTypeIncoming = 0 // From contact (customer)
@@ -133,9 +161,7 @@ func (c *Client) GetContactBySourceID(ctx context.Context, sourceID string) (*Co
 		return nil, fmt.Errorf("search contacts: status %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Payload []Contact `json:"payload"`
-	}
+	var result contactListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
@@ -164,9 +190,7 @@ func (c *Client) GetContactByEmail(ctx context.Context, email string) (*Contact,
 		return nil, fmt.Errorf("search contacts: status %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Payload []Contact `json:"payload"`
-	}
+	var result contactListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
@@ -200,9 +224,7 @@ func (c *Client) UpdateContactSourceID(ctx context.Context, contactID int64, sou
 		return nil, fmt.Errorf("update contact: status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var result struct {
-		Payload Contact `json:"payload"`
-	}
+	var result contactEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
@@ -232,11 +254,7 @@ func (c *Client) CreateContact(ctx context.Context, sourceID, name, email string
 		return nil, fmt.Errorf("create contact: status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var result struct {
-		Payload struct {
-			Contact Contact `json:"contact"`
-		} `json:"payload"`
-	}
+	var result createContactEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
@@ -258,9 +276,7 @@ func (c *Client) ListConversations(ctx context.Context, contactID int64, page, p
 		return nil, 0, fmt.Errorf("list conversations: status %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Payload []Conversation `json:"payload"`
-	}
+	var result conversationListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, 0, fmt.Errorf("decode response: %w", err)
 	}
@@ -293,11 +309,7 @@ func (c *Client) SearchConversations(ctx context.Context, query string, page int
 		return nil, 0, fmt.Errorf("search conversations: status %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Data struct {
-			Payload []Conversation `json:"payload"`
-		} `json:"data"`
-	}
+	var result conversationSearchEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, 0, fmt.Errorf("decode response: %w", err)
 	}
@@ -383,9 +395,7 @@ func (c *Client) ListMessages(ctx context.Context, conversationID int64) ([]Mess
 	}
 
 	// Chatwoot returns {"payload": [...messages...], "meta": {...}}
-	var result struct {
-		Payload []Message `json:"payload"`
-	}
+	var result messageListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}

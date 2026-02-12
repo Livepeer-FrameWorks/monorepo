@@ -27,6 +27,7 @@ type GRPCClient struct {
 	connection pb.ConnectionAnalyticsServiceClient
 	node       pb.NodeAnalyticsServiceClient
 	routing    pb.RoutingAnalyticsServiceClient
+	federation pb.FederationAnalyticsServiceClient
 	platform   pb.PlatformAnalyticsServiceClient
 	clip       pb.ClipAnalyticsServiceClient
 	aggregated pb.AggregatedAnalyticsServiceClient
@@ -125,6 +126,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		connection: pb.NewConnectionAnalyticsServiceClient(conn),
 		node:       pb.NewNodeAnalyticsServiceClient(conn),
 		routing:    pb.NewRoutingAnalyticsServiceClient(conn),
+		federation: pb.NewFederationAnalyticsServiceClient(conn),
 		platform:   pb.NewPlatformAnalyticsServiceClient(conn),
 		clip:       pb.NewClipAnalyticsServiceClient(conn),
 		aggregated: pb.NewAggregatedAnalyticsServiceClient(conn),
@@ -859,6 +861,44 @@ func (c *GRPCClient) GetAPIUsage(ctx context.Context, tenantID string, authType 
 		req.OperationName = operationName
 	}
 	return c.aggregated.GetAPIUsage(ctx, req)
+}
+
+// GetClusterTrafficMatrix returns cross-cluster routing traffic from routing_cluster_hourly MV
+func (c *GRPCClient) GetClusterTrafficMatrix(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*pb.GetClusterTrafficMatrixResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	return c.routing.GetClusterTrafficMatrix(ctx, &pb.GetClusterTrafficMatrixRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+	})
+}
+
+// GetFederationEvents returns federation events (origin pulls, peer connections, etc.)
+func (c *GRPCClient) GetFederationEvents(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, eventType *string, limit int32) (*pb.GetFederationEventsResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.GetFederationEventsRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+		Limit:     limit,
+	}
+	if eventType != nil {
+		req.EventType = eventType
+	}
+	return c.federation.GetFederationEvents(ctx, req)
+}
+
+// GetFederationSummary returns aggregated federation event counts and latencies
+func (c *GRPCClient) GetFederationSummary(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*pb.GetFederationSummaryResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	return c.federation.GetFederationSummary(ctx, &pb.GetFederationSummaryRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+	})
 }
 
 // GetRoutingEfficiency returns pre-aggregated routing decision stats

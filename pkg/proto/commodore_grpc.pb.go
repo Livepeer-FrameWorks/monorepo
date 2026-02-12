@@ -3200,3 +3200,147 @@ var VodService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "commodore.proto",
 }
+
+const (
+	NodeManagementService_SetNodeOperationalMode_FullMethodName = "/commodore.NodeManagementService/SetNodeOperationalMode"
+	NodeManagementService_GetNodeHealth_FullMethodName          = "/commodore.NodeManagementService/GetNodeHealth"
+)
+
+// NodeManagementServiceClient is the client API for NodeManagementService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type NodeManagementServiceClient interface {
+	// Set a node's operational mode (normal, draining, maintenance)
+	SetNodeOperationalMode(ctx context.Context, in *SetNodeModeRequest, opts ...grpc.CallOption) (*SetNodeModeResponse, error)
+	// Get real-time health and routing state for a node
+	GetNodeHealth(ctx context.Context, in *GetNodeHealthRequest, opts ...grpc.CallOption) (*GetNodeHealthResponse, error)
+}
+
+type nodeManagementServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewNodeManagementServiceClient(cc grpc.ClientConnInterface) NodeManagementServiceClient {
+	return &nodeManagementServiceClient{cc}
+}
+
+func (c *nodeManagementServiceClient) SetNodeOperationalMode(ctx context.Context, in *SetNodeModeRequest, opts ...grpc.CallOption) (*SetNodeModeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetNodeModeResponse)
+	err := c.cc.Invoke(ctx, NodeManagementService_SetNodeOperationalMode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeManagementServiceClient) GetNodeHealth(ctx context.Context, in *GetNodeHealthRequest, opts ...grpc.CallOption) (*GetNodeHealthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNodeHealthResponse)
+	err := c.cc.Invoke(ctx, NodeManagementService_GetNodeHealth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NodeManagementServiceServer is the server API for NodeManagementService service.
+// All implementations must embed UnimplementedNodeManagementServiceServer
+// for forward compatibility.
+type NodeManagementServiceServer interface {
+	// Set a node's operational mode (normal, draining, maintenance)
+	SetNodeOperationalMode(context.Context, *SetNodeModeRequest) (*SetNodeModeResponse, error)
+	// Get real-time health and routing state for a node
+	GetNodeHealth(context.Context, *GetNodeHealthRequest) (*GetNodeHealthResponse, error)
+	mustEmbedUnimplementedNodeManagementServiceServer()
+}
+
+// UnimplementedNodeManagementServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedNodeManagementServiceServer struct{}
+
+func (UnimplementedNodeManagementServiceServer) SetNodeOperationalMode(context.Context, *SetNodeModeRequest) (*SetNodeModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetNodeOperationalMode not implemented")
+}
+func (UnimplementedNodeManagementServiceServer) GetNodeHealth(context.Context, *GetNodeHealthRequest) (*GetNodeHealthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNodeHealth not implemented")
+}
+func (UnimplementedNodeManagementServiceServer) mustEmbedUnimplementedNodeManagementServiceServer() {}
+func (UnimplementedNodeManagementServiceServer) testEmbeddedByValue()                               {}
+
+// UnsafeNodeManagementServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to NodeManagementServiceServer will
+// result in compilation errors.
+type UnsafeNodeManagementServiceServer interface {
+	mustEmbedUnimplementedNodeManagementServiceServer()
+}
+
+func RegisterNodeManagementServiceServer(s grpc.ServiceRegistrar, srv NodeManagementServiceServer) {
+	// If the following call panics, it indicates UnimplementedNodeManagementServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&NodeManagementService_ServiceDesc, srv)
+}
+
+func _NodeManagementService_SetNodeOperationalMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetNodeModeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeManagementServiceServer).SetNodeOperationalMode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeManagementService_SetNodeOperationalMode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeManagementServiceServer).SetNodeOperationalMode(ctx, req.(*SetNodeModeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeManagementService_GetNodeHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNodeHealthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeManagementServiceServer).GetNodeHealth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeManagementService_GetNodeHealth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeManagementServiceServer).GetNodeHealth(ctx, req.(*GetNodeHealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// NodeManagementService_ServiceDesc is the grpc.ServiceDesc for NodeManagementService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var NodeManagementService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "commodore.NodeManagementService",
+	HandlerType: (*NodeManagementServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SetNodeOperationalMode",
+			Handler:    _NodeManagementService_SetNodeOperationalMode_Handler,
+		},
+		{
+			MethodName: "GetNodeHealth",
+			Handler:    _NodeManagementService_GetNodeHealth_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "commodore.proto",
+}

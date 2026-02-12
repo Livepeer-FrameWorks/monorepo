@@ -417,9 +417,21 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 	}
 
 	// Build cluster_peers: all clusters this tenant has access to (best-effort)
+	// Resolves Foghorn gRPC address per peer so Commodore can route commands to any cluster.
 	peerRows, peerErr := s.db.QueryContext(ctx, `
 		SELECT ic.cluster_id, ic.cluster_name, ic.cluster_type, ic.base_url,
-		       COALESCE(ic.s3_bucket, ''), COALESCE(ic.s3_endpoint, ''), COALESCE(ic.s3_region, '')
+		       COALESCE(ic.s3_bucket, ''), COALESCE(ic.s3_endpoint, ''), COALESCE(ic.s3_region, ''),
+		       COALESCE(
+		           (SELECT si.advertise_host || ':' || si.port
+		            FROM quartermaster.foghorn_cluster_assignments fca
+		            JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+		            WHERE fca.cluster_id = ic.cluster_id
+		              AND fca.is_active = TRUE
+		              AND si.status = 'running'
+		            ORDER BY si.updated_at DESC
+		            LIMIT 1),
+		           ''
+		       ) AS foghorn_grpc_addr
 		FROM quartermaster.tenant_cluster_access tca
 		JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
 		WHERE tca.tenant_id = $1
@@ -434,8 +446,8 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 			officialID = officialClusterID.String
 		}
 		for peerRows.Next() {
-			var cID, cName, cType, cBaseURL, s3Bucket, s3Endpoint, s3Region string
-			if err := peerRows.Scan(&cID, &cName, &cType, &cBaseURL, &s3Bucket, &s3Endpoint, &s3Region); err != nil {
+			var cID, cName, cType, cBaseURL, s3Bucket, s3Endpoint, s3Region, foghornGrpcAddr string
+			if err := peerRows.Scan(&cID, &cName, &cType, &cBaseURL, &s3Bucket, &s3Endpoint, &s3Region, &foghornGrpcAddr); err != nil {
 				continue
 			}
 			var role string
@@ -448,15 +460,16 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				role = "subscribed"
 			}
 			resp.ClusterPeers = append(resp.ClusterPeers, &pb.TenantClusterPeer{
-				ClusterId:   cID,
-				ClusterSlug: dns.SanitizeLabel(cID),
-				BaseUrl:     cBaseURL,
-				ClusterName: cName,
-				Role:        role,
-				ClusterType: cType,
-				S3Bucket:    s3Bucket,
-				S3Endpoint:  s3Endpoint,
-				S3Region:    s3Region,
+				ClusterId:       cID,
+				ClusterSlug:     dns.SanitizeLabel(cID),
+				BaseUrl:         cBaseURL,
+				ClusterName:     cName,
+				Role:            role,
+				ClusterType:     cType,
+				FoghornGrpcAddr: foghornGrpcAddr,
+				S3Bucket:        s3Bucket,
+				S3Endpoint:      s3Endpoint,
+				S3Region:        s3Region,
 			})
 		}
 	}
@@ -605,21 +618,41 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	if advHost == "" {
 		advHost = req.GetHost()
 	}
+	if advHost == "" && req.NodeId != nil {
+		// Derive advertise_host from the node's mesh address (wireguard_ip > internal_ip > external_ip)
+		var nodeIP sql.NullString
+		_ = exec.QueryRowContext(ctx, `
+			SELECT COALESCE(wireguard_ip::text, internal_ip::text, external_ip::text)
+			FROM quartermaster.infrastructure_nodes
+			WHERE node_id = $1 AND cluster_id = $2
+		`, *req.NodeId, clusterID).Scan(&nodeIP)
+		if nodeIP.Valid && nodeIP.String != "" {
+			advHost = nodeIP.String
+		}
+	}
 	if advHost == "" {
-		// In gRPC we can't get client IP easily, require it to be set
-		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required")
+		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered mesh address)")
 	}
 
 	healthEndpoint := req.HealthEndpoint
 	port := req.GetPort()
 
-	// 5. Idempotent registration: check for existing instance on same (service_id, cluster_id, protocol, port)
+	// 5. Idempotent registration: check for existing instance on same (service_id, cluster_id, protocol, port[, node_id])
 	var existingID, existingInstanceID string
-	_ = exec.QueryRowContext(ctx, `
-		SELECT id::text, instance_id FROM quartermaster.service_instances
-		WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
-		ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
-	`, serviceID, clusterID, proto, port).Scan(&existingID, &existingInstanceID)
+	if req.NodeId != nil {
+		_ = exec.QueryRowContext(ctx, `
+			SELECT id::text, instance_id FROM quartermaster.service_instances
+			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
+			  AND (node_id = $5 OR node_id IS NULL)
+			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
+		`, serviceID, clusterID, proto, port, *req.NodeId).Scan(&existingID, &existingInstanceID)
+	} else {
+		_ = exec.QueryRowContext(ctx, `
+			SELECT id::text, instance_id FROM quartermaster.service_instances
+			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
+			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
+		`, serviceID, clusterID, proto, port).Scan(&existingID, &existingInstanceID)
+	}
 
 	if existingID != "" {
 		// Update existing row
@@ -628,13 +661,14 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			SET advertise_host = $1,
 			    health_endpoint_override = $2,
 			    version = $3,
+			    node_id = COALESCE($4, node_id),
 			    status = 'running',
 			    health_status = 'unknown',
 			    started_at = COALESCE(started_at, NOW()),
 			    last_health_check = NULL,
 			    updated_at = NOW()
-			WHERE id = $4::uuid
-		`, advHost, healthEndpoint, req.GetVersion(), existingID)
+			WHERE id = $5::uuid
+		`, advHost, healthEndpoint, req.GetVersion(), req.NodeId, existingID)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to update service instance")
 			return nil, status.Errorf(codes.Internal, "failed to update service instance: %v", err)
@@ -644,9 +678,9 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		// Insert new row
 		_, err = exec.ExecContext(ctx, `
 			INSERT INTO quartermaster.service_instances
-				(instance_id, cluster_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, status, health_status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'running', 'unknown', NOW(), NOW())
-		`, instanceID, clusterID, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port)
+				(instance_id, cluster_id, node_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, status, health_status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', 'unknown', NOW(), NOW())
+		`, instanceID, clusterID, req.NodeId, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to create service instance")
 			return nil, status.Errorf(codes.Internal, "failed to create service instance: %v", err)
@@ -712,6 +746,16 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	if ownerTenantID.Valid && ownerTenantID.String != "" {
 		resp.OwnerTenantId = &ownerTenantID.String
 	}
+	if req.NodeId != nil {
+		resp.NodeId = req.NodeId
+		if node, nodeErr := s.queryNode(ctx, *req.NodeId); nodeErr == nil {
+			resp.Node = node
+		}
+	}
+	if advHost != "" && port > 0 {
+		addr := fmt.Sprintf("%s:%d", advHost, port)
+		resp.AdvertiseAddr = &addr
+	}
 	return resp, nil
 }
 
@@ -723,14 +767,19 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 	}
 
 	var resp pb.NodeOwnerResponse
-	var ownerTenantID, tenantName sql.NullString
+	var ownerTenantID, tenantName, foghornAddr sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT n.node_id, n.cluster_id, c.cluster_name, c.owner_tenant_id, t.name
+		SELECT n.node_id, n.cluster_id, c.cluster_name, c.owner_tenant_id, t.name,
+			(SELECT si.advertise_host || ':' || si.port
+			 FROM quartermaster.foghorn_cluster_assignments fca
+			 JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+			 WHERE fca.cluster_id = n.cluster_id AND fca.is_active = true AND si.status = 'running'
+			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1)
 		FROM quartermaster.infrastructure_nodes n
 		JOIN quartermaster.infrastructure_clusters c ON n.cluster_id = c.cluster_id
 		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
 		WHERE n.node_id = $1
-	`, nodeID).Scan(&resp.NodeId, &resp.ClusterId, &resp.ClusterName, &ownerTenantID, &tenantName)
+	`, nodeID).Scan(&resp.NodeId, &resp.ClusterId, &resp.ClusterName, &ownerTenantID, &tenantName, &foghornAddr)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Node not found")
@@ -749,6 +798,9 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 	}
 	if tenantName.Valid {
 		resp.TenantName = &tenantName.String
+	}
+	if foghornAddr.Valid {
+		resp.FoghornGrpcAddr = &foghornAddr.String
 	}
 
 	return &resp, nil
@@ -3069,7 +3121,8 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	query := fmt.Sprintf(`
 		SELECT id, node_id, cluster_id, node_name, node_type, internal_ip, external_ip,
 		       wireguard_ip, wireguard_public_key, region, availability_zone,
-		       latitude, longitude, cpu_cores, memory_gb, disk_gb,
+		       latitude, longitude,
+		       cpu_cores, memory_gb, disk_gb,
 		       last_heartbeat, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes n
 		%s
@@ -3181,7 +3234,12 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	args := append([]interface{}{}, baseArgs...)
 	argIdx := len(baseArgs) + 1
 
-	if req.GetNodeType() != "" {
+	serviceTypeFilter := req.GetServiceType()
+	if serviceTypeFilter != "" {
+		where += fmt.Sprintf(" AND s.type = $%d", argIdx)
+		args = append(args, serviceTypeFilter)
+		argIdx++
+	} else if req.GetNodeType() != "" {
 		where += fmt.Sprintf(" AND n.node_type = $%d", argIdx)
 		args = append(args, req.GetNodeType())
 		argIdx++
@@ -3189,7 +3247,22 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 
 	where += " AND n.external_ip IS NOT NULL AND n.external_ip <> ''"
 
-	totalQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_nodes n %s`, where)
+	servicesJoin := ""
+	if serviceTypeFilter != "" {
+		servicesJoin = "\n\t\tJOIN quartermaster.services s ON si.service_id = s.service_id"
+	}
+
+	// totalQuery must include the same JOINs as the main query when filtering by service_type
+	var totalQuery string
+	if serviceTypeFilter != "" {
+		totalQuery = fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n
+		JOIN quartermaster.service_instances si
+			ON si.cluster_id = n.cluster_id
+			AND (si.node_id = n.node_id OR si.advertise_host = n.external_ip OR si.advertise_host = n.internal_ip)
+		%s %s`, servicesJoin, where)
+	} else {
+		totalQuery = fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_nodes n %s`, where)
+	}
 	var totalNodes int32
 	if err := s.db.QueryRowContext(ctx, totalQuery, args...).Scan(&totalNodes); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -3211,7 +3284,8 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 				OR si.advertise_host = n.internal_ip
 			)
 		%s
-	`, healthWhere)
+		%s
+	`, servicesJoin, healthWhere)
 
 	var healthyNodes int32
 	if err := s.db.QueryRowContext(ctx, healthyCountQuery, healthArgs...).Scan(&healthyNodes); err != nil {
@@ -3221,7 +3295,8 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	query := fmt.Sprintf(`
 		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
 		       n.wireguard_ip, n.wireguard_public_key, n.region, n.availability_zone,
-		       n.latitude, n.longitude, n.cpu_cores, n.memory_gb, n.disk_gb,
+		       n.latitude, n.longitude,
+		       n.cpu_cores, n.memory_gb, n.disk_gb,
 		       n.last_heartbeat, n.created_at, n.updated_at
 		FROM quartermaster.infrastructure_nodes n
 		JOIN quartermaster.service_instances si
@@ -3232,7 +3307,8 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 				OR si.advertise_host = n.internal_ip
 			)
 		%s
-	`, healthWhere)
+		%s
+	`, servicesJoin, healthWhere)
 
 	rows, err := s.db.QueryContext(ctx, query, healthArgs...)
 	if err != nil {
@@ -3285,13 +3361,13 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type,
 		                                                internal_ip, external_ip, wireguard_ip, wireguard_public_key,
-		                                                region, availability_zone, latitude, longitude,
+		                                                region, availability_zone,
 		                                                cpu_cores, memory_gb, disk_gb, status,
 		                                                created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active', $17, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15, $15)
 	`, id, nodeID, clusterID, req.GetNodeName(), req.GetNodeType(),
 		req.InternalIp, req.ExternalIp, req.WireguardIp, req.WireguardPublicKey,
-		req.Region, req.AvailabilityZone, req.Latitude, req.Longitude,
+		req.Region, req.AvailabilityZone,
 		req.CpuCores, req.MemoryGb, req.DiskGb, now)
 
 	if err != nil {
@@ -3598,10 +3674,14 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	}
 
 	// Create node
+	var extIP interface{} = nil
+	if ips := req.GetIps(); len(ips) > 0 {
+		extIP = ips[0]
+	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, tags, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'edge', '{}', '{}', NOW(), NOW())
-	`, uuid.New().String(), nodeID, resolvedClusterID, hostname)
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, tags, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'edge', $5::inet, '{}', '{}', NOW(), NOW())
+	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, extIP)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
@@ -4888,15 +4968,16 @@ func scanCluster(rows *sql.Rows) (*pb.InfrastructureCluster, error) {
 func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 	var node pb.InfrastructureNode
 	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az sql.NullString
-	var latitude, longitude sql.NullFloat64
 	var cpuCores, memoryGB, diskGB sql.NullInt32
+	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
 
 	err := rows.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
 		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &region, &az,
-		&latitude, &longitude, &cpuCores, &memoryGB, &diskGB,
+		&lat, &lon,
+		&cpuCores, &memoryGB, &diskGB,
 		&lastHeartbeat, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -4921,11 +5002,11 @@ func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 	if az.Valid {
 		node.AvailabilityZone = &az.String
 	}
-	if latitude.Valid {
-		node.Latitude = &latitude.Float64
+	if lat.Valid {
+		node.Latitude = &lat.Float64
 	}
-	if longitude.Valid {
-		node.Longitude = &longitude.Float64
+	if lon.Valid {
+		node.Longitude = &lon.Float64
 	}
 	if cpuCores.Valid {
 		node.CpuCores = &cpuCores.Int32
@@ -5057,7 +5138,8 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, node_id, cluster_id, node_name, node_type, internal_ip, external_ip,
 		       wireguard_ip, wireguard_public_key, region, availability_zone,
-		       latitude, longitude, cpu_cores, memory_gb, disk_gb,
+		       latitude, longitude,
+		       cpu_cores, memory_gb, disk_gb,
 		       last_heartbeat, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
@@ -5065,15 +5147,16 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 
 	var node pb.InfrastructureNode
 	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az sql.NullString
-	var latitude, longitude sql.NullFloat64
 	var cpuCores, memoryGB, diskGB sql.NullInt32
+	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
 
 	err := row.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
 		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &region, &az,
-		&latitude, &longitude, &cpuCores, &memoryGB, &diskGB,
+		&lat, &lon,
+		&cpuCores, &memoryGB, &diskGB,
 		&lastHeartbeat, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -5101,11 +5184,11 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 	if az.Valid {
 		node.AvailabilityZone = &az.String
 	}
-	if latitude.Valid {
-		node.Latitude = &latitude.Float64
+	if lat.Valid {
+		node.Latitude = &lat.Float64
 	}
-	if longitude.Valid {
-		node.Longitude = &longitude.Float64
+	if lon.Valid {
+		node.Longitude = &lon.Float64
 	}
 	if cpuCores.Valid {
 		node.CpuCores = &cpuCores.Int32

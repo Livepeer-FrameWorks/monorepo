@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -306,5 +307,88 @@ func TestGatewayClient_ReconnectRefreshesTools(t *testing.T) {
 	}
 	if !gc.HasTool("tool_b") {
 		t.Fatal("expected tool_b to be registered after reconnect")
+	}
+}
+
+func TestGatewayClient_CallTool_InvalidJSONArguments(t *testing.T) {
+	ts := testMCPServer(t)
+
+	gc, err := New(context.Background(), Config{
+		GatewayURL: ts.URL,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gc.Close() }()
+
+	_, err = gc.CallTool(context.Background(), "diagnose_rebuffering", json.RawMessage(`{"stream_id":`))
+	if err == nil {
+		t.Fatal("expected error for malformed JSON arguments")
+	}
+	if !strings.Contains(err.Error(), `mcpclient: unmarshal arguments for diagnose_rebuffering`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGatewayClient_CallTool_NonObjectArguments(t *testing.T) {
+	ts := testMCPServer(t)
+
+	gc, err := New(context.Background(), Config{
+		GatewayURL: ts.URL,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gc.Close() }()
+
+	_, err = gc.CallTool(context.Background(), "diagnose_rebuffering", json.RawMessage(`"not-an-object"`))
+	if err == nil {
+		t.Fatal("expected error for non-object arguments")
+	}
+	if !strings.Contains(err.Error(), `mcpclient: unmarshal arguments for diagnose_rebuffering`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGatewayClient_CallTool_ToolErrorIncludesText(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:    "test-gateway",
+		Version: "1.0.0",
+	}, nil)
+
+	server.AddTool(&mcp.Tool{
+		Name:        "failing_tool",
+		Description: "Always fails",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: "downstream rejected request"},
+			},
+		}, nil
+	})
+
+	handler := mcp.NewStreamableHTTPHandler(
+		func(_ *http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	gc, err := New(context.Background(), Config{
+		GatewayURL: ts.URL,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gc.Close() }()
+
+	_, err = gc.CallTool(context.Background(), "failing_tool", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("expected tool error")
+	}
+	if !strings.Contains(err.Error(), "mcpclient: tool failing_tool returned error: downstream rejected request") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

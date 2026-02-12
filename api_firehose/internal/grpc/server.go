@@ -346,6 +346,11 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Messag
 		if payload.VodLifecycleData.TenantId != nil {
 			tenantID = *payload.VodLifecycleData.TenantId
 		}
+	case *pb.MistTrigger_FederationEventData:
+		eventType = "federation_event"
+		if payload.FederationEventData.TenantId != nil {
+			tenantID = *payload.FederationEventData.TenantId
+		}
 	default:
 		eventType = "unknown"
 	}

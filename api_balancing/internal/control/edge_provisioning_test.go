@@ -22,7 +22,6 @@ func setMockValidator(t *testing.T, resp *pb.ValidateBootstrapTokenResponse) {
 func TestPreRegisterEdge_ValidToken(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "us_west_1")
 	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
-	t.Setenv("FOGHORN_EXTERNAL_ADDR", "foghorn.example.com:18008")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -59,12 +58,12 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 		t.Errorf("expected edge_domain %q, got %q", expectedEdge, resp.EdgeDomain)
 	}
 
-	if resp.PoolDomain != "edge-egress.us-west-1.example.com" {
-		t.Errorf("expected pool_domain %q, got %q", "edge-egress.us-west-1.example.com", resp.PoolDomain)
+	if resp.PoolDomain != "edge.us-west-1.example.com" {
+		t.Errorf("expected pool_domain %q, got %q", "edge.us-west-1.example.com", resp.PoolDomain)
 	}
 
-	if resp.FoghornGrpcAddr != "foghorn.example.com:18008" {
-		t.Errorf("expected foghorn_grpc_addr %q, got %q", "foghorn.example.com:18008", resp.FoghornGrpcAddr)
+	if resp.FoghornGrpcAddr != "foghorn.us-west-1.example.com:18008" {
+		t.Errorf("expected foghorn_grpc_addr %q, got %q", "foghorn.us-west-1.example.com:18008", resp.FoghornGrpcAddr)
 	}
 }
 

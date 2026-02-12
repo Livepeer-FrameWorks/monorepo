@@ -28,6 +28,9 @@
 - Private clusters: create_private_cluster returns enrollment token for edge provisioning
 - Edge provisioning: `frameworks edge provision --enrollment-token <token> --ssh user@host`
 - Peering: preferred ↔ official clusters always peered; other subscribed clusters peer on demand when streams trigger it
+- Node lifecycle: frameworks edge mode (draining/maintenance/normal), frameworks edge doctor, frameworks edge logs
+- Node management via API (no SSH): set_node_mode, get_node_health (Gateway → Commodore → Foghorn)
+- MCP tools: create_enrollment_token, get_node_info, manage_node, set_node_mode, get_node_health
 
 ## Optional
 

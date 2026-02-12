@@ -1176,6 +1176,21 @@ var euVATRates = map[string]int{
 	"SE": 2500, // Sweden
 }
 
+type billingAddress struct {
+	Street     string `json:"street"`
+	City       string `json:"city"`
+	PostalCode string `json:"postal_code"`
+	Country    string `json:"country"`
+}
+
+func parseBillingAddress(raw []byte) (billingAddress, error) {
+	var addr billingAddress
+	if err := json.Unmarshal(raw, &addr); err != nil {
+		return billingAddress{}, err
+	}
+	return addr, nil
+}
+
 // getVATRateForTenant returns VAT rate considering tenant's billing details
 func (h *X402Handler) getVATRateForTenant(tenantID, clientIP string) (rateBps int, country string, isB2B bool) {
 	// 1. Check tenant's billing details (country and VAT number)
@@ -1191,10 +1206,8 @@ func (h *X402Handler) getVATRateForTenant(tenantID, clientIP string) (rateBps in
 
 	if err == nil && billingAddress != nil {
 		// Parse billing address to get country
-		var addr struct {
-			Country string `json:"country"`
-		}
-		if json.Unmarshal(billingAddress, &addr) == nil && addr.Country != "" {
+		addr, parseErr := parseBillingAddress(billingAddress)
+		if parseErr == nil && addr.Country != "" {
 			country = countries.Normalize(addr.Country)
 
 			// Check for B2B with valid EU VAT number
@@ -1231,13 +1244,8 @@ func isBillingDetailsComplete(billingEmail sql.NullString, billingAddress []byte
 	if len(billingAddress) == 0 {
 		return false
 	}
-	var addr struct {
-		Street     string `json:"street"`
-		City       string `json:"city"`
-		PostalCode string `json:"postal_code"`
-		Country    string `json:"country"`
-	}
-	if json.Unmarshal(billingAddress, &addr) != nil {
+	addr, err := parseBillingAddress(billingAddress)
+	if err != nil {
 		return false
 	}
 	return addr.Street != "" && addr.City != "" && addr.PostalCode != "" && addr.Country != ""
