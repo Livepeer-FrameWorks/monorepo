@@ -3570,8 +3570,8 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"node %s already exists in cluster %s", nodeID, existingClusterID)
 		}
-		if err := tx.Commit(); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
 		}
 		return &pb.BootstrapEdgeNodeResponse{
 			NodeId:    nodeID,
@@ -4148,7 +4148,6 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		SELECT wireguard_ip::text, external_ip::text, internal_ip::text, cluster_id
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
-		  AND status = 'active'
 	`, nodeID).Scan(&currentWgIP, &externalIP, &internalIP, &clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found - please register the node first")
