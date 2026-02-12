@@ -1,16 +1,8 @@
 # Federation events: origin pulls, peer connections, leader elections
-query GetFederationEvents(
-  $timeRange: TimeRangeInput!
-  $first: Int = 50
-  $eventType: String
-) {
+query GetFederationEvents($timeRange: TimeRangeInput!, $first: Int = 50, $eventType: String) {
   analytics {
     infra {
-      federationEventsConnection(
-        timeRange: $timeRange
-        first: $first
-        eventType: $eventType
-      ) {
+      federationEventsConnection(timeRange: $timeRange, first: $first, eventType: $eventType) {
         edges {
           cursor
           node {

@@ -1,9 +1,7 @@
 packages:
   - website_marketing
   - website_application
-  - npm_player
   - npm_player/packages/*
   - npm_player/playground
-  - npm_studio
   - npm_studio/packages/*
   - website_docs

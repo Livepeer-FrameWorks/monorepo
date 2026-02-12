@@ -103,7 +103,12 @@ func isRetryableStatus(code int) bool {
 // doWithRetry executes an HTTP request with exponential backoff on retryable
 // errors (429, 500-504, connection errors). It respects the Retry-After
 // header and the context deadline.
-func doWithRetry(ctx context.Context, client *http.Client, buildReq func() (*http.Request, error)) (*http.Response, error) {
+func doWithRetry(ctx context.Context, client *http.Client, buildReq func() (*http.Request, error), baseDelay ...time.Duration) (*http.Response, error) {
+	delay := retryBaseDelay
+	if len(baseDelay) > 0 {
+		delay = baseDelay[0]
+	}
+
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -117,7 +122,7 @@ func doWithRetry(ctx context.Context, client *http.Client, buildReq func() (*htt
 		if err != nil {
 			lastErr = err
 			if attempt < maxRetries {
-				backoff(ctx, attempt, nil)
+				backoff(ctx, attempt, nil, delay)
 				continue
 			}
 			return nil, err
@@ -129,7 +134,7 @@ func doWithRetry(ctx context.Context, client *http.Client, buildReq func() (*htt
 		retryAfter := resp.Header.Get("Retry-After")
 		_ = resp.Body.Close()
 		if attempt < maxRetries {
-			backoff(ctx, attempt, parseRetryAfter(retryAfter))
+			backoff(ctx, attempt, parseRetryAfter(retryAfter), delay)
 		}
 	}
 	return nil, lastErr
@@ -143,8 +148,8 @@ func (e *retryableError) Error() string {
 	return "retryable HTTP status: " + strconv.Itoa(e.statusCode)
 }
 
-func backoff(ctx context.Context, attempt int, retryAfter *time.Duration) {
-	delay := retryBaseDelay * (1 << attempt)
+func backoff(ctx context.Context, attempt int, retryAfter *time.Duration, baseDelay time.Duration) {
+	delay := baseDelay * (1 << attempt)
 	if retryAfter != nil && *retryAfter > delay {
 		delay = *retryAfter
 	}

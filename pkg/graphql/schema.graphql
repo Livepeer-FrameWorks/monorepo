@@ -930,10 +930,7 @@ type AnalyticsInfra {
   """
   Cross-cluster routing traffic matrix from hourly rollups.
   """
-  clusterTrafficMatrix(
-    timeRange: TimeRangeInput
-    noCache: Boolean = false
-  ): [ClusterPairTraffic!]!
+  clusterTrafficMatrix(timeRange: TimeRangeInput, noCache: Boolean = false): [ClusterPairTraffic!]!
   """
   Federation events: origin pulls, peer connections, leader elections, etc.
   """
@@ -946,10 +943,7 @@ type AnalyticsInfra {
   """
   Aggregated federation summary: event counts by type, latency, failure rate.
   """
-  federationSummary(
-    timeRange: TimeRangeInput!
-    noCache: Boolean = false
-  ): FederationSummary!
+  federationSummary(timeRange: TimeRangeInput!, noCache: Boolean = false): FederationSummary!
 }
 
 """

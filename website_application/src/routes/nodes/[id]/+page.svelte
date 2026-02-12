@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
+  import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { get } from "svelte/store";
   import {
@@ -29,7 +30,6 @@
   const ActivityIcon = getIconComponent("Activity");
   const PackageIcon = getIconComponent("Package");
   const CalendarIcon = getIconComponent("Calendar");
-  const GlobeIcon = getIconComponent("Globe");
 
   let nodeRelayId = $derived(page.params.id as string);
 
@@ -299,13 +299,16 @@
       <div class="flex items-center gap-3">
         {#if node}
           <a
-            href="/infrastructure/{node.clusterId}"
+            href={resolve(`/infrastructure/${node.clusterId}`)}
             class="text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeftIcon class="w-5 h-5" />
           </a>
         {:else}
-          <a href="/nodes" class="text-muted-foreground hover:text-foreground transition-colors">
+          <a
+            href={resolve("/nodes")}
+            class="text-muted-foreground hover:text-foreground transition-colors"
+          >
             <ArrowLeftIcon class="w-5 h-5" />
           </a>
         {/if}

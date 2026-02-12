@@ -102,13 +102,14 @@ Endpoints (local)
 
 All build and test commands go through the Makefile. Key targets:
 
-| Target        | Description                                     |
-| ------------- | ----------------------------------------------- |
-| `make build`  | Build all service binaries                      |
-| `make test`   | Run all tests (with race detector)              |
-| `make lint`   | Lint new code against baseline (matches CI)     |
-| `make verify` | Full verification (tidy, fmt, vet, test, build) |
-| `make env`    | Generate `.env` from `config/env/`              |
+| Target          | Description                                                |
+| --------------- | ---------------------------------------------------------- |
+| `make build`    | Build all service binaries                                 |
+| `make test`     | Run all tests (with race detector)                         |
+| `make lint`     | Run Go + frontend lint checks (matches CI lint jobs)       |
+| `make ci-local` | Run main CI checks locally (go/frontend lint, test, build) |
+| `make verify`   | Full verification (tidy, fmt, vet, test, build)            |
+| `make env`      | Generate `.env` from `config/env/`                         |
 
 Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Makefile` for all targets.
 

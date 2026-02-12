@@ -232,7 +232,11 @@ func (m *mockBillingClient) GetTenantLimits(ctx context.Context, tenantID string
 ### Required Checks
 
 - `make test` - All unit tests pass
-- `make lint` - No lint violations
+- `make lint` - Go + frontend lint checks pass
+
+### Local CI Parity
+
+- `make ci-local` - Run the main CI checks locally before pushing
 
 ### Optional Checks
 
