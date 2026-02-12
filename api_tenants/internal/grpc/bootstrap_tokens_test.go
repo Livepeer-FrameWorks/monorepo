@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 )
 
@@ -66,3 +69,21 @@ func TestValidateBootstrapTokenConsumeRaceRejected(t *testing.T) {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
+
+func TestCreateEnrollmentTokenRejectsCrossTenantRequest(t *testing.T) {
+	srv, _, _ := newMockQuartermasterServer(t)
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-caller")
+	_, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{
+		ClusterId: "cluster-1",
+		TenantId:  ptr("tenant-other"),
+	})
+	if err == nil {
+		t.Fatal("expected permission error for tenant mismatch")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

@@ -1301,12 +1301,16 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
+	callerTenantID := middleware.GetTenantID(ctx)
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
-		tenantID = middleware.GetTenantID(ctx)
+		tenantID = callerTenantID
 	}
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if callerTenantID != "" && tenantID != callerTenantID {
+		return nil, status.Error(codes.PermissionDenied, "tenant_id does not match caller tenant")
 	}
 
 	// Verify active subscription

@@ -58,6 +58,51 @@ func categorizeEnrollmentError(err error) bool {
 	}
 }
 
+func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID, peerAddr, token, targetClusterID string) *pb.BootstrapEdgeNodeRequest {
+	host := ""
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if fwd := md.Get("x-forwarded-for"); len(fwd) > 0 {
+			parts := strings.Split(fwd[0], ",")
+			if len(parts) > 0 {
+				host = strings.TrimSpace(parts[0])
+			}
+		}
+	}
+	if host == "" {
+		h, _, _ := net.SplitHostPort(peerAddr)
+		if h == "" {
+			h = peerAddr
+		}
+		host = h
+	}
+
+	req := &pb.BootstrapEdgeNodeRequest{Token: token, Hostname: nodeID, Ips: []string{host}}
+	if strings.TrimSpace(targetClusterID) != "" {
+		targetCluster := strings.TrimSpace(targetClusterID)
+		req.TargetClusterId = &targetCluster
+	}
+
+	if reg != nil && reg.Fingerprint != nil {
+		fp := reg.Fingerprint
+		if v := fp.GetLocalIpv4(); len(v) > 0 {
+			req.LocalIpv4 = append(req.LocalIpv4, v...)
+		}
+		if v := fp.GetLocalIpv6(); len(v) > 0 {
+			req.LocalIpv6 = append(req.LocalIpv6, v...)
+		}
+		if fp.GetMacsSha256() != "" {
+			s := fp.GetMacsSha256()
+			req.MacsSha256 = &s
+		}
+		if fp.GetMachineIdSha256() != "" {
+			s := fp.GetMachineIdSha256()
+			req.MachineIdSha256 = &s
+		}
+	}
+
+	return req
+}
+
 func sendControlError(stream pb.HelmsmanControl_ConnectServer, code, message string) error {
 	return stream.Send(&pb.ControlMessage{
 		SentAt:  timestamppb.Now(),
@@ -482,45 +527,9 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					cleanup()
 					return nil
 				}
-				// Parse client IP from forwarded metadata or peer address
-				host := ""
-				if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
-					if fwd := md.Get("x-forwarded-for"); len(fwd) > 0 {
-						// Use first IP in list
-						parts := strings.Split(fwd[0], ",")
-						if len(parts) > 0 {
-							host = strings.TrimSpace(parts[0])
-						}
-					}
-				}
-				if host == "" {
-					h, _, _ := net.SplitHostPort(peerAddr)
-					if h == "" {
-						h = peerAddr
-					}
-					host = h
-				}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				req := &pb.BootstrapEdgeNodeRequest{Token: tok, Hostname: nodeID, Ips: []string{host}}
-				// Include client-provided fingerprint to bind mapping at enrollment
-				if x.Register != nil && x.Register.Fingerprint != nil {
-					fp := x.Register.Fingerprint
-					if v := fp.GetLocalIpv4(); len(v) > 0 {
-						req.LocalIpv4 = append(req.LocalIpv4, v...)
-					}
-					if v := fp.GetLocalIpv6(); len(v) > 0 {
-						req.LocalIpv6 = append(req.LocalIpv6, v...)
-					}
-					if fp.GetMacsSha256() != "" {
-						s := fp.GetMacsSha256()
-						req.MacsSha256 = &s
-					}
-					if fp.GetMachineIdSha256() != "" {
-						s := fp.GetMachineIdSha256()
-						req.MachineIdSha256 = &s
-					}
-				}
+				req := buildBootstrapEdgeNodeRequest(stream.Context(), x.Register, nodeID, peerAddr, tok, localClusterID)
 				resp, err := quartermasterClient.BootstrapEdgeNode(ctx, req)
 				if err != nil {
 					if categorizeEnrollmentError(err) {
