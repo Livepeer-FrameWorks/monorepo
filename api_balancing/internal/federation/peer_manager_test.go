@@ -12,6 +12,8 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	pb "frameworks/pkg/proto"
+
+	"frameworks/api_balancing/internal/state"
 )
 
 func TestRecordAndAverage_SingleSample(t *testing.T) {
@@ -369,6 +371,78 @@ func (s *testPeerChannelStream) Trailer() metadata.MD { return metadata.MD{} }
 func (s *testPeerChannelStream) SendMsg(any) error { return nil }
 
 func (s *testPeerChannelStream) RecvMsg(any) error { return io.EOF }
+
+func TestCheckReplicationCompletion_RequiresDestinationNodeLive(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "cluster-a", cache, true)
+	ctx := context.Background()
+
+	record := &ActiveReplicationRecord{
+		StreamName:    "tenant1+stream1",
+		SourceNodeID:  "source-node",
+		SourceCluster: "cluster-b",
+		DestCluster:   "cluster-a",
+		DestNodeID:    "dest-node",
+		BaseURL:       "edge.dest.example.com",
+		CreatedAt:     time.Now(),
+	}
+	if err := cache.SetActiveReplication(ctx, record); err != nil {
+		t.Fatalf("SetActiveReplication: %v", err)
+	}
+
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo("other-node", "edge.other.example.com", true, nil, nil, "", "", nil)
+	if err := sm.UpdateStreamFromBuffer("stream1", record.StreamName, "other-node", "tenant1", "FULL", ""); err != nil {
+		t.Fatalf("UpdateStreamFromBuffer: %v", err)
+	}
+
+	pm.checkReplicationCompletion()
+
+	got, err := cache.GetActiveReplication(ctx, record.StreamName)
+	if err != nil {
+		t.Fatalf("GetActiveReplication: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected active replication to remain when destination node is not live")
+	}
+}
+
+func TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "cluster-a", cache, true)
+	ctx := context.Background()
+
+	record := &ActiveReplicationRecord{
+		StreamName:    "tenant1+stream1",
+		SourceNodeID:  "source-node",
+		SourceCluster: "cluster-b",
+		DestCluster:   "cluster-a",
+		DestNodeID:    "dest-node",
+		BaseURL:       "edge.dest.example.com",
+		CreatedAt:     time.Now(),
+	}
+	if err := cache.SetActiveReplication(ctx, record); err != nil {
+		t.Fatalf("SetActiveReplication: %v", err)
+	}
+
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo(record.DestNodeID, "edge.dest.example.com", true, nil, nil, "", "", nil)
+	if err := sm.UpdateStreamFromBuffer("stream1", record.StreamName, record.DestNodeID, "tenant1", "FULL", ""); err != nil {
+		t.Fatalf("UpdateStreamFromBuffer: %v", err)
+	}
+
+	pm.checkReplicationCompletion()
+
+	got, err := cache.GetActiveReplication(ctx, record.StreamName)
+	if err != nil {
+		t.Fatalf("GetActiveReplication: %v", err)
+	}
+	if got != nil {
+		t.Fatal("expected active replication to be cleared when destination node is live")
+	}
+}
 
 func TestRecvLoop_NoCache_DropsMessagesWithoutPanic(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)

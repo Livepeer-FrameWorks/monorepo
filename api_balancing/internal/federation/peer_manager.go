@@ -1307,6 +1307,12 @@ func (pm *PeerManager) checkReplicationCompletion() {
 			continue
 		}
 
+		instances := sm.GetStreamInstances(record.StreamName)
+		destInstance, ok := instances[record.DestNodeID]
+		if !ok || destInstance.Status != "live" {
+			continue
+		}
+
 		_ = pm.cache.DeleteActiveReplication(ctx, record.StreamName)
 		pm.broadcastToPeers(&pb.PeerMessage{
 			ClusterId: pm.clusterID,
