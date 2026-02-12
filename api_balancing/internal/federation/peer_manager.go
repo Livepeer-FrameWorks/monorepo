@@ -450,6 +450,9 @@ func (pm *PeerManager) runAsLeader() {
 			pm.pushArtifacts()
 		case <-heartbeatTicker.C:
 			pm.pushHeartbeat()
+			if pm.cache != nil {
+				pm.syncPeerAddressesToRedis()
+			}
 		}
 	}
 }
@@ -561,7 +564,6 @@ func (pm *PeerManager) loadPeerAddressesFromRedis() {
 		}
 		if existing, ok := pm.peers[clusterID]; ok {
 			existing.addr = addr
-			existing.fromRedis = true
 			continue
 		}
 		pm.peers[clusterID] = &peerState{
