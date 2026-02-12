@@ -400,6 +400,7 @@ message ResolveArtifactPlaybackIDResponse {
   string stream_id = 6;
   string content_type = 7;              // "clip" | "dvr" | "vod"
   string origin_cluster_id = 8;         // Cluster that originally created this artifact
+  repeated quartermaster.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
 }
 
 // Resolve artifact internal name to artifact identity
@@ -416,6 +417,7 @@ message ResolveArtifactInternalNameResponse {
   string stream_id = 6;
   string content_type = 7;              // "clip" | "dvr" | "vod"
   string origin_cluster_id = 8;         // Cluster that originally created this artifact
+  repeated quartermaster.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
 }
 
 // ============================================================================

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
@@ -215,5 +216,44 @@ func TestValidateAPIToken(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolveArtifactPlaybackID_PopulatesClusterPeersFromCachedRoute(t *testing.T) {
+	ctx := context.Background()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"clip_hash", "artifact_internal_name", "tenant_id", "user_id", "stream_id", "origin_cluster_id"}).
+		AddRow("clip-hash", "clip-internal", "tenant-1", "user-1", "stream-1", "cluster-origin")
+	mock.ExpectQuery("FROM commodore.clips").WithArgs("playback-1").WillReturnRows(rows)
+
+	server := &CommodoreServer{
+		db:            db,
+		logger:        logrus.New(),
+		routeCache:    map[string]*clusterRoute{},
+		routeCacheTTL: 5 * time.Minute,
+	}
+	server.routeCache["tenant-1"] = &clusterRoute{
+		clusterPeers: []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}},
+		resolvedAt:   time.Now(),
+	}
+
+	resp, err := server.ResolveArtifactPlaybackID(ctx, &pb.ResolveArtifactPlaybackIDRequest{PlaybackId: "playback-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Found {
+		t.Fatal("expected found response")
+	}
+	if len(resp.ClusterPeers) != 1 || resp.ClusterPeers[0].GetClusterId() != "cluster-origin" {
+		t.Fatalf("expected cluster peers from route cache, got %+v", resp.ClusterPeers)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }

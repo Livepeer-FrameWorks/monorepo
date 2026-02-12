@@ -1347,12 +1347,15 @@ func (pm *PeerManager) broadcastToPeers(msg *pb.PeerMessage) {
 // IsStreamLiveOnPeer checks Redis for a remote live stream entry.
 // Returns the peer cluster ID if the stream is live elsewhere, or ("", false) if not.
 // Fail-open: returns ("", false) on Redis errors so ingest is never blocked by cache issues.
-func (pm *PeerManager) IsStreamLiveOnPeer(ctx context.Context, internalName string) (string, bool) {
+func (pm *PeerManager) IsStreamLiveOnPeer(ctx context.Context, internalName, tenantID string) (string, bool) {
 	if pm.cache == nil {
 		return "", false
 	}
 	entry, err := pm.cache.GetRemoteLiveStream(ctx, internalName)
 	if err != nil || entry == nil {
+		return "", false
+	}
+	if tenantID != "" && entry.TenantID != "" && entry.TenantID != tenantID {
 		return "", false
 	}
 	return entry.ClusterID, true

@@ -148,6 +148,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	artifactType := contentType
 	tenantID := artifactResp.TenantId
 	originClusterID := artifactResp.GetOriginClusterId()
+	allowedClusters := artifactResp.GetClusterPeers()
 
 	// Query foghorn.artifacts for lifecycle state
 	var internalName string
@@ -174,7 +175,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
-				return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID)
+				return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters)
 			}
 			return nil, fmt.Errorf("%s not found", contentType)
 		}
@@ -229,7 +230,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		}
 		// Federation fallback: artifact exists locally but not on any node and not in S3
 		if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
-			return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID)
+			return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters)
 		}
 		return nil, fmt.Errorf("storage node unknown: no node assignment found")
 	}
@@ -824,12 +825,30 @@ func pickBestRemoteArtifact(hits []*RemoteArtifactInfo, viewerLat, viewerLon flo
 	return best
 }
 
+func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bool {
+	if clusterID == "" {
+		return false
+	}
+	if len(peers) == 0 {
+		return true // fail-open: routing data unavailable
+	}
+	for _, peer := range peers {
+		if peer.GetClusterId() == clusterID {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveRemoteArtifact handles cross-cluster artifact resolution by calling
 // PrepareArtifact on the origin cluster's Foghorn. If the artifact is ready,
 // it creates a local adoption record and triggers defrost from the presigned URLs.
-func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, artifactHash, originClusterID, contentType, tenantID string) (*pb.ViewerEndpointResponse, error) {
+func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
 	if deps.PeerResolver == nil {
 		return nil, fmt.Errorf("peer resolver not available for cross-cluster artifact")
+	}
+	if !isAuthorizedPeerCluster(originClusterID, clusterPeers) {
+		return nil, fmt.Errorf("origin cluster %s is not authorized for tenant", originClusterID)
 	}
 	addr := deps.PeerResolver.GetPeerAddr(originClusterID)
 	if addr == "" {

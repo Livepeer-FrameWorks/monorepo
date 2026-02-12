@@ -596,3 +596,26 @@ func TestBroadcastStreamLifecycle_FiltersUnauthorizedPeers(t *testing.T) {
 		t.Fatalf("expected blocked peer to receive 0 messages, got %d", len(blockedStream.sent))
 	}
 }
+
+func TestIsStreamLiveOnPeer_RejectsTenantMismatch(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "local-cluster", cache, false)
+
+	ctx := context.Background()
+	err := cache.SetRemoteLiveStream(ctx, "stream-1", &RemoteLiveStreamEntry{
+		ClusterID: "remote-cluster",
+		TenantID:  "tenant-a",
+		UpdatedAt: time.Now().Unix(),
+	})
+	if err != nil {
+		t.Fatalf("SetRemoteLiveStream: %v", err)
+	}
+
+	if cluster, ok := pm.IsStreamLiveOnPeer(ctx, "stream-1", "tenant-b"); ok || cluster != "" {
+		t.Fatalf("expected tenant mismatch to fail closed, got cluster=%q ok=%v", cluster, ok)
+	}
+
+	if cluster, ok := pm.IsStreamLiveOnPeer(ctx, "stream-1", "tenant-a"); !ok || cluster != "remote-cluster" {
+		t.Fatalf("expected tenant match to return remote cluster, got cluster=%q ok=%v", cluster, ok)
+	}
+}

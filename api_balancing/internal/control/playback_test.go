@@ -1,8 +1,12 @@
 package control
 
 import (
+	"context"
 	"math"
+	"strings"
 	"testing"
+
+	pb "frameworks/pkg/proto"
 )
 
 func TestExtractPublicHostFromOutputs(t *testing.T) {
@@ -309,5 +313,31 @@ func TestDeriveMistHTTPBase(t *testing.T) {
 				t.Fatalf("expected %q, got %q", test.expected, actual)
 			}
 		})
+	}
+}
+
+type stubPeerResolver struct{}
+
+func (s stubPeerResolver) GetPeerAddr(clusterID string) string { return "foghorn.example:18019" }
+
+type stubFedClient struct{}
+
+func (s stubFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+	return &pb.PrepareArtifactResponse{Ready: true}, nil
+}
+
+func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
+	deps := &PlaybackDependencies{
+		FedClient:      stubFedClient{},
+		PeerResolver:   stubPeerResolver{},
+		LocalClusterID: "cluster-local",
+	}
+
+	_, err := resolveRemoteArtifact(context.Background(), deps, "artifact-1", "cluster-other", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-allowed"}})
+	if err == nil {
+		t.Fatal("expected unauthorized origin cluster error")
+	}
+	if !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("expected not authorized error, got %v", err)
 	}
 }
