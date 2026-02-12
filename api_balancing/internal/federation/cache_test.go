@@ -622,14 +622,17 @@ func TestStreamAd_SetGetWithdraw(t *testing.T) {
 	}
 }
 
-func TestStreamAd_WithdrawDeletesPlaybackIndex(t *testing.T) {
+func TestStreamAd_WithdrawClearsPlaybackIndex(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
 
 	record := &StreamAdRecord{
-		InternalName: "tenant1+stream1",
-		PlaybackID:   "play-123",
-		IsLive:       true,
+		InternalName:    "tenant1+stream1",
+		TenantID:        "tenant1",
+		PlaybackID:      "play-123",
+		OriginClusterID: "cluster-b",
+		IsLive:          true,
+		Timestamp:       time.Now().Unix(),
 	}
 	if err := cache.SetStreamAd(ctx, "cluster-b", record); err != nil {
 		t.Fatalf("SetStreamAd: %v", err)
@@ -640,15 +643,52 @@ func TestStreamAd_WithdrawDeletesPlaybackIndex(t *testing.T) {
 
 	record.IsLive = false
 	if err := cache.SetStreamAd(ctx, "cluster-b", record); err != nil {
-		t.Fatalf("SetStreamAd (withdraw): %v", err)
+		t.Fatalf("SetStreamAd withdraw: %v", err)
 	}
 
-	mapped, err := cache.GetPlaybackIndex(ctx, "play-123")
+	got, err := cache.GetPlaybackIndex(ctx, "play-123")
 	if err != nil {
 		t.Fatalf("GetPlaybackIndex: %v", err)
 	}
-	if mapped != "" {
-		t.Fatalf("expected playback index to be removed, got %q", mapped)
+	if got != "" {
+		t.Fatalf("expected playback index to be cleared, got %q", got)
+	}
+}
+
+func TestStreamAd_WithdrawWithoutPlaybackIDStillClearsExistingIndex(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+
+	if err := cache.SetStreamAd(ctx, "cluster-b", &StreamAdRecord{
+		InternalName:    "tenant1+stream1",
+		TenantID:        "tenant1",
+		PlaybackID:      "play-123",
+		OriginClusterID: "cluster-b",
+		IsLive:          true,
+		Timestamp:       time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("SetStreamAd live: %v", err)
+	}
+	if err := cache.SetPlaybackIndex(ctx, "play-123", "tenant1+stream1"); err != nil {
+		t.Fatalf("SetPlaybackIndex: %v", err)
+	}
+
+	if err := cache.SetStreamAd(ctx, "cluster-b", &StreamAdRecord{
+		InternalName:    "tenant1+stream1",
+		TenantID:        "tenant1",
+		OriginClusterID: "cluster-b",
+		IsLive:          false,
+		Timestamp:       time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("SetStreamAd withdraw: %v", err)
+	}
+
+	got, err := cache.GetPlaybackIndex(ctx, "play-123")
+	if err != nil {
+		t.Fatalf("GetPlaybackIndex: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected playback index to be cleared, got %q", got)
 	}
 }
 

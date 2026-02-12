@@ -517,10 +517,17 @@ func (c *RemoteEdgeCache) SetStreamAd(ctx context.Context, peerClusterID string,
 	}
 	key := c.keyStreamAd(peerClusterID, record.InternalName)
 	if !record.IsLive {
+		playbackID := record.PlaybackID
+		if playbackID == "" {
+			if existing, err := c.GetStreamAd(ctx, peerClusterID, record.InternalName); err == nil && existing != nil {
+				playbackID = existing.PlaybackID
+			}
+		}
+
 		pipe := c.client.TxPipeline()
 		pipe.Del(ctx, key)
-		if record.PlaybackID != "" {
-			pipe.Del(ctx, c.keyPlaybackIndex(record.PlaybackID))
+		if playbackID != "" {
+			pipe.Del(ctx, c.keyPlaybackIndex(playbackID))
 		}
 		_, err = pipe.Exec(ctx)
 		return err
@@ -555,6 +562,14 @@ func (c *RemoteEdgeCache) GetStreamAdsByName(ctx context.Context, internalName s
 func (c *RemoteEdgeCache) SetPlaybackIndex(ctx context.Context, playbackID, internalName string) error {
 	key := c.keyPlaybackIndex(playbackID)
 	return c.client.Set(ctx, key, internalName, playbackIndexTTL).Err()
+}
+
+// DeletePlaybackIndex removes a playback_id reverse mapping immediately.
+func (c *RemoteEdgeCache) DeletePlaybackIndex(ctx context.Context, playbackID string) error {
+	if playbackID == "" {
+		return nil
+	}
+	return c.client.Del(ctx, c.keyPlaybackIndex(playbackID)).Err()
 }
 
 // GetPlaybackIndex resolves a playback_id to an internal_name from peer advertisements.
