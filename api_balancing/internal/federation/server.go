@@ -99,21 +99,28 @@ func (s *FederationServer) RegisterServices(srv *grpc.Server) {
 // returns scored local edge candidates. Reuses the existing load balancer
 // scoring algorithm and enriches results with DTSC URLs for origin-pull.
 func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
 	if req.StreamName == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_name required")
+	}
+	if req.RequestingCluster == "" {
+		return nil, status.Error(codes.InvalidArgument, "requesting_cluster required")
+	}
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 	if req.RequestingCluster == s.clusterID {
 		return nil, status.Error(codes.InvalidArgument, "cannot query own cluster")
 	}
 
 	// Shared-LB tenant isolation: only return candidates if the stream belongs to the requested tenant
-	if req.TenantId != "" {
-		sm := state.DefaultManager()
-		if sm != nil {
-			ss := sm.GetStreamState(req.StreamName)
-			if ss != nil && ss.TenantID != "" && ss.TenantID != req.TenantId {
-				return &pb.QueryStreamResponse{OriginClusterId: s.clusterID}, nil
-			}
+	sm := state.DefaultManager()
+	if sm != nil {
+		ss := sm.GetStreamState(req.StreamName)
+		if ss != nil && ss.TenantID != "" && ss.TenantID != req.TenantId {
+			return &pb.QueryStreamResponse{OriginClusterId: s.clusterID}, nil
 		}
 	}
 
@@ -126,10 +133,7 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 
 	// Score local nodes for this stream using the existing load balancer.
 	// isSourceSelection=true restricts to nodes with active inputs (origin nodes only).
-	lbctx := ctx
-	if req.TenantId != "" {
-		lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, req.TenantId)
-	}
+	lbctx := context.WithValue(ctx, ctxkeys.KeyClusterScope, req.TenantId)
 	nodes, err := s.lb.GetTopNodesWithScores(lbctx, req.StreamName, req.ViewerLat, req.ViewerLon, nil, "", 10, req.IsSourceSelection)
 	if err != nil {
 		log.WithError(err).Debug("No local candidates for federated query")
@@ -194,8 +198,14 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 // We validate the stream exists locally, select the best source node,
 // build a DTSC URL, and store an active replication record.
 func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginPullNotification) (*pb.OriginPullAck, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
 	if req.StreamName == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_name required")
+	}
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 	if req.DestClusterId == "" {
 		return nil, status.Error(codes.InvalidArgument, "dest_cluster_id required")
@@ -210,9 +220,10 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 	// Find best source node for the stream
 	sourceNodeID := req.SourceNodeId
 	if sourceNodeID == "" {
+		lbCtx := context.WithValue(ctx, ctxkeys.KeyClusterScope, req.TenantId)
 		// Auto-select: use load balancer to find best node with this stream
 		// isSourceSelection=true to find nodes with active inputs (not replicated)
-		bestHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(ctx, req.StreamName, 0, 0, nil, "", true)
+		bestHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(lbCtx, req.StreamName, 0, 0, nil, "", true)
 		if err != nil {
 			log.WithError(err).Warn("No source node available for origin-pull")
 			return &pb.OriginPullAck{
@@ -233,6 +244,12 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 	sm := state.DefaultManager()
 	ss := sm.GetStreamState(req.StreamName)
 	if ss == nil {
+		return &pb.OriginPullAck{
+			Accepted: false,
+			Reason:   "stream not found locally",
+		}, nil
+	}
+	if ss.TenantID != "" && ss.TenantID != req.TenantId {
 		return &pb.OriginPullAck{
 			Accepted: false,
 			Reason:   "stream not found locally",
@@ -287,6 +304,9 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 // synced to S3, and returns presigned GET URLs so the requesting cluster
 // can defrost the artifact without sharing S3 credentials.
 func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
 	hash := req.GetArtifactId()
 	if hash == "" {
 		hash = req.GetClipHash()
@@ -539,6 +559,9 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 // the sending side pushes telemetry for locally active replicated streams.
 func (s *FederationServer) PeerChannel(stream pb.FoghornFederation_PeerChannelServer) error {
 	ctx := stream.Context()
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return err
+	}
 
 	var peerClusterID string
 	var once sync.Once
@@ -563,6 +586,12 @@ func (s *FederationServer) PeerChannel(stream pb.FoghornFederation_PeerChannelSe
 			log = log.WithField("peer_cluster", peerClusterID)
 			log.Info("PeerChannel established")
 		})
+		if peerClusterID == "" {
+			return status.Error(codes.InvalidArgument, "cluster_id required in first peer message")
+		}
+		if msg.ClusterId != "" && msg.ClusterId != peerClusterID {
+			return status.Error(codes.PermissionDenied, "cluster_id mismatch on peer channel")
+		}
 
 		switch payload := msg.Payload.(type) {
 		case *pb.PeerMessage_EdgeTelemetry:
@@ -621,7 +650,7 @@ func (s *FederationServer) handleReplicationEvent(ctx context.Context, peerClust
 	entry := &RemoteReplicationEntry{
 		StreamName: r.StreamName,
 		NodeID:     r.NodeId,
-		ClusterID:  r.ClusterId,
+		ClusterID:  peerClusterID,
 		BaseURL:    r.BaseUrl,
 		DTSCURL:    r.DtscUrl,
 		Available:  r.Available,
@@ -638,8 +667,12 @@ func (s *FederationServer) handleReplicationEvent(ctx context.Context, peerClust
 
 func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerClusterID string, ev *pb.StreamLifecycleEvent) {
 	if ev.GetIsLive() {
+		clusterID := peerClusterID
+		if clusterID == "" {
+			clusterID = ev.GetClusterId()
+		}
 		if err := s.cache.SetRemoteLiveStream(ctx, ev.GetInternalName(), &RemoteLiveStreamEntry{
-			ClusterID: ev.GetClusterId(),
+			ClusterID: clusterID,
 			TenantID:  ev.GetTenantId(),
 			UpdatedAt: time.Now().Unix(),
 		}); err != nil {
@@ -736,7 +769,7 @@ func (s *FederationServer) handleStreamAdvertisement(ctx context.Context, peerCl
 		InternalName:    ad.InternalName,
 		TenantID:        ad.TenantId,
 		PlaybackID:      ad.PlaybackId,
-		OriginClusterID: ad.OriginClusterId,
+		OriginClusterID: peerClusterID,
 		IsLive:          ad.IsLive,
 		Edges:           edges,
 		Timestamp:       ad.Timestamp,
@@ -902,4 +935,11 @@ func AvailBandwidthFromNodeState(ns *state.NodeState) uint64 {
 		return 0
 	}
 	return uint64(avail)
+}
+
+func requireFederationServiceAuth(ctx context.Context) error {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return status.Error(codes.PermissionDenied, "federation rpc requires service authentication")
+	}
+	return nil
 }
