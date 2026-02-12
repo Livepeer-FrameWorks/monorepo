@@ -273,6 +273,33 @@ func TestLoadPeerAddressesFromRedis_SkipsSelf(t *testing.T) {
 	}
 }
 
+func TestLoadPeerAddressesFromRedis_RemovesStaleRedisPeers(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "local-cluster", cache, false)
+
+	pm.mu.Lock()
+	pm.peers["redis-peer"] = &peerState{addr: "old:18019", fromRedis: true, lastRefresh: time.Now()}
+	pm.peers["hint-peer"] = &peerState{addr: "hint:18019", fromRedis: false, lastRefresh: time.Now()}
+	pm.mu.Unlock()
+
+	ctx := context.Background()
+	if err := cache.SetPeerAddresses(ctx, map[string]string{"other-peer": "new:18019"}); err != nil {
+		t.Fatalf("SetPeerAddresses: %v", err)
+	}
+
+	pm.loadPeerAddressesFromRedis()
+
+	if pm.GetPeerAddr("redis-peer") != "" {
+		t.Fatal("expected stale redis peer to be removed")
+	}
+	if pm.GetPeerAddr("hint-peer") == "" {
+		t.Fatal("expected non-redis hint peer to remain")
+	}
+	if pm.GetPeerAddr("other-peer") != "new:18019" {
+		t.Fatal("expected redis peer address to be loaded")
+	}
+}
+
 func TestArtifactTypeToString(t *testing.T) {
 	tests := []struct {
 		input pb.ArtifactEvent_ArtifactType

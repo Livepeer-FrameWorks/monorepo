@@ -622,6 +622,36 @@ func TestStreamAd_SetGetWithdraw(t *testing.T) {
 	}
 }
 
+func TestStreamAd_WithdrawDeletesPlaybackIndex(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+
+	record := &StreamAdRecord{
+		InternalName: "tenant1+stream1",
+		PlaybackID:   "play-123",
+		IsLive:       true,
+	}
+	if err := cache.SetStreamAd(ctx, "cluster-b", record); err != nil {
+		t.Fatalf("SetStreamAd: %v", err)
+	}
+	if err := cache.SetPlaybackIndex(ctx, "play-123", "tenant1+stream1"); err != nil {
+		t.Fatalf("SetPlaybackIndex: %v", err)
+	}
+
+	record.IsLive = false
+	if err := cache.SetStreamAd(ctx, "cluster-b", record); err != nil {
+		t.Fatalf("SetStreamAd (withdraw): %v", err)
+	}
+
+	mapped, err := cache.GetPlaybackIndex(ctx, "play-123")
+	if err != nil {
+		t.Fatalf("GetPlaybackIndex: %v", err)
+	}
+	if mapped != "" {
+		t.Fatalf("expected playback index to be removed, got %q", mapped)
+	}
+}
+
 func TestPeerHeartbeat_SetGet(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()

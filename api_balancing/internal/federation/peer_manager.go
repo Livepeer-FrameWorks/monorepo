@@ -56,6 +56,7 @@ type peerState struct {
 	addr        string
 	tenantIDs   []string
 	lifecycle   peerLifecycleType
+	fromRedis   bool
 	cancel      context.CancelFunc
 	stream      pb.FoghornFederation_PeerChannelClient
 	lastRefresh time.Time
@@ -192,6 +193,7 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 		ps := &peerState{
 			addr:        addr,
 			lifecycle:   lifecycle,
+			fromRedis:   false,
 			lastRefresh: time.Now(),
 			s3Config: &ClusterS3Config{
 				ClusterID:  peer.GetClusterId(),
@@ -448,6 +450,9 @@ func (pm *PeerManager) runAsLeader() {
 			pm.pushArtifacts()
 		case <-heartbeatTicker.C:
 			pm.pushHeartbeat()
+			if pm.cache != nil {
+				pm.syncPeerAddressesToRedis()
+			}
 		}
 	}
 }
@@ -495,6 +500,7 @@ func (pm *PeerManager) refreshPeers() {
 		ps := &peerState{
 			addr:        peer.FoghornAddr,
 			tenantIDs:   peer.SharedTenantIds,
+			fromRedis:   false,
 			lastRefresh: time.Now(),
 			s3Config:    existingS3,
 		}
@@ -562,8 +568,25 @@ func (pm *PeerManager) loadPeerAddressesFromRedis() {
 		}
 		pm.peers[clusterID] = &peerState{
 			addr:        addr,
+			fromRedis:   true,
 			lastRefresh: time.Now(),
 		}
+	}
+
+	for clusterID, ps := range pm.peers {
+		if !ps.fromRedis {
+			continue
+		}
+		if _, present := addrs[clusterID]; present {
+			continue
+		}
+		if ps.connected {
+			continue
+		}
+		if ps.cancel != nil {
+			ps.cancel()
+		}
+		delete(pm.peers, clusterID)
 	}
 }
 

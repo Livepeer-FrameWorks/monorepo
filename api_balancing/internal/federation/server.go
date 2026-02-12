@@ -564,6 +564,16 @@ func (s *FederationServer) PeerChannel(stream pb.FoghornFederation_PeerChannelSe
 			log.Info("PeerChannel established")
 		})
 
+		if peerClusterID == "" {
+			return status.Error(codes.InvalidArgument, "peer cluster_id required")
+		}
+		if peerClusterID == s.clusterID {
+			return status.Error(codes.InvalidArgument, "cannot open PeerChannel to own cluster")
+		}
+		if msg.GetClusterId() != "" && msg.GetClusterId() != peerClusterID {
+			return status.Error(codes.InvalidArgument, "peer cluster_id changed during stream")
+		}
+
 		switch payload := msg.Payload.(type) {
 		case *pb.PeerMessage_EdgeTelemetry:
 			s.handleEdgeTelemetry(ctx, peerClusterID, payload.EdgeTelemetry)
