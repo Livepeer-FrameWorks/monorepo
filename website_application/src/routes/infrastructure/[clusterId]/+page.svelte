@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
+  import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { get } from "svelte/store";
   import {
@@ -21,7 +22,6 @@
   import InfrastructureMetricCard from "$lib/components/shared/InfrastructureMetricCard.svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Card, CardContent } from "$lib/components/ui/card";
-  import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
@@ -295,7 +295,7 @@
     <div class="flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
         <a
-          href="/infrastructure"
+          href={resolve("/infrastructure")}
           class="text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeftIcon class="w-5 h-5" />
@@ -470,7 +470,7 @@
                     ? (((health.event.ramCurrent || 0) / health.event.ramMax) * 100).toFixed(0)
                     : null}
                   <a
-                    href="/nodes/{node.id}"
+                    href={resolve(`/nodes/${node.id}`)}
                     class="block no-underline hover:ring-2 hover:ring-primary/50 rounded-lg transition-shadow"
                   >
                     <Card>

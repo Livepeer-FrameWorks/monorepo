@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,16 +28,20 @@ func (f *fakeStore) DeleteBySource(_ context.Context, _, _ string) error {
 }
 
 type fakeEmbedder struct {
-	calls int
+	calls int32
 	err   error // if set, EmbedDocument returns this error
 }
 
 func (f *fakeEmbedder) EmbedDocument(_ context.Context, url, title, content string) ([]Chunk, error) {
-	f.calls++
+	atomic.AddInt32(&f.calls, 1)
 	if f.err != nil {
 		return nil, f.err
 	}
 	return []Chunk{{SourceURL: url, SourceTitle: title, Text: content, Index: 0, Embedding: []float32{1}}}, nil
+}
+
+func (f *fakeEmbedder) callCount() int32 {
+	return atomic.LoadInt32(&f.calls)
 }
 
 type fakeRenderer struct {
@@ -84,7 +89,7 @@ func TestCrawlerSitemapAndFetch(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
-	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -133,7 +138,7 @@ func TestCrawlerCrawlAndEmbed(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
-	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -141,8 +146,8 @@ func TestCrawlerCrawlAndEmbed(t *testing.T) {
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
 		t.Fatalf("crawl and embed: %v", err)
 	}
-	if embedder.calls != 1 {
-		t.Fatalf("expected embedder to be called once, got %d", embedder.calls)
+	if embedder.callCount() != 1 {
+		t.Fatalf("expected embedder to be called once, got %d", embedder.callCount())
 	}
 	if len(store.upserted) != 1 {
 		t.Fatalf("expected store upserted once, got %d", len(store.upserted))
@@ -187,7 +192,7 @@ func TestCrawlerCrawlAndEmbed_IdempotentWithCache(t *testing.T) {
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
 	cache := NewPageCacheStore(db)
-	crawler, err := NewCrawler(server.Client(), embedder, store, WithPageCache(cache), withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, WithPageCache(cache), withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -223,8 +228,8 @@ func TestCrawlerCrawlAndEmbed_IdempotentWithCache(t *testing.T) {
 		t.Fatalf("crawl and embed (second run): %v", err)
 	}
 
-	if embedder.calls != 1 {
-		t.Fatalf("expected 1 embed call after idempotent re-crawl, got %d", embedder.calls)
+	if embedder.callCount() != 1 {
+		t.Fatalf("expected 1 embed call after idempotent re-crawl, got %d", embedder.callCount())
 	}
 	if len(store.upserted) != 1 {
 		t.Fatalf("expected 1 upsert batch, got %d", len(store.upserted))
@@ -300,7 +305,7 @@ func TestCrawlerSkipsOn304(t *testing.T) {
 	fakeS := &fakeStore{}
 	embedder := &fakeEmbedder{}
 	cache := NewPageCacheStore(db)
-	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -322,8 +327,8 @@ func TestCrawlerSkipsOn304(t *testing.T) {
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
 		t.Fatalf("crawl and embed: %v", err)
 	}
-	if embedder.calls != 0 {
-		t.Fatalf("expected 0 embed calls (304 skip), got %d", embedder.calls)
+	if embedder.callCount() != 0 {
+		t.Fatalf("expected 0 embed calls (304 skip), got %d", embedder.callCount())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -364,7 +369,7 @@ func TestCrawlerSkipsUnchangedContentHash(t *testing.T) {
 	fakeS := &fakeStore{}
 	embedder := &fakeEmbedder{}
 	cache := NewPageCacheStore(db)
-	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -386,8 +391,8 @@ func TestCrawlerSkipsUnchangedContentHash(t *testing.T) {
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
 		t.Fatalf("crawl and embed: %v", err)
 	}
-	if embedder.calls != 0 {
-		t.Fatalf("expected 0 embed calls (hash match), got %d", embedder.calls)
+	if embedder.callCount() != 0 {
+		t.Fatalf("expected 0 embed calls (hash match), got %d", embedder.callCount())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -422,7 +427,7 @@ func TestCrawlerSitemapLastmod(t *testing.T) {
 	fakeS := &fakeStore{}
 	embedder := &fakeEmbedder{}
 	cache := NewPageCacheStore(db)
-	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -438,8 +443,8 @@ func TestCrawlerSitemapLastmod(t *testing.T) {
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
 		t.Fatalf("crawl and embed: %v", err)
 	}
-	if embedder.calls != 0 {
-		t.Fatalf("expected 0 embed calls (lastmod skip), got %d", embedder.calls)
+	if embedder.callCount() != 0 {
+		t.Fatalf("expected 0 embed calls (lastmod skip), got %d", embedder.callCount())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -531,7 +536,7 @@ func TestCrawlerContinuesOn404(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
-	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -540,8 +545,8 @@ func TestCrawlerContinuesOn404(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error (should skip 404), got: %v", err)
 	}
-	if embedder.calls != 1 {
-		t.Fatalf("expected 1 embed call (skipped 404, embedded good page), got %d", embedder.calls)
+	if embedder.callCount() != 1 {
+		t.Fatalf("expected 1 embed call (skipped 404, embedded good page), got %d", embedder.callCount())
 	}
 }
 
@@ -562,7 +567,7 @@ func TestCrawlPagesEmbedsDirectURLs(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
-	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -571,8 +576,8 @@ func TestCrawlPagesEmbedsDirectURLs(t *testing.T) {
 	if err := crawler.CrawlPages(context.Background(), "tenant", pages, false); err != nil {
 		t.Fatalf("crawl pages: %v", err)
 	}
-	if embedder.calls != 2 {
-		t.Fatalf("expected 2 embed calls, got %d", embedder.calls)
+	if embedder.callCount() != 2 {
+		t.Fatalf("expected 2 embed calls, got %d", embedder.callCount())
 	}
 	if len(store.upserted) != 2 {
 		t.Fatalf("expected 2 upserts, got %d", len(store.upserted))
@@ -607,7 +612,7 @@ func TestCrawlPagesSkipsUnchangedHash(t *testing.T) {
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
 	cache := NewPageCacheStore(db)
-	crawler, err := NewCrawler(server.Client(), embedder, store, WithPageCache(cache), withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, WithPageCache(cache), withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -630,8 +635,8 @@ func TestCrawlPagesSkipsUnchangedHash(t *testing.T) {
 	if err := crawler.CrawlPages(context.Background(), "tenant", pages, false); err != nil {
 		t.Fatalf("crawl pages: %v", err)
 	}
-	if embedder.calls != 0 {
-		t.Fatalf("expected 0 embed calls (hash match), got %d", embedder.calls)
+	if embedder.callCount() != 0 {
+		t.Fatalf("expected 0 embed calls (hash match), got %d", embedder.callCount())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -653,7 +658,7 @@ func TestCrawlPagesRespectsContext(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
-	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -734,7 +739,7 @@ func TestExtractLinksEmpty(t *testing.T) {
 func TestCrawlPagesEmptyList(t *testing.T) {
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
-	crawler, err := NewCrawler(http.DefaultClient, embedder, store, withSkipURLValidation())
+	crawler, err := NewCrawler(http.DefaultClient, embedder, store, withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -742,8 +747,8 @@ func TestCrawlPagesEmptyList(t *testing.T) {
 	if err := crawler.CrawlPages(context.Background(), "tenant", nil, false); err != nil {
 		t.Fatalf("expected nil error for empty list, got %v", err)
 	}
-	if embedder.calls != 0 {
-		t.Fatalf("expected 0 embed calls, got %d", embedder.calls)
+	if embedder.callCount() != 0 {
+		t.Fatalf("expected 0 embed calls, got %d", embedder.callCount())
 	}
 }
 
@@ -771,7 +776,7 @@ func TestCrawlAndEmbed_EmbedFailureContinues(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{err: errors.New("API error")}
-	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -809,7 +814,7 @@ func TestCrawlAndEmbed_NoChunksTracked(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{err: ErrNoChunks}
-	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation(), WithMinCrawlDelay(0))
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -855,6 +860,7 @@ func TestCrawlAndEmbed_ExcludePatterns(t *testing.T) {
 	embedder := &fakeEmbedder{}
 	crawler, err := NewCrawler(server.Client(), embedder, store,
 		withSkipURLValidation(),
+		WithMinCrawlDelay(0),
 		WithExcludePatterns([]string{"/tags"}),
 	)
 	if err != nil {
@@ -871,8 +877,8 @@ func TestCrawlAndEmbed_ExcludePatterns(t *testing.T) {
 	if result.Embedded != 1 {
 		t.Fatalf("expected 1 embedded page, got %d", result.Embedded)
 	}
-	if embedder.calls != 1 {
-		t.Fatalf("expected 1 embed call, got %d", embedder.calls)
+	if embedder.callCount() != 1 {
+		t.Fatalf("expected 1 embed call, got %d", embedder.callCount())
 	}
 }
 
@@ -895,6 +901,7 @@ func TestCrawlPages_ExcludePatterns(t *testing.T) {
 	embedder := &fakeEmbedder{}
 	crawler, err := NewCrawler(server.Client(), embedder, store,
 		withSkipURLValidation(),
+		WithMinCrawlDelay(0),
 		WithExcludePatterns([]string{"/tag/"}),
 	)
 	if err != nil {
@@ -905,7 +912,7 @@ func TestCrawlPages_ExcludePatterns(t *testing.T) {
 	if err := crawler.CrawlPages(context.Background(), "tenant", pages, false); err != nil {
 		t.Fatalf("crawl pages: %v", err)
 	}
-	if embedder.calls != 1 {
-		t.Fatalf("expected 1 embed call (excluded page skipped), got %d", embedder.calls)
+	if embedder.callCount() != 1 {
+		t.Fatalf("expected 1 embed call (excluded page skipped), got %d", embedder.callCount())
 	}
 }

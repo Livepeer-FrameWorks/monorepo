@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import {
     GetInfrastructureOverviewStore,
@@ -359,7 +360,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {#each clusters as cluster, index (`${cluster.id}-${index}`)}
                   <a
-                    href="/infrastructure/{cluster.clusterId}"
+                    href={resolve(`/infrastructure/${cluster.clusterId}`)}
                     class="block no-underline hover:ring-2 hover:ring-primary/50 rounded-lg transition-shadow"
                   >
                     <Card>

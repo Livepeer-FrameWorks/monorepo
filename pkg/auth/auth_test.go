@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestPasswordHashAndCheck(t *testing.T) {
-	hash, err := HashPassword("secret")
+	hash, err := HashPassword("secret", bcrypt.MinCost)
 	if err != nil {
 		t.Fatalf("hash error: %v", err)
 	}

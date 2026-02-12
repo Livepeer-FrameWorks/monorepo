@@ -1,7 +1,7 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-cli \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper \
 	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
-	lint lint-all lint-fix lint-report lint-analyze \
+	lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
 # Version information
@@ -356,8 +356,15 @@ fmt:
 # Linting
 # =============================================================================
 
-# Run golangci-lint with baseline (matches CI - shows only NEW violations)
+# Run both Go and frontend lint checks (matches CI lint jobs)
 lint:
+	@failed=0; \
+	$(MAKE) lint-go || failed=1; \
+	$(MAKE) lint-frontend || failed=1; \
+	if [ $$failed -eq 1 ]; then exit 1; fi
+
+# Run golangci-lint with baseline (matches CI go-lint - shows only NEW violations)
+lint-go:
 	@echo "Running golangci-lint with baseline (CI mode)..."
 	@BASELINE=$$(cat .golangci-baseline 2>/dev/null || echo ""); \
 	if [ -z "$$BASELINE" ]; then \
@@ -374,6 +381,12 @@ lint:
 		(cd $$service_dir && golangci-lint run --timeout=5m $$BASELINE_ARG ./...) || failed=1; \
 	done; \
 	if [ $$failed -eq 1 ]; then exit 1; fi
+
+# Run frontend lint and format checks (matches CI frontend-lint)
+lint-frontend:
+	@echo "Running frontend lint checks (pnpm lint + pnpm format:check)..."
+	pnpm lint
+	pnpm format:check
 
 # Run golangci-lint without baseline (shows ALL violations for cleanup work)
 lint-all:
@@ -400,6 +413,31 @@ lint-report:
 # Analyze lint report
 lint-analyze:
 	@./scripts/lint-analyze.sh
+
+# =============================================================================
+# Local CI Parity
+# =============================================================================
+
+# Run the main CI checks locally (go + frontend)
+ci-local:
+	@failed=0; \
+	$(MAKE) ci-local-go || failed=1; \
+	$(MAKE) ci-local-frontend || failed=1; \
+	if [ $$failed -eq 1 ]; then exit 1; fi
+	@echo "✓ Local CI parity checks passed"
+
+ci-local-go:
+	@echo "Running local Go CI checks..."
+	@$(MAKE) lint-go
+	@$(MAKE) test
+	@$(MAKE) build
+
+ci-local-frontend:
+	@echo "Running local frontend CI checks..."
+	pnpm lint
+	pnpm format:check
+	pnpm test:coverage
+	pnpm build
 
 # =============================================================================
 # Dead Code Analysis

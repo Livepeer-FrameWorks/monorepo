@@ -11,12 +11,18 @@
 
 ### Linting
 
+**All lint checks (CI parity):**
+
+```bash
+make lint
+```
+
 **Go:**
 
 ```bash
-make lint       # Show all violations (for cleanup)
+make lint-go    # Baseline-aware Go lint (same mode as CI go-lint)
+make lint-all   # Show all Go violations (for cleanup)
 make lint-fix   # Auto-fix what's possible
-make lint-count # Track cleanup progress
 ```
 
 **Frontend:**
@@ -78,6 +84,7 @@ $effect(() => {
 make test                              # All Go tests
 cd api_control && go test ./... -v     # Specific service
 cd website_application && pnpm test    # Frontend
+make ci-local                          # Run core CI checks locally
 make verify                            # Pre-commit verification
 ./scripts/mutation-test.sh pkg/auth/   # Mutation testing (validates test quality)
 ```

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import { auth } from "$lib/stores/auth";
   import { GetNetworkOverviewStore, GetFederationEventsStore } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -19,7 +20,6 @@
   const NetworkIcon = getIconComponent("Network");
   const ZapIcon = getIconComponent("Zap");
   const CalendarIcon = getIconComponent("Calendar");
-  const AlertTriangleIcon = getIconComponent("AlertTriangle");
   const RefreshCwIcon = getIconComponent("RefreshCw");
 
   const networkStore = new GetNetworkOverviewStore();
@@ -74,7 +74,7 @@
 
   // Build cluster geo lookup for relationship lines
   let clusterGeoMap = $derived.by(() => {
-    const m = new Map<string, { lat: number; lng: number }>();
+    const m = new SvelteMap<string, { lat: number; lng: number }>();
     for (const c of clusters) {
       if (c.latitude && c.longitude) {
         m.set(c.clusterId, { lat: c.latitude, lng: c.longitude });

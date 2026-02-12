@@ -5,8 +5,13 @@ import (
 )
 
 // HashPassword hashes a password using bcrypt
-func HashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+func HashPassword(password string, cost ...int) (string, error) {
+	bcryptCost := bcrypt.DefaultCost
+	if len(cost) > 0 {
+		bcryptCost = cost[0]
+	}
+
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	return string(bytes), err
 }
 

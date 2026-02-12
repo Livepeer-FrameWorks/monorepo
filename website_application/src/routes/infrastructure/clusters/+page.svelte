@@ -40,7 +40,6 @@
   const CheckIcon = getIconComponent("Check");
   const XIcon = getIconComponent("X");
   const CopyIcon = getIconComponent("Copy");
-  const StoreIcon = getIconComponent("Store");
   const GlobeIcon = getIconComponent("Globe2");
   const ZapIcon = getIconComponent("Zap");
   const SparklesIcon = getIconComponent("Sparkles");

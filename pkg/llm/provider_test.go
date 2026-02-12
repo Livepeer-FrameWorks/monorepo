@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestDoWithRetryRetryCount(t *testing.T) {
@@ -24,7 +25,7 @@ func TestDoWithRetryRetryCount(t *testing.T) {
 	client := &http.Client{}
 	resp, err := doWithRetry(context.Background(), client, func() (*http.Request, error) {
 		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
-	})
+	}, time.Millisecond)
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestDoWithRetryAllFailures(t *testing.T) {
 	client := &http.Client{}
 	resp, err := doWithRetry(context.Background(), client, func() (*http.Request, error) {
 		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
-	})
+	}, time.Millisecond)
 	if resp != nil {
 		resp.Body.Close()
 	}
