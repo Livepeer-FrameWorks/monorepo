@@ -160,7 +160,7 @@ func (pm *PeerManager) IsPeerConnected(clusterID string) bool {
 // All replicas register addresses (so GetPeerAddr works everywhere);
 // only the leader opens PeerChannel connections.
 func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
-	var added bool
+	var changed bool
 
 	pm.mu.Lock()
 	for _, peer := range peers {
@@ -174,6 +174,9 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 
 		addr := "foghorn." + peer.GetClusterSlug() + "." + peer.GetBaseUrl() + ":" + federationPort
 		if existing, known := pm.peers[peer.GetClusterId()]; known {
+			if existing.addr != addr {
+				changed = true
+			}
 			existing.addr = addr
 			existing.lifecycle = lifecycle
 			existing.lastRefresh = time.Now()
@@ -198,7 +201,7 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 			},
 		}
 		pm.peers[peer.GetClusterId()] = ps
-		added = true
+		changed = true
 
 		if pm.isLeader {
 			go pm.connectPeer(peer.GetClusterId(), ps)
@@ -215,7 +218,7 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 	isLeader := pm.isLeader
 	pm.mu.Unlock()
 
-	if added && isLeader && pm.cache != nil {
+	if changed && isLeader && pm.cache != nil {
 		pm.syncPeerAddressesToRedis()
 	}
 }

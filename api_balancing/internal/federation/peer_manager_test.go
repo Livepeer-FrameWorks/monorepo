@@ -412,6 +412,38 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 	}
 }
 
+func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "local-cluster", cache, true)
+
+	// Close done so connectPeer goroutines exit immediately
+	close(pm.done)
+
+	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+		ClusterId:   "remote-1",
+		ClusterSlug: "r1",
+		BaseUrl:     "old.example.com",
+		Role:        "official",
+	}})
+
+	// Update address for the same peer
+	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+		ClusterId:   "remote-1",
+		ClusterSlug: "r1",
+		BaseUrl:     "new.example.com",
+		Role:        "official",
+	}})
+
+	ctx := context.Background()
+	addrs, err := cache.GetPeerAddresses(ctx)
+	if err != nil {
+		t.Fatalf("GetPeerAddresses: %v", err)
+	}
+	if addrs["remote-1"] != "foghorn.r1.new.example.com:18019" {
+		t.Fatalf("expected updated address in Redis, got %q", addrs["remote-1"])
+	}
+}
+
 func TestShouldSendStreamToPeer_StreamScopedRequiresTrackedStreamAndTenant(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 	pm.streamPeers["remote"] = map[string]bool{"live+alpha": true}
