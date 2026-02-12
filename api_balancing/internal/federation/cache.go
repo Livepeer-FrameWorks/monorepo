@@ -519,7 +519,7 @@ func (c *RemoteEdgeCache) SetStreamAd(ctx context.Context, peerClusterID string,
 	if !record.IsLive {
 		playbackID := record.PlaybackID
 		if playbackID == "" {
-			if existing, err := c.GetStreamAd(ctx, peerClusterID, record.InternalName); err == nil && existing != nil {
+			if existing, lookupErr := c.GetStreamAd(ctx, peerClusterID, record.InternalName); lookupErr == nil && existing != nil {
 				playbackID = existing.PlaybackID
 			}
 		}

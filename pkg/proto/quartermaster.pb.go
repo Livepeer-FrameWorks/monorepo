@@ -5829,18 +5829,19 @@ func (x *NodeOwnerResponse) GetTenantName() string {
 
 // Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeRequest (lines 235-245)
 type BootstrapEdgeNodeRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Token           string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`                                                    // json:"token" required
-	Hostname        string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`                                              // json:"hostname"
-	Ips             []string               `protobuf:"bytes,3,rep,name=ips,proto3" json:"ips,omitempty"`                                                        // json:"ips,omitempty"
-	Labels          *structpb.Struct       `protobuf:"bytes,4,opt,name=labels,proto3" json:"labels,omitempty"`                                                  // json:"labels,omitempty"
-	LocalIpv4       []string               `protobuf:"bytes,5,rep,name=local_ipv4,json=localIpv4,proto3" json:"local_ipv4,omitempty"`                           // json:"local_ipv4,omitempty"
-	LocalIpv6       []string               `protobuf:"bytes,6,rep,name=local_ipv6,json=localIpv6,proto3" json:"local_ipv6,omitempty"`                           // json:"local_ipv6,omitempty"
-	MacsSha256      *string                `protobuf:"bytes,7,opt,name=macs_sha256,json=macsSha256,proto3,oneof" json:"macs_sha256,omitempty"`                  // json:"macs_sha256,omitempty"
-	MachineIdSha256 *string                `protobuf:"bytes,8,opt,name=machine_id_sha256,json=machineIdSha256,proto3,oneof" json:"machine_id_sha256,omitempty"` // json:"machine_id_sha256,omitempty"
-	TargetClusterId *string                `protobuf:"bytes,9,opt,name=target_cluster_id,json=targetClusterId,proto3,oneof" json:"target_cluster_id,omitempty"` // Target cluster (must match token binding if token has cluster_id)
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Token            string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`                                                    // json:"token" required
+	Hostname         string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`                                              // json:"hostname"
+	Ips              []string               `protobuf:"bytes,3,rep,name=ips,proto3" json:"ips,omitempty"`                                                        // json:"ips,omitempty"
+	Labels           *structpb.Struct       `protobuf:"bytes,4,opt,name=labels,proto3" json:"labels,omitempty"`                                                  // json:"labels,omitempty"
+	LocalIpv4        []string               `protobuf:"bytes,5,rep,name=local_ipv4,json=localIpv4,proto3" json:"local_ipv4,omitempty"`                           // json:"local_ipv4,omitempty"
+	LocalIpv6        []string               `protobuf:"bytes,6,rep,name=local_ipv6,json=localIpv6,proto3" json:"local_ipv6,omitempty"`                           // json:"local_ipv6,omitempty"
+	MacsSha256       *string                `protobuf:"bytes,7,opt,name=macs_sha256,json=macsSha256,proto3,oneof" json:"macs_sha256,omitempty"`                  // json:"macs_sha256,omitempty"
+	MachineIdSha256  *string                `protobuf:"bytes,8,opt,name=machine_id_sha256,json=machineIdSha256,proto3,oneof" json:"machine_id_sha256,omitempty"` // json:"machine_id_sha256,omitempty"
+	TargetClusterId  *string                `protobuf:"bytes,9,opt,name=target_cluster_id,json=targetClusterId,proto3,oneof" json:"target_cluster_id,omitempty"` // Preferred cluster for unbound tokens
+	ServedClusterIds []string               `protobuf:"bytes,10,rep,name=served_cluster_ids,json=servedClusterIds,proto3" json:"served_cluster_ids,omitempty"`   // Clusters this caller serves; token binding validated against this set
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *BootstrapEdgeNodeRequest) Reset() {
@@ -5934,6 +5935,13 @@ func (x *BootstrapEdgeNodeRequest) GetTargetClusterId() string {
 		return *x.TargetClusterId
 	}
 	return ""
+}
+
+func (x *BootstrapEdgeNodeRequest) GetServedClusterIds() []string {
+	if x != nil {
+		return x.ServedClusterIds
+	}
+	return nil
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeResponse (lines 247-251)
@@ -10450,7 +10458,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\vtenant_name\x18\x05 \x01(\tH\x01R\n" +
 	"tenantName\x88\x01\x01B\x12\n" +
 	"\x10_owner_tenant_idB\x0e\n" +
-	"\f_tenant_name\"\x91\x03\n" +
+	"\f_tenant_name\"\xbf\x03\n" +
 	"\x18BootstrapEdgeNodeRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x10\n" +
@@ -10463,7 +10471,9 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\vmacs_sha256\x18\a \x01(\tH\x00R\n" +
 	"macsSha256\x88\x01\x01\x12/\n" +
 	"\x11machine_id_sha256\x18\b \x01(\tH\x01R\x0fmachineIdSha256\x88\x01\x01\x12/\n" +
-	"\x11target_cluster_id\x18\t \x01(\tH\x02R\x0ftargetClusterId\x88\x01\x01B\x0e\n" +
+	"\x11target_cluster_id\x18\t \x01(\tH\x02R\x0ftargetClusterId\x88\x01\x01\x12,\n" +
+	"\x12served_cluster_ids\x18\n" +
+	" \x03(\tR\x10servedClusterIdsB\x0e\n" +
 	"\f_macs_sha256B\x14\n" +
 	"\x12_machine_id_sha256B\x14\n" +
 	"\x12_target_cluster_id\"p\n" +
