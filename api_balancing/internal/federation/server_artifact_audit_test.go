@@ -47,7 +47,7 @@ func TestPrepareArtifactRejectsInconsistentS3Metadata(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(context.Background(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
 		ArtifactId: "artifact-1",
 		TenantId:   "tenant-a",
 	})
@@ -79,7 +79,7 @@ func TestPrepareArtifactRejectsTypeMismatch(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(context.Background(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
 		ArtifactId:   "artifact-1",
 		TenantId:     "tenant-a",
 		ArtifactType: "dvr",
