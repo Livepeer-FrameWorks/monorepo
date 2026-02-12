@@ -20,7 +20,7 @@ func TestBuildBootstrapEdgeNodeRequest_IncludesTargetClusterAndFingerprint(t *te
 			MacsSha256:      &macs,
 			MachineIdSha256: &machine,
 		},
-	}, "node-1", "203.0.113.5:443", "tok-1", "cluster-a")
+	}, "node-1", "203.0.113.5:443", "tok-1", "cluster-a", []string{"cluster-a", "cluster-b"})
 
 	if req.GetTargetClusterId() != "cluster-a" {
 		t.Fatalf("expected target cluster cluster-a, got %q", req.GetTargetClusterId())
@@ -34,15 +34,22 @@ func TestBuildBootstrapEdgeNodeRequest_IncludesTargetClusterAndFingerprint(t *te
 	if req.GetMachineIdSha256() != machine {
 		t.Fatalf("expected machine hash %q, got %q", machine, req.GetMachineIdSha256())
 	}
+	served := req.GetServedClusterIds()
+	if len(served) != 2 || served[0] != "cluster-a" || served[1] != "cluster-b" {
+		t.Fatalf("expected served clusters [cluster-a cluster-b], got %v", served)
+	}
 }
 
 func TestBuildBootstrapEdgeNodeRequest_UsesPeerAddressWhenForwardedMissing(t *testing.T) {
-	req := buildBootstrapEdgeNodeRequest(context.Background(), nil, "node-1", "203.0.113.5:443", "tok-1", "")
+	req := buildBootstrapEdgeNodeRequest(context.Background(), nil, "node-1", "203.0.113.5:443", "tok-1", "", nil)
 
 	if req.GetTargetClusterId() != "" {
 		t.Fatalf("expected empty target cluster, got %q", req.GetTargetClusterId())
 	}
 	if len(req.GetIps()) != 1 || req.GetIps()[0] != "203.0.113.5" {
 		t.Fatalf("expected peer host IP, got %+v", req.GetIps())
+	}
+	if len(req.GetServedClusterIds()) != 0 {
+		t.Fatalf("expected no served clusters, got %v", req.GetServedClusterIds())
 	}
 }

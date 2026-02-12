@@ -58,7 +58,7 @@ func categorizeEnrollmentError(err error) bool {
 	}
 }
 
-func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID, peerAddr, token, targetClusterID string) *pb.BootstrapEdgeNodeRequest {
+func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID, peerAddr, token, targetClusterID string, servedClusterIDs []string) *pb.BootstrapEdgeNodeRequest {
 	host := ""
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if fwd := md.Get("x-forwarded-for"); len(fwd) > 0 {
@@ -76,7 +76,7 @@ func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID
 		host = h
 	}
 
-	req := &pb.BootstrapEdgeNodeRequest{Token: token, Hostname: nodeID, Ips: []string{host}}
+	req := &pb.BootstrapEdgeNodeRequest{Token: token, Hostname: nodeID, Ips: []string{host}, ServedClusterIds: servedClusterIDs}
 	if strings.TrimSpace(targetClusterID) != "" {
 		targetCluster := strings.TrimSpace(targetClusterID)
 		req.TargetClusterId = &targetCluster
@@ -529,7 +529,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				req := buildBootstrapEdgeNodeRequest(stream.Context(), x.Register, nodeID, peerAddr, tok, localClusterID)
+				req := buildBootstrapEdgeNodeRequest(stream.Context(), x.Register, nodeID, peerAddr, tok, localClusterID, ServedClustersSnapshot())
 				resp, err := quartermasterClient.BootstrapEdgeNode(ctx, req)
 				if err != nil {
 					if categorizeEnrollmentError(err) {

@@ -957,7 +957,8 @@ message BootstrapEdgeNodeRequest {
   repeated string local_ipv6 = 6;       // json:"local_ipv6,omitempty"
   optional string macs_sha256 = 7;      // json:"macs_sha256,omitempty"
   optional string machine_id_sha256 = 8; // json:"machine_id_sha256,omitempty"
-  optional string target_cluster_id = 9; // Target cluster (must match token binding if token has cluster_id)
+  optional string target_cluster_id = 9; // Preferred cluster for unbound tokens
+  repeated string served_cluster_ids = 10; // Clusters this caller serves; token binding validated against this set
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeResponse (lines 247-251)

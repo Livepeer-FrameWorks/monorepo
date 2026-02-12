@@ -3529,13 +3529,23 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		return nil, status.Error(codes.InvalidArgument, "token missing tenant_id")
 	}
 
-	// Cluster enforcement: if token has a cluster_id binding, validate against target
+	// Cluster enforcement: if token has a cluster_id binding, validate against caller's served set
 	targetClusterID := req.GetTargetClusterId()
 	tokenClusterID := clusterID.String
+	servedClusters := req.GetServedClusterIds()
 
-	if tokenClusterID != "" && targetClusterID != "" && tokenClusterID != targetClusterID {
-		return nil, status.Errorf(codes.PermissionDenied,
-			"token is bound to cluster %s, cannot use for cluster %s", tokenClusterID, targetClusterID)
+	if tokenClusterID != "" && len(servedClusters) > 0 {
+		served := false
+		for _, sc := range servedClusters {
+			if sc == tokenClusterID {
+				served = true
+				break
+			}
+		}
+		if !served {
+			return nil, status.Errorf(codes.PermissionDenied,
+				"token is bound to cluster %s, not served by this instance", tokenClusterID)
+		}
 	}
 
 	// Cluster resolution priority: token binding > request target > fallback
