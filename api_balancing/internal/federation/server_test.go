@@ -5,6 +5,7 @@ import (
 	"io"
 	"testing"
 
+	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/grpc/codes"
@@ -54,7 +55,9 @@ func TestPeerChannel_RejectsEmptyClusterID(t *testing.T) {
 		Cache:     cache,
 	})
 
+	svcCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
 	err := srv.PeerChannel(&testPeerChannelServerStream{
+		ctx: svcCtx,
 		messages: []*pb.PeerMessage{{
 			ClusterId: "",
 			Payload: &pb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &pb.EdgeTelemetry{
@@ -77,14 +80,16 @@ func TestPeerChannel_RejectsClusterIDChangeWithinStream(t *testing.T) {
 		Cache:     cache,
 	})
 
+	svcCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
 	err := srv.PeerChannel(&testPeerChannelServerStream{
+		ctx: svcCtx,
 		messages: []*pb.PeerMessage{
 			{ClusterId: "cluster-b", Payload: &pb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &pb.PeerHeartbeat{ProtocolVersion: 1}}},
 			{ClusterId: "cluster-c", Payload: &pb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &pb.PeerHeartbeat{ProtocolVersion: 1}}},
 		},
 	})
 
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument, got %v", err)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
 	}
 }

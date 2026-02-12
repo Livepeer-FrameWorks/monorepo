@@ -589,18 +589,11 @@ func (s *FederationServer) PeerChannel(stream pb.FoghornFederation_PeerChannelSe
 		if peerClusterID == "" {
 			return status.Error(codes.InvalidArgument, "cluster_id required in first peer message")
 		}
-		if msg.ClusterId != "" && msg.ClusterId != peerClusterID {
-			return status.Error(codes.PermissionDenied, "cluster_id mismatch on peer channel")
-		}
-
-		if peerClusterID == "" {
-			return status.Error(codes.InvalidArgument, "peer cluster_id required")
-		}
 		if peerClusterID == s.clusterID {
 			return status.Error(codes.InvalidArgument, "cannot open PeerChannel to own cluster")
 		}
-		if msg.GetClusterId() != "" && msg.GetClusterId() != peerClusterID {
-			return status.Error(codes.InvalidArgument, "peer cluster_id changed during stream")
+		if msg.ClusterId != "" && msg.ClusterId != peerClusterID {
+			return status.Error(codes.PermissionDenied, "cluster_id mismatch on peer channel")
 		}
 
 		switch payload := msg.Payload.(type) {
