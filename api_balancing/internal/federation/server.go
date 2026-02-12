@@ -358,7 +358,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 	location := strings.ToLower(strings.TrimSpace(storageLocation))
 	syncSt := strings.ToLower(strings.TrimSpace(syncStatus))
 
-	if syncSt != "synced" && location != "s3" {
+	if syncSt != "synced" {
 		switch location {
 		case "local", "freezing":
 			log.Info("PrepareArtifact: artifact not yet frozen, requesting async freeze")
@@ -366,6 +366,9 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 			return &pb.PrepareArtifactResponse{Ready: false, EstReadySeconds: 30}, nil
 		case "defrosting":
 			return &pb.PrepareArtifactResponse{Ready: false, EstReadySeconds: 15}, nil
+		case "s3":
+			log.WithFields(logging.Fields{"storage_location": location, "sync_status": syncSt}).Warn("PrepareArtifact: metadata drift detected")
+			return &pb.PrepareArtifactResponse{Error: "artifact metadata inconsistent: s3 location without synced status"}, nil
 		default:
 			return &pb.PrepareArtifactResponse{Error: "artifact in unexpected state: " + location}, nil
 		}
@@ -373,7 +376,11 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 
 	artType := strings.ToLower(strings.TrimSpace(artifactType))
 	if req.GetArtifactType() != "" {
-		artType = strings.ToLower(req.GetArtifactType())
+		requestedType := strings.ToLower(strings.TrimSpace(req.GetArtifactType()))
+		if requestedType != artType {
+			return &pb.PrepareArtifactResponse{Error: "artifact type mismatch"}, nil
+		}
+		artType = requestedType
 	}
 
 	switch artType {
@@ -458,6 +465,9 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 	if req.GetInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
 	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
 	if s.clipCreator == nil {
 		return &pb.RemoteClipResponse{Accepted: false, Reason: "clip creation not available"}, nil
 	}
@@ -473,6 +483,9 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 	ss := sm.GetStreamState(req.GetInternalName())
 	if ss == nil || ss.Status != "live" {
 		return &pb.RemoteClipResponse{Accepted: false, Reason: "stream not live on origin"}, nil
+	}
+	if ss.TenantID != "" && ss.TenantID != req.GetTenantId() {
+		return &pb.RemoteClipResponse{Accepted: false, Reason: "stream tenant mismatch"}, nil
 	}
 
 	// Delegate to local clip creation — convert plain fields to optional pointers
@@ -522,6 +535,9 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 	if req.GetInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
 	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
 	if s.dvrCreator == nil {
 		return &pb.RemoteDVRResponse{Accepted: false, Reason: "DVR not available"}, nil
 	}
@@ -537,6 +553,9 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 	ss := sm.GetStreamState(req.GetInternalName())
 	if ss == nil || ss.Status != "live" {
 		return &pb.RemoteDVRResponse{Accepted: false, Reason: "stream not live on origin"}, nil
+	}
+	if ss.TenantID != "" && ss.TenantID != req.GetTenantId() {
+		return &pb.RemoteDVRResponse{Accepted: false, Reason: "stream tenant mismatch"}, nil
 	}
 
 	// Delegate to local DVR start

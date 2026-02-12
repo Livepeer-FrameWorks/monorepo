@@ -21,7 +21,7 @@ func IsSameBucket(local, remote ClusterS3Config) bool {
 	if local.S3Bucket == "" || remote.S3Bucket == "" {
 		return false
 	}
-	return local.S3Bucket == remote.S3Bucket &&
+	return strings.EqualFold(strings.TrimSpace(local.S3Bucket), strings.TrimSpace(remote.S3Bucket)) &&
 		normalizeEndpoint(local.S3Endpoint) == normalizeEndpoint(remote.S3Endpoint)
 }
 
