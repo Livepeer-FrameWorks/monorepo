@@ -1087,7 +1087,7 @@ func (s *FederationServer) revalidateForwardedArtifact(ctx context.Context, req 
 
 	artifactType, err := artifactTypeForForwardCommand(req.GetCommand())
 	if err != nil {
-		return err
+		return nil
 	}
 
 	var dbStreamID sql.NullString
