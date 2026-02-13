@@ -31,8 +31,10 @@ import (
 	"frameworks/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
 	goredis "github.com/redis/go-redis/v9"
+	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -567,6 +569,7 @@ func main() {
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
 	control.SetDecklogClient(decklogClient)
 	control.SetDVRStopRegistry(foghornServer)
+	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)
@@ -597,11 +600,12 @@ func main() {
 	// QM derives the advertise address from the node's mesh identity (wireguard_ip > internal_ip).
 	var relayServer *foghorngrpc.RelayServer
 	if redisStore != nil && qmClient != nil {
+		grpcPort := config.GetEnvInt("FOGHORN_GRPC_PORT", controlPortFromBindAddr(controlAddr, 18019))
 		bsReq := &pb.BootstrapServiceRequest{
 			Type:      "foghorn",
 			Version:   version.Version,
 			Protocol:  "grpc",
-			Port:      int32(config.GetEnvInt("FOGHORN_GRPC_PORT", 18019)),
+			Port:      int32(grpcPort),
 			ClusterId: &foghornCfg.ClusterID,
 		}
 		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
@@ -641,7 +645,6 @@ func main() {
 	}
 
 	// Start unified gRPC server with both Helmsman control and Foghorn control plane services
-	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
 	registrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
 	if federationServer != nil {
 		registrars = append(registrars, federationServer.RegisterServices)
@@ -649,14 +652,16 @@ func main() {
 	if relayServer != nil {
 		registrars = append(registrars, relayServer.RegisterServices)
 	}
-	if _, err := control.StartGRPCServer(control.GRPCServerConfig{
+	grpcServer, err := control.StartGRPCServer(control.GRPCServerConfig{
 		Addr:         controlAddr,
 		Logger:       logger,
 		ServiceToken: serviceToken,
 		Registrars:   registrars,
-	}); err != nil {
+	})
+	if err != nil {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")
 	}
+	defer grpcServer.GracefulStop()
 
 	// Start cert refresh loop (re-pushes ConfigSeed when Navigator renews wildcard certs)
 	certRefreshCtx, certRefreshCancel := context.WithCancel(context.Background())
@@ -739,6 +744,27 @@ func main() {
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	control.CleanupLocalConnOwners(shutdownCtx)
+}
+
+func controlPortFromBindAddr(bindAddr string, fallback int) int {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
+	if err != nil {
+		if strings.HasPrefix(bindAddr, ":") {
+			port = strings.TrimPrefix(bindAddr, ":")
+		} else {
+			return fallback
+		}
+	}
+	_ = host
+	parsed, err := strconv.Atoi(port)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func reconnectQuartermaster(

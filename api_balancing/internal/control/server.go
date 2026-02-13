@@ -553,9 +553,13 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					state.DefaultManager().MarkNodeDisconnected(canonicalNodeID)
 				}
 				if rs := GetRedisStore(); rs != nil {
-					_ = rs.DeleteConnOwner(context.Background(), nodeID)
+					if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
+						registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner in Redis")
+					}
 					if canonicalNodeID != "" && canonicalNodeID != nodeID {
-						_ = rs.DeleteConnOwner(context.Background(), canonicalNodeID)
+						if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), canonicalNodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
+							registry.log.WithError(err).WithField("node_id", canonicalNodeID).Warn("Failed to clean conn owner in Redis")
+						}
 					}
 				}
 			}
@@ -892,14 +896,51 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			state.DefaultManager().MarkNodeDisconnected(canonicalID)
 		}
 		if rs := GetRedisStore(); rs != nil {
-			_ = rs.DeleteConnOwner(context.Background(), nodeID)
+			if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
+				registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner in Redis")
+			}
 			if canonicalID != "" && canonicalID != nodeID {
-				_ = rs.DeleteConnOwner(context.Background(), canonicalID)
+				if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), canonicalID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
+					registry.log.WithError(err).WithField("node_id", canonicalID).Warn("Failed to clean conn owner in Redis")
+				}
 			}
 		}
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
 	return nil
+}
+
+// CleanupLocalConnOwners removes Redis conn_owner keys for currently connected nodes,
+// but only when the key still belongs to this instance.
+func CleanupLocalConnOwners(ctx context.Context) {
+	rs := GetRedisStore()
+	if rs == nil {
+		return
+	}
+
+	instanceID := GetInstanceID()
+	advertiseAddr := GetAdvertiseAddr()
+	if instanceID == "" || advertiseAddr == "" {
+		return
+	}
+
+	nodeIDs := make([]string, 0)
+	registry.mu.RLock()
+	for nodeID := range registry.conns {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	registry.mu.RUnlock()
+
+	for _, nodeID := range nodeIDs {
+		deleted, err := rs.DeleteConnOwnerIfMatch(ctx, nodeID, instanceID, advertiseAddr)
+		if err != nil {
+			registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner during shutdown")
+			continue
+		}
+		if deleted {
+			registry.log.WithField("node_id", nodeID).Info("Cleaned conn owner during shutdown")
+		}
+	}
 }
 
 func SendLocalClipPull(nodeID string, req *pb.ClipPullRequest) error {
