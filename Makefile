@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-cli \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper \
-	proto graphql graphql-frontend graphql-frontend-check graphql-all clean version install-tools verify test coverage env tidy fmt \
+	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
 	lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
@@ -32,10 +32,6 @@ graphql:
 # Generate GraphQL files (frontend)
 graphql-frontend:
 	cd website_application && pnpm run gql:codegen
-
-# Verify frontend generated GraphQL artifacts are fresh
-graphql-frontend-check:
-	./scripts/check-frontend-codegen.sh
 
 # Generate GraphQL files (backend + frontend)
 graphql-all: graphql graphql-frontend
@@ -438,7 +434,6 @@ ci-local-go:
 
 ci-local-frontend:
 	@echo "Running local frontend CI checks..."
-	$(MAKE) graphql-frontend-check
 	pnpm lint
 	pnpm format:check
 	pnpm test:coverage

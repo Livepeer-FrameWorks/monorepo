@@ -436,6 +436,7 @@
     const maybeStatusIcon = (item.result as Record<string, unknown>).statusIcon;
     return typeof maybeStatusIcon === "string" ? maybeStatusIcon : null;
   }
+
   function stopPropagation(event: Event) {
     event.stopPropagation();
   }
