@@ -268,6 +268,14 @@ func TestForward_DialError(t *testing.T) {
 	if !strings.Contains(err.Error(), "connection refused") {
 		t.Fatalf("expected dial error, got %v", err)
 	}
+
+	owner, ownerErr := store.GetConnOwner(ctx, "node-1")
+	if ownerErr != nil {
+		t.Fatalf("GetConnOwner: %v", ownerErr)
+	}
+	if owner.InstanceID != "" {
+		t.Fatalf("expected stale owner entry to be cleared after dial failure, got %+v", owner)
+	}
 }
 
 // --- Send* with relay ---
@@ -328,6 +336,28 @@ func TestSendWithRelay_NoRelay(t *testing.T) {
 	err := SendDVRStop("node-1", &pb.DVRStopRequest{})
 	if !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("expected ErrNotConnected when relay is nil, got %v", err)
+	}
+}
+
+func TestSendWithRelay_ReturnsLocalAndRelayFailure(t *testing.T) {
+	ensureRegistry(t)
+
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	pool := &mockRelayPool{err: fmt.Errorf("dial timeout")}
+	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
+	setCommandRelay(t, r)
+
+	err := SendDVRStop("node-1", &pb.DVRStopRequest{})
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("expected ErrNotConnected wrapper, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "relay failed: relay: dial") {
+		t.Fatalf("expected relay failure details in error, got %v", err)
 	}
 }
 
