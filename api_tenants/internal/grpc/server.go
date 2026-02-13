@@ -80,6 +80,25 @@ func mapToStruct(m map[string]interface{}) *structpb.Struct {
 	return s
 }
 
+func buildAdvertiseAddr(host sql.NullString, port sql.NullInt32) (string, bool) {
+	if !host.Valid || !port.Valid {
+		return "", false
+	}
+
+	cleanHost := strings.TrimSpace(host.String)
+	if cleanHost == "" {
+		return "", false
+	}
+	if strings.HasPrefix(cleanHost, "[") && strings.HasSuffix(cleanHost, "]") {
+		cleanHost = strings.TrimPrefix(strings.TrimSuffix(cleanHost, "]"), "[")
+	}
+	if port.Int32 <= 0 || port.Int32 > 65535 {
+		return "", false
+	}
+
+	return net.JoinHostPort(cleanHost, fmt.Sprintf("%d", port.Int32)), true
+}
+
 // ValidateTenant validates a tenant and returns its features/limits
 // Billing info is fetched via Purser gRPC (no cross-service DB access)
 func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.ValidateTenantRequest) (*pb.ValidateTenantResponse, error) {
@@ -363,19 +382,22 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 	}
 
 	// Resolve Foghorn gRPC address via foghorn_cluster_assignments (best-effort)
-	var foghornAddr sql.NullString
+	var foghornHost sql.NullString
+	var foghornPort sql.NullInt32
 	_ = s.db.QueryRowContext(ctx, `
-		SELECT si.advertise_host || ':' || si.port
+		SELECT si.advertise_host, si.port
 		FROM quartermaster.foghorn_cluster_assignments fca
 		JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
 		WHERE fca.cluster_id = $1
 		  AND fca.is_active = true
 		  AND si.status = 'running'
+		  AND COALESCE(si.advertise_host, '') <> ''
+		  AND COALESCE(si.port, 0) > 0
 		ORDER BY si.updated_at DESC, si.id ASC
 		LIMIT 1
-	`, primaryClusterID).Scan(&foghornAddr)
-	if foghornAddr.Valid {
-		resp.FoghornGrpcAddr = &foghornAddr.String
+	`, primaryClusterID).Scan(&foghornHost, &foghornPort)
+	if addr, ok := buildAdvertiseAddr(foghornHost, foghornPort); ok {
+		resp.FoghornGrpcAddr = &addr
 	}
 
 	slug := dns.SanitizeLabel(resp.ClusterId)
@@ -400,19 +422,22 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 			}
 
 			// Resolve official cluster's Foghorn address via assignments
-			var offFoghornAddr sql.NullString
+			var offFoghornHost sql.NullString
+			var offFoghornPort sql.NullInt32
 			_ = s.db.QueryRowContext(ctx, `
-				SELECT si.advertise_host || ':' || si.port
+				SELECT si.advertise_host, si.port
 				FROM quartermaster.foghorn_cluster_assignments fca
 				JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
 				WHERE fca.cluster_id = $1
 				  AND fca.is_active = true
 				  AND si.status = 'running'
+				  AND COALESCE(si.advertise_host, '') <> ''
+				  AND COALESCE(si.port, 0) > 0
 				ORDER BY si.updated_at DESC, si.id ASC
 				LIMIT 1
-			`, officialClusterID.String).Scan(&offFoghornAddr)
-			if offFoghornAddr.Valid {
-				resp.OfficialFoghornGrpcAddr = &offFoghornAddr.String
+			`, officialClusterID.String).Scan(&offFoghornHost, &offFoghornPort)
+			if addr, ok := buildAdvertiseAddr(offFoghornHost, offFoghornPort); ok {
+				resp.OfficialFoghornGrpcAddr = &addr
 			}
 		}
 	}
@@ -423,16 +448,31 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		SELECT ic.cluster_id, ic.cluster_name, ic.cluster_type, ic.base_url,
 		       COALESCE(ic.s3_bucket, ''), COALESCE(ic.s3_endpoint, ''), COALESCE(ic.s3_region, ''),
 		       COALESCE(
-		           (SELECT si.advertise_host || ':' || si.port
+		           (SELECT si.advertise_host
 		            FROM quartermaster.foghorn_cluster_assignments fca
 		            JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
 		            WHERE fca.cluster_id = ic.cluster_id
 		              AND fca.is_active = TRUE
 		              AND si.status = 'running'
-		            ORDER BY si.updated_at DESC
+		              AND COALESCE(si.advertise_host, '') <> ''
+		              AND COALESCE(si.port, 0) > 0
+		            ORDER BY si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           ''
-		       ) AS foghorn_grpc_addr
+		       ) AS foghorn_advertise_host,
+		       COALESCE(
+		           (SELECT si.port
+		            FROM quartermaster.foghorn_cluster_assignments fca
+		            JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+		            WHERE fca.cluster_id = ic.cluster_id
+		              AND fca.is_active = TRUE
+		              AND si.status = 'running'
+		              AND COALESCE(si.advertise_host, '') <> ''
+		              AND COALESCE(si.port, 0) > 0
+		            ORDER BY si.updated_at DESC, si.id ASC
+		            LIMIT 1),
+		           0
+		       ) AS foghorn_port
 		FROM quartermaster.tenant_cluster_access tca
 		JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
 		WHERE tca.tenant_id = $1
@@ -447,10 +487,13 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 			officialID = officialClusterID.String
 		}
 		for peerRows.Next() {
-			var cID, cName, cType, cBaseURL, s3Bucket, s3Endpoint, s3Region, foghornGrpcAddr string
-			if err := peerRows.Scan(&cID, &cName, &cType, &cBaseURL, &s3Bucket, &s3Endpoint, &s3Region, &foghornGrpcAddr); err != nil {
+			var cID, cName, cType, cBaseURL, s3Bucket, s3Endpoint, s3Region string
+			var foghornHost sql.NullString
+			var foghornPort sql.NullInt32
+			if err := peerRows.Scan(&cID, &cName, &cType, &cBaseURL, &s3Bucket, &s3Endpoint, &s3Region, &foghornHost, &foghornPort); err != nil {
 				continue
 			}
+			foghornGrpcAddr, _ := buildAdvertiseAddr(foghornHost, foghornPort)
 			var role string
 			switch cID {
 			case primaryClusterID:
@@ -801,19 +844,27 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 	}
 
 	var resp pb.NodeOwnerResponse
-	var ownerTenantID, tenantName, foghornAddr sql.NullString
+	var ownerTenantID, tenantName, foghornHost sql.NullString
+	var foghornPort sql.NullInt32
 	err := s.db.QueryRowContext(ctx, `
 		SELECT n.node_id, n.cluster_id, c.cluster_name, c.owner_tenant_id, t.name,
-			(SELECT si.advertise_host || ':' || si.port
+			(SELECT si.advertise_host
 			 FROM quartermaster.foghorn_cluster_assignments fca
 			 JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
 			 WHERE fca.cluster_id = n.cluster_id AND fca.is_active = true AND si.status = 'running'
+			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
+			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1),
+			(SELECT si.port
+			 FROM quartermaster.foghorn_cluster_assignments fca
+			 JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+			 WHERE fca.cluster_id = n.cluster_id AND fca.is_active = true AND si.status = 'running'
+			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
 			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1)
 		FROM quartermaster.infrastructure_nodes n
 		JOIN quartermaster.infrastructure_clusters c ON n.cluster_id = c.cluster_id
 		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
 		WHERE n.node_id = $1
-	`, nodeID).Scan(&resp.NodeId, &resp.ClusterId, &resp.ClusterName, &ownerTenantID, &tenantName, &foghornAddr)
+	`, nodeID).Scan(&resp.NodeId, &resp.ClusterId, &resp.ClusterName, &ownerTenantID, &tenantName, &foghornHost, &foghornPort)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Node not found")
@@ -833,8 +884,8 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 	if tenantName.Valid {
 		resp.TenantName = &tenantName.String
 	}
-	if foghornAddr.Valid {
-		resp.FoghornGrpcAddr = &foghornAddr.String
+	if addr, ok := buildAdvertiseAddr(foghornHost, foghornPort); ok {
+		resp.FoghornGrpcAddr = &addr
 	}
 
 	return &resp, nil
