@@ -311,33 +311,70 @@ func GetAdvertiseAddr() string {
 }
 
 func (r *CommandRelay) forward(ctx context.Context, req *pb.ForwardCommandRequest) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("relay: not configured")
+	}
+	commandType := RelayCommandType(req)
+	requestID := RelayRequestID(req)
+	log := r.logger.WithFields(logging.Fields{
+		"target_node_id":  req.GetTargetNodeId(),
+		"target_instance": "",
+		"command_type":    commandType,
+		"request_id":      requestID,
+	})
+	incRelayForward(commandType, "attempt")
+
 	owner, err := r.store.GetConnOwner(ctx, req.TargetNodeId)
-	if err != nil || owner.InstanceID == "" {
+	if err != nil {
+		incRelayForward(commandType, "owner_lookup_error")
+		return fmt.Errorf("relay: lookup owner for node %s: %w", req.TargetNodeId, err)
+	}
+	if owner.InstanceID == "" {
+		incRelayForward(commandType, "owner_missing")
 		return ErrNotConnected
 	}
+	log = log.WithField("target_instance", owner.InstanceID)
 	if owner.InstanceID == r.instanceID {
+		incRelayForward(commandType, "owner_is_self")
 		return ErrNotConnected
 	}
 	if owner.GRPCAddr == "" {
+		incRelayForward(commandType, "owner_missing_addr")
 		return fmt.Errorf("relay: no address for instance %s", owner.InstanceID)
 	}
 	evictStale := func() {
 		_, _ = r.store.DeleteConnOwnerIfMatch(ctx, req.TargetNodeId, owner.InstanceID, owner.GRPCAddr)
 	}
+	if r.pool == nil {
+		incRelayForward(commandType, "pool_unavailable")
+		return fmt.Errorf("relay: no client pool configured")
+	}
 	client, err := r.pool.GetOrCreate(owner.InstanceID, owner.GRPCAddr)
 	if err != nil {
 		evictStale()
+		incRelayForward(commandType, "dial_error")
 		return fmt.Errorf("relay: dial %s: %w", owner.GRPCAddr, err)
 	}
+	ctx = metadata.AppendToOutgoingContext(ctx,
+		"x-foghorn-instance-id", r.instanceID,
+		"x-relay-target-node-id", req.GetTargetNodeId(),
+		"x-relay-command-type", commandType,
+		"x-relay-request-id", requestID,
+	)
 	resp, err := client.Relay().ForwardCommand(ctx, req)
 	if err != nil {
 		evictStale()
+		incRelayForward(commandType, "rpc_error")
+		log.WithError(err).Warn("Relay forward RPC failed")
 		return fmt.Errorf("relay: forward to %s: %w", owner.InstanceID, err)
 	}
 	if !resp.Delivered {
 		evictStale()
+		incRelayForward(commandType, "peer_rejected")
+		log.WithField("peer_error", resp.Error).Warn("Relay forward rejected by peer")
 		return fmt.Errorf("relay: peer %s rejected: %s", owner.InstanceID, resp.Error)
 	}
+	incRelayForward(commandType, "delivered")
 	return nil
 }
 
@@ -349,6 +386,56 @@ func relayFailure(localErr, relayErr error) error {
 		return relayErr
 	}
 	return fmt.Errorf("%w (relay failed: %w)", localErr, relayErr)
+}
+
+func RelayCommandType(req *pb.ForwardCommandRequest) string {
+	switch req.GetCommand().(type) {
+	case *pb.ForwardCommandRequest_ConfigSeed:
+		return "config_seed"
+	case *pb.ForwardCommandRequest_ClipPull:
+		return "clip_pull"
+	case *pb.ForwardCommandRequest_DvrStart:
+		return "dvr_start"
+	case *pb.ForwardCommandRequest_DvrStop:
+		return "dvr_stop"
+	case *pb.ForwardCommandRequest_ClipDelete:
+		return "clip_delete"
+	case *pb.ForwardCommandRequest_DvrDelete:
+		return "dvr_delete"
+	case *pb.ForwardCommandRequest_VodDelete:
+		return "vod_delete"
+	case *pb.ForwardCommandRequest_Defrost:
+		return "defrost"
+	case *pb.ForwardCommandRequest_DtshSync:
+		return "dtsh_sync"
+	case *pb.ForwardCommandRequest_StopSessions:
+		return "stop_sessions"
+	default:
+		return "unknown"
+	}
+}
+
+func RelayRequestID(req *pb.ForwardCommandRequest) string {
+	switch cmd := req.GetCommand().(type) {
+	case *pb.ForwardCommandRequest_ClipPull:
+		return cmd.ClipPull.GetRequestId()
+	case *pb.ForwardCommandRequest_DvrStart:
+		return cmd.DvrStart.GetRequestId()
+	case *pb.ForwardCommandRequest_DvrStop:
+		return cmd.DvrStop.GetRequestId()
+	case *pb.ForwardCommandRequest_ClipDelete:
+		return cmd.ClipDelete.GetRequestId()
+	case *pb.ForwardCommandRequest_DvrDelete:
+		return cmd.DvrDelete.GetRequestId()
+	case *pb.ForwardCommandRequest_VodDelete:
+		return cmd.VodDelete.GetRequestId()
+	case *pb.ForwardCommandRequest_Defrost:
+		return cmd.Defrost.GetRequestId()
+	case *pb.ForwardCommandRequest_DtshSync:
+		return cmd.DtshSync.GetRequestId()
+	default:
+		return ""
+	}
 }
 
 // SetDB sets the database connection for clip operations
@@ -2253,16 +2340,17 @@ func SendLocalConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 
 // SendConfigSeed sends a ConfigSeed to the given node, relaying via HA if needed.
 func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
-	if err := SendLocalConfigSeed(nodeID, seed); !shouldRelay(nodeID, err) {
+	err := SendLocalConfigSeed(nodeID, seed)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil || seed == nil {
 		return ErrNotConnected
 	}
-	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
-	})
+	}))
 }
 
 func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
@@ -2286,7 +2374,8 @@ func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) er
 // PushOperationalMode sends a ConfigSeed with the specified operational mode to the node,
 // relaying via HA if needed.
 func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
-	if err := SendLocalPushOperationalMode(nodeID, mode); !shouldRelay(nodeID, err) {
+	err := SendLocalPushOperationalMode(nodeID, mode)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -2294,10 +2383,10 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 	}
 	// For relay: compose a full ConfigSeed (without peer addr, since we don't hold the conn)
 	seed := composeConfigSeed(nodeID, nil, "", mode)
-	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
-	})
+	}))
 }
 
 // processModeChangeRequest handles an upstream mode change request from Helmsman.
@@ -2799,16 +2888,17 @@ func SendLocalDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
 
 // SendDefrostRequest sends a DefrostRequest to the given node, relaying via HA if needed.
 func SendDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
-	if err := SendLocalDefrostRequest(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalDefrostRequest(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_Defrost{Defrost: req},
-	})
+	}))
 }
 
 func SendLocalDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
@@ -2827,16 +2917,17 @@ func SendLocalDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
 
 // SendDtshSyncRequest sends a DtshSyncRequest to the given node, relaying via HA if needed.
 func SendDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
-	if err := SendLocalDtshSyncRequest(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalDtshSyncRequest(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DtshSync{DtshSync: req},
-	})
+	}))
 }
 
 func SendLocalStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
@@ -2855,16 +2946,17 @@ func SendLocalStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
 
 // SendStopSessions sends a StopSessionsRequest to the given node, relaying via HA if needed.
 func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
-	if err := SendLocalStopSessions(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalStopSessions(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_StopSessions{StopSessions: req},
-	})
+	}))
 }
 
 // TriggerDtshSync is called when .dtsh appeared after the main asset was already synced

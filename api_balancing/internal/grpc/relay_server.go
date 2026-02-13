@@ -9,6 +9,8 @@ import (
 
 	grpclib "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -37,6 +39,23 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 		return nil, status.Error(codes.InvalidArgument, "target_node_id required")
 	}
 
+	logFields := logging.Fields{
+		"node_id":         req.TargetNodeId,
+		"command_type":    control.RelayCommandType(req),
+		"request_id":      control.RelayRequestID(req),
+		"source_instance": "",
+		"source_peer":     "",
+	}
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if vals := md.Get("x-foghorn-instance-id"); len(vals) > 0 {
+			logFields["source_instance"] = vals[0]
+		}
+	}
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		logFields["source_peer"] = p.Addr.String()
+	}
+	log := s.logger.WithFields(logFields)
+
 	var err error
 	switch cmd := req.Command.(type) {
 	case *pb.ForwardCommandRequest_ConfigSeed:
@@ -64,8 +83,9 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 	}
 
 	if err != nil {
-		s.logger.WithError(err).WithField("node_id", req.TargetNodeId).Warn("Relay: local send failed")
+		log.WithError(err).Warn("Relay local dispatch failed")
 		return &pb.ForwardCommandResponse{Delivered: false, Error: err.Error()}, nil
 	}
+	log.Debug("Relay local dispatch delivered")
 	return &pb.ForwardCommandResponse{Delivered: true}, nil
 }
