@@ -100,6 +100,42 @@ func TestRecordAndAverage_SeparateNodes(t *testing.T) {
 	}
 }
 
+func TestEnrichFederationEventGeo_UsesPeerClusterForRemoteGeo(t *testing.T) {
+	pm := &PeerManager{
+		clusterID:     "local-cluster",
+		ownerTenantID: "tenant-a",
+		logger:        testLogger(),
+		peers:         map[string]*peerState{"peer-1": {lat: 37.7749, lon: -122.4194}},
+		selfGeoFunc:   func() (float64, float64, string) { return 47.6062, -122.3321, "Seattle" },
+		streamPeers:   make(map[string]map[string]bool),
+		metricHistory: make(map[string][]metricSample),
+	}
+
+	peerCluster := "peer-1"
+	data := &pb.FederationEventData{
+		EventType:   pb.FederationEventType_PEER_CONNECTED,
+		PeerCluster: &peerCluster,
+	}
+
+	pm.enrichFederationEventGeo(data)
+
+	if data.GetTenantId() != "tenant-a" {
+		t.Fatalf("tenant_id = %q, want tenant-a", data.GetTenantId())
+	}
+	if data.GetLocalCluster() != "local-cluster" {
+		t.Fatalf("local_cluster = %q, want local-cluster", data.GetLocalCluster())
+	}
+	if data.GetRemoteCluster() != peerCluster {
+		t.Fatalf("remote_cluster = %q, want %q", data.GetRemoteCluster(), peerCluster)
+	}
+	if data.LocalLat == nil || data.LocalLon == nil {
+		t.Fatal("expected local geo to be enriched")
+	}
+	if data.RemoteLat == nil || data.RemoteLon == nil {
+		t.Fatal("expected remote geo to be enriched from peer cache")
+	}
+}
+
 // newTestPeerManager creates a PeerManager suitable for unit tests.
 // It does not start the background run() goroutine.
 func newTestPeerManager(t *testing.T, clusterID string, cache *RemoteEdgeCache, isLeader bool) *PeerManager {

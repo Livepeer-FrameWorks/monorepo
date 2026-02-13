@@ -753,6 +753,64 @@ func TestCountAsync(t *testing.T) {
 	})
 }
 
+func TestGetFederationEvents_IncludesGeoCoordinates(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	server := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("periscope-query-test")}
+
+	start := time.Now().Add(-time.Hour).UTC()
+	end := time.Now().UTC()
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
+
+	mock.ExpectQuery(`SELECT count\(\) FROM periscope.federation_events`).
+		WithArgs("tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(1)))
+
+	mock.ExpectQuery("FROM periscope.federation_events").
+		WithArgs("tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(), int32(100)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"timestamp", "event_type", "local_cluster", "remote_cluster",
+			"stream_name", "stream_id", "source_node", "dest_node", "dtsc_url",
+			"latency_ms", "time_to_live_ms", "failure_reason",
+			"queried_clusters", "responding_clusters", "total_candidates",
+			"best_remote_score", "peer_cluster", "role", "reason",
+			"local_lat", "local_lon", "remote_lat", "remote_lon",
+		}).AddRow(
+			end, "origin_pull_completed", "cluster-a", "cluster-b",
+			"stream-1", "11111111-1111-1111-1111-111111111111", "src-node", "dest-node", "https://example.com/live",
+			12.5, 345.0, "",
+			2, 1, 4,
+			99, "cluster-b", "peer_manager", "test",
+			47.6062, -122.3321, 37.7749, -122.4194,
+		))
+
+	resp, err := server.GetFederationEvents(ctx, &pb.GetFederationEventsRequest{
+		TimeRange: &pb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	})
+	if err != nil {
+		t.Fatalf("GetFederationEvents returned error: %v", err)
+	}
+	if len(resp.GetEvents()) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(resp.GetEvents()))
+	}
+
+	evt := resp.GetEvents()[0]
+	if evt.LocalLatitude == nil || evt.RemoteLatitude == nil {
+		t.Fatal("expected geo coordinates to be populated")
+	}
+	if *evt.LocalLatitude != 47.6062 || *evt.RemoteLongitude != -122.4194 {
+		t.Fatalf("unexpected geo values: local=%v,%v remote=%v,%v", evt.GetLocalLatitude(), evt.GetLocalLongitude(), evt.GetRemoteLatitude(), evt.GetRemoteLongitude())
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
 func TestJoinStrings(t *testing.T) {
 	cases := []struct {
 		name     string
