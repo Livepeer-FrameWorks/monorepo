@@ -517,6 +517,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		switch x := msg.GetPayload().(type) {
 		case *pb.ControlMessage_Register:
 			nodeID = x.Register.GetNodeId()
+			canonicalNodeID := nodeID
 			if nodeID == "" {
 				p, _ := peer.FromContext(stream.Context())
 				registry.log.WithField("peer", func() string {
@@ -538,6 +539,27 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			// Mark node healthy in unified state (baseURL unknown at register)
 			state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 
+			cleanup := func() {
+				registry.mu.Lock()
+				delete(registry.conns, nodeID)
+				if canonicalNodeID != "" && canonicalNodeID != nodeID {
+					if c, ok := registry.conns[canonicalNodeID]; ok && c.stream == stream {
+						delete(registry.conns, canonicalNodeID)
+					}
+				}
+				registry.mu.Unlock()
+				state.DefaultManager().MarkNodeDisconnected(nodeID)
+				if canonicalNodeID != "" && canonicalNodeID != nodeID {
+					state.DefaultManager().MarkNodeDisconnected(canonicalNodeID)
+				}
+				if rs := GetRedisStore(); rs != nil {
+					_ = rs.DeleteConnOwner(context.Background(), nodeID)
+					if canonicalNodeID != "" && canonicalNodeID != nodeID {
+						_ = rs.DeleteConnOwner(context.Background(), canonicalNodeID)
+					}
+				}
+			}
+
 			// HA: register connection ownership in Redis so peer instances can relay commands
 			if rs := GetRedisStore(); rs != nil {
 				if err := rs.SetConnOwner(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
@@ -545,20 +567,9 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				}
 			}
 
-			cleanup := func() {
-				registry.mu.Lock()
-				delete(registry.conns, nodeID)
-				registry.mu.Unlock()
-				state.DefaultManager().MarkNodeDisconnected(nodeID)
-				if rs := GetRedisStore(); rs != nil {
-					_ = rs.DeleteConnOwner(context.Background(), nodeID)
-				}
-			}
-
 			// Fingerprint-based tenant resolution (pre-provisioned mappings only; no creation here)
 			tenantID := ""
 			clusterID := ""
-			canonicalNodeID := nodeID
 			{
 				// Build resolver request
 				host := ""
@@ -679,8 +690,15 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				registry.mu.Lock()
 				if c, ok := registry.conns[nodeID]; ok {
 					c.canonicalID = canonicalNodeID
+					registry.conns[canonicalNodeID] = c
 				}
 				registry.mu.Unlock()
+
+				if rs := GetRedisStore(); rs != nil {
+					if err := rs.SetConnOwner(context.Background(), canonicalNodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
+						registry.log.WithError(err).WithField("node_id", canonicalNodeID).Warn("Failed to set canonical conn owner in Redis")
+					}
+				}
 			}
 
 			// Determine operational mode: DB-persisted wins over Helmsman's request
@@ -781,23 +799,36 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go handleArtifactDeleted(x.ArtifactDeleted, nodeID, registry.log)
 		case *pb.ControlMessage_Heartbeat:
 			if nodeID != "" {
+				canonicalNodeID := nodeID
 				registry.mu.Lock()
 				if c := registry.conns[nodeID]; c != nil {
 					c.last = time.Now()
+					if c.canonicalID != "" {
+						canonicalNodeID = c.canonicalID
+					}
 				}
 				registry.mu.Unlock()
 				// Refresh node health/last update
 				state.DefaultManager().TouchNode(nodeID, true)
+				if canonicalNodeID != nodeID {
+					state.DefaultManager().TouchNode(canonicalNodeID, true)
+				}
 				// HA: refresh connection ownership TTL
 				if rs := GetRedisStore(); rs != nil {
-					if err := rs.RefreshConnOwner(context.Background(), nodeID); err != nil {
-						if errors.Is(err, state.ErrConnOwnerMissing) {
-							if setErr := rs.SetConnOwner(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); setErr != nil {
-								registry.log.WithError(setErr).WithField("node_id", nodeID).Warn("Failed to restore conn owner in Redis")
+					refreshOrRestore := func(nid string) {
+						if err := rs.RefreshConnOwner(context.Background(), nid); err != nil {
+							if errors.Is(err, state.ErrConnOwnerMissing) {
+								if setErr := rs.SetConnOwner(context.Background(), nid, GetInstanceID(), GetAdvertiseAddr()); setErr != nil {
+									registry.log.WithError(setErr).WithField("node_id", nid).Warn("Failed to restore conn owner in Redis")
+								}
+							} else {
+								registry.log.WithError(err).WithField("node_id", nid).Warn("Failed to refresh conn owner TTL")
 							}
-						} else {
-							registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to refresh conn owner TTL")
 						}
+					}
+					refreshOrRestore(nodeID)
+					if canonicalNodeID != nodeID {
+						refreshOrRestore(canonicalNodeID)
 					}
 				}
 			}
@@ -844,11 +875,27 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 	}
 	if nodeID != "" {
 		registry.mu.Lock()
+		c := registry.conns[nodeID]
+		canonicalID := ""
+		if c != nil {
+			canonicalID = c.canonicalID
+		}
 		delete(registry.conns, nodeID)
+		if canonicalID != "" && canonicalID != nodeID {
+			if cc, ok := registry.conns[canonicalID]; ok && cc.stream == stream {
+				delete(registry.conns, canonicalID)
+			}
+		}
 		registry.mu.Unlock()
 		state.DefaultManager().MarkNodeDisconnected(nodeID)
+		if canonicalID != "" && canonicalID != nodeID {
+			state.DefaultManager().MarkNodeDisconnected(canonicalID)
+		}
 		if rs := GetRedisStore(); rs != nil {
 			_ = rs.DeleteConnOwner(context.Background(), nodeID)
+			if canonicalID != "" && canonicalID != nodeID {
+				_ = rs.DeleteConnOwner(context.Background(), canonicalID)
+			}
 		}
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
