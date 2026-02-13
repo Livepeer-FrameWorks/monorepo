@@ -1123,6 +1123,93 @@ func TestViewerConnectionDuplicateEventSkipped(t *testing.T) {
 	}
 }
 
+func TestViewerConnectionClusterContextFallback(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+
+	t.Run("cluster inherits origin when missing", func(t *testing.T) {
+		clusterFromOrigin := "origin-cluster-a"
+		data := mustMistTriggerData(t, &pb.MistTrigger{
+			StreamId:        &streamID,
+			OriginClusterId: &clusterFromOrigin,
+			TriggerPayload: &pb.MistTrigger_ViewerConnect{
+				ViewerConnect: &pb.ViewerConnectTrigger{
+					StreamName: "live+demo",
+					SessionId:  "sess-origin",
+					Connector:  "hls",
+					Host:       "1.2.3.4",
+				},
+			},
+		})
+		event := kafka.AnalyticsEvent{
+			EventID:   uuid.NewString(),
+			EventType: "viewer_connect",
+			Timestamp: time.Now(),
+			Source:    "decklog",
+			TenantID:  tenantID,
+			Data:      data,
+		}
+
+		if err := handler.HandleAnalyticsEvent(event); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		batch := conn.batches["viewer_connection_events"]
+		if batch == nil || len(batch.rows) == 0 {
+			t.Fatalf("expected viewer_connection_events row, got %#v", batch)
+		}
+		row := batch.rows[len(batch.rows)-1]
+		if row[9] != clusterFromOrigin {
+			t.Fatalf("expected cluster_id fallback %q, got %#v", clusterFromOrigin, row[9])
+		}
+		if row[10] != clusterFromOrigin {
+			t.Fatalf("expected origin_cluster_id %q, got %#v", clusterFromOrigin, row[10])
+		}
+	})
+
+	t.Run("origin inherits cluster when missing", func(t *testing.T) {
+		clusterID := "local-cluster-b"
+		data := mustMistTriggerData(t, &pb.MistTrigger{
+			StreamId:  &streamID,
+			ClusterId: &clusterID,
+			TriggerPayload: &pb.MistTrigger_ViewerConnect{
+				ViewerConnect: &pb.ViewerConnectTrigger{
+					StreamName: "live+demo",
+					SessionId:  "sess-cluster",
+					Connector:  "webrtc",
+					Host:       "4.3.2.1",
+				},
+			},
+		})
+		event := kafka.AnalyticsEvent{
+			EventID:   uuid.NewString(),
+			EventType: "viewer_connect",
+			Timestamp: time.Now(),
+			Source:    "decklog",
+			TenantID:  tenantID,
+			Data:      data,
+		}
+
+		if err := handler.HandleAnalyticsEvent(event); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		batch := conn.batches["viewer_connection_events"]
+		if batch == nil || len(batch.rows) == 0 {
+			t.Fatalf("expected viewer_connection_events row, got %#v", batch)
+		}
+		row := batch.rows[len(batch.rows)-1]
+		if row[9] != clusterID {
+			t.Fatalf("expected cluster_id %q, got %#v", clusterID, row[9])
+		}
+		if row[10] != clusterID {
+			t.Fatalf("expected origin_cluster_id fallback %q, got %#v", clusterID, row[10])
+		}
+	})
+}
+
 func TestHandleAnalyticsEventUnknownTypeSkipped(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
