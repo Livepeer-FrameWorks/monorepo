@@ -446,6 +446,53 @@ func TestSendWithRelay_MultipleSendTypes(t *testing.T) {
 	}
 }
 
+func TestPushOperationalMode_MixedLocalAndRemoteOwnership(t *testing.T) {
+	ensureRegistry(t)
+
+	localStream := &fakeControlStream{}
+	registry.mu.Lock()
+	registry.conns["canonical-local"] = &conn{stream: localStream, peerAddr: "10.0.0.10:8080"}
+	registry.mu.Unlock()
+
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "canonical-remote", "peer-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	fakeRelay := &fakeFoghornRelayClient{resp: &pb.ForwardCommandResponse{Delivered: true}}
+	pool := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
+	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool))
+
+	if err := PushOperationalMode("canonical-local", pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING); err != nil {
+		t.Fatalf("PushOperationalMode local: %v", err)
+	}
+	if len(localStream.sent) != 1 {
+		t.Fatalf("expected one local control message, got %d", len(localStream.sent))
+	}
+	localSeed := localStream.sent[0].GetConfigSeed()
+	if localSeed == nil || localSeed.GetOperationalMode() != pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING {
+		t.Fatalf("expected local draining config seed, got %+v", localSeed)
+	}
+
+	if err := PushOperationalMode("canonical-remote", pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE); err != nil {
+		t.Fatalf("PushOperationalMode remote: %v", err)
+	}
+	if fakeRelay.last == nil {
+		t.Fatal("expected relayed command for remote owner")
+	}
+	remoteSeed := fakeRelay.last.GetConfigSeed()
+	if remoteSeed == nil {
+		t.Fatal("expected relayed config seed command")
+	}
+	if remoteSeed.GetNodeId() != "canonical-remote" {
+		t.Fatalf("expected remote seed node_id canonical-remote, got %q", remoteSeed.GetNodeId())
+	}
+	if remoteSeed.GetOperationalMode() != pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE {
+		t.Fatalf("expected maintenance mode relay, got %s", remoteSeed.GetOperationalMode())
+	}
+}
+
 func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 	ensureRegistry(t)
 
