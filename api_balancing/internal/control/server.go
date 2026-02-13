@@ -847,12 +847,11 @@ func SendLocalClipPull(nodeID string, req *pb.ClipPullRequest) error {
 
 // SendClipPull sends a ClipPullRequest to the given node, relaying via HA if needed.
 func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
-	err := SendLocalClipPull(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalClipPull(nodeID, req); !shouldRelay(nodeID, err) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -860,7 +859,7 @@ func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ClipPull{ClipPull: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -881,12 +880,11 @@ func SendLocalDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 
 // SendDVRStart sends a DVRStartRequest to the given node, relaying via HA if needed.
 func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
-	err := SendLocalDVRStart(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalDVRStart(nodeID, req); !shouldRelay(nodeID, err) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -894,7 +892,7 @@ func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrStart{DvrStart: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -915,12 +913,11 @@ func SendLocalDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 
 // SendDVRStop sends a DVRStopRequest to the given node, relaying via HA if needed.
 func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
-	err := SendLocalDVRStop(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalDVRStop(nodeID, req); !shouldRelay(nodeID, err) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -928,7 +925,7 @@ func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -949,12 +946,11 @@ func SendLocalClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 
 // SendClipDelete sends a ClipDeleteRequest to the given node, relaying via HA if needed.
 func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
-	err := SendLocalClipDelete(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalClipDelete(nodeID, req); !shouldRelay(nodeID, err) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -962,7 +958,7 @@ func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ClipDelete{ClipDelete: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -983,12 +979,11 @@ func SendLocalDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 
 // SendDVRDelete sends a DVRDeleteRequest to the given node, relaying via HA if needed.
 func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
-	err := SendLocalDVRDelete(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalDVRDelete(nodeID, req); !shouldRelay(nodeID, err) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -996,7 +991,7 @@ func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrDelete{DvrDelete: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -1017,12 +1012,11 @@ func SendLocalVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 
 // SendVodDelete sends a VodDeleteRequest to the given node, relaying via HA if needed.
 func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
-	err := SendLocalVodDelete(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalVodDelete(nodeID, req); !shouldRelay(nodeID, err) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1030,7 +1024,7 @@ func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_VodDelete{VodDelete: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -1251,6 +1245,23 @@ func allowInsecureControlGRPC() bool {
 // Helpers
 
 var ErrNotConnected = status.Error(codes.Unavailable, "node not connected")
+
+// shouldRelay reports whether a local send error warrants a relay attempt.
+// Beyond ErrNotConnected (node absent from registry), it also triggers relay
+// when stream.Send failed and the node was concurrently removed — covering
+// the race between a stream dying and handleHelmsmanStream cleaning up.
+func shouldRelay(nodeID string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNotConnected) {
+		return true
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	return c == nil
+}
 
 // handleClipProgress processes clip progress updates from Helmsman nodes
 func handleClipProgress(progress *pb.ClipProgress, nodeID string, logger logging.Logger) {
@@ -2124,7 +2135,7 @@ func SendLocalConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 
 // SendConfigSeed sends a ConfigSeed to the given node, relaying via HA if needed.
 func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
-	if err := SendLocalConfigSeed(nodeID, seed); !errors.Is(err, ErrNotConnected) {
+	if err := SendLocalConfigSeed(nodeID, seed); !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil || seed == nil {
@@ -2157,7 +2168,7 @@ func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) er
 // PushOperationalMode sends a ConfigSeed with the specified operational mode to the node,
 // relaying via HA if needed.
 func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
-	if err := SendLocalPushOperationalMode(nodeID, mode); !errors.Is(err, ErrNotConnected) {
+	if err := SendLocalPushOperationalMode(nodeID, mode); !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -2670,7 +2681,7 @@ func SendLocalDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
 
 // SendDefrostRequest sends a DefrostRequest to the given node, relaying via HA if needed.
 func SendDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
-	if err := SendLocalDefrostRequest(nodeID, req); !errors.Is(err, ErrNotConnected) {
+	if err := SendLocalDefrostRequest(nodeID, req); !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -2698,7 +2709,7 @@ func SendLocalDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
 
 // SendDtshSyncRequest sends a DtshSyncRequest to the given node, relaying via HA if needed.
 func SendDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
-	if err := SendLocalDtshSyncRequest(nodeID, req); !errors.Is(err, ErrNotConnected) {
+	if err := SendLocalDtshSyncRequest(nodeID, req); !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -2726,7 +2737,7 @@ func SendLocalStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
 
 // SendStopSessions sends a StopSessionsRequest to the given node, relaying via HA if needed.
 func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
-	if err := SendLocalStopSessions(nodeID, req); !errors.Is(err, ErrNotConnected) {
+	if err := SendLocalStopSessions(nodeID, req); !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
