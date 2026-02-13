@@ -779,12 +779,6 @@ func nilIfZeroFloat32(v float32) interface{} {
 	}
 	return v
 }
-func nilIfZeroFloat64(v float64) interface{} {
-	if v == 0 {
-		return nil
-	}
-	return v
-}
 func nilIfZeroBool(v bool) interface{} {
 	if !v {
 		return nil
@@ -2638,6 +2632,7 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 			source_node, dest_node, dtsc_url, latency_ms, time_to_live_ms, failure_reason,
 			queried_clusters, responding_clusters, total_candidates, best_remote_score,
 			peer_cluster, role, reason,
+			blocked_cluster, existing_replication_cluster,
 			local_lat, local_lon, remote_lat, remote_lon
 		)`)
 	if err != nil {
@@ -2656,20 +2651,22 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 		nilIfEmptyString(fed.GetSourceNode()),
 		nilIfEmptyString(fed.GetDestNode()),
 		nilIfEmptyString(fed.GetDtscUrl()),
-		nilIfZeroFloat32(fed.GetLatencyMs()),
-		nilIfZeroFloat32(fed.GetTimeToLiveMs()),
+		valueOrNilFloat32Ptr(fed.LatencyMs),
+		valueOrNilFloat32Ptr(fed.TimeToLiveMs),
 		nilIfEmptyString(fed.GetFailureReason()),
-		nilIfZeroUint32(fed.GetQueriedClusters()),
-		nilIfZeroUint32(fed.GetRespondingClusters()),
-		nilIfZeroUint32(fed.GetTotalCandidates()),
-		nilIfZeroUint64(fed.GetBestRemoteScore()),
+		valueOrNilUint32Ptr(fed.QueriedClusters),
+		valueOrNilUint32Ptr(fed.RespondingClusters),
+		valueOrNilUint32Ptr(fed.TotalCandidates),
+		valueOrNilUint64Ptr(fed.BestRemoteScore),
 		nilIfEmptyString(fed.GetPeerCluster()),
 		fed.GetRole(),
 		nilIfEmptyString(fed.GetReason()),
-		nilIfZeroFloat64(fed.GetLocalLat()),
-		nilIfZeroFloat64(fed.GetLocalLon()),
-		nilIfZeroFloat64(fed.GetRemoteLat()),
-		nilIfZeroFloat64(fed.GetRemoteLon()),
+		nilIfEmptyString(fed.GetBlockedCluster()),
+		nilIfEmptyString(fed.GetExistingReplicationCluster()),
+		valueOrNilFloat64Ptr(fed.LocalLat),
+		valueOrNilFloat64Ptr(fed.LocalLon),
+		valueOrNilFloat64Ptr(fed.RemoteLat),
+		valueOrNilFloat64Ptr(fed.RemoteLon),
 	); err != nil {
 		h.logger.Errorf("Failed to append to federation_events batch: %v", err)
 		return err
@@ -3472,6 +3469,27 @@ func nilIfZeroUint64Ptr(v *uint64) interface{} {
 // valueOrNilUint64Ptr returns the value if pointer is non-nil (preserves 0), nil otherwise.
 // Use this for fields where 0 is a valid value (e.g., packet stats - HLS has 0 packets).
 func valueOrNilUint64Ptr(v *uint64) interface{} {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func valueOrNilUint32Ptr(v *uint32) interface{} {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func valueOrNilFloat32Ptr(v *float32) interface{} {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func valueOrNilFloat64Ptr(v *float64) interface{} {
 	if v == nil {
 		return nil
 	}
