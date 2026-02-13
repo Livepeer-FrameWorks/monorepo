@@ -361,18 +361,18 @@ func TestResolveRemoteArtifact_RejectsWhenTenantPeerDataMissing(t *testing.T) {
 }
 
 func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
 		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "mp4", "cluster-origin").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	deps := &PlaybackDependencies{
-		DB:             db,
+		DB:             mockDB,
 		FedClient:      stubFedClient{},
 		PeerResolver:   stubPeerResolver{},
 		LocalClusterID: "cluster-local",
