@@ -980,6 +980,18 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *pb.F
 	if req.GetCommand() == "" {
 		return nil, status.Error(codes.InvalidArgument, "command required")
 	}
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if err := s.revalidateForwardedArtifact(ctx, req); err != nil {
+		if status.Code(err) == codes.NotFound {
+			return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+		}
+		if status.Code(err) == codes.FailedPrecondition {
+			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+		}
+		return nil, err
+	}
 	if s.artifactHandler == nil {
 		return &pb.ForwardArtifactCommandResponse{Handled: false, Error: "artifact handler not available"}, nil
 	}
@@ -1009,11 +1021,15 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *pb.F
 		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
 
 	case "stop_dvr":
-		resp, err := s.artifactHandler.StopDVR(ctx, &pb.StopDVRRequest{
+		stopReq := &pb.StopDVRRequest{
 			DvrHash:  req.GetArtifactHash(),
 			TenantId: req.GetTenantId(),
-			StreamId: &req.StreamId,
-		})
+		}
+		if req.GetStreamId() != "" {
+			streamID := req.GetStreamId()
+			stopReq.StreamId = &streamID
+		}
+		resp, err := s.artifactHandler.StopDVR(ctx, stopReq)
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
 				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
@@ -1056,6 +1072,58 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *pb.F
 			Handled: false,
 			Error:   "unknown command: " + req.GetCommand(),
 		}, nil
+	}
+}
+
+func (s *FederationServer) revalidateForwardedArtifact(ctx context.Context, req *pb.ForwardArtifactCommandRequest) error {
+	if s.db == nil {
+		s.logger.WithFields(logging.Fields{
+			"command":       req.GetCommand(),
+			"artifact_hash": req.GetArtifactHash(),
+			"tenant_id":     req.GetTenantId(),
+		}).Warn("Skipping forwarded artifact revalidation because database is unavailable")
+		return nil
+	}
+
+	artifactType, err := artifactTypeForForwardCommand(req.GetCommand())
+	if err != nil {
+		return nil
+	}
+
+	var dbStreamID sql.NullString
+	err = s.db.QueryRowContext(ctx, `
+		SELECT stream_id::text
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1
+		  AND artifact_type = $2
+		  AND tenant_id = $3
+		  AND status != 'deleted'
+		LIMIT 1
+	`, req.GetArtifactHash(), artifactType, req.GetTenantId()).Scan(&dbStreamID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return status.Error(codes.NotFound, "artifact not found")
+	}
+	if err != nil {
+		return status.Error(codes.Internal, "failed to verify artifact ownership")
+	}
+
+	if req.GetCommand() == "stop_dvr" && req.GetStreamId() != "" && dbStreamID.Valid && dbStreamID.String != "" && dbStreamID.String != req.GetStreamId() {
+		return status.Error(codes.FailedPrecondition, "stream_id mismatch")
+	}
+
+	return nil
+}
+
+func artifactTypeForForwardCommand(command string) (string, error) {
+	switch command {
+	case "delete_clip":
+		return "clip", nil
+	case "stop_dvr", "delete_dvr":
+		return "dvr", nil
+	case "delete_vod":
+		return "vod", nil
+	default:
+		return "", status.Error(codes.InvalidArgument, "unknown command: "+command)
 	}
 }
 

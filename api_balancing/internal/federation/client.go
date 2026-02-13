@@ -129,7 +129,12 @@ func (c *FederationClient) ForwardArtifactCommand(ctx context.Context, clusterID
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
+	fedCtx := federationContext(ctx)
+	if _, hasDeadline := fedCtx.Deadline(); hasDeadline {
+		return client.Federation().ForwardArtifactCommand(fedCtx, req)
+	}
+
+	ctx, cancel := context.WithTimeout(fedCtx, c.timeout)
 	defer cancel()
 
 	return client.Federation().ForwardArtifactCommand(ctx, req)

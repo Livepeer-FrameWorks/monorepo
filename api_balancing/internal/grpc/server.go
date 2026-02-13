@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -188,6 +189,13 @@ func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, com
 	if ctx.Value(ctxkeys.KeyNoForward) != nil {
 		return false, nil
 	}
+	if tenantID == "" {
+		s.logger.WithFields(logging.Fields{
+			"command":       command,
+			"artifact_hash": artifactHash,
+		}).Warn("Skipping federation forward for artifact command without tenant_id")
+		return false, nil
+	}
 	if s.federationClient == nil || s.peerManager == nil {
 		return false, nil
 	}
@@ -196,6 +204,15 @@ func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, com
 		return false, nil
 	}
 
+	fwdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	clusterIDs := make([]string, 0, len(peers))
+	for clusterID := range peers {
+		clusterIDs = append(clusterIDs, clusterID)
+	}
+	sort.Strings(clusterIDs)
+
 	req := &pb.ForwardArtifactCommandRequest{
 		Command:      command,
 		ArtifactHash: artifactHash,
@@ -203,13 +220,12 @@ func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, com
 		StreamId:     streamID,
 	}
 
-	for clusterID, addr := range peers {
+	for _, clusterID := range clusterIDs {
+		addr := peers[clusterID]
 		if clusterID == s.clusterID {
 			continue
 		}
-		fwdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		resp, err := s.federationClient.ForwardArtifactCommand(fwdCtx, clusterID, addr, req)
-		cancel()
 		if err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"peer_cluster":  clusterID,
