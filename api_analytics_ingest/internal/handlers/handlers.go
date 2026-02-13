@@ -779,12 +779,6 @@ func nilIfZeroFloat32(v float32) interface{} {
 	}
 	return v
 }
-func nilIfZeroFloat64(v float64) interface{} {
-	if v == 0 {
-		return nil
-	}
-	return v
-}
 func nilIfZeroBool(v bool) interface{} {
 	if !v {
 		return nil

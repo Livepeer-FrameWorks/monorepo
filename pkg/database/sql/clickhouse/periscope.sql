@@ -823,6 +823,9 @@ PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, local_cluster, event_type, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
+ALTER TABLE federation_events ADD COLUMN IF NOT EXISTS blocked_cluster Nullable(String);
+ALTER TABLE federation_events ADD COLUMN IF NOT EXISTS existing_replication_cluster Nullable(String);
+
 -- Hourly rollup for federation summary dashboards
 CREATE TABLE IF NOT EXISTS federation_hourly (
     hour DateTime,
