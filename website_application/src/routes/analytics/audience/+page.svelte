@@ -26,6 +26,7 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
+  import { buildBucketFlows } from "$lib/analytics/routingFlows";
 
   // Houdini stores
   const nodesStore = new GetNodesConnectionStore();
@@ -389,33 +390,7 @@
   // Aggregate bucket-to-bucket flows (client -> node)
   let bucketFlows = $derived.by(() => {
     const edges = $routingEventsStore.data?.analytics?.infra?.routingEventsConnection?.edges ?? [];
-    const flows: Record<
-      string,
-      { from: string; to: string; count: number; distanceSum: number; crossCluster: boolean }
-    > = {};
-
-    for (const edge of edges) {
-      const evt = edge.node;
-      const from = evt.clientBucket?.h3Index;
-      const to = evt.nodeBucket?.h3Index;
-      if (!from || !to) continue;
-      const key = `${from}->${to}`;
-      if (!flows[key]) {
-        flows[key] = { from, to, count: 0, distanceSum: 0, crossCluster: false };
-      }
-      flows[key].count++;
-      flows[key].distanceSum += evt.routingDistance ?? 0;
-      if (evt.remoteClusterId && evt.remoteClusterId !== evt.clusterId) {
-        flows[key].crossCluster = true;
-      }
-    }
-
-    return Object.values(flows)
-      .map((f) => ({
-        ...f,
-        avgDistance: f.count ? f.distanceSum / f.count : 0,
-      }))
-      .sort((a, b) => b.count - a.count);
+    return buildBucketFlows(edges.map((edge) => edge.node));
   });
 
   let flowSegments = $derived.by(() => {
@@ -1431,7 +1406,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each bucketFlows.slice(0, 10) as flow (flow.from + flow.to)}
+                      {#each bucketFlows.slice(0, 10) as flow (flow.from + flow.to + flow.crossCluster)}
                         <tr class="border-b border-border/30 hover:bg-muted/15">
                           <td class="py-2 px-4 text-xs font-mono" title={flow.from}>
                             {resolveBucketLocation(flow.from, bucketCountryMap)}

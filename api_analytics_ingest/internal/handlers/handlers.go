@@ -709,6 +709,12 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 
 	clusterID := mt.GetClusterId()
 	originClusterID := mt.GetOriginClusterId()
+	if clusterID == "" {
+		clusterID = originClusterID
+	}
+	if originClusterID == "" {
+		originClusterID = clusterID
+	}
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO viewer_connection_events (
