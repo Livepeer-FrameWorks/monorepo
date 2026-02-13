@@ -155,6 +155,14 @@ func (c *GRPCClient) InvalidateTenantCacheKeys(tenantID string) {
 	}
 }
 
+func buildValidateStreamKeyCacheKey(streamKey, clusterID string) string {
+	cacheKey := "commodore:validate:" + streamKey
+	if clusterID == "" {
+		return cacheKey
+	}
+	return cacheKey + ":cluster:" + clusterID
+}
+
 // ============================================================================
 // INTERNAL SERVICE OPERATIONS (Foghorn, Sidecar → Commodore)
 // ============================================================================
@@ -175,7 +183,7 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, cl
 
 	// Check cache first
 	if c.cache != nil {
-		cacheKey := "commodore:validate:" + streamKey
+		cacheKey := buildValidateStreamKeyCacheKey(streamKey, cid)
 		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
 			resp, err := c.internal.ValidateStreamKey(ctx, buildReq())
 			if err != nil || !resp.Valid {

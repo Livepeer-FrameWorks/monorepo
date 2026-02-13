@@ -479,6 +479,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		  AND tca.is_active = TRUE
 		  AND tca.subscription_status = 'active'
 		  AND ic.is_active = TRUE
+		ORDER BY ic.cluster_id ASC
 	`, tenantID)
 	if peerErr == nil {
 		defer peerRows.Close()
