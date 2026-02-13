@@ -31,7 +31,7 @@ func (s *testTenantControlServer) InvalidateTenantCache(context.Context, *pb.Inv
 
 func startTenantControlTestServer(t *testing.T, svc pb.TenantControlServiceServer) string {
 	t.Helper()
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -125,5 +125,27 @@ func TestInvalidateTenantCache_DeduplicatesTargets(t *testing.T) {
 	}
 	if resp.EntriesInvalidated != 5 {
 		t.Fatalf("expected single target invalidation count, got %d", resp.EntriesInvalidated)
+	}
+}
+
+func TestTerminateTenantStreams_DeduplicatesByAddrWhenClusterIDMissing(t *testing.T) {
+	goodAddr := startTenantControlTestServer(t, &testTenantControlServer{
+		terminateResp: &pb.TerminateTenantStreamsResponse{StreamsTerminated: 7, SessionsTerminated: 9},
+	})
+
+	server := newTenantFanoutTestServer(t, &clusterRoute{
+		clusterPeers: []*pb.TenantClusterPeer{
+			{ClusterId: "", FoghornGrpcAddr: goodAddr},
+			{ClusterId: "", FoghornGrpcAddr: goodAddr},
+		},
+		resolvedAt: time.Now(),
+	})
+
+	resp, err := server.TerminateTenantStreams(context.Background(), &pb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StreamsTerminated != 7 || resp.SessionsTerminated != 9 {
+		t.Fatalf("expected single-target result (7/9), got %d/%d", resp.StreamsTerminated, resp.SessionsTerminated)
 	}
 }

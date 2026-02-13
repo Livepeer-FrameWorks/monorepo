@@ -363,10 +363,17 @@ func (r *CommandRelay) forward(ctx context.Context, req *pb.ForwardCommandReques
 	)
 	resp, err := client.Relay().ForwardCommand(ctx, req)
 	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return fmt.Errorf("relay: peer %s does not implement ForwardCommand: %w", owner.InstanceID, err)
+		}
 		evictStale()
 		incRelayForward(commandType, "rpc_error")
 		log.WithError(err).Warn("Relay forward RPC failed")
 		return fmt.Errorf("relay: forward to %s: %w", owner.InstanceID, err)
+	}
+	if resp == nil {
+		evictStale()
+		return fmt.Errorf("relay: peer %s returned nil response", owner.InstanceID)
 	}
 	if !resp.Delivered {
 		evictStale()
@@ -3877,6 +3884,9 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 		clusterID = "default"
 	}
 	clusterSlug := pkgdns.SanitizeLabel(clusterID)
+	if clusterSlug == "" {
+		clusterSlug = "default"
+	}
 	AddServedCluster(clusterID)
 
 	b := make([]byte, 6)
