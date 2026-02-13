@@ -5904,7 +5904,11 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 		return nil, status.Errorf(codes.Unavailable, "failed to terminate streams on any cluster: %v", lastErr)
 	}
 	if failures > 0 {
-		return nil, status.Errorf(codes.Unavailable, "tenant termination incomplete: %d/%d clusters failed (last error: %v)", failures, len(targets), lastErr)
+		s.logger.WithError(lastErr).WithFields(logging.Fields{
+			"tenant_id":       req.TenantId,
+			"clusters_failed": failures,
+			"clusters_total":  len(targets),
+		}).Warn("Tenant termination partially failed: some clusters unreachable")
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -5971,7 +5975,11 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.Inv
 		return nil, status.Errorf(codes.Unavailable, "failed to invalidate cache on any cluster: %v", lastErr)
 	}
 	if failures > 0 {
-		return nil, status.Errorf(codes.Unavailable, "tenant cache invalidation incomplete: %d/%d clusters failed (last error: %v)", failures, len(targets), lastErr)
+		s.logger.WithError(lastErr).WithFields(logging.Fields{
+			"tenant_id":       req.TenantId,
+			"clusters_failed": failures,
+			"clusters_total":  len(targets),
+		}).Warn("Tenant cache invalidation partially failed: some clusters unreachable")
 	}
 
 	s.logger.WithFields(logging.Fields{

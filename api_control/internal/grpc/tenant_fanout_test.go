@@ -79,7 +79,7 @@ func TestTerminateTenantStreams_FailsWhenAllDialAttemptsFail(t *testing.T) {
 	}
 }
 
-func TestTerminateTenantStreams_ReturnsErrorOnPartialFanoutFailure(t *testing.T) {
+func TestTerminateTenantStreams_SucceedsWithPartialResults(t *testing.T) {
 	goodAddr := startTenantControlTestServer(t, &testTenantControlServer{
 		terminateResp: &pb.TerminateTenantStreamsResponse{StreamsTerminated: 2, SessionsTerminated: 3, StreamNames: []string{"a", "b"}},
 	})
@@ -95,13 +95,12 @@ func TestTerminateTenantStreams_ReturnsErrorOnPartialFanoutFailure(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	_, err := server.TerminateTenantStreams(ctx, &pb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
-	if err == nil {
-		t.Fatal("expected error")
+	resp, err := server.TerminateTenantStreams(ctx, &pb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	if err != nil {
+		t.Fatalf("expected success with partial results, got error: %v", err)
 	}
-	st := status.Convert(err)
-	if st.Code() != codes.Unavailable {
-		t.Fatalf("expected unavailable, got %v", st.Code())
+	if resp.StreamsTerminated != 2 {
+		t.Fatalf("expected 2 streams terminated from successful cluster, got %d", resp.StreamsTerminated)
 	}
 }
 
