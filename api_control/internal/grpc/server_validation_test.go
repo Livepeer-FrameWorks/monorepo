@@ -275,7 +275,11 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 		logger: logrus.New(),
 		routeCache: map[string]*clusterRoute{
 			"tenant-id": {
-				clusterID:  "cluster-primary",
+				clusterID: "cluster-primary",
+				clusterPeers: []*pb.TenantClusterPeer{
+					{ClusterId: "cluster-primary"},
+					{ClusterId: "cluster-ingest"},
+				},
 				resolvedAt: time.Now(),
 			},
 		},

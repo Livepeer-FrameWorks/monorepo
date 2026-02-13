@@ -442,6 +442,15 @@ func resolveAddrFromRoute(route *clusterRoute, clusterID string) string {
 	return ""
 }
 
+func clusterInPeers(peers []*pb.TenantClusterPeer, clusterID string) bool {
+	for _, p := range peers {
+		if p.ClusterId == clusterID {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveFoghornForArtifact returns a Foghorn client routed to the artifact's origin cluster.
 // Falls back to the tenant's primary cluster if originClusterID is empty (legacy data).
 func (s *CommodoreServer) resolveFoghornForArtifact(ctx context.Context, tenantID, originClusterID string) (*foghornclient.GRPCClient, error) {
@@ -536,7 +545,11 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
 		resolvedOriginClusterID := route.clusterID
 		if ingestClusterID := req.GetClusterId(); ingestClusterID != "" {
-			resolvedOriginClusterID = ingestClusterID
+			if ingestClusterID == route.clusterID ||
+				ingestClusterID == route.officialClusterID ||
+				clusterInPeers(route.clusterPeers, ingestClusterID) {
+				resolvedOriginClusterID = ingestClusterID
+			}
 		}
 		resp.OriginClusterId = &resolvedOriginClusterID
 		if route.officialClusterID != "" {
