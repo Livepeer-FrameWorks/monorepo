@@ -2,24 +2,33 @@
   import { cn } from "$lib/utils";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
+  import type { ButtonVariant } from "$lib/components/ui/button";
+  import {
+    resolveEmptyStateIcon,
+    type EmptyStateSize,
+    type EmptyStateVariant,
+  } from "$lib/components/empty-state-contract";
+  import type { IconName } from "$lib/iconUtils";
   import type { Snippet } from "svelte";
 
   interface Props {
-    iconName?: string;
+    icon?: IconName;
+    iconName?: IconName;
     title?: string;
     description?: string;
     actionText?: string;
     onAction?: () => void;
-    size?: "sm" | "md" | "lg";
-    variant?: "default" | "accent" | "subtle";
-    buttonVariant?: "default" | "cta" | "outline" | "ghost" | "secondary" | "destructive";
+    size?: EmptyStateSize;
+    variant?: EmptyStateVariant;
+    buttonVariant?: ButtonVariant;
     class?: string;
     showAction?: boolean;
     children?: Snippet;
   }
 
   let {
-    iconName = "FileText",
+    icon,
+    iconName,
     title = "No data found",
     description = "",
     actionText = "",
@@ -32,7 +41,8 @@
     children,
   }: Props = $props();
 
-  const iconComponent = $derived(getIconComponent(iconName));
+  const resolvedIcon = $derived(resolveEmptyStateIcon({ icon, iconName }));
+  const iconComponent = $derived(getIconComponent(resolvedIcon));
 
   const sizeClasses = {
     sm: {
