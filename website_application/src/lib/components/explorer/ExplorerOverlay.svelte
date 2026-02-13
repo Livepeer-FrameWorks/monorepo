@@ -22,6 +22,7 @@
     ResolvedExplorerSection,
     ResolvedExplorerExample,
   } from "$lib/graphql/services/explorer";
+  import type { QueryHistoryItem } from "$lib/components/explorer/queryHistory";
   import {
     formatTypeString,
     getBaseTypeName,
@@ -49,29 +50,11 @@
     deprecationReason?: string;
   }
 
-  interface SchemaType {
-    fields: SchemaField[];
-  }
-
-  type Schema = IntrospectedSchema & {
-    queryType?: SchemaType;
-    mutationType?: SchemaType;
-    subscriptionType?: SchemaType;
-  };
-
-  interface QueryHistoryItem {
-    id: number;
-    query: string;
-    variables: Record<string, unknown>;
-    result: { statusIcon: string; [key: string]: unknown };
-    timestamp: string;
-  }
-
   type PanelView = "templates" | "schema" | null;
 
   interface Props {
     view: PanelView;
-    schema: Schema | null;
+    schema: IntrospectedSchema | null;
     queryTemplates: TemplateGroups | null;
     catalogSections?: ResolvedExplorerSection[] | null;
     queryHistory: QueryHistoryItem[];
@@ -448,6 +431,12 @@
     return getObjectTypeFields(schema, baseName) || [];
   }
 
+  function getHistoryStatusIcon(item: QueryHistoryItem): string | null {
+    if (typeof item.result !== "object" || item.result === null) return null;
+    const maybeStatusIcon = (item.result as Record<string, unknown>).statusIcon;
+    return typeof maybeStatusIcon === "string" ? maybeStatusIcon : null;
+  }
+
   function stopPropagation(event: Event) {
     event.stopPropagation();
   }
@@ -633,7 +622,7 @@
               </div>
               <div class="text-[10px] text-muted-foreground mt-0.5">
                 {new Date(item.timestamp).toLocaleTimeString()}
-                <span class="ml-1">{item.result.statusIcon === "success" ? "✓" : "✗"}</span>
+                <span class="ml-1">{getHistoryStatusIcon(item) === "success" ? "✓" : "✗"}</span>
               </div>
             </button>
           {/each}

@@ -19,6 +19,11 @@
   import CodeExamplesPanel from "$lib/components/explorer/CodeExamplesPanel.svelte";
   import ResponseViewer from "$lib/components/explorer/ResponseViewer.svelte";
   import ExplorerOverlay from "$lib/components/explorer/ExplorerOverlay.svelte";
+  import {
+    normalizeQueryHistory,
+    type QueryHistoryItem,
+  } from "$lib/components/explorer/queryHistory";
+  import type { IntrospectedSchema, SchemaField } from "$lib/graphql/services/schemaUtils";
 
   interface Props {
     initialQuery?: string;
@@ -27,14 +32,6 @@
 
   // Use the Template type from the loader
   type QueryTemplate = Template;
-
-  interface QueryHistoryItem {
-    id: number;
-    query: string;
-    variables: Record<string, unknown>;
-    result: unknown;
-    timestamp: string;
-  }
 
   interface FormattedResponse {
     status: string;
@@ -92,37 +89,7 @@
   let response = $state<FormattedResponse | null>(null);
   let loading = $state(false);
   let schemaLoading = $state(false);
-  type SchemaField = {
-    name: string;
-    description?: string;
-    args?: Array<{
-      name: string;
-      description?: string;
-      type?: { name?: string; kind?: string; ofType?: { name?: string } };
-    }>;
-    type?: { name?: string; kind?: string; ofType?: { name?: string } };
-    isDeprecated?: boolean;
-    deprecationReason?: string;
-  };
-
-  let schema: null | {
-    queryType?: { fields: SchemaField[] };
-    mutationType?: { fields: SchemaField[] };
-    subscriptionType?: { fields: SchemaField[] };
-    types?: Array<{
-      name?: string;
-      kind?: string;
-      description?: string;
-      fields?: SchemaField[];
-      inputFields?: SchemaField[];
-      enumValues?: Array<{
-        name?: string;
-        description?: string;
-        isDeprecated?: boolean;
-        deprecationReason?: string;
-      }>;
-    }>;
-  } = $state(null);
+  let schema = $state<IntrospectedSchema | null>(null);
   let queryTemplates: TemplateGroups | null = $state(null);
   let catalogSections = $state<ResolvedExplorerSection[] | null>(null);
   let _selectedTemplate: QueryTemplate | null = $state(null);
@@ -308,7 +275,7 @@
     try {
       const saved = localStorage.getItem("graphql_explorer_history");
       if (saved) {
-        queryHistory = JSON.parse(saved) as QueryHistoryItem[];
+        queryHistory = normalizeQueryHistory(JSON.parse(saved));
       }
     } catch (error) {
       console.error("Failed to load query history:", error);
