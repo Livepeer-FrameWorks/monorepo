@@ -938,18 +938,12 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *pb.
 
 	var migrated, exists int32
 	for _, a := range listResp.Artifacts {
-		result, err := s.db.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id)
-			VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10)
-			ON CONFLICT (artifact_hash, artifact_type, tenant_id) DO NOTHING
-		`, a.ArtifactHash, a.ArtifactType, tenantID, a.InternalName, a.Format,
-			a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID)
+		inserted, err := upsertMigratedArtifactMetadata(ctx, s.db, tenantID, sourceClusterID, a)
 		if err != nil {
-			log.WithError(err).WithField("artifact_hash", a.ArtifactHash).Warn("Failed to insert migrated artifact")
+			log.WithError(err).WithField("artifact_hash", a.ArtifactHash).Warn("Failed to upsert migrated artifact")
 			continue
 		}
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected > 0 {
+		if inserted {
 			migrated++
 		} else {
 			exists++
@@ -966,6 +960,61 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *pb.
 		MigratedCount: migrated,
 		AlreadyExists: exists,
 	}, nil
+}
+
+func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, sourceClusterID string, a *pb.ArtifactMetadata) (bool, error) {
+	result, err := db.ExecContext(ctx, `
+		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id)
+		VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10)
+		ON CONFLICT (artifact_hash, artifact_type, tenant_id) DO NOTHING
+	`, a.ArtifactHash, a.ArtifactType, tenantID, a.InternalName, a.Format,
+		a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected > 0 {
+		return true, nil
+	}
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET internal_name = CASE
+				WHEN COALESCE(internal_name, '') = '' AND $4 <> '' THEN $4
+				ELSE internal_name
+			END,
+			format = CASE
+				WHEN COALESCE(format, '') = '' AND $5 <> '' THEN $5
+				ELSE format
+			END,
+			storage_location = CASE
+				WHEN COALESCE(storage_location, '') = '' AND $6 <> '' THEN $6
+				ELSE storage_location
+			END,
+			sync_status = CASE
+				WHEN COALESCE(sync_status, '') = '' AND $7 <> '' THEN $7
+				ELSE sync_status
+			END,
+			s3_url = CASE
+				WHEN COALESCE(s3_url, '') = '' AND $8 <> '' THEN $8
+				ELSE s3_url
+			END,
+			size_bytes = CASE
+				WHEN COALESCE(size_bytes, 0) = 0 AND $9 > 0 THEN $9
+				ELSE size_bytes
+			END,
+			origin_cluster_id = CASE
+				WHEN COALESCE(origin_cluster_id, '') = '' THEN $10
+				ELSE origin_cluster_id
+			END
+		WHERE artifact_hash = $1 AND artifact_type = $2 AND tenant_id = $3
+	`, a.ArtifactHash, a.ArtifactType, tenantID, a.InternalName, a.Format,
+		a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID)
+	if err != nil {
+		return false, err
+	}
+
+	return false, nil
 }
 
 // ForwardArtifactCommand handles a peer forwarding an artifact command it couldn't

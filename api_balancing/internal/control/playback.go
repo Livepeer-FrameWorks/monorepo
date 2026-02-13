@@ -830,7 +830,7 @@ func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bo
 		return false
 	}
 	if len(peers) == 0 {
-		return true // fail-open: routing data unavailable
+		return false
 	}
 	for _, peer := range peers {
 		if peer.GetClusterId() == clusterID {
@@ -880,7 +880,12 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 		_, _ = deps.DB.ExecContext(ctx, `
 			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, format, status, storage_location, sync_status, origin_cluster_id)
 			VALUES ($1, $2, $3, $4, $5, 'active', 's3', 'synced', $6)
-			ON CONFLICT (artifact_hash, artifact_type, tenant_id) DO NOTHING
+			ON CONFLICT (artifact_hash, artifact_type, tenant_id) DO UPDATE
+			SET storage_location = 's3',
+			    sync_status = 'synced',
+			    internal_name = CASE WHEN foghorn.artifacts.internal_name = '' AND EXCLUDED.internal_name <> '' THEN EXCLUDED.internal_name ELSE foghorn.artifacts.internal_name END,
+			    format = CASE WHEN COALESCE(foghorn.artifacts.format, '') = '' AND EXCLUDED.format <> '' THEN EXCLUDED.format ELSE foghorn.artifacts.format END,
+			    origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END
 		`, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetFormat(), originClusterID)
 	}
 
