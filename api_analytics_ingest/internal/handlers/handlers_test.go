@@ -1227,6 +1227,75 @@ func TestHandleAnalyticsEventMissingStreamIDDropped(t *testing.T) {
 	}
 }
 
+func TestHandleAnalyticsEventFederationEventPreservesOptionalZeroValues(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "federation_event",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data: mustMistTriggerData(t, &pb.MistTrigger{
+			TriggerPayload: &pb.MistTrigger_FederationEventData{
+				FederationEventData: &pb.FederationEventData{
+					EventType:                  pb.FederationEventType_REPLICATION_LOOP_PREVENTED,
+					LocalCluster:               "central-primary",
+					RemoteCluster:              "us-east-edge",
+					StreamName:                 stringPtr("demo_live_stream_001"),
+					StreamId:                   stringPtr(streamID),
+					LatencyMs:                  float32Ptr(0),
+					TimeToLiveMs:               float32Ptr(0),
+					QueriedClusters:            uint32Ptr(0),
+					RespondingClusters:         uint32Ptr(0),
+					TotalCandidates:            uint32Ptr(0),
+					BestRemoteScore:            uint64Ptr(0),
+					Role:                       stringPtr("leader"),
+					BlockedCluster:             stringPtr("apac-edge"),
+					ExistingReplicationCluster: stringPtr("us-east-edge"),
+					LocalLat:                   float64Ptr(0),
+					LocalLon:                   float64Ptr(0),
+					RemoteLat:                  float64Ptr(40.7128),
+					RemoteLon:                  float64Ptr(-74.0060),
+				},
+			},
+		}),
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("HandleAnalyticsEvent() error = %v", err)
+	}
+
+	batch := conn.batches["federation_events"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected federation_events row, got %#v", batch)
+	}
+	row := batch.rows[0]
+
+	if row[10] != float32(0) {
+		t.Fatalf("expected latency_ms 0.0, got %#v", row[10])
+	}
+	if row[11] != float32(0) {
+		t.Fatalf("expected time_to_live_ms 0.0, got %#v", row[11])
+	}
+	if row[13] != uint32(0) || row[14] != uint32(0) || row[15] != uint32(0) {
+		t.Fatalf("expected queried/responding/total candidates zeros, got %#v %#v %#v", row[13], row[14], row[15])
+	}
+	if row[16] != uint64(0) {
+		t.Fatalf("expected best_remote_score 0, got %#v", row[16])
+	}
+	if row[20] != "apac-edge" {
+		t.Fatalf("expected blocked_cluster apac-edge, got %#v", row[20])
+	}
+	if row[21] != "us-east-edge" {
+		t.Fatalf("expected existing_replication_cluster us-east-edge, got %#v", row[21])
+	}
+	if row[22] != float64(0) || row[23] != float64(0) {
+		t.Fatalf("expected local coordinates 0,0, got %#v %#v", row[22], row[23])
+	}
+}
+
 func TestWriteIngestErrorPayloadMarshalFailure(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := &AnalyticsHandler{clickhouse: clickhouseNativeConn{conn: conn}, logger: logging.NewLogger()}

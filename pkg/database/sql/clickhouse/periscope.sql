@@ -812,6 +812,8 @@ CREATE TABLE IF NOT EXISTS federation_events (
     peer_cluster Nullable(String),
     role LowCardinality(String) DEFAULT '',
     reason Nullable(String),
+    blocked_cluster Nullable(String),
+    existing_replication_cluster Nullable(String),
     local_lat Nullable(Float64),
     local_lon Nullable(Float64),
     remote_lat Nullable(Float64),
