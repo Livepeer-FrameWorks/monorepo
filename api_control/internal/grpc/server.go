@@ -136,6 +136,8 @@ type clusterFanoutTarget struct {
 	addr      string
 }
 
+const activeIngestClusterFreshnessWindow = 2 * time.Minute
+
 func buildClusterFanoutTargets(route *clusterRoute) []clusterFanoutTarget {
 	if route == nil {
 		return nil
@@ -211,6 +213,19 @@ func normalizeClusterRoute(route *clusterRoute) {
 			}
 		}
 	}
+}
+
+func selectActiveIngestCluster(clusterID sql.NullString, updatedAt sql.NullTime, now time.Time) (string, bool) {
+	if !clusterID.Valid || clusterID.String == "" {
+		return "", false
+	}
+	if !updatedAt.Valid {
+		return "", false
+	}
+	if now.Sub(updatedAt.Time) > activeIngestClusterFreshnessWindow {
+		return "", false
+	}
+	return clusterID.String, true
 }
 
 type commodoreUserRecord struct {
@@ -605,11 +620,27 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 
 	// Track which cluster this stream is ingesting on (Foghorn reports its own cluster_id)
 	if ingestClusterID := req.GetClusterId(); ingestClusterID != "" {
-		if _, updateErr := s.db.ExecContext(ctx, `
-			UPDATE commodore.streams SET active_ingest_cluster_id = $1, updated_at = NOW()
+		res, updateErr := s.db.ExecContext(ctx, `
+			UPDATE commodore.streams
+			SET active_ingest_cluster_id = $1,
+				active_ingest_cluster_updated_at = NOW(),
+				updated_at = NOW()
 			WHERE stream_key = $2
-		`, ingestClusterID, streamKey); updateErr != nil {
+				AND (
+					active_ingest_cluster_id IS NULL
+					OR active_ingest_cluster_id = ''
+					OR active_ingest_cluster_id = $1
+					OR active_ingest_cluster_updated_at IS NULL
+					OR active_ingest_cluster_updated_at < NOW() - INTERVAL '30 seconds'
+				)
+		`, ingestClusterID, streamKey)
+		if updateErr != nil {
 			s.logger.WithError(updateErr).WithField("stream_key", streamKey).Warn("Failed to record ingest cluster")
+		} else if rows, rowsErr := res.RowsAffected(); rowsErr == nil && rows == 0 {
+			s.logger.WithFields(logging.Fields{
+				"stream_key":        streamKey,
+				"ingest_cluster_id": ingestClusterID,
+			}).Debug("Skipped ingest cluster update due to active lease")
 		}
 	}
 
@@ -4503,9 +4534,12 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	// Resolve internal_name and active ingest cluster for routing
 	var internalName string
 	var activeIngestClusterID sql.NullString
+	var activeIngestClusterUpdatedAt sql.NullTime
 	err = s.db.QueryRowContext(ctx, `
-		SELECT internal_name, active_ingest_cluster_id FROM commodore.streams WHERE id = $1 AND tenant_id = $2
-	`, streamID, tenantID).Scan(&internalName, &activeIngestClusterID)
+		SELECT internal_name, active_ingest_cluster_id, active_ingest_cluster_updated_at
+		FROM commodore.streams
+		WHERE id = $1 AND tenant_id = $2
+	`, streamID, tenantID).Scan(&internalName, &activeIngestClusterID, &activeIngestClusterUpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
@@ -4516,10 +4550,21 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	// Route to the cluster where the stream is ingesting (if known), else primary
 	var foghornClient *foghornclient.GRPCClient
 	var clipClusterID string
-	if activeIngestClusterID.Valid && activeIngestClusterID.String != "" {
-		foghornClient, err = s.resolveFoghornForCluster(ctx, activeIngestClusterID.String, tenantID)
-		clipClusterID = activeIngestClusterID.String
-	} else {
+	if freshClusterID, ok := selectActiveIngestCluster(activeIngestClusterID, activeIngestClusterUpdatedAt, time.Now()); ok {
+		foghornClient, err = s.resolveFoghornForCluster(ctx, freshClusterID, tenantID)
+		if err == nil {
+			clipClusterID = freshClusterID
+		} else {
+			s.logger.WithFields(logging.Fields{
+				"tenant_id":                  tenantID,
+				"stream_id":                  streamID,
+				"active_ingest_cluster_id":   freshClusterID,
+				"active_ingest_cluster_time": activeIngestClusterUpdatedAt.Time,
+				"error":                      err,
+			}).Warn("Failed to resolve active ingest cluster for clip, falling back to tenant route")
+		}
+	}
+	if foghornClient == nil {
 		var clipRoute *clusterRoute
 		foghornClient, clipRoute, err = s.resolveFoghornForTenant(ctx, tenantID)
 		if clipRoute != nil {

@@ -76,11 +76,12 @@ func TestValidateStreamKey(t *testing.T) {
 		},
 		{
 			name: "active_user",
-			req:  &pb.ValidateStreamKeyRequest{StreamKey: "good-key"},
+			req:  &pb.ValidateStreamKeyRequest{StreamKey: "good-key", ClusterId: "cluster-us"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+				mock.ExpectExec("UPDATE commodore.streams").WithArgs("cluster-us", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
 			},
 			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
@@ -94,6 +95,24 @@ func TestValidateStreamKey(t *testing.T) {
 				}
 				if resp.InternalName != "internal" {
 					t.Fatalf("unexpected internal name: %q", resp.InternalName)
+				}
+			},
+		},
+		{
+			name: "active_user_cluster_update_contended",
+			req:  &pb.ValidateStreamKeyRequest{StreamKey: "contended-key", ClusterId: "cluster-eu"},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
+				mock.ExpectQuery("FROM commodore.streams").WithArgs("contended-key").WillReturnRows(rows)
+				mock.ExpectExec("UPDATE commodore.streams").WithArgs("cluster-eu", "contended-key").WillReturnResult(sqlmock.NewResult(0, 0))
+			},
+			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !resp.Valid {
+					t.Fatalf("expected valid response")
 				}
 			},
 		},
@@ -299,5 +318,48 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestSelectActiveIngestCluster(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		clusterID sql.NullString
+		updatedAt sql.NullTime
+		wantID    string
+		wantOK    bool
+	}{
+		{
+			name:      "fresh cluster",
+			clusterID: sql.NullString{String: "cluster-a", Valid: true},
+			updatedAt: sql.NullTime{Time: now.Add(-30 * time.Second), Valid: true},
+			wantID:    "cluster-a",
+			wantOK:    true,
+		},
+		{
+			name:      "stale cluster",
+			clusterID: sql.NullString{String: "cluster-a", Valid: true},
+			updatedAt: sql.NullTime{Time: now.Add(-(activeIngestClusterFreshnessWindow + time.Second)), Valid: true},
+			wantOK:    false,
+		},
+		{
+			name:      "missing timestamp",
+			clusterID: sql.NullString{String: "cluster-a", Valid: true},
+			updatedAt: sql.NullTime{},
+			wantOK:    false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotID, gotOK := selectActiveIngestCluster(tc.clusterID, tc.updatedAt, now)
+			if gotOK != tc.wantOK {
+				t.Fatalf("expected ok=%v, got %v", tc.wantOK, gotOK)
+			}
+			if gotID != tc.wantID {
+				t.Fatalf("expected cluster id %q, got %q", tc.wantID, gotID)
+			}
+		})
 	}
 }

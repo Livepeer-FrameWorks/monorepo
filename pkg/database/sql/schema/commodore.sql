@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     -- Set by ValidateStreamKey when Foghorn reports its cluster_id during ingest.
     -- Used by Commodore to route stream-scoped commands (CreateClip) to the correct cluster.
     active_ingest_cluster_id VARCHAR(100),
+    active_ingest_cluster_updated_at TIMESTAMP,
 
     -- NOTE: Operational state (status, start_time, end_time) removed
     -- Stream status now comes from Periscope Data Plane via ClickHouse analytics
@@ -392,6 +393,8 @@ ALTER TABLE commodore.clips ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(1
 ALTER TABLE commodore.dvr_recordings ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
 ALTER TABLE commodore.vod_assets ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
 
+ALTER TABLE commodore.streams ADD COLUMN IF NOT EXISTS active_ingest_cluster_updated_at TIMESTAMP;
+
 -- Generate VOD hash (includes tenant + user + filename + timestamp for uniqueness)
 CREATE OR REPLACE FUNCTION commodore.generate_vod_hash(
     p_tenant_id UUID,
@@ -408,4 +411,3 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql;
-
