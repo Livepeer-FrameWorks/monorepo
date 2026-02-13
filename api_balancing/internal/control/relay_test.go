@@ -83,9 +83,13 @@ func (f *fakeFoghornRelayClient) ForwardCommand(_ context.Context, req *pb.Forwa
 type fakeControlStream struct {
 	pb.HelmsmanControl_ConnectServer
 	sent []*pb.ControlMessage
+	err  error
 }
 
 func (f *fakeControlStream) Send(msg *pb.ControlMessage) error {
+	if f.err != nil {
+		return f.err
+	}
 	f.sent = append(f.sent, msg)
 	return nil
 }
@@ -558,4 +562,44 @@ func sortedKeys(m map[string]struct{}) []string {
 	keys := slices.Collect(maps.Keys(m))
 	slices.Sort(keys)
 	return keys
+}
+
+func TestSendWithRelay_LocalSendErrorDoesNotRelay(t *testing.T) {
+	ensureRegistry(t)
+
+	sendErr := fmt.Errorf("stream write failed")
+	registry.mu.Lock()
+	registry.conns["node-1"] = &conn{stream: &fakeControlStream{err: sendErr}}
+	registry.mu.Unlock()
+
+	store, _ := newTestStore(t)
+	poolCalled := false
+	pool := &trackingRelayPool{called: &poolCalled}
+	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
+	setCommandRelay(t, r)
+
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{"ClipPull", func() error { return SendClipPull("node-1", &pb.ClipPullRequest{}) }},
+		{"DVRStart", func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) }},
+		{"DVRStop", func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) }},
+		{"ClipDelete", func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) }},
+		{"DVRDelete", func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) }},
+		{"VodDelete", func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.fn()
+			if !errors.Is(err, sendErr) {
+				t.Fatalf("expected local send error to be returned, got %v", err)
+			}
+		})
+	}
+
+	if poolCalled {
+		t.Fatal("relay pool should not be called when local stream send fails")
+	}
 }
