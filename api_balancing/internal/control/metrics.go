@@ -7,6 +7,9 @@ type ControlMetrics struct {
 	// MistTriggers counts MistTrigger messages received/processed over the HelmsmanControl stream.
 	// Labels: trigger_type, blocking ("true"|"false"), status
 	MistTriggers *prometheus.CounterVec
+	// RelayForwards counts cross-instance relay attempts and outcomes.
+	// Labels: command_type, status
+	RelayForwards *prometheus.CounterVec
 }
 
 var controlMetrics *ControlMetrics
@@ -25,4 +28,11 @@ func incMistTrigger(triggerType string, blocking bool, status string) {
 		b = "true"
 	}
 	controlMetrics.MistTriggers.WithLabelValues(triggerType, b, status).Inc()
+}
+
+func incRelayForward(commandType, status string) {
+	if controlMetrics == nil || controlMetrics.RelayForwards == nil {
+		return
+	}
+	controlMetrics.RelayForwards.WithLabelValues(commandType, status).Inc()
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 // --- helpers ---
@@ -70,13 +71,17 @@ func (m *mockRelayPool) GetOrCreate(_, _ string) (CommandRelayClient, error) {
 }
 
 type fakeFoghornRelayClient struct {
-	resp *pb.ForwardCommandResponse
-	err  error
-	last *pb.ForwardCommandRequest
+	resp   *pb.ForwardCommandResponse
+	err    error
+	last   *pb.ForwardCommandRequest
+	lastMD metadata.MD
 }
 
-func (f *fakeFoghornRelayClient) ForwardCommand(_ context.Context, req *pb.ForwardCommandRequest, _ ...grpc.CallOption) (*pb.ForwardCommandResponse, error) {
+func (f *fakeFoghornRelayClient) ForwardCommand(ctx context.Context, req *pb.ForwardCommandRequest, _ ...grpc.CallOption) (*pb.ForwardCommandResponse, error) {
 	f.last = req
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		f.lastMD = md
+	}
 	return f.resp, f.err
 }
 
@@ -326,6 +331,51 @@ func (p *racingRelayPool) GetOrCreate(_, _ string) (CommandRelayClient, error) {
 	return nil, p.err
 }
 
+func TestForward_NotConfigured(t *testing.T) {
+	r := buildRelay(t, nil, "self-instance", "10.0.0.1:9090", nil)
+	err := r.forward(context.Background(), &pb.ForwardCommandRequest{TargetNodeId: "node-1"})
+	if err == nil {
+		t.Fatal("expected not configured error")
+	}
+	if !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("expected not configured context, got %v", err)
+	}
+}
+
+func TestForward_AttachesRelayMetadata(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	fakeRelay := &fakeFoghornRelayClient{resp: &pb.ForwardCommandResponse{Delivered: true}}
+	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}})
+
+	err := r.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: "node-1",
+		Command: &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{
+			DvrHash:   "dvr-1",
+			RequestId: "req-123",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error on successful relay, got %v", err)
+	}
+	if got := fakeRelay.lastMD.Get("x-foghorn-instance-id"); len(got) != 1 || got[0] != "self-instance" {
+		t.Fatalf("expected x-foghorn-instance-id=self-instance, got %v", got)
+	}
+	if got := fakeRelay.lastMD.Get("x-relay-target-node-id"); len(got) != 1 || got[0] != "node-1" {
+		t.Fatalf("expected x-relay-target-node-id=node-1, got %v", got)
+	}
+	if got := fakeRelay.lastMD.Get("x-relay-command-type"); len(got) != 1 || got[0] != "dvr_stop" {
+		t.Fatalf("expected x-relay-command-type=dvr_stop, got %v", got)
+	}
+	if got := fakeRelay.lastMD.Get("x-relay-request-id"); len(got) != 1 || got[0] != "req-123" {
+		t.Fatalf("expected x-relay-request-id=req-123, got %v", got)
+	}
+}
+
 // --- Send* with relay ---
 
 func TestSendWithRelay_LocalSuccess(t *testing.T) {
@@ -374,6 +424,30 @@ func TestSendWithRelay_LocalFailRelay(t *testing.T) {
 	err := SendClipPull("node-1", &pb.ClipPullRequest{})
 	if err != nil {
 		t.Fatalf("expected nil error after relay success, got %v", err)
+	}
+}
+
+func TestSendWithRelay_PropagatesRelayFailure(t *testing.T) {
+	ensureRegistry(t)
+
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	fakeRelay := &fakeFoghornRelayClient{
+		resp: &pb.ForwardCommandResponse{Delivered: false, Error: "peer says no"},
+	}
+	p := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
+	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", p))
+
+	err := SendDVRStop("node-1", &pb.DVRStopRequest{RequestId: "req-9"})
+	if err == nil {
+		t.Fatal("expected combined local+relay error")
+	}
+	if !strings.Contains(err.Error(), "relay failed") {
+		t.Fatalf("expected relay failure details, got %v", err)
 	}
 }
 
