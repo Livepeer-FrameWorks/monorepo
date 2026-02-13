@@ -176,6 +176,8 @@ foghorn:
     CLUSTER_ID: ${CLUSTER_ID}
     REDIS_URL: redis://foghorn-redis:6379
     FOGHORN_INSTANCE_ID: foghorn-1
+    FOGHORN_CONTROL_BIND_ADDR: 0.0.0.0:18019
+    FOGHORN_GRPC_PORT: 18019 # optional override; defaults to control bind port
     NODE_ID: regional-1 # used by BootstrapService to resolve mesh address for relay
   ports: [18008, 18019]
 
@@ -185,6 +187,8 @@ foghorn-2:
     CLUSTER_ID: ${CLUSTER_ID}
     REDIS_URL: redis://foghorn-redis:6379
     FOGHORN_INSTANCE_ID: foghorn-2
+    FOGHORN_CONTROL_BIND_ADDR: 0.0.0.0:18029
+    FOGHORN_GRPC_PORT: 18029
     NODE_ID: regional-2
   ports: [18018, 18029]
 ```

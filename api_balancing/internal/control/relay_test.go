@@ -603,3 +603,65 @@ func TestSendWithRelay_LocalSendErrorDoesNotRelay(t *testing.T) {
 		t.Fatal("relay pool should not be called when local stream send fails")
 	}
 }
+
+func TestDeleteConnOwnerIfMatch(t *testing.T) {
+	store, mr := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.SetConnOwner(ctx, "node-1", "inst-old", "10.0.0.1:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	deleted, err := store.DeleteConnOwnerIfMatch(ctx, "node-1", "inst-other", "10.0.0.9:9090")
+	if err != nil {
+		t.Fatalf("DeleteConnOwnerIfMatch mismatch: %v", err)
+	}
+	if deleted {
+		t.Fatal("expected mismatch cleanup to skip delete")
+	}
+	if !mr.Exists("{test-cluster}:conn_owner:node-1") {
+		t.Fatal("expected conn_owner key to remain after mismatch")
+	}
+
+	deleted, err = store.DeleteConnOwnerIfMatch(ctx, "node-1", "inst-old", "10.0.0.1:9090")
+	if err != nil {
+		t.Fatalf("DeleteConnOwnerIfMatch match: %v", err)
+	}
+	if !deleted {
+		t.Fatal("expected matching cleanup to delete key")
+	}
+	if mr.Exists("{test-cluster}:conn_owner:node-1") {
+		t.Fatal("expected conn_owner key to be deleted")
+	}
+}
+
+func TestDeleteConnOwnerIfMatch_PreventsStaleCleanupRace(t *testing.T) {
+	store, mr := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.SetConnOwner(ctx, "node-race", "inst-old", "10.0.0.1:9090"); err != nil {
+		t.Fatalf("SetConnOwner old: %v", err)
+	}
+	if err := store.SetConnOwner(ctx, "node-race", "inst-new", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner new: %v", err)
+	}
+
+	deleted, err := store.DeleteConnOwnerIfMatch(ctx, "node-race", "inst-old", "10.0.0.1:9090")
+	if err != nil {
+		t.Fatalf("DeleteConnOwnerIfMatch stale: %v", err)
+	}
+	if deleted {
+		t.Fatal("stale cleanup should not delete ownership of newer connection")
+	}
+
+	owner, err := store.GetConnOwner(ctx, "node-race")
+	if err != nil {
+		t.Fatalf("GetConnOwner: %v", err)
+	}
+	if owner.InstanceID != "inst-new" || owner.GRPCAddr != "10.0.0.2:9090" {
+		t.Fatalf("unexpected owner after stale cleanup: %+v", owner)
+	}
+	if !mr.Exists("{test-cluster}:conn_owner:node-race") {
+		t.Fatal("expected conn_owner key to remain for new owner")
+	}
+}
