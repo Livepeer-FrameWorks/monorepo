@@ -10,6 +10,7 @@
     GetServiceInstancesConnectionStore,
     SystemHealthStore,
     NodeListFieldsStore,
+    PageInfoFieldsStore,
   } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -21,6 +22,11 @@
   import { Badge } from "$lib/components/ui/badge";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import {
+    filterNodePerformance,
+    serviceInstanceRenderKey,
+    sortServiceInstancesForRender,
+  } from "$lib/utils/infrastructure-data";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { formatBytes } from "$lib/utils/formatters.js";
 
@@ -38,6 +44,7 @@
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
   const systemHealthSub = new SystemHealthStore();
   const nodeCoreStore = new NodeListFieldsStore();
+  const pageInfoStore = new PageInfoFieldsStore();
 
   let isAuthenticated = false;
 
@@ -48,18 +55,25 @@
   let allNodes = $derived(maskedNodes.map((n) => get(fragment(n, nodeCoreStore))));
   let node = $derived(allNodes.find((n) => n.id === nodeRelayId) ?? null);
   let nodeId = $derived(node?.nodeId ?? "");
+  let loadSequence = 0;
 
   let serviceInstances = $derived(
-    (
-      $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.edges?.map(
-        (e) => e.node
-      ) ?? []
-    ).filter((s) => s.nodeId === nodeId)
+    sortServiceInstancesForRender(
+      (
+        $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.edges?.map(
+          (e) => e.node
+        ) ?? []
+      ).filter((s) => s.nodeId === nodeId)
+    )
   );
 
   // 5-minute performance data
   let perfData = $derived(
-    $perfStore.data?.analytics?.infra?.nodePerformance5mConnection?.edges?.map((e) => e.node) ?? []
+    filterNodePerformance(
+      $perfStore.data?.analytics?.infra?.nodePerformance5mConnection?.edges?.map((e) => e.node) ??
+        [],
+      nodeId
+    )
   );
 
   // Real-time health
@@ -190,11 +204,12 @@
   });
 
   async function loadNodeData() {
+    const requestID = ++loadSequence;
     try {
-      await nodesStore.fetch();
+      const foundNode = await findNodeByRelayID(nodeRelayId);
+      if (requestID !== loadSequence) return;
 
       // Once we have the node, fetch performance + services using its nodeId
-      const foundNode = allNodes.find((n) => n.id === nodeRelayId);
       if (foundNode) {
         const range = resolveTimeRange(timeRange);
         const timeRangeInput = { start: range.start, end: range.end };
@@ -215,6 +230,23 @@
       console.error("Failed to load node data:", error);
       toast.error("Failed to load node data.");
     }
+  }
+
+  async function findNodeByRelayID(relayID: string) {
+    let cursor: string | undefined;
+    for (let pageCount = 0; pageCount < 20; pageCount += 1) {
+      await nodesStore.fetch({ variables: { first: 100, after: cursor } });
+      const edges = $nodesStore.data?.nodesConnection?.edges ?? [];
+      const found = edges.map((edge) => edge.node).find((item) => item.id === relayID);
+      if (found) return get(fragment(found, nodeCoreStore));
+
+      const maskedPageInfo = $nodesStore.data?.nodesConnection?.pageInfo;
+      const pageInfo = maskedPageInfo ? get(fragment(maskedPageInfo, pageInfoStore)) : null;
+      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) return null;
+      cursor = pageInfo.endCursor;
+    }
+
+    return null;
   }
 
   // Real-time health subscription
@@ -568,7 +600,7 @@
               />
             {:else}
               <div class="space-y-2">
-                {#each serviceInstances as instance, index (`${instance.id}-${index}`)}
+                {#each serviceInstances as instance (serviceInstanceRenderKey(instance))}
                   <div class="flex items-center justify-between p-3 border border-border/50">
                     <div class="flex items-center gap-3">
                       <div

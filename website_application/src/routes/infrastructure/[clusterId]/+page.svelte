@@ -22,6 +22,10 @@
   import { Card, CardContent } from "$lib/components/ui/card";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import {
+    serviceInstanceRenderKey,
+    sortServiceInstancesForRender,
+  } from "$lib/utils/infrastructure-data";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
 
   const ArrowLeftIcon = getIconComponent("ArrowLeft");
@@ -55,9 +59,11 @@
   let totalNodeCount = $derived($nodesStore.data?.nodesConnection?.totalCount ?? 0);
 
   let serviceInstances = $derived(
-    $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.edges?.map(
-      (e) => e.node
-    ) ?? []
+    sortServiceInstancesForRender(
+      $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.edges?.map(
+        (e) => e.node
+      ) ?? []
+    )
   );
 
   let clusterAvgCpu = $derived.by(() => {
@@ -554,7 +560,7 @@
               />
             {:else}
               <div class="space-y-2">
-                {#each serviceInstances as instance, index (`${instance.id}-${index}`)}
+                {#each serviceInstances as instance (serviceInstanceRenderKey(instance))}
                   <div class="flex items-center justify-between p-3 border border-border/50">
                     <div class="flex items-center gap-3">
                       <div
