@@ -661,7 +661,6 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")
 	}
-	defer grpcServer.GracefulStop()
 
 	// Start cert refresh loop (re-pushes ConfigSeed when Navigator renews wildcard certs)
 	certRefreshCtx, certRefreshCancel := context.WithCancel(context.Background())
@@ -748,6 +747,17 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	control.CleanupLocalConnOwners(shutdownCtx)
+
+	done := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-shutdownCtx.Done():
+		grpcServer.Stop()
+	}
 }
 
 func controlPortFromBindAddr(bindAddr string, fallback int) int {
