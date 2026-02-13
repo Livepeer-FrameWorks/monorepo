@@ -1406,7 +1406,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each bucketFlows.slice(0, 10) as flow (flow.from + flow.to)}
+                      {#each bucketFlows.slice(0, 10) as flow (flow.from + flow.to + flow.crossCluster)}
                         <tr class="border-b border-border/30 hover:bg-muted/15">
                           <td class="py-2 px-4 text-xs font-mono" title={flow.from}>
                             {resolveBucketLocation(flow.from, bucketCountryMap)}
