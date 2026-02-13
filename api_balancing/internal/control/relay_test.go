@@ -268,6 +268,58 @@ func TestForward_DialError(t *testing.T) {
 	if !strings.Contains(err.Error(), "connection refused") {
 		t.Fatalf("expected dial error, got %v", err)
 	}
+
+	owner, ownerErr := store.GetConnOwner(ctx, "node-1")
+	if ownerErr != nil {
+		t.Fatalf("GetConnOwner: %v", ownerErr)
+	}
+	if owner.InstanceID != "" {
+		t.Fatalf("expected stale owner entry to be cleared after dial failure, got %+v", owner)
+	}
+}
+
+func TestForward_DialError_PreservesFreshOwner(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "node-1", "stale-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	// Pool that simulates a race: when dial is attempted (after forward reads
+	// the stale owner), another instance takes over and writes a fresh owner.
+	racingPool := &racingRelayPool{
+		err:   fmt.Errorf("connection refused"),
+		store: store,
+	}
+	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", racingPool)
+
+	err := r.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: "node-1",
+		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}},
+	})
+	if err == nil {
+		t.Fatal("expected error on dial failure")
+	}
+
+	owner, ownerErr := store.GetConnOwner(ctx, "node-1")
+	if ownerErr != nil {
+		t.Fatalf("GetConnOwner: %v", ownerErr)
+	}
+	if owner.InstanceID != "fresh-instance" {
+		t.Fatalf("expected fresh owner to survive stale eviction, got %+v", owner)
+	}
+}
+
+// racingRelayPool writes a fresh conn_owner when GetOrCreate is called,
+// simulating another instance taking over between the read and eviction.
+type racingRelayPool struct {
+	err   error
+	store *state.RedisStateStore
+}
+
+func (p *racingRelayPool) GetOrCreate(_, _ string) (CommandRelayClient, error) {
+	_ = p.store.SetConnOwner(context.Background(), "node-1", "fresh-instance", "10.0.0.3:9090")
+	return nil, p.err
 }
 
 // --- Send* with relay ---
@@ -328,6 +380,28 @@ func TestSendWithRelay_NoRelay(t *testing.T) {
 	err := SendDVRStop("node-1", &pb.DVRStopRequest{})
 	if !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("expected ErrNotConnected when relay is nil, got %v", err)
+	}
+}
+
+func TestSendWithRelay_ReturnsLocalAndRelayFailure(t *testing.T) {
+	ensureRegistry(t)
+
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	pool := &mockRelayPool{err: fmt.Errorf("dial timeout")}
+	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
+	setCommandRelay(t, r)
+
+	err := SendDVRStop("node-1", &pb.DVRStopRequest{})
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("expected ErrNotConnected wrapper, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "relay failed: relay: dial") {
+		t.Fatalf("expected relay failure details in error, got %v", err)
 	}
 }
 

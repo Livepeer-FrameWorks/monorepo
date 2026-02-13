@@ -321,18 +321,34 @@ func (r *CommandRelay) forward(ctx context.Context, req *pb.ForwardCommandReques
 	if owner.GRPCAddr == "" {
 		return fmt.Errorf("relay: no address for instance %s", owner.InstanceID)
 	}
+	evictStale := func() {
+		_, _ = r.store.DeleteConnOwnerIfMatch(ctx, req.TargetNodeId, owner.InstanceID, owner.GRPCAddr)
+	}
 	client, err := r.pool.GetOrCreate(owner.InstanceID, owner.GRPCAddr)
 	if err != nil {
+		evictStale()
 		return fmt.Errorf("relay: dial %s: %w", owner.GRPCAddr, err)
 	}
 	resp, err := client.Relay().ForwardCommand(ctx, req)
 	if err != nil {
+		evictStale()
 		return fmt.Errorf("relay: forward to %s: %w", owner.InstanceID, err)
 	}
 	if !resp.Delivered {
+		evictStale()
 		return fmt.Errorf("relay: peer %s rejected: %s", owner.InstanceID, resp.Error)
 	}
 	return nil
+}
+
+func relayFailure(localErr, relayErr error) error {
+	if relayErr == nil {
+		return nil
+	}
+	if localErr == nil {
+		return relayErr
+	}
+	return fmt.Errorf("%w (relay failed: %w)", localErr, relayErr)
 }
 
 // SetDB sets the database connection for clip operations
@@ -774,7 +790,15 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				state.DefaultManager().TouchNode(nodeID, true)
 				// HA: refresh connection ownership TTL
 				if rs := GetRedisStore(); rs != nil {
-					_ = rs.RefreshConnOwner(context.Background(), nodeID)
+					if err := rs.RefreshConnOwner(context.Background(), nodeID); err != nil {
+						if errors.Is(err, state.ErrConnOwnerMissing) {
+							if setErr := rs.SetConnOwner(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); setErr != nil {
+								registry.log.WithError(setErr).WithField("node_id", nodeID).Warn("Failed to restore conn owner in Redis")
+							}
+						} else {
+							registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to refresh conn owner TTL")
+						}
+					}
 				}
 			}
 		case *pb.ControlMessage_DvrStartRequest:
@@ -847,7 +871,8 @@ func SendLocalClipPull(nodeID string, req *pb.ClipPullRequest) error {
 
 // SendClipPull sends a ClipPullRequest to the given node, relaying via HA if needed.
 func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
-	if err := SendLocalClipPull(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalClipPull(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -859,7 +884,7 @@ func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ClipPull{ClipPull: req},
 	}); relayErr != nil {
-		return ErrNotConnected
+		return relayFailure(err, relayErr)
 	}
 	return nil
 }
@@ -880,7 +905,8 @@ func SendLocalDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 
 // SendDVRStart sends a DVRStartRequest to the given node, relaying via HA if needed.
 func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
-	if err := SendLocalDVRStart(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalDVRStart(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -892,7 +918,7 @@ func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrStart{DvrStart: req},
 	}); relayErr != nil {
-		return ErrNotConnected
+		return relayFailure(err, relayErr)
 	}
 	return nil
 }
@@ -913,7 +939,8 @@ func SendLocalDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 
 // SendDVRStop sends a DVRStopRequest to the given node, relaying via HA if needed.
 func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
-	if err := SendLocalDVRStop(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalDVRStop(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -925,7 +952,7 @@ func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: req},
 	}); relayErr != nil {
-		return ErrNotConnected
+		return relayFailure(err, relayErr)
 	}
 	return nil
 }
@@ -946,7 +973,8 @@ func SendLocalClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 
 // SendClipDelete sends a ClipDeleteRequest to the given node, relaying via HA if needed.
 func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
-	if err := SendLocalClipDelete(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalClipDelete(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -958,7 +986,7 @@ func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ClipDelete{ClipDelete: req},
 	}); relayErr != nil {
-		return ErrNotConnected
+		return relayFailure(err, relayErr)
 	}
 	return nil
 }
@@ -979,7 +1007,8 @@ func SendLocalDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 
 // SendDVRDelete sends a DVRDeleteRequest to the given node, relaying via HA if needed.
 func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
-	if err := SendLocalDVRDelete(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalDVRDelete(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -991,7 +1020,7 @@ func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrDelete{DvrDelete: req},
 	}); relayErr != nil {
-		return ErrNotConnected
+		return relayFailure(err, relayErr)
 	}
 	return nil
 }
@@ -1012,7 +1041,8 @@ func SendLocalVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 
 // SendVodDelete sends a VodDeleteRequest to the given node, relaying via HA if needed.
 func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
-	if err := SendLocalVodDelete(nodeID, req); !shouldRelay(nodeID, err) {
+	err := SendLocalVodDelete(nodeID, req)
+	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
@@ -1024,7 +1054,7 @@ func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_VodDelete{VodDelete: req},
 	}); relayErr != nil {
-		return ErrNotConnected
+		return relayFailure(err, relayErr)
 	}
 	return nil
 }

@@ -13,6 +13,21 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
+const connOwnerTTL = 60 * time.Second
+
+var ErrConnOwnerMissing = errors.New("conn owner key missing")
+
+// deleteConnOwnerIfMatch atomically deletes the key only if its value still
+// matches expectedVal, preventing a stale eviction from clobbering a fresh
+// owner written by another instance during failover.
+var deleteConnOwnerIfMatch = goredis.NewScript(`
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+else
+  return 0
+end
+`)
+
 type StateEntity string
 
 type StateOperation string
@@ -204,7 +219,7 @@ func decodeConnOwner(val string) ConnOwner {
 }
 
 func (r *RedisStateStore) SetConnOwner(ctx context.Context, nodeID, instanceID, grpcAddr string) error {
-	return r.client.Set(ctx, r.keyConnOwner(nodeID), encodeConnOwner(instanceID, grpcAddr), 60*time.Second).Err()
+	return r.client.Set(ctx, r.keyConnOwner(nodeID), encodeConnOwner(instanceID, grpcAddr), connOwnerTTL).Err()
 }
 
 func (r *RedisStateStore) GetConnOwner(ctx context.Context, nodeID string) (ConnOwner, error) {
@@ -222,8 +237,28 @@ func (r *RedisStateStore) DeleteConnOwner(ctx context.Context, nodeID string) er
 	return r.client.Del(ctx, r.keyConnOwner(nodeID)).Err()
 }
 
+// DeleteConnOwnerIfMatch deletes the conn_owner key only if it still holds
+// the value for the given instance. Returns true if the key was deleted.
+func (r *RedisStateStore) DeleteConnOwnerIfMatch(ctx context.Context, nodeID, instanceID, grpcAddr string) (bool, error) {
+	res, err := deleteConnOwnerIfMatch.Run(ctx, r.client,
+		[]string{r.keyConnOwner(nodeID)},
+		encodeConnOwner(instanceID, grpcAddr),
+	).Int64()
+	if err != nil {
+		return false, err
+	}
+	return res == 1, nil
+}
+
 func (r *RedisStateStore) RefreshConnOwner(ctx context.Context, nodeID string) error {
-	return r.client.Expire(ctx, r.keyConnOwner(nodeID), 60*time.Second).Err()
+	ok, err := r.client.Expire(ctx, r.keyConnOwner(nodeID), connOwnerTTL).Result()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrConnOwnerMissing
+	}
+	return nil
 }
 
 func (r *RedisStateStore) PublishStateChange(change StateChange) error {
