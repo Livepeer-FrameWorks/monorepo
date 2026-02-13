@@ -847,12 +847,11 @@ func SendLocalClipPull(nodeID string, req *pb.ClipPullRequest) error {
 
 // SendClipPull sends a ClipPullRequest to the given node, relaying via HA if needed.
 func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
-	err := SendLocalClipPull(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalClipPull(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -860,7 +859,7 @@ func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ClipPull{ClipPull: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -881,12 +880,11 @@ func SendLocalDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 
 // SendDVRStart sends a DVRStartRequest to the given node, relaying via HA if needed.
 func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
-	err := SendLocalDVRStart(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalDVRStart(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -894,7 +892,7 @@ func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrStart{DvrStart: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -915,12 +913,11 @@ func SendLocalDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 
 // SendDVRStop sends a DVRStopRequest to the given node, relaying via HA if needed.
 func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
-	err := SendLocalDVRStop(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalDVRStop(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -928,7 +925,7 @@ func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -949,12 +946,11 @@ func SendLocalClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 
 // SendClipDelete sends a ClipDeleteRequest to the given node, relaying via HA if needed.
 func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
-	err := SendLocalClipDelete(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalClipDelete(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -962,7 +958,7 @@ func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ClipDelete{ClipDelete: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -983,12 +979,11 @@ func SendLocalDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 
 // SendDVRDelete sends a DVRDeleteRequest to the given node, relaying via HA if needed.
 func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
-	err := SendLocalDVRDelete(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalDVRDelete(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -996,7 +991,7 @@ func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_DvrDelete{DvrDelete: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }
@@ -1017,12 +1012,11 @@ func SendLocalVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 
 // SendVodDelete sends a VodDeleteRequest to the given node, relaying via HA if needed.
 func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
-	err := SendLocalVodDelete(nodeID, req)
-	if err == nil {
-		return nil
+	if err := SendLocalVodDelete(nodeID, req); !errors.Is(err, ErrNotConnected) {
+		return err
 	}
 	if commandRelay == nil {
-		return err
+		return ErrNotConnected
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1030,7 +1024,7 @@ func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_VodDelete{VodDelete: req},
 	}); relayErr != nil {
-		return err
+		return ErrNotConnected
 	}
 	return nil
 }

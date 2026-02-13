@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -70,9 +72,11 @@ func (m *mockRelayPool) GetOrCreate(_, _ string) (CommandRelayClient, error) {
 type fakeFoghornRelayClient struct {
 	resp *pb.ForwardCommandResponse
 	err  error
+	last *pb.ForwardCommandRequest
 }
 
-func (f *fakeFoghornRelayClient) ForwardCommand(_ context.Context, _ *pb.ForwardCommandRequest, _ ...grpc.CallOption) (*pb.ForwardCommandResponse, error) {
+func (f *fakeFoghornRelayClient) ForwardCommand(_ context.Context, req *pb.ForwardCommandRequest, _ ...grpc.CallOption) (*pb.ForwardCommandResponse, error) {
+	f.last = req
 	return f.resp, f.err
 }
 
@@ -366,4 +370,71 @@ func TestSendWithRelay_MultipleSendTypes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
+	ensureRegistry(t)
+
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	fakeRelay := &fakeFoghornRelayClient{resp: &pb.ForwardCommandResponse{Delivered: true}}
+	p := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
+	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", p))
+
+	sendByField := map[string]func() error{
+		"config_seed":   func() error { return SendConfigSeed("node-1", &pb.ConfigSeed{NodeId: "node-1"}) },
+		"clip_pull":     func() error { return SendClipPull("node-1", &pb.ClipPullRequest{}) },
+		"dvr_start":     func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) },
+		"dvr_stop":      func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) },
+		"clip_delete":   func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) },
+		"dvr_delete":    func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) },
+		"vod_delete":    func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) },
+		"defrost":       func() error { return SendDefrostRequest("node-1", &pb.DefrostRequest{}) },
+		"dtsh_sync":     func() error { return SendDtshSyncRequest("node-1", &pb.DtshSyncRequest{}) },
+		"stop_sessions": func() error { return SendStopSessions("node-1", &pb.StopSessionsRequest{}) },
+	}
+
+	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()
+	fieldsFromProto := make(map[string]struct{}, oneofFields.Len())
+	for i := 0; i < oneofFields.Len(); i++ {
+		fieldsFromProto[string(oneofFields.Get(i).Name())] = struct{}{}
+	}
+
+	if !maps.Equal(fieldsFromProto, toSet(sendByField)) {
+		t.Fatalf("send relay coverage mismatch: proto=%v senders=%v", sortedKeys(fieldsFromProto), sortedKeys(toSet(sendByField)))
+	}
+
+	for field, send := range sendByField {
+		t.Run(field, func(t *testing.T) {
+			fakeRelay.last = nil
+			if err := send(); err != nil {
+				t.Fatalf("send command %s: %v", field, err)
+			}
+			if fakeRelay.last == nil || fakeRelay.last.GetCommand() == nil {
+				t.Fatalf("send command %s: expected forwarded command", field)
+			}
+			got := string(fakeRelay.last.ProtoReflect().WhichOneof(fakeRelay.last.ProtoReflect().Descriptor().Oneofs().ByName("command")).Name())
+			if got != field {
+				t.Fatalf("send command mismatch: expected=%s got=%s", field, got)
+			}
+		})
+	}
+}
+
+func toSet[V any](m map[string]V) map[string]struct{} {
+	out := make(map[string]struct{}, len(m))
+	for k := range m {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func sortedKeys(m map[string]struct{}) []string {
+	keys := slices.Collect(maps.Keys(m))
+	slices.Sort(keys)
+	return keys
 }

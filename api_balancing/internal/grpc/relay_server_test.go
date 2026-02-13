@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 
@@ -50,9 +52,7 @@ func TestForwardCommand_MissingNodeID(t *testing.T) {
 func TestForwardCommand_UnknownCommandType(t *testing.T) {
 	srv := NewRelayServer(logging.NewLogger())
 
-	_, err := srv.ForwardCommand(context.Background(), &pb.ForwardCommandRequest{
-		TargetNodeId: "node-1",
-	})
+	_, err := srv.ForwardCommand(context.Background(), &pb.ForwardCommandRequest{TargetNodeId: "node-1"})
 	if err == nil {
 		t.Fatal("expected error for nil command")
 	}
@@ -87,67 +87,58 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 	srv := NewRelayServer(logging.NewLogger())
 
 	commands := []struct {
-		name string
-		cmd  *pb.ForwardCommandRequest
+		field   string
+		cmd     *pb.ForwardCommandRequest
+		payload string
 	}{
-		{"ConfigSeed", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: &pb.ConfigSeed{NodeId: "node-1"}},
-		}},
-		{"ClipPull", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_ClipPull{ClipPull: &pb.ClipPullRequest{}},
-		}},
-		{"DVRStart", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_DvrStart{DvrStart: &pb.DVRStartRequest{}},
-		}},
-		{"DVRStop", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}},
-		}},
-		{"ClipDelete", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_ClipDelete{ClipDelete: &pb.ClipDeleteRequest{}},
-		}},
-		{"DVRDelete", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_DvrDelete{DvrDelete: &pb.DVRDeleteRequest{}},
-		}},
-		{"VodDelete", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_VodDelete{VodDelete: &pb.VodDeleteRequest{}},
-		}},
-		{"Defrost", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_Defrost{Defrost: &pb.DefrostRequest{}},
-		}},
-		{"DtshSync", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_DtshSync{DtshSync: &pb.DtshSyncRequest{}},
-		}},
-		{"StopSessions", &pb.ForwardCommandRequest{
-			TargetNodeId: "node-1",
-			Command:      &pb.ForwardCommandRequest_StopSessions{StopSessions: &pb.StopSessionsRequest{}},
-		}},
+		{"config_seed", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: &pb.ConfigSeed{NodeId: "node-1"}}}, "config_seed"},
+		{"clip_pull", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ClipPull{ClipPull: &pb.ClipPullRequest{}}}, "clip_pull_request"},
+		{"dvr_start", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrStart{DvrStart: &pb.DVRStartRequest{}}}, "dvr_start_request"},
+		{"dvr_stop", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}}}, "dvr_stop_request"},
+		{"clip_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ClipDelete{ClipDelete: &pb.ClipDeleteRequest{}}}, "clip_delete"},
+		{"dvr_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrDelete{DvrDelete: &pb.DVRDeleteRequest{}}}, "dvr_delete"},
+		{"vod_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_VodDelete{VodDelete: &pb.VodDeleteRequest{}}}, "vod_delete"},
+		{"defrost", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_Defrost{Defrost: &pb.DefrostRequest{}}}, "defrost_request"},
+		{"dtsh_sync", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DtshSync{DtshSync: &pb.DtshSyncRequest{}}}, "dtsh_sync_request"},
+		{"stop_sessions", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_StopSessions{StopSessions: &pb.StopSessionsRequest{}}}, "stop_sessions_request"},
 	}
 
+	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()
+	protoFields := make(map[string]struct{}, oneofFields.Len())
+	for i := 0; i < oneofFields.Len(); i++ {
+		protoFields[string(oneofFields.Get(i).Name())] = struct{}{}
+	}
+	commandFields := map[string]struct{}{}
 	for _, tc := range commands {
-		t.Run(tc.name, func(t *testing.T) {
+		commandFields[tc.field] = struct{}{}
+	}
+	if !maps.Equal(protoFields, commandFields) {
+		t.Fatalf("relay dispatch coverage mismatch: proto=%v tests=%v", sortedKeys(protoFields), sortedKeys(commandFields))
+	}
+
+	for i, tc := range commands {
+		t.Run(tc.field, func(t *testing.T) {
 			resp, err := srv.ForwardCommand(context.Background(), tc.cmd)
 			if err != nil {
-				t.Fatalf("ForwardCommand(%s): %v", tc.name, err)
+				t.Fatalf("ForwardCommand(%s): %v", tc.field, err)
 			}
 			if !resp.Delivered {
-				t.Fatalf("ForwardCommand(%s): expected Delivered=true, got error=%s", tc.name, resp.Error)
+				t.Fatalf("ForwardCommand(%s): expected Delivered=true, got error=%s", tc.field, resp.Error)
+			}
+
+			stream.mu.Lock()
+			msg := stream.sent[i]
+			stream.mu.Unlock()
+			gotPayload := string(msg.ProtoReflect().WhichOneof(msg.ProtoReflect().Descriptor().Oneofs().ByName("payload")).Name())
+			if gotPayload != tc.payload {
+				t.Fatalf("ForwardCommand(%s): expected payload=%s got=%s", tc.field, tc.payload, gotPayload)
 			}
 		})
 	}
+}
 
-	stream.mu.Lock()
-	count := len(stream.sent)
-	stream.mu.Unlock()
-	if count != len(commands) {
-		t.Fatalf("expected %d messages sent to stream, got %d", len(commands), count)
-	}
+func sortedKeys(m map[string]struct{}) []string {
+	keys := slices.Collect(maps.Keys(m))
+	slices.Sort(keys)
+	return keys
 }
