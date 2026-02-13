@@ -3355,25 +3355,21 @@ func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *mod
 	return pairs, nil
 }
 
-// enrichTrafficMatrixGeo attaches cluster lat/lon to traffic matrix pairs
-// by averaging node geo per cluster.
-func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*pb.ClusterPairTraffic) {
-	if len(pairs) == 0 {
-		return
-	}
-	nodesResp, err := r.Clients.Quartermaster.ListNodes(ctx, "", "", "", &pb.CursorPaginationRequest{First: 500})
-	if err != nil || nodesResp == nil {
-		return
-	}
-
-	type geo struct{ lat, lon float64 }
-	clusterGeo := make(map[string]geo)
+func computeClusterGeo(nodes []*pb.InfrastructureNode, clusterFilter map[string]struct{}) map[string]struct{ lat, lon float64 } {
 	type acc struct {
 		latSum, lonSum float64
 		n              int
 	}
 	accum := make(map[string]*acc)
-	for _, n := range nodesResp.Nodes {
+	for _, n := range nodes {
+		if n == nil || n.ClusterId == "" {
+			continue
+		}
+		if len(clusterFilter) > 0 {
+			if _, ok := clusterFilter[n.ClusterId]; !ok {
+				continue
+			}
+		}
 		if n.Latitude == nil || n.Longitude == nil {
 			continue
 		}
@@ -3386,13 +3382,21 @@ func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*pb.Clust
 		a.lonSum += *n.Longitude
 		a.n++
 	}
+
+	out := make(map[string]struct{ lat, lon float64 }, len(accum))
 	for cid, a := range accum {
 		if a.n > 0 {
-			clusterGeo[cid] = geo{lat: a.latSum / float64(a.n), lon: a.lonSum / float64(a.n)}
+			out[cid] = struct{ lat, lon float64 }{lat: a.latSum / float64(a.n), lon: a.lonSum / float64(a.n)}
 		}
 	}
+	return out
+}
 
+func applyTrafficGeo(pairs []*pb.ClusterPairTraffic, clusterGeo map[string]struct{ lat, lon float64 }) {
 	for _, p := range pairs {
+		if p == nil {
+			continue
+		}
 		if g, ok := clusterGeo[p.ClusterId]; ok {
 			p.LocalLatitude = &g.lat
 			p.LocalLongitude = &g.lon
@@ -3404,6 +3408,48 @@ func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*pb.Clust
 			}
 		}
 	}
+}
+
+// enrichTrafficMatrixGeo attaches cluster lat/lon to traffic matrix pairs
+// by averaging node geo per cluster.
+func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*pb.ClusterPairTraffic) {
+	if len(pairs) == 0 {
+		return
+	}
+	clusterIDs := make(map[string]struct{}, len(pairs)*2)
+	for _, p := range pairs {
+		if p == nil {
+			continue
+		}
+		if p.ClusterId != "" {
+			clusterIDs[p.ClusterId] = struct{}{}
+		}
+		if p.RemoteClusterId != "" {
+			clusterIDs[p.RemoteClusterId] = struct{}{}
+		}
+	}
+
+	nodes := make([]*pb.InfrastructureNode, 0)
+	for clusterID := range clusterIDs {
+		var after *string
+		for {
+			resp, err := r.Clients.Quartermaster.ListNodes(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 500, After: after})
+			if err != nil || resp == nil {
+				break
+			}
+			nodes = append(nodes, resp.Nodes...)
+			if resp.Pagination == nil || !resp.Pagination.HasNextPage || resp.Pagination.EndCursor == nil || *resp.Pagination.EndCursor == "" {
+				break
+			}
+			after = resp.Pagination.EndCursor
+		}
+	}
+
+	if len(nodes) == 0 {
+		return
+	}
+	clusterGeo := computeClusterGeo(nodes, clusterIDs)
+	applyTrafficGeo(pairs, clusterGeo)
 }
 
 // DoGetFederationEventsConnection returns federation events as a connection.
@@ -3547,11 +3593,21 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 	}
 
-	// Track which clusters have foghorn instances (for peer connection derivation)
+	activeClusters := make(map[string]*pb.InfrastructureCluster)
+	for _, c := range clustersResp.Clusters {
+		if c != nil && c.IsActive {
+			activeClusters[c.ClusterId] = c
+		}
+	}
+
+	// Track which active clusters have foghorn instances (for peer connection derivation)
 	foghornClusters := make(map[string]bool)
 	if poolStatus != nil {
 		for _, entry := range poolStatus.Clusters {
 			if entry.ClusterId != "" && entry.InstanceCount > 0 {
+				if _, ok := activeClusters[entry.ClusterId]; !ok {
+					continue
+				}
 				foghornClusters[entry.ClusterId] = true
 			}
 		}
@@ -3560,7 +3616,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	var clusters []*model.NetworkClusterStatus
 	var totalNodes, healthyNodes int
 	for _, c := range clustersResp.Clusters {
-		if !c.IsActive {
+		if _, ok := activeClusters[c.ClusterId]; !ok {
 			continue
 		}
 		var lat, lon float64

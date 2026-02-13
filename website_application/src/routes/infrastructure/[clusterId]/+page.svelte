@@ -8,8 +8,6 @@
     GetInfrastructureOverviewStore,
     GetNodesConnectionStore,
     GetServiceInstancesConnectionStore,
-    GetInfrastructureMetricsStore,
-    GetServiceInstancesHealthStore,
     SystemHealthStore,
     NodeListFieldsStore,
   } from "$houdini";
@@ -38,8 +36,6 @@
   const infrastructureStore = new GetInfrastructureOverviewStore();
   const nodesStore = new GetNodesConnectionStore();
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
-  const metricsStore = new GetInfrastructureMetricsStore();
-  const serviceHealthStore = new GetServiceInstancesHealthStore();
   const systemHealthSub = new SystemHealthStore();
   const nodeCoreStore = new NodeListFieldsStore();
 
@@ -64,26 +60,25 @@
     ) ?? []
   );
 
-  let serviceHealth = $derived(
-    ($serviceHealthStore.data?.analytics?.infra?.serviceInstancesHealth ?? []).filter(
-      (s) => s.clusterId === clusterId
-    )
-  );
-
-  // Cluster-scoped node metrics
-  let nodeMetrics = $derived.by(() => {
-    const aggregated = $metricsStore.data?.analytics?.infra?.nodeMetricsAggregated ?? [];
-    return aggregated.filter((m) => m.clusterId === clusterId);
-  });
-
   let clusterAvgCpu = $derived.by(() => {
-    if (nodeMetrics.length === 0) return 0;
-    return nodeMetrics.reduce((sum, m) => sum + (m.avgCpu ?? 0), 0) / nodeMetrics.length;
+    const metrics = nodes
+      .map((node) => node.liveState?.cpuPercent)
+      .filter((cpu): cpu is number => typeof cpu === "number");
+    if (metrics.length === 0) return 0;
+    return metrics.reduce((sum, value) => sum + value, 0) / metrics.length;
   });
 
   let clusterAvgMemory = $derived.by(() => {
-    if (nodeMetrics.length === 0) return 0;
-    return nodeMetrics.reduce((sum, m) => sum + (m.avgMemory ?? 0), 0) / nodeMetrics.length;
+    const metrics = nodes
+      .map((node) => {
+        const max = node.liveState?.ramTotalBytes;
+        const current = node.liveState?.ramUsedBytes;
+        if (!max || max <= 0 || current == null) return null;
+        return (current / max) * 100;
+      })
+      .filter((memory): memory is number => typeof memory === "number");
+    if (metrics.length === 0) return 0;
+    return metrics.reduce((sum, value) => sum + value, 0) / metrics.length;
   });
 
   // Real-time system health
@@ -163,17 +158,10 @@
 
   async function loadClusterData() {
     try {
-      const range = resolveTimeRange(timeRange);
-      const metricsFirst = Math.min(range.days * 24, 150);
-      const timeRangeInput = { start: range.start, end: range.end };
       await Promise.all([
         infrastructureStore.fetch(),
         nodesStore.fetch({ variables: { clusterId } }),
         serviceInstancesStore.fetch({ variables: { clusterId } }),
-        metricsStore.fetch({
-          variables: { timeRange: timeRangeInput, first: metricsFirst, noCache: false },
-        }),
-        serviceHealthStore.fetch().catch(() => null),
       ]);
 
       if ($infrastructureStore.errors?.length) {
@@ -614,53 +602,6 @@
             {/if}
           </div>
         </div>
-
-        <!-- Service Health Summary -->
-        {#if serviceHealth.length > 0}
-          <div class="slab col-span-full">
-            <div class="slab-header">
-              <div class="flex items-center gap-2">
-                <PackageIcon class="w-4 h-4 text-info" />
-                <h3>Service Health Checks</h3>
-              </div>
-            </div>
-            <div class="slab-body--padded">
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {#each serviceHealth as instance (instance.instanceId)}
-                  <div class="p-3 border border-border/50">
-                    <div class="flex items-center justify-between mb-2">
-                      <div>
-                        <p class="text-sm font-medium text-foreground">{instance.serviceId}</p>
-                      </div>
-                      <Badge
-                        variant="outline"
-                        class="uppercase text-[0.6rem] {instance.status?.toLowerCase() === 'healthy'
-                          ? 'text-success'
-                          : instance.status?.toLowerCase() === 'degraded'
-                            ? 'text-warning'
-                            : instance.status?.toLowerCase() === 'unhealthy'
-                              ? 'text-destructive'
-                              : 'text-muted-foreground'}"
-                      >
-                        {instance.status ?? "unknown"}
-                      </Badge>
-                    </div>
-                    {#if instance.host}
-                      <div class="text-xs text-muted-foreground font-mono">
-                        {instance.host}:{instance.port}
-                      </div>
-                    {/if}
-                    {#if instance.lastHealthCheck}
-                      <p class="text-[10px] text-muted-foreground mt-2">
-                        Last check: {new Date(instance.lastHealthCheck).toLocaleTimeString()}
-                      </p>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            </div>
-          </div>
-        {/if}
       </div>
     {/if}
   </div>
