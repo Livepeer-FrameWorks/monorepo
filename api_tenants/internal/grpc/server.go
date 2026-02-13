@@ -11,6 +11,7 @@ import (
 	"net"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -579,7 +580,49 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		s.logger.WithField("cluster_id", clusterID).Debug("Auto-selected single active cluster for bootstrap")
 	}
 
-	// 2. Get or create service record (service_id/type default to request type)
+	// 2. Derive protocol and advertise host
+	proto := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
+	if proto == "" {
+		proto = "http"
+	}
+
+	var nodeIP string
+	if req.NodeId != nil {
+		var nodeClusterID string
+		var resolvedNodeIP sql.NullString
+		err := exec.QueryRowContext(ctx, `
+			SELECT cluster_id, COALESCE(wireguard_ip::text, internal_ip::text, external_ip::text)
+			FROM quartermaster.infrastructure_nodes
+			WHERE node_id = $1
+		`, *req.NodeId).Scan(&nodeClusterID, &resolvedNodeIP)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "node '%s' not found", *req.NodeId)
+		}
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+		if nodeClusterID != clusterID {
+			return nil, status.Errorf(codes.InvalidArgument, "node '%s' belongs to cluster '%s', not '%s'", *req.NodeId, nodeClusterID, clusterID)
+		}
+		if resolvedNodeIP.Valid {
+			nodeIP = resolvedNodeIP.String
+		}
+	}
+
+	advHost := req.GetAdvertiseHost()
+	if advHost == "" {
+		advHost = req.GetHost()
+	}
+	if advHost == "" && req.NodeId != nil {
+		if nodeIP != "" {
+			advHost = nodeIP
+		}
+	}
+	if advHost == "" {
+		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered mesh address)")
+	}
+
+	// 3. Get or create service record (service_id/type default to request type)
 	var serviceID string
 	err := exec.QueryRowContext(ctx, `
 		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1
@@ -603,36 +646,11 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// 3. Normalize service ID for instance naming
+	// 4. Normalize service ID for instance naming
 	sluggedID := strings.ToLower(strings.TrimSpace(serviceID))
 	sluggedID = strings.ReplaceAll(sluggedID, " ", "-")
 	sluggedID = strings.ReplaceAll(sluggedID, "_", "-")
 	instanceID := fmt.Sprintf("inst-%s-%s", sluggedID, uuid.NewString()[:8])
-
-	// 4. Derive protocol and advertise host
-	proto := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
-	if proto == "" {
-		proto = "http"
-	}
-	advHost := req.GetAdvertiseHost()
-	if advHost == "" {
-		advHost = req.GetHost()
-	}
-	if advHost == "" && req.NodeId != nil {
-		// Derive advertise_host from the node's mesh address (wireguard_ip > internal_ip > external_ip)
-		var nodeIP sql.NullString
-		_ = exec.QueryRowContext(ctx, `
-			SELECT COALESCE(wireguard_ip::text, internal_ip::text, external_ip::text)
-			FROM quartermaster.infrastructure_nodes
-			WHERE node_id = $1 AND cluster_id = $2
-		`, *req.NodeId, clusterID).Scan(&nodeIP)
-		if nodeIP.Valid && nodeIP.String != "" {
-			advHost = nodeIP.String
-		}
-	}
-	if advHost == "" {
-		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered mesh address)")
-	}
 
 	healthEndpoint := req.HealthEndpoint
 	port := req.GetPort()
@@ -753,7 +771,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		}
 	}
 	if advHost != "" && port > 0 {
-		addr := fmt.Sprintf("%s:%d", advHost, port)
+		addr := net.JoinHostPort(advHost, strconv.Itoa(int(port)))
 		resp.AdvertiseAddr = &addr
 	}
 	return resp, nil

@@ -316,9 +316,16 @@ CREATE INDEX IF NOT EXISTS idx_qm_fca_foghorn ON quartermaster.foghorn_cluster_a
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_clusters_cluster_type ON quartermaster.infrastructure_clusters(cluster_type);
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_clusters_owner_tenant ON quartermaster.infrastructure_clusters(owner_tenant_id);
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_cluster_id ON quartermaster.infrastructure_nodes(cluster_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_node_cluster_unique ON quartermaster.infrastructure_nodes(node_id, cluster_id);
 CREATE INDEX IF NOT EXISTS idx_qm_services_plane ON quartermaster.services(plane);
 CREATE INDEX IF NOT EXISTS idx_qm_cluster_services_cluster_id ON quartermaster.cluster_services(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_qm_service_instances_cluster_id ON quartermaster.service_instances(cluster_id);
+ALTER TABLE quartermaster.service_instances
+    DROP CONSTRAINT IF EXISTS fk_qm_service_instances_node_cluster;
+ALTER TABLE quartermaster.service_instances
+    ADD CONSTRAINT fk_qm_service_instances_node_cluster
+    FOREIGN KEY (node_id, cluster_id)
+    REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id) NOT VALID;
 
 -- ============================================================================
 -- TENANT-CLUSTER MAPPING & ACCESS CONTROL
@@ -505,4 +512,3 @@ CREATE INDEX IF NOT EXISTS idx_qm_service_instances_status_last_check ON quarter
 CREATE UNIQUE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_wireguard_ip_unique
     ON quartermaster.infrastructure_nodes(wireguard_ip)
     WHERE wireguard_ip IS NOT NULL;
-

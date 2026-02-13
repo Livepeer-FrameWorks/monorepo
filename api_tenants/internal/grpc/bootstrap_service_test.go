@@ -145,3 +145,110 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
+
+func TestBootstrapServiceRejectsMissingNodeReference(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
+	mock.ExpectQuery("SELECT cluster_id, COALESCE\\(wireguard_ip::text, internal_ip::text, external_ip::text\\)").
+		WithArgs("node-missing").
+		WillReturnError(sql.ErrNoRows)
+
+	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:      "bridge",
+		ClusterId: strPtr("cluster-1"),
+		NodeId:    strPtr("node-missing"),
+		Port:      18000,
+		Host:      "10.0.0.1",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestBootstrapServiceRejectsNodeFromDifferentCluster(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
+		WithArgs("cluster-a").
+		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
+	mock.ExpectQuery("SELECT cluster_id, COALESCE\\(wireguard_ip::text, internal_ip::text, external_ip::text\\)").
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "addr"}).AddRow("cluster-b", "10.1.0.10"))
+
+	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:      "bridge",
+		ClusterId: strPtr("cluster-a"),
+		NodeId:    strPtr("node-1"),
+		Port:      18000,
+		Host:      "10.0.0.1",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestBootstrapServiceFormatsIPv6AdvertiseAddr(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
+	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
+		WithArgs("bridge").
+		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
+	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
+		WithArgs("bridge", "cluster-1", "http", int32(443)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO quartermaster.service_instances").
+		WithArgs(sqlmock.AnyArg(), "cluster-1", nil, "bridge", "http", "2001:db8::10", (*string)(nil), "", int32(443)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
+		WithArgs("cluster-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
+		WithArgs("bridge", "cluster-1", sqlmock.AnyArg(), "2001:db8::10", "http", int32(443)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:      "bridge",
+		ClusterId: strPtr("cluster-1"),
+		Port:      443,
+		Host:      "2001:db8::10",
+	})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if resp.GetAdvertiseAddr() != "[2001:db8::10]:443" {
+		t.Fatalf("expected bracketed IPv6 advertise addr, got %q", resp.GetAdvertiseAddr())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
