@@ -201,7 +201,7 @@ func normalizeClusterRoute(route *clusterRoute) {
 		}
 		if route.foghornAddr == "" {
 			for _, peer := range route.clusterPeers {
-				if peer.GetFoghornGrpcAddr() != "" {
+				if peer.GetFoghornGrpcAddr() != "" && (route.clusterID == "" || peer.GetClusterId() == "" || peer.GetClusterId() == route.clusterID) {
 					route.foghornAddr = peer.GetFoghornGrpcAddr()
 					if route.clusterID == "" {
 						route.clusterID = peer.GetClusterId()

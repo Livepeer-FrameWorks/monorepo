@@ -31,7 +31,7 @@ func (s *testTenantControlServer) InvalidateTenantCache(context.Context, *pb.Inv
 
 func startTenantControlTestServer(t *testing.T, svc pb.TenantControlServiceServer) string {
 	t.Helper()
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
