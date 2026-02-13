@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+
 	pb "frameworks/pkg/proto"
 )
 
@@ -323,7 +325,7 @@ func (s stubPeerResolver) GetPeerAddr(clusterID string) string { return "foghorn
 type stubFedClient struct{}
 
 func (s stubFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
-	return &pb.PrepareArtifactResponse{Ready: true}, nil
+	return &pb.PrepareArtifactResponse{Ready: true, InternalName: "stream-a", Format: "mp4"}, nil
 }
 
 func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
@@ -339,5 +341,52 @@ func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not authorized") {
 		t.Fatalf("expected not authorized error, got %v", err)
+	}
+}
+
+func TestResolveRemoteArtifact_RejectsWhenTenantPeerDataMissing(t *testing.T) {
+	deps := &PlaybackDependencies{
+		FedClient:      stubFedClient{},
+		PeerResolver:   stubPeerResolver{},
+		LocalClusterID: "cluster-local",
+	}
+
+	_, err := resolveRemoteArtifact(context.Background(), deps, "artifact-1", "cluster-origin", "clip", "tenant-1", nil)
+	if err == nil {
+		t.Fatal("expected authorization error when peer list is unavailable")
+	}
+	if !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("expected not authorized error, got %v", err)
+	}
+}
+
+func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer mockDB.Close()
+
+	mock.ExpectExec("INSERT INTO foghorn.artifacts").
+		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "mp4", "cluster-origin").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	deps := &PlaybackDependencies{
+		DB:             mockDB,
+		FedClient:      stubFedClient{},
+		PeerResolver:   stubPeerResolver{},
+		LocalClusterID: "cluster-local",
+	}
+
+	_, err = resolveRemoteArtifact(context.Background(), deps, "artifact-1", "cluster-origin", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}})
+	if err == nil {
+		t.Fatal("expected storage-node lookup error")
+	}
+	if !strings.Contains(err.Error(), "no local storage node") {
+		t.Fatalf("expected local storage node error, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
 	}
 }
