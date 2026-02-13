@@ -2401,7 +2401,8 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 			stream_name, stream_id, source_node, dest_node, dtsc_url,
 			latency_ms, time_to_live_ms, failure_reason,
 			queried_clusters, responding_clusters, total_candidates,
-			best_remote_score, peer_cluster, role, reason
+			best_remote_score, peer_cluster, role, reason,
+			local_lat, local_lon, remote_lat, remote_lon
 		FROM periscope.federation_events
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
@@ -2433,12 +2434,14 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 		var peerCluster sql.NullString
 		var role string
 		var reason sql.NullString
+		var localLat, localLon, remoteLat, remoteLon sql.NullFloat64
 
 		if err := rows.Scan(&ts, &eventType, &localCluster, &remoteCluster,
 			&streamName, &streamID, &sourceNode, &destNode, &dtscURL,
 			&latencyMs, &timeToLiveMs, &failureReason,
 			&queriedClusters, &respondingClusters, &totalCandidates,
-			&bestRemoteScore, &peerCluster, &role, &reason); err != nil {
+			&bestRemoteScore, &peerCluster, &role, &reason,
+			&localLat, &localLon, &remoteLat, &remoteLon); err != nil {
 			s.logger.WithError(err).Warn("Failed to scan federation event row")
 			continue
 		}
@@ -2497,6 +2500,18 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 		}
 		if reason.Valid {
 			evt.Reason = &reason.String
+		}
+		if localLat.Valid {
+			evt.LocalLatitude = &localLat.Float64
+		}
+		if localLon.Valid {
+			evt.LocalLongitude = &localLon.Float64
+		}
+		if remoteLat.Valid {
+			evt.RemoteLatitude = &remoteLat.Float64
+		}
+		if remoteLon.Valid {
+			evt.RemoteLongitude = &remoteLon.Float64
 		}
 
 		events = append(events, evt)

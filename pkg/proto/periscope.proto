@@ -1722,6 +1722,10 @@ message FederationEvent {
   optional string peer_cluster = 17;
   string role = 18;
   optional string reason = 19;
+  optional double local_latitude = 20;
+  optional double local_longitude = 21;
+  optional double remote_latitude = 22;
+  optional double remote_longitude = 23;
 }
 
 message GetFederationEventsRequest {

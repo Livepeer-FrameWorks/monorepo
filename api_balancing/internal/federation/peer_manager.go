@@ -161,14 +161,27 @@ func NewPeerManager(cfg PeerManagerConfig) *PeerManager {
 // emitFederationEvent sends a topology/lifecycle event to Decklog (fire-and-forget).
 // Automatically enriches with local/remote geo from self-geo and peer cache.
 func (pm *PeerManager) emitFederationEvent(data *pb.FederationEventData) {
+	pm.enrichFederationEventGeo(data)
+
 	if pm.decklogClient == nil {
 		return
 	}
+	go func() {
+		if err := pm.decklogClient.SendFederationEvent(data); err != nil {
+			pm.logger.WithError(err).Debug("Failed to emit federation event")
+		}
+	}()
+}
+
+func (pm *PeerManager) enrichFederationEventGeo(data *pb.FederationEventData) {
 	if data.TenantId == nil && pm.ownerTenantID != "" {
 		data.TenantId = &pm.ownerTenantID
 	}
 	if data.LocalCluster == "" {
 		data.LocalCluster = pm.clusterID
+	}
+	if data.RemoteCluster == "" && data.PeerCluster != nil {
+		data.RemoteCluster = data.GetPeerCluster()
 	}
 	if data.LocalLat == nil && pm.selfGeoFunc != nil {
 		lat, lon, _ := pm.selfGeoFunc()
@@ -184,11 +197,6 @@ func (pm *PeerManager) emitFederationEvent(data *pb.FederationEventData) {
 			data.RemoteLon = &rLon
 		}
 	}
-	go func() {
-		if err := pm.decklogClient.SendFederationEvent(data); err != nil {
-			pm.logger.WithError(err).Debug("Failed to emit federation event")
-		}
-	}()
 }
 
 // GetPeerGeo returns the cached geo coordinates for a peer cluster's foghorn.

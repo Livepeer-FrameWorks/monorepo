@@ -76,7 +76,11 @@
   let clusterGeoMap = $derived.by(() => {
     const m = new SvelteMap<string, { lat: number; lng: number }>();
     for (const c of clusters) {
-      if (c.latitude && c.longitude) {
+      const hasGeo =
+        Number.isFinite(c.latitude) &&
+        Number.isFinite(c.longitude) &&
+        !(c.latitude === 0 && c.longitude === 0);
+      if (hasGeo) {
         m.set(c.clusterId, { lat: c.latitude, lng: c.longitude });
       }
     }
