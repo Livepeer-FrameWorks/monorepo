@@ -321,18 +321,21 @@ func (r *CommandRelay) forward(ctx context.Context, req *pb.ForwardCommandReques
 	if owner.GRPCAddr == "" {
 		return fmt.Errorf("relay: no address for instance %s", owner.InstanceID)
 	}
+	evictStale := func() {
+		_, _ = r.store.DeleteConnOwnerIfMatch(ctx, req.TargetNodeId, owner.InstanceID, owner.GRPCAddr)
+	}
 	client, err := r.pool.GetOrCreate(owner.InstanceID, owner.GRPCAddr)
 	if err != nil {
-		_ = r.store.DeleteConnOwner(ctx, req.TargetNodeId)
+		evictStale()
 		return fmt.Errorf("relay: dial %s: %w", owner.GRPCAddr, err)
 	}
 	resp, err := client.Relay().ForwardCommand(ctx, req)
 	if err != nil {
-		_ = r.store.DeleteConnOwner(ctx, req.TargetNodeId)
+		evictStale()
 		return fmt.Errorf("relay: forward to %s: %w", owner.InstanceID, err)
 	}
 	if !resp.Delivered {
-		_ = r.store.DeleteConnOwner(ctx, req.TargetNodeId)
+		evictStale()
 		return fmt.Errorf("relay: peer %s rejected: %s", owner.InstanceID, resp.Error)
 	}
 	return nil
@@ -345,7 +348,7 @@ func relayFailure(localErr, relayErr error) error {
 	if localErr == nil {
 		return relayErr
 	}
-	return fmt.Errorf("%w (relay failed: %v)", localErr, relayErr)
+	return fmt.Errorf("%w (relay failed: %w)", localErr, relayErr)
 }
 
 // SetDB sets the database connection for clip operations

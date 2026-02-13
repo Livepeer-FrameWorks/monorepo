@@ -17,6 +17,17 @@ const connOwnerTTL = 60 * time.Second
 
 var ErrConnOwnerMissing = errors.New("conn owner key missing")
 
+// deleteConnOwnerIfMatch atomically deletes the key only if its value still
+// matches expectedVal, preventing a stale eviction from clobbering a fresh
+// owner written by another instance during failover.
+var deleteConnOwnerIfMatch = goredis.NewScript(`
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+else
+  return 0
+end
+`)
+
 type StateEntity string
 
 type StateOperation string
@@ -224,6 +235,19 @@ func (r *RedisStateStore) GetConnOwner(ctx context.Context, nodeID string) (Conn
 
 func (r *RedisStateStore) DeleteConnOwner(ctx context.Context, nodeID string) error {
 	return r.client.Del(ctx, r.keyConnOwner(nodeID)).Err()
+}
+
+// DeleteConnOwnerIfMatch deletes the conn_owner key only if it still holds
+// the value for the given instance. Returns true if the key was deleted.
+func (r *RedisStateStore) DeleteConnOwnerIfMatch(ctx context.Context, nodeID, instanceID, grpcAddr string) (bool, error) {
+	res, err := deleteConnOwnerIfMatch.Run(ctx, r.client,
+		[]string{r.keyConnOwner(nodeID)},
+		encodeConnOwner(instanceID, grpcAddr),
+	).Int64()
+	if err != nil {
+		return false, err
+	}
+	return res == 1, nil
 }
 
 func (r *RedisStateStore) RefreshConnOwner(ctx context.Context, nodeID string) error {

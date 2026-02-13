@@ -58,6 +58,41 @@ func TestRefreshConnOwnerMissing(t *testing.T) {
 	}
 }
 
+func TestDeleteConnOwnerIfMatch(t *testing.T) {
+	store, _, _ := newRedisStateStore(t)
+	ctx := context.Background()
+
+	if err := store.SetConnOwner(ctx, "node-1", "inst-a", "10.0.0.1:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	// Mismatched value: should not delete.
+	deleted, err := store.DeleteConnOwnerIfMatch(ctx, "node-1", "inst-b", "10.0.0.2:9090")
+	if err != nil {
+		t.Fatalf("DeleteConnOwnerIfMatch mismatch: %v", err)
+	}
+	if deleted {
+		t.Fatal("expected no deletion when value does not match")
+	}
+	owner, _ := store.GetConnOwner(ctx, "node-1")
+	if owner.InstanceID != "inst-a" {
+		t.Fatalf("owner should still be inst-a, got %+v", owner)
+	}
+
+	// Matching value: should delete.
+	deleted, err = store.DeleteConnOwnerIfMatch(ctx, "node-1", "inst-a", "10.0.0.1:9090")
+	if err != nil {
+		t.Fatalf("DeleteConnOwnerIfMatch match: %v", err)
+	}
+	if !deleted {
+		t.Fatal("expected deletion when value matches")
+	}
+	owner, _ = store.GetConnOwner(ctx, "node-1")
+	if owner.InstanceID != "" {
+		t.Fatalf("expected empty owner after matched delete, got %+v", owner)
+	}
+}
+
 func TestConnOwnerRedisUnavailable(t *testing.T) {
 	store, mr, client := newRedisStateStore(t)
 	mr.Close()
