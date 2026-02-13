@@ -37,6 +37,7 @@
   } from "$lib/components/ui/table";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
+  import { resolveOperationalStreamId } from "$lib/route-ids";
 
   // Houdini stores
   const streamStore = new GetStreamStore();
@@ -102,8 +103,13 @@
         }
       : null
   );
+  let operationalStreamId = $derived(
+    resolveOperationalStreamId({ routeParamId: streamId, streamUuid: stream?.streamId })
+  );
   // Real-time metrics from STREAM_BUFFER subscription
-  let realtimeMetrics = $derived(stream?.id ? $realtimeStreamMetrics[stream.id] : null);
+  let realtimeMetrics = $derived(
+    operationalStreamId ? $realtimeStreamMetrics[operationalStreamId] : null
+  );
   let healthMetrics = $derived(
     ($healthCoreStore.data?.analytics?.health?.streamHealthConnection?.edges ?? [])
       .map((e: { node: HealthMetricType }) => e?.node)
@@ -395,7 +401,10 @@
     refreshInterval = setInterval(async () => {
       try {
         if (streamId) {
-          const analyticsStreamId = stream?.id ?? streamId;
+          const analyticsStreamId = resolveOperationalStreamId({
+            routeParamId: streamId,
+            streamUuid: stream?.streamId,
+          });
           await healthCoreStore.fetch({
             variables: {
               id: streamId,
@@ -419,8 +428,8 @@
   });
 
   function startTrackListSubscription() {
-    if (!stream) return;
-    trackListSub.listen({ streamId: stream.id });
+    if (!operationalStreamId) return;
+    trackListSub.listen({ streamId: operationalStreamId });
   }
 
   // Utility functions for color formatting
@@ -441,14 +450,26 @@
   async function loadStreamData() {
     if (!streamId) return;
     try {
-      const analyticsStreamId = stream?.id ?? streamId;
+      const analyticsStreamId = resolveOperationalStreamId({
+        routeParamId: streamId,
+        streamUuid: stream?.streamId,
+      });
       const result = await streamStore.fetch({
-        variables: { id: streamId, streamId: analyticsStreamId },
+        variables: { id: streamId, streamId: analyticsStreamId || streamId },
       });
 
       if (!result.data?.stream) {
         error = "Stream not found";
         return;
+      }
+
+      if (
+        !resolveOperationalStreamId({
+          routeParamId: streamId,
+          streamUuid: stream?.streamId,
+        })
+      ) {
+        error = "Unable to resolve stream identifier";
       }
     } catch (err: unknown) {
       // Ignore AbortErrors which happen on navigation/cancellation
@@ -468,7 +489,10 @@
   async function loadHealthData() {
     if (!streamId) return;
     try {
-      const analyticsStreamId = stream?.id ?? streamId;
+      const analyticsStreamId = resolveOperationalStreamId({
+        routeParamId: streamId,
+        streamUuid: stream?.streamId,
+      });
       const timeRange = getTimeRange();
       const metricsFirst = getMetricsFirst();
 

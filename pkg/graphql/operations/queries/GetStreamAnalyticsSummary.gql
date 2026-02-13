@@ -9,6 +9,7 @@ query GetStreamAnalyticsSummary(
 ) {
   stream(id: $id) {
     id
+    streamId
     name
     playbackId
   }
