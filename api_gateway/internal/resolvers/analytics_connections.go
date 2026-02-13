@@ -3615,7 +3615,10 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 
 	var clusters []*model.NetworkClusterStatus
 	var totalNodes, healthyNodes int
-	for _, c := range activeClusters {
+	for _, c := range clustersResp.Clusters {
+		if _, ok := activeClusters[c.ClusterId]; !ok {
+			continue
+		}
 		var lat, lon float64
 		nc := 0
 		hn := 0
