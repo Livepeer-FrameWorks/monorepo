@@ -131,6 +131,44 @@ type clusterRoute struct {
 	resolvedAt              time.Time
 }
 
+type clusterFanoutTarget struct {
+	clusterID string
+	addr      string
+}
+
+func buildClusterFanoutTargets(route *clusterRoute) []clusterFanoutTarget {
+	if route == nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	targets := make([]clusterFanoutTarget, 0, len(route.clusterPeers)+2)
+	addTarget := func(clusterID, addr string) {
+		if addr == "" {
+			return
+		}
+		key := clusterID
+		if key == "" {
+			key = addr
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, clusterFanoutTarget{clusterID: clusterID, addr: addr})
+	}
+
+	addTarget(route.clusterID, route.foghornAddr)
+	if route.officialClusterID != route.clusterID {
+		addTarget(route.officialClusterID, route.officialFoghornGrpcAddr)
+	}
+	for _, peer := range route.clusterPeers {
+		addTarget(peer.ClusterId, peer.FoghornGrpcAddr)
+	}
+
+	return targets
+}
+
 type commodoreUserRecord struct {
 	ID           string
 	TenantID     string
@@ -5830,27 +5868,31 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 		return nil, err
 	}
 
+	targets := buildClusterFanoutTargets(route)
+	if len(targets) == 0 {
+		return nil, status.Errorf(codes.Unavailable, "no foghorn targets for tenant %s", req.TenantId)
+	}
+
 	var totalStreams, totalSessions int32
 	var allStreamNames []string
 	var lastErr error
-	var contacted int
-	for _, peer := range route.clusterPeers {
-		if peer.FoghornGrpcAddr == "" {
-			continue
-		}
-		contacted++
-		client, dialErr := s.foghornPool.GetOrCreate(peer.ClusterId, peer.FoghornGrpcAddr)
+	failures := 0
+	for _, target := range targets {
+		client, dialErr := s.foghornPool.GetOrCreate(target.clusterID, target.addr)
 		if dialErr != nil {
-			s.logger.WithError(dialErr).WithField("cluster_id", peer.ClusterId).Warn("Failed to connect to cluster for tenant termination")
+			s.logger.WithError(dialErr).WithField("cluster_id", target.clusterID).Warn("Failed to connect to cluster for tenant termination")
+			lastErr = dialErr
+			failures++
 			continue
 		}
 		foghornResp, _, callErr := client.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
 		if callErr != nil {
 			s.logger.WithError(callErr).WithFields(logging.Fields{
 				"tenant_id":  req.TenantId,
-				"cluster_id": peer.ClusterId,
+				"cluster_id": target.clusterID,
 			}).Warn("Failed to terminate tenant streams on cluster")
 			lastErr = callErr
+			failures++
 			continue
 		}
 		totalStreams += foghornResp.StreamsTerminated
@@ -5858,21 +5900,18 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 		allStreamNames = append(allStreamNames, foghornResp.StreamNames...)
 	}
 
-	if contacted == 0 {
-		return nil, status.Errorf(codes.Unavailable, "no reachable clusters for tenant %s", req.TenantId)
-	}
 	if totalStreams == 0 && totalSessions == 0 && lastErr != nil {
 		return nil, status.Errorf(codes.Unavailable, "failed to terminate streams on any cluster: %v", lastErr)
 	}
-	if lastErr != nil && (totalStreams > 0 || totalSessions > 0) {
-		s.logger.WithError(lastErr).WithField("tenant_id", req.TenantId).Warn("Tenant termination partially failed: some clusters unreachable")
+	if failures > 0 {
+		return nil, status.Errorf(codes.Unavailable, "tenant termination incomplete: %d/%d clusters failed (last error: %v)", failures, len(targets), lastErr)
 	}
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":           req.TenantId,
 		"streams_terminated":  totalStreams,
 		"sessions_terminated": totalSessions,
-		"clusters_contacted":  len(route.clusterPeers),
+		"clusters_contacted":  len(targets),
 	}).Info("Tenant streams terminated across all clusters")
 
 	return &pb.TerminateTenantStreamsResponse{
@@ -5899,42 +5938,46 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.Inv
 		return nil, err
 	}
 
+	targets := buildClusterFanoutTargets(route)
+	if len(targets) == 0 {
+		return nil, status.Errorf(codes.Unavailable, "no foghorn targets for tenant %s", req.TenantId)
+	}
+
 	var totalInvalidated int32
 	var lastErr error
-	var contacted int
-	for _, peer := range route.clusterPeers {
-		if peer.FoghornGrpcAddr == "" {
-			continue
-		}
-		contacted++
-		client, dialErr := s.foghornPool.GetOrCreate(peer.ClusterId, peer.FoghornGrpcAddr)
+	failures := 0
+	for _, target := range targets {
+		client, dialErr := s.foghornPool.GetOrCreate(target.clusterID, target.addr)
 		if dialErr != nil {
-			s.logger.WithError(dialErr).WithField("cluster_id", peer.ClusterId).Warn("Failed to connect to cluster for cache invalidation")
+			s.logger.WithError(dialErr).WithField("cluster_id", target.clusterID).Warn("Failed to connect to cluster for cache invalidation")
+			lastErr = dialErr
+			failures++
 			continue
 		}
 		foghornResp, _, callErr := client.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
 		if callErr != nil {
 			s.logger.WithError(callErr).WithFields(logging.Fields{
 				"tenant_id":  req.TenantId,
-				"cluster_id": peer.ClusterId,
+				"cluster_id": target.clusterID,
 			}).Warn("Failed to invalidate tenant cache on cluster")
 			lastErr = callErr
+			failures++
 			continue
 		}
 		totalInvalidated += foghornResp.EntriesInvalidated
 	}
 
-	if contacted == 0 {
-		return nil, status.Errorf(codes.Unavailable, "no reachable clusters for tenant %s", req.TenantId)
-	}
 	if totalInvalidated == 0 && lastErr != nil {
 		return nil, status.Errorf(codes.Unavailable, "failed to invalidate cache on any cluster: %v", lastErr)
+	}
+	if failures > 0 {
+		return nil, status.Errorf(codes.Unavailable, "tenant cache invalidation incomplete: %d/%d clusters failed (last error: %v)", failures, len(targets), lastErr)
 	}
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":           req.TenantId,
 		"entries_invalidated": totalInvalidated,
-		"clusters_contacted":  len(route.clusterPeers),
+		"clusters_contacted":  len(targets),
 	}).Info("Tenant cache invalidated across all clusters")
 
 	return &pb.InvalidateTenantCacheResponse{
