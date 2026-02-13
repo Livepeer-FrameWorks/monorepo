@@ -191,6 +191,39 @@ foghorn-2:
 
 Both instances register independently with Quartermaster via `BootstrapService`. QM resolves each instance's mesh address from its `NODE_ID` and returns a full `advertise_addr` used for relay forwarding. An upstream load balancer (Nginx, Caddy, or cloud LB) distributes requests across instances.
 
+### Local HA Relay Validation Matrix
+
+Use this matrix when validating relay behavior locally with `docker-compose`.
+
+| Scenario                              | Setup                                                                            | Expected result                                                                              |
+| ------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Local ownership                       | Helmsman stream connected to same Foghorn instance handling RPC                  | Command is delivered via `SendLocal*`; no relay hop                                          |
+| Mixed ownership (same cluster)        | RPC lands on `foghorn-1`, node stream owned by `foghorn-2` in Redis `conn_owner` | `foghorn-1` relays via `ForwardCommand`; `foghorn-2` delivers locally                        |
+| Stale ownership drift                 | Local stream exists but `stream.Send` fails (transport error)                    | Command returns local error and **must not relay**                                           |
+| Cross-cluster remote artifact command | Remote peer receives command for artifact it does not own                        | Peer returns `handled=false`; caller continues trying other peers                            |
+| Cross-cluster mixed ownership         | Remote command lands on non-owner Foghorn instance in destination cluster        | Destination cluster uses intra-cluster relay and returns `handled=true` to federation caller |
+
+Deterministic automated coverage:
+
+- `api_balancing/internal/control/relay_test.go`
+  - `TestSendWithRelay_LocalSuccess`
+  - `TestSendWithRelay_LocalFailRelay`
+  - `TestSendWithRelay_LocalSendErrorDoesNotRelay`
+- `api_balancing/internal/grpc/relay_server_test.go`
+  - `TestForwardCommand_AllCommandTypes`
+  - `TestForwardCommand_NodeNotConnected`
+- `api_balancing/internal/grpc/server_forward_federation_test.go`
+  - `TestForwardArtifact_NoPeerHandles`
+  - `TestForwardArtifact_PeerError_ContinuesToNext`
+
+Manual smoke check with compose topology:
+
+1. `docker compose up -d foghorn foghorn-2 foghorn-redis`
+2. Ensure both relay endpoints are healthy: `curl -sf http://localhost:18008/health` and `curl -sf http://localhost:18028/health`
+3. Verify ownership keys use distinct instance IDs:
+   - `redis-cli GET '{<cluster_id>}:conn_owner:<node_id>'`
+   - Expect `foghorn-1|...` or `foghorn-2|...`, never blank instance IDs.
+
 ## Key Files
 
 - `api_balancing/internal/state/stream_state.go` - StreamStateManager: in-memory state + Redis write-through

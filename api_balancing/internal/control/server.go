@@ -922,6 +922,9 @@ func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
 	if !shouldRelay(nodeID, err) {
 		return err
 	}
+	if !errors.Is(err, ErrNotConnected) {
+		return err
+	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
@@ -954,6 +957,9 @@ func SendLocalDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 	err := SendLocalDVRStart(nodeID, req)
 	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if !errors.Is(err, ErrNotConnected) {
 		return err
 	}
 	if commandRelay == nil {
@@ -990,6 +996,9 @@ func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 	if !shouldRelay(nodeID, err) {
 		return err
 	}
+	if !errors.Is(err, ErrNotConnected) {
+		return err
+	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
@@ -1022,6 +1031,9 @@ func SendLocalClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 	err := SendLocalClipDelete(nodeID, req)
 	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if !errors.Is(err, ErrNotConnected) {
 		return err
 	}
 	if commandRelay == nil {
@@ -1058,6 +1070,9 @@ func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 	if !shouldRelay(nodeID, err) {
 		return err
 	}
+	if !errors.Is(err, ErrNotConnected) {
+		return err
+	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
@@ -1090,6 +1105,9 @@ func SendLocalVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 	err := SendLocalVodDelete(nodeID, req)
 	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if !errors.Is(err, ErrNotConnected) {
 		return err
 	}
 	if commandRelay == nil {
