@@ -22,6 +22,88 @@ export interface Breadcrumb {
   href?: string;
 }
 
+const dynamicRoutes: Array<{
+  pattern: RegExp;
+  route: Omit<RouteInfo, "path">;
+  breadcrumb: Breadcrumb[];
+}> = [
+  {
+    pattern: /^\/streams\/[^/]+$/,
+    route: { name: "Stream Details", parent: "Content" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Content" },
+      { name: "Streams", href: "/streams" },
+      { name: "Stream Details" },
+    ],
+  },
+  {
+    pattern: /^\/streams\/[^/]+\/analytics$/,
+    route: { name: "Stream Analytics", parent: "Content" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Content" },
+      { name: "Streams", href: "/streams" },
+      { name: "Stream Analytics" },
+    ],
+  },
+  {
+    pattern: /^\/streams\/[^/]+\/health$/,
+    route: { name: "Stream Health", parent: "Content" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Content" },
+      { name: "Streams", href: "/streams" },
+      { name: "Stream Health" },
+    ],
+  },
+  {
+    pattern: /^\/messages\/[^/]+$/,
+    route: { name: "Conversation", parent: "Support" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Support" },
+      { name: "Messages", href: "/messages" },
+      { name: "Conversation" },
+    ],
+  },
+  {
+    pattern: /^\/nodes\/[^/]+$/,
+    route: { name: "Node Details", parent: "Infrastructure" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Infrastructure" },
+      { name: "Nodes", href: "/nodes" },
+      { name: "Node Details" },
+    ],
+  },
+  {
+    pattern: /^\/infrastructure\/[^/]+$/,
+    route: { name: "Cluster Details", parent: "Infrastructure" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Infrastructure" },
+      { name: "Overview", href: "/infrastructure" },
+      { name: "Cluster Details" },
+    ],
+  },
+];
+
+function normalizePath(path: string): string {
+  const [withoutQuery] = path.split(/[?#]/, 1);
+  if (!withoutQuery) {
+    return "/";
+  }
+  if (withoutQuery !== "/" && withoutQuery.endsWith("/")) {
+    return withoutQuery.slice(0, -1);
+  }
+  return withoutQuery;
+}
+
+function findDynamicRoute(path: string) {
+  return dynamicRoutes.find((route) => route.pattern.test(path));
+}
+
 // Navigation configuration for FrameWorks webapp
 
 export const navigationConfig: Record<string, NavigationItem> = {
@@ -275,8 +357,10 @@ export const navigationConfig: Record<string, NavigationItem> = {
 };
 
 export function getRouteInfo(path: string): RouteInfo | null {
+  const normalizedPath = normalizePath(path);
+
   // Handle dashboard
-  if (path === "/") {
+  if (normalizedPath === "/") {
     return {
       path: "/",
       name: "Dashboard",
@@ -288,7 +372,7 @@ export function getRouteInfo(path: string): RouteInfo | null {
   for (const section of Object.values(navigationConfig)) {
     if (section.children) {
       for (const child of Object.values(section.children)) {
-        if (child.href === path) {
+        if (child.href === normalizedPath) {
           return {
             path: child.href,
             name: child.name,
@@ -298,6 +382,14 @@ export function getRouteInfo(path: string): RouteInfo | null {
         }
       }
     }
+  }
+
+  const dynamicRoute = findDynamicRoute(normalizedPath);
+  if (dynamicRoute) {
+    return {
+      path: normalizedPath,
+      ...dynamicRoute.route,
+    };
   }
 
   return null;
@@ -334,9 +426,10 @@ export function getAllRoutes(): RouteInfo[] {
 }
 
 export function getBreadcrumbs(path: string): Breadcrumb[] {
+  const normalizedPath = normalizePath(path);
   const breadcrumbs: Breadcrumb[] = [];
 
-  if (path === "/") {
+  if (normalizedPath === "/") {
     return [{ name: "Dashboard" }];
   }
 
@@ -344,7 +437,7 @@ export function getBreadcrumbs(path: string): Breadcrumb[] {
   for (const section of Object.values(navigationConfig)) {
     if (section.children) {
       for (const child of Object.values(section.children)) {
-        if (child.href === path) {
+        if (child.href === normalizedPath) {
           breadcrumbs.push({ name: "Dashboard", href: "/" });
           breadcrumbs.push({ name: section.name });
           breadcrumbs.push({ name: child.name });
@@ -352,6 +445,11 @@ export function getBreadcrumbs(path: string): Breadcrumb[] {
         }
       }
     }
+  }
+
+  const dynamicRoute = findDynamicRoute(normalizedPath);
+  if (dynamicRoute) {
+    return dynamicRoute.breadcrumb;
   }
 
   return [{ name: "Dashboard", href: "/" }];

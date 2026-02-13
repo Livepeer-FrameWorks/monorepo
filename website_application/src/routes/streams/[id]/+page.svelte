@@ -57,6 +57,7 @@
   import { SectionDivider } from "$lib/components/layout";
   import type { StreamEvent, EventType } from "$lib/components/stream-details/EventLog.svelte";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import { resolveOperationalStreamId } from "$lib/route-ids";
   import { Sheet, SheetContent } from "$lib/components/ui/sheet";
   import {
     DropdownMenu,
@@ -176,7 +177,11 @@
   let baseHealth = $derived(healthMetrics.length > 0 ? healthMetrics[0] : null);
   // Merge base health (from GraphQL query) with real-time metrics (from subscription)
   let health = $derived.by(() => {
-    const realtime = stream?.id ? $realtimeStreamMetrics[stream.id] : null;
+    const realtimeKey = resolveOperationalStreamId({
+      routeParamId: streamId,
+      streamUuid: stream?.streamId,
+    });
+    const realtime = realtimeKey ? $realtimeStreamMetrics[realtimeKey] : null;
     if (!baseHealth && !realtime) return null;
     return {
       ...baseHealth,
@@ -351,7 +356,8 @@
     // Create a fallback that satisfies the TrackInfo type from the subscription
     // OverviewTabPanel only uses a subset of these fields for display
     return {
-      streamId: stream?.id ?? "",
+      streamId:
+        resolveOperationalStreamId({ routeParamId: streamId, streamUuid: stream?.streamId }) ?? "",
       totalTracks: 1,
       videoTrackCount: 1,
       audioTrackCount: 0,
@@ -468,7 +474,11 @@
 
     // Refresh health every 30 seconds when live (both Core + Charts stores)
     healthRefreshInterval = setInterval(async () => {
-      if (isLive && stream?.id) {
+      const operationalStreamId = resolveOperationalStreamId({
+        routeParamId: streamId,
+        streamUuid: stream?.streamId,
+      });
+      if (isLive && operationalStreamId) {
         const range = resolveTimeRange(timeRange);
         currentRange = range;
         const timeRangeInput = { start: range.start, end: range.end };
@@ -478,8 +488,8 @@
         await Promise.all([
           streamOverviewCoreStore.fetch({
             variables: {
-              id: stream.id,
-              streamId: stream.id,
+              id: streamId,
+              streamId: operationalStreamId,
               timeRange: timeRangeInput,
               viewerFirst,
               viewerInterval,
@@ -487,7 +497,7 @@
           }),
           streamOverviewChartsStore.fetch({
             variables: {
-              streamId: stream.id,
+              streamId: operationalStreamId,
               timeRange: timeRangeInput,
               first: overviewFirst,
               qualityFirst,
@@ -509,13 +519,17 @@
   });
 
   function startSubscriptions() {
-    if (!stream) return;
+    const operationalStreamId = resolveOperationalStreamId({
+      routeParamId: streamId,
+      streamUuid: stream?.streamId,
+    });
+    if (!operationalStreamId) return;
 
-    streamEventsSub.listen({ streamId: stream.id });
-    viewerMetricsSub.listen({ streamId: stream.id });
-    trackListSub.listen({ streamId: stream.id });
-    clipLifecycleSub.listen({ streamId: stream.id });
-    dvrLifecycleSub.listen({ streamId: stream.id });
+    streamEventsSub.listen({ streamId: operationalStreamId });
+    viewerMetricsSub.listen({ streamId: operationalStreamId });
+    trackListSub.listen({ streamId: operationalStreamId });
+    clipLifecycleSub.listen({ streamId: operationalStreamId });
+    dvrLifecycleSub.listen({ streamId: operationalStreamId });
   }
 
   function addEvent(type: EventType, message: string, details?: string) {
@@ -713,7 +727,10 @@
     try {
       error = null;
 
-      const analyticsStreamId = stream?.id ?? streamId;
+      const analyticsStreamId = resolveOperationalStreamId({
+        routeParamId: streamId,
+        streamUuid: stream?.streamId,
+      });
       const result = await streamStore.fetch({
         variables: { id: streamId, streamId: analyticsStreamId },
       });
@@ -722,8 +739,15 @@
         error = "Stream not found";
         return;
       }
-      // Use analyticsStreamId since the result stream is masked and streamId isn't directly accessible
-      const resolvedStreamId = analyticsStreamId;
+      const resolvedStreamId = resolveOperationalStreamId({
+        routeParamId: streamId,
+        streamUuid: stream?.streamId,
+      });
+
+      if (!resolvedStreamId) {
+        error = "Unable to resolve stream identifier";
+        return;
+      }
 
       const range = resolveTimeRange(timeRange);
       currentRange = range;
@@ -732,9 +756,9 @@
       const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
       const qualityFirst = getQualityFirst(range);
       await Promise.all([
-        streamKeysStore.fetch({ variables: { streamId } }),
+        streamKeysStore.fetch({ variables: { streamId: resolvedStreamId } }),
         dvrRequestsStore.fetch({ variables: { streamId: resolvedStreamId } }),
-        clipsStore.fetch({ variables: { streamId, first: 100 } }),
+        clipsStore.fetch({ variables: { streamId: resolvedStreamId, first: 100 } }),
         streamOverviewCoreStore
           .fetch({
             variables: {
@@ -798,7 +822,10 @@
       currentRange = range;
       const timeRangeInput = { start: range.start, end: range.end };
       const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
-      const analyticsStreamId = stream?.id ?? streamId;
+      const analyticsStreamId = resolveOperationalStreamId({
+        routeParamId: streamId,
+        streamUuid: stream?.streamId,
+      });
 
       await Promise.all([
         streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } }),
@@ -830,8 +857,13 @@
       if (result.data?.refreshStreamKey?.__typename === "Stream") {
         toast.success("Stream key refreshed successfully!");
         addEvent("info", "Stream key refreshed");
-        const analyticsStreamId = stream?.id ?? streamId;
-        await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
+        const analyticsStreamId = resolveOperationalStreamId({
+          routeParamId: streamId,
+          streamUuid: stream?.streamId,
+        });
+        if (analyticsStreamId) {
+          await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
+        }
       } else {
         const errorResult = result.data?.refreshStreamKey as unknown as { message?: string };
         toast.error(errorResult?.message || "Failed to refresh stream key");
@@ -861,8 +893,13 @@
         showEditModal = false;
         toast.success("Stream updated successfully!");
         addEvent("info", "Stream settings updated");
-        const analyticsStreamId = stream?.id ?? streamId;
-        await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
+        const analyticsStreamId = resolveOperationalStreamId({
+          routeParamId: streamId,
+          streamUuid: stream?.streamId,
+        });
+        if (analyticsStreamId) {
+          await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
+        }
       } else {
         const errorResult = result.data?.updateStream as unknown as { message?: string };
         toast.error(errorResult?.message || "Failed to update stream");
@@ -1243,7 +1280,10 @@
       <!-- Health Sidebar (right side, collapsible) -->
       <div class="hidden lg:block shrink-0 {healthSidebarCollapsed ? 'w-10' : 'w-72'}">
         <HealthSidebar
-          streamId={stream?.id ?? streamId}
+          streamId={resolveOperationalStreamId({
+            routeParamId: streamId,
+            streamUuid: stream?.streamId,
+          }) || streamId}
           streamName={stream.name}
           {isLive}
           {health}
@@ -1260,7 +1300,10 @@
           class="w-[85vw] sm:w-[400px] p-0 border-l border-[hsl(var(--tn-fg-gutter)/0.3)]"
         >
           <HealthSidebar
-            streamId={stream?.id ?? streamId}
+            streamId={resolveOperationalStreamId({
+              routeParamId: streamId,
+              streamUuid: stream?.streamId,
+            }) || streamId}
             streamName={stream.name}
             {isLive}
             {health}

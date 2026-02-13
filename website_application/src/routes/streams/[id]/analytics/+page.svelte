@@ -25,6 +25,7 @@
   import type { StreamEvent } from "$lib/components/stream-details/EventLog.svelte";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
+  import { resolveOperationalStreamId } from "$lib/route-ids";
 
   // Houdini stores
   const streamStore = new GetStreamStore();
@@ -81,6 +82,9 @@
   );
   let streamMetrics = $derived(streamMetricsStoreResult ? $streamMetricsStoreResult : null);
   let stream = $derived(streamCore ? { ...streamCore, metrics: streamMetrics } : null);
+  let operationalStreamId = $derived(
+    resolveOperationalStreamId({ routeParamId: streamId, streamUuid: stream?.streamId })
+  );
 
   // Analytics summary
   let streamAnalyticsSummary = $derived(
@@ -250,19 +254,34 @@
     try {
       const range = resolveTimeRange(timeRange);
 
+      await streamStore.fetch({
+        variables: {
+          id: streamId,
+          streamId: operationalStreamId || streamId,
+        },
+      });
+
+      const resolvedOperationalStreamId = resolveOperationalStreamId({
+        routeParamId: streamId,
+        streamUuid: stream?.streamId,
+      });
+
+      if (!resolvedOperationalStreamId) {
+        return;
+      }
+
       await Promise.all([
-        streamStore.fetch({ variables: { id: streamId, streamId: streamId } }),
         streamAnalyticsSummaryStore.fetch({
           variables: {
             id: streamId,
-            streamId: streamId,
+            streamId: resolvedOperationalStreamId,
             timeRange: { start: range.start, end: range.end },
             qualityFirst: Math.min(range.days, 30),
           },
         }),
         streamEventsStore.fetch({
           variables: {
-            streamId: streamId,
+            streamId: resolvedOperationalStreamId,
             timeRange: { start: range.start, end: range.end },
             first: 50,
           },
@@ -306,15 +325,15 @@
   });
 
   function startRealTimeSubscriptions() {
-    if (!streamId) return;
+    if (!operationalStreamId) return;
     viewerMetricsSub.unlisten();
     liveViewerActivity = [];
-    viewerMetricsSub.listen({ streamId: streamId });
+    viewerMetricsSub.listen({ streamId: operationalStreamId });
   }
 
   // Restart subscription when streamId changes
   $effect(() => {
-    if (streamId) {
+    if (operationalStreamId) {
       startRealTimeSubscriptions();
     }
   });
