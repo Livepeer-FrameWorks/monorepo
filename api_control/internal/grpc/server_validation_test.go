@@ -257,3 +257,47 @@ func TestResolveArtifactPlaybackID_PopulatesClusterPeersFromCachedRoute(t *testi
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	mock.ExpectExec("UPDATE commodore.streams SET active_ingest_cluster_id").WithArgs("cluster-ingest", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	server := &CommodoreServer{
+		db:     db,
+		logger: logrus.New(),
+		routeCache: map[string]*clusterRoute{
+			"tenant-id": {
+				clusterID: "cluster-primary",
+				clusterPeers: []*pb.TenantClusterPeer{
+					{ClusterId: "cluster-primary"},
+					{ClusterId: "cluster-ingest"},
+				},
+				resolvedAt: time.Now(),
+			},
+		},
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	resp, err := server.ValidateStreamKey(context.Background(), &pb.ValidateStreamKeyRequest{
+		StreamKey: "good-key",
+		ClusterId: "cluster-ingest",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.GetOriginClusterId() != "cluster-ingest" {
+		t.Fatalf("expected origin cluster to match ingest cluster, got %q", resp.GetOriginClusterId())
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}

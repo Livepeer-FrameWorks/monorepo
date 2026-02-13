@@ -262,6 +262,20 @@ func TestResolveAddrFromRoute_PeerCluster(t *testing.T) {
 	}
 }
 
+func TestResolveAddrFromRoute_PrimaryWithoutAddrFallsBackToPeers(t *testing.T) {
+	route := &clusterRoute{
+		clusterID:   "cluster-primary",
+		foghornAddr: "",
+		clusterPeers: []*pb.TenantClusterPeer{
+			{ClusterId: "cluster-primary", FoghornGrpcAddr: "foghorn-primary-from-peer:50051"},
+		},
+	}
+	got := resolveAddrFromRoute(route, "cluster-primary")
+	if got != "foghorn-primary-from-peer:50051" {
+		t.Fatalf("expected peer fallback address, got %q", got)
+	}
+}
+
 func TestResolveAddrFromRoute_UnknownCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",
