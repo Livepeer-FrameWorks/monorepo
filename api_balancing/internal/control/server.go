@@ -875,11 +875,27 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 	}
 	if nodeID != "" {
 		registry.mu.Lock()
+		c := registry.conns[nodeID]
+		canonicalID := ""
+		if c != nil {
+			canonicalID = c.canonicalID
+		}
 		delete(registry.conns, nodeID)
+		if canonicalID != "" && canonicalID != nodeID {
+			if cc, ok := registry.conns[canonicalID]; ok && cc.stream == stream {
+				delete(registry.conns, canonicalID)
+			}
+		}
 		registry.mu.Unlock()
 		state.DefaultManager().MarkNodeDisconnected(nodeID)
+		if canonicalID != "" && canonicalID != nodeID {
+			state.DefaultManager().MarkNodeDisconnected(canonicalID)
+		}
 		if rs := GetRedisStore(); rs != nil {
 			_ = rs.DeleteConnOwner(context.Background(), nodeID)
+			if canonicalID != "" && canonicalID != nodeID {
+				_ = rs.DeleteConnOwner(context.Background(), canonicalID)
+			}
 		}
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
