@@ -393,6 +393,8 @@ ALTER TABLE commodore.clips ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(1
 ALTER TABLE commodore.dvr_recordings ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
 ALTER TABLE commodore.vod_assets ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
 
+ALTER TABLE commodore.streams ADD COLUMN IF NOT EXISTS active_ingest_cluster_updated_at TIMESTAMP;
+
 -- Generate VOD hash (includes tenant + user + filename + timestamp for uniqueness)
 CREATE OR REPLACE FUNCTION commodore.generate_vod_hash(
     p_tenant_id UUID,
