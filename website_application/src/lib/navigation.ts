@@ -431,7 +431,11 @@ export function getBreadcrumbs(path: string): Breadcrumb[] {
 
   const staticRoute = routesByPath.get(normalizedPath);
   if (staticRoute) {
-    return [{ name: "Dashboard", href: "/" }, { name: staticRoute.parent }, { name: staticRoute.name }];
+    return [
+      { name: "Dashboard", href: "/" },
+      { name: staticRoute.parent },
+      { name: staticRoute.name },
+    ];
   }
 
   const dynamicRoute = findDynamicRoute(normalizedPath);
