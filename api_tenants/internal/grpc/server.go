@@ -683,6 +683,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			    status = 'running',
 			    health_status = 'unknown',
 			    started_at = COALESCE(started_at, NOW()),
+			    stopped_at = NULL,
 			    last_health_check = NULL,
 			    updated_at = NOW()
 			WHERE id = $5::uuid
@@ -737,8 +738,9 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	// don't abort the already-committed bootstrap.
 	_, _ = s.db.ExecContext(ctx, `
 		UPDATE quartermaster.service_instances
-		SET status = 'stopped', updated_at = NOW()
+		SET status = 'stopped', stopped_at = NOW(), updated_at = NOW()
 		WHERE service_id = $1 AND cluster_id = $2 AND instance_id != $3
+		  AND status != 'stopped'
 		  AND (
 		    last_health_check IS NULL OR
 		    last_health_check < NOW() - INTERVAL '10 minutes' OR
@@ -747,6 +749,20 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	`, serviceID, clusterID, instanceID, advHost, proto, port)
 
 	if serviceType == "foghorn" {
+		_, _ = s.db.ExecContext(ctx, `
+			DELETE FROM quartermaster.foghorn_cluster_assignments
+			WHERE foghorn_instance_id IN (
+				SELECT si.id
+				FROM quartermaster.service_instances si
+				JOIN quartermaster.services svc ON svc.service_id = si.service_id
+				WHERE svc.type = 'foghorn'
+				  AND si.service_id = $1
+				  AND si.cluster_id = $2
+				  AND si.instance_id != $3
+				  AND si.status != 'running'
+			)
+		`, serviceID, clusterID, instanceID)
+
 		_, _ = s.db.ExecContext(ctx, `
 			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
 			SELECT si.id, $1

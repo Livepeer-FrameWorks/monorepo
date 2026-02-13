@@ -252,3 +252,95 @@ func TestBootstrapServiceFormatsIPv6AdvertiseAddr(t *testing.T) {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
+
+func TestBootstrapServiceReRegistrationClearsStoppedAt(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
+		WithArgs("bridge").
+		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
+	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
+		WithArgs("bridge", "cluster-1", "http", int32(18000)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
+	mock.ExpectExec("(?s)UPDATE quartermaster.service_instances.*stopped_at = NULL").
+		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, "uuid-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
+		WithArgs("cluster-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(`UPDATE quartermaster.service_instances\s+SET status = 'stopped', stopped_at = NOW\(\)`).
+		WithArgs("bridge", "cluster-1", "inst-bridge-1234", "10.0.0.1", "http", int32(18000)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:           "bridge",
+		Port:           18000,
+		Host:           "10.0.0.1",
+		Protocol:       "http",
+		HealthEndpoint: strPtr(""),
+		Version:        "v1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
+		WithArgs("foghorn").
+		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("foghorn"))
+	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
+		WithArgs("foghorn", "cluster-1", "http", int32(9000)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-2", "inst-foghorn-1234"))
+	mock.ExpectExec("UPDATE quartermaster.service_instances").
+		WithArgs("10.0.0.2", sqlmock.AnyArg(), "v2.0.0", nil, "uuid-2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
+		WithArgs("cluster-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(`UPDATE quartermaster.service_instances\s+SET status = 'stopped', stopped_at = NOW\(\)`).
+		WithArgs("foghorn", "cluster-1", "inst-foghorn-1234", "10.0.0.2", "http", int32(9000)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM quartermaster.foghorn_cluster_assignments").
+		WithArgs("foghorn", "cluster-1", "inst-foghorn-1234").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO quartermaster.foghorn_cluster_assignments").
+		WithArgs("cluster-1", "inst-foghorn-1234").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:           "foghorn",
+		Port:           9000,
+		Host:           "10.0.0.2",
+		Protocol:       "http",
+		HealthEndpoint: strPtr(""),
+		Version:        "v2.0.0",
+	})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
