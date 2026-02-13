@@ -10,6 +10,7 @@
     GetServiceInstancesConnectionStore,
     SystemHealthStore,
     NodeListFieldsStore,
+    PageInfoFieldsStore,
   } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -43,6 +44,7 @@
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
   const systemHealthSub = new SystemHealthStore();
   const nodeCoreStore = new NodeListFieldsStore();
+  const pageInfoStore = new PageInfoFieldsStore();
 
   let isAuthenticated = false;
 
@@ -238,7 +240,8 @@
       const found = edges.map((edge) => edge.node).find((item) => item.id === relayID);
       if (found) return get(fragment(found, nodeCoreStore));
 
-      const pageInfo = $nodesStore.data?.nodesConnection?.pageInfo;
+      const maskedPageInfo = $nodesStore.data?.nodesConnection?.pageInfo;
+      const pageInfo = maskedPageInfo ? get(fragment(maskedPageInfo, pageInfoStore)) : null;
       if (!pageInfo?.hasNextPage || !pageInfo.endCursor) return null;
       cursor = pageInfo.endCursor;
     }
