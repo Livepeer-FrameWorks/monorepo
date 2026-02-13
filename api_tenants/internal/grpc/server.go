@@ -740,6 +740,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		UPDATE quartermaster.service_instances
 		SET status = 'stopped', stopped_at = NOW(), updated_at = NOW()
 		WHERE service_id = $1 AND cluster_id = $2 AND instance_id != $3
+		  AND status != 'stopped'
 		  AND (
 		    last_health_check IS NULL OR
 		    last_health_check < NOW() - INTERVAL '10 minutes' OR
