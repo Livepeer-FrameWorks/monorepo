@@ -732,7 +732,7 @@
         streamUuid: stream?.streamId,
       });
       const result = await streamStore.fetch({
-        variables: { id: streamId, streamId: analyticsStreamId },
+        variables: { id: streamId, streamId: analyticsStreamId || streamId },
       });
 
       if (!result.data?.stream) {
