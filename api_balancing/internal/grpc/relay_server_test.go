@@ -116,7 +116,7 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		t.Fatalf("relay dispatch coverage mismatch: proto=%v tests=%v", sortedKeys(protoFields), sortedKeys(commandFields))
 	}
 
-	for i, tc := range commands {
+	for _, tc := range commands {
 		t.Run(tc.field, func(t *testing.T) {
 			resp, err := srv.ForwardCommand(context.Background(), tc.cmd)
 			if err != nil {
@@ -127,7 +127,7 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 			}
 
 			stream.mu.Lock()
-			msg := stream.sent[i]
+			msg := stream.sent[len(stream.sent)-1]
 			stream.mu.Unlock()
 			gotPayload := string(msg.ProtoReflect().WhichOneof(msg.ProtoReflect().Descriptor().Oneofs().ByName("payload")).Name())
 			if gotPayload != tc.payload {
