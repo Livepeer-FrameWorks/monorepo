@@ -456,7 +456,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND si.status = 'running'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
-		            ORDER BY si.updated_at DESC
+		            ORDER BY si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           ''
 		       ) AS foghorn_advertise_host,
@@ -469,7 +469,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND si.status = 'running'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
-		            ORDER BY si.updated_at DESC
+		            ORDER BY si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           0
 		       ) AS foghorn_port
