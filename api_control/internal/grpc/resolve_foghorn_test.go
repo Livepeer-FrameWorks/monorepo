@@ -199,6 +199,32 @@ func TestResolveFoghornForTenant_EmptyAddr_EvictsAndRetries(t *testing.T) {
 	}
 }
 
+func TestNormalizeClusterRoute_FallbacksForLegacyQuartermaster(t *testing.T) {
+	route := &clusterRoute{
+		clusterPeers: []*pb.TenantClusterPeer{
+			{ClusterId: "cluster-peer", FoghornGrpcAddr: "foghorn-peer:50051"},
+		},
+	}
+
+	normalizeClusterRoute(route)
+
+	if route.clusterID != "cluster-peer" {
+		t.Fatalf("expected clusterID fallback from peer, got %q", route.clusterID)
+	}
+	if route.foghornAddr != "foghorn-peer:50051" {
+		t.Fatalf("expected foghornAddr fallback from peer, got %q", route.foghornAddr)
+	}
+}
+
+func TestFoghornPoolKey_FallsBackToAddrWhenClusterMissing(t *testing.T) {
+	if got := foghornPoolKey("cluster-1", "foghorn:50051"); got != "cluster-1" {
+		t.Fatalf("expected cluster key, got %q", got)
+	}
+	if got := foghornPoolKey("", "foghorn:50051"); got != "foghorn:50051" {
+		t.Fatalf("expected addr key fallback, got %q", got)
+	}
+}
+
 func TestResolveViewerEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testing.T) {
 	server := &CommodoreServer{
 		logger:        logrus.New(),

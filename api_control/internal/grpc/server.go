@@ -169,6 +169,50 @@ func buildClusterFanoutTargets(route *clusterRoute) []clusterFanoutTarget {
 	return targets
 }
 
+func foghornPoolKey(clusterID, addr string) string {
+	if clusterID != "" {
+		return clusterID
+	}
+	return addr
+}
+
+func normalizeClusterRoute(route *clusterRoute) {
+	if route == nil {
+		return
+	}
+
+	if route.clusterID == "" {
+		switch {
+		case route.officialClusterID != "":
+			route.clusterID = route.officialClusterID
+		default:
+			for _, peer := range route.clusterPeers {
+				if peer.GetClusterId() != "" {
+					route.clusterID = peer.GetClusterId()
+					break
+				}
+			}
+		}
+	}
+
+	if route.foghornAddr == "" {
+		if route.clusterID != "" {
+			route.foghornAddr = resolveAddrFromRoute(route, route.clusterID)
+		}
+		if route.foghornAddr == "" {
+			for _, peer := range route.clusterPeers {
+				if peer.GetFoghornGrpcAddr() != "" {
+					route.foghornAddr = peer.GetFoghornGrpcAddr()
+					if route.clusterID == "" {
+						route.clusterID = peer.GetClusterId()
+					}
+					break
+				}
+			}
+		}
+	}
+}
+
 type commodoreUserRecord struct {
 	ID           string
 	TenantID     string
@@ -342,6 +386,7 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 		clusterPeers:            resp.GetClusterPeers(),
 		resolvedAt:              time.Now(),
 	}
+	normalizeClusterRoute(route)
 
 	s.routeCacheMu.Lock()
 	s.routeCache[tenantID] = route
@@ -364,7 +409,7 @@ func (s *CommodoreServer) resolveFoghornForTenant(ctx context.Context, tenantID 
 			return nil, route, status.Errorf(codes.Unavailable, "no foghorn registered for cluster %s", route.clusterID)
 		}
 
-		client, err := s.foghornPool.GetOrCreate(route.clusterID, route.foghornAddr)
+		client, err := s.foghornPool.GetOrCreate(foghornPoolKey(route.clusterID, route.foghornAddr), route.foghornAddr)
 		if err != nil {
 			return nil, route, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", route.clusterID, err)
 		}
@@ -419,7 +464,7 @@ func (s *CommodoreServer) resolveFoghornForCluster(ctx context.Context, clusterI
 			clusterID, tenantID, len(route.clusterPeers))
 	}
 
-	client, err := s.foghornPool.GetOrCreate(clusterID, addr)
+	client, err := s.foghornPool.GetOrCreate(foghornPoolKey(clusterID, addr), addr)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", clusterID, err)
 	}
@@ -5895,7 +5940,7 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 	var lastErr error
 	failures := 0
 	for _, target := range targets {
-		client, dialErr := s.foghornPool.GetOrCreate(target.clusterID, target.addr)
+		client, dialErr := s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
 		if dialErr != nil {
 			s.logger.WithError(dialErr).WithField("cluster_id", target.clusterID).Warn("Failed to connect to cluster for tenant termination")
 			lastErr = dialErr
@@ -5968,7 +6013,7 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.Inv
 	var lastErr error
 	failures := 0
 	for _, target := range targets {
-		client, dialErr := s.foghornPool.GetOrCreate(target.clusterID, target.addr)
+		client, dialErr := s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
 		if dialErr != nil {
 			s.logger.WithError(dialErr).WithField("cluster_id", target.clusterID).Warn("Failed to connect to cluster for cache invalidation")
 			lastErr = dialErr

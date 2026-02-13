@@ -16,7 +16,9 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // --- helpers ---
@@ -316,6 +318,67 @@ func TestForward_DialError_PreservesFreshOwner(t *testing.T) {
 	}
 	if owner.InstanceID != "fresh-instance" {
 		t.Fatalf("expected fresh owner to survive stale eviction, got %+v", owner)
+	}
+}
+
+func TestForward_PeerUnimplemented_PreservesOwner(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	fakeRelay := &fakeFoghornRelayClient{
+		err: status.Error(codes.Unimplemented, "unknown service foghorn_relay.FoghornRelay"),
+	}
+	pool := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
+	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
+
+	err := r.forward(ctx, &pb.ForwardCommandRequest{
+		TargetNodeId: "node-1",
+		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}},
+	})
+	if err == nil {
+		t.Fatal("expected unimplemented relay error")
+	}
+	if !strings.Contains(err.Error(), "does not implement ForwardCommand") {
+		t.Fatalf("expected unsupported relay error, got %v", err)
+	}
+
+	owner, ownerErr := store.GetConnOwner(ctx, "node-1")
+	if ownerErr != nil {
+		t.Fatalf("GetConnOwner: %v", ownerErr)
+	}
+	if owner.InstanceID != "peer-instance" {
+		t.Fatalf("expected owner to be preserved, got %+v", owner)
+	}
+}
+
+func TestForward_NilResponseClearsOwner(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetConnOwner(ctx, "node-1", "peer-instance", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	fakeRelay := &fakeFoghornRelayClient{}
+	pool := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
+	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
+
+	err := r.forward(ctx, &pb.ForwardCommandRequest{TargetNodeId: "node-1"})
+	if err == nil {
+		t.Fatal("expected nil response error")
+	}
+	if !strings.Contains(err.Error(), "nil response") {
+		t.Fatalf("expected nil response error, got %v", err)
+	}
+
+	owner, ownerErr := store.GetConnOwner(ctx, "node-1")
+	if ownerErr != nil {
+		t.Fatalf("GetConnOwner: %v", ownerErr)
+	}
+	if owner.InstanceID != "" {
+		t.Fatalf("expected stale owner to be cleared after nil response, got %+v", owner)
 	}
 }
 

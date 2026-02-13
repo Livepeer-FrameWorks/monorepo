@@ -220,3 +220,26 @@ func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 		seen[resp.NodeId] = true
 	}
 }
+
+func TestPreRegisterEdge_EmptySanitizedClusterSlugFallsBackToDefault(t *testing.T) {
+	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid:     true,
+		Kind:      "edge_node",
+		ClusterId: "___",
+	})
+
+	srv := &EdgeProvisioningServer{}
+	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{EnrollmentToken: "bt_slug"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.ClusterSlug != "default" {
+		t.Fatalf("expected default cluster slug, got %q", resp.ClusterSlug)
+	}
+	if !strings.Contains(resp.FoghornGrpcAddr, "foghorn.default.example.com:18008") {
+		t.Fatalf("expected fallback foghorn addr with default slug, got %q", resp.FoghornGrpcAddr)
+	}
+}

@@ -127,3 +127,25 @@ func TestInvalidateTenantCache_DeduplicatesTargets(t *testing.T) {
 		t.Fatalf("expected single target invalidation count, got %d", resp.EntriesInvalidated)
 	}
 }
+
+func TestTerminateTenantStreams_DeduplicatesByAddrWhenClusterIDMissing(t *testing.T) {
+	goodAddr := startTenantControlTestServer(t, &testTenantControlServer{
+		terminateResp: &pb.TerminateTenantStreamsResponse{StreamsTerminated: 7, SessionsTerminated: 9},
+	})
+
+	server := newTenantFanoutTestServer(t, &clusterRoute{
+		clusterPeers: []*pb.TenantClusterPeer{
+			{ClusterId: "", FoghornGrpcAddr: goodAddr},
+			{ClusterId: "", FoghornGrpcAddr: goodAddr},
+		},
+		resolvedAt: time.Now(),
+	})
+
+	resp, err := server.TerminateTenantStreams(context.Background(), &pb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StreamsTerminated != 7 || resp.SessionsTerminated != 9 {
+		t.Fatalf("expected single-target result (7/9), got %d/%d", resp.StreamsTerminated, resp.SessionsTerminated)
+	}
+}
