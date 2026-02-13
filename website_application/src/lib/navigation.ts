@@ -356,46 +356,22 @@ export const navigationConfig: Record<string, NavigationItem> = {
   },
 };
 
-export function getRouteInfo(path: string): RouteInfo | null {
-  const normalizedPath = normalizePath(path);
+const hiddenRoutes: RouteInfo[] = [
+  {
+    path: "/infrastructure/marketplace",
+    name: "Marketplace",
+    parent: "Infrastructure",
+    description: "Discover and connect to available clusters",
+  },
+  {
+    path: "/view",
+    name: "Viewer",
+    parent: "Content",
+    description: "Viewer playback route",
+  },
+];
 
-  // Handle dashboard
-  if (normalizedPath === "/") {
-    return {
-      path: "/",
-      name: "Dashboard",
-      parent: "root",
-    };
-  }
-
-  // Search through navigation config
-  for (const section of Object.values(navigationConfig)) {
-    if (section.children) {
-      for (const child of Object.values(section.children)) {
-        if (child.href === normalizedPath) {
-          return {
-            path: child.href,
-            name: child.name,
-            parent: section.name,
-            description: child.description,
-          };
-        }
-      }
-    }
-  }
-
-  const dynamicRoute = findDynamicRoute(normalizedPath);
-  if (dynamicRoute) {
-    return {
-      path: normalizedPath,
-      ...dynamicRoute.route,
-    };
-  }
-
-  return null;
-}
-
-export function getAllRoutes(): RouteInfo[] {
+function getNavigationRoutes(): RouteInfo[] {
   const routes: RouteInfo[] = [
     {
       path: "/",
@@ -405,46 +381,57 @@ export function getAllRoutes(): RouteInfo[] {
   ];
 
   for (const section of Object.values(navigationConfig)) {
-    if (section.children) {
-      for (const child of Object.values(section.children)) {
-        if (child.href) {
-          const route: RouteInfo = {
-            path: child.href,
-            name: child.name,
-            parent: section.name,
-          };
-          if (child.description) {
-            route.description = child.description;
-          }
-          routes.push(route);
-        }
+    if (!section.children) continue;
+    for (const child of Object.values(section.children)) {
+      if (!child.href) continue;
+      const route: RouteInfo = {
+        path: child.href,
+        name: child.name,
+        parent: section.name,
+      };
+      if (child.description) {
+        route.description = child.description;
       }
+      routes.push(route);
     }
   }
 
   return routes;
 }
 
+const routesByPath = new Map<string, RouteInfo>(
+  [...getNavigationRoutes(), ...hiddenRoutes].map((route) => [route.path, route])
+);
+
+export function getRouteInfo(path: string): RouteInfo | null {
+  const normalizedPath = normalizePath(path);
+  const staticRoute = routesByPath.get(normalizedPath);
+  if (staticRoute) {
+    return staticRoute;
+  }
+
+  const match = findDynamicRoute(normalizedPath);
+  if (match) {
+    return { path: normalizedPath, ...match.route };
+  }
+
+  return null;
+}
+
+export function getAllRoutes(): RouteInfo[] {
+  return [...routesByPath.values()];
+}
+
 export function getBreadcrumbs(path: string): Breadcrumb[] {
   const normalizedPath = normalizePath(path);
-  const breadcrumbs: Breadcrumb[] = [];
 
   if (normalizedPath === "/") {
     return [{ name: "Dashboard" }];
   }
 
-  // Find the route in navigation
-  for (const section of Object.values(navigationConfig)) {
-    if (section.children) {
-      for (const child of Object.values(section.children)) {
-        if (child.href === normalizedPath) {
-          breadcrumbs.push({ name: "Dashboard", href: "/" });
-          breadcrumbs.push({ name: section.name });
-          breadcrumbs.push({ name: child.name });
-          return breadcrumbs;
-        }
-      }
-    }
+  const staticRoute = routesByPath.get(normalizedPath);
+  if (staticRoute) {
+    return [{ name: "Dashboard", href: "/" }, { name: staticRoute.parent }, { name: staticRoute.name }];
   }
 
   const dynamicRoute = findDynamicRoute(normalizedPath);
