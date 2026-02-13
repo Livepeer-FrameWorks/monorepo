@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     -- Set by ValidateStreamKey when Foghorn reports its cluster_id during ingest.
     -- Used by Commodore to route stream-scoped commands (CreateClip) to the correct cluster.
     active_ingest_cluster_id VARCHAR(100),
+    active_ingest_cluster_updated_at TIMESTAMP,
 
     -- NOTE: Operational state (status, start_time, end_time) removed
     -- Stream status now comes from Periscope Data Plane via ClickHouse analytics
@@ -408,4 +409,3 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql;
-
