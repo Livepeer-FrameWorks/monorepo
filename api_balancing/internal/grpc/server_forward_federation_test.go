@@ -244,3 +244,26 @@ func TestForwardArtifact_PassesCorrectRequest(t *testing.T) {
 		t.Fatalf("expected streamID=stream-99, got %q", call.streamID)
 	}
 }
+
+func TestForwardArtifact_SkipsWhenTenantMissing(t *testing.T) {
+	fed := &mockFedRPC{handlers: map[string]bool{"peer-1": true}}
+	srv := &FoghornGRPCServer{
+		logger:           newTestFoghornLogger(),
+		federationClient: fed,
+		peerManager: &mockPeerResolver{peers: map[string]string{
+			"peer-1": "addr-1",
+		}},
+		clusterID: "self",
+	}
+
+	handled, err := srv.forwardArtifactToFederation(context.Background(), "delete_clip", "clip-hash-1", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if handled {
+		t.Fatal("expected handled=false when tenant is missing")
+	}
+	if len(fed.calls) != 0 {
+		t.Fatalf("expected no federation calls when tenant missing, got %d", len(fed.calls))
+	}
+}
