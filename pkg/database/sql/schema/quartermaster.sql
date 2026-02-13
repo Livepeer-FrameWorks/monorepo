@@ -325,7 +325,7 @@ ALTER TABLE quartermaster.service_instances
 ALTER TABLE quartermaster.service_instances
     ADD CONSTRAINT fk_qm_service_instances_node_cluster
     FOREIGN KEY (node_id, cluster_id)
-    REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id);
+    REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id) NOT VALID;
 
 -- ============================================================================
 -- TENANT-CLUSTER MAPPING & ACCESS CONTROL
