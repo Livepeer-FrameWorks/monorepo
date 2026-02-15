@@ -1,18 +1,26 @@
 # @livepeer-frameworks/player-core
 
-Core (headless) player engine used by the React/Svelte wrappers. Provides `PlayerController`, selection logic, and player implementations (WebCodecs, HLS, etc).
+Headless player engine for FrameWorks. Provides `PlayerController`, protocol selection, transport implementations (HLS, DASH, WebRTC, WebCodecs, etc.), and CSS.
 
-**Docs:** `logbook.frameworks.network`
+> **Most users should install a wrapper instead of core directly:**
+>
+> | Package                                                                                                  | Use case                                                      |
+> | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+> | [`@livepeer-frameworks/player-react`](https://www.npmjs.com/package/@livepeer-frameworks/player-react)   | React apps                                                    |
+> | [`@livepeer-frameworks/player-svelte`](https://www.npmjs.com/package/@livepeer-frameworks/player-svelte) | Svelte 5 apps                                                 |
+> | [`@livepeer-frameworks/player-wc`](https://www.npmjs.com/package/@livepeer-frameworks/player-wc)         | Web Components — Vue, Angular, CDN `<script>` tag, plain HTML |
+>
+> The wrappers include core as a dependency and provide a full UI (controls, seek bar, quality menu, etc.). Install core directly only if you need **headless programmatic control** with a completely custom UI.
+
+**Docs:** https://logbook.frameworks.network
 
 ## Install
 
 ```bash
-pnpm add @livepeer-frameworks/player-core
-# or
 npm i @livepeer-frameworks/player-core
 ```
 
-## Basic Usage
+## Headless Usage
 
 ```ts
 import { PlayerController } from "@livepeer-frameworks/player-core";

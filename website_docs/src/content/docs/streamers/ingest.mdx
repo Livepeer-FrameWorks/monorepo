@@ -22,6 +22,7 @@ Browser-based broadcasting — camera, screen share, or both with audio mixing. 
 [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-react?label=@livepeer-frameworks%2Fstreamcrafter-react)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-react)
 [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-svelte?label=@livepeer-frameworks%2Fstreamcrafter-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte)
 [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-core?label=@livepeer-frameworks%2Fstreamcrafter-core)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)
+[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-wc?label=@livepeer-frameworks%2Fstreamcrafter-wc)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-wc)
 
 Install the React or Svelte package:
 
@@ -29,6 +30,8 @@ Install the React or Svelte package:
 npm install @livepeer-frameworks/streamcrafter-react
 # or
 npm install @livepeer-frameworks/streamcrafter-svelte
+# or Web Components (Vue, Angular, CDN, plain HTML)
+npm install @livepeer-frameworks/streamcrafter-wc
 ```
 
 Import the StreamCrafter CSS once in your app (React/Svelte examples below include this).
@@ -206,6 +209,38 @@ await crafter.startStreaming();
 await crafter.stopStreaming();
 crafter.destroy();
 ```
+
+## Web Components (CDN / Any Framework)
+
+For a fully-skinned streaming UI with no bundler, load the IIFE bundle via a free npm CDN:
+
+```html
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+
+<fw-streamcrafter
+  whip-url="%INGEST_URL%/webrtc/your-stream-key"
+  initial-profile="broadcast"
+></fw-streamcrafter>
+```
+
+Or install via npm and use the ESM entry:
+
+```bash
+npm install @livepeer-frameworks/streamcrafter-wc
+```
+
+```ts
+import "@livepeer-frameworks/streamcrafter-wc/define";
+```
+
+```html
+<fw-streamcrafter whip-url="..." initial-profile="broadcast"></fw-streamcrafter>
+```
+
+Shadow DOM encapsulates all StreamCrafter CSS — host page styles won't break controls. The component includes the same full UI as the React/Svelte versions: video preview, camera/screen controls, quality selection, and connection status.
 
 ## Quality Profiles
 

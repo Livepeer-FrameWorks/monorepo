@@ -1,0 +1,65 @@
+{
+  "name": "@livepeer-frameworks/player-wc",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Lit Web Components for FrameWorks streaming player — <fw-player> custom element with full UI",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./define": {
+      "source": "./src/define.ts",
+      "types": "./dist/types/define.d.ts",
+      "import": "./dist/esm/define.js",
+      "require": "./dist/cjs/define.js"
+    },
+    "./fw-player.js": {
+      "default": "./dist/fw-player.iife.js"
+    }
+  },
+  "scripts": {
+    "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",
+    "build:watch": "NODE_ENV=development rollup -c --watch",
+    "build:css": "node scripts/generate-shared-styles.js",
+    "build:types": "tsc --noEmit false --emitDeclarationOnly --outDir dist/types",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@livepeer-frameworks/player-core": "workspace:*",
+    "lit": "^3.2.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^0.4.0",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "@vitest/coverage-v8": "^4.0.18",
+    "rollup": "^4.57.1",
+    "tslib": "^2.8.1",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.18"
+  },
+  "keywords": [
+    "web-components",
+    "lit",
+    "streaming",
+    "player",
+    "video",
+    "custom-elements"
+  ],
+  "author": "Livepeer FrameWorks",
+  "license": "Unlicense"
+}

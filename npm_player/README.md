@@ -13,13 +13,14 @@ The `Player` component resolves optimal endpoints via the FrameWorks Gateway, wh
 
 ## Packages
 
-This library is split into three packages:
+This library is split into four packages:
 
 | Package                              | Description                                                    |
 | ------------------------------------ | -------------------------------------------------------------- |
 | `@livepeer-frameworks/player-core`   | Framework-agnostic core logic, player implementations, and CSS |
 | `@livepeer-frameworks/player-react`  | React components and hooks                                     |
 | `@livepeer-frameworks/player-svelte` | Svelte 5 components                                            |
+| `@livepeer-frameworks/player-wc`     | Lit Web Components (Shadow DOM, CDN-ready)                     |
 
 ## Vite playground
 
@@ -63,7 +64,48 @@ npm install --save @livepeer-frameworks/player-react
 npm install --save @livepeer-frameworks/player-svelte
 ```
 
-### Vanilla JS / Other Frameworks
+### Web Components (Vue, Angular, CDN, plain HTML)
+
+```bash
+npm install --save @livepeer-frameworks/player-wc
+```
+
+Or via `<script>` tag (no bundler needed). The IIFE bundle is served by free npm CDNs:
+
+```html
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+
+<fw-player
+  content-id="pk_..."
+  content-type="live"
+  gateway-url="https://your-gateway/graphql"
+  autoplay
+  muted
+  controls
+></fw-player>
+```
+
+Or with ESM (bundler):
+
+```ts
+import "@livepeer-frameworks/player-wc/define";
+```
+
+```html
+<fw-player
+  content-id="pk_..."
+  content-type="live"
+  gateway-url="..."
+  autoplay
+  muted
+  controls
+></fw-player>
+```
+
+### Vanilla JS / Headless (Programmatic Control)
 
 ```bash
 npm install --save @livepeer-frameworks/player-core

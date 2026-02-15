@@ -46,6 +46,7 @@ npm_studio/
     core/     # @livepeer-frameworks/streamcrafter-core
     react/    # @livepeer-frameworks/streamcrafter-react
     svelte/   # @livepeer-frameworks/streamcrafter-svelte (Svelte 5)
+    wc/       # @livepeer-frameworks/streamcrafter-wc (Lit Web Components)
   playground -> ../npm_player/playground  # shared Vite playground
 ```
 
@@ -84,6 +85,15 @@ Svelte 5 integration:
 - Optional extras:
   - Compositor store: `npm_studio/packages/svelte/src/stores/compositor.ts`
   - Gateway resolution store: `npm_studio/packages/svelte/src/stores/ingestEndpoints.ts`
+
+### `@livepeer-frameworks/streamcrafter-wc`
+
+Lit Web Components integration + UI (Shadow DOM encapsulation):
+
+- Main element: `npm_studio/packages/wc/src/components/fw-streamcrafter.ts`
+- ReactiveController: `npm_studio/packages/wc/src/controllers/ingest-controller-host.ts`
+- 6 child components matching React/Svelte UI parity
+- Three build outputs: ESM, CJS, IIFE (CDN)
 
 ## Architecture (mental model)
 

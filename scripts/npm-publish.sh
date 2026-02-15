@@ -23,9 +23,11 @@ PACKAGES=(
   npm_player/packages/core
   npm_player/packages/react
   npm_player/packages/svelte
+  npm_player/packages/wc
   npm_studio/packages/core
   npm_studio/packages/react
   npm_studio/packages/svelte
+  npm_studio/packages/wc
 )
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -72,6 +72,7 @@ The FrameWorks Player is a React component that wraps multiple open-source playb
 [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-react?label=@livepeer-frameworks%2Fplayer-react)](https://www.npmjs.com/package/@livepeer-frameworks/player-react)
 [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-svelte?label=@livepeer-frameworks%2Fplayer-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/player-svelte)
 [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-core?label=@livepeer-frameworks%2Fplayer-core)](https://www.npmjs.com/package/@livepeer-frameworks/player-core)
+[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-wc?label=@livepeer-frameworks%2Fplayer-wc)](https://www.npmjs.com/package/@livepeer-frameworks/player-wc)
 
 **Key features:**
 
@@ -123,7 +124,10 @@ npm install @livepeer-frameworks/player-react
 # Svelte 5
 npm install @livepeer-frameworks/player-svelte
 
-# Vanilla JS / Other frameworks
+# Web Components (Vue, Angular, CDN, plain HTML)
+npm install @livepeer-frameworks/player-wc
+
+# Vanilla JS / Other frameworks (headless, no UI)
 npm install @livepeer-frameworks/player-core
 ```
 
@@ -362,6 +366,55 @@ onMounted(async () => {
 
 onUnmounted(() => player?.destroy());
 </script>
+```
+
+### Web Components (CDN / Any Framework)
+
+For a fully-skinned player with no bundler required, load the IIFE bundle via a free npm CDN:
+
+```html
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+
+<fw-player
+  content-type="live"
+  content-id="<YOUR_PLAYBACK_ID>"
+  gateway-url="%GATEWAY_URL%/graphql"
+  autoplay
+  muted
+  controls
+></fw-player>
+```
+
+Or install via npm and use the ESM entry:
+
+```bash
+npm install @livepeer-frameworks/player-wc
+```
+
+```ts
+import "@livepeer-frameworks/player-wc/define";
+```
+
+```html
+<fw-player
+  content-id="pk_..."
+  content-type="live"
+  gateway-url="..."
+  autoplay
+  muted
+  controls
+></fw-player>
+```
+
+Shadow DOM encapsulates all player CSS — host page styles won't break controls. Theme via CSS custom properties:
+
+```css
+fw-player {
+  --tn-blue: 200 80% 60%;
+}
 ```
 
 #### Available Options (Quick Reference)

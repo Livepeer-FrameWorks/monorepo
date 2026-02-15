@@ -1,0 +1,55 @@
+{
+  "name": "@livepeer-frameworks/streamcrafter-wc",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Lit Web Components for StreamCrafter - framework-agnostic streaming UI",
+  "main": "dist/cjs/index.cjs",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.cjs"
+    },
+    "./define": {
+      "source": "./src/define.ts",
+      "types": "./dist/types/define.d.ts",
+      "import": "./dist/esm/define.js",
+      "require": "./dist/cjs/define.cjs"
+    },
+    "./fw-streamcrafter.js": {
+      "source": "./src/iife-entry.ts",
+      "default": "./dist/fw-streamcrafter.iife.js"
+    }
+  },
+  "scripts": {
+    "build:css": "node scripts/generate-shared-styles.js",
+    "build:types": "tsc --noEmit false --emitDeclarationOnly --outDir dist/types",
+    "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@livepeer-frameworks/streamcrafter-core": "workspace:*",
+    "lit": "^3.2.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "rollup": "^4.57.1",
+    "tslib": "^2.8.1",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.18"
+  },
+  "author": "Livepeer FrameWorks",
+  "license": "Unlicense"
+}

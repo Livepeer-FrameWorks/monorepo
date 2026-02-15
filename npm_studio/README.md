@@ -14,6 +14,7 @@ The `StreamCrafter` component is self-contained - pass a WHIP endpoint and get a
 | `@livepeer-frameworks/streamcrafter-core`   | Core streaming logic, WHIP client, WebCodecs encoder |
 | `@livepeer-frameworks/streamcrafter-react`  | React component and hooks                            |
 | `@livepeer-frameworks/streamcrafter-svelte` | Svelte 5 component and stores                        |
+| `@livepeer-frameworks/streamcrafter-wc`     | Lit Web Components (Shadow DOM, CDN-ready)           |
 
 ## Features
 
@@ -35,6 +36,36 @@ Full docs and guides: https://logbook.frameworks.network
 npm install @livepeer-frameworks/streamcrafter-react
 # or
 npm install @livepeer-frameworks/streamcrafter-svelte
+```
+
+### Web Components
+
+```bash
+npm install @livepeer-frameworks/streamcrafter-wc
+```
+
+Or via `<script>` tag (no bundler needed). The IIFE bundle is served by free npm CDNs:
+
+```html
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+
+<fw-streamcrafter
+  whip-url="https://edge-ingest.example.com/webrtc/your-stream-key"
+  initial-profile="broadcast"
+></fw-streamcrafter>
+```
+
+Or with ESM (bundler):
+
+```ts
+import "@livepeer-frameworks/streamcrafter-wc/define";
+```
+
+```html
+<fw-streamcrafter whip-url="..." initial-profile="broadcast"></fw-streamcrafter>
 ```
 
 ## Usage

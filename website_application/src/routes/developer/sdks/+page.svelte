@@ -10,7 +10,7 @@
     getRtmpServerUrl,
   } from "$lib/config";
 
-  type Framework = "react" | "svelte" | "vanilla";
+  type Framework = "react" | "svelte" | "wc" | "vanilla";
 
   // Break the "import" keyword in code example strings so Vite's dep scanner
   // doesn't treat them as real imports (the packages aren't installed locally).
@@ -35,6 +35,7 @@
       core: "@livepeer-frameworks/player-core",
       react: "@livepeer-frameworks/player-react",
       svelte: "@livepeer-frameworks/player-svelte",
+      wc: "@livepeer-frameworks/player-wc",
     },
     version: "0.1.0",
     features: [
@@ -66,6 +67,18 @@ function App() {
   playbackId="your-playback-id"
   gatewayUrl="${graphqlUrl}"
 />`,
+      wc: `<!-- IIFE via npm CDN — no bundler needed -->
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"><\/script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"><\/script>
+
+<fw-player
+  content-id="your-playback-id"
+  content-type="live"
+  gateway-url="${graphqlUrl}"
+  autoplay muted controls
+></fw-player>`,
       vanilla: `import { FrameWorksPlayer } from '@livepeer-frameworks/player-core/vanilla';
 ${_imp} '@livepeer-frameworks/player-core/player.css';
 
@@ -90,6 +103,7 @@ player.destroy();`,
       core: "@livepeer-frameworks/streamcrafter-core",
       react: "@livepeer-frameworks/streamcrafter-react",
       svelte: "@livepeer-frameworks/streamcrafter-svelte",
+      wc: "@livepeer-frameworks/streamcrafter-wc",
     },
     version: "0.1.0",
     features: [
@@ -127,6 +141,17 @@ function Studio() {
   <Preview />
   <Controls />
 </StreamCrafter>`,
+      wc: `<!-- IIFE via npm CDN — no bundler needed -->
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"><\/script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"><\/script>
+
+<fw-streamcrafter
+  gateway-url="${graphqlUrl}"
+  stream-key="your-stream-key"
+  initial-profile="broadcast"
+></fw-streamcrafter>`,
       vanilla: `import { IngestController } from '@livepeer-frameworks/streamcrafter-core/vanilla';
 ${_imp} '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
 
@@ -251,7 +276,7 @@ await controller.stopStreaming();`,
         <div>
           <h1 class="text-xl font-bold text-foreground">SDKs & Libraries</h1>
           <p class="text-sm text-muted-foreground">
-            Player and Studio SDKs for React, Svelte, and vanilla JavaScript
+            Player and Studio SDKs for React, Svelte, Web Components, and vanilla JavaScript
           </p>
         </div>
       </div>
@@ -286,6 +311,16 @@ await controller.stopStreaming();`,
               onclick={() => (selectedFramework = "svelte")}
             >
               Svelte
+            </button>
+            <button
+              type="button"
+              class="px-4 py-2 text-sm font-medium transition-colors border-r border-border {selectedFramework ===
+              'wc'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
+              onclick={() => (selectedFramework = "wc")}
+            >
+              Web Components
             </button>
             <button
               type="button"

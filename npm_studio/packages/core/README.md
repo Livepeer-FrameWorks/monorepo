@@ -1,10 +1,18 @@
 # @livepeer-frameworks/streamcrafter-core
 
-Framework-agnostic core for StreamCrafter: WHIP client, WebRTC transport, WebCodecs encoder, audio mixing, and compositor.
+Headless WHIP streaming engine for FrameWorks. Provides `IngestControllerV2`, `WhipClient`, WebCodecs encoder, audio mixing, compositor, and CSS.
 
-## Documentation
+> **Most users should install a wrapper instead of core directly:**
+>
+> | Package                                                                                                                | Use case                                                      |
+> | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+> | [`@livepeer-frameworks/streamcrafter-react`](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-react)   | React apps                                                    |
+> | [`@livepeer-frameworks/streamcrafter-svelte`](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte) | Svelte 5 apps                                                 |
+> | [`@livepeer-frameworks/streamcrafter-wc`](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-wc)         | Web Components — Vue, Angular, CDN `<script>` tag, plain HTML |
+>
+> The wrappers include core as a dependency and provide a full UI (preview, camera/screen controls, quality selector, connection status, etc.). Install core directly only if you need **headless programmatic control** with a completely custom UI.
 
-Docs: https://logbook.frameworks.network
+**Docs:** https://logbook.frameworks.network
 
 ## Install
 
@@ -12,7 +20,7 @@ Docs: https://logbook.frameworks.network
 npm install @livepeer-frameworks/streamcrafter-core
 ```
 
-## Usage (Vanilla)
+## Headless Usage
 
 ```ts
 import { StreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-core";
@@ -58,5 +66,5 @@ Notes:
 ## Notes
 
 - WebCodecs + Web Workers are used when available for background-safe encoding.
-- For custom UIs, build on the core APIs or use the React/Svelte wrappers.
+- For custom UIs, build on the core APIs or use the React/Svelte/Web Component wrappers.
 - CSS export: `@livepeer-frameworks/streamcrafter-core/streamcrafter.css`

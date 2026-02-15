@@ -31,6 +31,7 @@ npm_player/
     core/     # @livepeer-frameworks/player-core (framework-agnostic engine + CSS)
     react/    # @livepeer-frameworks/player-react (React wrapper + UI)
     svelte/   # @livepeer-frameworks/player-svelte (Svelte 5 wrapper + UI)
+    wc/       # @livepeer-frameworks/player-wc (Lit Web Components, Shadow DOM)
   playground/ # local Vite app for developing/testing the player packages
 ```
 
@@ -59,6 +60,15 @@ Svelte 5 integration + UI:
 
 - Drop-in component: `npm_player/packages/svelte/src/Player.svelte`
 - Stores wrapping the core controller: `npm_player/packages/svelte/src/stores/*`
+
+### `@livepeer-frameworks/player-wc`
+
+Lit Web Components integration + UI (Shadow DOM encapsulation):
+
+- Drop-in element: `npm_player/packages/wc/src/components/fw-player.ts`
+- ReactiveController (wraps core controller): `npm_player/packages/wc/src/controllers/player-controller-host.ts`
+- 16 child components matching React/Svelte UI parity
+- Three build outputs: ESM (bundlers), CJS (Node/SSR), IIFE (CDN `<script>` tag)
 
 ---
 
@@ -96,6 +106,23 @@ import { Player } from "@livepeer-frameworks/player-react";
   contentId="pk_..."
   options={{ gatewayUrl: "https://your-bridge/graphql" }}
 />
+```
+
+### Web Components (CDN / any framework)
+
+- Install: `npm i @livepeer-frameworks/player-wc`
+- Or IIFE via CDN: `<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>`
+- Use:
+
+```html
+<fw-player
+  content-type="live"
+  content-id="pk_..."
+  gateway-url="https://your-bridge/graphql"
+  autoplay
+  muted
+  controls
+></fw-player>
 ```
 
 ### Vanilla / other frameworks

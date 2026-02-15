@@ -4,6 +4,7 @@ import {
   PlayIcon,
   ArrowUpTrayIcon,
   CodeBracketIcon,
+  CubeIcon,
   ClipboardDocumentCheckIcon,
   ClipboardDocumentIcon,
 } from "@heroicons/react/24/outline";
@@ -40,6 +41,19 @@ const snippetIngest = `<script>
   />
 </div>`;
 
+const snippetWebComponent = `<!-- IIFE via npm CDN — no bundler needed -->
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+
+<fw-player
+  content-id="your-playback-id"
+  content-type="live"
+  gateway-url="${config.gatewayUrl}"
+  autoplay muted controls
+></fw-player>`;
+
 const snippetGraphql = `query LiveStreams {
   streamsConnection(page: { first: 10 }) {
     edges {
@@ -65,12 +79,14 @@ export default function SdkCodePreview({ variant = "default", className }) {
   const snippets = {
     player: snippetPlayer,
     ingest: snippetIngest,
+    wc: snippetWebComponent,
     graphql: snippetGraphql,
   };
 
   const langLabels = {
     player: "React / TSX",
     ingest: "Svelte 5",
+    wc: "HTML",
     graphql: "GraphQL",
   };
 
@@ -83,6 +99,7 @@ export default function SdkCodePreview({ variant = "default", className }) {
   const tabs = [
     { id: "player", label: "Player SDK", icon: PlayIcon },
     { id: "ingest", label: "StreamCrafter", icon: ArrowUpTrayIcon },
+    { id: "wc", label: "Web Components", icon: CubeIcon },
     { id: "graphql", label: "GraphQL", icon: CodeBracketIcon },
   ];
 
