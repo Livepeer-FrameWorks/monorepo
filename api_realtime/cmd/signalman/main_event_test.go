@@ -7,6 +7,7 @@ import (
 	"time"
 
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
@@ -20,10 +21,12 @@ func (b *blockingBootstrapper) BootstrapService(ctx context.Context, req *pb.Boo
 }
 
 func TestBootstrapSignalmanServiceTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
+	logger, _ := logrustest.NewNullLogger()
+	cfg := qmbootstrap.DefaultRetryConfig("signalman")
+	cfg.AttemptTimeout = 10 * time.Millisecond
+	cfg.MaxAttempts = 1
 
-	err := bootstrapSignalmanService(ctx, &blockingBootstrapper{}, &pb.BootstrapServiceRequest{})
+	_, err := qmbootstrap.BootstrapServiceWithRetry(&blockingBootstrapper{}, &pb.BootstrapServiceRequest{Type: "signalman"}, logger, cfg)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline exceeded, got %v", err)
 	}

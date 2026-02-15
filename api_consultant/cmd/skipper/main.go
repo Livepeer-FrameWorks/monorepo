@@ -38,6 +38,7 @@ import (
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/search"
 	"frameworks/pkg/server"
 	"frameworks/pkg/tenants"
@@ -574,8 +575,6 @@ func main() {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
 		if httpPort <= 0 || httpPort > 65535 {
@@ -584,7 +583,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("SKIPPER_HOST", "skipper")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		if _, err := qmClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		req := &pb.BootstrapServiceRequest{
 			Type:           "skipper",
 			Version:        version.Version,
 			Protocol:       "http",
@@ -597,7 +596,8 @@ func main() {
 				}
 				return nil
 			}(),
-		}); err != nil {
+		}
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(qmClient, req, logger, qmbootstrap.DefaultRetryConfig("skipper")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (skipper) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (skipper) ok")

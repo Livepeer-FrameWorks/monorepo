@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 	"time"
@@ -177,8 +177,6 @@ func main() {
 			logger.Warn("Quartermaster gRPC client not available, skipping bootstrap")
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
 		if httpPort <= 0 || httpPort > 65535 {
@@ -187,7 +185,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("COMMODORE_HOST", "commodore")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		if _, err := quartermasterGRPCClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		req := &pb.BootstrapServiceRequest{
 			Type:           "commodore",
 			Version:        version.Version,
 			Protocol:       "http",
@@ -200,7 +198,8 @@ func main() {
 				}
 				return nil
 			}(),
-		}); err != nil {
+		}
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(quartermasterGRPCClient, req, logger, qmbootstrap.DefaultRetryConfig("commodore")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (commodore) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (commodore) ok")

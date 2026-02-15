@@ -18,6 +18,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
@@ -219,12 +220,10 @@ func main() {
 			return
 		}
 		defer func() { _ = qc.Close() }()
-		ctx, bootstrapCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer bootstrapCancel()
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("PERISCOPE_INGEST_HOST", "periscope-ingest")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		req := &pb.BootstrapServiceRequest{
 			Type:           "periscope_ingest",
 			Version:        version.Version,
 			Protocol:       "http",
@@ -237,7 +236,8 @@ func main() {
 				}
 				return nil
 			}(),
-		}); err != nil {
+		}
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope_ingest")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_ingest) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (periscope_ingest) ok")

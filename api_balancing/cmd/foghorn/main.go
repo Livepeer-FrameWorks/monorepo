@@ -26,6 +26,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	pkgredis "frameworks/pkg/redis"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
@@ -615,14 +616,15 @@ func main() {
 			bsReq.AdvertiseHost = &host
 		}
 
-		bsCtx, bsCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		bsResp, bsErr := qmClient.BootstrapService(bsCtx, bsReq)
-		bsCancel()
-
-		advertiseAddr := ""
+		retryCfg := qmbootstrap.DefaultRetryConfig("foghorn")
+		retryCfg.AttemptTimeout = 10 * time.Second
+		bsResp, bsErr := qmbootstrap.BootstrapServiceWithRetry(qmClient, bsReq, logger, retryCfg)
 		if bsErr != nil {
 			logger.WithError(bsErr).Warn("BootstrapService failed — HA relay disabled")
-		} else {
+		}
+
+		advertiseAddr := ""
+		if bsResp != nil {
 			advertiseAddr = bsResp.GetAdvertiseAddr()
 		}
 

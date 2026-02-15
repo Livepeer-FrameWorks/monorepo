@@ -29,6 +29,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/tenants"
 	"frameworks/pkg/version"
@@ -544,8 +545,6 @@ func main() {
 
 	// Best-effort service registration in Quartermaster (gRPC, before server starts)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		port, _ := strconv.Atoi(serverConfig.Port)
 		if port <= 0 || port > 65535 {
 			logger.Warn("Quartermaster bootstrap skipped: invalid port")
@@ -554,7 +553,7 @@ func main() {
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("BRIDGE_HOST", "bridge")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		if resp, err := serviceClients.Quartermaster.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		req := &pb.BootstrapServiceRequest{
 			Type:           "gateway",
 			Version:        version.Version,
 			Protocol:       "http",
@@ -567,7 +566,9 @@ func main() {
 				}
 				return nil
 			}(),
-		}); err != nil {
+		}
+		resp, err := qmbootstrap.BootstrapServiceWithRetry(serviceClients.Quartermaster, req, logger, qmbootstrap.DefaultRetryConfig("gateway"))
+		if err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
 		} else {
 			if resp != nil && resp.GetOwnerTenantId() != "" {

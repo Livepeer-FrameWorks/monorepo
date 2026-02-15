@@ -221,7 +221,10 @@ INSERT INTO quartermaster.node_fingerprints (
     '{}',
     '{}'
 ) ON CONFLICT (node_id) DO UPDATE SET
+    tenant_id = EXCLUDED.tenant_id,
     fingerprint_machine_sha256 = EXCLUDED.fingerprint_machine_sha256,
+    fingerprint_macs_sha256 = EXCLUDED.fingerprint_macs_sha256,
+    attrs = EXCLUDED.attrs,
     last_seen = NOW();
 
 -- Demo bootstrap token for node provisioning testing
@@ -238,7 +241,7 @@ INSERT INTO quartermaster.bootstrap_tokens (
     'Demo Edge Node Bootstrap',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'central-primary',                        -- Central cluster
-    '127.0.0.1',                              -- Expected localhost for dev
+    NULL,                                     -- Allow docker bridge IPs in local dev
     '{"purpose": "demo", "environment": "development"}',
     10,    -- Max 10 uses
     1,     -- Already used once for edge-node-1

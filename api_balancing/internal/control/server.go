@@ -707,14 +707,17 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				}
 				if quartermasterClient != nil {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					if resp, err := quartermasterClient.ResolveNodeFingerprint(ctx, fpReq); err == nil && resp != nil {
+					resp, err := quartermasterClient.ResolveNodeFingerprint(ctx, fpReq)
+					cancel()
+					if err == nil && resp != nil {
 						tenantID = resp.TenantId
 						if resp.CanonicalNodeId != "" {
 							canonicalNodeID = resp.CanonicalNodeId
 						}
 						registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Resolved tenant via fingerprint")
+					} else if err != nil {
+						registry.log.WithError(err).WithField("node_id", nodeID).Debug("Fingerprint resolution did not match; enrollment token may be required")
 					}
-					cancel()
 				}
 			}
 

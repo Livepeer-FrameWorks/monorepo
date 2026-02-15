@@ -3797,6 +3797,13 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 			INSERT INTO quartermaster.node_fingerprints (tenant_id, node_id, fingerprint_machine_sha256, fingerprint_macs_sha256, seen_ips, attrs)
 			VALUES ($1, $2, NULLIF($3,''), NULLIF($4,''), $5::inet[], $6)
 			ON CONFLICT (node_id) DO UPDATE SET
+				tenant_id = EXCLUDED.tenant_id,
+				fingerprint_machine_sha256 = COALESCE(EXCLUDED.fingerprint_machine_sha256, quartermaster.node_fingerprints.fingerprint_machine_sha256),
+				fingerprint_macs_sha256 = COALESCE(EXCLUDED.fingerprint_macs_sha256, quartermaster.node_fingerprints.fingerprint_macs_sha256),
+				attrs = CASE
+					WHEN EXCLUDED.attrs IS NULL OR EXCLUDED.attrs = '{}'::jsonb THEN quartermaster.node_fingerprints.attrs
+					ELSE EXCLUDED.attrs
+				END,
 				last_seen = NOW(),
 				seen_ips = quartermaster.node_fingerprints.seen_ips || EXCLUDED.seen_ips
 		`, tenantID.String, nodeID, machineIDSHA, macsSHA, ipsLiteral, attrsJSON)

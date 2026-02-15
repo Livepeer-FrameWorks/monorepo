@@ -19,6 +19,7 @@ import (
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 
@@ -331,8 +332,6 @@ func main() {
 			return
 		}
 		defer qc.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		grpcPortInt, _ := strconv.Atoi(grpcPort)
 		if grpcPortInt <= 0 || grpcPortInt > 65535 {
 			logger.Warn("Quartermaster bootstrap skipped: invalid port")
@@ -353,7 +352,7 @@ func main() {
 				return nil
 			}(),
 		}
-		if err := bootstrapSignalmanService(ctx, qc, req); err != nil {
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("signalman")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (signalman) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (signalman) ok")
@@ -612,21 +611,4 @@ func getInt64(data map[string]interface{}, key string) (int64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-type quartermasterBootstrapper interface {
-	BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error)
-}
-
-func bootstrapSignalmanService(ctx context.Context, bootstrapper quartermasterBootstrapper, req *pb.BootstrapServiceRequest) error {
-	if bootstrapper == nil {
-		return fmt.Errorf("quartermaster bootstrapper is nil")
-	}
-
-	_, err := bootstrapper.BootstrapService(ctx, req)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }

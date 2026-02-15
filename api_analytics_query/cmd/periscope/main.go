@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
@@ -125,8 +125,6 @@ func main() {
 			return
 		}
 		defer func() { _ = qc.Close() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
 		if httpPort <= 0 || httpPort > 65535 {
@@ -135,7 +133,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("PERISCOPE_QUERY_HOST", "periscope-query")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		req := &pb.BootstrapServiceRequest{
 			Type:           "periscope_query",
 			Version:        version.Version,
 			Protocol:       "http",
@@ -148,7 +146,8 @@ func main() {
 				}
 				return nil
 			}(),
-		}); err != nil {
+		}
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope_query")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_query) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (periscope_query) ok")

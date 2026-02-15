@@ -901,6 +901,9 @@ services:
     build:
       context: .
       dockerfile: api_consultant/Dockerfile
+      args:
+        # api_consultant/Dockerfile installs chromium when this is true.
+        ENABLE_RENDERING: ${SKIPPER_ENABLE_RENDERING:-false}
     ports:
       - "18018:18018"
       - "19007:19007"
@@ -925,6 +928,7 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_API_URL: ${EMBEDDING_API_URL:-}
+      SKIPPER_ENABLE_RENDERING: ${SKIPPER_ENABLE_RENDERING:-false}
       SKIPPER_WEB_UI: ${SKIPPER_WEB_UI:-true}
       SKIPPER_API_KEY: ${SKIPPER_API_KEY:-}
       SEARCH_PROVIDER: ${SEARCH_PROVIDER}
@@ -935,7 +939,7 @@ services:
       MARKETING_PUBLIC_URL: ${MARKETING_PUBLIC_URL}
       SITEMAPS: ${SITEMAPS:-}
       SKIPPER_SITEMAPS_DIR: /etc/skipper/sitemaps
-      CRAWL_INTERVAL: ${CRAWL_INTERVAL:-24h}
+      CRAWL_INTERVAL: ${CRAWL_INTERVAL:-168h}
     volumes:
       - ./config/skipper/sitemaps:/etc/skipper/sitemaps:ro
     depends_on:

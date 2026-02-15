@@ -18,6 +18,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
@@ -118,8 +119,6 @@ func main() {
 			return
 		}
 		defer func() { _ = qc.Close() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		pi, _ := strconv.Atoi(port)
 		if pi <= 0 || pi > 65535 {
 			logger.Warn("Quartermaster bootstrap skipped: invalid port")
@@ -128,7 +127,7 @@ func main() {
 		advertiseHost := config.GetEnv("DECKLOG_HOST", "decklog")
 		healthEndpoint := "/health"
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		req := &pb.BootstrapServiceRequest{
 			Type:           "decklog",
 			Version:        version.Version,
 			Protocol:       "grpc",
@@ -141,7 +140,8 @@ func main() {
 				}
 				return nil
 			}(),
-		}); err != nil {
+		}
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("decklog")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (decklog) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (decklog) ok")
