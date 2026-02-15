@@ -85,7 +85,7 @@ for pkg_dir in "${to_publish[@]}"; do
   (cd "$ROOT/$pkg_dir" && pnpm run build)
 
   echo "  Publishing..."
-  (cd "$ROOT/$pkg_dir" && npm publish --access public)
+  (cd "$ROOT/$pkg_dir" && pnpm publish --access public --no-git-checks)
 
   echo "  Done."
   echo ""
