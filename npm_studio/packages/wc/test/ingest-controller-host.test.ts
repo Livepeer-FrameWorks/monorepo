@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactiveControllerHost } from "lit";
 import { IngestControllerHost } from "../src/controllers/ingest-controller-host.js";
+import {
+  STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR,
+  STREAMCRAFTER_WRAPPER_PARITY_ACTION_METHODS,
+  STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE,
+  STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE_WC_EXT,
+} from "../../test-contract/streamcrafter-wrapper-contract";
 
 function createMockHost(): ReactiveControllerHost & HTMLElement {
   const host = document.createElement("div") as unknown as ReactiveControllerHost & HTMLElement;
@@ -25,37 +31,49 @@ describe("IngestControllerHost", () => {
   });
 
   it("has correct initial state", () => {
-    expect(ic.s.state).toBe("idle");
-    expect(ic.s.isStreaming).toBe(false);
-    expect(ic.s.isCapturing).toBe(false);
-    expect(ic.s.isReconnecting).toBe(false);
-    expect(ic.s.error).toBeNull();
-    expect(ic.s.mediaStream).toBeNull();
-    expect(ic.s.sources).toEqual([]);
-    expect(ic.s.qualityProfile).toBe("broadcast");
-    expect(ic.s.reconnectionState).toBeNull();
-    expect(ic.s.stats).toBeNull();
-    expect(ic.s.isWebCodecsActive).toBe(false);
-    expect(ic.s.encoderStats).toBeNull();
+    for (const [key, expected] of Object.entries(STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE)) {
+      expect(ic.s[key as keyof typeof ic.s]).toEqual(expected);
+    }
+    for (const [key, expected] of Object.entries(
+      STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE_WC_EXT
+    )) {
+      expect(ic.s[key as keyof typeof ic.s]).toEqual(expected);
+    }
   });
 
-  it("action methods are safe to call without controller", () => {
+  it("action methods are safe to call without controller", async () => {
+    for (const actionName of STREAMCRAFTER_WRAPPER_PARITY_ACTION_METHODS) {
+      expect(typeof ic[actionName]).toBe("function");
+    }
+
     ic.removeSource("x");
     ic.setSourceVolume("x", 0.5);
     ic.setSourceMuted("x", true);
     ic.setSourceActive("x", true);
     ic.setPrimaryVideoSource("x");
     ic.setMasterVolume(0.8);
+    await ic.stopCapture();
+    await ic.stopStreaming();
+    await ic.getDevices();
+    await ic.switchVideoDevice("video-1");
+    await ic.switchAudioDevice("audio-1");
+    await ic.getStats();
+    ic.setUseWebCodecs(true);
+    ic.setEncoderOverrides({ maxBitrate: 2_000_000 });
     expect(ic.getMasterVolume()).toBe(1);
     expect(ic.getController()).toBeNull();
   });
 
   it("throws on startCamera without controller", async () => {
-    await expect(ic.startCamera()).rejects.toThrow("Controller not initialized");
+    await expect(ic.startCamera()).rejects.toThrow(
+      STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR
+    );
   });
 
   it("throws on startStreaming without controller", async () => {
-    await expect(ic.startStreaming()).rejects.toThrow("Controller not initialized");
+    await expect(ic.startStreaming()).rejects.toThrow(
+      STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR
+    );
   });
 
   it("custom initial profile works", () => {

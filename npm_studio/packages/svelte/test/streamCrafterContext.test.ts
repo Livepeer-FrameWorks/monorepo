@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { createStreamCrafterContextV2 } from "../src/stores/streamCrafterContextV2";
+import {
+  STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR,
+  STREAMCRAFTER_WRAPPER_PARITY_EVENT_NAMES,
+  STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE,
+  STREAMCRAFTER_WRAPPER_PARITY_STATE_CHANGE_CASES,
+} from "../../test-contract/streamcrafter-wrapper-contract";
 
 // ---------------------------------------------------------------------------
 // Event-capturing mock
@@ -104,15 +110,9 @@ describe("createStreamCrafterContextV2", () => {
     const store = createStreamCrafterContextV2();
     const state = get(store);
 
-    expect(state.state).toBe("idle");
-    expect(state.isStreaming).toBe(false);
-    expect(state.isCapturing).toBe(false);
-    expect(state.isReconnecting).toBe(false);
-    expect(state.error).toBeNull();
-    expect(state.mediaStream).toBeNull();
-    expect(state.sources).toEqual([]);
-    expect(state.stats).toBeNull();
-    expect(state.qualityProfile).toBe("broadcast");
+    for (const [key, expected] of Object.entries(STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE)) {
+      expect(state[key as keyof typeof state]).toEqual(expected);
+    }
   });
 
   it("initializes controller", async () => {
@@ -131,29 +131,39 @@ describe("createStreamCrafterContextV2", () => {
     createInitializedStore();
 
     const eventNames = mockOn.mock.calls.map((call: unknown[]) => call[0]);
-    expect(eventNames).toContain("stateChange");
-    expect(eventNames).toContain("statsUpdate");
-    expect(eventNames).toContain("error");
-    expect(eventNames).toContain("sourceAdded");
-    expect(eventNames).toContain("sourceRemoved");
-    expect(eventNames).toContain("sourceUpdated");
-    expect(eventNames).toContain("qualityChanged");
-    expect(eventNames).toContain("reconnectionAttempt");
+    for (const eventName of STREAMCRAFTER_WRAPPER_PARITY_EVENT_NAMES) {
+      expect(eventNames).toContain(eventName);
+    }
   });
 
   it("throws when calling actions before initialize", async () => {
     const store = createStreamCrafterContextV2();
 
-    await expect(store.startCamera()).rejects.toThrow("Controller not initialized");
-    await expect(store.startScreenShare()).rejects.toThrow("Controller not initialized");
-    await expect(store.startStreaming()).rejects.toThrow("Controller not initialized");
+    await expect(store.startCamera()).rejects.toThrow(
+      STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR
+    );
+    await expect(store.startScreenShare()).rejects.toThrow(
+      STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR
+    );
+    await expect(store.startStreaming()).rejects.toThrow(
+      STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR
+    );
     expect(() => store.addCustomSource({} as MediaStream, "test")).toThrow(
-      "Controller not initialized"
+      STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR
     );
   });
 
-  it("forwards actions to controller after initialize", () => {
+  it("forwards actions to controller after initialize", async () => {
     const store = createInitializedStore();
+
+    await store.startCamera();
+    expect(mockStartCamera).toHaveBeenCalled();
+
+    await store.startScreenShare();
+    expect(mockStartScreenShare).toHaveBeenCalled();
+
+    store.addCustomSource({} as MediaStream, "custom-source");
+    expect(mockAddCustomSource).toHaveBeenCalledWith({} as MediaStream, "custom-source");
 
     store.setSourceVolume("src-1", 0.5);
     expect(mockSetSourceVolume).toHaveBeenCalledWith("src-1", 0.5);
@@ -169,6 +179,37 @@ describe("createStreamCrafterContextV2", () => {
 
     store.setMasterVolume(0.8);
     expect(mockSetMasterVolume).toHaveBeenCalledWith(0.8);
+    expect(store.getMasterVolume()).toBe(1);
+
+    await store.setQualityProfile("professional");
+    expect(mockSetQualityProfile).toHaveBeenCalledWith("professional");
+
+    await store.startStreaming();
+    expect(mockStartStreaming).toHaveBeenCalled();
+
+    await store.stopStreaming();
+    expect(mockStopStreaming).toHaveBeenCalled();
+
+    await store.getDevices();
+    expect(mockGetDevices).toHaveBeenCalled();
+
+    await store.switchVideoDevice("video-1");
+    expect(mockSwitchVideoDevice).toHaveBeenCalledWith("video-1");
+
+    await store.switchAudioDevice("audio-1");
+    expect(mockSwitchAudioDevice).toHaveBeenCalledWith("audio-1");
+
+    await store.getStats();
+    expect(mockGetStats).toHaveBeenCalled();
+
+    await store.stopCapture();
+    expect(mockStopCapture).toHaveBeenCalled();
+
+    store.setUseWebCodecs(true);
+    expect(mockSetUseWebCodecs).toHaveBeenCalledWith(true);
+
+    store.setEncoderOverrides({ maxBitrate: 2_000_000 });
+    expect(mockSetEncoderOverrides).toHaveBeenCalledWith({ maxBitrate: 2_000_000 });
 
     store.removeSource("src-1");
     expect(mockRemoveSource).toHaveBeenCalledWith("src-1");
@@ -205,43 +246,22 @@ describe("createStreamCrafterContextV2", () => {
 // Event → State: Fire events and verify store updates
 // ===========================================================================
 describe("event → state updates", () => {
-  it("stateChange updates state and derived fields", () => {
-    const store = createInitializedStore();
-
-    fire("stateChange", { state: "streaming", context: {} });
-
-    const state = get(store);
-    expect(state.state).toBe("streaming");
-    expect(state.isStreaming).toBe(true);
-    expect(state.isCapturing).toBe(true);
-  });
-
-  it("stateChange to capturing sets isCapturing", () => {
-    const store = createInitializedStore();
-
-    fire("stateChange", { state: "capturing", context: {} });
-
-    const state = get(store);
-    expect(state.state).toBe("capturing");
-    expect(state.isCapturing).toBe(true);
-    expect(state.isStreaming).toBe(false);
-  });
-
-  it("stateChange to reconnecting sets isReconnecting", () => {
+  it("stateChange updates derived fields for parity cases", () => {
     const store = createInitializedStore();
 
     mockGetReconnectionManager.mockReturnValue({
       getState: () => ({ attempt: 2, maxAttempts: 5 }),
     });
 
-    fire("stateChange", {
-      state: "reconnecting",
-      context: { reconnection: { attempt: 2, maxAttempts: 5 } },
-    });
+    for (const testCase of STREAMCRAFTER_WRAPPER_PARITY_STATE_CHANGE_CASES) {
+      fire("stateChange", { state: testCase.state, context: testCase.context });
 
-    const state = get(store);
-    expect(state.state).toBe("reconnecting");
-    expect(state.isReconnecting).toBe(true);
+      const state = get(store);
+      expect(state.state).toBe(testCase.state);
+      for (const [key, expected] of Object.entries(testCase.expected)) {
+        expect(state[key as keyof typeof state]).toEqual(expected);
+      }
+    }
   });
 
   it("statsUpdate updates stats", () => {
@@ -299,5 +319,12 @@ describe("event → state updates", () => {
 
     fire("reconnectionAttempt");
     expect(get(store).reconnectionState).toEqual(reconnState);
+  });
+
+  it("webCodecsActive updates isWebCodecsActive", () => {
+    const store = createInitializedStore();
+
+    fire("webCodecsActive", { active: true });
+    expect(get(store).isWebCodecsActive).toBe(true);
   });
 });

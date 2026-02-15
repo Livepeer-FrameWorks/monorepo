@@ -114,6 +114,11 @@ export interface IngestControllerConfig {
   profile?: QualityProfile;
   useWebCodecs?: boolean;
   debug?: boolean;
+  workers?: {
+    compositor?: string;
+    encoder?: string;
+    rtcTransform?: string;
+  };
 }
 
 export interface IngestStateContext {

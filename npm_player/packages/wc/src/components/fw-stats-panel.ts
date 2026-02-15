@@ -1,13 +1,17 @@
 /**
- * <fw-stats-panel> — Stats for nerds overlay.
- * Port of StatsPanel.tsx from player-react.
+ * <fw-stats-panel> — Stats for nerds overlay aligned with wrapper diagnostics.
  */
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
 import { closeIcon } from "../icons/index.js";
 import type { PlayerControllerHost } from "../controllers/player-controller-host.js";
+
+interface StatRow {
+  label: string;
+  value: string;
+}
 
 @customElement("fw-stats-panel")
 export class FwStatsPanel extends LitElement {
@@ -22,126 +26,195 @@ export class FwStatsPanel extends LitElement {
       }
       .panel {
         position: absolute;
-        top: 0.75rem;
-        left: 0.75rem;
+        top: 0.5rem;
+        right: 0.5rem;
         z-index: 30;
-        min-width: 240px;
-        max-width: 320px;
+        width: 18rem;
         max-height: 80%;
-        overflow: auto;
-        border-radius: 0.5rem;
-        border: 1px solid rgb(255 255 255 / 0.1);
-        background: rgb(0 0 0 / 0.85);
-        backdrop-filter: blur(8px);
-        padding: 0.5rem 0.75rem;
-        font-size: 0.6875rem;
-        color: rgb(255 255 255 / 0.7);
+        overflow-y: auto;
+        background: hsl(var(--tn-bg-dark) / 0.9);
+        backdrop-filter: blur(4px);
+        border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+        font-family: ui-monospace, monospace;
+        font-size: 0.75rem;
+        color: hsl(var(--tn-fg));
       }
       .header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-bottom: 0.5rem;
+        padding: 0.5rem;
+        border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
       }
       .title {
-        font-size: 0.75rem;
+        font-size: 10px;
         font-weight: 600;
-        color: white;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: hsl(var(--tn-fg-dark));
       }
       .close {
         display: flex;
-        background: none;
+        align-items: center;
+        justify-content: center;
+        width: 1.5rem;
+        height: 1.5rem;
         border: none;
-        color: rgb(255 255 255 / 0.5);
+        background: transparent;
+        color: hsl(var(--tn-fg-dark));
         cursor: pointer;
-        padding: 0;
       }
       .close:hover {
-        color: white;
+        color: hsl(var(--tn-fg));
+      }
+      .rows {
+        padding: 0.5rem;
       }
       .row {
         display: flex;
         justify-content: space-between;
+        gap: 0.5rem;
         padding: 0.125rem 0;
       }
       .label {
-        color: rgb(255 255 255 / 0.5);
+        color: hsl(var(--tn-fg-dark));
       }
       .value {
-        color: rgb(255 255 255 / 0.9);
-        font-variant-numeric: tabular-nums;
-        font-family: ui-monospace, monospace;
-      }
-      .sep {
-        height: 1px;
-        background: rgb(255 255 255 / 0.08);
-        margin: 0.375rem 0;
+        color: hsl(var(--tn-fg));
+        text-align: right;
+        word-break: break-word;
       }
     `,
   ];
 
-  private _resolution(): string | null {
-    const video = this.pc.s.videoElement;
-    if (!video || !video.videoWidth || !video.videoHeight) return null;
-    return `${video.videoWidth}x${video.videoHeight}`;
+  private _deriveTracksFromMist(mistInfo: any) {
+    const mistTracks = mistInfo?.meta?.tracks;
+    if (!mistTracks) return undefined;
+    return Object.values(mistTracks as Record<string, any>).map((track: any) => ({
+      type: track.type,
+      codec: track.codec,
+      width: track.width,
+      height: track.height,
+      bitrate: typeof track.bps === "number" ? Math.round(track.bps) : undefined,
+      fps: typeof track.fpks === "number" ? track.fpks / 1000 : undefined,
+      channels: track.channels,
+      sampleRate: track.rate,
+    }));
   }
 
-  private _stat(label: string, value: string | number | null | undefined) {
-    if (value == null || value === "") return nothing;
-    return html`<div class="row">
-      <span class="label">${label}</span><span class="value">${value}</span>
-    </div>`;
+  private _formatTracks(metadata: any, mistInfo: any): string {
+    const tracks = metadata?.tracks ?? this._deriveTracksFromMist(mistInfo);
+    if (!tracks?.length) return "—";
+    return tracks
+      .map((track: any) => {
+        if (track.type === "video") {
+          const resolution = track.width && track.height ? `${track.width}x${track.height}` : "?";
+          const bitrate = track.bitrate ? `${Math.round(track.bitrate / 1000)}kbps` : "?";
+          return `${track.codec ?? "?"} ${resolution}@${bitrate}`;
+        }
+        const channels = track.channels ? `${track.channels}ch` : "?";
+        return `${track.codec ?? "?"} ${channels}`;
+      })
+      .join(", ");
+  }
+
+  private _collectStats(): StatRow[] {
+    const s = this.pc.s;
+    const video = s.videoElement;
+    const quality = s.playbackQuality;
+    const metadata = s.metadata;
+    const streamState = s.streamState;
+    const primaryEndpoint = s.endpoints?.primary as
+      | { protocol?: string; nodeId?: string; geoDistance?: number }
+      | undefined;
+
+    const currentRes = video ? `${video.videoWidth}x${video.videoHeight}` : "—";
+    const buffered =
+      video && video.buffered.length > 0
+        ? (video.buffered.end(video.buffered.length - 1) - video.currentTime).toFixed(1)
+        : "—";
+    const playbackRate = video?.playbackRate?.toFixed(2) ?? "1.00";
+    const qualityScore = quality?.score?.toFixed(0) ?? "—";
+    const bitrateKbps = quality?.bitrate ? `${(quality.bitrate / 1000).toFixed(0)} kbps` : "—";
+    const frameDropRate = quality?.frameDropRate?.toFixed(1) ?? "—";
+    const stallCount = quality?.stallCount ?? 0;
+    const latency = quality?.latency ? `${Math.round(quality.latency)} ms` : "—";
+    const viewers = metadata?.viewers ?? "—";
+    const streamStatus = streamState?.status ?? metadata?.status ?? "—";
+    const mistInfo = metadata?.mist ?? streamState?.streamInfo;
+    const mistType = mistInfo?.type ?? "—";
+    const mistBufferWindow = mistInfo?.meta?.buffer_window;
+    const mistLastMs = mistInfo?.lastms;
+    const mistUnixOffset = mistInfo?.unixoffset;
+
+    const stats: StatRow[] = [
+      { label: "Resolution", value: currentRes },
+      { label: "Buffer", value: `${buffered}s` },
+      { label: "Latency", value: latency },
+      { label: "Bitrate", value: bitrateKbps },
+      { label: "Quality Score", value: `${qualityScore}/100` },
+      { label: "Frame Drop Rate", value: `${frameDropRate}%` },
+      { label: "Stalls", value: String(stallCount) },
+      { label: "Playback Rate", value: `${playbackRate}x` },
+      { label: "Protocol", value: primaryEndpoint?.protocol ?? "—" },
+      { label: "Node", value: primaryEndpoint?.nodeId ?? "—" },
+      {
+        label: "Geo Distance",
+        value: primaryEndpoint?.geoDistance ? `${primaryEndpoint.geoDistance.toFixed(0)} km` : "—",
+      },
+      { label: "Viewers", value: String(viewers) },
+      { label: "Status", value: streamStatus },
+      { label: "Tracks", value: this._formatTracks(metadata, mistInfo) },
+      { label: "Mist Type", value: mistType },
+      {
+        label: "Mist Buffer Window",
+        value: mistBufferWindow != null ? String(mistBufferWindow) : "—",
+      },
+      { label: "Mist Lastms", value: mistLastMs != null ? String(mistLastMs) : "—" },
+      { label: "Mist Unixoffset", value: mistUnixOffset != null ? String(mistUnixOffset) : "—" },
+    ];
+
+    if (metadata?.title) {
+      stats.unshift({ label: "Title", value: metadata.title });
+    }
+    if (metadata?.durationSeconds) {
+      const mins = Math.floor(metadata.durationSeconds / 60);
+      const secs = metadata.durationSeconds % 60;
+      stats.push({ label: "Duration", value: `${mins}:${String(secs).padStart(2, "0")}` });
+    }
+    if (metadata?.recordingSizeBytes) {
+      const mb = (metadata.recordingSizeBytes / (1024 * 1024)).toFixed(1);
+      stats.push({ label: "Size", value: `${mb} MB` });
+    }
+
+    return stats;
   }
 
   protected render() {
-    const s = this.pc.s;
-    const q = s.playbackQuality;
-    const meta = s.metadata;
-    const ss = s.streamState;
+    const stats = this._collectStats();
 
     return html`
       <div class="panel fw-stats-panel">
-        <div class="header">
-          <span class="title">Stats</span>
+        <div class="header fw-stats-header">
+          <span class="title">Stats Overlay</span>
           <button
             class="close"
             @click=${() =>
               this.dispatchEvent(new CustomEvent("fw-close", { bubbles: true, composed: true }))}
-            aria-label="Close stats"
+            aria-label="Close stats panel"
           >
             ${closeIcon()}
           </button>
         </div>
-
-        ${this._stat("State", s.state)} ${this._stat("Player", s.currentPlayerInfo?.name)}
-        ${this._stat("Source", s.currentSourceInfo?.type)}
-
-        <div class="sep"></div>
-
-        ${q
-          ? html`
-              ${this._stat("Resolution", this._resolution())}
-              ${this._stat("Bitrate", q.bitrate ? `${Math.round(q.bitrate / 1000)} kbps` : null)}
-              ${this._stat("Latency", q.latency != null ? `${q.latency.toFixed(1)}s` : null)}
-              ${this._stat(
-                "Buffer",
-                q.bufferedAhead != null ? `${q.bufferedAhead.toFixed(1)}s` : null
-              )}
-              ${this._stat("Quality", q.score != null ? `${q.score.toFixed(0)}` : null)}
-              ${this._stat(
-                "Frame drops",
-                q.frameDropRate != null ? `${q.frameDropRate.toFixed(1)}%` : null
-              )}
-              ${this._stat("Stalls", q.stallCount ?? null)}
-            `
-          : nothing}
-        ${meta || ss
-          ? html`
-              <div class="sep"></div>
-              ${this._stat("Viewers", meta?.viewers ?? null)}
-              ${this._stat("Stream status", ss?.status ?? null)}
-            `
-          : nothing}
+        <div class="rows">
+          ${stats.map(
+            (stat) =>
+              html`<div class="row fw-stats-row">
+                <span class="label">${stat.label}</span>
+                <span class="value fw-stats-value">${stat.value}</span>
+              </div>`
+          )}
+        </div>
       </div>
     `;
   }

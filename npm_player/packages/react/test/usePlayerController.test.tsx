@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { usePlayerController } from "../src/hooks/usePlayerController";
+import {
+  WRAPPER_PARITY_ACTION_METHODS,
+  WRAPPER_PARITY_EVENT_NAMES,
+  WRAPPER_PARITY_INITIAL_STATE,
+} from "../../test-contract/player-wrapper-contract";
 
 // ---------------------------------------------------------------------------
 // Event-capturing mock
@@ -166,14 +171,10 @@ describe("usePlayerController", () => {
       })
     );
 
-    expect(result.current.state.state).toBe("booting");
-    expect(result.current.state.isPlaying).toBe(false);
-    expect(result.current.state.isPaused).toBe(true);
-    expect(result.current.state.isMuted).toBe(true);
-    expect(result.current.state.volume).toBe(1);
-    expect(result.current.state.error).toBeNull();
-    expect(result.current.state.videoElement).toBeNull();
-    expect(result.current.state.shouldShowIdleScreen).toBe(true);
+    for (const [key, expected] of Object.entries(WRAPPER_PARITY_INITIAL_STATE)) {
+      expect(result.current.state[key as keyof typeof result.current.state]).toEqual(expected);
+    }
+    expect(result.current.state.duration).toBeNaN();
   });
 
   it("provides stable action callbacks", () => {
@@ -272,11 +273,9 @@ describe("usePlayerController", () => {
 
     expect(mockOn).toHaveBeenCalled();
     const eventNames = mockOn.mock.calls.map((call: unknown[]) => call[0]);
-    expect(eventNames).toContain("stateChange");
-    expect(eventNames).toContain("timeUpdate");
-    expect(eventNames).toContain("error");
-    expect(eventNames).toContain("volumeChange");
-    expect(eventNames).toContain("ready");
+    for (const eventName of WRAPPER_PARITY_EVENT_NAMES) {
+      expect(eventNames).toContain(eventName);
+    }
   });
 
   it("attaches controller to container element", () => {
@@ -293,27 +292,9 @@ describe("usePlayerController", () => {
       })
     );
 
-    expect(typeof result.current.play).toBe("function");
-    expect(typeof result.current.pause).toBe("function");
-    expect(typeof result.current.togglePlay).toBe("function");
-    expect(typeof result.current.seek).toBe("function");
-    expect(typeof result.current.seekBy).toBe("function");
-    expect(typeof result.current.setVolume).toBe("function");
-    expect(typeof result.current.toggleMute).toBe("function");
-    expect(typeof result.current.toggleLoop).toBe("function");
-    expect(typeof result.current.toggleFullscreen).toBe("function");
-    expect(typeof result.current.togglePiP).toBe("function");
-    expect(typeof result.current.toggleSubtitles).toBe("function");
-    expect(typeof result.current.retry).toBe("function");
-    expect(typeof result.current.reload).toBe("function");
-    expect(typeof result.current.jumpToLive).toBe("function");
-    expect(typeof result.current.getQualities).toBe("function");
-    expect(typeof result.current.selectQuality).toBe("function");
-    expect(typeof result.current.handleMouseEnter).toBe("function");
-    expect(typeof result.current.handleMouseLeave).toBe("function");
-    expect(typeof result.current.handleMouseMove).toBe("function");
-    expect(typeof result.current.handleTouchStart).toBe("function");
-    expect(typeof result.current.setDevModeOptions).toBe("function");
+    for (const actionName of WRAPPER_PARITY_ACTION_METHODS) {
+      expect(typeof result.current[actionName]).toBe("function");
+    }
   });
 });
 

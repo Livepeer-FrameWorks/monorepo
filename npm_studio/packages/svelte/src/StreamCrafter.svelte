@@ -20,6 +20,7 @@
   import { createIngestEndpointsStore, type IngestEndpointsState } from "./stores/ingestEndpoints";
   import CompositorControls from "./components/CompositorControls.svelte";
   import AdvancedPanel, { type AudioProcessingSettings } from "./components/AdvancedPanel.svelte";
+  import VolumeSlider from "./components/VolumeSlider.svelte";
 
   // Icons
   import CameraIcon from "./icons/CameraIcon.svelte";
@@ -183,19 +184,18 @@
   let unsubscribe: (() => void) | undefined;
   let unsubscribeAudioLevels: (() => void) | undefined;
 
-  // Initialize controller when URL is available
-  // Track if we've already initialized to prevent re-initialization
-  let controllerInitialized = false;
+  // Track controller init inputs so we reinitialize when endpoint/profile/debug change.
+  let controllerInitKey = "";
 
   $effect(() => {
     if (resolvedWhipUrl) {
       // Use untrack to read compositorStore without creating a dependency
       // This prevents the effect from re-running when compositorStore changes
       const existingCompositorStore = untrack(() => compositorStore);
-      const alreadyInitialized = untrack(() => controllerInitialized);
+      const currentInitKey = `${resolvedWhipUrl}|${initialProfile}|${debug}`;
+      const lastInitKey = untrack(() => controllerInitKey);
 
-      // Only initialize controller once per URL
-      if (!alreadyInitialized) {
+      if (lastInitKey !== currentInitKey) {
         crafter.initialize({
           whipUrl: resolvedWhipUrl,
           profile: initialProfile,
@@ -203,7 +203,7 @@
           reconnection: { enabled: true, maxAttempts: 5 },
           audioMixing: true,
         });
-        controllerInitialized = true;
+        controllerInitKey = currentInitKey;
       }
 
       // Setup compositor store immediately after controller is created
@@ -220,7 +220,10 @@
           });
         }
       }
+      return;
     }
+
+    controllerInitKey = "";
   });
 
   // Update video preview when stream changes
@@ -322,15 +325,26 @@
 
     // Note: compositor store is created in $effect when controller becomes available
 
-    // Setup ingest endpoints store if using gateway mode (no direct whipUrl)
-    if (!whipUrl && gatewayUrl && streamKey) {
-      ingestEndpointsStore = createIngestEndpointsStore();
-      unsubscribeIngestEndpoints = ingestEndpointsStore.subscribe((state) => {
-        ingestEndpointsState = state;
-      });
-      // Trigger resolution
-      ingestEndpointsStore.resolve({ gatewayUrl, streamKey });
+    ingestEndpointsStore = createIngestEndpointsStore();
+    unsubscribeIngestEndpoints = ingestEndpointsStore.subscribe((state) => {
+      ingestEndpointsState = state;
+    });
+  });
+
+  $effect(() => {
+    if (!ingestEndpointsStore) return;
+
+    if (whipUrl) {
+      ingestEndpointsStore.reset();
+      return;
     }
+
+    if (gatewayUrl && streamKey) {
+      ingestEndpointsStore.resolve({ gatewayUrl, streamKey });
+      return;
+    }
+
+    ingestEndpointsStore.reset();
   });
 
   onDestroy(() => {
@@ -402,7 +416,22 @@
   }
 
   function handleAudioProcessingChange(settings: Partial<AudioProcessingSettings>) {
-    audioProcessing = { ...audioProcessing, ...settings };
+    const next = { ...audioProcessing, ...settings };
+    audioProcessing = next;
+
+    crafterState.sources.forEach((source) => {
+      source.stream.getAudioTracks().forEach((track) => {
+        track
+          .applyConstraints({
+            echoCancellation: next.echoCancellation,
+            noiseSuppression: next.noiseSuppression,
+            autoGainControl: next.autoGainControl,
+          })
+          .catch((err) => {
+            console.warn("Failed to apply audio constraints:", err);
+          });
+      });
+    });
   }
 
   function handleEncoderOverridesChange(overrides: EncoderOverrides) {
@@ -594,6 +623,16 @@
               {#each crafterState.sources as source (source.id)}
                 {@const isVisible = getSourceLayerVisibility(source.id)}
                 <div class="fw-sc-source {!isVisible ? 'fw-sc-source--hidden' : ''}">
+                  {#if enableCompositor}
+                    <button
+                      type="button"
+                      class="fw-sc-icon-btn {!isVisible ? 'fw-sc-icon-btn--muted' : ''}"
+                      onclick={() => handleToggleSourceVisibility(source.id)}
+                      title={isVisible ? "Hide from composition" : "Show in composition"}
+                    >
+                      <EyeIcon size={14} visible={isVisible} />
+                    </button>
+                  {/if}
                   <div class="fw-sc-source-icon">
                     {#if source.type === "camera"}
                       <CameraIcon size={16} />
@@ -604,15 +643,14 @@
                   <div class="fw-sc-source-info">
                     <div class="fw-sc-source-label">
                       {source.label}
-                      {#if source.primaryVideo}
+                      {#if source.primaryVideo && !enableCompositor}
                         <span class="fw-sc-primary-badge">PRIMARY</span>
                       {/if}
                     </div>
                     <div class="fw-sc-source-type">{source.type}</div>
                   </div>
                   <div class="fw-sc-source-controls">
-                    <!-- Primary Video Button - works even during streaming -->
-                    {#if sourceHasVideo(source)}
+                    {#if sourceHasVideo(source) && !enableCompositor}
                       <button
                         type="button"
                         class="fw-sc-icon-btn {source.primaryVideo
@@ -627,33 +665,11 @@
                         <VideoIcon size={14} active={source.primaryVideo} />
                       </button>
                     {/if}
-                    <!-- Visibility toggle (when compositor enabled) -->
-                    {#if compositorState.isEnabled}
-                      <button
-                        type="button"
-                        class="fw-sc-icon-btn {!isVisible ? 'fw-sc-icon-btn--inactive' : ''}"
-                        onclick={() => handleToggleSourceVisibility(source.id)}
-                        title={isVisible ? "Hide from composition" : "Show in composition"}
-                      >
-                        <EyeIcon size={14} visible={isVisible} />
-                      </button>
-                    {/if}
-                    <!-- Volume Slider - supports up to 200% boost -->
                     <span class="fw-sc-volume-label">{Math.round(source.volume * 100)}%</span>
-                    <input
-                      type="range"
-                      class="fw-sc-volume-slider {source.volume > 1
-                        ? 'fw-sc-volume-slider--boosted'
-                        : ''}"
-                      min="0"
-                      max="200"
-                      value={Math.round(source.volume * 100)}
-                      oninput={(e) =>
-                        crafter.setSourceVolume(
-                          source.id,
-                          parseInt((e.target as HTMLInputElement).value, 10) / 100
-                        )}
-                      title={`Volume: ${Math.round(source.volume * 100)}%${source.volume > 1 ? " (boosted)" : ""}`}
+                    <VolumeSlider
+                      value={source.volume}
+                      onChange={(volume) => crafter.setSourceVolume(source.id, volume)}
+                      compact={true}
                     />
                     <button
                       type="button"
@@ -847,7 +863,6 @@
           </div>
         {/if}
       </div>
-
       <!-- Primary action: Go Live / Stop -->
       {#if !crafterState.isStreaming}
         <button

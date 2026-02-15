@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactiveControllerHost } from "lit";
 import { PlayerControllerHost } from "../src/controllers/player-controller-host.js";
+import {
+  WRAPPER_PARITY_ACTION_METHODS,
+  WRAPPER_PARITY_INITIAL_STATE,
+} from "../../test-contract/player-wrapper-contract";
 
 // Minimal mock host
 function createMockHost(): ReactiveControllerHost & HTMLElement {
@@ -26,23 +30,12 @@ describe("PlayerControllerHost", () => {
   });
 
   it("has correct initial state", () => {
-    expect(pc.s.state).toBe("booting");
-    expect(pc.s.currentTime).toBe(0);
+    for (const [key, expected] of Object.entries(WRAPPER_PARITY_INITIAL_STATE)) {
+      expect(pc.s[key as keyof typeof pc.s]).toEqual(expected);
+    }
     expect(pc.s.duration).toBeNaN();
-    expect(pc.s.isPlaying).toBe(false);
-    expect(pc.s.isPaused).toBe(true);
-    expect(pc.s.isMuted).toBe(true);
-    expect(pc.s.volume).toBe(1);
-    expect(pc.s.error).toBeNull();
-    expect(pc.s.videoElement).toBeNull();
-    expect(pc.s.isFullscreen).toBe(false);
-    expect(pc.s.isPiPActive).toBe(false);
-    expect(pc.s.shouldShowControls).toBe(false);
-    expect(pc.s.isLoopEnabled).toBe(false);
     expect(pc.s.qualities).toEqual([]);
     expect(pc.s.textTracks).toEqual([]);
-    expect(pc.s.toast).toBeNull();
-    expect(pc.s.playbackQuality).toBeNull();
   });
 
   it("resets state on hostDisconnected", () => {
@@ -56,8 +49,13 @@ describe("PlayerControllerHost", () => {
     expect(pc.s.currentTime).toBe(0);
   });
 
-  it("action methods are safe to call without controller", () => {
+  it("action methods are safe to call without controller", async () => {
+    for (const actionName of WRAPPER_PARITY_ACTION_METHODS) {
+      expect(typeof pc[actionName]).toBe("function");
+    }
+
     // These should not throw
+    await pc.play();
     pc.pause();
     pc.togglePlay();
     pc.seek(10);
@@ -66,14 +64,19 @@ describe("PlayerControllerHost", () => {
     pc.setVolume(0.5);
     pc.toggleMute();
     pc.toggleLoop();
+    await pc.toggleFullscreen();
+    await pc.togglePiP();
     pc.toggleSubtitles();
     pc.clearError();
     pc.dismissToast();
+    await pc.retry();
+    await pc.reload();
     pc.selectQuality("auto");
     pc.handleMouseEnter();
     pc.handleMouseLeave();
     pc.handleMouseMove();
     pc.handleTouchStart();
+    await pc.setDevModeOptions({ forcePlayer: "native" });
     expect(pc.getQualities()).toEqual([]);
     expect(pc.getController()).toBeNull();
   });

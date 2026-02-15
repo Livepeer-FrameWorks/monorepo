@@ -1,5 +1,5 @@
 /**
- * <fw-volume-control> — Mute toggle + volume slider.
+ * <fw-volume-control> — Mute toggle + expandable volume slider.
  */
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -12,7 +12,14 @@ import type { PlayerControllerHost } from "../controllers/player-controller-host
 @customElement("fw-volume-control")
 export class FwVolumeControl extends LitElement {
   @property({ attribute: false }) pc!: PlayerControllerHost;
-  @state() private _expanded = false;
+
+  @state() private _hovered = false;
+  @state() private _focused = false;
+  @state() private _dragging = false;
+  @state() private _hasAudio = true;
+
+  private _activePointerId: number | null = null;
+  private _activeSliderTarget: HTMLElement | null = null;
 
   static styles = [
     sharedStyles,
@@ -21,111 +28,262 @@ export class FwVolumeControl extends LitElement {
         display: flex;
         align-items: center;
       }
-      .group {
-        display: flex;
-        align-items: center;
-        gap: 0;
-      }
-      .btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 2rem;
-        height: 2rem;
-        background: none;
-        border: none;
-        color: rgb(255 255 255 / 0.8);
-        cursor: pointer;
-        padding: 0;
-        border-radius: 0.25rem;
-        transition: color 150ms;
-      }
-      .btn:hover {
-        color: white;
-      }
-      .slider-wrap {
-        width: 0;
-        overflow: hidden;
-        transition: width 200ms ease;
-      }
-      .slider-wrap--expanded {
-        width: 72px;
-      }
+
       .slider {
         position: relative;
-        width: 72px;
-        height: 4px;
-        background: rgb(255 255 255 / 0.15);
-        border-radius: 2px;
+        width: 100%;
+        height: 0.25rem;
+        background: rgb(255 255 255 / 0.2);
+        border-radius: 9999px;
         cursor: pointer;
+        touch-action: none;
+        user-select: none;
       }
+
       .slider-fill {
         position: absolute;
         top: 0;
         left: 0;
         height: 100%;
-        background: white;
-        border-radius: 2px;
-        pointer-events: none;
+        border-radius: 9999px;
+        background: hsl(var(--tn-fg));
       }
+
       .slider-thumb {
         position: absolute;
         top: 50%;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: white;
+        width: 0.625rem;
+        height: 0.625rem;
+        border-radius: 9999px;
+        background: hsl(var(--tn-fg));
         transform: translate(-50%, -50%);
         pointer-events: none;
       }
     `,
   ];
 
-  private _handleSliderClick = (e: MouseEvent) => {
-    const target = e.currentTarget as HTMLElement;
+  private get _expanded(): boolean {
+    return this._hovered || this._focused || this._dragging;
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this._endDragInteraction();
+  }
+
+  protected updated(): void {
+    this._updateHasAudio();
+  }
+
+  private _updateHasAudio(): void {
+    const video = this.pc?.s.videoElement;
+    if (!video) {
+      this._hasAudio = true;
+      return;
+    }
+
+    if (video.srcObject instanceof MediaStream) {
+      this._hasAudio = video.srcObject.getAudioTracks().length > 0;
+      return;
+    }
+
+    const maybeWithTracks = video as HTMLVideoElement & {
+      audioTracks?: {
+        length: number;
+      };
+    };
+
+    if (maybeWithTracks.audioTracks && typeof maybeWithTracks.audioTracks.length === "number") {
+      this._hasAudio = maybeWithTracks.audioTracks.length > 0;
+      return;
+    }
+
+    this._hasAudio = true;
+  }
+
+  private _setVolumeFromClientX(clientX: number, target: HTMLElement): void {
     const rect = target.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    if (rect.width <= 0) {
+      return;
+    }
+
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     this.pc.setVolume(pct);
-    if (this.pc.s.isMuted && pct > 0) this.pc.toggleMute();
+
+    if (this.pc.s.isMuted && pct > 0) {
+      this.pc.toggleMute();
+    }
+  }
+
+  private _beginDragInteraction(target: HTMLElement, pointerId: number): void {
+    this._activePointerId = pointerId;
+    this._activeSliderTarget = target;
+    this._dragging = true;
+    this._hovered = true;
+    this._focused = true;
+
+    try {
+      target.setPointerCapture(pointerId);
+    } catch {
+      // Non-fatal: we still listen on window as a fallback.
+    }
+
+    window.addEventListener("pointermove", this._onGlobalPointerMove);
+    window.addEventListener("pointerup", this._onGlobalPointerUp);
+    window.addEventListener("pointercancel", this._onGlobalPointerUp);
+  }
+
+  private _endDragInteraction(): void {
+    const pointerId = this._activePointerId;
+    const target = this._activeSliderTarget;
+    if (pointerId != null && target) {
+      try {
+        if (target.hasPointerCapture(pointerId)) {
+          target.releasePointerCapture(pointerId);
+        }
+      } catch {
+        // Ignore pointer-capture release errors.
+      }
+    }
+
+    this._activePointerId = null;
+    this._activeSliderTarget = null;
+    this._dragging = false;
+    window.removeEventListener("pointermove", this._onGlobalPointerMove);
+    window.removeEventListener("pointerup", this._onGlobalPointerUp);
+    window.removeEventListener("pointercancel", this._onGlobalPointerUp);
+  }
+
+  private _onGlobalPointerMove = (event: PointerEvent): void => {
+    if (!this._dragging || this._activePointerId !== event.pointerId) {
+      return;
+    }
+    const target = this._activeSliderTarget;
+    if (!target) {
+      return;
+    }
+    this._setVolumeFromClientX(event.clientX, target);
   };
 
-  private _handleSliderDrag = (e: PointerEvent) => {
-    const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    this.pc.setVolume(pct);
+  private _onGlobalPointerUp = (event: PointerEvent): void => {
+    if (!this._dragging || this._activePointerId !== event.pointerId) {
+      return;
+    }
+    this._endDragInteraction();
+  };
+
+  private _handleMouseEnter = (): void => {
+    this._hovered = true;
+  };
+
+  private _handleMouseLeave = (): void => {
+    if (this._dragging) {
+      return;
+    }
+    this._hovered = false;
+    this._focused = false;
+  };
+
+  private _handleFocusIn = (): void => {
+    this._focused = true;
+  };
+
+  private _handleFocusOut = (event: FocusEvent): void => {
+    if (this._dragging) {
+      return;
+    }
+    const related = event.relatedTarget as Node | null;
+    if (!related || !this.renderRoot.contains(related)) {
+      this._focused = false;
+    }
+  };
+
+  private _onSliderPointerDown = (event: PointerEvent) => {
+    if (!this._hasAudio) {
+      return;
+    }
+
+    event.preventDefault();
+    const target = event.currentTarget as HTMLElement;
+    this._beginDragInteraction(target, event.pointerId);
+    this._setVolumeFromClientX(event.clientX, target);
+  };
+
+  private _onWheel = (event: WheelEvent) => {
+    if (!this._hasAudio) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const current = this.pc.s.isMuted ? 0 : Math.round(this.pc.s.volume * 100);
+    const delta = event.deltaY < 0 ? 5 : -5;
+    const next = Math.max(0, Math.min(100, current + delta));
+    this.pc.setVolume(next / 100);
+
+    if (this.pc.s.isMuted && next > 0) {
+      this.pc.toggleMute();
+    }
   };
 
   protected render() {
-    const { isMuted, volume } = this.pc.s;
-    const displayVol = isMuted ? 0 : volume;
+    const isMuted = this.pc.s.isMuted;
+    const volume = this.pc.s.volume;
+    const displayVolume = isMuted ? 0 : Math.max(0, Math.min(1, volume));
 
     return html`
       <div
-        class="group fw-volume-group"
-        @mouseenter=${() => {
-          this._expanded = true;
+        class=${classMap({
+          "fw-volume-group": true,
+          "fw-volume-group--expanded": this._expanded,
+          "fw-volume-group--disabled": !this._hasAudio,
+        })}
+        role="group"
+        aria-label="Volume controls"
+        @mouseenter=${this._handleMouseEnter}
+        @mouseleave=${this._handleMouseLeave}
+        @focusin=${this._handleFocusIn}
+        @focusout=${this._handleFocusOut}
+        @click=${(event: MouseEvent) => {
+          if (this._hasAudio && event.target === event.currentTarget) {
+            this.pc.toggleMute();
+          }
         }}
-        @mouseleave=${() => {
-          this._expanded = false;
-        }}
+        @wheel=${this._onWheel}
       >
         <button
-          class="btn fw-btn-flush fw-volume-btn"
+          class="fw-volume-btn"
           type="button"
-          @click=${() => this.pc.toggleMute()}
-          aria-label="${isMuted ? "Unmute" : "Mute"}"
+          @click=${() => {
+            if (this._hasAudio) {
+              this.pc.toggleMute();
+            }
+          }}
+          ?disabled=${!this._hasAudio}
+          aria-label=${!this._hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
+          title=${!this._hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
         >
-          ${isMuted ? volumeOffIcon(16) : volumeUpIcon(16)}
+          ${isMuted || !this._hasAudio ? volumeOffIcon(16) : volumeUpIcon(16)}
         </button>
-        <div class=${classMap({ "slider-wrap": true, "slider-wrap--expanded": this._expanded })}>
+
+        <div
+          class=${classMap({
+            "fw-volume-slider-wrapper": true,
+            "fw-volume-slider-wrapper--expanded": this._expanded,
+            "fw-volume-slider-wrapper--collapsed": !this._expanded,
+          })}
+        >
           <div
             class="slider"
-            @click=${this._handleSliderClick}
-            @pointermove=${this._handleSliderDrag}
+            role="slider"
+            aria-label="Volume"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow=${Math.round(displayVolume * 100)}
+            @pointerdown=${this._onSliderPointerDown}
           >
-            <div class="slider-fill" style=${styleMap({ width: `${displayVol * 100}%` })}></div>
-            <div class="slider-thumb" style=${styleMap({ left: `${displayVol * 100}%` })}></div>
+            <div class="slider-fill" style=${styleMap({ width: `${displayVolume * 100}%` })}></div>
+            <div class="slider-thumb" style=${styleMap({ left: `${displayVolume * 100}%` })}></div>
           </div>
         </div>
       </div>

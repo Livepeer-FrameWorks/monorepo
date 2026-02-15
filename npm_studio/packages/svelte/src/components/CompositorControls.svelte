@@ -92,17 +92,17 @@
   ];
 
   // Tooltip state
+  let tooltipKey = $state<string | null>(null);
   let tooltipText = $state<string | null>(null);
-  let tooltipTarget = $state<HTMLElement | null>(null);
 
-  function showTooltip(text: string, target: HTMLElement) {
+  function showTooltip(key: string, text: string) {
+    tooltipKey = key;
     tooltipText = text;
-    tooltipTarget = target;
   }
 
   function hideTooltip() {
+    tooltipKey = null;
     tooltipText = null;
-    tooltipTarget = null;
   }
 
   function handleLayoutSelect(mode: LayoutMode, e?: MouseEvent) {
@@ -154,10 +154,10 @@
             <div
               class="fw-sc-tooltip-wrapper"
               role="presentation"
-              onmouseenter={(e) =>
+              onmouseenter={() =>
                 showTooltip(
-                  isActive ? `${preset.label} (click to swap)` : preset.label,
-                  e.currentTarget as HTMLElement
+                  `layout-${preset.mode}`,
+                  isActive ? `${preset.label} (click to swap)` : preset.label
                 )}
               onmouseleave={hideTooltip}
             >
@@ -259,6 +259,9 @@
                   </svg>
                 {/if}
               </button>
+              {#if tooltipText && tooltipKey === `layout-${preset.mode}`}
+                <div class="fw-sc-tooltip">{tooltipText}</div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -276,7 +279,7 @@
             <div
               class="fw-sc-tooltip-wrapper"
               role="presentation"
-              onmouseenter={(e) => showTooltip(sm.label, e.currentTarget as HTMLElement)}
+              onmouseenter={() => showTooltip(`scaling-${sm.mode}`, sm.label)}
               onmouseleave={hideTooltip}
             >
               <button
@@ -313,6 +316,9 @@
                   </svg>
                 {/if}
               </button>
+              {#if tooltipText && tooltipKey === `scaling-${sm.mode}`}
+                <div class="fw-sc-tooltip">{tooltipText}</div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -327,12 +333,5 @@
         </span>
       {/if}
     </div>
-
-    <!-- Tooltip -->
-    {#if tooltipText && tooltipTarget}
-      <div class="fw-sc-tooltip" style="position: fixed; pointer-events: none;">
-        {tooltipText}
-      </div>
-    {/if}
   </div>
 {/if}

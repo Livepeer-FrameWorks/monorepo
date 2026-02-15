@@ -240,6 +240,13 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
     controller.on("reconnectionAttempt", () => {
       applyUpdate({ reconnectionState: controller?.getReconnectionManager().getState() ?? null });
     });
+
+    controller.on("webCodecsActive", (event: { active: boolean }) => {
+      applyUpdate({ isWebCodecsActive: event.active });
+      if (event.active) {
+        setupEncoderStatsListener();
+      }
+    });
   }
 
   return {

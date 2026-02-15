@@ -770,35 +770,99 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
     this.log("Attaching encoder transform");
 
-    // Create transform workers using inlined worker bundle
+    // Create transform workers with configurable and fallback URLs.
     const createWorker = (): Worker | null => {
-      // Custom worker URL takes precedence (for consumers who bundle separately)
       if (workerUrl) {
-        return new Worker(workerUrl, { type: "module" });
-      }
-
-      // Preferred: load packaged worker relative to the built module URL.
-      try {
-        const packagedUrl = new URL("../workers/rtcTransform.worker.js", import.meta.url);
-        return new Worker(packagedUrl, { type: "module" });
-      } catch (err) {
-        this.log("Packaged worker URL failed, trying fallback paths", err);
-      }
-
-      const fallbackPaths = [
-        "/workers/rtcTransform.worker.js",
-        "./workers/rtcTransform.worker.js",
-        "/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/rtcTransform.worker.js",
-      ];
-
-      for (const path of fallbackPaths) {
         try {
-          return new Worker(path, { type: "module" });
-        } catch {
+          return new Worker(workerUrl, { type: "module" });
+        } catch (err) {
+          this.log("Configured rtcTransform worker URL failed", err);
           try {
-            return new Worker(path);
-          } catch {
-            // Continue
+            return new Worker(workerUrl);
+          } catch (classicErr) {
+            this.log("Configured rtcTransform classic worker URL failed", classicErr);
+          }
+        }
+      }
+
+      // Bundler-managed worker URL patterns.
+      // Keep new URL(...) inline in new Worker(...) so app bundlers can emit worker assets.
+      try {
+        return new Worker(new URL("../workers/rtcTransform.worker.mod.js", import.meta.url), {
+          type: "module",
+        });
+      } catch (err) {
+        this.log("Bundler source rtcTransform (.mod.js) URL failed", err);
+      }
+
+      try {
+        return new Worker(new URL("../workers/rtcTransform.worker.ts", import.meta.url), {
+          type: "module",
+        });
+      } catch (err) {
+        this.log("Bundler source rtcTransform (.ts) URL failed", err);
+      }
+
+      try {
+        const distUrl = new URL("../../workers/rtcTransform.worker.js", import.meta.url).href;
+        return new Worker(distUrl, { type: "module" });
+      } catch (err) {
+        this.log("Bundler dist rtcTransform URL failed", err);
+      }
+
+      const candidates: Array<{ path: string | URL; label: string }> = [];
+
+      try {
+        const sourceModUrl = new URL("../workers/rtcTransform.worker.mod.js", import.meta.url);
+        candidates.push({ path: sourceModUrl, label: "import.meta.url source (.mod.js)" });
+      } catch {
+        // URL construction failed, continue.
+      }
+
+      try {
+        const sourceUrl = new URL("../workers/rtcTransform.worker.ts", import.meta.url);
+        candidates.push({ path: sourceUrl, label: "import.meta.url source (.ts fallback)" });
+      } catch {
+        // URL construction failed, continue.
+      }
+
+      try {
+        const distUrl = new URL("../../workers/rtcTransform.worker.js", import.meta.url);
+        candidates.push({ path: distUrl, label: "import.meta.url dist (.js)" });
+      } catch {
+        // URL construction failed, continue.
+      }
+
+      candidates.push(
+        {
+          path: "/node_modules/@livepeer-frameworks/streamcrafter-wc/dist/workers/rtcTransform.worker.js",
+          label: "wc package dist",
+        },
+        { path: "/workers/rtcTransform.worker.js", label: "public /workers" },
+        { path: "./workers/rtcTransform.worker.js", label: "relative ./workers" },
+        {
+          path: "/node_modules/@livepeer-frameworks/streamcrafter-core/src/workers/rtcTransform.worker.mod.js",
+          label: "node_modules source (.mod.js)",
+        },
+        {
+          path: "/node_modules/@livepeer-frameworks/streamcrafter-core/src/workers/rtcTransform.worker.ts",
+          label: "node_modules source",
+        },
+        {
+          path: "/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/rtcTransform.worker.js",
+          label: "node_modules dist",
+        }
+      );
+
+      for (const candidate of candidates) {
+        try {
+          return new Worker(candidate.path, { type: "module" });
+        } catch (moduleErr) {
+          this.log(`rtcTransform module worker failed (${candidate.label})`, moduleErr);
+          try {
+            return new Worker(candidate.path);
+          } catch (classicErr) {
+            this.log(`rtcTransform classic worker failed (${candidate.label})`, classicErr);
           }
         }
       }

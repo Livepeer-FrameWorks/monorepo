@@ -9,7 +9,7 @@ export function WorkspaceLayout({ configPanel, mediaPanel }: WorkspaceLayoutProp
   return (
     <div className="workspace-layout h-full">
       <div className="slab-stack overflow-y-auto">{configPanel}</div>
-      <div className="slab-stack">{mediaPanel}</div>
+      <div className="slab-stack overflow-y-auto">{mediaPanel}</div>
     </div>
   );
 }

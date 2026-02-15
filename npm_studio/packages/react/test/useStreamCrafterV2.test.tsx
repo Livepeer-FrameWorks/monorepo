@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useStreamCrafterV2 } from "../src/hooks/useStreamCrafterV2";
+import {
+  STREAMCRAFTER_WRAPPER_PARITY_ACTION_METHODS,
+  STREAMCRAFTER_WRAPPER_DEFAULT_QUALITY_PROFILE,
+  STREAMCRAFTER_WRAPPER_PARITY_EVENT_NAMES,
+  STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE,
+  STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE_REACT_EXT,
+  STREAMCRAFTER_WRAPPER_PARITY_STATE_CHANGE_CASES,
+} from "../../test-contract/streamcrafter-wrapper-contract";
 
 // ---------------------------------------------------------------------------
 // Event-capturing mock
@@ -109,14 +117,14 @@ describe("useStreamCrafterV2", () => {
   it("returns initial idle state", () => {
     const { result } = renderHook(() => useStreamCrafterV2(baseConfig));
 
-    expect(result.current.state).toBe("idle");
-    expect(result.current.isStreaming).toBe(false);
-    expect(result.current.isCapturing).toBe(false);
-    expect(result.current.isReconnecting).toBe(false);
-    expect(result.current.error).toBeNull();
-    expect(result.current.mediaStream).toBeNull();
-    expect(result.current.sources).toEqual([]);
-    expect(result.current.stats).toBeNull();
+    for (const [key, expected] of Object.entries(STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE)) {
+      expect(result.current[key as keyof typeof result.current]).toEqual(expected);
+    }
+    for (const [key, expected] of Object.entries(
+      STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE_REACT_EXT
+    )) {
+      expect(result.current[key as keyof typeof result.current]).toEqual(expected);
+    }
   });
 
   it("creates IngestControllerV2 on mount", async () => {
@@ -133,15 +141,9 @@ describe("useStreamCrafterV2", () => {
     renderHook(() => useStreamCrafterV2(baseConfig));
 
     const eventNames = mockOn.mock.calls.map((call: unknown[]) => call[0]);
-    expect(eventNames).toContain("stateChange");
-    expect(eventNames).toContain("statsUpdate");
-    expect(eventNames).toContain("error");
-    expect(eventNames).toContain("sourceAdded");
-    expect(eventNames).toContain("sourceRemoved");
-    expect(eventNames).toContain("sourceUpdated");
-    expect(eventNames).toContain("qualityChanged");
-    expect(eventNames).toContain("reconnectionAttempt");
-    expect(eventNames).toContain("webCodecsActive");
+    for (const eventName of STREAMCRAFTER_WRAPPER_PARITY_EVENT_NAMES) {
+      expect(eventNames).toContain(eventName);
+    }
   });
 
   it("destroys controller on unmount", () => {
@@ -175,31 +177,14 @@ describe("useStreamCrafterV2", () => {
   it("exposes all expected action methods", () => {
     const { result } = renderHook(() => useStreamCrafterV2(baseConfig));
 
-    expect(typeof result.current.startCamera).toBe("function");
-    expect(typeof result.current.startScreenShare).toBe("function");
-    expect(typeof result.current.addCustomSource).toBe("function");
-    expect(typeof result.current.removeSource).toBe("function");
-    expect(typeof result.current.stopCapture).toBe("function");
-    expect(typeof result.current.setSourceVolume).toBe("function");
-    expect(typeof result.current.setSourceMuted).toBe("function");
-    expect(typeof result.current.setSourceActive).toBe("function");
-    expect(typeof result.current.setPrimaryVideoSource).toBe("function");
-    expect(typeof result.current.setMasterVolume).toBe("function");
-    expect(typeof result.current.getMasterVolume).toBe("function");
-    expect(typeof result.current.setQualityProfile).toBe("function");
-    expect(typeof result.current.startStreaming).toBe("function");
-    expect(typeof result.current.stopStreaming).toBe("function");
-    expect(typeof result.current.getDevices).toBe("function");
-    expect(typeof result.current.switchVideoDevice).toBe("function");
-    expect(typeof result.current.switchAudioDevice).toBe("function");
-    expect(typeof result.current.getStats).toBe("function");
-    expect(typeof result.current.setUseWebCodecs).toBe("function");
-    expect(typeof result.current.setEncoderOverrides).toBe("function");
+    for (const actionName of STREAMCRAFTER_WRAPPER_PARITY_ACTION_METHODS) {
+      expect(typeof result.current[actionName]).toBe("function");
+    }
   });
 
   it("defaults qualityProfile to broadcast", () => {
     const { result } = renderHook(() => useStreamCrafterV2(baseConfig));
-    expect(result.current.qualityProfile).toBe("broadcast");
+    expect(result.current.qualityProfile).toBe(STREAMCRAFTER_WRAPPER_DEFAULT_QUALITY_PROFILE);
   });
 });
 
@@ -209,43 +194,20 @@ describe("useStreamCrafterV2", () => {
 describe("event -> state updates", () => {
   const baseConfig = { whipUrl: "https://example.com/whip" };
 
-  it("stateChange to streaming updates state and derived fields", () => {
+  it("stateChange updates derived fields for parity cases", () => {
     const { result } = renderHook(() => useStreamCrafterV2(baseConfig));
 
-    act(() => {
-      fire("stateChange", { state: "streaming", context: {} });
-    });
-
-    expect(result.current.state).toBe("streaming");
-    expect(result.current.isStreaming).toBe(true);
-    expect(result.current.isCapturing).toBe(true);
-    expect(result.current.isReconnecting).toBe(false);
-  });
-
-  it("stateChange to capturing sets isCapturing but not isStreaming", () => {
-    const { result } = renderHook(() => useStreamCrafterV2(baseConfig));
-
-    act(() => {
-      fire("stateChange", { state: "capturing", context: {} });
-    });
-
-    expect(result.current.state).toBe("capturing");
-    expect(result.current.isCapturing).toBe(true);
-    expect(result.current.isStreaming).toBe(false);
-  });
-
-  it("stateChange to reconnecting sets isReconnecting", () => {
-    const { result } = renderHook(() => useStreamCrafterV2(baseConfig));
-
-    act(() => {
-      fire("stateChange", {
-        state: "reconnecting",
-        context: { reconnection: { attempt: 2, maxAttempts: 5 } },
+    for (const testCase of STREAMCRAFTER_WRAPPER_PARITY_STATE_CHANGE_CASES) {
+      act(() => {
+        fire("stateChange", { state: testCase.state, context: testCase.context });
       });
-    });
 
-    expect(result.current.state).toBe("reconnecting");
-    expect(result.current.isReconnecting).toBe(true);
+      expect(result.current.state).toBe(testCase.state);
+      for (const [key, expected] of Object.entries(testCase.expected)) {
+        expect(result.current[key as keyof typeof result.current]).toEqual(expected);
+      }
+    }
+
     expect(result.current.reconnectionState).toEqual({ attempt: 2, maxAttempts: 5 });
   });
 

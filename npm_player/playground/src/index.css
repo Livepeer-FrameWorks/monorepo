@@ -155,7 +155,14 @@
   border-color: hsl(var(--border));
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
+  margin: 0;
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family:
@@ -294,6 +301,8 @@ body {
 .workspace-layout {
   display: grid;
   grid-template-columns: 1fr;
+  height: 100%;
+  min-height: 0;
   border-top: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
 }
 
@@ -311,6 +320,8 @@ body {
 .slab-stack {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .slab-stack > .slab {
@@ -318,6 +329,7 @@ body {
   border-left: 0;
   border-right: 0;
   border-bottom: 0;
+  min-height: 0;
 }
 
 .slab-stack > .slab:first-child {

@@ -13,15 +13,30 @@ import type {
   TransitionType,
 } from "@livepeer-frameworks/streamcrafter-core";
 
+const DEFAULT_TRANSITION: TransitionConfig = {
+  type: "fade",
+  durationMs: 500,
+  easing: "ease-in-out",
+};
+
 @customElement("fw-sc-scene-switcher")
 export class FwScSceneSwitcher extends LitElement {
   @property({ attribute: false }) scenes: Scene[] = [];
   @property({ type: String, attribute: "active-scene-id" }) activeSceneId: string | null = null;
   @property({ type: Boolean, attribute: "show-transition-controls" }) showTransitionControls = true;
+  @property({ attribute: false }) transitionConfig: TransitionConfig = DEFAULT_TRANSITION;
+  @property({ attribute: false }) onSceneSelect?: (sceneId: string) => void;
+  @property({ attribute: false }) onSceneCreate?: () => void;
+  @property({ attribute: false }) onSceneDelete?: (sceneId: string) => void;
+  @property({ attribute: false }) onTransitionTo?: (
+    sceneId: string,
+    transition: TransitionConfig
+  ) => Promise<void>;
 
-  @state() private _selectedTransition: TransitionType = "fade";
-  @state() private _transitionDuration = 500;
+  @state() private _selectedTransition: TransitionType = DEFAULT_TRANSITION.type;
+  @state() private _transitionDuration = DEFAULT_TRANSITION.durationMs;
   @state() private _isTransitioning = false;
+  @state() private _transitionInitialized = false;
 
   static styles = [
     sharedStyles,
@@ -32,6 +47,15 @@ export class FwScSceneSwitcher extends LitElement {
       }
     `,
   ];
+
+  connectedCallback() {
+    super.connectedCallback();
+    if (!this._transitionInitialized) {
+      this._selectedTransition = this.transitionConfig.type;
+      this._transitionDuration = this.transitionConfig.durationMs;
+      this._transitionInitialized = true;
+    }
+  }
 
   protected render() {
     return html`
@@ -88,7 +112,7 @@ export class FwScSceneSwitcher extends LitElement {
               >
                 <span class="fw-sc-scene-name">${scene.name}</span>
                 <span class="fw-sc-scene-layer-count">${scene.layers.length} layers</span>
-                ${this.scenes.length > 1 && scene.id !== this.activeSceneId
+                ${this.onSceneDelete && this.scenes.length > 1 && scene.id !== this.activeSceneId
                   ? html`
                       <button
                         class="fw-sc-scene-delete"
@@ -105,17 +129,17 @@ export class FwScSceneSwitcher extends LitElement {
               </div>
             `
           )}
-
-          <button
-            class="fw-sc-scene-add"
-            @click=${() =>
-              this.dispatchEvent(
-                new CustomEvent("fw-sc-scene-create", { bubbles: true, composed: true })
-              )}
-            title="Create new scene"
-          >
-            +
-          </button>
+          ${this.onSceneCreate
+            ? html`
+                <button
+                  class="fw-sc-scene-add"
+                  @click=${() => this._handleCreate()}
+                  title="Create new scene"
+                >
+                  +
+                </button>
+              `
+            : nothing}
         </div>
       </div>
     `;
@@ -123,36 +147,33 @@ export class FwScSceneSwitcher extends LitElement {
 
   private async _handleSceneClick(sceneId: string) {
     if (sceneId === this.activeSceneId || this._isTransitioning) return;
-    this._isTransitioning = true;
-    try {
-      this.dispatchEvent(
-        new CustomEvent("fw-sc-scene-select", {
-          detail: {
-            sceneId,
-            transition: {
-              type: this._selectedTransition,
-              durationMs: this._transitionDuration,
-              easing: "ease-in-out" as const,
-            } satisfies TransitionConfig,
-          },
-          bubbles: true,
-          composed: true,
-        })
-      );
-    } finally {
-      this._isTransitioning = false;
+
+    const transition: TransitionConfig = {
+      type: this._selectedTransition,
+      durationMs: this._transitionDuration,
+      easing: this.transitionConfig.easing,
+    };
+
+    if (this.onTransitionTo) {
+      this._isTransitioning = true;
+      try {
+        await this.onTransitionTo(sceneId, transition);
+      } finally {
+        this._isTransitioning = false;
+      }
+      return;
     }
+
+    this.onSceneSelect?.(sceneId);
+  }
+
+  private _handleCreate() {
+    this.onSceneCreate?.();
   }
 
   private _handleDelete(sceneId: string) {
     if (this.scenes.length <= 1) return;
-    this.dispatchEvent(
-      new CustomEvent("fw-sc-scene-delete", {
-        detail: { sceneId },
-        bubbles: true,
-        composed: true,
-      })
-    );
+    this.onSceneDelete?.(sceneId);
   }
 }
 

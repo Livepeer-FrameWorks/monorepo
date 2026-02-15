@@ -15,6 +15,14 @@ export class FwScLayerList extends LitElement {
   @property({ attribute: false }) layers: Layer[] = [];
   @property({ attribute: false }) sources: MediaSource[] = [];
   @property({ type: String, attribute: "selected-layer-id" }) selectedLayerId: string | null = null;
+  @property({ attribute: false }) onVisibilityToggle?: (layerId: string, visible: boolean) => void;
+  @property({ attribute: false }) onReorder?: (layerIds: string[]) => void;
+  @property({ attribute: false }) onTransformEdit?: (
+    layerId: string,
+    transform: Partial<LayerTransform>
+  ) => void;
+  @property({ attribute: false }) onRemove?: (layerId: string) => void;
+  @property({ attribute: false }) onSelect?: (layerId: string | null) => void;
 
   @state() private _draggedId: string | null = null;
   @state() private _dragOverId: string | null = null;
@@ -85,9 +93,7 @@ export class FwScLayerList extends LitElement {
                       this._dragOverId = null;
                     }}
                     @click=${() =>
-                      this._dispatch("fw-sc-layer-select", {
-                        layerId: layer.id === this.selectedLayerId ? null : layer.id,
-                      })}
+                      this.onSelect?.(layer.id === this.selectedLayerId ? null : layer.id)}
                   >
                     <button
                       class=${classMap({
@@ -96,10 +102,7 @@ export class FwScLayerList extends LitElement {
                       })}
                       @click=${(e: Event) => {
                         e.stopPropagation();
-                        this._dispatch("fw-sc-visibility-toggle", {
-                          layerId: layer.id,
-                          visible: !layer.visible,
-                        });
+                        this.onVisibilityToggle?.(layer.id, !layer.visible);
                       }}
                       title=${layer.visible ? "Hide layer" : "Show layer"}
                     >
@@ -108,7 +111,7 @@ export class FwScLayerList extends LitElement {
                     <span class="fw-sc-layer-icon">${this._getSourceIcon(layer.sourceId)}</span>
                     <span class="fw-sc-layer-name">${this._getSourceLabel(layer.sourceId)}</span>
 
-                    ${this._editingLayerId === layer.id
+                    ${this._editingLayerId === layer.id && this.onTransformEdit
                       ? html`
                           <div class="fw-sc-layer-opacity">
                             <input
@@ -118,11 +121,8 @@ export class FwScLayerList extends LitElement {
                               step="0.1"
                               .value=${String(layer.transform.opacity)}
                               @input=${(e: Event) =>
-                                this._dispatch("fw-sc-transform-edit", {
-                                  layerId: layer.id,
-                                  transform: {
-                                    opacity: Number((e.target as HTMLInputElement).value),
-                                  },
+                                this.onTransformEdit?.(layer.id, {
+                                  opacity: Number((e.target as HTMLInputElement).value),
                                 })}
                               @click=${(e: Event) => e.stopPropagation()}
                             />
@@ -154,30 +154,38 @@ export class FwScLayerList extends LitElement {
                       >
                         ↓
                       </button>
-                      <button
-                        class=${classMap({
-                          "fw-sc-layer-btn": true,
-                          "fw-sc-layer-btn--active": this._editingLayerId === layer.id,
-                        })}
-                        @click=${(e: Event) => {
-                          e.stopPropagation();
-                          this._editingLayerId =
-                            this._editingLayerId === layer.id ? null : layer.id;
-                        }}
-                        title="Edit opacity"
-                      >
-                        ⚙
-                      </button>
-                      <button
-                        class="fw-sc-layer-btn fw-sc-layer-btn--danger"
-                        @click=${(e: Event) => {
-                          e.stopPropagation();
-                          this._dispatch("fw-sc-layer-remove", { layerId: layer.id });
-                        }}
-                        title="Remove layer"
-                      >
-                        ×
-                      </button>
+                      ${this.onTransformEdit
+                        ? html`
+                            <button
+                              class=${classMap({
+                                "fw-sc-layer-btn": true,
+                                "fw-sc-layer-btn--active": this._editingLayerId === layer.id,
+                              })}
+                              @click=${(e: Event) => {
+                                e.stopPropagation();
+                                this._editingLayerId =
+                                  this._editingLayerId === layer.id ? null : layer.id;
+                              }}
+                              title="Edit opacity"
+                            >
+                              ⚙
+                            </button>
+                          `
+                        : nothing}
+                      ${this.onRemove
+                        ? html`
+                            <button
+                              class="fw-sc-layer-btn fw-sc-layer-btn--danger"
+                              @click=${(e: Event) => {
+                                e.stopPropagation();
+                                this.onRemove?.(layer.id);
+                              }}
+                              title="Remove layer"
+                            >
+                              ×
+                            </button>
+                          `
+                        : nothing}
                     </div>
                   </div>
                 `
@@ -185,10 +193,6 @@ export class FwScLayerList extends LitElement {
         </div>
       </div>
     `;
-  }
-
-  private _dispatch(name: string, detail: unknown) {
-    this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }));
   }
 
   private _handleDragStart(e: DragEvent, layerId: string) {
@@ -221,7 +225,7 @@ export class FwScLayerList extends LitElement {
     const newOrder = [...currentIds];
     newOrder.splice(fromIndex, 1);
     newOrder.splice(toIndex, 0, this._draggedId);
-    this._dispatch("fw-sc-reorder", { layerIds: newOrder });
+    this.onReorder?.(newOrder);
     this._draggedId = null;
   }
 
@@ -231,7 +235,7 @@ export class FwScLayerList extends LitElement {
     const idx = ids.indexOf(layerId);
     if (idx <= 0) return;
     [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
-    this._dispatch("fw-sc-reorder", { layerIds: ids });
+    this.onReorder?.(ids);
   }
 
   private _moveDown(layerId: string) {
@@ -240,7 +244,7 @@ export class FwScLayerList extends LitElement {
     const idx = ids.indexOf(layerId);
     if (idx >= ids.length - 1) return;
     [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
-    this._dispatch("fw-sc-reorder", { layerIds: ids });
+    this.onReorder?.(ids);
   }
 }
 

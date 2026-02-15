@@ -27,11 +27,14 @@ import {
   cropIcon,
   stretchIcon,
 } from "../icons/index.js";
-import type { IngestControllerHost } from "../controllers/ingest-controller-host.js";
 import type {
+  Layer,
   LayoutMode,
   LayoutConfig,
   ScalingMode,
+  MediaSource,
+  RendererType,
+  RendererStats,
 } from "@livepeer-frameworks/streamcrafter-core";
 import { isLayoutAvailable } from "@livepeer-frameworks/streamcrafter-core";
 
@@ -72,10 +75,17 @@ const SCALING_MODES: {
 
 @customElement("fw-sc-compositor")
 export class FwScCompositor extends LitElement {
-  @property({ attribute: false }) ic!: IngestControllerHost;
+  @property({ type: Boolean, attribute: "is-enabled" }) isEnabled = false;
+  @property({ type: Boolean, attribute: "is-initialized" }) isInitialized = false;
+  @property({ type: String, attribute: "renderer-type" }) rendererType: RendererType | null = null;
+  @property({ attribute: false }) stats: RendererStats | null = null;
+  @property({ attribute: false }) sources: MediaSource[] = [];
+  @property({ attribute: false }) layers: Layer[] = [];
+  @property({ attribute: false }) currentLayout: LayoutConfig | null = null;
+  @property({ type: Boolean, attribute: "show-stats" }) showStats = true;
 
+  @state() private _tooltipKey: string | null = null;
   @state() private _tooltipText = "";
-  @state() private _tooltipTarget: Element | null = null;
 
   static styles = [
     sharedStyles,
@@ -88,9 +98,15 @@ export class FwScCompositor extends LitElement {
   ];
 
   protected render() {
-    // Compositor uses controller compositor API — for now render layout bar from CSS classes
-    const sources = this.ic.s.sources;
-    const visibleSourceCount = sources.length;
+    if (!this.isEnabled || !this.isInitialized) {
+      return nothing;
+    }
+
+    const visibleSourceCount = this.sources.filter((source) => {
+      const layer = this.layers.find((candidate) => candidate.sourceId === source.id);
+      return layer?.visible ?? true;
+    }).length;
+    const currentScalingMode = this.currentLayout?.scalingMode ?? "letterbox";
 
     const availableLayouts = LAYOUT_PRESETS_UI.filter((preset) =>
       isLayoutAvailable(preset.mode, visibleSourceCount)
@@ -104,17 +120,36 @@ export class FwScCompositor extends LitElement {
             <div class="fw-sc-layout-icons">
               ${availableLayouts.map(
                 (preset) => html`
-                  <button
-                    type="button"
-                    class="fw-sc-layout-icon"
-                    @click=${(e: MouseEvent) => {
-                      e.stopPropagation();
-                      this._handleLayoutSelect(preset.mode);
+                  <div
+                    class="fw-sc-tooltip-wrapper"
+                    @mouseenter=${() => {
+                      const isActive = this.currentLayout?.mode === preset.mode;
+                      this._tooltipKey = `layout-${preset.mode}`;
+                      this._tooltipText = isActive
+                        ? `${preset.label} (click to swap)`
+                        : preset.label;
                     }}
-                    title=${preset.label}
+                    @mouseleave=${() => {
+                      this._tooltipKey = null;
+                    }}
                   >
-                    ${preset.icon()}
-                  </button>
+                    <button
+                      type="button"
+                      class=${classMap({
+                        "fw-sc-layout-icon": true,
+                        "fw-sc-layout-icon--active": this.currentLayout?.mode === preset.mode,
+                      })}
+                      @click=${(e: MouseEvent) => {
+                        e.stopPropagation();
+                        this._handleLayoutSelect(preset.mode, e);
+                      }}
+                    >
+                      ${preset.icon()}
+                    </button>
+                    ${this._tooltipKey === `layout-${preset.mode}`
+                      ? html`<div class="fw-sc-tooltip">${this._tooltipText}</div>`
+                      : nothing}
+                  </div>
                 `
               )}
             </div>
@@ -125,29 +160,98 @@ export class FwScCompositor extends LitElement {
             <div class="fw-sc-scaling-icons">
               ${SCALING_MODES.map(
                 (sm) => html`
-                  <button
-                    type="button"
-                    class="fw-sc-layout-icon"
-                    @click=${(e: MouseEvent) => {
-                      e.stopPropagation();
+                  <div
+                    class="fw-sc-tooltip-wrapper"
+                    @mouseenter=${() => {
+                      this._tooltipKey = `scaling-${sm.mode}`;
+                      this._tooltipText = sm.label;
                     }}
-                    title=${sm.label}
+                    @mouseleave=${() => {
+                      this._tooltipKey = null;
+                    }}
                   >
-                    ${sm.icon()}
-                  </button>
+                    <button
+                      type="button"
+                      class=${classMap({
+                        "fw-sc-layout-icon": true,
+                        "fw-sc-layout-icon--active": currentScalingMode === sm.mode,
+                      })}
+                      @click=${(e: MouseEvent) => {
+                        e.stopPropagation();
+                        this._handleScalingModeChange(sm.mode);
+                      }}
+                    >
+                      ${sm.icon()}
+                    </button>
+                    ${this._tooltipKey === `scaling-${sm.mode}`
+                      ? html`<div class="fw-sc-tooltip">${this._tooltipText}</div>`
+                      : nothing}
+                  </div>
                 `
               )}
             </div>
           </div>
+          ${this.showStats && this.stats
+            ? html`
+                <div class="fw-sc-layout-separator"></div>
+                <span class="fw-sc-layout-stats">
+                  ${this.rendererType === "webgpu"
+                    ? "GPU"
+                    : this.rendererType === "webgl"
+                      ? "GL"
+                      : this.rendererType === "canvas2d"
+                        ? "2D"
+                        : ""}
+                  ${this.stats.fps}fps
+                </span>
+              `
+            : nothing}
         </div>
       </div>
     `;
   }
 
-  private _handleLayoutSelect(mode: LayoutMode) {
+  private _handleLayoutSelect(mode: LayoutMode, e?: MouseEvent) {
+    if (this.currentLayout?.mode === mode) {
+      const direction = e?.shiftKey ? "backward" : "forward";
+      this.dispatchEvent(
+        new CustomEvent("fw-sc-cycle-source-order", {
+          detail: { direction },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      return;
+    }
+
+    const layout: LayoutConfig = {
+      mode,
+      scalingMode: this.currentLayout?.scalingMode ?? "letterbox",
+      pipScale: 0.25,
+    };
+
     this.dispatchEvent(
-      new CustomEvent("fw-sc-layout-select", {
-        detail: { mode },
+      new CustomEvent("fw-sc-layout-apply", {
+        detail: { layout },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  private _handleScalingModeChange(scalingMode: ScalingMode) {
+    if (!this.currentLayout) {
+      return;
+    }
+
+    this.dispatchEvent(
+      new CustomEvent("fw-sc-layout-apply", {
+        detail: {
+          layout: {
+            ...this.currentLayout,
+            scalingMode,
+          },
+        },
         bubbles: true,
         composed: true,
       })

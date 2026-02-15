@@ -1000,7 +1000,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                   </div>
                 )}
               </div>
-
               {/* Primary action: Go Live / Stop */}
               {!isStreaming ? (
                 <button

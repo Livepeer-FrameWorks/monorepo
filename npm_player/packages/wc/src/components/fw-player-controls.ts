@@ -1,9 +1,9 @@
 /**
- * <fw-player-controls> — Control bar with play/pause, seek, volume, quality, fullscreen.
- * Port of PlayerControls.tsx from player-react.
+ * <fw-player-controls> — Player controls with seek, volume, live state, and settings.
+ * Parity port of React/Svelte control behavior.
  */
-import { LitElement, html, css, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { LitElement, html, css, nothing, type PropertyValues } from "lit";
+import { customElement, property, query, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
@@ -14,18 +14,51 @@ import {
   fullscreenExitIcon,
   settingsIcon,
   seekToLiveIcon,
+  skipBackIcon,
+  skipForwardIcon,
+  statsIcon,
 } from "../icons/index.js";
+import {
+  calculateIsNearLive,
+  calculateLiveThresholds,
+  calculateSeekableRange,
+  canSeekStream,
+  formatTimeDisplay,
+  isLiveContent,
+  isMediaStreamSource,
+  type MistStreamInfo,
+  type PlaybackMode,
+} from "@livepeer-frameworks/player-core";
 import type { PlayerControllerHost } from "../controllers/player-controller-host.js";
-import type { PlaybackMode } from "@livepeer-frameworks/player-core";
+
+interface SeekingContext {
+  mistStreamInfo?: MistStreamInfo;
+  isLive: boolean;
+  sourceType?: string;
+  seekableStart: number;
+  liveEdge: number;
+  hasDvrWindow: boolean;
+  canSeek: boolean;
+  commitOnRelease: boolean;
+  liveThresholds: ReturnType<typeof calculateLiveThresholds>;
+}
 
 @customElement("fw-player-controls")
 export class FwPlayerControls extends LitElement {
   @property({ attribute: false }) pc!: PlayerControllerHost;
   @property({ type: String }) playbackMode: PlaybackMode = "auto";
   @property({ type: Boolean, attribute: "is-content-live" }) isContentLive = false;
+  @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
+  @property({ type: Boolean, attribute: "show-stats-button" }) showStatsButton = false;
   @property({ type: Boolean, attribute: "is-stats-open" }) isStatsOpen = false;
 
   @state() private _settingsOpen = false;
+  @state() private _isNearLiveState = true;
+  @state() private _buffered: TimeRanges | null = null;
+  @query(".fw-settings-anchor") private _settingsAnchorEl!: HTMLElement | null;
+
+  private _boundVideo: HTMLVideoElement | null = null;
+  private _onBufferedUpdate: (() => void) | null = null;
 
   static styles = [
     sharedStyles,
@@ -34,213 +67,453 @@ export class FwPlayerControls extends LitElement {
       :host {
         display: contents;
       }
-      .controls-wrapper {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        z-index: 20;
-        background: linear-gradient(to top, rgb(0 0 0 / 0.7), transparent);
-        padding: 2rem 0.75rem 0.5rem;
-        opacity: 0;
-        transition: opacity 200ms ease;
-        pointer-events: none;
-      }
-      .controls-wrapper--visible {
-        opacity: 1;
-        pointer-events: auto;
-      }
-      .bar {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-      }
-      .row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.25rem;
-      }
-      .group {
-        display: flex;
-        align-items: center;
-        gap: 0.125rem;
-      }
-      .btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 2rem;
-        height: 2rem;
-        background: none;
-        border: none;
-        color: rgb(255 255 255 / 0.8);
-        cursor: pointer;
-        padding: 0;
-        border-radius: 0.25rem;
-        transition: color 150ms;
-      }
-      .btn:hover {
-        color: white;
-      }
-      .btn:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-      }
-      .time {
-        font-size: 0.6875rem;
-        color: rgb(255 255 255 / 0.7);
-        font-variant-numeric: tabular-nums;
-        padding: 0 0.375rem;
-        white-space: nowrap;
-      }
-      .live-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.375rem;
-        padding: 0.125rem 0.5rem;
-        border-radius: 0.25rem;
-        font-size: 0.6875rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.025em;
-        cursor: pointer;
-        border: none;
-        background: none;
-        transition: color 150ms;
-      }
-      .live-badge--active {
-        color: hsl(var(--tn-red, 348 74% 64%));
-      }
-      .live-badge--behind {
-        color: rgb(255 255 255 / 0.5);
-      }
-      .live-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: currentColor;
-      }
-      .settings-anchor {
+
+      .fw-settings-anchor {
         position: relative;
       }
     `,
   ];
 
-  private _formatTime(seconds: number): string {
-    if (!isFinite(seconds) || isNaN(seconds)) return "0:00";
-    const abs = Math.abs(Math.floor(seconds));
-    const h = Math.floor(abs / 3600);
-    const m = Math.floor((abs % 3600) / 60);
-    const s = abs % 60;
-    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-    return `${m}:${String(s).padStart(2, "0")}`;
+  connectedCallback(): void {
+    super.connectedCallback();
   }
 
-  private get _isNearLive(): boolean {
-    if (!this.isContentLive) return false;
-    const { currentTime, duration } = this.pc.s;
-    if (!isFinite(duration) || duration <= 0) return true;
-    return duration - currentTime < 10;
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this._unbindVideoEvents();
+    this._detachWindowClickListener();
+  }
+
+  protected updated(changed: PropertyValues<this>): void {
+    this._bindVideoEvents();
+    this._reconcileNearLiveState();
+
+    if (changed.has("_settingsOpen" as keyof FwPlayerControls)) {
+      if (this._settingsOpen) {
+        this._attachWindowClickListener();
+      } else {
+        this._detachWindowClickListener();
+      }
+    }
+  }
+
+  private _bindVideoEvents(): void {
+    const video = this.pc?.s.videoElement ?? null;
+    if (video === this._boundVideo) {
+      return;
+    }
+
+    this._unbindVideoEvents();
+    this._boundVideo = video;
+
+    if (!video) {
+      this._buffered = null;
+      return;
+    }
+
+    const updateBuffered = () => {
+      this._buffered = this.pc.getBufferedRanges() ?? video.buffered;
+    };
+
+    updateBuffered();
+    video.addEventListener("progress", updateBuffered);
+    video.addEventListener("loadeddata", updateBuffered);
+    this._onBufferedUpdate = updateBuffered;
+  }
+
+  private _unbindVideoEvents(): void {
+    if (!this._boundVideo) {
+      return;
+    }
+
+    const updateBuffered = this._onBufferedUpdate;
+    if (updateBuffered) {
+      this._boundVideo.removeEventListener("progress", updateBuffered);
+      this._boundVideo.removeEventListener("loadeddata", updateBuffered);
+    }
+
+    this._boundVideo = null;
+    this._onBufferedUpdate = null;
+  }
+
+  private _attachWindowClickListener(): void {
+    window.setTimeout(() => {
+      if (!this._settingsOpen) {
+        return;
+      }
+      window.addEventListener("click", this._onWindowClick);
+    }, 0);
+  }
+
+  private _detachWindowClickListener(): void {
+    window.removeEventListener("click", this._onWindowClick);
+  }
+
+  private _onWindowClick = (event: MouseEvent): void => {
+    const path = event.composedPath();
+    const anchor = this._settingsAnchorEl;
+    const insideControls =
+      anchor !== null &&
+      path.some((entry) => {
+        if (!(entry instanceof Node)) {
+          return false;
+        }
+        return anchor.contains(entry);
+      });
+
+    if (!insideControls) {
+      this._settingsOpen = false;
+    }
+  };
+
+  private _deriveBufferWindowMs(
+    tracks?: Record<string, { firstms?: number; lastms?: number }>
+  ): number | undefined {
+    if (!tracks) {
+      return undefined;
+    }
+
+    const trackValues = Object.values(tracks);
+    if (trackValues.length === 0) {
+      return undefined;
+    }
+
+    const firstmsValues = trackValues
+      .map((track) => track.firstms)
+      .filter((value): value is number => typeof value === "number");
+    const lastmsValues = trackValues
+      .map((track) => track.lastms)
+      .filter((value): value is number => typeof value === "number");
+
+    if (firstmsValues.length === 0 || lastmsValues.length === 0) {
+      return undefined;
+    }
+
+    const firstms = Math.max(...firstmsValues);
+    const lastms = Math.min(...lastmsValues);
+    const window = lastms - firstms;
+
+    if (!Number.isFinite(window) || window <= 0) {
+      return undefined;
+    }
+
+    return window;
+  }
+
+  private _getSeekingContext(): SeekingContext {
+    const state = this.pc.s;
+    const controller = this.pc.getController();
+    const sourceType = state.currentSourceInfo?.type;
+    const mistStreamInfo = state.streamState?.streamInfo as MistStreamInfo | undefined;
+
+    const isLive = isLiveContent(this.isContentLive, mistStreamInfo, state.duration);
+    const bufferWindowMs =
+      mistStreamInfo?.meta?.buffer_window ??
+      this._deriveBufferWindowMs(
+        mistStreamInfo?.meta?.tracks as
+          | Record<string, { firstms?: number; lastms?: number }>
+          | undefined
+      );
+
+    const isWebRTC = isMediaStreamSource(state.videoElement);
+
+    const allowMediaStreamDvr =
+      isMediaStreamSource(state.videoElement) &&
+      bufferWindowMs !== undefined &&
+      bufferWindowMs > 0 &&
+      sourceType !== "whep" &&
+      sourceType !== "webrtc";
+
+    const calculatedRange = calculateSeekableRange({
+      isLive,
+      video: state.videoElement,
+      mistStreamInfo,
+      currentTime: state.currentTime,
+      duration: state.duration,
+      allowMediaStreamDvr,
+    });
+
+    const controllerSeekableStart = this.pc.getSeekableStart();
+    const controllerLiveEdge = this.pc.getLiveEdge();
+
+    const useControllerRange =
+      Number.isFinite(controllerSeekableStart) &&
+      Number.isFinite(controllerLiveEdge) &&
+      controllerLiveEdge >= controllerSeekableStart &&
+      (controllerLiveEdge > 0 || controllerSeekableStart > 0);
+
+    const seekableStart = useControllerRange
+      ? controllerSeekableStart
+      : calculatedRange.seekableStart;
+    const liveEdge = useControllerRange ? controllerLiveEdge : calculatedRange.liveEdge;
+
+    const hasDvrWindow =
+      isLive &&
+      Number.isFinite(liveEdge) &&
+      Number.isFinite(seekableStart) &&
+      liveEdge > seekableStart;
+
+    const baseCanSeek =
+      controller?.canSeekStream?.() ??
+      canSeekStream({
+        video: state.videoElement,
+        isLive,
+        duration: state.duration,
+        bufferWindowMs,
+      });
+
+    const liveThresholds = calculateLiveThresholds(sourceType, isWebRTC, bufferWindowMs);
+
+    return {
+      mistStreamInfo,
+      isLive,
+      sourceType,
+      seekableStart,
+      liveEdge,
+      hasDvrWindow,
+      canSeek: baseCanSeek && (!isLive || hasDvrWindow),
+      commitOnRelease: isLive,
+      liveThresholds,
+    };
+  }
+
+  private _reconcileNearLiveState(): void {
+    const context = this._getSeekingContext();
+
+    if (!context.isLive) {
+      if (!this._isNearLiveState) {
+        this._isNearLiveState = true;
+      }
+      return;
+    }
+
+    const next = calculateIsNearLive(
+      this.pc.s.currentTime,
+      context.liveEdge,
+      context.liveThresholds,
+      this._isNearLiveState
+    );
+
+    if (next !== this._isNearLiveState) {
+      this._isNearLiveState = next;
+    }
+  }
+
+  private _handleModeChange(
+    event: CustomEvent<{ mode: "auto" | "low-latency" | "quality" }>
+  ): void {
+    const { mode } = event.detail;
+    this.dispatchEvent(
+      new CustomEvent("fw-mode-change", {
+        detail: { mode },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   protected render() {
-    const s = this.pc.s;
-    const disabled = !s.videoElement;
+    const state = this.pc.s;
+    const disabled = !state.videoElement;
+    const context = this._getSeekingContext();
+    const shouldShowControls =
+      state.shouldShowControls ||
+      state.isPaused ||
+      !state.hasPlaybackStarted ||
+      state.shouldShowIdleScreen ||
+      !!state.error ||
+      this._settingsOpen;
+
+    const timeDisplay = formatTimeDisplay({
+      isLive: context.isLive,
+      currentTime: state.currentTime,
+      duration: state.duration,
+      liveEdge: context.liveEdge,
+      seekableStart: context.seekableStart,
+      unixoffset: context.mistStreamInfo?.unixoffset,
+    });
+    const showTimeDisplay = !(context.isLive && timeDisplay === "LIVE");
+
+    const liveButtonDisabled = !context.hasDvrWindow || this._isNearLiveState;
 
     return html`
       <div
         class=${classMap({
-          "controls-wrapper": true,
-          "controls-wrapper--visible": s.shouldShowControls,
+          "fw-player-surface": true,
           "fw-controls-wrapper": true,
+          "fw-controls-wrapper--visible": shouldShowControls,
+          "fw-controls-wrapper--hidden": !shouldShowControls,
         })}
       >
-        <div class="bar fw-control-bar">
-          <!-- Seek bar -->
-          <fw-seek-bar
-            .currentTime=${s.currentTime}
-            .duration=${s.duration}
-            .disabled=${disabled}
-            .isLive=${this.isContentLive}
-            @fw-seek=${(e: CustomEvent) => this.pc.seek(e.detail.time)}
-          ></fw-seek-bar>
+        <div class="fw-control-bar" @click=${(event: Event) => event.stopPropagation()}>
+          ${context.canSeek
+            ? html`
+                <div class="fw-seek-wrapper">
+                  <fw-seek-bar
+                    .currentTime=${state.currentTime}
+                    .duration=${state.duration}
+                    .buffered=${this._buffered}
+                    .disabled=${disabled}
+                    .isLive=${context.isLive}
+                    .seekableStart=${context.seekableStart}
+                    .liveEdge=${context.liveEdge}
+                    .commitOnRelease=${context.commitOnRelease}
+                    @fw-seek=${(event: CustomEvent<{ time: number }>) =>
+                      this.pc.seek(event.detail.time)}
+                  ></fw-seek-bar>
+                </div>
+              `
+            : nothing}
 
-          <!-- Button row -->
-          <div class="row">
-            <div class="group fw-control-group">
-              <!-- Play/Pause -->
-              <button
-                class="btn fw-btn-flush"
-                type="button"
-                ?disabled=${disabled}
-                @click=${() => this.pc.togglePlay()}
-                aria-label="${s.isPlaying ? "Pause" : "Play"}"
-              >
-                ${s.isPlaying ? pauseIcon(18) : playIcon(18)}
-              </button>
+          <div class="fw-controls-row">
+            <div class="fw-controls-left">
+              <div class="fw-control-group">
+                <button
+                  type="button"
+                  class="fw-btn-flush"
+                  ?disabled=${disabled}
+                  aria-label=${state.isPlaying ? "Pause" : "Play"}
+                  @click=${() => this.pc.togglePlay()}
+                >
+                  ${state.isPlaying ? pauseIcon(18) : playIcon(18)}
+                </button>
 
-              <!-- Volume -->
-              <fw-volume-control .pc=${this.pc}></fw-volume-control>
+                ${context.canSeek
+                  ? html`
+                      <button
+                        type="button"
+                        class="fw-btn-flush hidden sm:flex"
+                        ?disabled=${disabled}
+                        aria-label="Skip back 10 seconds"
+                        @click=${() => this.pc.seekBy(-10)}
+                      >
+                        ${skipBackIcon(16)}
+                      </button>
+                      <button
+                        type="button"
+                        class="fw-btn-flush hidden sm:flex"
+                        ?disabled=${disabled}
+                        aria-label="Skip forward 10 seconds"
+                        @click=${() => this.pc.seekBy(10)}
+                      >
+                        ${skipForwardIcon(16)}
+                      </button>
+                    `
+                  : nothing}
+              </div>
 
-              <!-- Time display -->
-              ${!this.isContentLive
+              <div class="fw-control-group">
+                <fw-volume-control .pc=${this.pc}></fw-volume-control>
+              </div>
+
+              ${showTimeDisplay
                 ? html`
-                    <span class="time fw-time-display">
-                      ${this._formatTime(s.currentTime)} / ${this._formatTime(s.duration)}
-                    </span>
+                    <div class="fw-control-group">
+                      <span class="fw-time-display">${timeDisplay}</span>
+                    </div>
                   `
                 : nothing}
-
-              <!-- Live badge -->
-              ${this.isContentLive
+              ${context.isLive
                 ? html`
-                    <button
-                      class=${classMap({
-                        "live-badge": true,
-                        "fw-live-badge": true,
-                        "live-badge--active": this._isNearLive,
-                        "fw-live-badge--active": this._isNearLive,
-                        "live-badge--behind": !this._isNearLive,
-                        "fw-live-badge--behind": !this._isNearLive,
-                      })}
-                      type="button"
-                      @click=${() => this.pc.jumpToLive()}
-                      aria-label="Jump to live"
-                    >
-                      <span class="live-dot"></span>
-                      LIVE
-                    </button>
+                    <div class="fw-control-group">
+                      <button
+                        type="button"
+                        @click=${() => this.pc.jumpToLive()}
+                        ?disabled=${liveButtonDisabled}
+                        class=${classMap({
+                          "fw-live-badge": true,
+                          "fw-live-badge--active": liveButtonDisabled,
+                          "fw-live-badge--behind": !liveButtonDisabled,
+                        })}
+                        title=${!context.hasDvrWindow
+                          ? "Live only"
+                          : this._isNearLiveState
+                            ? "At live edge"
+                            : "Jump to live"}
+                      >
+                        LIVE
+                        ${!this._isNearLiveState && context.hasDvrWindow
+                          ? seekToLiveIcon(10)
+                          : nothing}
+                      </button>
+                    </div>
                   `
                 : nothing}
             </div>
 
-            <div class="group fw-control-group">
-              <!-- Settings -->
-              <div class="settings-anchor">
+            <div class="fw-controls-right">
+              ${this.showStatsButton
+                ? html`
+                    <div class="fw-control-group">
+                      <button
+                        type="button"
+                        class=${classMap({
+                          "fw-btn-flush": true,
+                          "fw-btn-flush--active": this.isStatsOpen,
+                        })}
+                        aria-label="Toggle stats"
+                        title="Stats"
+                        @click=${() =>
+                          this.dispatchEvent(
+                            new CustomEvent("fw-stats-toggle", {
+                              bubbles: true,
+                              composed: true,
+                            })
+                          )}
+                      >
+                        ${statsIcon(16)}
+                      </button>
+                    </div>
+                  `
+                : nothing}
+              <div class="fw-control-group fw-settings-anchor">
                 <button
-                  class="btn fw-btn-flush"
                   type="button"
-                  @click=${() => {
+                  class=${classMap({
+                    "fw-btn-flush": true,
+                    group: true,
+                    "fw-btn-flush--active": this._settingsOpen,
+                  })}
+                  aria-label="Settings"
+                  title="Settings"
+                  ?disabled=${disabled}
+                  @click=${(event: MouseEvent) => {
+                    event.stopPropagation();
+                    if (disabled) {
+                      return;
+                    }
                     this._settingsOpen = !this._settingsOpen;
                   }}
-                  aria-label="Settings"
                 >
-                  ${settingsIcon(16)}
+                  <span class="transition-transform group-hover:rotate-90"
+                    >${settingsIcon(16)}</span
+                  >
                 </button>
-                <fw-settings-menu .pc=${this.pc} .open=${this._settingsOpen}></fw-settings-menu>
+
+                <fw-settings-menu
+                  .pc=${this.pc}
+                  .open=${this._settingsOpen}
+                  .playbackMode=${this.playbackMode}
+                  .isContentLive=${this.isContentLive}
+                  @click=${(event: MouseEvent) => event.stopPropagation()}
+                  @fw-close=${() => {
+                    this._settingsOpen = false;
+                  }}
+                  @fw-mode-change=${this._handleModeChange}
+                ></fw-settings-menu>
               </div>
 
-              <!-- Fullscreen -->
-              <button
-                class="btn fw-btn-flush"
-                type="button"
-                ?disabled=${disabled}
-                @click=${() => this.pc.toggleFullscreen()}
-                aria-label="${s.isFullscreen ? "Exit fullscreen" : "Fullscreen"}"
-              >
-                ${s.isFullscreen ? fullscreenExitIcon(16) : fullscreenIcon(16)}
-              </button>
+              <div class="fw-control-group">
+                <button
+                  type="button"
+                  class="fw-btn-flush"
+                  ?disabled=${disabled}
+                  aria-label=${state.isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  @click=${() => this.pc.toggleFullscreen()}
+                >
+                  ${state.isFullscreen ? fullscreenExitIcon(16) : fullscreenIcon(16)}
+                </button>
+              </div>
             </div>
           </div>
         </div>

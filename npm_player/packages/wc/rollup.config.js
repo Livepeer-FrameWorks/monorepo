@@ -79,7 +79,7 @@ export default [
       file: "dist/fw-player.iife.js",
       format: "iife",
       name: "FwPlayer",
-      sourcemap: !isDevelopment,
+      sourcemap: false,
       inlineDynamicImports: true,
     },
     plugins: [

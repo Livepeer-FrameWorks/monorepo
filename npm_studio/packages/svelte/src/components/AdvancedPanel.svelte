@@ -178,7 +178,7 @@
     isWebCodecsActive = false,
     encoderStats = null,
     onUseWebCodecsChange,
-    isWebCodecsAvailable: _isWebCodecsAvailable = true,
+    isWebCodecsAvailable = true,
     encoderOverrides = {},
     onEncoderOverridesChange,
   }: Props = $props();
@@ -736,11 +736,16 @@
           <div class="fw-dev-mode-info-row">
             <span>Type</span>
             <span
-              class="fw-dev-mode-encoder-badge {isWebCodecsActive
+              class="fw-dev-mode-encoder-badge {useWebCodecs && isWebCodecsAvailable
                 ? 'fw-dev-mode-encoder-badge--webcodecs'
                 : 'fw-dev-mode-encoder-badge--browser'}"
             >
-              {isWebCodecsActive ? "WebCodecs" : "Browser"}
+              {useWebCodecs && isWebCodecsAvailable ? "WebCodecs" : "Browser"}
+              {#if ingestState === "streaming"}
+                <span style="opacity: 0.7; margin-left: 4px;">
+                  {isWebCodecsActive ? "(active)" : "(pending)"}
+                </span>
+              {/if}
             </span>
           </div>
           <div class="fw-dev-mode-toggle-row">
@@ -756,7 +761,7 @@
               type="button"
               class="fw-dev-mode-switch {useWebCodecs ? 'fw-dev-mode-switch--on' : ''}"
               onclick={() => onUseWebCodecsChange?.(!useWebCodecs)}
-              disabled={ingestState === "streaming"}
+              disabled={ingestState === "streaming" || !isWebCodecsAvailable}
               role="switch"
               aria-checked={useWebCodecs}
               aria-label="Use WebCodecs"
@@ -764,6 +769,16 @@
               <span class="fw-dev-mode-switch-thumb"></span>
             </button>
           </div>
+          {#if !isWebCodecsAvailable}
+            <div class="fw-dev-mode-locked-notice fw-dev-mode-value--error">
+              Not available - RTCRtpScriptTransform unsupported
+            </div>
+          {/if}
+          {#if isWebCodecsAvailable && ingestState === "streaming" && useWebCodecs !== isWebCodecsActive}
+            <div class="fw-dev-mode-locked-notice fw-dev-mode-value--warning">
+              Change takes effect on next stream
+            </div>
+          {/if}
         </div>
 
         <!-- WebCodecs Encoder Stats -->
@@ -808,7 +823,7 @@
         <!-- Info -->
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-compositor-info">
-            {#if isWebCodecsActive}
+            {#if useWebCodecs && isWebCodecsAvailable}
               Using WebCodecs encoder via RTCRtpScriptTransform for lower latency and better
               control.
             {:else}

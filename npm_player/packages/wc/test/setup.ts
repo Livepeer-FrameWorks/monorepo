@@ -16,3 +16,9 @@ if (typeof globalThis.customElements === "undefined") {
     },
   };
 }
+
+if (typeof globalThis.MediaStream === "undefined") {
+  class MediaStreamMock {}
+  // @ts-expect-error -- jsdom polyfill for test runtime
+  globalThis.MediaStream = MediaStreamMock;
+}

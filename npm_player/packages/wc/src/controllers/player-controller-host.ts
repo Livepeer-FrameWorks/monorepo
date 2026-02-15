@@ -54,7 +54,7 @@ export interface PlayerControllerHostState {
     isAuto?: boolean;
     active?: boolean;
   }>;
-  textTracks: Array<{ id: string; label: string; language?: string; active: boolean }>;
+  textTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
   streamInfo: StreamInfo | null;
   toast: { message: string; timestamp: number } | null;
 }
@@ -185,6 +185,7 @@ export class PlayerControllerHost implements ReactiveController {
       isLoopEnabled: c.isLoopEnabled(),
       subtitlesEnabled: c.isSubtitlesEnabled(),
       qualities: c.getQualities(),
+      textTracks: c.getTextTracks(),
       streamInfo: c.getStreamInfo(),
     });
   }
@@ -215,7 +216,18 @@ export class PlayerControllerHost implements ReactiveController {
 
     u.push(
       controller.on("timeUpdate", ({ currentTime, duration }) => {
-        this.update({ currentTime, duration });
+        const next: Partial<PlayerControllerHostState> = {
+          currentTime,
+          duration,
+          shouldShowControls: controller.shouldShowControls(),
+        };
+        if (this.s.qualities.length === 0) {
+          const qualities = controller.getQualities();
+          if (qualities.length > 0) {
+            next.qualities = qualities;
+          }
+        }
+        this.update(next);
         this.dispatchEvent("fw-time-update", { currentTime, duration });
       })
     );
@@ -248,8 +260,10 @@ export class PlayerControllerHost implements ReactiveController {
           currentPlayerInfo: controller.getCurrentPlayerInfo(),
           currentSourceInfo: controller.getCurrentSourceInfo(),
           qualities: controller.getQualities(),
+          textTracks: controller.getTextTracks(),
         });
         this.dispatchEvent("fw-ready", { videoElement });
+        this.syncState();
 
         const handleVideoEvent = () => {
           if (this.controller?.shouldSuppressVideoEvents?.()) return;
@@ -274,7 +288,9 @@ export class PlayerControllerHost implements ReactiveController {
           currentPlayerInfo: controller.getCurrentPlayerInfo(),
           currentSourceInfo: { url: source.url, type: source.type },
           qualities: controller.getQualities(),
+          textTracks: controller.getTextTracks(),
         });
+        this.syncState();
       })
     );
 
@@ -334,7 +350,7 @@ export class PlayerControllerHost implements ReactiveController {
 
     u.push(
       controller.on("captionsChange", ({ enabled }) => {
-        this.update({ subtitlesEnabled: enabled });
+        this.update({ subtitlesEnabled: enabled, textTracks: controller.getTextTracks() });
       })
     );
 
@@ -428,18 +444,51 @@ export class PlayerControllerHost implements ReactiveController {
   selectQuality(id: string) {
     this.controller?.selectQuality(id);
   }
+  getTextTracks() {
+    return this.controller?.getTextTracks() ?? [];
+  }
+  selectTextTrack(id: string | null) {
+    this.controller?.selectTextTrack(id);
+  }
+  setPlaybackRate(rate: number) {
+    this.controller?.setPlaybackRate(rate);
+  }
+  getSeekableStart() {
+    return this.controller?.getSeekableStart() ?? 0;
+  }
+  getLiveEdge() {
+    return this.controller?.getLiveEdge() ?? 0;
+  }
+  canSeekStream() {
+    return this.controller?.canSeekStream() ?? false;
+  }
+  getBufferedRanges() {
+    return this.controller?.getBufferedRanges() ?? null;
+  }
+  async getStats() {
+    return this.controller?.getStats();
+  }
 
   handleMouseEnter() {
     this.controller?.handleMouseEnter();
+    this.update({ isHovering: true, shouldShowControls: true });
   }
   handleMouseLeave() {
     this.controller?.handleMouseLeave();
+    this.update({
+      isHovering: false,
+      shouldShowControls: this.controller?.shouldShowControls() ?? false,
+    });
   }
   handleMouseMove() {
     this.controller?.handleMouseMove();
+    if (this.controller) {
+      this.update({ shouldShowControls: this.controller.shouldShowControls() });
+    }
   }
   handleTouchStart() {
     this.controller?.handleTouchStart();
+    this.update({ shouldShowControls: true });
   }
 
   async setDevModeOptions(options: {
