@@ -414,25 +414,25 @@ const PlayerInner: React.FC<PlayerProps> = ({
 
       {/* Context menu */}
       <ContextMenuContent>
-        <ContextMenuItem onClick={handleStatsToggle} className="gap-2">
+        <ContextMenuItem onSelect={handleStatsToggle} className="gap-2">
           <StatsIcon size={14} className="opacity-70 flex-shrink-0" />
           <span>{isStatsOpen ? "Hide Stats" : "Stats"}</span>
         </ContextMenuItem>
         {options?.devMode && (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => setIsDevPanelOpen(!isDevPanelOpen)} className="gap-2">
+            <ContextMenuItem onSelect={() => setIsDevPanelOpen(!isDevPanelOpen)} className="gap-2">
               <SettingsIcon size={14} className="opacity-70 flex-shrink-0" />
               <span>{isDevPanelOpen ? "Hide Settings" : "Settings"}</span>
             </ContextMenuItem>
           </>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem onClick={togglePiP} className="gap-2">
+        <ContextMenuItem onSelect={togglePiP} className="gap-2">
           <PictureInPictureIcon size={14} className="opacity-70 flex-shrink-0" />
           <span>Picture-in-Picture</span>
         </ContextMenuItem>
-        <ContextMenuItem onClick={toggleLoop} className="gap-2">
+        <ContextMenuItem onSelect={toggleLoop} className="gap-2">
           <svg
             width="14"
             height="14"

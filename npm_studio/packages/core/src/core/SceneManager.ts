@@ -33,9 +33,12 @@ import { DEFAULT_LAYER_TRANSFORM, DEFAULT_COMPOSITOR_CONFIG } from "../types";
 import { applyLayout, createDefaultLayoutConfig } from "./layouts";
 import { createDefaultTransitionConfig } from "./TransitionEngine";
 
-// ============================================================================
-// SceneManager Class
-// ============================================================================
+// Capture the IIFE script src at module-load time (only available during synchronous execution).
+// In ESM/bundled contexts this is undefined — the import.meta.url paths handle those.
+const _iifeScriptSrc: string | undefined =
+  typeof document !== "undefined"
+    ? (document.currentScript?.getAttribute("src") ?? undefined)
+    : undefined;
 
 /**
  * Default layout transition configuration
@@ -56,6 +59,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
   // Worker communication
   private worker: Worker | null = null;
+  private workerUrl = "";
   private workerReady = false;
   private pendingMessages: CompositorMainToWorker[] = [];
 
@@ -72,9 +76,10 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   // Stats
   private lastStats: RendererStats = { fps: 0, frameTimeMs: 0 };
 
-  constructor(config?: Partial<CompositorConfig>) {
+  constructor(config?: Partial<CompositorConfig>, options?: { workerUrl?: string }) {
     super();
     this.config = { ...DEFAULT_COMPOSITOR_CONFIG, ...config };
+    this.workerUrl = options?.workerUrl ?? "";
     this.defaultTransition = this.config.defaultTransition || createDefaultTransitionConfig();
     this.currentLayout = createDefaultLayoutConfig();
   }
@@ -90,34 +95,13 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     // Fallback: try loading from paths (for development or custom deployments)
     let lastError: Error | null = null;
 
-    const workerPaths = [
-      // Preferred: packaged worker relative to built module URL
-      new URL("../workers/compositor.worker.js", import.meta.url).href,
-      // Vite dev server with pnpm workspace symlinks
-      "/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/compositor.worker.js",
-      // Public folder paths
-      "/workers/compositor.worker.js",
-      "./workers/compositor.worker.js",
-    ];
-
-    console.log("[SceneManager] Trying fallback worker paths:", workerPaths);
-
-    for (const path of workerPaths) {
-      if (this.worker) break;
-
+    const tryWorkerFactory = async (
+      label: string,
+      createWorker: () => Worker
+    ): Promise<boolean> => {
       try {
-        console.log(`[SceneManager] Trying worker path: ${path}`);
+        const testWorker = createWorker();
 
-        // Worker constructor doesn't throw on 404, need to use a test approach
-        const testWorker = (() => {
-          try {
-            return new Worker(path, { type: "module" });
-          } catch {
-            return new Worker(path);
-          }
-        })();
-
-        // Wait for either successful message or error
         const success = await new Promise<boolean>((resolve) => {
           const timeout = setTimeout(() => {
             testWorker.terminate();
@@ -130,32 +114,125 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
             resolve(false);
           };
 
-          // If worker starts sending messages, it loaded successfully
           testWorker.onmessage = () => {
             clearTimeout(timeout);
             resolve(true);
           };
 
-          // Also check if we get a ready response quickly
-          // Some workers might not send immediate messages, give a short grace period
+          // Some workers don't post an immediate message on startup.
           setTimeout(() => {
-            // If we haven't errored by now, assume it loaded
             clearTimeout(timeout);
             resolve(true);
           }, 500);
         });
 
-        if (success) {
-          // Terminate test worker and create the real one
-          testWorker.terminate();
-          try {
-            this.worker = new Worker(path, { type: "module" });
-          } catch {
-            this.worker = new Worker(path);
-          }
-          console.log(`[SceneManager] Worker loaded from: ${path}`);
-          break;
-        } else {
+        if (!success) {
+          return false;
+        }
+
+        testWorker.terminate();
+        this.worker = createWorker();
+        console.log(`[SceneManager] Worker loaded from: ${label}`);
+        return true;
+      } catch (e) {
+        lastError = e instanceof Error ? e : new Error(String(e));
+        console.warn(`[SceneManager] Failed to create worker from ${label}:`, lastError.message);
+        return false;
+      }
+    };
+
+    // Consumer override for environments where package-relative worker URLs are not reachable.
+    if (this.workerUrl) {
+      const loaded =
+        (await tryWorkerFactory(
+          this.workerUrl,
+          () => new Worker(this.workerUrl, { type: "module" })
+        )) || (await tryWorkerFactory(this.workerUrl, () => new Worker(this.workerUrl)));
+      if (loaded) {
+        return;
+      }
+    }
+
+    // Bundler-managed worker URL patterns. Keep new URL(...) inline in new Worker(...)
+    // so host app bundlers can emit/rehydrate worker assets.
+    if (
+      await tryWorkerFactory(
+        "bundler ../workers (.ts)",
+        () =>
+          new Worker(new URL("../workers/compositor.worker.ts", import.meta.url), {
+            type: "module",
+          })
+      )
+    ) {
+      return;
+    }
+
+    if (
+      await tryWorkerFactory(
+        "bundler ../../workers (.js)",
+        () =>
+          new Worker(new URL("../../workers/compositor.worker.js", import.meta.url), {
+            type: "module",
+          })
+      )
+    ) {
+      return;
+    }
+
+    // First-pass candidates relative to the current module URL.
+    // Keep these as plain href strings so downstream app bundlers don't require static
+    // worker-module graph resolution for the streamcrafter-core package internals.
+    const moduleRelativeCandidates = [
+      new URL("../workers/compositor.worker.js", import.meta.url).href,
+      new URL("../workers/compositor.worker.ts", import.meta.url).href,
+      new URL("../../workers/compositor.worker.js", import.meta.url).href,
+    ];
+
+    for (const path of moduleRelativeCandidates) {
+      const loaded =
+        (await tryWorkerFactory(path, () => new Worker(path, { type: "module" }))) ||
+        (await tryWorkerFactory(path, () => new Worker(path)));
+      if (loaded) {
+        return;
+      }
+    }
+
+    // IIFE scripts: derive worker path relative to the script's own URL.
+    // document.currentScript is only available during synchronous <script> execution,
+    // so SceneManager captures it at module-load time via the module-scope constant below.
+    const workerPaths: string[] = [];
+    if (typeof _iifeScriptSrc === "string" && _iifeScriptSrc) {
+      try {
+        const base = new URL("./workers/compositor.worker.js", _iifeScriptSrc).href;
+        workerPaths.push(base);
+      } catch {
+        // invalid URL, skip
+      }
+    }
+
+    workerPaths.push(
+      // Web Component package bundles workers in its own dist/workers folder.
+      "/node_modules/@livepeer-frameworks/streamcrafter-wc/dist/workers/compositor.worker.js",
+      // Vite dev server with pnpm workspace symlinks
+      "/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/compositor.worker.js",
+      // Workspace source fallback (Vite can transpile .ts workers in dev)
+      "/node_modules/@livepeer-frameworks/streamcrafter-core/src/workers/compositor.worker.ts",
+      // Public folder paths
+      "/workers/compositor.worker.js",
+      "./workers/compositor.worker.js"
+    );
+
+    console.log("[SceneManager] Trying fallback worker paths:", workerPaths);
+
+    for (const path of workerPaths) {
+      if (this.worker) break;
+
+      try {
+        console.log(`[SceneManager] Trying worker path: ${path}`);
+        const loaded =
+          (await tryWorkerFactory(path, () => new Worker(path, { type: "module" }))) ||
+          (await tryWorkerFactory(path, () => new Worker(path)));
+        if (!loaded) {
           console.warn(`[SceneManager] Worker failed to load from: ${path}`);
         }
       } catch (e) {

@@ -755,7 +755,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           this.log("canUseEncodedInsertion result:", canUseEncoded);
           if (canUseEncoded) {
             try {
-              this.whipClient.attachEncoderTransform(this.encoderManager);
+              this.whipClient.attachEncoderTransform(
+                this.encoderManager,
+                this.config.workers?.rtcTransform
+              );
               this.encoderManager.start();
               this.log("WebCodecs encoder transform attached", {
                 videoCodec: this.whipClient.getNegotiatedVideoCodec(),
@@ -840,7 +843,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       if (this.useWebCodecs && isRTCRtpScriptTransformSupported()) {
         this.log("Initializing WebCodecs encoder (Path C: RTCRtpScriptTransform)");
         try {
-          this.encoderManager = new EncoderManager({ debug: this.config.debug });
+          this.encoderManager = new EncoderManager({
+            debug: this.config.debug,
+            workerUrl: this.config.workers?.encoder,
+          });
 
           // Set up encoder event forwarding
           this.encoderManager.on("error", (event) => {
@@ -1201,7 +1207,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     const compositorConfig = { ...DEFAULT_COMPOSITOR_CONFIG, ...this.config.compositor, ...config };
     this.log("Creating SceneManager with config", compositorConfig);
-    this.sceneManager = new SceneManager(compositorConfig);
+    this.sceneManager = new SceneManager(compositorConfig, {
+      workerUrl: this.config.workers?.compositor,
+    });
     this.compositorBaseConfig = compositorConfig;
 
     // Initialize the compositor

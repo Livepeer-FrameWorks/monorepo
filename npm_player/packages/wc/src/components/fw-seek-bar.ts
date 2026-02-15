@@ -1,26 +1,37 @@
 /**
- * <fw-seek-bar> — Video seek bar with buffer visualization, drag, tooltips.
- * Port of SeekBar.tsx from player-react.
+ * <fw-seek-bar> — Video seek bar with buffer visualization, drag, and live tooltips.
+ * Behavioral parity with react/svelte SeekBar implementations.
  */
 import { LitElement, html, css, nothing } from "lit";
-import { customElement, property, state, query } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { sharedStyles } from "../styles/shared-styles.js";
+
+interface BufferedSegment {
+  startPercent: number;
+  endPercent: number;
+}
 
 @customElement("fw-seek-bar")
 export class FwSeekBar extends LitElement {
   @property({ type: Number }) currentTime = 0;
   @property({ type: Number }) duration = 0;
+  @property({ attribute: false }) buffered: TimeRanges | null = null;
   @property({ type: Boolean }) disabled = false;
   @property({ type: Boolean, attribute: "is-live" }) isLive = false;
+  @property({ type: Number, attribute: "seekable-start" }) seekableStart = 0;
+  @property({ type: Number, attribute: "live-edge" }) liveEdge?: number;
+  @property({ type: Boolean, attribute: "commit-on-release" }) commitOnRelease = false;
 
   @state() private _hovering = false;
   @state() private _dragging = false;
-  @state() private _hoverPct = 0;
-  @state() private _dragPct: number | null = null;
+  @state() private _dragTime: number | null = null;
+  @state() private _hoverPosition = 0;
+  @state() private _hoverTime = 0;
 
-  @query(".track") private _trackEl!: HTMLDivElement;
+  private _trackRect: DOMRect | null = null;
+  private _activePointerId: number | null = null;
 
   static styles = [
     sharedStyles,
@@ -29,181 +40,363 @@ export class FwSeekBar extends LitElement {
         display: block;
         width: 100%;
       }
-      .wrap {
+
+      .seek-root {
         position: relative;
-        padding: 0.25rem 0;
+        width: 100%;
+        height: 1.5rem;
+        display: flex;
+        align-items: center;
         cursor: pointer;
       }
-      .wrap--disabled {
-        opacity: 0.4;
-        pointer-events: none;
-      }
-      .track {
-        position: relative;
-        height: 4px;
-        background: rgb(255 255 255 / 0.15);
-        border-radius: 2px;
-        overflow: hidden;
-        transition: height 150ms ease;
-      }
-      .wrap:hover .track,
-      .track--active {
-        height: 6px;
-      }
-      .progress {
-        position: absolute;
-        top: 0;
-        left: 0;
-        height: 100%;
-        background: hsl(var(--tn-blue, 217 89% 61%));
-        border-radius: 2px;
-        pointer-events: none;
-      }
-      .thumb {
-        position: absolute;
-        top: 50%;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        background: white;
-        transform: translate(-50%, -50%) scale(0);
-        transition: transform 150ms ease;
-        z-index: 5;
-        pointer-events: none;
-      }
-      .wrap:hover .thumb,
-      .thumb--active {
-        transform: translate(-50%, -50%) scale(1);
-      }
-      .tooltip {
-        position: absolute;
-        bottom: 100%;
-        margin-bottom: 8px;
-        transform: translateX(-50%);
-        padding: 0.25rem 0.5rem;
-        border-radius: 4px;
-        background: rgb(0 0 0 / 0.85);
-        color: white;
-        font-size: 0.6875rem;
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-        pointer-events: none;
-        z-index: 10;
+
+      .seek-root--disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
       }
     `,
   ];
 
-  private _pctFromEvent(e: MouseEvent | PointerEvent): number {
-    if (!this._trackEl) return 0;
-    const rect = this._trackEl.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this._detachDragListeners();
   }
 
-  private _timeFromPct(pct: number): number {
-    const d = this.isLive ? this.duration : this.duration;
-    return isFinite(d) && d > 0 ? pct * d : 0;
+  private get _effectiveLiveEdge(): number {
+    if (typeof this.liveEdge === "number" && Number.isFinite(this.liveEdge)) {
+      return this.liveEdge;
+    }
+    return this.duration;
+  }
+
+  private get _seekableWindow(): number {
+    return this._effectiveLiveEdge - this.seekableStart;
+  }
+
+  private get _displayTime(): number {
+    return this._dragTime ?? this.currentTime;
+  }
+
+  private get _progressPercent(): number {
+    const displayTime = this._displayTime;
+
+    if (this.isLive && this._seekableWindow > 0) {
+      const positionInWindow = displayTime - this.seekableStart;
+      return Math.min(100, Math.max(0, (positionInWindow / this._seekableWindow) * 100));
+    }
+
+    if (!Number.isFinite(this.duration) || this.duration <= 0) {
+      return 0;
+    }
+
+    return Math.min(100, Math.max(0, (displayTime / this.duration) * 100));
+  }
+
+  private get _bufferedSegments(): BufferedSegment[] {
+    const buffered = this.buffered;
+    if (!buffered || buffered.length === 0) {
+      return [];
+    }
+
+    const rangeEnd = this.isLive ? this._effectiveLiveEdge : this.duration;
+    const rangeStart = this.isLive ? this.seekableStart : 0;
+    const rangeSize = rangeEnd - rangeStart;
+
+    if (!Number.isFinite(rangeSize) || rangeSize <= 0) {
+      return [];
+    }
+
+    const segments: BufferedSegment[] = [];
+    for (let i = 0; i < buffered.length; i += 1) {
+      const start = buffered.start(i);
+      const end = buffered.end(i);
+      const relativeStart = start - rangeStart;
+      const relativeEnd = end - rangeStart;
+
+      segments.push({
+        startPercent: Math.min(100, Math.max(0, (relativeStart / rangeSize) * 100)),
+        endPercent: Math.min(100, Math.max(0, (relativeEnd / rangeSize) * 100)),
+      });
+    }
+
+    return segments;
   }
 
   private _formatTime(seconds: number): string {
-    if (!isFinite(seconds)) return "0:00";
-    const abs = Math.abs(Math.floor(seconds));
-    const h = Math.floor(abs / 3600);
-    const m = Math.floor((abs % 3600) / 60);
-    const s = abs % 60;
-    const sign = seconds < 0 ? "-" : "";
-    if (h > 0) return `${sign}${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-    return `${sign}${m}:${String(s).padStart(2, "0")}`;
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      return "0:00";
+    }
+
+    const total = Math.floor(seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    }
+
+    return `${minutes}:${String(secs).padStart(2, "0")}`;
   }
 
-  private _handlePointerDown = (e: PointerEvent) => {
-    if (this.disabled) return;
-    e.preventDefault();
-    this._dragging = true;
-    this._dragPct = this._pctFromEvent(e);
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-  };
-
-  private _handlePointerMove = (e: PointerEvent) => {
-    const pct = this._pctFromEvent(e);
-    if (this._dragging) {
-      this._dragPct = pct;
+  private _formatLiveTime(seconds: number, edge: number): string {
+    const behindSeconds = edge - seconds;
+    if (behindSeconds < 1) {
+      return "LIVE";
     }
-    this._hoverPct = pct;
-  };
 
-  private _handlePointerUp = (e: PointerEvent) => {
-    if (this._dragging && this._dragPct != null) {
-      const time = this._timeFromPct(this._dragPct);
-      this.dispatchEvent(
-        new CustomEvent("fw-seek", { detail: { time }, bubbles: true, composed: true })
-      );
+    const total = Math.floor(behindSeconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+
+    if (hours > 0) {
+      return `-${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
     }
-    this._dragging = false;
-    this._dragPct = null;
-  };
 
-  private _handleClick = (e: MouseEvent) => {
-    if (this.disabled || this._dragging) return;
-    const pct = this._pctFromEvent(e);
-    const time = this._timeFromPct(pct);
+    return `-${minutes}:${String(secs).padStart(2, "0")}`;
+  }
+
+  private _getTrackRect(): DOMRect | null {
+    const track = this.renderRoot.querySelector(".seek-root") as HTMLDivElement | null;
+    if (!track) {
+      return null;
+    }
+
+    this._trackRect = track.getBoundingClientRect();
+    return this._trackRect;
+  }
+
+  private _getTimeFromClientX(clientX: number): number {
+    const rect = this._getTrackRect();
+    if (!rect || rect.width <= 0) {
+      return 0;
+    }
+
+    const x = clientX - rect.left;
+    const percent = Math.min(1, Math.max(0, x / rect.width));
+
+    if (this.isLive && Number.isFinite(this._seekableWindow) && this._seekableWindow > 0) {
+      return this.seekableStart + percent * this._seekableWindow;
+    }
+
+    if (Number.isFinite(this.duration) && this.duration > 0) {
+      return percent * this.duration;
+    }
+
+    if (Number.isFinite(this._effectiveLiveEdge) && this._effectiveLiveEdge > 0) {
+      const start = Number.isFinite(this.seekableStart) ? this.seekableStart : 0;
+      const window = this._effectiveLiveEdge - start;
+      if (window > 0) {
+        return start + percent * window;
+      }
+    }
+
+    return percent * (this.currentTime || 1);
+  }
+
+  private _updateHover(clientX: number): void {
+    const rect = this._getTrackRect();
+    if (!rect || rect.width <= 0) {
+      return;
+    }
+
+    const x = clientX - rect.left;
+    const percent = Math.min(1, Math.max(0, x / rect.width));
+    this._hoverPosition = percent * 100;
+    this._hoverTime = this._getTimeFromClientX(clientX);
+  }
+
+  private _emitSeek(time: number): void {
     this.dispatchEvent(
       new CustomEvent("fw-seek", { detail: { time }, bubbles: true, composed: true })
     );
+  }
+
+  private _onKeyDown = (event: KeyboardEvent) => {
+    if (this.disabled) {
+      return;
+    }
+
+    const step = event.shiftKey ? 10 : 5;
+    const rawRangeEnd = this.isLive ? this._effectiveLiveEdge : this.duration;
+    const rangeEnd = Number.isFinite(rawRangeEnd) ? rawRangeEnd : this.currentTime + step;
+    const rangeStart = this.isLive ? this.seekableStart : 0;
+
+    let newTime: number | null = null;
+    switch (event.key) {
+      case "ArrowLeft":
+      case "ArrowDown":
+        newTime = Math.max(rangeStart, this.currentTime - step);
+        break;
+      case "ArrowRight":
+      case "ArrowUp":
+        newTime = Math.min(rangeEnd, this.currentTime + step);
+        break;
+      case "Home":
+        newTime = rangeStart;
+        break;
+      case "End":
+        newTime = rangeEnd;
+        break;
+      default:
+        return;
+    }
+
+    if (newTime != null) {
+      event.preventDefault();
+      this._emitSeek(newTime);
+    }
   };
 
-  private _handleMouseEnter = () => {
+  private _onPointerEnter = () => {
+    if (this.disabled) {
+      return;
+    }
     this._hovering = true;
   };
-  private _handleMouseLeave = () => {
+
+  private _onPointerLeave = () => {
     this._hovering = false;
+    this._trackRect = null;
   };
 
-  private get _progressPct(): number {
-    if (this._dragPct != null) return this._dragPct * 100;
-    const d = this.duration;
-    if (!isFinite(d) || d <= 0) return 0;
-    return Math.min(100, (this.currentTime / d) * 100);
+  private _onPointerMove = (event: PointerEvent) => {
+    if (this.disabled || (!this._hovering && !this._dragging)) {
+      return;
+    }
+    this._updateHover(event.clientX);
+  };
+
+  private _onPointerDown = (event: PointerEvent) => {
+    if (this.disabled) {
+      return;
+    }
+
+    if (!this.isLive && !Number.isFinite(this.duration)) {
+      return;
+    }
+
+    event.preventDefault();
+    this._activePointerId = event.pointerId;
+    this._dragging = true;
+    this._hovering = true;
+
+    const initialTime = this._getTimeFromClientX(event.clientX);
+    this._updateHover(event.clientX);
+
+    if (this.commitOnRelease) {
+      this._dragTime = initialTime;
+    } else {
+      this._emitSeek(initialTime);
+    }
+
+    this._attachDragListeners();
+  };
+
+  private _onGlobalPointerMove = (event: PointerEvent) => {
+    if (!this._dragging || this._activePointerId !== event.pointerId) {
+      return;
+    }
+
+    const time = this._getTimeFromClientX(event.clientX);
+    this._updateHover(event.clientX);
+
+    if (this.commitOnRelease) {
+      this._dragTime = time;
+    } else {
+      this._emitSeek(time);
+    }
+  };
+
+  private _onGlobalPointerUp = (event: PointerEvent) => {
+    if (!this._dragging || this._activePointerId !== event.pointerId) {
+      return;
+    }
+
+    if (this.commitOnRelease && this._dragTime != null) {
+      this._emitSeek(this._dragTime);
+    }
+
+    this._dragging = false;
+    this._dragTime = null;
+    this._activePointerId = null;
+    this._detachDragListeners();
+  };
+
+  private _attachDragListeners(): void {
+    window.addEventListener("pointermove", this._onGlobalPointerMove);
+    window.addEventListener("pointerup", this._onGlobalPointerUp);
+    window.addEventListener("pointercancel", this._onGlobalPointerUp);
+  }
+
+  private _detachDragListeners(): void {
+    window.removeEventListener("pointermove", this._onGlobalPointerMove);
+    window.removeEventListener("pointerup", this._onGlobalPointerUp);
+    window.removeEventListener("pointercancel", this._onGlobalPointerUp);
   }
 
   protected render() {
-    const progressPct = this._progressPct;
-    const thumbPct = this._dragPct != null ? this._dragPct * 100 : progressPct;
-    const showTooltip = this._hovering || this._dragging;
-    const tooltipPct = this._dragging ? (this._dragPct ?? 0) * 100 : this._hoverPct * 100;
-    const tooltipTime = this._timeFromPct(tooltipPct / 100);
-
-    let tooltipText = this._formatTime(tooltipTime);
-    if (this.isLive && isFinite(this.duration) && this.duration > 0) {
-      const behindLive = tooltipTime - this.duration;
-      if (behindLive < -1) tooltipText = this._formatTime(behindLive);
-    }
+    const progressPercent = this._progressPercent;
+    const showThumb = this._hovering || this._dragging;
+    const canShowTooltip = this.isLive ? this._seekableWindow > 0 : Number.isFinite(this.duration);
 
     return html`
       <div
-        class=${classMap({ wrap: true, "wrap--disabled": this.disabled })}
-        @pointerdown=${this._handlePointerDown}
-        @pointermove=${this._handlePointerMove}
-        @pointerup=${this._handlePointerUp}
-        @click=${this._handleClick}
-        @mouseenter=${this._handleMouseEnter}
-        @mouseleave=${this._handleMouseLeave}
+        class=${classMap({
+          "seek-root": true,
+          "seek-root--disabled": this.disabled,
+          "fw-seek-root": true,
+        })}
+        @pointerenter=${this._onPointerEnter}
+        @pointerleave=${this._onPointerLeave}
+        @pointermove=${this._onPointerMove}
+        @pointerdown=${this._onPointerDown}
+        role="slider"
+        aria-label="Seek"
+        aria-valuemin=${this.isLive ? this.seekableStart : 0}
+        aria-valuemax=${this.isLive
+          ? this._effectiveLiveEdge
+          : Number.isFinite(this.duration)
+            ? this.duration
+            : 100}
+        aria-valuenow=${this._displayTime}
+        aria-valuetext=${this.isLive
+          ? this._formatLiveTime(this._displayTime, this._effectiveLiveEdge)
+          : this._formatTime(this._displayTime)}
+        tabindex=${this.disabled ? -1 : 0}
+        @keydown=${this._onKeyDown}
       >
-        <div
-          class=${classMap({ track: true, "track--active": this._dragging, "fw-seek-track": true })}
-        >
-          <div
-            class="progress fw-seek-progress"
-            style=${styleMap({ width: `${progressPct}%` })}
-          ></div>
+        <div class=${classMap({ "fw-seek-track": true, "fw-seek-track--active": this._dragging })}>
+          ${this._bufferedSegments.map(
+            (segment) => html`
+              <div
+                class="fw-seek-buffered"
+                style=${styleMap({
+                  left: `${segment.startPercent}%`,
+                  width: `${segment.endPercent - segment.startPercent}%`,
+                })}
+              ></div>
+            `
+          )}
+          <div class="fw-seek-progress" style=${styleMap({ width: `${progressPercent}%` })}></div>
         </div>
+
         <div
-          class=${classMap({ thumb: true, "thumb--active": this._dragging, "fw-seek-thumb": true })}
-          style=${styleMap({ left: `${thumbPct}%` })}
+          class=${classMap({
+            "fw-seek-thumb": true,
+            "fw-seek-thumb--active": showThumb,
+            "fw-seek-thumb--hidden": !showThumb,
+          })}
+          style=${styleMap({ left: `${progressPercent}%` })}
         ></div>
-        ${showTooltip
+
+        ${this._hovering && !this._dragging && canShowTooltip
           ? html`
-              <div class="tooltip fw-seek-tooltip" style=${styleMap({ left: `${tooltipPct}%` })}>
-                ${tooltipText}
+              <div class="fw-seek-tooltip" style=${styleMap({ left: `${this._hoverPosition}%` })}>
+                ${this.isLive
+                  ? this._formatLiveTime(this._hoverTime, this._effectiveLiveEdge)
+                  : this._formatTime(this._hoverTime)}
               </div>
             `
           : nothing}

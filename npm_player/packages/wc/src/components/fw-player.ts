@@ -27,7 +27,11 @@ export class FwPlayer extends LitElement {
   @property({ attribute: "auth-token" }) authToken?: string;
   @property({ type: Boolean }) autoplay = true;
   @property({ type: Boolean }) muted = true;
+  // React/Svelte use `stockControls` for native controls. Keep `controls` as a
+  // compatibility no-op so WC parity does not hide custom controls/seekbar.
   @property({ type: Boolean }) controls = false;
+  @property({ type: Boolean, attribute: "stock-controls" }) stockControls = false;
+  @property({ type: Boolean, attribute: "native-controls" }) nativeControls = false;
   @property({ type: Boolean }) debug = false;
   @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
   @property({ attribute: "thumbnail-url" }) thumbnailUrl?: string;
@@ -41,6 +45,9 @@ export class FwPlayer extends LitElement {
   @state() private _isDevPanelOpen = false;
   @state() private _skipDirection: "back" | "forward" | null = null;
   @state() private _contextMenuOpen = false;
+  @state() private _contextMenuMounted = false;
+  @state() private _contextMenuState: "open" | "closed" = "closed";
+  @state() private _contextMenuSide: "top" | "bottom" | "left" | "right" = "bottom";
   @state() private _contextMenuX = 0;
   @state() private _contextMenuY = 0;
 
@@ -72,40 +79,7 @@ export class FwPlayer extends LitElement {
       .player-area--dev {
         flex: 1;
         min-width: 0;
-      }
-      .context-menu {
-        position: fixed;
-        z-index: 200;
-        min-width: 180px;
-        border-radius: 0.5rem;
-        border: 1px solid rgb(255 255 255 / 0.1);
-        background: rgb(0 0 0 / 0.9);
-        backdrop-filter: blur(8px);
-        padding: 0.25rem;
-        box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.3);
-      }
-      .context-menu-item {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        width: 100%;
-        padding: 0.375rem 0.5rem;
-        border: none;
-        background: none;
-        color: rgb(255 255 255 / 0.8);
-        font-size: 0.8125rem;
-        cursor: pointer;
-        border-radius: 0.25rem;
-        text-align: left;
-      }
-      .context-menu-item:hover {
-        background: rgb(255 255 255 / 0.1);
-        color: white;
-      }
-      .context-menu-sep {
-        height: 1px;
-        background: rgb(255 255 255 / 0.1);
-        margin: 0.25rem 0;
+        min-height: 0;
       }
     `,
   ];
@@ -121,7 +95,8 @@ export class FwPlayer extends LitElement {
       changed.has("authToken") ||
       changed.has("autoplay") ||
       changed.has("muted") ||
-      changed.has("controls") ||
+      changed.has("stockControls") ||
+      changed.has("nativeControls") ||
       changed.has("debug") ||
       changed.has("thumbnailUrl") ||
       changed.has("endpoints")
@@ -135,7 +110,7 @@ export class FwPlayer extends LitElement {
         authToken: this.authToken,
         autoplay: this.autoplay,
         muted: this.muted,
-        controls: this.controls,
+        controls: this.stockControls || this.nativeControls,
         poster: this.thumbnailUrl,
         debug: this.debug,
       });
@@ -146,33 +121,284 @@ export class FwPlayer extends LitElement {
     this.pc.attach(this._containerEl);
 
     // Close context menu on outside click
-    document.addEventListener("pointerdown", this._handleDocumentClick);
+    document.addEventListener("pointerdown", this._handleDocumentPointerDown);
     document.addEventListener("contextmenu", this._handleDocumentContextMenu);
+    document.addEventListener("keydown", this._handleDocumentKeyDown);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    document.removeEventListener("pointerdown", this._handleDocumentClick);
+    document.removeEventListener("pointerdown", this._handleDocumentPointerDown);
     document.removeEventListener("contextmenu", this._handleDocumentContextMenu);
+    document.removeEventListener("keydown", this._handleDocumentKeyDown);
+    if (this._contextMenuCloseTimer) {
+      clearTimeout(this._contextMenuCloseTimer);
+      this._contextMenuCloseTimer = undefined;
+    }
+    this._resetContextMenuTypeahead();
   }
 
   // ---- Context Menu ----
 
-  private _handleContextMenu = (e: MouseEvent) => {
-    e.preventDefault();
-    const rect = this.getBoundingClientRect();
-    this._contextMenuX = e.clientX;
-    this._contextMenuY = e.clientY;
+  private _contextMenuCloseTimer?: ReturnType<typeof setTimeout>;
+  private _contextMenuTypeahead = "";
+  private _contextMenuTypeaheadTimer?: ReturnType<typeof setTimeout>;
+
+  private _resetContextMenuTypeahead = () => {
+    this._contextMenuTypeahead = "";
+    if (this._contextMenuTypeaheadTimer) {
+      clearTimeout(this._contextMenuTypeaheadTimer);
+      this._contextMenuTypeaheadTimer = undefined;
+    }
+  };
+
+  private _resolveContextMenuSide = (
+    rawX: number,
+    rawY: number,
+    clampedX: number,
+    clampedY: number
+  ) => {
+    const deltaX = Math.abs(rawX - clampedX);
+    const deltaY = Math.abs(rawY - clampedY);
+
+    if (deltaX === 0 && deltaY === 0) {
+      return "bottom";
+    }
+
+    if (deltaY >= deltaX) {
+      return rawY > clampedY ? "top" : "bottom";
+    }
+
+    return rawX > clampedX ? "left" : "right";
+  };
+
+  private _closeContextMenu = (restoreFocus = false) => {
+    this._contextMenuOpen = false;
+    this._contextMenuState = "closed";
+    this._resetContextMenuTypeahead();
+    if (this._contextMenuCloseTimer) {
+      clearTimeout(this._contextMenuCloseTimer);
+    }
+    this._contextMenuCloseTimer = setTimeout(() => {
+      if (!this._contextMenuOpen) {
+        this._contextMenuMounted = false;
+      }
+    }, 170);
+
+    if (restoreFocus) {
+      const root = this.shadowRoot?.querySelector<HTMLElement>('[part="root"]');
+      root?.focus();
+    }
+  };
+
+  private _getQueryRoot = (): ShadowRoot | null => {
+    return (
+      this.shadowRoot ?? (this as unknown as { renderRoot?: ShadowRoot | null }).renderRoot ?? null
+    );
+  };
+
+  private _getContextMenuElement = () =>
+    this._getQueryRoot()?.querySelector<HTMLElement>('[data-context-menu="true"]') ?? null;
+
+  private _getContextMenuBounds = () => {
+    const root = this._getQueryRoot()?.querySelector<HTMLElement>('[part="root"]');
+    const rect = root?.getBoundingClientRect() ?? this.getBoundingClientRect();
+
+    const width = rect.width > 0 ? rect.width : window.innerWidth;
+    const height = rect.height > 0 ? rect.height : window.innerHeight;
+
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.left + width,
+      bottom: rect.top + height,
+      width,
+      height,
+    };
+  };
+
+  private _toLocalContextMenuPoint = (clientX: number, clientY: number) => {
+    const bounds = this._getContextMenuBounds();
+    return {
+      x: clientX - bounds.left,
+      y: clientY - bounds.top,
+    };
+  };
+
+  private _getContextMenuItems = () =>
+    Array.from(
+      this._getQueryRoot()?.querySelectorAll<HTMLButtonElement>(
+        '[data-context-menu-item="true"][data-context-menu-level="root"]:not([data-disabled="true"])'
+      ) ?? []
+    );
+
+  private _focusFirstContextMenuItem = () => {
+    const [firstItem] = this._getContextMenuItems();
+    firstItem?.focus();
+  };
+
+  private _clampContextMenuPosition = (x: number, y: number, width: number, height: number) => {
+    const viewportPadding = 8;
+    const bounds = this._getContextMenuBounds();
+    const maxX = Math.max(viewportPadding, bounds.width - width - viewportPadding);
+    const maxY = Math.max(viewportPadding, bounds.height - height - viewportPadding);
+
+    return {
+      x: Math.max(viewportPadding, Math.min(x, maxX)),
+      y: Math.max(viewportPadding, Math.min(y, maxY)),
+    };
+  };
+
+  private _syncContextMenuPosition = () => {
+    if (!this._contextMenuMounted) return;
+    const menu = this._getContextMenuElement();
+    if (!menu) return;
+
+    const rect = menu.getBoundingClientRect();
+    const next = this._clampContextMenuPosition(
+      this._contextMenuX,
+      this._contextMenuY,
+      rect.width,
+      rect.height
+    );
+    this._contextMenuSide = this._resolveContextMenuSide(
+      this._contextMenuX,
+      this._contextMenuY,
+      next.x,
+      next.y
+    );
+    if (next.x !== this._contextMenuX || next.y !== this._contextMenuY) {
+      this._contextMenuX = next.x;
+      this._contextMenuY = next.y;
+    }
+  };
+
+  private _openContextMenu = (clientX: number, clientY: number) => {
+    const local = this._toLocalContextMenuPoint(clientX, clientY);
+    const next = this._clampContextMenuPosition(local.x, local.y, 220, 200);
+    this._contextMenuSide = this._resolveContextMenuSide(local.x, local.y, next.x, next.y);
+    this._contextMenuX = next.x;
+    this._contextMenuY = next.y;
+    this._contextMenuMounted = true;
+    this._contextMenuState = "open";
+    if (this._contextMenuCloseTimer) {
+      clearTimeout(this._contextMenuCloseTimer);
+      this._contextMenuCloseTimer = undefined;
+    }
+    this._resetContextMenuTypeahead();
     this._contextMenuOpen = true;
   };
 
-  private _handleDocumentClick = () => {
-    if (this._contextMenuOpen) this._contextMenuOpen = false;
+  private _handleContextMenu = (e: MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('[data-context-menu="true"]')) {
+      e.preventDefault();
+      return;
+    }
+
+    e.preventDefault();
+    this._openContextMenu(e.clientX, e.clientY);
+  };
+
+  private _handleContextMenuShortcut = (e: KeyboardEvent) => {
+    const isContextMenuKey = e.key === "ContextMenu";
+    const isShiftF10 = e.key === "F10" && e.shiftKey;
+    if (!isContextMenuKey && !isShiftF10) return;
+
+    e.preventDefault();
+    const rect = this.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    this._openContextMenu(x, y);
+  };
+
+  private _handleDocumentPointerDown = (e: PointerEvent) => {
+    if (!this._contextMenuOpen) return;
+    const menu = this._getContextMenuElement();
+    const composedPath = e.composedPath();
+    if (menu && composedPath.includes(menu)) return;
+    this._closeContextMenu();
   };
 
   private _handleDocumentContextMenu = (e: MouseEvent) => {
+    if (!this._contextMenuOpen) return;
     if (!this.contains(e.target as Node)) {
-      this._contextMenuOpen = false;
+      this._closeContextMenu();
+    }
+  };
+
+  private _handleDocumentKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && this._contextMenuOpen) {
+      e.preventDefault();
+      this._closeContextMenu(true);
+    }
+  };
+
+  private _handleContextMenuKeyDown = (e: KeyboardEvent) => {
+    if (!this._contextMenuOpen) return;
+    const activeElement = this.shadowRoot?.activeElement as HTMLButtonElement | null;
+
+    if (e.key === "Escape") {
+      e.preventDefault();
+      this._closeContextMenu(true);
+      return;
+    }
+
+    if (e.key === "Tab") {
+      this._closeContextMenu();
+      return;
+    }
+
+    const items = this._getContextMenuItems();
+    if (items.length === 0) return;
+    const activeIndex = items.findIndex((item) => item === activeElement);
+
+    if (e.key === "Home") {
+      e.preventDefault();
+      this._focusFirstContextMenuItem();
+      return;
+    }
+
+    if (e.key === "End") {
+      e.preventDefault();
+      items[items.length - 1]?.focus();
+      return;
+    }
+
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const direction = e.key === "ArrowDown" ? 1 : -1;
+      const startIndex =
+        activeIndex === -1 ? (direction === 1 ? 0 : items.length - 1) : activeIndex;
+      const nextIndex = (startIndex + direction + items.length) % items.length;
+      items[nextIndex]?.focus();
+      return;
+    }
+
+    if (e.key === "Enter" || e.key === " ") {
+      if (activeElement) {
+        e.preventDefault();
+        activeElement.click();
+      }
+      return;
+    }
+
+    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      this._contextMenuTypeahead += e.key.toLowerCase();
+      if (this._contextMenuTypeaheadTimer) {
+        clearTimeout(this._contextMenuTypeaheadTimer);
+      }
+      this._contextMenuTypeaheadTimer = setTimeout(() => {
+        this._resetContextMenuTypeahead();
+      }, 700);
+
+      const startIndex = activeIndex === -1 ? 0 : activeIndex + 1;
+      const orderedItems = [...items.slice(startIndex), ...items.slice(0, startIndex)];
+      const match = orderedItems.find((item) =>
+        item.textContent?.trim().toLowerCase().startsWith(this._contextMenuTypeahead)
+      );
+      match?.focus();
     }
   };
 
@@ -184,6 +410,16 @@ export class FwPlayer extends LitElement {
     if (this.pc.s.toast) {
       clearTimeout(this._toastTimer);
       this._toastTimer = setTimeout(() => this.pc.dismissToast(), 3000);
+    }
+
+    if (
+      (changed.has("_contextMenuOpen") || changed.has("_contextMenuMounted")) &&
+      this._contextMenuOpen
+    ) {
+      queueMicrotask(() => {
+        this._syncContextMenuPosition();
+        this._focusFirstContextMenuItem();
+      });
     }
   }
 
@@ -201,11 +437,23 @@ export class FwPlayer extends LitElement {
 
   private get _showWaitingForEndpoint() {
     const s = this.pc.s;
-    return !s.endpoints && s.state !== "booting";
+    return !s.endpoints?.primary && s.state !== "booting";
+  }
+
+  private get _waitingMessage() {
+    const s = this.pc.s;
+    if (this.gatewayUrl && s.state === "gateway_loading") {
+      return "Resolving viewing endpoint...";
+    }
+    return "Waiting for endpoint...";
   }
 
   private get _useStockControls() {
-    return this.controls || this.pc.s.currentPlayerInfo?.shortname === "mist-legacy";
+    return (
+      this.stockControls ||
+      this.nativeControls ||
+      this.pc.s.currentPlayerInfo?.shortname === "mist-legacy"
+    );
   }
 
   // ---- Public API methods ----
@@ -278,11 +526,13 @@ export class FwPlayer extends LitElement {
           "overflow-hidden": true,
           flex: this.devMode,
         })}
+        data-player-container="true"
         tabindex="0"
         @mouseenter=${() => this.pc.handleMouseEnter()}
         @mouseleave=${() => this.pc.handleMouseLeave()}
         @mousemove=${() => this.pc.handleMouseMove()}
         @touchstart=${() => this.pc.handleTouchStart()}
+        @keydown=${this._handleContextMenuShortcut}
         @contextmenu=${this._handleContextMenu}
       >
         <!-- Player area -->
@@ -294,6 +544,16 @@ export class FwPlayer extends LitElement {
         >
           <!-- Video container -->
           <div id="container" part="video-container" class="fw-player-container"></div>
+
+          <!-- Subtitle renderer -->
+          ${s.subtitlesEnabled
+            ? html`
+                <fw-subtitle-renderer
+                  .currentTime=${s.currentTime}
+                  .enabled=${s.subtitlesEnabled}
+                ></fw-subtitle-renderer>
+              `
+            : nothing}
 
           <!-- Title overlay -->
           ${this._showTitleOverlay
@@ -334,7 +594,14 @@ export class FwPlayer extends LitElement {
           <!-- Waiting for endpoint -->
           ${this._showWaitingForEndpoint
             ? html`
-                <fw-idle-screen status="OFFLINE" message="Waiting for endpoint..."></fw-idle-screen>
+                <fw-idle-screen
+                  status="OFFLINE"
+                  .message=${this._waitingMessage}
+                  @fw-retry=${() => {
+                    this.pc.clearError();
+                    this.pc.retry();
+                  }}
+                ></fw-idle-screen>
               `
             : nothing}
 
@@ -345,6 +612,10 @@ export class FwPlayer extends LitElement {
                   .status=${s.isEffectivelyLive ? s.streamState?.status : undefined}
                   .message=${s.isEffectivelyLive ? s.streamState?.message : "Loading video..."}
                   .percentage=${s.isEffectivelyLive ? s.streamState?.percentage : undefined}
+                  @fw-retry=${() => {
+                    this.pc.clearError();
+                    this.pc.retry();
+                  }}
                 ></fw-idle-screen>
               `
             : nothing}
@@ -467,9 +738,13 @@ export class FwPlayer extends LitElement {
                   .pc=${this.pc}
                   .playbackMode=${this.playbackMode}
                   .isContentLive=${s.isEffectivelyLive}
+                  .devMode=${this.devMode}
                   .isStatsOpen=${this._isStatsOpen}
                   @fw-stats-toggle=${() => {
                     this._isStatsOpen = !this._isStatsOpen;
+                  }}
+                  @fw-mode-change=${(event: CustomEvent<{ mode: PlaybackMode }>) => {
+                    this.playbackMode = event.detail.mode;
                   }}
                 ></fw-player-controls>
               `
@@ -485,23 +760,41 @@ export class FwPlayer extends LitElement {
                 @fw-close=${() => {
                   this._isDevPanelOpen = false;
                 }}
+                @fw-playback-mode-change=${(event: CustomEvent<{ mode: PlaybackMode }>) => {
+                  this.playbackMode = event.detail.mode;
+                }}
               ></fw-dev-mode-panel>
             `
           : nothing}
       </div>
 
       <!-- Context menu -->
-      ${this._contextMenuOpen
+      <!-- Keep menu in-shadow (no document portal) to preserve host-scoped styling and avoid a global overlay manager. -->
+      ${this._contextMenuMounted
         ? html`
             <div
-              class="context-menu"
-              style="left: ${this._contextMenuX}px; top: ${this._contextMenuY}px;"
+              data-context-menu="true"
+              data-state=${this._contextMenuState}
+              data-side=${this._contextMenuSide}
+              class="fw-player-surface fw-context-menu"
+              role="menu"
+              aria-label="Player options"
+              tabindex="-1"
+              style="position: absolute; left: ${this._contextMenuX}px; top: ${this
+                ._contextMenuY}px;"
+              @contextmenu=${(e: MouseEvent) => e.preventDefault()}
+              @keydown=${this._handleContextMenuKeyDown}
             >
               <button
-                class="context-menu-item"
+                type="button"
+                role="menuitem"
+                tabindex="-1"
+                data-context-menu-item="true"
+                data-context-menu-level="root"
+                class="fw-context-menu-item gap-2"
                 @click=${() => {
                   this._isStatsOpen = !this._isStatsOpen;
-                  this._contextMenuOpen = false;
+                  this._closeContextMenu();
                 }}
               >
                 <span class="opacity-70 shrink-0">${statsIcon(14)}</span>
@@ -509,12 +802,17 @@ export class FwPlayer extends LitElement {
               </button>
               ${this.devMode
                 ? html`
-                    <div class="context-menu-sep"></div>
+                    <div class="fw-context-menu-separator"></div>
                     <button
-                      class="context-menu-item"
+                      type="button"
+                      role="menuitem"
+                      tabindex="-1"
+                      data-context-menu-item="true"
+                      data-context-menu-level="root"
+                      class="fw-context-menu-item gap-2"
                       @click=${() => {
                         this._isDevPanelOpen = !this._isDevPanelOpen;
-                        this._contextMenuOpen = false;
+                        this._closeContextMenu();
                       }}
                     >
                       <span class="opacity-70 shrink-0">${settingsIcon(14)}</span>
@@ -522,22 +820,34 @@ export class FwPlayer extends LitElement {
                     </button>
                   `
                 : nothing}
-              <div class="context-menu-sep"></div>
+              <div class="fw-context-menu-separator"></div>
               <button
-                class="context-menu-item"
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked=${String(s.isPiPActive)}
+                tabindex="-1"
+                data-context-menu-item="true"
+                data-context-menu-level="root"
+                class="fw-context-menu-item gap-2"
                 @click=${() => {
                   this.pc.togglePiP();
-                  this._contextMenuOpen = false;
+                  this._closeContextMenu();
                 }}
               >
                 <span class="opacity-70 shrink-0">${pictureInPictureIcon(14)}</span>
                 <span>Picture-in-Picture</span>
               </button>
               <button
-                class="context-menu-item"
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked=${String(s.isLoopEnabled)}
+                tabindex="-1"
+                data-context-menu-item="true"
+                data-context-menu-level="root"
+                class="fw-context-menu-item gap-2"
                 @click=${() => {
                   this.pc.toggleLoop();
-                  this._contextMenuOpen = false;
+                  this._closeContextMenu();
                 }}
               >
                 <span class="opacity-70 shrink-0">${loopIcon(14)}</span>

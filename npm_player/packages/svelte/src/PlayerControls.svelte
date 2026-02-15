@@ -602,6 +602,11 @@
           onfocusout={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) isVolumeFocused = false;
           }}
+          onpointerup={(e) => {
+            if (hasAudio && e.target === e.currentTarget) {
+              handleMute();
+            }
+          }}
         >
           <button
             type="button"

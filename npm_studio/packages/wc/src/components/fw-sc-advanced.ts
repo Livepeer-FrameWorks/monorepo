@@ -1,7 +1,6 @@
 /**
  * <fw-sc-advanced> — Advanced/dev mode side panel.
- * Full port of AdvancedPanel.tsx from streamcrafter-react.
- * Tabs: Audio, Stats, Info, Compositor (when enabled).
+ * Port of AdvancedPanel.tsx from streamcrafter-react.
  */
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -10,18 +9,90 @@ import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
 import { xIcon } from "../icons/index.js";
 import type { IngestControllerHost } from "../controllers/ingest-controller-host.js";
-import type { RendererType, RendererStats } from "@livepeer-frameworks/streamcrafter-core";
+import {
+  createEncoderConfig,
+  getAudioConstraints,
+  getEncoderSettings,
+  type EncoderOverrides,
+  type RendererType,
+  type RendererStats,
+} from "@livepeer-frameworks/streamcrafter-core";
 
 type TabId = "audio" | "stats" | "info" | "compositor";
+
+export interface AudioProcessingSettings {
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+}
+
+interface SettingOption<T> {
+  value: T;
+  label: string;
+}
+
+const RESOLUTION_OPTIONS: SettingOption<string>[] = [
+  { value: "3840x2160", label: "3840x2160 (4K)" },
+  { value: "2560x1440", label: "2560x1440 (1440p)" },
+  { value: "1920x1080", label: "1920x1080 (1080p)" },
+  { value: "1280x720", label: "1280x720 (720p)" },
+  { value: "854x480", label: "854x480 (480p)" },
+  { value: "640x360", label: "640x360 (360p)" },
+];
+
+const VIDEO_BITRATE_OPTIONS: SettingOption<number>[] = [
+  { value: 50_000_000, label: "50 Mbps" },
+  { value: 35_000_000, label: "35 Mbps" },
+  { value: 25_000_000, label: "25 Mbps" },
+  { value: 15_000_000, label: "15 Mbps" },
+  { value: 10_000_000, label: "10 Mbps" },
+  { value: 8_000_000, label: "8 Mbps" },
+  { value: 6_000_000, label: "6 Mbps" },
+  { value: 4_000_000, label: "4 Mbps" },
+  { value: 2_500_000, label: "2.5 Mbps" },
+  { value: 2_000_000, label: "2 Mbps" },
+  { value: 1_500_000, label: "1.5 Mbps" },
+  { value: 1_000_000, label: "1 Mbps" },
+  { value: 500_000, label: "500 kbps" },
+];
+
+const FRAMERATE_OPTIONS: SettingOption<number>[] = [
+  { value: 120, label: "120 fps" },
+  { value: 60, label: "60 fps" },
+  { value: 30, label: "30 fps" },
+  { value: 24, label: "24 fps" },
+  { value: 15, label: "15 fps" },
+];
+
+const AUDIO_BITRATE_OPTIONS: SettingOption<number>[] = [
+  { value: 320_000, label: "320 kbps" },
+  { value: 256_000, label: "256 kbps" },
+  { value: 192_000, label: "192 kbps" },
+  { value: 128_000, label: "128 kbps" },
+  { value: 96_000, label: "96 kbps" },
+  { value: 64_000, label: "64 kbps" },
+];
 
 function formatBitrate(bps: number): string {
   if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
   return `${(bps / 1000).toFixed(0)} kbps`;
 }
 
+function hasAnyDefinedValue(object?: Record<string, unknown>): boolean {
+  if (!object) return false;
+  return Object.values(object).some((value) => value !== undefined);
+}
+
 @customElement("fw-sc-advanced")
 export class FwScAdvanced extends LitElement {
   @property({ attribute: false }) ic!: IngestControllerHost;
+  @property({ type: String, attribute: "whip-url" }) whipUrl = "";
+  @property({ attribute: false }) audioProcessing: AudioProcessingSettings = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  @property({ attribute: false }) encoderOverrides: EncoderOverrides = {};
   @property({ type: Boolean, attribute: "compositor-enabled" }) compositorEnabled = false;
   @property({ type: String, attribute: "compositor-renderer" })
   compositorRendererType: RendererType | null = null;
@@ -117,6 +188,7 @@ export class FwScAdvanced extends LitElement {
       .row {
         display: flex;
         justify-content: space-between;
+        align-items: center;
         padding: 8px 12px;
         border-top: 1px solid rgba(65, 72, 104, 0.2);
       }
@@ -191,12 +263,17 @@ export class FwScAdvanced extends LitElement {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 8px 12px;
+        padding: 10px 12px;
         border-top: 1px solid rgba(65, 72, 104, 0.2);
       }
       .processing-label {
         font-size: 12px;
-        color: #a9b1d6;
+        color: #c0caf5;
+      }
+      .processing-desc {
+        font-size: 10px;
+        color: #565f89;
+        margin-top: 2px;
       }
       .source-type {
         font-size: 10px;
@@ -204,10 +281,50 @@ export class FwScAdvanced extends LitElement {
         padding: 2px 6px;
         text-transform: uppercase;
       }
+      .select {
+        background: rgba(65, 72, 104, 0.3);
+        border: 1px solid rgba(65, 72, 104, 0.5);
+        border-radius: 4px;
+        color: #c0caf5;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-family: inherit;
+        min-width: 100px;
+      }
+      .select--overridden {
+        background: rgba(187, 154, 247, 0.15);
+        border-color: rgba(187, 154, 247, 0.4);
+        color: #bb9af7;
+      }
+      .mini-button {
+        margin-top: 8px;
+        font-size: 10px;
+        color: #565f89;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+      }
+      .info-copy {
+        font-size: 10px;
+        color: #565f89;
+        line-height: 1.5;
+      }
+      .modified-badge {
+        font-size: 8px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #e0af68;
+        background: rgba(224, 175, 104, 0.2);
+        padding: 2px 4px;
+      }
     `,
   ];
 
   protected render() {
+    if (!this.ic) return nothing;
+
     return html`
       <div class="panel">
         <div class="header">
@@ -273,8 +390,6 @@ export class FwScAdvanced extends LitElement {
     `;
   }
 
-  // ---- Audio Tab ----
-
   private _renderAudio() {
     const s = this.ic.s;
     const masterVolume = this.ic.getMasterVolume();
@@ -282,8 +397,31 @@ export class FwScAdvanced extends LitElement {
     const levelColor = audioLevel > 0.9 ? "#f7768e" : audioLevel > 0.7 ? "#e0af68" : "#9ece6a";
     const volColor = masterVolume > 1 ? "#e0af68" : masterVolume === 1 ? "#9ece6a" : "#c0caf5";
 
+    const profileDefaults = getAudioConstraints(s.qualityProfile);
+    const processing = {
+      echoCancellation: this.audioProcessing.echoCancellation,
+      noiseSuppression: this.audioProcessing.noiseSuppression,
+      autoGainControl: this.audioProcessing.autoGainControl,
+    };
+    const toggles = [
+      {
+        key: "echoCancellation" as const,
+        label: "Echo Cancellation",
+        description: "Reduce echo from speakers",
+      },
+      {
+        key: "noiseSuppression" as const,
+        label: "Noise Suppression",
+        description: "Filter background noise",
+      },
+      {
+        key: "autoGainControl" as const,
+        label: "Auto Gain Control",
+        description: "Normalize audio levels",
+      },
+    ];
+
     return html`
-      <!-- Master Volume -->
       <div class="section">
         <div class="section-header">Master Volume</div>
         <div style="display:flex;align-items:center;gap:12px">
@@ -291,7 +429,8 @@ export class FwScAdvanced extends LitElement {
             .value=${masterVolume}
             .min=${0}
             .max=${2}
-            @fw-sc-volume-change=${(e: CustomEvent) => this.ic.setMasterVolume(e.detail.value)}
+            @fw-sc-volume-change=${(e: CustomEvent<{ value: number }>) =>
+              this.ic.setMasterVolume(e.detail.value)}
           ></fw-sc-volume>
           <span style="font-size:14px;min-width:48px;text-align:right;color:${volColor}">
             ${Math.round(masterVolume * 100)}%
@@ -304,7 +443,6 @@ export class FwScAdvanced extends LitElement {
           : nothing}
       </div>
 
-      <!-- Audio Level -->
       <div class="section">
         <div class="section-header">Output Level</div>
         <div class="level-bar">
@@ -313,7 +451,6 @@ export class FwScAdvanced extends LitElement {
         <div class="level-labels"><span>-60dB</span><span>0dB</span></div>
       </div>
 
-      <!-- Audio Mixing Status -->
       <div class="section">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span class="section-header" style="margin-bottom:0">Audio Mixing</span>
@@ -322,36 +459,48 @@ export class FwScAdvanced extends LitElement {
         <div style="font-size:10px;color:#565f89;margin-top:4px">Compressor + Limiter active</div>
       </div>
 
-      <!-- Audio Processing -->
       <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
         <div class="section-dark">
           <span class="section-header" style="margin-bottom:0">Processing</span>
           <span style="font-size:9px;color:#565f89"> profile: ${s.qualityProfile} </span>
         </div>
-        ${this._renderToggle("Echo Cancellation", true)}
-        ${this._renderToggle("Noise Suppression", true)}
-        ${this._renderToggle("Auto Gain Control", true)}
+        ${toggles.map(({ key, label, description }) => {
+          const isModified = processing[key] !== profileDefaults[key];
+          return html`
+            <div class="processing-row">
+              <div style="display:flex;flex-direction:column;gap:0;min-width:0;flex:1">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="processing-label">${label}</span>
+                  ${isModified ? html`<span class="modified-badge">Modified</span>` : nothing}
+                </div>
+                <div class="processing-desc">${description}</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked=${processing[key]}
+                class="toggle ${processing[key] ? "toggle--on" : "toggle--off"}"
+                @click=${() =>
+                  this._emitAudioProcessingChange({
+                    [key]: !processing[key],
+                  })}
+              >
+                <div class="toggle-knob"></div>
+              </button>
+            </div>
+          `;
+        })}
+        <div class="row">
+          <span class="row-label">Sample Rate</span>
+          <span class="row-value">${profileDefaults.sampleRate} Hz</span>
+        </div>
+        <div class="row">
+          <span class="row-label">Channels</span>
+          <span class="row-value">${profileDefaults.channelCount}</span>
+        </div>
       </div>
     `;
   }
-
-  private _renderToggle(label: string, checked: boolean) {
-    return html`
-      <div class="processing-row">
-        <span class="processing-label">${label}</span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked=${checked}
-          class="toggle ${checked ? "toggle--on" : "toggle--off"}"
-        >
-          <div class="toggle-knob"></div>
-        </button>
-      </div>
-    `;
-  }
-
-  // ---- Stats Tab ----
 
   private _renderStats() {
     const s = this.ic.s;
@@ -441,107 +590,265 @@ export class FwScAdvanced extends LitElement {
             </div>
           `
         : nothing}
-      ${s.encoderStats
-        ? html`
-            <div style="border-top:1px solid rgba(65,72,104,0.3)">
-              <div class="section-dark">
-                <span class="section-header" style="margin-bottom:0">Encoder</span>
-              </div>
-              <div class="row">
-                <span class="row-label">Video frames</span>
-                <span class="row-value">${s.encoderStats.video.framesEncoded}</span>
-              </div>
-              <div class="row">
-                <span class="row-label">Video pending</span>
-                <span
-                  class="row-value"
-                  style="color:${s.encoderStats.video.framesPending > 5 ? "#e0af68" : "#c0caf5"}"
-                >
-                  ${s.encoderStats.video.framesPending}
-                </span>
-              </div>
-              <div class="row">
-                <span class="row-label">Audio samples</span>
-                <span class="row-value">${s.encoderStats.audio.samplesEncoded}</span>
-              </div>
-            </div>
-          `
-        : nothing}
     `;
   }
 
-  // ---- Info Tab ----
-
   private _renderInfo() {
     const s = this.ic.s;
+    const profileEncoderSettings = getEncoderSettings(s.qualityProfile);
+    const effectiveEncoderConfig = createEncoderConfig(
+      s.qualityProfile === "auto" ? "broadcast" : s.qualityProfile,
+      this.encoderOverrides
+    );
+    const videoTrackSettings = s.mediaStream?.getVideoTracks?.()[0]?.getSettings?.();
+    const hasEncoderOverrides =
+      hasAnyDefinedValue(this.encoderOverrides.video as Record<string, unknown>) ||
+      hasAnyDefinedValue(this.encoderOverrides.audio as Record<string, unknown>);
+    const currentResolution = `${this.encoderOverrides.video?.width ?? profileEncoderSettings.video.width}x${this.encoderOverrides.video?.height ?? profileEncoderSettings.video.height}`;
+
     return html`
       <div class="section">
         <div class="section-header" style="margin-bottom:4px">Quality Profile</div>
         <div style="font-size:14px;color:#c0caf5;text-transform:capitalize">
           ${s.qualityProfile}
         </div>
+        <div style="font-size:10px;color:#565f89;margin-top:4px">
+          ${profileEncoderSettings.video.width}x${profileEncoderSettings.video.height} @
+          ${formatBitrate(profileEncoderSettings.video.bitrate)}
+        </div>
       </div>
 
       <div class="section">
-        <div class="section-header" style="margin-bottom:4px">Configuration</div>
-        ${this._simpleRow("WebCodecs", s.isWebCodecsAvailable ? "Available" : "Unavailable")}
-        ${this._simpleRow(
-          "WebCodecs Active",
-          s.isWebCodecsActive ? "Yes" : s.useWebCodecs ? "Pending" : "No"
-        )}
-        ${this._simpleRow("Sources", String(s.sources.length))}
+        <div class="section-header" style="margin-bottom:4px">WHIP Endpoint</div>
+        <div style="font-size:12px;color:#7aa2f7;word-break:break-all">
+          ${this.whipUrl || "Not configured"}
+        </div>
+        ${this.whipUrl
+          ? html`
+              <button type="button" class="mini-button" @click=${() => this._copyWhipUrl()}>
+                Copy URL
+              </button>
+            `
+          : nothing}
       </div>
 
-      ${s.sources.length > 0
-        ? html`
-            <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
-              <div class="section-dark">
-                <span class="section-header" style="margin-bottom:0">
-                  Sources (${s.sources.length})
+      <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+        <div class="section-dark">
+          <span class="section-header" style="margin-bottom:0">Encoder</span>
+          ${hasEncoderOverrides
+            ? html`
+                <button
+                  type="button"
+                  style="font-size:10px;color:#bb9af7;background:transparent;border:none;cursor:pointer;padding:2px 6px"
+                  @click=${() => this._emitEncoderOverridesChange({})}
+                >
+                  Reset to Profile
+                </button>
+              `
+            : nothing}
+        </div>
+        <div class="row">
+          <span class="row-label">Video Codec</span>
+          <span class="row-value">${effectiveEncoderConfig.video.codec}</span>
+        </div>
+        <div class="row">
+          <span class="row-label">Resolution</span>
+          <select
+            class=${classMap({
+              select: true,
+              "select--overridden":
+                this.encoderOverrides.video?.width !== undefined ||
+                this.encoderOverrides.video?.height !== undefined,
+            })}
+            .value=${currentResolution}
+            ?disabled=${s.state === "streaming"}
+            @change=${(e: Event) => {
+              const value = (e.target as HTMLSelectElement).value;
+              const [w, h] = value.split("x").map((part) => Number(part));
+              const isProfileDefault =
+                w === profileEncoderSettings.video.width &&
+                h === profileEncoderSettings.video.height;
+              const next: EncoderOverrides = {
+                ...this.encoderOverrides,
+                video: {
+                  ...this.encoderOverrides.video,
+                  width: isProfileDefault ? undefined : w,
+                  height: isProfileDefault ? undefined : h,
+                },
+              };
+              this._emitEncoderOverridesChange(next);
+            }}
+          >
+            ${RESOLUTION_OPTIONS.map(
+              (option) => html`<option .value=${option.value}>${option.label}</option>`
+            )}
+          </select>
+        </div>
+        ${videoTrackSettings?.width && videoTrackSettings?.height
+          ? html`
+              <div class="row">
+                <span class="row-label">Actual Resolution</span>
+                <span class="row-value">
+                  ${Math.round(videoTrackSettings.width)}x${Math.round(videoTrackSettings.height)}
                 </span>
               </div>
-              ${s.sources.map(
-                (source, idx) => html`
-                  <div
-                    style="padding:8px 12px;${idx > 0
-                      ? "border-top:1px solid rgba(65,72,104,0.2)"
-                      : ""}"
-                  >
-                    <div style="display:flex;align-items:center;gap:8px">
-                      <span
-                        class="source-type"
-                        style="background:${source.type === "camera"
-                          ? "rgba(122,162,247,0.2)"
-                          : source.type === "screen"
-                            ? "rgba(158,206,106,0.2)"
-                            : "rgba(224,175,104,0.2)"};color:${source.type === "camera"
-                          ? "#7aa2f7"
-                          : source.type === "screen"
-                            ? "#9ece6a"
-                            : "#e0af68"}"
-                      >
-                        ${source.type}
-                      </span>
-                      <span
-                        style="color:#c0caf5;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                      >
-                        ${source.label}
-                      </span>
-                    </div>
-                    <div style="display:flex;gap:12px;margin-top:4px;font-size:10px;color:#565f89">
-                      <span>Vol: ${Math.round(source.volume * 100)}%</span>
-                      ${source.muted ? html`<span style="color:#f7768e">Muted</span>` : nothing}
-                    </div>
+            `
+          : nothing}
+        <div class="row">
+          <span class="row-label">Framerate</span>
+          <select
+            class=${classMap({
+              select: true,
+              "select--overridden": this.encoderOverrides.video?.framerate !== undefined,
+            })}
+            .value=${String(
+              this.encoderOverrides.video?.framerate ?? profileEncoderSettings.video.framerate
+            )}
+            ?disabled=${s.state === "streaming"}
+            @change=${(e: Event) => {
+              const value = Number((e.target as HTMLSelectElement).value);
+              const isProfileDefault = value === profileEncoderSettings.video.framerate;
+              const next: EncoderOverrides = {
+                ...this.encoderOverrides,
+                video: {
+                  ...this.encoderOverrides.video,
+                  framerate: isProfileDefault ? undefined : value,
+                },
+              };
+              this._emitEncoderOverridesChange(next);
+            }}
+          >
+            ${FRAMERATE_OPTIONS.map(
+              (option) => html`<option .value=${String(option.value)}>${option.label}</option>`
+            )}
+          </select>
+        </div>
+        ${videoTrackSettings?.frameRate
+          ? html`
+              <div class="row">
+                <span class="row-label">Actual Framerate</span>
+                <span class="row-value">${Math.round(videoTrackSettings.frameRate)} fps</span>
+              </div>
+            `
+          : nothing}
+        <div class="row">
+          <span class="row-label">Video Bitrate</span>
+          <select
+            class=${classMap({
+              select: true,
+              "select--overridden": this.encoderOverrides.video?.bitrate !== undefined,
+            })}
+            .value=${String(
+              this.encoderOverrides.video?.bitrate ?? profileEncoderSettings.video.bitrate
+            )}
+            ?disabled=${s.state === "streaming"}
+            @change=${(e: Event) => {
+              const value = Number((e.target as HTMLSelectElement).value);
+              const isProfileDefault = value === profileEncoderSettings.video.bitrate;
+              const next: EncoderOverrides = {
+                ...this.encoderOverrides,
+                video: {
+                  ...this.encoderOverrides.video,
+                  bitrate: isProfileDefault ? undefined : value,
+                },
+              };
+              this._emitEncoderOverridesChange(next);
+            }}
+          >
+            ${VIDEO_BITRATE_OPTIONS.map(
+              (option) => html`<option .value=${String(option.value)}>${option.label}</option>`
+            )}
+          </select>
+        </div>
+        <div class="row">
+          <span class="row-label">Audio Codec</span>
+          <span class="row-value">${effectiveEncoderConfig.audio.codec}</span>
+        </div>
+        <div class="row">
+          <span class="row-label">Audio Bitrate</span>
+          <select
+            class=${classMap({
+              select: true,
+              "select--overridden": this.encoderOverrides.audio?.bitrate !== undefined,
+            })}
+            .value=${String(
+              this.encoderOverrides.audio?.bitrate ?? profileEncoderSettings.audio.bitrate
+            )}
+            ?disabled=${s.state === "streaming"}
+            @change=${(e: Event) => {
+              const value = Number((e.target as HTMLSelectElement).value);
+              const isProfileDefault = value === profileEncoderSettings.audio.bitrate;
+              const next: EncoderOverrides = {
+                ...this.encoderOverrides,
+                audio: {
+                  ...this.encoderOverrides.audio,
+                  bitrate: isProfileDefault ? undefined : value,
+                },
+              };
+              this._emitEncoderOverridesChange(next);
+            }}
+          >
+            ${AUDIO_BITRATE_OPTIONS.map(
+              (option) => html`<option .value=${String(option.value)}>${option.label}</option>`
+            )}
+          </select>
+        </div>
+        ${s.state === "streaming"
+          ? html`
+              <div style="padding:8px 12px;font-size:10px;color:#e0af68">
+                Settings locked while streaming
+              </div>
+            `
+          : nothing}
+      </div>
+
+      <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+        <div class="section-dark">
+          <span class="section-header" style="margin-bottom:0">Sources (${s.sources.length})</span>
+        </div>
+        ${s.sources.length > 0
+          ? s.sources.map(
+              (source, index) => html`
+                <div
+                  style="padding:8px 12px;${index > 0
+                    ? "border-top:1px solid rgba(65,72,104,0.2)"
+                    : ""}"
+                >
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span
+                      class="source-type"
+                      style="background:${source.type === "camera"
+                        ? "rgba(122,162,247,0.2)"
+                        : source.type === "screen"
+                          ? "rgba(158,206,106,0.2)"
+                          : "rgba(224,175,104,0.2)"};color:${source.type === "camera"
+                        ? "#7aa2f7"
+                        : source.type === "screen"
+                          ? "#9ece6a"
+                          : "#e0af68"}"
+                    >
+                      ${source.type}
+                    </span>
+                    <span
+                      style="color:#c0caf5;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                    >
+                      ${source.label}
+                    </span>
                   </div>
-                `
-              )}
-            </div>
-          `
-        : nothing}
+                  <div style="display:flex;gap:12px;margin-top:4px;font-size:10px;color:#565f89">
+                    <span>Vol: ${Math.round(source.volume * 100)}%</span>
+                    ${source.muted ? html`<span style="color:#f7768e">Muted</span>` : nothing}
+                    ${!source.active ? html`<span style="color:#e0af68">Inactive</span>` : nothing}
+                  </div>
+                </div>
+              `
+            )
+          : html`<div style="padding:16px 12px;color:#565f89;text-align:center">
+              No sources added
+            </div>`}
+      </div>
     `;
   }
-
-  // ---- Compositor Tab ----
 
   private _renderCompositor() {
     const s = this.ic.s;
@@ -561,6 +868,9 @@ export class FwScAdvanced extends LitElement {
       <div class="section">
         <div class="section-header">Renderer</div>
         <div style="font-size:14px;font-weight:600;color:${rendererColor}">${rendererLabel}</div>
+        <div style="font-size:10px;color:#565f89;margin-top:4px">
+          Set renderer in config before starting
+        </div>
       </div>
 
       ${stats
@@ -608,7 +918,6 @@ export class FwScAdvanced extends LitElement {
         </div>
       </div>
 
-      <!-- Encoder -->
       <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
         <div class="section-dark">
           <span class="section-header" style="margin-bottom:0">Encoder</span>
@@ -632,7 +941,10 @@ export class FwScAdvanced extends LitElement {
           </span>
         </div>
         <div class="processing-row">
-          <span class="processing-label">Use WebCodecs</span>
+          <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
+            <span class="processing-label">Use WebCodecs</span>
+            <span class="processing-desc">Enable advanced WebCodecs encoder</span>
+          </div>
           <button
             type="button"
             role="switch"
@@ -649,14 +961,95 @@ export class FwScAdvanced extends LitElement {
               Not available - RTCRtpScriptTransform unsupported
             </div>`
           : nothing}
+        ${s.isWebCodecsAvailable &&
+        s.state === "streaming" &&
+        s.useWebCodecs !== s.isWebCodecsActive
+          ? html`<div style="padding:8px 12px;font-size:10px;color:#e0af68">
+              Change takes effect on next stream
+            </div>`
+          : nothing}
+      </div>
+
+      ${s.isWebCodecsActive && s.encoderStats
+        ? html`
+            <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+              <div class="section-dark">
+                <span class="section-header" style="margin-bottom:0">Encoder Stats</span>
+              </div>
+              <div class="row">
+                <span class="row-label">Video Frames</span>
+                <span class="row-value">${s.encoderStats.video.framesEncoded}</span>
+              </div>
+              <div class="row">
+                <span class="row-label">Video Pending</span>
+                <span
+                  class="row-value"
+                  style="color:${s.encoderStats.video.framesPending > 5 ? "#e0af68" : "#c0caf5"}"
+                >
+                  ${s.encoderStats.video.framesPending}
+                </span>
+              </div>
+              <div class="row">
+                <span class="row-label">Video Bytes</span>
+                <span class="row-value">
+                  ${(s.encoderStats.video.bytesEncoded / 1024 / 1024).toFixed(2)} MB
+                </span>
+              </div>
+              <div class="row">
+                <span class="row-label">Audio Samples</span>
+                <span class="row-value">${s.encoderStats.audio.samplesEncoded}</span>
+              </div>
+              <div class="row">
+                <span class="row-label">Audio Bytes</span>
+                <span class="row-value">
+                  ${(s.encoderStats.audio.bytesEncoded / 1024).toFixed(1)} KB
+                </span>
+              </div>
+            </div>
+          `
+        : nothing}
+
+      <div class="section">
+        <div class="info-copy">
+          ${s.useWebCodecs && s.isWebCodecsAvailable
+            ? "WebCodecs encoder via RTCRtpScriptTransform provides lower latency and better encoding control."
+            : "Browser's built-in MediaStream encoder. Enable WebCodecs toggle for advanced encoding."}
+        </div>
       </div>
     `;
   }
 
-  private _simpleRow(label: string, value: string) {
-    return html`<div class="row">
-      <span class="row-label">${label}</span><span class="row-value">${value}</span>
-    </div>`;
+  private _copyWhipUrl() {
+    if (!this.whipUrl) return;
+    navigator.clipboard.writeText(this.whipUrl).catch(console.error);
+  }
+
+  private _emitAudioProcessingChange(settings: Partial<AudioProcessingSettings>) {
+    this.dispatchEvent(
+      new CustomEvent("fw-audio-processing-change", {
+        detail: { settings },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  private _emitEncoderOverridesChange(overrides: EncoderOverrides) {
+    const normalized: EncoderOverrides = { ...overrides };
+    if (!hasAnyDefinedValue(normalized.video as Record<string, unknown>)) {
+      delete normalized.video;
+    }
+    if (!hasAnyDefinedValue(normalized.audio as Record<string, unknown>)) {
+      delete normalized.audio;
+    }
+
+    this.dispatchEvent(
+      new CustomEvent("fw-encoder-overrides-change", {
+        detail: { overrides: normalized },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 }
 

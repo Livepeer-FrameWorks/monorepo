@@ -27,4 +27,24 @@ describe("FwPlayer", () => {
     expect(typeof proto.selectQuality).toBe("function");
     expect(typeof proto.destroy).toBe("function");
   });
+
+  it("keeps custom controls when only legacy controls prop is set", () => {
+    const player = new FwPlayer() as any;
+    player.controls = true;
+    player.stockControls = false;
+    player.nativeControls = false;
+    player.pc.s.currentPlayerInfo = null;
+
+    expect(player._useStockControls).toBe(false);
+  });
+
+  it("uses stock controls when stock-controls is enabled", () => {
+    const player = new FwPlayer() as any;
+    player.controls = false;
+    player.stockControls = true;
+    player.nativeControls = false;
+    player.pc.s.currentPlayerInfo = null;
+
+    expect(player._useStockControls).toBe(true);
+  });
 });

@@ -106,6 +106,8 @@ export interface PlayerControllerStore extends Readable<PlayerControllerState> {
   seek: (time: number) => void;
   /** Seek by delta */
   seekBy: (delta: number) => void;
+  /** Jump to live edge (for live streams) */
+  jumpToLive: () => void;
   /** Set volume */
   setVolume: (volume: number) => void;
   /** Toggle mute */
@@ -485,6 +487,10 @@ export function createPlayerControllerStore(
     controller?.seekBy(delta);
   }
 
+  function jumpToLive(): void {
+    controller?.jumpToLive();
+  }
+
   function setVolume(volume: number): void {
     controller?.setVolume(volume);
   }
@@ -579,6 +585,7 @@ export function createPlayerControllerStore(
     togglePlay,
     seek,
     seekBy,
+    jumpToLive,
     setVolume,
     toggleMute,
     toggleLoop,

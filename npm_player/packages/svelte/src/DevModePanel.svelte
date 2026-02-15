@@ -467,7 +467,8 @@
                       {#if combo.compatible && combo.scoreBreakdown}
                         <div class="fw-dev-tooltip-score">Score: {combo.score.toFixed(2)}</div>
                         <div class="fw-dev-tooltip-row">
-                          Tracks: <span class="fw-dev-tooltip-value"
+                          Tracks [{combo.scoreBreakdown.trackTypes.join(", ")}]:
+                          <span class="fw-dev-tooltip-value"
                             >{combo.scoreBreakdown.trackScore.toFixed(2)}</span
                           >
                           <span class="fw-dev-tooltip-weight"
@@ -490,6 +491,43 @@
                             >x{combo.scoreBreakdown.weights.source}</span
                           >
                         </div>
+                        {#if combo.scoreBreakdown.reliabilityScore !== undefined}
+                          <div class="fw-dev-tooltip-row">
+                            Reliability: <span class="fw-dev-tooltip-value"
+                              >{combo.scoreBreakdown.reliabilityScore.toFixed(2)}</span
+                            >
+                            <span class="fw-dev-tooltip-weight"
+                              >x{combo.scoreBreakdown.weights.reliability ?? 0}</span
+                            >
+                          </div>
+                        {/if}
+                        {#if combo.scoreBreakdown.modeBonus !== undefined && combo.scoreBreakdown.modeBonus !== 0}
+                          <div class="fw-dev-tooltip-row">
+                            Mode ({playbackMode}):
+                            <span class="fw-dev-tooltip-bonus"
+                              >+{combo.scoreBreakdown.modeBonus.toFixed(2)}</span
+                            >
+                            <span class="fw-dev-tooltip-weight"
+                              >x{combo.scoreBreakdown.weights.mode ?? 0}</span
+                            >
+                          </div>
+                        {/if}
+                        {#if combo.scoreBreakdown.routingBonus !== undefined && combo.scoreBreakdown.routingBonus !== 0}
+                          <div class="fw-dev-tooltip-row">
+                            Routing: <span
+                              class={combo.scoreBreakdown.routingBonus > 0
+                                ? "fw-dev-tooltip-bonus"
+                                : "fw-dev-tooltip-penalty"}
+                            >
+                              {combo.scoreBreakdown.routingBonus > 0
+                                ? "+"
+                                : ""}{combo.scoreBreakdown.routingBonus.toFixed(2)}
+                            </span>
+                            <span class="fw-dev-tooltip-weight"
+                              >x{combo.scoreBreakdown.weights.routing ?? 0}</span
+                            >
+                          </div>
+                        {/if}
                       {:else}
                         <div class="fw-dev-tooltip-error">
                           {combo.incompatibleReason || "Incompatible"}

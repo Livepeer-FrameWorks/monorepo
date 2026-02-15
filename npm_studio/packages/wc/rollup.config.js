@@ -2,6 +2,7 @@ import resolve from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
 import typescript from "@rollup/plugin-typescript";
 import terser from "@rollup/plugin-terser";
+import copy from "rollup-plugin-copy";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
@@ -79,7 +80,7 @@ export default [
       file: "dist/fw-streamcrafter.iife.js",
       format: "iife",
       name: "FwStreamCrafter",
-      sourcemap: !isDevelopment,
+      sourcemap: false,
       inlineDynamicImports: true,
     },
     plugins: [
@@ -97,6 +98,23 @@ export default [
         outDir: "dist",
       }),
       !isDevelopment && terser(),
+      copy({
+        targets: [
+          {
+            src: "../core/dist/workers/compositor.worker.js",
+            dest: "dist/workers",
+          },
+          {
+            src: "../core/dist/workers/encoder.worker.js",
+            dest: "dist/workers",
+          },
+          {
+            src: "../core/dist/workers/rtcTransform.worker.js",
+            dest: "dist/workers",
+          },
+        ],
+        hook: "writeBundle",
+      }),
     ],
   },
 ];

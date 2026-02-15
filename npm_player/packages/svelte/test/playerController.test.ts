@@ -8,6 +8,10 @@ import {
   createDerivedDuration,
   createDerivedError,
 } from "../src/stores/playerController";
+import {
+  WRAPPER_PARITY_EVENT_NAMES,
+  WRAPPER_PARITY_INITIAL_STATE,
+} from "../../test-contract/player-wrapper-contract";
 
 // ---------------------------------------------------------------------------
 // Event-capturing mock for PlayerController
@@ -155,14 +159,10 @@ describe("createPlayerControllerStore", () => {
     });
 
     const state = get(store);
-    expect(state.state).toBe("booting");
-    expect(state.isPlaying).toBe(false);
-    expect(state.isPaused).toBe(true);
-    expect(state.isMuted).toBe(true);
-    expect(state.volume).toBe(1);
-    expect(state.error).toBeNull();
-    expect(state.videoElement).toBeNull();
-    expect(state.shouldShowIdleScreen).toBe(true);
+    for (const [key, expected] of Object.entries(WRAPPER_PARITY_INITIAL_STATE)) {
+      expect(state[key as keyof typeof state]).toEqual(expected);
+    }
+    expect(state.duration).toBeNaN();
   });
 
   it("attaches controller to container", async () => {
@@ -186,24 +186,9 @@ describe("createPlayerControllerStore", () => {
     const store = await createAttachedStore();
 
     const eventNames = mockOn.mock.calls.map((call: unknown[]) => call[0]);
-    expect(eventNames).toContain("stateChange");
-    expect(eventNames).toContain("streamStateChange");
-    expect(eventNames).toContain("timeUpdate");
-    expect(eventNames).toContain("error");
-    expect(eventNames).toContain("errorCleared");
-    expect(eventNames).toContain("ready");
-    expect(eventNames).toContain("playerSelected");
-    expect(eventNames).toContain("volumeChange");
-    expect(eventNames).toContain("loopChange");
-    expect(eventNames).toContain("fullscreenChange");
-    expect(eventNames).toContain("pipChange");
-    expect(eventNames).toContain("holdSpeedStart");
-    expect(eventNames).toContain("holdSpeedEnd");
-    expect(eventNames).toContain("hoverStart");
-    expect(eventNames).toContain("hoverEnd");
-    expect(eventNames).toContain("captionsChange");
-    expect(eventNames).toContain("protocolSwapped");
-    expect(eventNames).toContain("playbackFailed");
+    for (const eventName of WRAPPER_PARITY_EVENT_NAMES) {
+      expect(eventNames).toContain(eventName);
+    }
   });
 
   it("destroy cleans up controller and resets state", async () => {
@@ -229,6 +214,9 @@ describe("createPlayerControllerStore", () => {
   it("forwards action methods to controller", async () => {
     const store = await createAttachedStore();
 
+    await store.play();
+    expect(mockPlay).toHaveBeenCalled();
+
     store.pause();
     expect(mockPause).toHaveBeenCalled();
 
@@ -241,6 +229,9 @@ describe("createPlayerControllerStore", () => {
     store.seekBy(10);
     expect(mockSeekBy).toHaveBeenCalledWith(10);
 
+    store.jumpToLive();
+    expect(mockJumpToLive).toHaveBeenCalled();
+
     store.setVolume(0.5);
     expect(mockSetVolume).toHaveBeenCalledWith(0.5);
 
@@ -249,6 +240,24 @@ describe("createPlayerControllerStore", () => {
 
     store.toggleLoop();
     expect(mockToggleLoop).toHaveBeenCalled();
+
+    await store.toggleFullscreen();
+    expect(mockToggleFullscreen).toHaveBeenCalled();
+
+    await store.togglePiP();
+    expect(mockTogglePictureInPicture).toHaveBeenCalled();
+
+    store.toggleSubtitles();
+    expect(mockToggleSubtitles).toHaveBeenCalled();
+
+    await store.retry();
+    expect(mockRetry).toHaveBeenCalled();
+
+    await store.reload();
+    expect(mockReload).toHaveBeenCalled();
+
+    await store.setDevModeOptions({ forcePlayer: "native" });
+    expect(mockSetDevModeOptions).toHaveBeenCalledWith({ forcePlayer: "native" });
 
     store.selectQuality("720p");
     expect(mockSelectQuality).toHaveBeenCalledWith("720p");

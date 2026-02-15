@@ -442,11 +442,20 @@ export const sharedStyles = css`
     .fw-context-menu-item {
       position: relative;
       display: flex;
+      width: 100%;
+      justify-content: flex-start;
+      gap: 0.5rem;
       cursor: pointer;
       user-select: none;
       align-items: center;
       padding: 0.5rem 0.75rem;
       font-size: 0.875rem;
+      text-align: left;
+      font: inherit;
+      border: none;
+      background: transparent;
+      appearance: none;
+      -webkit-appearance: none;
       outline: none;
       color: hsl(var(--tn-fg));
       transition:
@@ -485,11 +494,20 @@ export const sharedStyles = css`
     .fw-context-menu-checkbox {
       position: relative;
       display: flex;
+      width: 100%;
+      justify-content: flex-start;
+      gap: 0.5rem;
       cursor: pointer;
       user-select: none;
       align-items: center;
       padding: 0.5rem 0.5rem 0.5rem 2rem;
       font-size: 0.875rem;
+      text-align: left;
+      font: inherit;
+      border: none;
+      background: transparent;
+      appearance: none;
+      -webkit-appearance: none;
       outline: none;
       color: hsl(var(--tn-fg));
       transition:

@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/player-wc",
-  "version": "0.1.2",
+  "version": "0.1.8",
   "type": "module",
   "description": "Lit Web Components for FrameWorks streaming player — <fw-player> custom element with full UI",
   "main": "dist/cjs/index.js",
@@ -28,7 +28,7 @@
     }
   },
   "scripts": {
-    "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",
+    "build": "rm -rf dist && pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",
     "build:watch": "NODE_ENV=development rollup -c --watch",
     "build:css": "node scripts/generate-shared-styles.js",
     "build:types": "tsc --noEmit false --emitDeclarationOnly --outDir dist/types",

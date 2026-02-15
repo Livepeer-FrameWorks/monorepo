@@ -21,12 +21,25 @@ import {
   eyeOffIcon,
 } from "../icons/index.js";
 import { IngestControllerHost } from "../controllers/ingest-controller-host.js";
-import type {
-  QualityProfile,
-  MediaSource,
-  IngestState,
-  ReconnectionState,
+import {
+  IngestClient,
+  type CompositorConfig,
+  getAudioConstraints,
+  type EncoderOverrides,
+  type IngestClientStatus,
+  type IngestState,
+  type IngestStateContextV2,
+  type LayoutConfig,
+  type MediaSource,
+  type QualityProfile,
+  type ReconnectionState,
 } from "@livepeer-frameworks/streamcrafter-core";
+
+interface AudioProcessingSettings {
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+}
 
 const QUALITY_PROFILES: { id: QualityProfile; label: string; description: string }[] = [
   { id: "professional", label: "Professional", description: "1080p @ 8 Mbps" },
@@ -68,6 +81,20 @@ function getStatusBadgeClass(state: IngestState, isReconnecting: boolean): strin
   return "fw-sc-badge fw-sc-badge--idle";
 }
 
+function getInitialAudioProcessing(profile: QualityProfile): AudioProcessingSettings {
+  const defaults = getAudioConstraints(profile);
+  return {
+    echoCancellation: defaults.echoCancellation,
+    noiseSuppression: defaults.noiseSuppression,
+    autoGainControl: defaults.autoGainControl,
+  };
+}
+
+const _iifeScriptSrc: string | undefined =
+  typeof document !== "undefined"
+    ? (document.currentScript?.getAttribute("src") ?? undefined)
+    : undefined;
+
 @customElement("fw-streamcrafter")
 export class FwStreamCrafter extends LitElement {
   @property({ type: String, attribute: "whip-url" }) whipUrl = "";
@@ -77,17 +104,49 @@ export class FwStreamCrafter extends LitElement {
     "broadcast";
   @property({ type: Boolean, attribute: "auto-start-camera" }) autoStartCamera = false;
   @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
+  @property({ type: Boolean, attribute: "show-settings" }) showSettings = false;
   @property({ type: Boolean }) debug = false;
   @property({ type: Boolean, attribute: "enable-compositor" }) enableCompositor = false;
+  @property({ type: String, attribute: "class-name" }) className = "";
+  @property({ attribute: false }) onStateChange?:
+    | ((state: IngestState, context?: IngestStateContextV2) => void)
+    | undefined;
+  @property({ attribute: false }) onError?: ((error: string) => void) | undefined;
+  @property({ attribute: false }) compositorConfig: Partial<CompositorConfig> = {};
+  @property({ type: String, attribute: "compositor-worker-url" }) compositorWorkerUrl = "";
+  @property({ type: String, attribute: "encoder-worker-url" }) encoderWorkerUrl = "";
+  @property({ type: String, attribute: "rtc-transform-worker-url" }) rtcTransformWorkerUrl = "";
 
   @state() private _showSettings = false;
   @state() private _showSources = true;
   @state() private _isAdvancedPanelOpen = false;
   @state() private _contextMenu: { x: number; y: number } | null = null;
+  @state() private _resolvedWhipUrl = "";
+  @state() private _endpointStatus: IngestClientStatus = "idle";
+  @state() private _endpointError: string | null = null;
+  @state() private _audioProcessing: AudioProcessingSettings;
+  @state() private _encoderOverrides: EncoderOverrides = {};
 
   @query(".fw-sc-preview video") private _videoEl!: HTMLVideoElement | null;
+  @query(".fw-sc-settings-popup") private _settingsPopupEl!: HTMLElement | null;
+  @query(".fw-sc-action-secondary--settings") private _settingsButtonEl!: HTMLElement | null;
+  @query(".fw-sc-context-menu") private _contextMenuEl!: HTMLElement | null;
 
   pc: IngestControllerHost;
+  private _ingestClient: IngestClient | null = null;
+  private _lastInitKey = "";
+  private _dismissListenersAttached = false;
+  private _showSettingsInitialized = false;
+  private _compositorEnabling: Promise<void> | null = null;
+  private _handleStateChangeEvent = (event: Event) => {
+    const detail = (event as CustomEvent<{ state: IngestState; context?: IngestStateContextV2 }>)
+      .detail;
+    this.onStateChange?.(detail.state, detail.context);
+  };
+  private _handleErrorEvent = (event: Event) => {
+    const detail = (event as CustomEvent<{ error: string }>).detail;
+    this.onError?.(detail.error);
+  };
 
   static styles = [
     sharedStyles,
@@ -112,39 +171,229 @@ export class FwStreamCrafter extends LitElement {
   constructor() {
     super();
     this.pc = new IngestControllerHost(this, this.initialProfile);
+    this._audioProcessing = getInitialAudioProcessing(this.initialProfile);
   }
 
   connectedCallback() {
     super.connectedCallback();
-    this._initController();
+    this.addEventListener("fw-sc-state-change", this._handleStateChangeEvent);
+    this.addEventListener("fw-sc-error", this._handleErrorEvent);
+    if (!this._showSettingsInitialized) {
+      this._showSettings = this.showSettings;
+      this._showSettingsInitialized = true;
+    }
+    this._refreshResolvedWhipUrl();
+  }
+
+  disconnectedCallback() {
+    this.removeEventListener("fw-sc-state-change", this._handleStateChangeEvent);
+    this.removeEventListener("fw-sc-error", this._handleErrorEvent);
+    this._teardownDismissListeners();
+    this._destroyIngestClient();
+    super.disconnectedCallback();
   }
 
   willUpdate(changed: Map<string, unknown>) {
-    if (changed.has("whipUrl") || changed.has("initialProfile") || changed.has("debug")) {
+    if (changed.has("whipUrl") || changed.has("gatewayUrl") || changed.has("streamKey")) {
+      this._refreshResolvedWhipUrl();
+    }
+
+    if (
+      changed.has("_resolvedWhipUrl") ||
+      changed.has("initialProfile") ||
+      changed.has("debug") ||
+      changed.has("compositorWorkerUrl") ||
+      changed.has("encoderWorkerUrl") ||
+      changed.has("rtcTransformWorkerUrl")
+    ) {
       this._initController();
+    }
+
+    if (changed.has("enableCompositor") || changed.has("compositorConfig")) {
+      this._syncCompositor();
+    }
+
+    if (changed.has("_showSettings") || changed.has("_contextMenu")) {
+      this._syncDismissListeners();
     }
   }
 
-  updated(changed: Map<string, unknown>) {
-    if (changed.has("_showSources") || changed.has("_showSettings")) {
-      // no-op, reactive update handles UI
-    }
+  updated() {
     this._syncVideoPreview();
   }
 
+  private _refreshResolvedWhipUrl() {
+    if (this.whipUrl) {
+      this._destroyIngestClient();
+      this._resolvedWhipUrl = this.whipUrl;
+      this._endpointStatus = "idle";
+      this._endpointError = null;
+      return;
+    }
+
+    if (this.gatewayUrl && this.streamKey) {
+      this._resolveGatewayEndpoint();
+      return;
+    }
+
+    this._destroyIngestClient();
+    this._resolvedWhipUrl = "";
+    this._endpointStatus = "idle";
+    this._endpointError = null;
+    this._lastInitKey = "";
+  }
+
+  private _destroyIngestClient() {
+    if (!this._ingestClient) return;
+    this._ingestClient.destroy();
+    this._ingestClient = null;
+  }
+
+  private _resolveWorkerUrl(fileName: string, explicitUrl: string): string {
+    if (explicitUrl) return explicitUrl;
+
+    if (typeof _iifeScriptSrc === "string" && _iifeScriptSrc) {
+      try {
+        return new URL(`./workers/${fileName}`, _iifeScriptSrc).href;
+      } catch {
+        // Fall through.
+      }
+    }
+
+    return "";
+  }
+
+  private _resolveWorkerConfig() {
+    const compositor = this._resolveWorkerUrl("compositor.worker.js", this.compositorWorkerUrl);
+    const encoder = this._resolveWorkerUrl("encoder.worker.js", this.encoderWorkerUrl);
+    const rtcTransform = this._resolveWorkerUrl(
+      "rtcTransform.worker.js",
+      this.rtcTransformWorkerUrl
+    );
+
+    return {
+      ...(compositor ? { compositor } : {}),
+      ...(encoder ? { encoder } : {}),
+      ...(rtcTransform ? { rtcTransform } : {}),
+    };
+  }
+
+  private async _resolveGatewayEndpoint() {
+    if (!this.gatewayUrl || !this.streamKey || this.whipUrl) return;
+
+    this._destroyIngestClient();
+    this._endpointStatus = "loading";
+    this._endpointError = null;
+    this._resolvedWhipUrl = "";
+
+    const client = new IngestClient({
+      gatewayUrl: this.gatewayUrl,
+      streamKey: this.streamKey,
+      maxRetries: 3,
+      initialDelayMs: 1000,
+    });
+    this._ingestClient = client;
+
+    client.on("statusChange", ({ status, error }) => {
+      if (this._ingestClient !== client) return;
+      this._endpointStatus = status;
+      if (error) {
+        this._endpointError = error;
+      } else if (status !== "error") {
+        this._endpointError = null;
+      }
+    });
+
+    client.on("endpointsResolved", ({ endpoints }) => {
+      if (this._ingestClient !== client) return;
+      this._resolvedWhipUrl = endpoints.primary?.whipUrl ?? "";
+      this._endpointError = null;
+    });
+
+    try {
+      const endpoints = await client.resolve();
+      if (this._ingestClient !== client) return;
+      this._resolvedWhipUrl = endpoints.primary?.whipUrl ?? "";
+      this._endpointError = null;
+    } catch (error) {
+      if (this._ingestClient !== client) return;
+      if ((error as Error)?.name === "AbortError") return;
+      const message = error instanceof Error ? error.message : "Unknown error";
+      this._endpointError = message;
+      this._endpointStatus = "error";
+      this._resolvedWhipUrl = "";
+    }
+  }
+
   private _initController() {
-    if (!this.whipUrl) return;
+    if (!this._resolvedWhipUrl) {
+      this._lastInitKey = "";
+      return;
+    }
+
+    const initKey = [
+      this._resolvedWhipUrl,
+      this.initialProfile,
+      String(this.debug),
+      this.compositorWorkerUrl,
+      this.encoderWorkerUrl,
+      this.rtcTransformWorkerUrl,
+    ].join("|");
+    if (this._lastInitKey === initKey && this.pc.getController()) return;
+
     this.pc.initialize({
-      whipUrl: this.whipUrl,
+      whipUrl: this._resolvedWhipUrl,
       profile: this.initialProfile,
       debug: this.debug,
       reconnection: { enabled: true, maxAttempts: 5 },
       audioMixing: true,
+      workers: this._resolveWorkerConfig(),
     });
+    this.pc.setEncoderOverrides(this._encoderOverrides);
+    this._syncCompositor();
+
+    this._lastInitKey = initKey;
 
     if (this.autoStartCamera && this.pc.s.state === "idle") {
       this.pc.startCamera().catch(console.error);
     }
+  }
+
+  private _syncCompositor() {
+    const controller = this.pc.getController();
+    if (!controller) return;
+
+    if (!this.enableCompositor) {
+      if (controller.getSceneManager()) {
+        controller.disableCompositor();
+        this.requestUpdate();
+      }
+      return;
+    }
+
+    if (controller.getSceneManager() || this._compositorEnabling) {
+      return;
+    }
+
+    const config =
+      this.compositorConfig && Object.keys(this.compositorConfig).length > 0
+        ? this.compositorConfig
+        : undefined;
+
+    this._compositorEnabling = controller
+      .enableCompositor(config)
+      .then(() => {
+        if (!this.enableCompositor && controller.getSceneManager()) {
+          controller.disableCompositor();
+        }
+        this.requestUpdate();
+      })
+      .catch((error) => {
+        console.error("Failed to enable compositor:", error);
+      })
+      .finally(() => {
+        this._compositorEnabling = null;
+      });
   }
 
   private _syncVideoPreview() {
@@ -158,29 +407,64 @@ export class FwStreamCrafter extends LitElement {
     }
   }
 
-  // ---- Context Menu ----
-
-  private _boundDismissContextMenu = this._dismissContextMenu.bind(this);
-
-  private _handleContextMenu(e: MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    this._contextMenu = { x: e.clientX, y: e.clientY };
-    requestAnimationFrame(() => {
-      document.addEventListener("click", this._boundDismissContextMenu, { once: true });
-      document.addEventListener("contextmenu", this._boundDismissContextMenu, { once: true });
-    });
+  private _eventHitsElement(event: Event, element: HTMLElement | null): boolean {
+    if (!element) return false;
+    const path = event.composedPath();
+    if (path.includes(element)) return true;
+    const target = event.target;
+    return target instanceof Node ? element.contains(target) : false;
   }
 
-  private _dismissContextMenu() {
-    this._contextMenu = null;
-    document.removeEventListener("click", this._boundDismissContextMenu);
-    document.removeEventListener("contextmenu", this._boundDismissContextMenu);
+  private _handleDocumentMouseDown = (event: MouseEvent) => {
+    if (this._showSettings) {
+      const clickedSettingsPopup = this._eventHitsElement(event, this._settingsPopupEl);
+      const clickedSettingsButton = this._eventHitsElement(event, this._settingsButtonEl);
+      if (!clickedSettingsPopup && !clickedSettingsButton) {
+        this._showSettings = false;
+      }
+    }
+
+    if (this._contextMenu) {
+      const clickedContextMenu = this._eventHitsElement(event, this._contextMenuEl);
+      if (!clickedContextMenu) {
+        this._contextMenu = null;
+      }
+    }
+  };
+
+  private _handleDocumentKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape") return;
+    if (this._showSettings) this._showSettings = false;
+    if (this._contextMenu) this._contextMenu = null;
+  };
+
+  private _syncDismissListeners() {
+    const shouldAttach = this._showSettings || !!this._contextMenu;
+    if (shouldAttach && !this._dismissListenersAttached) {
+      document.addEventListener("mousedown", this._handleDocumentMouseDown);
+      document.addEventListener("keydown", this._handleDocumentKeyDown);
+      this._dismissListenersAttached = true;
+    } else if (!shouldAttach && this._dismissListenersAttached) {
+      this._teardownDismissListeners();
+    }
+  }
+
+  private _teardownDismissListeners() {
+    if (!this._dismissListenersAttached) return;
+    document.removeEventListener("mousedown", this._handleDocumentMouseDown);
+    document.removeEventListener("keydown", this._handleDocumentKeyDown);
+    this._dismissListenersAttached = false;
+  }
+
+  private _handleContextMenu(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    this._contextMenu = { x: event.clientX, y: event.clientY };
   }
 
   private _copyWhipUrl() {
-    if (this.whipUrl) {
-      navigator.clipboard.writeText(this.whipUrl).catch(console.error);
+    if (this._resolvedWhipUrl) {
+      navigator.clipboard.writeText(this._resolvedWhipUrl).catch(console.error);
     }
     this._contextMenu = null;
   }
@@ -192,15 +476,13 @@ export class FwStreamCrafter extends LitElement {
       `Status: ${s.state}`,
       `Quality: ${profile?.label ?? s.qualityProfile} (${profile?.description ?? ""})`,
       `Sources: ${s.sources.length}`,
-      this.whipUrl ? `WHIP: ${this.whipUrl}` : null,
+      this._resolvedWhipUrl ? `WHIP: ${this._resolvedWhipUrl}` : null,
     ]
       .filter(Boolean)
       .join("\n");
     navigator.clipboard.writeText(info).catch(console.error);
     this._contextMenu = null;
   }
-
-  // ---- Public API ----
 
   async startCamera(options?: Parameters<IngestControllerHost["startCamera"]>[0]) {
     return this.pc.startCamera(options);
@@ -220,11 +502,17 @@ export class FwStreamCrafter extends LitElement {
   removeSource(id: string) {
     this.pc.removeSource(id);
   }
+  addCustomSource(stream: MediaStream, label: string) {
+    return this.pc.addCustomSource(stream, label);
+  }
   setSourceVolume(id: string, vol: number) {
     this.pc.setSourceVolume(id, vol);
   }
-  setSourceMuted(id: string, m: boolean) {
-    this.pc.setSourceMuted(id, m);
+  setSourceMuted(id: string, muted: boolean) {
+    this.pc.setSourceMuted(id, muted);
+  }
+  setSourceActive(id: string, active: boolean) {
+    this.pc.setSourceActive(id, active);
   }
   setPrimaryVideoSource(id: string) {
     this.pc.setPrimaryVideoSource(id);
@@ -232,10 +520,36 @@ export class FwStreamCrafter extends LitElement {
   setMasterVolume(vol: number) {
     this.pc.setMasterVolume(vol);
   }
-  async setQualityProfile(p: QualityProfile) {
-    return this.pc.setQualityProfile(p);
+  getMasterVolume() {
+    return this.pc.getMasterVolume();
+  }
+  async setQualityProfile(profile: QualityProfile) {
+    return this.pc.setQualityProfile(profile);
+  }
+  async getDevices() {
+    return this.pc.getDevices();
+  }
+  async switchVideoDevice(deviceId: string) {
+    return this.pc.switchVideoDevice(deviceId);
+  }
+  async switchAudioDevice(deviceId: string) {
+    return this.pc.switchAudioDevice(deviceId);
+  }
+  async getStats() {
+    return this.pc.getStats();
+  }
+  setUseWebCodecs(enabled: boolean) {
+    this.pc.setUseWebCodecs(enabled);
+  }
+  setEncoderOverrides(overrides: EncoderOverrides) {
+    this._encoderOverrides = overrides;
+    this.pc.setEncoderOverrides(overrides);
+  }
+  getController() {
+    return this.pc.getController();
   }
   destroy() {
+    this._destroyIngestClient();
     this.pc.getController()?.destroy();
   }
 
@@ -244,16 +558,26 @@ export class FwStreamCrafter extends LitElement {
     const statusText = getStatusText(s.state, s.reconnectionState);
     const statusBadgeClass = getStatusBadgeClass(s.state, s.isReconnecting);
     const canAddSource = s.state !== "destroyed" && s.state !== "error";
-    const canStream = s.isCapturing && !s.isStreaming && !!this.whipUrl;
+    const canStream = s.isCapturing && !s.isStreaming && !!this._resolvedWhipUrl;
     const hasCamera = s.sources.some((src: MediaSource) => src.type === "camera");
+    const isResolvingEndpoint =
+      !this.whipUrl && !!this.gatewayUrl && !!this.streamKey && this._endpointStatus === "loading";
+    const activeScene = this._getActiveScene();
+    const rootClassName = [
+      "root",
+      "fw-sc-root",
+      this.devMode ? "fw-sc-root--devmode" : "",
+      this.className,
+    ]
+      .filter(Boolean)
+      .join(" ");
 
     return html`
       <div
-        class=${classMap({ root: true, "fw-sc-root": true, "fw-sc-root--devmode": this.devMode })}
-        @contextmenu=${(e: MouseEvent) => this._handleContextMenu(e)}
+        class=${rootClassName}
+        @contextmenu=${(event: MouseEvent) => this._handleContextMenu(event)}
       >
         <div class="main fw-sc-main">
-          <!-- Header -->
           <div class="fw-sc-header">
             <span class="fw-sc-header-title">StreamCrafter</span>
             <div class="fw-sc-header-status">
@@ -261,7 +585,6 @@ export class FwStreamCrafter extends LitElement {
             </div>
           </div>
 
-          <!-- Content -->
           <div class="fw-sc-content">
             <div class="fw-sc-preview-wrapper">
               <div class="fw-sc-preview">
@@ -285,12 +608,26 @@ export class FwStreamCrafter extends LitElement {
                   : nothing}
                 ${s.isStreaming ? html`<div class="fw-sc-live-badge">Live</div>` : nothing}
                 ${this.enableCompositor
-                  ? html` <fw-sc-compositor .ic=${this.pc}></fw-sc-compositor> `
+                  ? html`
+                      <fw-sc-compositor
+                        .isEnabled=${this.enableCompositor}
+                        .isInitialized=${!!activeScene}
+                        .rendererType=${this._getCompositorRendererType()}
+                        .stats=${this._getCompositorStats()}
+                        .sources=${s.sources}
+                        .layers=${activeScene?.layers ?? []}
+                        .currentLayout=${this._getCurrentLayout()}
+                        @fw-sc-layout-apply=${(event: CustomEvent<{ layout: LayoutConfig }>) =>
+                          this._handleCompositorLayoutApply(event)}
+                        @fw-sc-cycle-source-order=${(
+                          event: CustomEvent<{ direction?: "forward" | "backward" }>
+                        ) => this._handleCompositorCycleSourceOrder(event)}
+                      ></fw-sc-compositor>
+                    `
                   : nothing}
               </div>
             </div>
 
-            <!-- Sources Mixer -->
             ${s.sources.length > 0
               ? html`
                   <div
@@ -325,7 +662,6 @@ export class FwStreamCrafter extends LitElement {
               : nothing}
           </div>
 
-          <!-- VU Meter -->
           ${s.isCapturing
             ? html`
                 <div class="fw-sc-vu-meter">
@@ -340,17 +676,15 @@ export class FwStreamCrafter extends LitElement {
                 </div>
               `
             : nothing}
-
-          <!-- Error -->
-          ${s.error
+          ${s.error || this._endpointError
             ? html`
                 <div class="fw-sc-error">
                   <div class="fw-sc-error-title">Error</div>
-                  <div class="fw-sc-error-message">${s.error}</div>
+                  <div class="fw-sc-error-message">${s.error || this._endpointError}</div>
                 </div>
               `
             : nothing}
-          ${!this.whipUrl && !s.error
+          ${!this._resolvedWhipUrl && !s.error && !this._endpointError && !isResolvingEndpoint
             ? html`
                 <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)">
                   <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">Warning</div>
@@ -358,8 +692,15 @@ export class FwStreamCrafter extends LitElement {
                 </div>
               `
             : nothing}
+          ${isResolvingEndpoint
+            ? html`
+                <div class="fw-sc-error" style="border-left-color: hsl(210 80% 65%)">
+                  <div class="fw-sc-error-title" style="color: hsl(210 80% 65%)">Resolving</div>
+                  <div class="fw-sc-error-message">Resolving ingest endpoint...</div>
+                </div>
+              `
+            : nothing}
 
-          <!-- Action Bar -->
           <div class="fw-sc-actions">
             <button
               type="button"
@@ -380,13 +721,13 @@ export class FwStreamCrafter extends LitElement {
               ${monitorIcon(18)}
             </button>
 
-            <!-- Settings -->
             <div style="position:relative">
               <button
                 type="button"
                 class=${classMap({
                   "fw-sc-action-secondary": true,
                   "fw-sc-action-secondary--active": this._showSettings,
+                  "fw-sc-action-secondary--settings": true,
                 })}
                 @click=${() => {
                   this._showSettings = !this._showSettings;
@@ -397,8 +738,6 @@ export class FwStreamCrafter extends LitElement {
               </button>
               ${this._showSettings ? this._renderSettingsPopup() : nothing}
             </div>
-
-            <!-- Go Live / Stop -->
             ${!s.isStreaming
               ? html`
                   <button
@@ -422,7 +761,6 @@ export class FwStreamCrafter extends LitElement {
           </div>
         </div>
 
-        <!-- Context Menu -->
         ${this._contextMenu
           ? html`
               <div
@@ -430,12 +768,15 @@ export class FwStreamCrafter extends LitElement {
                 style="position:fixed;top:${this._contextMenu.y}px;left:${this._contextMenu
                   .x}px;z-index:1000;background:#1a1b26;border:1px solid rgba(90,96,127,0.3);border-radius:6px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,0.5);min-width:160px"
               >
-                ${this.whipUrl
+                ${this._resolvedWhipUrl
                   ? html`
                       <button
                         type="button"
                         class="fw-sc-context-menu-item"
-                        @click=${() => this._copyWhipUrl()}
+                        @mousedown=${(event: MouseEvent) => {
+                          event.preventDefault();
+                          this._copyWhipUrl();
+                        }}
                       >
                         Copy WHIP URL
                       </button>
@@ -444,7 +785,10 @@ export class FwStreamCrafter extends LitElement {
                 <button
                   type="button"
                   class="fw-sc-context-menu-item"
-                  @click=${() => this._copyStreamInfo()}
+                  @mousedown=${(event: MouseEvent) => {
+                    event.preventDefault();
+                    this._copyStreamInfo();
+                  }}
                 >
                   Copy Stream Info
                 </button>
@@ -454,7 +798,8 @@ export class FwStreamCrafter extends LitElement {
                       <button
                         type="button"
                         class="fw-sc-context-menu-item"
-                        @click=${() => {
+                        @mousedown=${(event: MouseEvent) => {
+                          event.preventDefault();
                           this._isAdvancedPanelOpen = !this._isAdvancedPanelOpen;
                           this._contextMenu = null;
                         }}
@@ -467,17 +812,24 @@ export class FwStreamCrafter extends LitElement {
               </div>
             `
           : nothing}
-
-        <!-- Advanced Panel -->
         ${this.devMode && this._isAdvancedPanelOpen
           ? html`
               <fw-sc-advanced
                 .ic=${this.pc}
+                .whipUrl=${this._resolvedWhipUrl}
+                .audioProcessing=${this._audioProcessing}
+                .encoderOverrides=${this._encoderOverrides}
                 .compositorEnabled=${this.enableCompositor}
                 .compositorRendererType=${this._getCompositorRendererType()}
                 .compositorStats=${this._getCompositorStats()}
                 .sceneCount=${this._getSceneCount()}
                 .layerCount=${this._getLayerCount()}
+                @fw-audio-processing-change=${(
+                  event: CustomEvent<{ settings: Partial<AudioProcessingSettings> }>
+                ) => this._handleAudioProcessingChange(event)}
+                @fw-encoder-overrides-change=${(
+                  event: CustomEvent<{ overrides: EncoderOverrides }>
+                ) => this._handleEncoderOverridesChange(event)}
                 @fw-close=${() => {
                   this._isAdvancedPanelOpen = false;
                 }}
@@ -488,32 +840,87 @@ export class FwStreamCrafter extends LitElement {
     `;
   }
 
+  private _getActiveScene() {
+    if (!this.enableCompositor) return null;
+    return this.pc.getController()?.getSceneManager()?.getActiveScene() ?? null;
+  }
+
+  private _getCurrentLayout(): LayoutConfig | null {
+    if (!this.enableCompositor) return null;
+    return this.pc.getController()?.getSceneManager()?.getCurrentLayout() ?? null;
+  }
+
+  private _handleCompositorLayoutApply(event: CustomEvent<{ layout: LayoutConfig }>) {
+    const sceneManager = this.pc.getController()?.getSceneManager();
+    if (!sceneManager) return;
+
+    const layout = event.detail.layout;
+    const currentScene = sceneManager.getActiveScene();
+    const preservedOrder = currentScene?.layers.map((layer) => layer.sourceId) ?? [];
+
+    sceneManager.applyLayout(layout);
+    if (currentScene && preservedOrder.length > 0) {
+      sceneManager.reorderLayers(currentScene.id, preservedOrder);
+    }
+
+    this.requestUpdate();
+  }
+
+  private _handleCompositorCycleSourceOrder(
+    event: CustomEvent<{ direction?: "forward" | "backward" }>
+  ) {
+    const sceneManager = this.pc.getController()?.getSceneManager();
+    if (!sceneManager) return;
+    sceneManager.cycleSourceOrder(event.detail.direction ?? "forward");
+    this.requestUpdate();
+  }
+
   private _getSourceLayerVisibility(sourceId: string): boolean {
-    const ctrl = this.pc.getController();
-    if (!ctrl || !this.enableCompositor) return true;
-    const sm = ctrl.getSceneManager();
-    if (!sm) return true;
-    const scene = sm.getActiveScene();
+    const scene = this._getActiveScene();
     if (!scene) return true;
-    const layer = scene.layers.find((l: { sourceId: string }) => l.sourceId === sourceId);
+    const layer = scene.layers.find((candidate) => candidate.sourceId === sourceId);
     return layer?.visible ?? true;
   }
 
   private _toggleSourceLayerVisibility(sourceId: string) {
-    const ctrl = this.pc.getController();
-    if (!ctrl) return;
-    const sm = ctrl.getSceneManager();
-    if (!sm) return;
-    const scene = sm.getActiveScene();
-    if (!scene) return;
-    const layer = scene.layers.find((l: { sourceId: string }) => l.sourceId === sourceId);
-    if (layer) {
-      sm.setLayerVisibility(scene.id, layer.id, !layer.visible);
-      this.requestUpdate();
+    const sceneManager = this.pc.getController()?.getSceneManager();
+    const scene = sceneManager?.getActiveScene();
+    if (!sceneManager || !scene) return;
+
+    const layer = scene.layers.find((candidate) => candidate.sourceId === sourceId);
+    if (!layer) return;
+
+    sceneManager.setLayerVisibility(scene.id, layer.id, !layer.visible);
+    this.requestUpdate();
+  }
+
+  private _handleAudioProcessingChange(
+    event: CustomEvent<{ settings: Partial<AudioProcessingSettings> }>
+  ) {
+    const next = {
+      ...this._audioProcessing,
+      ...event.detail.settings,
+    };
+    this._audioProcessing = next;
+
+    for (const source of this.pc.s.sources) {
+      source.stream.getAudioTracks().forEach((track) => {
+        track
+          .applyConstraints({
+            echoCancellation: next.echoCancellation,
+            noiseSuppression: next.noiseSuppression,
+            autoGainControl: next.autoGainControl,
+          })
+          .catch((error) => {
+            console.warn("Failed to apply audio constraints:", error);
+          });
+      });
     }
   }
 
-  // ---- Compositor helpers (for advanced panel) ----
+  private _handleEncoderOverridesChange(event: CustomEvent<{ overrides: EncoderOverrides }>) {
+    this.setEncoderOverrides(event.detail.overrides);
+  }
 
   private _getCompositorRendererType() {
     if (!this.enableCompositor) return null;
@@ -589,8 +996,8 @@ export class FwStreamCrafter extends LitElement {
           <span class="fw-sc-volume-label">${Math.round(source.volume * 100)}%</span>
           <fw-sc-volume
             .value=${source.volume}
-            @fw-sc-volume-change=${(e: CustomEvent) =>
-              this.pc.setSourceVolume(source.id, e.detail.value)}
+            @fw-sc-volume-change=${(event: CustomEvent<{ value: number }>) =>
+              this.pc.setSourceVolume(source.id, event.detail.value)}
             compact
           ></fw-sc-volume>
           <button
@@ -630,12 +1037,12 @@ export class FwStreamCrafter extends LitElement {
           </div>
           <div style="display:flex;flex-direction:column;gap:2px">
             ${QUALITY_PROFILES.map(
-              (p) => html`
+              (profile) => html`
                 <button
                   type="button"
                   @click=${() => {
                     if (!s.isStreaming) {
-                      this.pc.setQualityProfile(p.id);
+                      this.pc.setQualityProfile(profile.id).catch(console.error);
                       if (!this.devMode) this._showSettings = false;
                     }
                   }}
@@ -644,12 +1051,14 @@ export class FwStreamCrafter extends LitElement {
                     ? "not-allowed"
                     : "pointer"};opacity:${s.isStreaming
                     ? "0.5"
-                    : "1"};background:${s.qualityProfile === p.id
+                    : "1"};background:${s.qualityProfile === profile.id
                     ? "rgba(122,162,247,0.2)"
-                    : "transparent"};color:${s.qualityProfile === p.id ? "#7aa2f7" : "#a9b1d6"}"
+                    : "transparent"};color:${s.qualityProfile === profile.id
+                    ? "#7aa2f7"
+                    : "#a9b1d6"}"
                 >
-                  <div style="font-weight:500">${p.label}</div>
-                  <div style="font-size:10px;color:#565f89">${p.description}</div>
+                  <div style="font-weight:500">${profile.label}</div>
+                  <div style="font-size:10px;color:#565f89">${profile.description}</div>
                 </button>
               `
             )}
@@ -671,9 +1080,15 @@ export class FwStreamCrafter extends LitElement {
                     ><span style="color:#c0caf5">${s.state}</span>
                   </div>
                   <div style="display:flex;justify-content:space-between">
+                    <span style="color:#565f89">Audio</span>
+                    <span style="color:${s.isCapturing ? "#9ece6a" : "#565f89"}">
+                      ${s.isCapturing ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                  <div style="display:flex;justify-content:space-between">
                     <span style="color:#565f89">WHIP</span
-                    ><span style="color:${this.whipUrl ? "#9ece6a" : "#f7768e"}"
-                      >${this.whipUrl ? "OK" : "Not set"}</span
+                    ><span style="color:${this._resolvedWhipUrl ? "#9ece6a" : "#f7768e"}"
+                      >${this._resolvedWhipUrl ? "OK" : "Not set"}</span
                     >
                   </div>
                 </div>

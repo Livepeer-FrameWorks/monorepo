@@ -238,49 +238,65 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
     return new Promise((resolve) => {
       try {
         const worker = new Worker(url, useModule ? { type: "module" } : undefined);
-        let resolved = false;
-
-        const cleanup = () => {
-          worker.removeEventListener("message", onMessage);
-          worker.removeEventListener("error", onError);
-        };
-
-        const onMessage = (_e: MessageEvent) => {
-          // Worker loaded and sent a message - it's working
-          if (!resolved) {
-            resolved = true;
-            cleanup();
-            // Put the message back by re-dispatching after we return
-            // Actually, we need to handle this message in initialize()
-            // For now, just resolve - the worker is loaded
-            resolve(worker);
-          }
-        };
-
-        const onError = (e: ErrorEvent) => {
-          if (!resolved) {
-            resolved = true;
-            cleanup();
-            this.log("Worker failed to load from: " + url.toString(), e.message);
-            worker.terminate();
-            resolve(null);
-          }
-        };
-
-        worker.addEventListener("message", onMessage);
-        worker.addEventListener("error", onError);
-
-        // Timeout - if no message or error within 2 seconds, assume it's loading but slow
-        // We'll resolve with the worker and let initialize() handle the timeout
-        setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            cleanup();
-            resolve(worker);
-          }
-        }, 2000);
+        this.validateCreatedWorker(worker, url.toString()).then(resolve);
       } catch (e) {
         this.log("Failed to create worker: " + url.toString(), e);
+        resolve(null);
+      }
+    });
+  }
+
+  private validateCreatedWorker(worker: Worker, label: string): Promise<Worker | null> {
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      const cleanup = () => {
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+      };
+
+      const onMessage = (_e: MessageEvent) => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve(worker);
+        }
+      };
+
+      const onError = (e: ErrorEvent) => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          this.log("Worker failed to load from: " + label, e.message);
+          worker.terminate();
+          resolve(null);
+        }
+      };
+
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError);
+
+      // If startup is silent, keep worker and let initialize() handshake determine readiness.
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve(worker);
+        }
+      }, 2000);
+    });
+  }
+
+  private tryCreateWorkerFromFactory(
+    description: string,
+    createWorker: () => Worker
+  ): Promise<Worker | null> {
+    return new Promise((resolve) => {
+      try {
+        const worker = createWorker();
+        this.validateCreatedWorker(worker, description).then(resolve);
+      } catch (e) {
+        this.log("Failed to create worker from factory: " + description, e);
         resolve(null);
       }
     });
@@ -300,20 +316,62 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
       if (worker) return worker;
     }
 
+    // Bundler-managed worker URL patterns. Keep new URL(...) inline in new Worker(...)
+    // so app bundlers can emit/rehydrate worker assets.
+    const bundlerFactories = [
+      {
+        description: "bundler ../workers/encoder.worker.ts",
+        create: () =>
+          new Worker(new URL("../workers/encoder.worker.ts", import.meta.url), { type: "module" }),
+      },
+      {
+        description: "bundler ../../workers/encoder.worker.js",
+        create: () =>
+          new Worker(new URL("../../workers/encoder.worker.js", import.meta.url), {
+            type: "module",
+          }),
+      },
+    ] as const;
+
+    for (const factory of bundlerFactories) {
+      this.log("Trying worker path: " + factory.description);
+      const worker = await this.tryCreateWorkerFromFactory(factory.description, factory.create);
+      if (worker) {
+        this.log("Worker loaded from:", factory.description);
+        return worker;
+      }
+    }
+
     // Build list of URLs to try
     const urlsToTry: Array<{ url: string | URL; description: string }> = [];
 
-    // Priority 3: Try loading relative to built module
+    // Priority 3: Try loading relative to source module (bundler/dev)
     try {
-      const workerUrl = new URL("../workers/encoder.worker.js", import.meta.url);
-      urlsToTry.push({ url: workerUrl, description: "import.meta.url relative" });
+      const workerUrl = new URL("../workers/encoder.worker.ts", import.meta.url);
+      urlsToTry.push({ url: workerUrl, description: "import.meta.url source (.ts)" });
     } catch {
       // URL construction failed, skip
     }
 
-    // Priority 4: Fallback paths for various environments
+    // Priority 4: Try loading relative to published ESM output
+    try {
+      const workerUrl = new URL("../../workers/encoder.worker.js", import.meta.url);
+      urlsToTry.push({ url: workerUrl, description: "import.meta.url dist (.js)" });
+    } catch {
+      // URL construction failed, skip
+    }
+
+    // Priority 5: Fallback paths for various environments
     urlsToTry.push(
+      {
+        url: "/node_modules/@livepeer-frameworks/streamcrafter-wc/dist/workers/encoder.worker.js",
+        description: "wc package dist",
+      },
       { url: "/workers/encoder.worker.js", description: "Vite dev server" },
+      {
+        url: "/node_modules/@livepeer-frameworks/streamcrafter-core/src/workers/encoder.worker.ts",
+        description: "node_modules source",
+      },
       {
         url: "/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/encoder.worker.js",
         description: "node_modules",
@@ -349,15 +407,23 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
       return new Worker(this.options.workerUrl, { type: "module" });
     }
 
-    // Try import.meta.url first (works in production builds)
+    // Try source-relative worker path first (bundlers can rewrite .ts worker URLs)
     try {
-      const workerUrl = new URL("../workers/encoder.worker.js", import.meta.url);
+      const workerUrl = new URL("../workers/encoder.worker.ts", import.meta.url);
       return new Worker(workerUrl, { type: "module" });
     } catch {
       // Fall through
     }
 
-    // Try common fallback paths
+    // Try dist-relative worker path for published ESM builds
+    try {
+      const workerUrl = new URL("../../workers/encoder.worker.js", import.meta.url);
+      return new Worker(workerUrl, { type: "module" });
+    } catch {
+      // Fall through
+    }
+
+    // Try common fallback path
     return new Worker("/workers/encoder.worker.js", { type: "module" });
   }
 
