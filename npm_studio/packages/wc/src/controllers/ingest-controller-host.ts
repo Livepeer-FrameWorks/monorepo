@@ -52,6 +52,8 @@ export interface IngestControllerHostState {
   isWebCodecsActive: boolean;
   isWebCodecsAvailable: boolean;
   encoderStats: EncoderStats | null;
+  audioLevel: number;
+  peakAudioLevel: number;
 }
 
 type HostElement = ReactiveControllerHost & HTMLElement;
@@ -61,6 +63,7 @@ export class IngestControllerHost implements ReactiveController {
   private controller: IngestControllerV2 | null = null;
   private unsubs: Array<() => void> = [];
   private encoderStatsCleanup: (() => void) | null = null;
+  private audioLevelCleanup: (() => void) | null = null;
 
   s: IngestControllerHostState;
 
@@ -85,6 +88,8 @@ export class IngestControllerHost implements ReactiveController {
       isWebCodecsActive: false,
       isWebCodecsAvailable: isWebCodecsEncodingPathSupported(),
       encoderStats: null,
+      audioLevel: 0,
+      peakAudioLevel: 0,
     };
   }
 
@@ -114,6 +119,7 @@ export class IngestControllerHost implements ReactiveController {
       this.encoderStatsCleanup();
       this.encoderStatsCleanup = null;
     }
+    this.stopAudioLevelMonitoring();
     this.controller?.destroy();
     this.controller = null;
   }
@@ -134,16 +140,22 @@ export class IngestControllerHost implements ReactiveController {
       controller.on("stateChange", (event) => {
         const state = event.state;
         const ctx = (event.context ?? {}) as IngestStateContextV2;
+        const isCapturing = state === "capturing" || state === "streaming";
         this.update({
           state,
           stateContext: ctx,
           isStreaming: state === "streaming",
-          isCapturing: state === "capturing" || state === "streaming",
+          isCapturing,
           isReconnecting: state === "reconnecting",
           mediaStream: controller.getMediaStream(),
           sources: controller.getSources(),
           reconnectionState: ctx.reconnection ?? this.s.reconnectionState,
         });
+        if (isCapturing) {
+          this.startAudioLevelMonitoring();
+        } else {
+          this.stopAudioLevelMonitoring();
+        }
         this.dispatchEvent("fw-sc-state-change", { state, context: ctx });
       })
     );
@@ -240,6 +252,29 @@ export class IngestControllerHost implements ReactiveController {
         this.update({ encoderStats: newStats as EncoderStats });
       });
     }
+  }
+
+  private startAudioLevelMonitoring() {
+    if (this.audioLevelCleanup || !this.controller) return;
+    const audioMixer = this.controller.getAudioMixer();
+    if (!audioMixer) return;
+
+    const unsub = audioMixer.on("levelUpdate", (event: { level: number; peakLevel: number }) => {
+      this.update({ audioLevel: event.level, peakAudioLevel: event.peakLevel });
+    });
+    audioMixer.startLevelMonitoring();
+    this.audioLevelCleanup = () => {
+      unsub();
+      audioMixer.stopLevelMonitoring();
+    };
+  }
+
+  private stopAudioLevelMonitoring() {
+    if (this.audioLevelCleanup) {
+      this.audioLevelCleanup();
+      this.audioLevelCleanup = null;
+    }
+    this.update({ audioLevel: 0, peakAudioLevel: 0 });
   }
 
   private dispatchEvent(name: string, detail: unknown) {

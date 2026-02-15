@@ -72,7 +72,7 @@ export class MistPlayerImpl extends BasePlayer {
     const playerJsUrl = this.getPlayerJsUrl(source);
 
     // Load and call mistPlay - simple passthrough, no extra params
-    await this.loadAndPlay(streamName, uniqueId, playerJsUrl, options);
+    await this.loadAndPlay(streamName, this.mistDiv, playerJsUrl, options);
 
     // Find the video element MistServer created (for compatibility)
     const video = this.findVideoElement() || this.createProxyVideo(container);
@@ -98,7 +98,7 @@ export class MistPlayerImpl extends BasePlayer {
 
   private async loadAndPlay(
     streamName: string,
-    targetId: string,
+    targetElement: HTMLElement,
     playerJsUrl: string,
     options: PlayerOptions
   ): Promise<void> {
@@ -107,7 +107,7 @@ export class MistPlayerImpl extends BasePlayer {
       if ((window as any).mistPlay) {
         // Let MistServer handle source selection - no forcePriority
         const mistOptions: any = {
-          target: document.getElementById(targetId),
+          target: targetElement,
           fillSpace: true,
           // MistServer's player.js has its own UI - always enable controls
           controls: true,

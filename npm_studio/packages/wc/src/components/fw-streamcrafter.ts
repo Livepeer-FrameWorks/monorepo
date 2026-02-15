@@ -17,6 +17,8 @@ import {
   micMutedIcon,
   videoIcon,
   xIcon,
+  eyeIcon,
+  eyeOffIcon,
 } from "../icons/index.js";
 import { IngestControllerHost } from "../controllers/ingest-controller-host.js";
 import type {
@@ -81,6 +83,7 @@ export class FwStreamCrafter extends LitElement {
   @state() private _showSettings = false;
   @state() private _showSources = true;
   @state() private _isAdvancedPanelOpen = false;
+  @state() private _contextMenu: { x: number; y: number } | null = null;
 
   @query(".fw-sc-preview video") private _videoEl!: HTMLVideoElement | null;
 
@@ -155,6 +158,48 @@ export class FwStreamCrafter extends LitElement {
     }
   }
 
+  // ---- Context Menu ----
+
+  private _boundDismissContextMenu = this._dismissContextMenu.bind(this);
+
+  private _handleContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    this._contextMenu = { x: e.clientX, y: e.clientY };
+    requestAnimationFrame(() => {
+      document.addEventListener("click", this._boundDismissContextMenu, { once: true });
+      document.addEventListener("contextmenu", this._boundDismissContextMenu, { once: true });
+    });
+  }
+
+  private _dismissContextMenu() {
+    this._contextMenu = null;
+    document.removeEventListener("click", this._boundDismissContextMenu);
+    document.removeEventListener("contextmenu", this._boundDismissContextMenu);
+  }
+
+  private _copyWhipUrl() {
+    if (this.whipUrl) {
+      navigator.clipboard.writeText(this.whipUrl).catch(console.error);
+    }
+    this._contextMenu = null;
+  }
+
+  private _copyStreamInfo() {
+    const s = this.pc.s;
+    const profile = QUALITY_PROFILES.find((p) => p.id === s.qualityProfile);
+    const info = [
+      `Status: ${s.state}`,
+      `Quality: ${profile?.label ?? s.qualityProfile} (${profile?.description ?? ""})`,
+      `Sources: ${s.sources.length}`,
+      this.whipUrl ? `WHIP: ${this.whipUrl}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    navigator.clipboard.writeText(info).catch(console.error);
+    this._contextMenu = null;
+  }
+
   // ---- Public API ----
 
   async startCamera(options?: Parameters<IngestControllerHost["startCamera"]>[0]) {
@@ -205,6 +250,7 @@ export class FwStreamCrafter extends LitElement {
     return html`
       <div
         class=${classMap({ root: true, "fw-sc-root": true, "fw-sc-root--devmode": this.devMode })}
+        @contextmenu=${(e: MouseEvent) => this._handleContextMenu(e)}
       >
         <div class="main fw-sc-main">
           <!-- Header -->
@@ -278,6 +324,22 @@ export class FwStreamCrafter extends LitElement {
                 `
               : nothing}
           </div>
+
+          <!-- VU Meter -->
+          ${s.isCapturing
+            ? html`
+                <div class="fw-sc-vu-meter">
+                  <div
+                    class="fw-sc-vu-meter-fill"
+                    style="width:${Math.min(s.audioLevel * 100, 100)}%"
+                  ></div>
+                  <div
+                    class="fw-sc-vu-meter-peak"
+                    style="left:${Math.min(s.peakAudioLevel * 100, 100)}%"
+                  ></div>
+                </div>
+              `
+            : nothing}
 
           <!-- Error -->
           ${s.error
@@ -360,11 +422,62 @@ export class FwStreamCrafter extends LitElement {
           </div>
         </div>
 
+        <!-- Context Menu -->
+        ${this._contextMenu
+          ? html`
+              <div
+                class="fw-sc-context-menu"
+                style="position:fixed;top:${this._contextMenu.y}px;left:${this._contextMenu
+                  .x}px;z-index:1000;background:#1a1b26;border:1px solid rgba(90,96,127,0.3);border-radius:6px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,0.5);min-width:160px"
+              >
+                ${this.whipUrl
+                  ? html`
+                      <button
+                        type="button"
+                        class="fw-sc-context-menu-item"
+                        @click=${() => this._copyWhipUrl()}
+                      >
+                        Copy WHIP URL
+                      </button>
+                    `
+                  : nothing}
+                <button
+                  type="button"
+                  class="fw-sc-context-menu-item"
+                  @click=${() => this._copyStreamInfo()}
+                >
+                  Copy Stream Info
+                </button>
+                ${this.devMode
+                  ? html`
+                      <div class="fw-sc-context-menu-separator"></div>
+                      <button
+                        type="button"
+                        class="fw-sc-context-menu-item"
+                        @click=${() => {
+                          this._isAdvancedPanelOpen = !this._isAdvancedPanelOpen;
+                          this._contextMenu = null;
+                        }}
+                      >
+                        ${settingsIcon(14)}
+                        <span>${this._isAdvancedPanelOpen ? "Hide Advanced" : "Advanced"}</span>
+                      </button>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing}
+
         <!-- Advanced Panel -->
         ${this.devMode && this._isAdvancedPanelOpen
           ? html`
               <fw-sc-advanced
                 .ic=${this.pc}
+                .compositorEnabled=${this.enableCompositor}
+                .compositorRendererType=${this._getCompositorRendererType()}
+                .compositorStats=${this._getCompositorStats()}
+                .sceneCount=${this._getSceneCount()}
+                .layerCount=${this._getLayerCount()}
                 @fw-close=${() => {
                   this._isAdvancedPanelOpen = false;
                 }}
@@ -375,11 +488,75 @@ export class FwStreamCrafter extends LitElement {
     `;
   }
 
+  private _getSourceLayerVisibility(sourceId: string): boolean {
+    const ctrl = this.pc.getController();
+    if (!ctrl || !this.enableCompositor) return true;
+    const sm = ctrl.getSceneManager();
+    if (!sm) return true;
+    const scene = sm.getActiveScene();
+    if (!scene) return true;
+    const layer = scene.layers.find((l: { sourceId: string }) => l.sourceId === sourceId);
+    return layer?.visible ?? true;
+  }
+
+  private _toggleSourceLayerVisibility(sourceId: string) {
+    const ctrl = this.pc.getController();
+    if (!ctrl) return;
+    const sm = ctrl.getSceneManager();
+    if (!sm) return;
+    const scene = sm.getActiveScene();
+    if (!scene) return;
+    const layer = scene.layers.find((l: { sourceId: string }) => l.sourceId === sourceId);
+    if (layer) {
+      sm.setLayerVisibility(scene.id, layer.id, !layer.visible);
+      this.requestUpdate();
+    }
+  }
+
+  // ---- Compositor helpers (for advanced panel) ----
+
+  private _getCompositorRendererType() {
+    if (!this.enableCompositor) return null;
+    return this.pc.getController()?.getSceneManager()?.getRendererType() ?? null;
+  }
+
+  private _getCompositorStats() {
+    if (!this.enableCompositor) return null;
+    return this.pc.getController()?.getSceneManager()?.getStats() ?? null;
+  }
+
+  private _getSceneCount(): number {
+    if (!this.enableCompositor) return 0;
+    return this.pc.getController()?.getSceneManager()?.getAllScenes()?.length ?? 0;
+  }
+
+  private _getLayerCount(): number {
+    if (!this.enableCompositor) return 0;
+    const scene = this.pc.getController()?.getSceneManager()?.getActiveScene();
+    return scene?.layers?.length ?? 0;
+  }
+
   private _renderSourceRow(source: MediaSource) {
     const s = this.pc.s;
     const hasVideo = source.stream.getVideoTracks().length > 0;
+    const isVisible = this._getSourceLayerVisibility(source.id);
     return html`
-      <div class=${classMap({ "fw-sc-source": true })}>
+      <div class=${classMap({ "fw-sc-source": true, "fw-sc-source--hidden": !isVisible })}>
+        ${this.enableCompositor
+          ? html`
+              <button
+                type="button"
+                class=${classMap({
+                  "fw-sc-icon-btn": true,
+                  "fw-sc-icon-btn--muted": !isVisible,
+                })}
+                @click=${() => this._toggleSourceLayerVisibility(source.id)}
+                title=${isVisible ? "Hide from composition" : "Show in composition"}
+              >
+                ${isVisible ? eyeIcon(14) : eyeOffIcon(14)}
+              </button>
+            `
+          : nothing}
         <div class="fw-sc-source-icon">
           ${source.type === "camera" ? cameraIcon(16) : monitorIcon(16)}
         </div>
