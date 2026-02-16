@@ -26,7 +26,7 @@
     "svelte-turnstile": "^0.11.0",
     "unist-util-visit": "^5.1.0",
     "viem": "^2.46.1",
-    "wagmi": "^2.19.5"
+    "wagmi": "^3.4.4"
   },
   "devDependencies": {
     "eslint": "^9.39.2",

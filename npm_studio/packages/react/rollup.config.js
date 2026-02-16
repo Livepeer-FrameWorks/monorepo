@@ -11,6 +11,8 @@ const external = [
   "react",
   "react-dom",
   "react/jsx-runtime",
+  /^@radix-ui\//,
+  "lucide-react",
 ];
 
 const commonPlugins = [
