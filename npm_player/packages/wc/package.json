@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@livepeer-frameworks/player-core": "workspace:*",
-    "lit": "^3.2.0"
+    "lit": "^3.3.2"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^29.0.0",
