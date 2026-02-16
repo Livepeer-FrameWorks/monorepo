@@ -411,14 +411,16 @@ FROM numbers(0, 336);
 INSERT INTO periscope.federation_events (
     timestamp, tenant_id, event_type, local_cluster, remote_cluster,
     stream_name, stream_id, source_node, dest_node, dtsc_url,
-    latency_ms, queried_clusters, responding_clusters, total_candidates,
+    latency_ms, time_to_live_ms, failure_reason,
+    queried_clusters, responding_clusters, total_candidates,
     peer_cluster, role, reason,
     local_lat, local_lon, remote_lat, remote_lon
 )
 SELECT
     ts, tenant_id, event_type, local_cluster, remote_cluster,
     stream_name, stream_id, source_node, dest_node, dtsc_url,
-    latency_ms, queried_clusters, responding_clusters, total_candidates,
+    latency_ms, time_to_live_ms, failure_reason,
+    queried_clusters, responding_clusters, total_candidates,
     peer_cluster, role, reason,
     local_lat, local_lon, remote_lat, remote_lon
 FROM (
@@ -435,6 +437,8 @@ FROM (
         toNullable('edge-leiden') as dest_node,
         toNullable(concat('dtsc://', arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2), ':4200/demo_live_stream_001')) as dtsc_url,
         toNullable(toFloat32(0)) as latency_ms,
+        toNullable(toFloat32(0)) as time_to_live_ms,
+        toNullable('') as failure_reason,
         toNullable(toUInt32(0)) as queried_clusters,
         toNullable(toUInt32(0)) as responding_clusters,
         toNullable(toUInt32(0)) as total_candidates,
@@ -459,7 +463,8 @@ FROM (
         toNullable(arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2)),
         toNullable('edge-leiden'),
         toNullable(concat('dtsc://', arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2), ':4200/demo_live_stream_001')),
-        toNullable(toFloat32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
+        toNullable(toFloat32(0)), toNullable(toFloat32(0)), toNullable(''),
+        toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
         toNullable(''), '', toNullable(''),
         toNullable(41.8781), toNullable(-87.6298),
         toNullable(arrayElement([40.7128, 35.6762], 1 + number%2)),
@@ -479,6 +484,7 @@ FROM (
         toNullable('5eedfeed-11fe-ca57-feed-11feca570001'),
         toNullable(''), toNullable(''), toNullable(''),
         toNullable(toFloat32(25 + rand()%50)),
+        toNullable(toFloat32(0)), toNullable(''),
         toNullable(toUInt32(2)),
         toNullable(toUInt32(1 + rand()%2)),
         toNullable(toUInt32(2 + rand()%6)),
@@ -497,8 +503,9 @@ FROM (
         'central-primary',
         '',
         '', toNullable(''), toNullable(''), toNullable(''), toNullable(''),
-        toNullable(toFloat32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
-        toNullable(arrayElement(['us-east-edge', 'apac-edge'], 1 + (number/2)%2)),
+        toNullable(toFloat32(0)), toNullable(toFloat32(0)), toNullable(''),
+        toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
+        toNullable(arrayElement(['us-east-edge', 'apac-edge'], 1 + intDiv(number, 2) % 2)),
         '', toNullable(''),
         toNullable(41.8781), toNullable(-87.6298),
         null, null
@@ -514,7 +521,8 @@ FROM (
         'central-primary',
         '',
         '', toNullable(''), toNullable(''), toNullable(''), toNullable(''),
-        toNullable(toFloat32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
+        toNullable(toFloat32(0)), toNullable(toFloat32(0)), toNullable(''),
+        toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
         toNullable(''),
         'peer_manager',
         toNullable(''),
@@ -534,7 +542,8 @@ FROM (
         'demo_live_stream_001',
         toNullable('5eedfeed-11fe-ca57-feed-11feca570001'),
         toNullable(''), toNullable(''), toNullable(''),
-        toNullable(toFloat32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
+        toNullable(toFloat32(0)), toNullable(toFloat32(0)), toNullable(''),
+        toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
         toNullable(''),
         '',
         toNullable(''),
@@ -927,6 +936,8 @@ INSERT INTO periscope.viewer_hours_hourly
 SELECT
     toStartOfHour(timestamp) AS hour,
     tenant_id,
+    cluster_id,
+    origin_cluster_id,
     stream_id,
     internal_name,
     country_code,
@@ -935,19 +946,21 @@ SELECT
     sumState(bytes_transferred) AS total_bytes
 FROM periscope.viewer_connection_events
 WHERE event_type = 'disconnect'
-GROUP BY hour, tenant_id, stream_id, internal_name, country_code;
+GROUP BY hour, tenant_id, cluster_id, origin_cluster_id, stream_id, internal_name, country_code;
 
 -- Backfill tenant_viewer_daily from viewer_hours_hourly
 INSERT INTO periscope.tenant_viewer_daily
 SELECT
     toDate(hour) AS day,
     tenant_id,
+    cluster_id,
+    origin_cluster_id,
     sumMerge(total_session_seconds) / 3600.0 AS viewer_hours,
     toUInt32(uniqMerge(unique_viewers)) AS unique_viewers,
     toUInt32(count()) AS total_sessions,
     sumMerge(total_bytes) / (1024*1024*1024) AS egress_gb
 FROM periscope.viewer_hours_hourly
-GROUP BY day, tenant_id;
+GROUP BY day, tenant_id, cluster_id, origin_cluster_id;
 
 -- Backfill viewer_geo_hourly from viewer_hours_hourly
 INSERT INTO periscope.viewer_geo_hourly
