@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-cli \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper \
-	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
+	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy update fmt \
 	lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
@@ -20,6 +20,8 @@ SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ing
 
 # All Go modules (including pkg for testing)
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
+GO_GET_ARGS ?= -u ./...
+PNPM_UP_ARGS ?= -r
 
 # Generate proto files first
 proto:
@@ -341,6 +343,26 @@ tidy:
 		(cd $$service_dir && go mod tidy); \
 	done
 	@echo "✓ All modules tidied"
+
+# Update Go dependencies in all modules, then tidy
+update:
+	@echo "Updating Go dependencies for all Go modules (go get $(GO_GET_ARGS))..."
+	@failed=0; \
+	for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> $$service_name"; \
+		(cd $$service_dir && go get $(GO_GET_ARGS)) || failed=1; \
+	done; \
+	if [ $$failed -eq 0 ]; then \
+		echo "✓ Go dependencies updated"; \
+	else \
+		echo "✗ Go dependency update failed"; \
+		exit 1; \
+	fi
+	@$(MAKE) tidy
+	@echo "Updating JS dependencies (pnpm up $(PNPM_UP_ARGS))..."
+	pnpm up $(PNPM_UP_ARGS)
+	@echo "✓ Update complete"
 
 # Format all Go code
 fmt:
