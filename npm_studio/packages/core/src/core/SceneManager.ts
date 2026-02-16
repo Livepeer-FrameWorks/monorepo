@@ -157,9 +157,9 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     // so host app bundlers can emit/rehydrate worker assets.
     if (
       await tryWorkerFactory(
-        "bundler ../workers (.mod.js)",
+        "bundler ../../workers (.js)",
         () =>
-          new Worker(new URL("../workers/compositor.worker.mod.js", import.meta.url), {
+          new Worker(new URL("../../workers/compositor.worker.js", import.meta.url), {
             type: "module",
           })
       )

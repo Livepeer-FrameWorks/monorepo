@@ -788,19 +788,17 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       // Bundler-managed worker URL patterns.
       // Keep new URL(...) inline in new Worker(...) so app bundlers can emit worker assets.
       try {
-        return new Worker(new URL("../workers/rtcTransform.worker.mod.js", import.meta.url), {
+        return new Worker(new URL("../../workers/rtcTransform.worker.js", import.meta.url), {
           type: "module",
         });
       } catch (err) {
-        this.log("Bundler source rtcTransform (.mod.js) URL failed", err);
+        this.log("Bundler dist rtcTransform (.js) URL failed", err);
       }
 
       try {
-        return new Worker(new URL("../workers/rtcTransform.worker.ts", import.meta.url), {
-          type: "module",
-        });
+        return new Worker(new URL("../../workers/rtcTransform.worker.js", import.meta.url));
       } catch (err) {
-        this.log("Bundler source rtcTransform (.ts) URL failed", err);
+        this.log("Bundler dist rtcTransform (.js classic) URL failed", err);
       }
 
       try {

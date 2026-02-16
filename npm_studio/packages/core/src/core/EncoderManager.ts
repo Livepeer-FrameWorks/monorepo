@@ -320,9 +320,9 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
     // so app bundlers can emit/rehydrate worker assets.
     const bundlerFactories = [
       {
-        description: "bundler ../workers/encoder.worker.mod.js",
+        description: "bundler ../../workers/encoder.worker.js",
         create: () =>
-          new Worker(new URL("../workers/encoder.worker.mod.js", import.meta.url), {
+          new Worker(new URL("../../workers/encoder.worker.js", import.meta.url), {
             type: "module",
           }),
       },
@@ -416,7 +416,7 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
 
     // Try source-relative worker path first (bundlers can rewrite .ts worker URLs)
     try {
-      const workerUrl = new URL("../workers/encoder.worker.mod.js", import.meta.url);
+      const workerUrl = new URL("../../workers/encoder.worker.js", import.meta.url);
       return new Worker(workerUrl, { type: "module" });
     } catch {
       // Fall through
