@@ -48,31 +48,6 @@ export default [
       }),
     ],
   },
-  // CJS (unbundled for tree-shaking)
-  {
-    input: {
-      index: "src/index.ts",
-      define: "src/define.ts",
-    },
-    external,
-    output: {
-      dir: "dist/cjs",
-      format: "cjs",
-      sourcemap: !isDevelopment,
-      exports: "named",
-      preserveModules: true,
-      preserveModulesRoot: "src",
-    },
-    plugins: [
-      ...commonPlugins,
-      typescript({
-        tsconfig: "./tsconfig.json",
-        declaration: false,
-        declarationDir: undefined,
-        outDir: "dist/cjs",
-      }),
-    ],
-  },
   // IIFE (fully bundled for CDN <script> tag)
   {
     input: "src/iife-entry.ts",

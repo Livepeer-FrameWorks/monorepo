@@ -12,56 +12,42 @@
  * ```
  */
 
-import React, { createContext, useContext, type ReactNode } from "react";
+import React, { type ReactNode } from "react";
 import {
   usePlayerController,
   type UsePlayerControllerConfig,
   type UsePlayerControllerReturn,
 } from "../hooks/usePlayerController";
+import { PlayerContext } from "./player";
 
-// Context holds the full hook return value
-const PlayerContext = createContext<UsePlayerControllerReturn | null>(null);
-
-export interface PlayerProviderProps {
+export type PlayerProviderProps = {
   children: ReactNode;
-  /** Configuration for the player controller */
-  config: UsePlayerControllerConfig;
-}
+} & (
+  | { config: UsePlayerControllerConfig; value?: never }
+  | { value: UsePlayerControllerReturn; config?: never }
+);
 
 /**
  * Provider component that wraps Player and its controls.
- * Calls usePlayerController internally and shares state via context.
+ *
+ * Two modes:
+ * - `config` — creates a new hook instance internally
+ * - `value` — wraps children with a pre-computed hook return (used by Player component)
  */
-export function PlayerProvider({ children, config }: PlayerProviderProps) {
-  const playerController = usePlayerController(config);
+export function PlayerProvider({ children, config, value }: PlayerProviderProps) {
+  if (value !== undefined) {
+    return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
+  }
+  return <HookProvider config={config!}>{children}</HookProvider>;
+}
 
+function HookProvider({
+  children,
+  config,
+}: {
+  children: ReactNode;
+  config: UsePlayerControllerConfig;
+}) {
+  const playerController = usePlayerController(config);
   return <PlayerContext.Provider value={playerController}>{children}</PlayerContext.Provider>;
 }
-
-/**
- * Hook to access player context.
- * Must be used within a PlayerProvider.
- */
-export function usePlayerContext(): UsePlayerControllerReturn {
-  const context = useContext(PlayerContext);
-  if (!context) {
-    throw new Error("usePlayerContext must be used within a PlayerProvider");
-  }
-  return context;
-}
-
-/**
- * Hook to optionally access player context.
- * Returns null if not within a PlayerProvider (no error thrown).
- * Use this when component may or may not be within a PlayerProvider.
- */
-export function usePlayerContextOptional(): UsePlayerControllerReturn | null {
-  return useContext(PlayerContext);
-}
-
-// Export context for advanced use cases
-export { PlayerContext };
-
-// Type exports
-export type { UsePlayerControllerReturn as PlayerContextValue };
-export type { UsePlayerControllerConfig };

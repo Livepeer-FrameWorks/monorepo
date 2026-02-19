@@ -131,6 +131,7 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
   const { subscribe, update } = writable<StreamCrafterV2State>(initialState);
   let controller: IngestControllerV2 | null = null;
   let encoderStatsCleanup: (() => void) | null = null;
+  let encoderCheckTimeout: ReturnType<typeof setTimeout> | null = null;
 
   let _state: StreamCrafterV2State;
   subscribe((s) => (_state = s));
@@ -194,7 +195,8 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
 
       // Check encoder status when streaming starts
       if (event.state === "streaming") {
-        setTimeout(checkEncoderStatus, 100);
+        if (encoderCheckTimeout) clearTimeout(encoderCheckTimeout);
+        encoderCheckTimeout = setTimeout(checkEncoderStatus, 100);
       } else if (event.state === "idle" || event.state === "capturing") {
         applyUpdate({ isWebCodecsActive: false, encoderStats: null });
         if (encoderStatsCleanup) {
@@ -374,6 +376,10 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
     },
 
     destroy() {
+      if (encoderCheckTimeout) {
+        clearTimeout(encoderCheckTimeout);
+        encoderCheckTimeout = null;
+      }
       if (encoderStatsCleanup) {
         encoderStatsCleanup();
         encoderStatsCleanup = null;

@@ -618,7 +618,9 @@ func main() {
 
 		retryCfg := qmbootstrap.DefaultRetryConfig("foghorn")
 		retryCfg.AttemptTimeout = 10 * time.Second
-		bsResp, bsErr := qmbootstrap.BootstrapServiceWithRetry(qmClient, bsReq, logger, retryCfg)
+		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		bsResp, bsErr := qmbootstrap.BootstrapServiceWithRetry(bootstrapCtx, qmClient, bsReq, logger, retryCfg)
+		bootstrapCancel()
 		if bsErr != nil {
 			logger.WithError(bsErr).Warn("BootstrapService failed — HA relay disabled")
 		}

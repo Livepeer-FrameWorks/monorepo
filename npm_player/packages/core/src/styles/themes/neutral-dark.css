@@ -1,0 +1,30 @@
+/*
+ * FrameWorks Player — Neutral Dark Theme
+ * A brand-neutral dark theme without Tokyo Night's purple-blue tint.
+ */
+.fw-player-surface[data-theme="neutral-dark"] {
+  --fw-surface-deep: 0 0% 8%;
+  --fw-surface: 0 0% 12%;
+  --fw-surface-raised: 0 0% 16%;
+  --fw-surface-active: 0 0% 22%;
+
+  --fw-text: 0 0% 82%;
+  --fw-text-bright: 0 0% 95%;
+  --fw-text-muted: 0 0% 55%;
+  --fw-text-faint: 0 0% 38%;
+
+  --fw-accent: 210 100% 55%;
+  --fw-accent-secondary: 195 80% 55%;
+  --fw-success: 140 60% 50%;
+  --fw-danger: 0 70% 55%;
+  --fw-warning: 35 80% 55%;
+  --fw-live: 0 80% 48%;
+
+  --fw-shadow-color: 0 0% 0%;
+  --fw-on-accent: 0 0% 100%;
+  --fw-on-live: 0 0% 100%;
+
+  --fw-controls-bg: hsl(var(--fw-surface-deep) / 0.85);
+  --fw-controls-fg: hsl(var(--fw-text));
+  --fw-seam: hsl(var(--fw-text-faint) / 0.3);
+}

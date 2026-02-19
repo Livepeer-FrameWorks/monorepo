@@ -11,6 +11,7 @@ import type {
   EncodedVideoChunkData,
   EncodedAudioChunkData,
 } from "./EncoderManager";
+import { type VideoCodecFamily, mimeToCodecFamily } from "./CodecProfiles";
 
 export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
   private config: WhipClientConfig;
@@ -101,14 +102,12 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         const capabilities = RTCRtpSender.getCapabilities("video");
         if (!capabilities?.codecs) continue;
 
-        // Filter to VP9 and H264, preferring VP9
+        // Filter to AV1, VP9, and H264 — prefer AV1 > VP9 > H264
+        const codecOrder = ["video/AV1", "video/VP9", "video/H264"];
         const preferred = capabilities.codecs
-          .filter((c) => c.mimeType === "video/VP9" || c.mimeType === "video/H264")
+          .filter((c) => codecOrder.includes(c.mimeType))
           .sort((a, b) => {
-            // VP9 first, then H264
-            if (a.mimeType === "video/VP9" && b.mimeType !== "video/VP9") return -1;
-            if (a.mimeType !== "video/VP9" && b.mimeType === "video/VP9") return 1;
-            return 0;
+            return codecOrder.indexOf(a.mimeType) - codecOrder.indexOf(b.mimeType);
           });
 
         if (preferred.length > 0) {
@@ -203,10 +202,12 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       return false;
     }
 
-    // Check video codec alignment
+    // Check video codec alignment (WebCodecs can produce H264, VP9, and AV1)
     if (this.negotiatedVideoCodec) {
       const videoOk =
-        this.negotiatedVideoCodec === "video/VP9" || this.negotiatedVideoCodec === "video/H264";
+        this.negotiatedVideoCodec === "video/VP9" ||
+        this.negotiatedVideoCodec === "video/H264" ||
+        this.negotiatedVideoCodec === "video/AV1";
 
       if (!videoOk) {
         this.log("Video codec not compatible with WebCodecs", this.negotiatedVideoCodec);
@@ -239,6 +240,15 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    */
   getNegotiatedAudioCodec(): string | null {
     return this.negotiatedAudioCodec;
+  }
+
+  /**
+   * Get the negotiated video codec as a VideoCodecFamily.
+   * Returns null if no codec negotiated or unrecognized.
+   */
+  getNegotiatedVideoCodecFamily(): VideoCodecFamily | null {
+    if (!this.negotiatedVideoCodec) return null;
+    return mimeToCodecFamily(this.negotiatedVideoCodec);
   }
 
   /**
@@ -1012,7 +1022,17 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       this.audioWriter = null;
     }
 
+    for (const entry of this.videoWriteQueue) {
+      try {
+        entry.frame.close();
+      } catch {}
+    }
     this.videoWriteQueue = [];
+    for (const entry of this.audioWriteQueue) {
+      try {
+        entry.audioData.close();
+      } catch {}
+    }
     this.audioWriteQueue = [];
     this.isProcessingVideoQueue = false;
     this.isProcessingAudioQueue = false;

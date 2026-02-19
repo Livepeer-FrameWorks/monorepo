@@ -38,31 +38,6 @@ export default [
       }),
     ],
   },
-  // Main library - CJS (unbundled for better tree-shaking)
-  {
-    input: {
-      index: "src/index.ts",
-      vanilla: "src/vanilla/index.ts",
-    },
-    output: {
-      dir: "dist/cjs",
-      format: "cjs",
-      sourcemap: !isDevelopment,
-      exports: "named",
-      preserveModules: true,
-      preserveModulesRoot: "src",
-      entryFileNames: "[name].cjs",
-    },
-    plugins: [
-      ...commonPlugins,
-      typescript({
-        tsconfig: "./tsconfig.json",
-        declaration: false,
-        declarationDir: undefined,
-        outDir: "dist/cjs",
-      }),
-    ],
-  },
   // Encoder Worker bundle (must be bundled - self-contained IIFE)
   {
     input: "src/workers/encoder.worker.ts",

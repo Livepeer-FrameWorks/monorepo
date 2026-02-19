@@ -56,6 +56,7 @@ function createMockGL() {
     uniform1f: vi.fn(),
     uniform1i: vi.fn(),
     uniform2f: vi.fn(),
+    uniform3f: vi.fn(),
     uniform4f: vi.fn(),
     uniformMatrix4fv: vi.fn(),
     activeTexture: vi.fn(),
@@ -235,6 +236,9 @@ describe("WebGLRenderer", () => {
       expect(uniformNames).toContain("u_filterType");
       expect(uniformNames).toContain("u_filterStrength");
       expect(uniformNames).toContain("u_colorMatrix");
+      expect(uniformNames).toContain("u_keyColor");
+      expect(uniformNames).toContain("u_keyTolerance");
+      expect(uniformNames).toContain("u_keyEdgeSoftness");
 
       // Transition program uniforms
       expect(uniformNames).toContain("u_offset");
@@ -1126,21 +1130,104 @@ describe("WebGLRenderer", () => {
       expect(lastCall[1]).toBe(0);
     });
 
-    it("unsupported filters default filterType to 0", () => {
+    it("invert sets filterType to 6", () => {
       renderWithFilter({ type: "invert" });
 
       const filterTypeCalls = gl.uniform1i.mock.calls.filter(
         (c: any[]) => c[0]._name === "u_filterType"
       );
       const lastCall = filterTypeCalls[filterTypeCalls.length - 1];
-      expect(lastCall[1]).toBe(0);
+      expect(lastCall[1]).toBe(6);
+    });
 
-      gl.uniform1i.mockClear();
+    it("unsupported filters default filterType to 0", () => {
       renderWithFilter({ type: "glow", strength: 0.5 });
 
       const glowCalls = gl.uniform1i.mock.calls.filter((c: any[]) => c[0]._name === "u_filterType");
       const lastGlowCall = glowCalls[glowCalls.length - 1];
       expect(lastGlowCall[1]).toBe(0);
+    });
+
+    it("chromaKey sets filterType to 5 and configures uniforms", () => {
+      renderWithFilter({
+        type: "chromaKey",
+        keyColor: "#00FF00",
+        keyTolerance: 0.4,
+        keyEdgeSoftness: 0.15,
+      });
+
+      const filterTypeCalls = gl.uniform1i.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_filterType"
+      );
+      expect(filterTypeCalls.some((c: any[]) => c[1] === 5)).toBe(true);
+
+      const colorCalls = gl.uniform3f.mock.calls.filter((c: any[]) => c[0]._name === "u_keyColor");
+      expect(colorCalls.length).toBeGreaterThan(0);
+      // Green key: R=0, G=1, B=0
+      expect(colorCalls[0][1]).toBeCloseTo(0);
+      expect(colorCalls[0][2]).toBeCloseTo(1);
+      expect(colorCalls[0][3]).toBeCloseTo(0);
+
+      const tolCalls = gl.uniform1f.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_keyTolerance"
+      );
+      expect(tolCalls.some((c: any[]) => c[1] === 0.4)).toBe(true);
+
+      const softCalls = gl.uniform1f.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_keyEdgeSoftness"
+      );
+      expect(softCalls.some((c: any[]) => c[1] === 0.15)).toBe(true);
+    });
+
+    it("chromaKey uses green defaults when no keyColor specified", () => {
+      renderWithFilter({ type: "chromaKey" });
+
+      const tolCalls = gl.uniform1f.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_keyTolerance"
+      );
+      expect(tolCalls.some((c: any[]) => c[1] === 0.3)).toBe(true);
+
+      const softCalls = gl.uniform1f.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_keyEdgeSoftness"
+      );
+      expect(softCalls.some((c: any[]) => c[1] === 0.1)).toBe(true);
+    });
+
+    it("invert sets filterType to 6 with default strength 1", () => {
+      renderWithFilter({ type: "invert" });
+
+      const filterTypeCalls = gl.uniform1i.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_filterType"
+      );
+      expect(filterTypeCalls.some((c: any[]) => c[1] === 6)).toBe(true);
+
+      const strengthCalls = gl.uniform1f.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_filterStrength"
+      );
+      expect(strengthCalls.some((c: any[]) => c[1] === 1)).toBe(true);
+    });
+
+    it("invert uses custom strength", () => {
+      renderWithFilter({ type: "invert", strength: 0.5 });
+
+      const strengthCalls = gl.uniform1f.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_filterStrength"
+      );
+      expect(strengthCalls.some((c: any[]) => c[1] === 0.5)).toBe(true);
+    });
+
+    it("colorMatrix applies hue rotation when hue is non-zero", () => {
+      renderWithFilter({ type: "colorMatrix", hue: 90 });
+
+      const matrixCall = gl.uniformMatrix4fv.mock.calls[0];
+      const matrix = matrixCall[2] as Float32Array;
+
+      // With 90deg hue rotation + default b/c/s, diagonal should not be identity
+      expect(matrix[0]).not.toBeCloseTo(1, 2);
+      // Matrix should still have reasonable values
+      for (let i = 0; i < 16; i++) {
+        expect(Math.abs(matrix[i])).toBeLessThan(2);
+      }
     });
 
     it("colorMatrix uses default values when brightness/contrast/saturation not set", () => {
@@ -1149,7 +1236,7 @@ describe("WebGLRenderer", () => {
       const matrixCall = gl.uniformMatrix4fv.mock.calls[0];
       const matrix = matrixCall[2] as Float32Array;
 
-      // With defaults (b=1, c=1, s=1) the diagonal should be ~1 (identity-like)
+      // With defaults (b=1, c=1, s=1, h=0) the diagonal should be ~1 (identity-like)
       expect(matrix[0]).toBeCloseTo(1);
       expect(matrix[5]).toBeCloseTo(1);
       expect(matrix[10]).toBeCloseTo(1);

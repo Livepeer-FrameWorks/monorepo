@@ -7,6 +7,7 @@
     PlayerMetadata,
   } from "@livepeer-frameworks/player-svelte";
   import { getGraphqlHttpUrl } from "$lib/config";
+  import { themeStore } from "$lib/stores/theme.svelte";
 
   interface Props {
     contentId: string;
@@ -67,7 +68,10 @@
     {contentId}
     {contentType}
     {thumbnailUrl}
-    options={playerOptions}
+    options={{
+      ...playerOptions,
+      theme: themeStore.playerTheme,
+    } as typeof playerOptions}
     {onStateChange}
     {onMetadata}
   />

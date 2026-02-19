@@ -1,0 +1,202 @@
+---
+title: "StreamCrafter — Web Components"
+description: "Web Components integration for browser-based streaming with StreamCrafter."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Installation
+
+**NPM:**
+
+```bash
+npm install @livepeer-frameworks/streamcrafter-wc
+```
+
+```ts
+import "@livepeer-frameworks/streamcrafter-wc/define";
+```
+
+**CDN (no bundler):**
+
+```html
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+```
+
+Shadow DOM encapsulates all CSS — host page styles won't break controls.
+
+## Drop-in Element
+
+```html
+<fw-streamcrafter
+  whip-url="%INGEST_URL%/webrtc/your-stream-key"
+  initial-profile="broadcast"
+></fw-streamcrafter>
+```
+
+**Gateway Mode:**
+
+```html
+<fw-streamcrafter
+  gateway-url="%GATEWAY_URL%/graphql"
+  stream-key="<YOUR_STREAM_KEY>"
+  initial-profile="broadcast"
+></fw-streamcrafter>
+```
+
+The element includes the same full UI as the React/Svelte versions: video preview, camera/screen controls, quality selection, and connection status.
+
+## Headless Mode
+
+Set `controls="false"` to hide the built-in UI. The element still manages the streaming connection — you provide your own controls:
+
+```html
+<fw-streamcrafter
+  id="studio"
+  whip-url="%INGEST_URL%/webrtc/key"
+  controls="false"
+></fw-streamcrafter>
+
+<script>
+  const studio = document.getElementById("studio");
+
+  document.getElementById("go-live").addEventListener("click", () => {
+    studio.controller.startStreaming();
+  });
+
+  document.getElementById("add-camera").addEventListener("click", () => {
+    studio.controller.startCamera();
+  });
+</script>
+```
+
+### Controller Access
+
+The `.controller` property provides direct access to the underlying `IngestControllerHost`:
+
+```js
+const studio = document.querySelector("fw-streamcrafter");
+
+// Read state
+studio.controller.getState(); // "idle" | "capturing" | "streaming" | ...
+studio.controller.isStreaming(); // boolean
+studio.controller.getSources(); // MediaSource[]
+
+// Actions
+await studio.controller.startCamera();
+await studio.controller.startScreenShare({ audio: true });
+await studio.controller.startStreaming();
+await studio.controller.stopStreaming();
+studio.controller.removeSource("camera-1");
+studio.controller.setSourceVolume("camera-1", 0.5);
+
+// Events
+studio.controller.on("stateChange", ({ state }) => console.log(state));
+```
+
+## Slot-based Composition
+
+When you provide content in the default slot, it replaces the built-in controls while the element still manages the connection:
+
+```html
+<fw-streamcrafter whip-url="..." controls="false">
+  <div class="my-controls">
+    <fw-sc-volume></fw-sc-volume>
+    <button id="go-live">Go Live</button>
+  </div>
+</fw-streamcrafter>
+```
+
+## Standalone Sub-Components
+
+All sub-components can be used outside `<fw-streamcrafter>` by referencing it with the `for` attribute:
+
+```html
+<fw-streamcrafter id="studio" whip-url="..." controls="false"></fw-streamcrafter>
+
+<div class="my-custom-layout">
+  <fw-sc-volume for="studio"></fw-sc-volume>
+  <fw-sc-compositor for="studio"></fw-sc-compositor>
+  <fw-sc-scene-switcher for="studio"></fw-sc-scene-switcher>
+  <fw-sc-layer-list for="studio"></fw-sc-layer-list>
+  <fw-sc-advanced for="studio"></fw-sc-advanced>
+</div>
+```
+
+Without `for`, sub-components look for the nearest ancestor `<fw-streamcrafter>` using `closest()`.
+
+### Sub-Component Reference
+
+| Element                  | Purpose                                                        |
+| ------------------------ | -------------------------------------------------------------- |
+| `<fw-sc-volume>`         | Volume slider with mute toggle                                 |
+| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                       |
+| `<fw-sc-scene-switcher>` | Scene list with transition controls                            |
+| `<fw-sc-layer-list>`     | Drag-to-reorder layer list with visibility toggles             |
+| `<fw-sc-advanced>`       | Advanced settings panel (WebCodecs, encoder, audio processing) |
+
+## Attributes Reference
+
+| Attribute           | Type      | Default       | Description                        |
+| ------------------- | --------- | ------------- | ---------------------------------- |
+| `whip-url`          | `string`  | —             | Direct WHIP ingest endpoint        |
+| `gateway-url`       | `string`  | —             | Gateway GraphQL endpoint           |
+| `stream-key`        | `string`  | —             | Stream key (used with gateway-url) |
+| `initial-profile`   | `string`  | `"broadcast"` | Quality preset                     |
+| `controls`          | `string`  | `""`          | Set to `"false"` for headless mode |
+| `theme`             | `string`  | `"default"`   | Theme preset name                  |
+| `locale`            | `string`  | `"en"`        | UI language                        |
+| `enable-compositor` | `boolean` | `true`        | Enable compositor                  |
+| `debug`             | `boolean` | `false`       | Enable debug logging               |
+
+## Events
+
+Listen for events on the element:
+
+```js
+const studio = document.querySelector("fw-streamcrafter");
+
+studio.addEventListener("fw-sc-state-change", (e) => {
+  console.log("State:", e.detail.state);
+});
+
+studio.addEventListener("fw-sc-layout-apply", (e) => {
+  console.log("Layout:", e.detail.layout);
+});
+```
+
+## Using with Vue
+
+```vue
+<template>
+  <fw-streamcrafter :whip-url="whipUrl" initial-profile="broadcast" />
+</template>
+
+<script setup>
+import "@livepeer-frameworks/streamcrafter-wc/define";
+import { ref } from "vue";
+
+const whipUrl = ref("%INGEST_URL%/webrtc/my-key");
+</script>
+```
+
+## Using with Angular
+
+```typescript
+// app.module.ts
+import { CUSTOM_ELEMENTS_SCHEMA, NgModule } from "@angular/core";
+import "@livepeer-frameworks/streamcrafter-wc/define";
+
+@NgModule({
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
+})
+export class AppModule {}
+```
+
+```html
+<!-- component.html -->
+<fw-streamcrafter [attr.whip-url]="whipUrl" initial-profile="broadcast"></fw-streamcrafter>
+```

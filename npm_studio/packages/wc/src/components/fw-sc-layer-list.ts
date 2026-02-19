@@ -9,9 +9,15 @@ import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
 import { eyeIcon, eyeOffIcon, cameraIcon, monitorIcon, videoIcon } from "../icons/index.js";
 import type { Layer, MediaSource, LayerTransform } from "@livepeer-frameworks/streamcrafter-core";
+import {
+  type StudioTranslateFn,
+  createStudioTranslator,
+} from "@livepeer-frameworks/streamcrafter-core";
 
 @customElement("fw-sc-layer-list")
 export class FwScLayerList extends LitElement {
+  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
+  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ attribute: false }) layers: Layer[] = [];
   @property({ attribute: false }) sources: MediaSource[] = [];
   @property({ type: String, attribute: "selected-layer-id" }) selectedLayerId: string | null = null;
@@ -23,6 +29,7 @@ export class FwScLayerList extends LitElement {
   ) => void;
   @property({ attribute: false }) onRemove?: (layerId: string) => void;
   @property({ attribute: false }) onSelect?: (layerId: string | null) => void;
+  @property({ attribute: false }) t: StudioTranslateFn = createStudioTranslator({ locale: "en" });
 
   @state() private _draggedId: string | null = null;
   @state() private _dragOverId: string | null = null;
@@ -64,13 +71,13 @@ export class FwScLayerList extends LitElement {
     return html`
       <div class="fw-sc-layer-list">
         <div class="fw-sc-layer-list-header">
-          <span class="fw-sc-layer-list-title">Layers</span>
+          <span class="fw-sc-layer-list-title">${this.t("layers")}</span>
           <span class="fw-sc-layer-count">${this.layers.length}</span>
         </div>
 
         <div class="fw-sc-layer-items">
           ${sorted.length === 0
-            ? html` <div class="fw-sc-layer-empty">No layers. Add a source to get started.</div> `
+            ? html` <div class="fw-sc-layer-empty">${this.t("noLayers")}</div> `
             : sorted.map(
                 (layer, index) => html`
                   <div
@@ -104,7 +111,7 @@ export class FwScLayerList extends LitElement {
                         e.stopPropagation();
                         this.onVisibilityToggle?.(layer.id, !layer.visible);
                       }}
-                      title=${layer.visible ? "Hide layer" : "Show layer"}
+                      title=${layer.visible ? this.t("hideLayer") : this.t("showLayer")}
                     >
                       ${layer.visible ? eyeIcon(14) : eyeOffIcon(14)}
                     </button>
@@ -139,7 +146,7 @@ export class FwScLayerList extends LitElement {
                           this._moveUp(layer.id);
                         }}
                         ?disabled=${index === 0}
-                        title="Move up"
+                        title=${this.t("moveUp")}
                       >
                         ↑
                       </button>
@@ -150,7 +157,7 @@ export class FwScLayerList extends LitElement {
                           this._moveDown(layer.id);
                         }}
                         ?disabled=${index === sorted.length - 1}
-                        title="Move down"
+                        title=${this.t("moveDown")}
                       >
                         ↓
                       </button>
@@ -166,7 +173,7 @@ export class FwScLayerList extends LitElement {
                                 this._editingLayerId =
                                   this._editingLayerId === layer.id ? null : layer.id;
                               }}
-                              title="Edit opacity"
+                              title=${this.t("editOpacity")}
                             >
                               ⚙
                             </button>
@@ -180,7 +187,7 @@ export class FwScLayerList extends LitElement {
                                 e.stopPropagation();
                                 this.onRemove?.(layer.id);
                               }}
-                              title="Remove layer"
+                              title=${this.t("removeLayer")}
                             >
                               ×
                             </button>

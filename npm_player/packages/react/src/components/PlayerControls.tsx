@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
-import { usePlayerContextOptional } from "../context/PlayerContext";
+import { usePlayerContextOptional } from "../context/player";
 import {
   cn,
   // Seeking utilities from core
@@ -13,7 +13,11 @@ import {
   isLiveContent,
   // Time formatting from core
   formatTimeDisplay,
+  getAvailableLocales,
+  getLocaleDisplayName,
+  createTranslator,
 } from "@livepeer-frameworks/player-core";
+import type { FwLocale } from "@livepeer-frameworks/player-core";
 import { Slider } from "../ui/slider";
 import SeekBar from "./SeekBar";
 import {
@@ -84,6 +88,10 @@ interface PlayerControlsProps {
   onToggleLoop?: () => void;
   /** Jump to live edge callback */
   onJumpToLive?: () => void;
+  /** Current active locale */
+  activeLocale?: FwLocale;
+  /** Callback when locale is changed */
+  onLocaleChange?: (locale: FwLocale) => void;
 }
 
 const PlayerControls: React.FC<PlayerControlsProps> = ({
@@ -112,7 +120,11 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   isLoopEnabled: _propIsLoopEnabled,
   onToggleLoop: _onToggleLoop,
   onJumpToLive,
+  activeLocale,
+  onLocaleChange,
 }) => {
+  const t = useMemo(() => createTranslator({ locale: activeLocale ?? "en" }), [activeLocale]);
+
   // Context fallback - prefer props passed from parent over context
   // Context provides UsePlayerControllerReturn which has state.videoElement and controller
   const ctx = usePlayerContextOptional();
@@ -429,6 +441,12 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   }, [video]);
 
   useEffect(() => {
+    // Primary: trust MistServer stream metadata (matches ddvtech embed approach)
+    if (mistStreamInfo?.hasAudio !== undefined) {
+      setHasAudio(mistStreamInfo.hasAudio);
+      return;
+    }
+
     if (!video) {
       setHasAudio(true);
       return;
@@ -448,8 +466,18 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
     };
     checkAudio();
     video.addEventListener("loadedmetadata", checkAudio);
-    return () => video.removeEventListener("loadedmetadata", checkAudio);
-  }, [video]);
+    // Safari: audioTracks may be populated after loadedmetadata for HLS streams
+    const audioTracks = (video as any).audioTracks;
+    if (audioTracks?.addEventListener) {
+      audioTracks.addEventListener("addtrack", checkAudio);
+    }
+    return () => {
+      video.removeEventListener("loadedmetadata", checkAudio);
+      if (audioTracks?.removeEventListener) {
+        audioTracks.removeEventListener("addtrack", checkAudio);
+      }
+    };
+  }, [video, mistStreamInfo?.hasAudio]);
 
   const handlePlayPause = () => {
     if (disabled) return;
@@ -623,7 +651,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   return (
     <div
       className={cn(
-        "fw-player-surface fw-controls-wrapper",
+        "fw-controls-wrapper",
         isVisible ? "fw-controls-wrapper--visible" : "fw-controls-wrapper--hidden"
       )}
     >
@@ -660,7 +688,8 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
               <button
                 type="button"
                 className="fw-btn-flush"
-                aria-label={isPlaying ? "Pause" : "Play"}
+                aria-label={isPlaying ? t("pause") : t("play")}
+                title={isPlaying ? `${t("pause")} (k)` : `${t("play")} (k)`}
                 onClick={handlePlayPause}
               >
                 <PlayPauseIcon isPlaying={isPlaying} size={18} />
@@ -670,7 +699,8 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                   <button
                     type="button"
                     className="fw-btn-flush hidden sm:flex"
-                    aria-label="Skip back 10 seconds"
+                    aria-label={t("skipBackward")}
+                    title={`${t("seekBackward")} (j)`}
                     onClick={handleSkipBack}
                   >
                     <SkipBackIcon size={16} />
@@ -678,7 +708,8 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                   <button
                     type="button"
                     className="fw-btn-flush hidden sm:flex"
-                    aria-label="Skip forward 10 seconds"
+                    aria-label={t("skipForward")}
+                    title={`${t("seekForward")} (l)`}
                     onClick={handleSkipForward}
                   >
                     <SkipForwardIcon size={16} />
@@ -715,7 +746,8 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
               <button
                 type="button"
                 className="fw-volume-btn"
-                aria-label={!hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
+                aria-label={!hasAudio ? t("muted") : isMuted ? t("unmute") : t("mute")}
+                title={!hasAudio ? t("muted") : isMuted ? `${t("unmute")} (m)` : `${t("mute")} (m)`}
                 onClick={hasAudio ? handleMute : undefined}
                 disabled={!hasAudio}
               >
@@ -732,7 +764,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
               >
                 <Slider
                   orientation="horizontal"
-                  aria-label="Volume"
+                  aria-label={t("volume")}
                   max={100}
                   step={1}
                   value={[volumeValue]}
@@ -744,7 +776,9 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
             </div>
 
             <div className="fw-control-group">
-              <span className="fw-time-display">{timeDisplay}</span>
+              <span className="fw-time-display" aria-label={t("currentTime")} aria-live="off">
+                {timeDisplay}
+              </span>
             </div>
 
             {isLive && (
@@ -759,11 +793,9 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                       ? "fw-live-badge--active"
                       : "fw-live-badge--behind"
                   )}
-                  title={
-                    !hasDvrWindow ? "Live only" : isNearLiveState ? "At live edge" : "Jump to live"
-                  }
+                  title={t("live")}
                 >
-                  LIVE
+                  {t("live").toUpperCase()}
                   {!isNearLiveState && hasDvrWindow && <SeekToLiveIcon size={10} />}
                 </button>
               </div>
@@ -776,8 +808,8 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
               <button
                 type="button"
                 className={cn("fw-btn-flush group", isSettingsOpen && "fw-btn-flush--active")}
-                aria-label="Settings"
-                title="Settings"
+                aria-label={t("settings")}
+                title={t("settings")}
                 onClick={() => setIsSettingsOpen(!isSettingsOpen)}
               >
                 <SettingsIcon size={16} className="transition-transform group-hover:rotate-90" />
@@ -785,11 +817,21 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
 
               {/* Settings Popup */}
               {isSettingsOpen && (
-                <div className="fw-player-surface fw-settings-menu">
+                <div
+                  className="fw-settings-menu"
+                  role="menu"
+                  aria-label={t("settings")}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setIsSettingsOpen(false);
+                      e.preventDefault();
+                    }
+                  }}
+                >
                   {/* Playback Mode - only show for live content (not VOD/clips) */}
                   {onModeChange && isContentLive !== false && (
                     <div className="fw-settings-section">
-                      <div className="fw-settings-label">Mode</div>
+                      <div className="fw-settings-label">{t("mode")}</div>
                       <div className="fw-settings-options">
                         {(["auto", "low-latency", "quality"] as const).map((mode) => (
                           <button
@@ -804,10 +846,10 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                             }}
                           >
                             {mode === "low-latency"
-                              ? "Fast"
+                              ? t("fast")
                               : mode === "quality"
-                                ? "Stable"
-                                : "Auto"}
+                                ? t("stable")
+                                : t("auto")}
                           </button>
                         ))}
                       </div>
@@ -815,7 +857,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                   )}
                   {supportsPlaybackRate && (
                     <div className="fw-settings-section">
-                      <div className="fw-settings-label">Speed</div>
+                      <div className="fw-settings-label">{t("speed")}</div>
                       <div className="fw-settings-options fw-settings-options--wrap">
                         {SPEED_PRESETS.map((rate) => (
                           <button
@@ -837,7 +879,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                   )}
                   {qualities.length > 0 && (
                     <div className="fw-settings-section">
-                      <div className="fw-settings-label">Quality</div>
+                      <div className="fw-settings-label">{t("quality")}</div>
                       <div className="fw-settings-list">
                         <button
                           className={cn(
@@ -849,7 +891,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                             setIsSettingsOpen(false);
                           }}
                         >
-                          Auto
+                          {t("auto")}
                         </button>
                         {qualities.map((q) => (
                           <button
@@ -871,7 +913,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                   )}
                   {textTracks.length > 0 && (
                     <div className="fw-settings-section">
-                      <div className="fw-settings-label">Captions</div>
+                      <div className="fw-settings-label">{t("captions")}</div>
                       <div className="fw-settings-list">
                         <button
                           className={cn(
@@ -883,7 +925,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                             setIsSettingsOpen(false);
                           }}
                         >
-                          Off
+                          {t("captionsOff")}
                         </button>
                         {textTracks.map((t) => (
                           <button
@@ -903,6 +945,28 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                       </div>
                     </div>
                   )}
+                  {/* Locale */}
+                  {onLocaleChange && (
+                    <div className="fw-settings-section">
+                      <div className="fw-settings-label">{t("language")}</div>
+                      <div className="fw-settings-list">
+                        {getAvailableLocales().map((loc) => (
+                          <button
+                            key={loc}
+                            className={cn(
+                              "fw-settings-list-item",
+                              activeLocale === loc && "fw-settings-list-item--active"
+                            )}
+                            onClick={() => {
+                              onLocaleChange(loc);
+                            }}
+                          >
+                            {getLocaleDisplayName(loc)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -911,7 +975,8 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
               <button
                 type="button"
                 className="fw-btn-flush"
-                aria-label="Toggle fullscreen"
+                aria-label={isFullscreen ? t("exitFullscreen") : t("fullscreen")}
+                title={isFullscreen ? `${t("exitFullscreen")} (f)` : `${t("fullscreen")} (f)`}
                 onClick={handleFullscreen}
               >
                 <FullscreenToggleIcon isFullscreen={isFullscreen} size={16} />

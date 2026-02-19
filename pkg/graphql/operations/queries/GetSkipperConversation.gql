@@ -1,0 +1,18 @@
+query GetSkipperConversation($id: ID!) {
+  skipperConversation(id: $id) {
+    id
+    title
+    messages {
+      id
+      role
+      content
+      confidence
+      sources
+      toolsUsed
+      confidenceBlocks
+      createdAt
+    }
+    createdAt
+    updatedAt
+  }
+}

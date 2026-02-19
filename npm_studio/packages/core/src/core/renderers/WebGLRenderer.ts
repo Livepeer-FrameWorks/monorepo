@@ -109,9 +109,14 @@ uniform float u_opacity;
 uniform float u_borderRadius;   // Border radius in pixels
 
 // Filter uniforms
-uniform int u_filterType;       // 0=none, 1=blur, 2=colorMatrix, 3=grayscale, 4=sepia
+uniform int u_filterType;       // 0=none, 1=blur, 2=colorMatrix, 3=grayscale, 4=sepia, 5=chromaKey, 6=invert
 uniform float u_filterStrength;
 uniform mat4 u_colorMatrix;
+
+// Chroma key uniforms
+uniform vec3 u_keyColor;        // Key color in RGB (0-1)
+uniform float u_keyTolerance;   // Chroma distance threshold (0-1)
+uniform float u_keyEdgeSoftness; // Edge feathering width (0-1)
 
 in vec2 v_texCoord;
 in vec2 v_localPos;
@@ -125,12 +130,20 @@ float roundedRectSDF(vec2 pos, vec2 size, float radius) {
   return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
 }
 
+// RGB to YCbCr for chroma keying
+vec3 rgb2ycbcr(vec3 rgb) {
+  float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+  float cb = -0.169 * rgb.r - 0.331 * rgb.g + 0.500 * rgb.b;
+  float cr =  0.500 * rgb.r - 0.419 * rgb.g - 0.081 * rgb.b;
+  return vec3(y, cb, cr);
+}
+
 void main() {
   vec4 color = texture(u_texture, v_texCoord);
 
   // Apply filter effects
   if (u_filterType == 2) {
-    // Color matrix
+    // Color matrix (brightness, contrast, saturation, hue)
     color = u_colorMatrix * color;
   } else if (u_filterType == 3) {
     // Grayscale
@@ -144,6 +157,16 @@ void main() {
       dot(color.rgb, vec3(0.272, 0.534, 0.131))
     );
     color.rgb = mix(color.rgb, sepia, u_filterStrength);
+  } else if (u_filterType == 5) {
+    // Chroma key: compare in YCbCr chroma space
+    vec3 pixelYCbCr = rgb2ycbcr(color.rgb);
+    vec3 keyYCbCr = rgb2ycbcr(u_keyColor);
+    float chromaDist = distance(pixelYCbCr.yz, keyYCbCr.yz);
+    float alpha = smoothstep(u_keyTolerance, u_keyTolerance + u_keyEdgeSoftness, chromaDist);
+    color.a *= alpha;
+  } else if (u_filterType == 6) {
+    // Invert
+    color.rgb = mix(color.rgb, 1.0 - color.rgb, u_filterStrength);
   }
 
   // Apply border radius clipping
@@ -239,6 +262,9 @@ export class WebGLRenderer implements CompositorRenderer {
     filterType: WebGLUniformLocation;
     filterStrength: WebGLUniformLocation;
     colorMatrix: WebGLUniformLocation;
+    keyColor: WebGLUniformLocation;
+    keyTolerance: WebGLUniformLocation;
+    keyEdgeSoftness: WebGLUniformLocation;
   };
 
   // Uniform locations for transition program
@@ -311,6 +337,9 @@ export class WebGLRenderer implements CompositorRenderer {
       filterType: gl.getUniformLocation(this.layerProgram, "u_filterType")!,
       filterStrength: gl.getUniformLocation(this.layerProgram, "u_filterStrength")!,
       colorMatrix: gl.getUniformLocation(this.layerProgram, "u_colorMatrix")!,
+      keyColor: gl.getUniformLocation(this.layerProgram, "u_keyColor")!,
+      keyTolerance: gl.getUniformLocation(this.layerProgram, "u_keyTolerance")!,
+      keyEdgeSoftness: gl.getUniformLocation(this.layerProgram, "u_keyEdgeSoftness")!,
     };
 
     // Get uniform locations for transition program
@@ -566,17 +595,18 @@ export class WebGLRenderer implements CompositorRenderer {
     switch (filter.type) {
       case "colorMatrix": {
         gl.uniform1i(this.layerUniforms.filterType, 2);
-        // Build color matrix from filter settings
         const b = filter.brightness ?? 1;
         const c = filter.contrast ?? 1;
         const s = filter.saturation ?? 1;
+        const h = filter.hue ?? 0; // hue rotation in degrees
 
-        // Simplified color matrix combining brightness, contrast, saturation
+        // Saturation matrix components
         const sr = (1 - s) * 0.299;
         const sg = (1 - s) * 0.587;
         const sb = (1 - s) * 0.114;
 
-        const matrix = new Float32Array([
+        // Saturation matrix
+        let m = [
           (sr + s) * c * b,
           sg * c * b,
           sb * c * b,
@@ -593,8 +623,37 @@ export class WebGLRenderer implements CompositorRenderer {
           0,
           0,
           1,
-        ]);
-        gl.uniformMatrix4fv(this.layerUniforms.colorMatrix, false, matrix);
+        ];
+
+        // Apply hue rotation if non-zero
+        if (h !== 0) {
+          const rad = (h * Math.PI) / 180;
+          const cosH = Math.cos(rad);
+          const sinH = Math.sin(rad);
+          // Hue rotation matrix in RGB space (Pregibon method)
+          const hue = [
+            0.213 + cosH * 0.787 - sinH * 0.213,
+            0.715 - cosH * 0.715 - sinH * 0.715,
+            0.072 - cosH * 0.072 + sinH * 0.928,
+            0,
+            0.213 - cosH * 0.213 + sinH * 0.143,
+            0.715 + cosH * 0.285 + sinH * 0.14,
+            0.072 - cosH * 0.072 - sinH * 0.283,
+            0,
+            0.213 - cosH * 0.213 - sinH * 0.787,
+            0.715 - cosH * 0.715 + sinH * 0.715,
+            0.072 + cosH * 0.928 + sinH * 0.072,
+            0,
+            0,
+            0,
+            0,
+            1,
+          ];
+          // Multiply m * hue (column-major for WebGL)
+          m = this.multiplyMatrix4(m, hue);
+        }
+
+        gl.uniformMatrix4fv(this.layerUniforms.colorMatrix, false, new Float32Array(m));
         break;
       }
 
@@ -608,9 +667,21 @@ export class WebGLRenderer implements CompositorRenderer {
         gl.uniform1f(this.layerUniforms.filterStrength, filter.strength ?? 1);
         break;
 
+      case "chromaKey": {
+        gl.uniform1i(this.layerUniforms.filterType, 5);
+        const rgb = this.parseColor(filter.keyColor ?? "#00FF00");
+        gl.uniform3f(this.layerUniforms.keyColor, rgb.r, rgb.g, rgb.b);
+        gl.uniform1f(this.layerUniforms.keyTolerance, filter.keyTolerance ?? 0.3);
+        gl.uniform1f(this.layerUniforms.keyEdgeSoftness, filter.keyEdgeSoftness ?? 0.1);
+        break;
+      }
+
+      case "invert":
+        gl.uniform1i(this.layerUniforms.filterType, 6);
+        gl.uniform1f(this.layerUniforms.filterStrength, filter.strength ?? 1);
+        break;
+
       case "blur":
-        // Blur would require multi-pass rendering with framebuffers
-        // For now, just log a warning
         console.warn(
           "[WebGLRenderer] Blur filter requires multi-pass rendering, not yet implemented"
         );
@@ -620,6 +691,20 @@ export class WebGLRenderer implements CompositorRenderer {
       default:
         gl.uniform1i(this.layerUniforms.filterType, 0);
     }
+  }
+
+  private multiplyMatrix4(a: number[], b: number[]): number[] {
+    const result: number[] = new Array(16);
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 4; col++) {
+        result[row * 4 + col] =
+          a[row * 4 + 0] * b[0 * 4 + col] +
+          a[row * 4 + 1] * b[1 * 4 + col] +
+          a[row * 4 + 2] * b[2 * 4 + col] +
+          a[row * 4 + 3] * b[3 * 4 + col];
+      }
+    }
+    return result;
   }
 
   renderTransition(

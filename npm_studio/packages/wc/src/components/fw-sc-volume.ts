@@ -8,11 +8,19 @@ import { sharedStyles } from "../styles/shared-styles.js";
 
 @customElement("fw-sc-volume")
 export class FwScVolume extends LitElement {
+  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
+  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ type: Number }) value = 1;
   @property({ type: Number }) min = 0;
   @property({ type: Number }) max = 2;
   @property({ type: Number, attribute: "snap-threshold" }) snapThreshold = 0.05;
   @property({ type: Boolean }) compact = false;
+
+  /** Resolve the parent `<fw-streamcrafter>` element. */
+  resolveStudio(): HTMLElement | null {
+    if (this.for) return document.getElementById(this.for);
+    return this.closest("fw-streamcrafter");
+  }
 
   @state() private _isDragging = false;
   @state() private _popupPosition = 0;
@@ -59,7 +67,7 @@ export class FwScVolume extends LitElement {
         transform: translateX(-50%);
         margin-bottom: 8px;
         padding: 4px 8px;
-        color: #1a1b26;
+        color: hsl(var(--fw-sc-on-accent, 235 19% 13%));
         border-radius: 4px;
         font-size: 12px;
         font-weight: 600;
@@ -93,9 +101,9 @@ export class FwScVolume extends LitElement {
   }
 
   private get _accentColor(): string {
-    if (this._isBoost) return "#e0af68";
-    if (this._isDefault) return "#9ece6a";
-    return "#7aa2f7";
+    if (this._isBoost) return "hsl(var(--fw-sc-warning))";
+    if (this._isDefault) return "hsl(var(--fw-sc-success))";
+    return "hsl(var(--fw-sc-accent))";
   }
 
   private _handleChange(e: Event) {
@@ -130,7 +138,9 @@ export class FwScVolume extends LitElement {
 
   protected render() {
     const markerLeft = `${(1 / this.max) * 100}%`;
-    const markerBg = this._isDefault ? "#9ece6a" : "rgba(158, 206, 106, 0.3)";
+    const markerBg = this._isDefault
+      ? "hsl(var(--fw-sc-success))"
+      : "hsl(var(--fw-sc-success) / 0.3)";
 
     return html`
       ${this._isDragging

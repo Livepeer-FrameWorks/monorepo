@@ -1,9 +1,14 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, getContext } from "svelte";
+  import type { Readable } from "svelte/store";
   import type {
     Scene,
     TransitionConfig,
     TransitionType,
+  } from "@livepeer-frameworks/streamcrafter-core";
+  import {
+    createStudioTranslator,
+    type StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
 
   interface Props {
@@ -35,6 +40,10 @@
     showTransitionControls = true,
     class: className = "",
   }: Props = $props();
+
+  const translatorCtx = getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator");
+  const fallbackT = createStudioTranslator({ locale: "en" });
+  let t: StudioTranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
 
   let selectedTransition = $state<TransitionType>("fade");
   let transitionDuration = $state(500);
@@ -74,7 +83,7 @@
 
 <div class="fw-sc-scene-switcher {className}">
   <div class="fw-sc-scene-switcher-header">
-    <span class="fw-sc-scene-switcher-title">Scenes</span>
+    <span class="fw-sc-scene-switcher-title">{t("scenes")}</span>
     {#if showTransitionControls}
       <div class="fw-sc-transition-controls">
         <select
@@ -83,12 +92,12 @@
           onchange={(e) =>
             (selectedTransition = (e.target as HTMLSelectElement).value as TransitionType)}
         >
-          <option value="cut">Cut</option>
-          <option value="fade">Fade</option>
-          <option value="slide-left">Slide Left</option>
-          <option value="slide-right">Slide Right</option>
-          <option value="slide-up">Slide Up</option>
-          <option value="slide-down">Slide Down</option>
+          <option value="cut">{t("cut")}</option>
+          <option value="fade">{t("fade")}</option>
+          <option value="slide-left">{t("slideLeft")}</option>
+          <option value="slide-right">{t("slideRight")}</option>
+          <option value="slide-up">{t("slideUp")}</option>
+          <option value="slide-down">{t("slideDown")}</option>
         </select>
         <input
           type="number"
@@ -98,7 +107,7 @@
           min={0}
           max={3000}
           step={100}
-          title="Transition duration (ms)"
+          title={t("transitionDuration")}
         />
         <span class="fw-sc-transition-unit">ms</span>
       </div>
@@ -128,7 +137,7 @@
           <button
             class="fw-sc-scene-delete"
             onclick={(e) => handleDeleteClick(e, scene.id)}
-            title="Delete scene"
+            title={t("deleteScene")}
           >
             ×
           </button>
@@ -137,7 +146,7 @@
     {/each}
 
     {#if onSceneCreate}
-      <button class="fw-sc-scene-add" onclick={onSceneCreate} title="Create new scene">+</button>
+      <button class="fw-sc-scene-add" onclick={onSceneCreate} title={t("createNewScene")}>+</button>
     {/if}
   </div>
 </div>

@@ -20,53 +20,63 @@ export const sharedStyles = css`
  * These are OUTSIDE the layer so they're always available regardless of cascade.
  */
   .fw-player-surface {
-    /* Tokyo Night color palette */
-    --tn-bg-dark: 235 21% 11%; /* #1a1b26 - Darkest (slab backgrounds) */
-    --tn-bg: 233 23% 17%; /* #24283b - Main background */
-    --tn-bg-highlight: 233 23% 21%; /* #292e42 - Elevated surfaces */
-    --tn-bg-visual: 232 27% 25%; /* #33395e - Selection/active states */
+    /*
+   * INTERNAL: Tokyo Night palette (default theme).
+   * Do NOT reference --tn-* in component styles — use --fw-* tokens below.
+   */
+    --tn-bg-dark: 235 21% 11%;
+    --tn-bg: 233 23% 17%;
+    --tn-bg-highlight: 233 23% 21%;
+    --tn-bg-visual: 232 27% 25%;
+    --tn-fg: 223 27% 76%;
+    --tn-fg-bright: 220 13% 91%;
+    --tn-fg-dark: 224 16% 53%;
+    --tn-fg-gutter: 228 15% 45%;
+    --tn-blue: 218 79% 73%;
+    --tn-green: 95 53% 55%;
+    --tn-red: 348 74% 64%;
+    --tn-yellow: 35 79% 64%;
+    --tn-purple: 267 82% 77%;
+    --tn-cyan: 178 64% 63%;
+    --tn-teal: 162 66% 62%;
 
-    /* Text hierarchy */
-    --tn-fg: 223 27% 76%; /* #a9b1d6 - Primary text */
-    --tn-fg-bright: 220 13% 91%; /* #e2e4ea - Bright/highlighted text */
-    --tn-fg-dark: 224 16% 53%; /* #787c99 - Secondary text (muted) */
-    --tn-fg-gutter: 228 15% 45%; /* #5a607f - Borders, seams */
+    /*
+   * PUBLIC: Semantic design tokens (default = Tokyo Night).
+   * Override these to theme the player. Values are HSL triplets (e.g. "210 100% 50%").
+   * Use with hsl(): background: hsl(var(--fw-accent) / 0.5);
+   */
 
-    /* Accent colors (semantic) */
-    --tn-blue: 218 79% 73%; /* #7aa2f7 - Primary actions */
-    --tn-green: 95 53% 55%; /* #9ece6a - Success */
-    --tn-red: 348 74% 64%; /* #f7768e - Destructive, live */
-    --tn-yellow: 35 79% 64%; /* #e0af68 - Warnings */
-    --tn-purple: 267 82% 77%; /* #bb9af7 - Secondary accent */
-    --tn-cyan: 178 64% 63%; /* #7dcfff - Info */
-    --tn-teal: 162 66% 62%; /* #73daca - Terminal green */
+    /* Surfaces */
+    --fw-surface-deep: var(--tn-bg-dark);
+    --fw-surface: var(--tn-bg);
+    --fw-surface-raised: var(--tn-bg-highlight);
+    --fw-surface-active: var(--tn-bg-visual);
 
-    /* Player-internal variables (not shared with host) */
-    --fw-background: var(--tn-bg);
-    --fw-foreground: var(--tn-fg);
-    --fw-card: var(--tn-bg-highlight);
-    --fw-card-foreground: var(--tn-fg);
-    --fw-popover: var(--tn-bg-highlight);
-    --fw-popover-foreground: var(--tn-fg);
-    --fw-primary: var(--tn-blue);
-    --fw-primary-foreground: var(--tn-bg-dark);
-    --fw-secondary: var(--tn-bg-visual);
-    --fw-secondary-foreground: var(--tn-fg);
-    --fw-muted: var(--tn-bg-highlight);
-    --fw-muted-foreground: var(--tn-fg-dark);
-    --fw-accent: var(--tn-bg-visual);
-    --fw-accent-foreground: var(--tn-fg);
-    --fw-destructive: var(--tn-red);
-    --fw-destructive-foreground: var(--tn-bg-dark);
-    --fw-border: var(--tn-fg-gutter);
-    --fw-input: var(--tn-bg-highlight);
-    --fw-ring: var(--tn-blue);
+    /* Text */
+    --fw-text: var(--tn-fg);
+    --fw-text-bright: var(--tn-fg-bright);
+    --fw-text-muted: var(--tn-fg-dark);
+    --fw-text-faint: var(--tn-fg-gutter);
+
+    /* Accents */
+    --fw-accent: var(--tn-blue);
+    --fw-accent-secondary: var(--tn-cyan);
+    --fw-success: var(--tn-green);
+    --fw-danger: var(--tn-red);
+    --fw-warning: var(--tn-yellow);
+    --fw-info: var(--tn-cyan);
+    --fw-live: 348 80% 48%;
+
+    /* Special */
+    --fw-shadow-color: 0 0% 0%;
+    --fw-on-accent: var(--tn-bg-dark);
+    --fw-on-live: 0 0% 100%;
     --fw-radius: 0;
 
-    /* Controls-specific variables */
-    --fw-controls-bg: hsl(var(--tn-bg-dark) / 0.85);
-    --fw-controls-fg: hsl(var(--tn-fg));
-    --fw-seam: hsl(var(--tn-fg-gutter) / 0.3);
+    /* Composite (derived from tokens — override for fine control) */
+    --fw-controls-bg: hsl(var(--fw-surface-deep) / 0.85);
+    --fw-controls-fg: hsl(var(--fw-text));
+    --fw-seam: hsl(var(--fw-text-faint) / 0.3);
     color: var(--fw-controls-fg);
   }
 
@@ -136,7 +146,7 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     /* Slab body - padded content area */
@@ -189,7 +199,7 @@ export const sharedStyles = css`
       padding: 0.5rem 0.75rem;
       border-radius: 0;
       background: transparent;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
       transition:
         background-color 0.15s,
         color 0.15s;
@@ -198,29 +208,29 @@ export const sharedStyles = css`
     }
 
     .fw-btn-flush:hover {
-      background: hsl(var(--tn-bg-visual) / 0.5);
+      background: hsl(var(--fw-surface-active) / 0.5);
     }
 
     .fw-btn-flush:active {
-      background: hsl(var(--tn-bg-visual));
+      background: hsl(var(--fw-surface-active));
     }
 
     .fw-btn-flush--active {
-      color: hsl(var(--tn-blue));
+      color: hsl(var(--fw-accent));
     }
 
     /* Status indicators */
     .fw-status-online {
-      color: hsl(var(--tn-green));
+      color: hsl(var(--fw-success));
     }
     .fw-status-offline {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-danger));
     }
     .fw-status-warning {
-      color: hsl(var(--tn-yellow));
+      color: hsl(var(--fw-warning));
     }
     .fw-status-info {
-      color: hsl(var(--tn-cyan));
+      color: hsl(var(--fw-accent-secondary));
     }
 
     /* =====================================================
@@ -232,9 +242,10 @@ export const sharedStyles = css`
       height: 100%;
       width: 100%;
       overflow: hidden;
+      container-type: size;
       border-radius: 0; /* Slabs don't have rounded corners */
-      background-color: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      background-color: hsl(var(--fw-surface-deep));
+      border: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-player-container {
@@ -242,7 +253,7 @@ export const sharedStyles = css`
       width: 100%;
       overflow: hidden;
       border-radius: 0;
-      background-color: hsl(var(--tn-bg-dark));
+      background-color: hsl(var(--fw-surface-deep));
     }
 
     .fw-player-video {
@@ -250,7 +261,7 @@ export const sharedStyles = css`
       width: 100%;
       border-radius: 0;
       object-fit: contain;
-      background-color: hsl(var(--tn-bg-dark));
+      background-color: hsl(var(--fw-surface-deep));
     }
 
     .fw-player-embed {
@@ -259,7 +270,7 @@ export const sharedStyles = css`
       min-height: 300px;
       border-radius: 0;
       border-width: 0;
-      background-color: hsl(var(--tn-bg-dark));
+      background-color: hsl(var(--fw-surface-deep));
     }
 
     .fw-player-dvd {
@@ -282,7 +293,7 @@ export const sharedStyles = css`
       min-width: 0 !important;
       min-height: 0 !important;
       padding: 0 !important;
-      background: black;
+      background: hsl(var(--fw-surface-deep));
     }
 
     /* Ensure video tech fills the wrapper with letterboxing */
@@ -330,20 +341,20 @@ export const sharedStyles = css`
       bottom: 3rem;
       right: 0;
       width: 12rem;
-      max-height: 70vh;
+      max-height: min(70vh, calc(100cqb - 4rem));
       overflow-y: auto;
-      background: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      background: hsl(var(--fw-surface-deep));
+      border: 1px solid hsl(var(--fw-text-faint) / 0.3);
       box-shadow:
-        0 10px 15px -3px rgb(0 0 0 / 0.1),
-        0 4px 6px -4px rgb(0 0 0 / 0.1);
+        0 10px 15px -3px hsl(var(--fw-shadow-color) / 0.1),
+        0 4px 6px -4px hsl(var(--fw-shadow-color) / 0.1);
       border-radius: 0.25rem;
       z-index: 50;
     }
 
     .fw-settings-section {
       padding: 0.5rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-settings-section:last-child {
@@ -352,7 +363,7 @@ export const sharedStyles = css`
 
     .fw-settings-label {
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       text-transform: uppercase;
       font-weight: 600;
       margin-bottom: 0.25rem;
@@ -373,8 +384,8 @@ export const sharedStyles = css`
       padding: 0.375rem 0.25rem;
       font-size: 10px;
       border-radius: 0.25rem;
-      background: hsl(var(--tn-bg));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-surface));
+      color: hsl(var(--fw-text));
       border: none;
       cursor: pointer;
       transition:
@@ -383,16 +394,16 @@ export const sharedStyles = css`
     }
 
     .fw-settings-btn:hover {
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-surface-raised));
     }
 
     .fw-settings-btn--active {
-      background: hsl(var(--tn-blue));
-      color: hsl(var(--tn-bg-dark));
+      background: hsl(var(--fw-accent));
+      color: hsl(var(--fw-surface-deep));
     }
 
     .fw-settings-btn--active:hover {
-      background: hsl(var(--tn-blue));
+      background: hsl(var(--fw-accent));
     }
 
     .fw-settings-list {
@@ -409,19 +420,19 @@ export const sharedStyles = css`
       text-align: left;
       border-radius: 0.25rem;
       background: transparent;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
       border: none;
       cursor: pointer;
       transition: background-color 0.15s;
     }
 
     .fw-settings-list-item:hover {
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-surface-raised));
     }
 
     .fw-settings-list-item--active {
-      background: hsl(var(--tn-blue) / 0.2);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-accent) / 0.2);
+      color: hsl(var(--fw-accent));
     }
 
     /* --- Context Menu (bits-ui wrapper) --- */
@@ -430,13 +441,13 @@ export const sharedStyles = css`
       min-width: 8rem;
       overflow: hidden;
       border-radius: 0.25rem;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-      background: hsl(var(--tn-bg-dark));
+      border: 1px solid hsl(var(--fw-text-faint) / 0.3);
+      background: hsl(var(--fw-surface-deep));
       padding: 0;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
       box-shadow:
-        0 10px 15px -3px rgb(0 0 0 / 0.1),
-        0 4px 6px -4px rgb(0 0 0 / 0.1);
+        0 10px 15px -3px hsl(var(--fw-shadow-color) / 0.1),
+        0 4px 6px -4px hsl(var(--fw-shadow-color) / 0.1);
     }
 
     .fw-context-menu-item {
@@ -457,7 +468,7 @@ export const sharedStyles = css`
       appearance: none;
       -webkit-appearance: none;
       outline: none;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
       transition:
         background-color 0.15s,
         color 0.15s;
@@ -465,8 +476,8 @@ export const sharedStyles = css`
 
     .fw-context-menu-item:hover,
     .fw-context-menu-item:focus {
-      background: hsl(var(--tn-bg-visual));
-      color: white;
+      background: hsl(var(--fw-surface-active));
+      color: hsl(var(--fw-text-bright));
     }
 
     .fw-context-menu-item[data-disabled] {
@@ -481,14 +492,14 @@ export const sharedStyles = css`
     .fw-context-menu-separator {
       margin: 0.25rem -0.25rem;
       height: 1px;
-      background: hsl(var(--tn-fg-gutter) / 0.3);
+      background: hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-context-menu-label {
       padding: 0.375rem 0.5rem;
       font-size: 0.75rem;
       font-weight: 600;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-context-menu-checkbox {
@@ -509,7 +520,7 @@ export const sharedStyles = css`
       appearance: none;
       -webkit-appearance: none;
       outline: none;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
       transition:
         background-color 0.15s,
         color 0.15s;
@@ -517,8 +528,8 @@ export const sharedStyles = css`
 
     .fw-context-menu-checkbox:hover,
     .fw-context-menu-checkbox:focus {
-      background: hsl(var(--tn-bg-visual));
-      color: white;
+      background: hsl(var(--fw-surface-active));
+      color: hsl(var(--fw-text-bright));
     }
 
     .fw-context-menu-indicator {
@@ -549,19 +560,19 @@ export const sharedStyles = css`
     }
 
     .fw-live-badge--active {
-      background: rgb(220 38 38);
-      color: white;
+      background: hsl(var(--fw-live));
+      color: hsl(var(--fw-on-live));
       cursor: default;
     }
 
     .fw-live-badge--behind {
-      background: #414868;
-      color: #a9b1d6;
+      background: hsl(var(--fw-surface-active));
+      color: hsl(var(--fw-text));
     }
 
     .fw-live-badge--behind:hover {
-      background: rgb(220 38 38);
-      color: white;
+      background: hsl(var(--fw-live));
+      color: hsl(var(--fw-on-live));
     }
 
     /* --- Volume Control --- */
@@ -576,15 +587,15 @@ export const sharedStyles = css`
     }
 
     .fw-volume-group--expanded {
-      background: hsl(var(--tn-bg-visual) / 0.5);
+      background: hsl(var(--fw-surface-active) / 0.5);
     }
 
     .fw-volume-group:hover {
-      background: hsl(var(--tn-bg-visual) / 0.5);
+      background: hsl(var(--fw-surface-active) / 0.5);
     }
 
     .fw-volume-group--expanded:hover {
-      background: hsl(var(--tn-bg-visual) / 0.5);
+      background: hsl(var(--fw-surface-active) / 0.5);
     }
 
     .fw-volume-group--disabled {
@@ -598,7 +609,7 @@ export const sharedStyles = css`
       justify-content: center;
       width: 2rem;
       height: 2rem;
-      color: rgb(255 255 255 / 0.8);
+      color: hsl(var(--fw-text) / 0.8);
       background: transparent;
       border: none;
       cursor: pointer;
@@ -606,7 +617,7 @@ export const sharedStyles = css`
     }
 
     .fw-volume-btn:hover {
-      color: white;
+      color: hsl(var(--fw-text-bright));
     }
 
     .fw-volume-slider-wrapper {
@@ -653,7 +664,7 @@ export const sharedStyles = css`
       right: 0;
       height: 4px;
       border-radius: 9999px;
-      background: hsl(var(--tn-fg-gutter) / 0.4);
+      background: hsl(var(--fw-text-faint) / 0.4);
       overflow: hidden;
       transition: height 0.15s ease;
     }
@@ -681,11 +692,11 @@ export const sharedStyles = css`
       position: absolute;
       height: 100%;
       border-radius: 9999px;
-      background: hsl(var(--tn-fg));
+      background: hsl(var(--fw-text));
     }
 
     .fw-slider-range--accent {
-      background: hsl(var(--tn-cyan));
+      background: hsl(var(--fw-accent-secondary));
     }
 
     .fw-slider--vertical .fw-slider-range {
@@ -699,9 +710,9 @@ export const sharedStyles = css`
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background: hsl(var(--tn-fg));
+      background: hsl(var(--fw-text));
       border: none;
-      box-shadow: 0 2px 4px rgb(0 0 0 / 0.3);
+      box-shadow: 0 2px 4px hsl(var(--fw-shadow-color) / 0.3);
       cursor: pointer;
       transition:
         width 0.15s ease,
@@ -719,11 +730,11 @@ export const sharedStyles = css`
     }
 
     .fw-slider-thumb:focus-visible {
-      box-shadow: 0 0 0 2px hsl(var(--tn-fg) / 0.5);
+      box-shadow: 0 0 0 2px hsl(var(--fw-text) / 0.5);
     }
 
     .fw-slider-thumb--accent {
-      background: hsl(var(--tn-cyan));
+      background: hsl(var(--fw-accent-secondary));
     }
 
     .fw-slider-thumb[data-disabled] {
@@ -736,7 +747,7 @@ export const sharedStyles = css`
       font-family: ui-monospace, monospace;
       font-size: 11px;
       line-height: 1;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       white-space: nowrap;
       padding: 0 0.5rem;
     }
@@ -794,7 +805,7 @@ export const sharedStyles = css`
       right: 0;
       height: 4px;
       border-radius: 9999px;
-      background: hsl(var(--tn-fg-gutter) / 0.4);
+      background: hsl(var(--fw-text-faint) / 0.4);
       transition: height 0.15s ease;
     }
 
@@ -807,7 +818,7 @@ export const sharedStyles = css`
       position: absolute;
       height: 100%;
       border-radius: 9999px;
-      background: hsl(var(--tn-fg) / 0.3);
+      background: hsl(var(--fw-text) / 0.3);
       transition: all 0.2s ease;
     }
 
@@ -815,7 +826,7 @@ export const sharedStyles = css`
       position: absolute;
       height: 100%;
       border-radius: 9999px;
-      background: hsl(var(--tn-blue));
+      background: hsl(var(--fw-accent));
       transition: width 0.1s linear;
     }
 
@@ -825,8 +836,8 @@ export const sharedStyles = css`
       width: 16px;
       height: 16px;
       border-radius: 50%;
-      background: hsl(var(--tn-blue));
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      background: hsl(var(--fw-accent));
+      box-shadow: 0 2px 4px hsl(var(--fw-shadow-color) / 0.3);
       transform: translate(-50%, -50%);
       transition:
         opacity 0.15s ease,
@@ -853,8 +864,8 @@ export const sharedStyles = css`
       padding: 4px 8px;
       font-family: ui-monospace, monospace;
       font-size: 12px;
-      background: hsl(var(--tn-bg-dark) / 0.95);
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-surface-deep) / 0.95);
+      color: hsl(var(--fw-text));
       border-radius: 4px;
       white-space: nowrap;
       pointer-events: none;
@@ -869,9 +880,9 @@ export const sharedStyles = css`
       width: 18rem;
       max-height: 80%;
       overflow-y: auto;
-      background: hsl(var(--tn-bg-dark) / 0.85);
+      background: hsl(var(--fw-surface-deep) / 0.85);
       backdrop-filter: blur(4px);
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-text-faint) / 0.3);
       font-family: ui-monospace, monospace;
       font-size: 0.75rem;
       z-index: 30;
@@ -882,17 +893,17 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: space-between;
       padding: 0.5rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
       font-size: 10px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-stats-section {
       padding: 0.5rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-stats-section:last-child {
@@ -903,11 +914,44 @@ export const sharedStyles = css`
       display: flex;
       justify-content: space-between;
       padding: 0.125rem 0;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-stats-value {
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
+    }
+
+    /* --- Buffering Overlay --- */
+    .fw-buffering-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: hsl(var(--fw-shadow-color) / 0.4);
+      backdrop-filter: blur(4px);
+      z-index: 20;
+    }
+
+    .fw-buffering-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      font-size: 0.875rem;
+      color: hsl(var(--fw-text-bright));
+      background: hsl(var(--fw-surface-deep) / 0.85);
+      border: 1px solid hsl(var(--fw-text-faint) / 0.3);
+      box-shadow: 0 4px 12px hsl(var(--fw-shadow-color) / 0.2);
+    }
+
+    .fw-buffering-spinner {
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid hsl(var(--fw-text-faint) / 0.3);
+      border-top-color: hsl(var(--fw-accent));
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
     }
 
     /* --- Loading Screen --- */
@@ -918,15 +962,15 @@ export const sharedStyles = css`
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: hsl(var(--tn-bg-dark));
+      background: hsl(var(--fw-surface-deep));
       z-index: 20;
     }
 
     .fw-loading-spinner {
       width: 2rem;
       height: 2rem;
-      border: 3px solid hsl(var(--tn-fg-gutter) / 0.3);
-      border-top-color: hsl(var(--tn-blue));
+      border: 3px solid hsl(var(--fw-text-faint) / 0.3);
+      border-top-color: hsl(var(--fw-accent));
       border-radius: 50%;
       animation: spin 1s linear infinite;
     }
@@ -934,7 +978,7 @@ export const sharedStyles = css`
     .fw-loading-text {
       margin-top: 1rem;
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     /* --- Idle Screen --- */
@@ -945,13 +989,13 @@ export const sharedStyles = css`
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: hsl(var(--tn-bg-dark));
+      background: hsl(var(--fw-surface-deep));
       z-index: 20;
     }
 
     .fw-idle-message {
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     /* --- Stream State Overlay --- */
@@ -962,24 +1006,24 @@ export const sharedStyles = css`
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: hsl(var(--tn-bg-dark) / 0.9);
+      background: hsl(var(--fw-surface-deep) / 0.9);
       gap: 1rem;
       z-index: 20;
     }
 
     .fw-stream-state-icon {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-stream-state-text {
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     /* --- Title Overlay --- */
     .fw-title-overlay {
       padding: 1rem;
-      background: linear-gradient(to bottom, hsl(var(--tn-bg-dark) / 0.8), transparent);
+      background: linear-gradient(to bottom, hsl(var(--fw-surface-deep) / 0.8), transparent);
     }
 
     /* --- Thumbnail Overlay --- */
@@ -993,7 +1037,7 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: center;
       overflow: hidden;
-      background: hsl(var(--tn-bg-dark));
+      background: hsl(var(--fw-surface-deep));
     }
 
     /* --- Speed Indicator --- */
@@ -1019,8 +1063,8 @@ export const sharedStyles = css`
       gap: 1rem;
       padding: 1.5rem;
       min-height: 280px;
-      background: hsl(var(--tn-bg-dark));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-surface-deep));
+      color: hsl(var(--fw-text));
       text-align: center;
     }
 
@@ -1035,7 +1079,7 @@ export const sharedStyles = css`
       display: flex;
       align-items: center;
       justify-content: center;
-      background: hsl(0 0% 0% / 0.6);
+      background: hsl(var(--fw-shadow-color) / 0.6);
       backdrop-filter: blur(4px);
     }
 
@@ -1046,9 +1090,9 @@ export const sharedStyles = css`
     }
 
     .fw-error-popup {
-      background: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+      background: hsl(var(--fw-surface-deep));
+      border: 1px solid hsl(var(--fw-text-faint) / 0.3);
+      box-shadow: 0 10px 25px -5px hsl(var(--fw-shadow-color) / 0.3);
       overflow: hidden;
     }
 
@@ -1066,15 +1110,15 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: space-between;
       padding: 0.5rem 0.75rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-error-header--error {
-      background: hsl(0 70% 50% / 0.1);
+      background: hsl(var(--fw-danger) / 0.1);
     }
 
     .fw-error-header--warning {
-      background: hsl(45 100% 50% / 0.1);
+      background: hsl(var(--fw-warning) / 0.1);
     }
 
     .fw-error-title {
@@ -1085,11 +1129,11 @@ export const sharedStyles = css`
     }
 
     .fw-error-title--error {
-      color: hsl(0 70% 60%);
+      color: hsl(var(--fw-danger));
     }
 
     .fw-error-title--warning {
-      color: hsl(45 100% 50%);
+      color: hsl(var(--fw-warning));
     }
 
     .fw-error-close {
@@ -1101,7 +1145,7 @@ export const sharedStyles = css`
       border-radius: 4px;
       background: transparent;
       border: none;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       cursor: pointer;
       transition:
         background-color 0.15s ease,
@@ -1109,8 +1153,8 @@ export const sharedStyles = css`
     }
 
     .fw-error-close:hover {
-      background: hsl(var(--tn-fg) / 0.1);
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-text) / 0.1);
+      color: hsl(var(--fw-text));
     }
 
     .fw-error-body {
@@ -1119,12 +1163,12 @@ export const sharedStyles = css`
 
     .fw-error-message {
       font-size: 14px;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
     }
 
     .fw-error-actions {
       display: flex;
-      border-top: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-top: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-error-btn {
@@ -1132,7 +1176,7 @@ export const sharedStyles = css`
       padding: 0.5rem 1rem;
       font-size: 12px;
       font-weight: 500;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
       background: transparent;
       border: none;
       cursor: pointer;
@@ -1142,8 +1186,8 @@ export const sharedStyles = css`
     }
 
     .fw-error-btn:hover {
-      background: hsl(var(--tn-fg) / 0.05);
-      color: hsl(var(--tn-fg-bright));
+      background: hsl(var(--fw-text) / 0.05);
+      color: hsl(var(--fw-text-bright));
     }
 
     /* --- Context Menu Animations (for bits-ui) --- */
@@ -1202,15 +1246,16 @@ export const sharedStyles = css`
     .fw-dev-panel {
       z-index: 40;
       pointer-events: auto;
-      background: hsl(var(--tn-bg-dark));
-      border-left: 1px solid hsl(var(--tn-fg-gutter) / 0.5);
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-surface-deep));
+      border-left: 1px solid hsl(var(--fw-text-faint) / 0.5);
+      color: hsl(var(--fw-text));
       font-family: ui-monospace, monospace;
       font-size: 0.75rem;
       width: 280px;
       display: flex;
       flex-direction: column;
       height: 100%;
+      min-height: 0;
       flex-shrink: 0;
     }
 
@@ -1218,8 +1263,8 @@ export const sharedStyles = css`
     .fw-dev-header {
       display: flex;
       align-items: center;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-      background: hsl(var(--tn-bg) / 0.5);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
+      background: hsl(var(--fw-surface) / 0.5);
     }
 
     /* Tab buttons */
@@ -1231,8 +1276,8 @@ export const sharedStyles = css`
       font-weight: 600;
       background: transparent;
       border: none;
-      border-right: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-      color: hsl(var(--tn-fg-dark));
+      border-right: 1px solid hsl(var(--fw-text-faint) / 0.3);
+      color: hsl(var(--fw-text-muted));
       cursor: pointer;
       transition:
         background-color 0.15s,
@@ -1240,13 +1285,13 @@ export const sharedStyles = css`
     }
 
     .fw-dev-tab:hover {
-      background: hsl(var(--tn-bg-dark) / 0.5);
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-surface-deep) / 0.5);
+      color: hsl(var(--fw-text));
     }
 
     .fw-dev-tab--active {
-      background: hsl(var(--tn-bg-dark));
-      color: hsl(var(--tn-fg-bright));
+      background: hsl(var(--fw-surface-deep));
+      color: hsl(var(--fw-text-bright));
     }
 
     .fw-dev-close {
@@ -1258,14 +1303,14 @@ export const sharedStyles = css`
       justify-content: center;
       background: transparent;
       border: none;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       cursor: pointer;
       transition: color 0.15s;
       margin-left: auto;
     }
 
     .fw-dev-close:hover {
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
     }
 
     /* Spacer - pushes close button to right */
@@ -1283,7 +1328,7 @@ export const sharedStyles = css`
     /* Section with label */
     .fw-dev-section {
       padding: 0.75rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-dev-section-label,
@@ -1292,29 +1337,29 @@ export const sharedStyles = css`
       text-transform: uppercase;
       letter-spacing: 0.05em;
       font-weight: 600;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       margin-bottom: 0.25rem;
     }
 
     .fw-dev-section-value,
     .fw-dev-value {
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg-bright));
+      color: hsl(var(--fw-text-bright));
     }
 
     .fw-dev-value-arrow {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-dev-value-muted {
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       margin-top: 0.25rem;
     }
 
     .fw-dev-section-sub {
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       margin-top: 0.25rem;
     }
 
@@ -1328,7 +1373,7 @@ export const sharedStyles = css`
 
     .fw-dev-mode-desc {
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       margin-top: 0.5rem;
       font-style: italic;
     }
@@ -1339,9 +1384,9 @@ export const sharedStyles = css`
       font-size: 10px;
       font-weight: 500;
       border-radius: 0.25rem;
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-surface-raised));
       border: none;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       cursor: pointer;
       transition:
         background-color 0.15s,
@@ -1349,28 +1394,28 @@ export const sharedStyles = css`
     }
 
     .fw-dev-mode-btn:hover {
-      color: hsl(var(--tn-fg));
-      background: hsl(var(--tn-bg-visual));
+      color: hsl(var(--fw-text));
+      background: hsl(var(--fw-surface-active));
     }
 
     .fw-dev-mode-btn--active {
-      background: hsl(var(--tn-blue));
-      color: hsl(var(--tn-bg-dark));
+      background: hsl(var(--fw-accent));
+      color: hsl(var(--fw-surface-deep));
     }
 
     /* Action buttons row */
     .fw-dev-actions {
       display: flex;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-dev-action-btn {
       flex: 1;
       padding: 0.5rem 0.75rem;
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-surface-raised));
       border: none;
-      border-right: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-      color: hsl(var(--tn-fg));
+      border-right: 1px solid hsl(var(--fw-text-faint) / 0.3);
+      color: hsl(var(--fw-text));
       font-size: 0.75rem;
       cursor: pointer;
       transition:
@@ -1383,8 +1428,8 @@ export const sharedStyles = css`
     }
 
     .fw-dev-action-btn:hover {
-      background: hsl(var(--tn-bg-visual));
-      color: hsl(var(--tn-fg-bright));
+      background: hsl(var(--fw-surface-active));
+      color: hsl(var(--fw-text-bright));
     }
 
     /* Combo list header */
@@ -1393,7 +1438,7 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: space-between;
       padding: 0.5rem 0.75rem;
-      background: hsl(var(--tn-bg) / 0.5);
+      background: hsl(var(--fw-surface) / 0.5);
     }
 
     .fw-dev-list-title {
@@ -1401,12 +1446,12 @@ export const sharedStyles = css`
       text-transform: uppercase;
       letter-spacing: 0.05em;
       font-weight: 600;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-dev-list-toggle {
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       background: transparent;
       border: none;
       cursor: pointer;
@@ -1418,12 +1463,12 @@ export const sharedStyles = css`
     }
 
     .fw-dev-list-toggle:hover {
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
     }
 
     /* Combo list items */
     .fw-dev-combo-list {
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-dev-combo-item {
@@ -1435,8 +1480,8 @@ export const sharedStyles = css`
       text-align: left;
       background: transparent;
       border: none;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
-      color: hsl(var(--tn-fg));
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.2);
+      color: hsl(var(--fw-text));
       cursor: pointer;
       transition: background-color 0.15s;
     }
@@ -1446,13 +1491,13 @@ export const sharedStyles = css`
     }
 
     .fw-dev-combo-item:hover {
-      background: hsl(var(--tn-bg) / 0.5);
+      background: hsl(var(--fw-surface) / 0.5);
     }
 
     .fw-dev-combo-item--active {
-      background: hsl(var(--tn-bg-visual));
-      color: hsl(var(--tn-fg-bright));
-      box-shadow: inset 0 0 0 1px hsl(var(--tn-blue));
+      background: hsl(var(--fw-surface-active));
+      color: hsl(var(--fw-text-bright));
+      box-shadow: inset 0 0 0 1px hsl(var(--fw-accent));
     }
 
     .fw-dev-combo-item--disabled {
@@ -1460,11 +1505,11 @@ export const sharedStyles = css`
     }
 
     .fw-dev-combo-item--warning {
-      background: hsl(var(--tn-yellow) / 0.05);
+      background: hsl(var(--fw-warning) / 0.05);
     }
 
     .fw-dev-combo-item--warning:hover {
-      background: hsl(var(--tn-yellow) / 0.1);
+      background: hsl(var(--fw-warning) / 0.1);
     }
 
     .fw-dev-combo-rank {
@@ -1476,19 +1521,19 @@ export const sharedStyles = css`
       font-size: 10px;
       font-weight: 700;
       border-radius: 0.125rem;
-      background: hsl(var(--tn-fg-gutter) / 0.5);
-      color: hsl(var(--tn-fg-dark));
+      background: hsl(var(--fw-text-faint) / 0.5);
+      color: hsl(var(--fw-text-muted));
       flex-shrink: 0;
     }
 
     .fw-dev-combo-rank--active {
-      background: hsl(var(--tn-blue));
-      color: hsl(var(--tn-bg-dark));
+      background: hsl(var(--fw-accent));
+      color: hsl(var(--fw-surface-deep));
     }
 
     .fw-dev-combo-rank--warning {
-      background: hsl(var(--tn-yellow) / 0.3);
-      color: hsl(var(--tn-yellow));
+      background: hsl(var(--fw-warning) / 0.3);
+      color: hsl(var(--fw-warning));
     }
 
     .fw-dev-combo-name {
@@ -1500,15 +1545,15 @@ export const sharedStyles = css`
     }
 
     .fw-dev-combo-arrow {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-dev-combo-type {
-      color: hsl(var(--tn-cyan));
+      color: hsl(var(--fw-accent-secondary));
     }
 
     .fw-dev-combo-type--warning {
-      color: hsl(var(--tn-yellow));
+      color: hsl(var(--fw-warning));
     }
 
     .fw-dev-combo-score {
@@ -1521,93 +1566,83 @@ export const sharedStyles = css`
     }
 
     .fw-dev-combo-score--high {
-      background: hsl(var(--tn-green) / 0.2);
-      color: hsl(var(--tn-green));
+      background: hsl(var(--fw-success) / 0.2);
+      color: hsl(var(--fw-success));
     }
 
     .fw-dev-combo-score--medium {
-      background: hsl(var(--tn-blue) / 0.2);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-accent) / 0.2);
+      color: hsl(var(--fw-accent));
     }
 
     .fw-dev-combo-score--low {
-      background: hsl(var(--tn-yellow) / 0.2);
-      color: hsl(var(--tn-yellow));
+      background: hsl(var(--fw-warning) / 0.2);
+      color: hsl(var(--fw-warning));
     }
 
-    /* Tooltip for combo details */
+    /* Tooltip for combo details — position: fixed escapes overflow containers */
     .fw-dev-tooltip {
-      position: absolute;
-      left: 0;
-      z-index: 50;
-      background: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter));
+      position: fixed;
+      z-index: 9999;
+      background: hsl(var(--fw-surface-deep));
+      border: 1px solid hsl(var(--fw-text-faint));
       box-shadow:
-        0 4px 6px -1px rgb(0 0 0 / 0.1),
-        0 2px 4px -2px rgb(0 0 0 / 0.1);
+        0 4px 6px -1px hsl(var(--fw-shadow-color) / 0.1),
+        0 2px 4px -2px hsl(var(--fw-shadow-color) / 0.1);
       padding: 0.5rem;
       font-size: 10px;
       white-space: nowrap;
       pointer-events: none;
       min-width: 220px;
-    }
-
-    .fw-dev-tooltip--above {
-      bottom: 100%;
-      margin-bottom: 0.25rem;
-    }
-
-    .fw-dev-tooltip--below {
-      top: 100%;
-      margin-top: 0.25rem;
+      max-width: 320px;
     }
 
     .fw-dev-tooltip-header {
       margin-bottom: 0.5rem;
       padding-bottom: 0.5rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.5);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.5);
     }
 
     .fw-dev-tooltip-title {
       font-weight: 700;
-      color: hsl(var(--tn-fg-bright));
+      color: hsl(var(--fw-text-bright));
     }
 
     .fw-dev-tooltip-subtitle {
-      color: hsl(var(--tn-cyan));
+      color: hsl(var(--fw-accent-secondary));
     }
 
     .fw-dev-tooltip-info {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       margin-top: 0.25rem;
     }
 
     .fw-dev-tooltip-score {
       font-weight: 700;
-      color: hsl(var(--tn-fg-bright));
+      color: hsl(var(--fw-text-bright));
       margin-bottom: 0.25rem;
     }
 
     .fw-dev-tooltip-breakdown {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-dev-tooltip-breakdown-value {
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
     }
 
     .fw-dev-tooltip-breakdown-weight {
-      color: hsl(var(--tn-fg-gutter));
+      color: hsl(var(--fw-text-faint));
     }
 
     .fw-dev-tooltip-error {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-danger));
     }
 
     /* Stats panel content */
     .fw-dev-stats-hero {
       padding: 0.75rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-dev-stats-rate {
@@ -1617,24 +1652,24 @@ export const sharedStyles = css`
     }
 
     .fw-dev-stats-rate--good {
-      color: hsl(var(--tn-green));
+      color: hsl(var(--fw-success));
     }
 
     .fw-dev-stats-rate--catching {
-      color: hsl(var(--tn-blue));
+      color: hsl(var(--fw-accent));
     }
 
     .fw-dev-stats-rate--slow {
-      color: hsl(var(--tn-yellow));
+      color: hsl(var(--fw-warning));
     }
 
     .fw-dev-stats-rate--stalling {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-danger));
     }
 
     .fw-dev-stats-label {
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-dev-stats-metrics {
@@ -1645,27 +1680,27 @@ export const sharedStyles = css`
     }
 
     .fw-dev-stats-metric--good {
-      color: hsl(var(--tn-green));
+      color: hsl(var(--fw-success));
     }
 
     .fw-dev-stats-metric--warning {
-      color: hsl(var(--tn-yellow));
+      color: hsl(var(--fw-warning));
     }
 
     .fw-dev-stats-metric--bad {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-danger));
     }
 
     /* Stats rows */
     .fw-dev-stats-rows {
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.3);
     }
 
     .fw-dev-stats-row {
       display: flex;
       justify-content: space-between;
       padding: 0.5rem 0.75rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.2);
     }
 
     .fw-dev-stats-row:last-child {
@@ -1673,27 +1708,27 @@ export const sharedStyles = css`
     }
 
     .fw-dev-stats-key {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-dev-stats-value {
-      color: hsl(var(--tn-fg-bright));
+      color: hsl(var(--fw-text-bright));
     }
 
     .fw-dev-stats-value--cyan {
-      color: hsl(var(--tn-cyan));
+      color: hsl(var(--fw-accent-secondary));
     }
 
     .fw-dev-stats-value--warning {
-      color: hsl(var(--tn-yellow));
+      color: hsl(var(--fw-warning));
     }
 
     .fw-dev-stats-value--bad {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-danger));
     }
 
     .fw-dev-stats-value--good {
-      color: hsl(var(--tn-green));
+      color: hsl(var(--fw-success));
     }
 
     /* Track badges */
@@ -1705,18 +1740,18 @@ export const sharedStyles = css`
     }
 
     .fw-dev-track-badge--video {
-      background: hsl(var(--tn-blue) / 0.2);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-accent) / 0.2);
+      color: hsl(var(--fw-accent));
     }
 
     .fw-dev-track-badge--audio {
-      background: hsl(var(--tn-green) / 0.2);
-      color: hsl(var(--tn-green));
+      background: hsl(var(--fw-success) / 0.2);
+      color: hsl(var(--fw-success));
     }
 
     .fw-dev-track-badge--other {
-      background: hsl(var(--tn-yellow) / 0.2);
-      color: hsl(var(--tn-yellow));
+      background: hsl(var(--fw-warning) / 0.2);
+      color: hsl(var(--fw-warning));
     }
 
     .fw-dev-track-info {
@@ -1724,7 +1759,7 @@ export const sharedStyles = css`
       flex-wrap: wrap;
       gap: 0.5rem;
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     /* Empty state */
@@ -1732,7 +1767,7 @@ export const sharedStyles = css`
     .fw-dev-list-empty {
       padding: 1rem 0.75rem;
       text-align: center;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     /* Chevron icon (expand/collapse toggle) */
@@ -1759,8 +1794,8 @@ export const sharedStyles = css`
       text-align: left;
       background: transparent;
       border: none;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
-      color: hsl(var(--tn-fg));
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.2);
+      color: hsl(var(--fw-text));
       cursor: pointer;
       transition: background-color 0.15s;
     }
@@ -1770,13 +1805,13 @@ export const sharedStyles = css`
     }
 
     .fw-dev-combo-btn:hover {
-      background: hsl(var(--tn-bg) / 0.5);
+      background: hsl(var(--fw-surface) / 0.5);
     }
 
     .fw-dev-combo-btn--active {
-      background: hsl(var(--tn-bg-visual));
-      color: hsl(var(--tn-fg-bright));
-      box-shadow: inset 0 0 0 1px hsl(var(--tn-blue));
+      background: hsl(var(--fw-surface-active));
+      color: hsl(var(--fw-text-bright));
+      box-shadow: inset 0 0 0 1px hsl(var(--fw-accent));
     }
 
     .fw-dev-combo-btn--disabled {
@@ -1784,69 +1819,69 @@ export const sharedStyles = css`
     }
 
     .fw-dev-combo-btn--codec-warn {
-      background: hsl(var(--tn-yellow) / 0.05);
+      background: hsl(var(--fw-warning) / 0.05);
     }
 
     .fw-dev-combo-btn--codec-warn:hover {
-      background: hsl(var(--tn-yellow) / 0.1);
+      background: hsl(var(--fw-warning) / 0.1);
     }
 
     /* Combo rank modifiers */
     .fw-dev-combo-rank--disabled {
-      background: hsl(var(--tn-fg-gutter) / 0.3);
-      color: hsl(var(--tn-fg-gutter));
+      background: hsl(var(--fw-text-faint) / 0.3);
+      color: hsl(var(--fw-text-faint));
     }
 
     .fw-dev-combo-rank--warn {
-      background: hsl(var(--tn-yellow) / 0.3);
-      color: hsl(var(--tn-yellow));
+      background: hsl(var(--fw-warning) / 0.3);
+      color: hsl(var(--fw-warning));
     }
 
     /* Combo type modifiers */
     .fw-dev-combo-type--disabled {
-      color: hsl(var(--tn-fg-gutter));
+      color: hsl(var(--fw-text-faint));
     }
 
     .fw-dev-combo-type--warn {
-      color: hsl(var(--tn-yellow));
+      color: hsl(var(--fw-warning));
     }
 
     /* Combo score modifiers (additional) */
     .fw-dev-combo-score--disabled {
-      background: hsl(var(--tn-fg-gutter) / 0.2);
-      color: hsl(var(--tn-fg-gutter));
+      background: hsl(var(--fw-text-faint) / 0.2);
+      color: hsl(var(--fw-text-faint));
     }
 
     .fw-dev-combo-score--mid {
-      background: hsl(var(--tn-blue) / 0.2);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-accent) / 0.2);
+      color: hsl(var(--fw-accent));
     }
 
     /* Tooltip additional classes */
     .fw-dev-tooltip-tracks {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       margin-top: 0.25rem;
     }
 
     .fw-dev-tooltip-value {
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
     }
 
     .fw-dev-tooltip-row {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       margin-bottom: 0.125rem;
     }
 
     .fw-dev-tooltip-bonus {
-      color: hsl(var(--tn-green));
+      color: hsl(var(--fw-success));
     }
 
     .fw-dev-tooltip-penalty {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-danger));
     }
 
     .fw-dev-tooltip-weight {
-      color: hsl(var(--tn-fg-gutter));
+      color: hsl(var(--fw-text-faint));
       font-size: 9px;
     }
 
@@ -1875,7 +1910,7 @@ export const sharedStyles = css`
 
     .fw-dev-rate-status {
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       text-transform: uppercase;
     }
 
@@ -1883,24 +1918,24 @@ export const sharedStyles = css`
       display: flex;
       gap: 1rem;
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     /* Stat value modifiers */
     .fw-dev-stat-value--good {
-      color: hsl(var(--tn-green));
+      color: hsl(var(--fw-success));
     }
 
     .fw-dev-stat-value--accent {
-      color: hsl(var(--tn-blue));
+      color: hsl(var(--fw-accent));
     }
 
     .fw-dev-stat-value--warn {
-      color: hsl(var(--tn-yellow));
+      color: hsl(var(--fw-warning));
     }
 
     .fw-dev-stat-value--bad {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-danger));
     }
 
     /* Stats row (key-value pair) */
@@ -1908,7 +1943,7 @@ export const sharedStyles = css`
       display: flex;
       justify-content: space-between;
       padding: 0.5rem 0.75rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.2);
     }
 
     .fw-dev-stat:last-child {
@@ -1916,17 +1951,17 @@ export const sharedStyles = css`
     }
 
     .fw-dev-stat-label {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     .fw-dev-stat-value {
-      color: hsl(var(--tn-fg-bright));
+      color: hsl(var(--fw-text-bright));
     }
 
     /* Track display */
     .fw-dev-track {
       padding: 0.5rem 0.75rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-text-faint) / 0.2);
     }
 
     .fw-dev-track:last-child {
@@ -1942,13 +1977,13 @@ export const sharedStyles = css`
 
     .fw-dev-track-codec {
       font-size: 10px;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-text));
       font-weight: 500;
     }
 
     .fw-dev-track-id {
       font-size: 10px;
-      color: hsl(var(--tn-fg-gutter));
+      color: hsl(var(--fw-text-faint));
       margin-left: auto;
     }
 
@@ -1957,7 +1992,7 @@ export const sharedStyles = css`
       flex-wrap: wrap;
       gap: 0.5rem;
       font-size: 10px;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
     }
 
     /* No tracks state */
@@ -1967,13 +2002,75 @@ export const sharedStyles = css`
     }
 
     .fw-dev-no-tracks-text {
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-text-muted));
       font-size: 10px;
     }
 
     .fw-dev-no-tracks-type {
-      color: hsl(var(--tn-fg-gutter));
+      color: hsl(var(--fw-text-faint));
       margin-left: 0.25rem;
     }
+  }
+
+  /*
+ * FrameWorks Player — Light Theme
+ * Import alongside player.css, or set data-theme="light" on the player root.
+ */
+  .fw-player-surface[data-theme="light"] {
+    --fw-surface-deep: 0 0% 97%;
+    --fw-surface: 220 10% 94%;
+    --fw-surface-raised: 220 10% 90%;
+    --fw-surface-active: 220 10% 85%;
+
+    --fw-text: 220 20% 15%;
+    --fw-text-bright: 220 20% 5%;
+    --fw-text-muted: 220 10% 45%;
+    --fw-text-faint: 220 10% 70%;
+
+    --fw-accent: 218 80% 50%;
+    --fw-accent-secondary: 195 80% 42%;
+    --fw-success: 140 60% 35%;
+    --fw-danger: 0 70% 50%;
+    --fw-warning: 35 80% 45%;
+    --fw-live: 0 80% 48%;
+
+    --fw-shadow-color: 220 10% 50%;
+    --fw-on-accent: 0 0% 100%;
+    --fw-on-live: 0 0% 100%;
+
+    --fw-controls-bg: hsl(var(--fw-surface-deep) / 0.92);
+    --fw-controls-fg: hsl(var(--fw-text));
+    --fw-seam: hsl(var(--fw-text-faint) / 0.25);
+  }
+
+  /*
+ * FrameWorks Player — Neutral Dark Theme
+ * A brand-neutral dark theme without Tokyo Night's purple-blue tint.
+ */
+  .fw-player-surface[data-theme="neutral-dark"] {
+    --fw-surface-deep: 0 0% 8%;
+    --fw-surface: 0 0% 12%;
+    --fw-surface-raised: 0 0% 16%;
+    --fw-surface-active: 0 0% 22%;
+
+    --fw-text: 0 0% 82%;
+    --fw-text-bright: 0 0% 95%;
+    --fw-text-muted: 0 0% 55%;
+    --fw-text-faint: 0 0% 38%;
+
+    --fw-accent: 210 100% 55%;
+    --fw-accent-secondary: 195 80% 55%;
+    --fw-success: 140 60% 50%;
+    --fw-danger: 0 70% 55%;
+    --fw-warning: 35 80% 55%;
+    --fw-live: 0 80% 48%;
+
+    --fw-shadow-color: 0 0% 0%;
+    --fw-on-accent: 0 0% 100%;
+    --fw-on-live: 0 0% 100%;
+
+    --fw-controls-bg: hsl(var(--fw-surface-deep) / 0.85);
+    --fw-controls-fg: hsl(var(--fw-text));
+    --fw-seam: hsl(var(--fw-text-faint) / 0.3);
   }
 `;

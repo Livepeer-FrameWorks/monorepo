@@ -36,7 +36,11 @@ import type {
   RendererType,
   RendererStats,
 } from "@livepeer-frameworks/streamcrafter-core";
-import { isLayoutAvailable } from "@livepeer-frameworks/streamcrafter-core";
+import {
+  isLayoutAvailable,
+  type StudioTranslateFn,
+  createStudioTranslator,
+} from "@livepeer-frameworks/streamcrafter-core";
 
 interface LayoutPresetUI {
   mode: LayoutMode;
@@ -75,6 +79,8 @@ const SCALING_MODES: {
 
 @customElement("fw-sc-compositor")
 export class FwScCompositor extends LitElement {
+  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
+  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ type: Boolean, attribute: "is-enabled" }) isEnabled = false;
   @property({ type: Boolean, attribute: "is-initialized" }) isInitialized = false;
   @property({ type: String, attribute: "renderer-type" }) rendererType: RendererType | null = null;
@@ -83,6 +89,7 @@ export class FwScCompositor extends LitElement {
   @property({ attribute: false }) layers: Layer[] = [];
   @property({ attribute: false }) currentLayout: LayoutConfig | null = null;
   @property({ type: Boolean, attribute: "show-stats" }) showStats = true;
+  @property({ attribute: false }) t: StudioTranslateFn = createStudioTranslator({ locale: "en" });
 
   @state() private _tooltipKey: string | null = null;
   @state() private _tooltipText = "";
@@ -116,7 +123,7 @@ export class FwScCompositor extends LitElement {
       <div class="fw-sc-layout-overlay">
         <div class="fw-sc-layout-bar">
           <div class="fw-sc-layout-section">
-            <span class="fw-sc-layout-label">Layout</span>
+            <span class="fw-sc-layout-label">${this.t("layout")}</span>
             <div class="fw-sc-layout-icons">
               ${availableLayouts.map(
                 (preset) => html`
@@ -156,7 +163,7 @@ export class FwScCompositor extends LitElement {
           </div>
           <div class="fw-sc-layout-separator"></div>
           <div class="fw-sc-layout-section">
-            <span class="fw-sc-layout-label">Display</span>
+            <span class="fw-sc-layout-label">${this.t("display")}</span>
             <div class="fw-sc-scaling-icons">
               ${SCALING_MODES.map(
                 (sm) => html`

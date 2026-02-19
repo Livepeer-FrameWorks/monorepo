@@ -34,8 +34,9 @@ func DefaultRetryConfig(serviceName string) RetryConfig {
 	}
 }
 
-// BootstrapServiceWithRetry keeps attempting Quartermaster bootstrap until success or attempts are exhausted.
-func BootstrapServiceWithRetry(client BootstrapClient, req *pb.BootstrapServiceRequest, logger logging.Logger, cfg RetryConfig) (*pb.BootstrapServiceResponse, error) {
+// BootstrapServiceWithRetry keeps attempting Quartermaster bootstrap until success,
+// attempts are exhausted, or the parent context is cancelled.
+func BootstrapServiceWithRetry(ctx context.Context, client BootstrapClient, req *pb.BootstrapServiceRequest, logger logging.Logger, cfg RetryConfig) (*pb.BootstrapServiceResponse, error) {
 	if client == nil {
 		return nil, fmt.Errorf("quartermaster bootstrap client is nil")
 	}
@@ -60,8 +61,8 @@ func BootstrapServiceWithRetry(client BootstrapClient, req *pb.BootstrapServiceR
 
 	backoff := cfg.InitialBackoff
 	for attempt := 1; ; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.AttemptTimeout)
-		resp, err := client.BootstrapService(ctx, req)
+		attemptCtx, cancel := context.WithTimeout(ctx, cfg.AttemptTimeout)
+		resp, err := client.BootstrapService(attemptCtx, req)
 		cancel()
 		if err == nil {
 			return resp, nil
@@ -77,7 +78,11 @@ func BootstrapServiceWithRetry(client BootstrapClient, req *pb.BootstrapServiceR
 			"retry_in":     backoff.String(),
 		}).WithError(err).Warn("Quartermaster bootstrap failed; retrying")
 
-		time.Sleep(backoff)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
 		if backoff < cfg.MaxBackoff {
 			backoff *= 2
 			if backoff > cfg.MaxBackoff {

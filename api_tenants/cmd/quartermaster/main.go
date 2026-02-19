@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -195,7 +196,7 @@ func main() {
 				return nil
 			}(),
 		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("quartermaster")); err != nil {
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("quartermaster")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (quartermaster) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (quartermaster) ok")

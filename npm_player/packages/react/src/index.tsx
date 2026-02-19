@@ -18,6 +18,28 @@ export { default as StatsPanel } from "./components/StatsPanel";
 export { default as DevModePanel } from "./components/DevModePanel";
 export { default as PlayerErrorBoundary } from "./components/PlayerErrorBoundary";
 
+// Composable control components
+export {
+  PlayButton,
+  SkipButton,
+  VolumeControl,
+  TimeDisplay,
+  LiveBadge,
+  FullscreenButton,
+  ControlBar,
+  SettingsMenu,
+} from "./components/controls";
+export type {
+  PlayButtonProps,
+  SkipButtonProps,
+  VolumeControlProps,
+  TimeDisplayProps,
+  LiveBadgeProps,
+  FullscreenButtonProps,
+  ControlBarProps,
+  SettingsMenuProps,
+} from "./components/controls";
+
 // Icon components
 export * from "./components/Icons";
 
@@ -27,13 +49,12 @@ export { Badge } from "./ui/badge";
 export { Slider } from "./ui/slider";
 
 // Context
-export {
-  PlayerProvider,
-  usePlayerContext,
-  usePlayerContextOptional,
-  PlayerContext,
-} from "./context/PlayerContext";
-export type { PlayerContextValue } from "./context/PlayerContext";
+export { PlayerProvider } from "./context/PlayerContext";
+export type { PlayerProviderProps } from "./context/PlayerContext";
+export { usePlayerContext, usePlayerContextOptional } from "./context/player";
+export type { PlayerContextValue } from "./context/player";
+export { I18nProvider } from "./context/I18nContext";
+export { useTranslate } from "./context/i18n";
 
 // Hooks
 export { useStreamState } from "./hooks/useStreamState";

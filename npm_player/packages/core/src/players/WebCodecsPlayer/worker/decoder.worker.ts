@@ -19,8 +19,12 @@ import type {
   DecodedFrame,
   VideoDecoderInit,
   AudioDecoderInit,
+  TransferFrameMessage,
+  TransferYUVMessage,
 } from "./types";
 import type { PipelineStats, FrameTrackerStats } from "../types";
+import { WasmVideoDecoder, needsWasmFallback } from "../../../wasm/WasmVideoDecoder";
+import type { WasmDecodedOutput } from "../../../wasm/WasmVideoDecoder";
 
 // ============================================================================
 // Global State
@@ -145,13 +149,84 @@ const STATS_INTERVAL_MS = 250;
 // Frame dropping stats (Phase 2B)
 let _totalFramesDropped = 0;
 
-// Chrome-recommended decoder queue threshold
-// Per Chrome WebCodecs best practices: drop when decodeQueueSize > 2
-// This ensures decoder doesn't fall too far behind before corrective action
+// Chrome-recommended decoder queue threshold.
+// When decodeQueueSize exceeds this, new chunks are held in inputQueue (backpressure)
+// rather than submitted to the hardware decoder. The decoder output callback drains
+// the inputQueue as capacity frees up. This prevents the huge decoder queue buildup
+// (80-148 frames) that caused post-warmup pressure drops and multi-second freezes.
 const MAX_DECODER_QUEUE_SIZE = 2;
+// Safety valve: if inputQueue grows beyond this, the decoder genuinely can't keep up.
+// Drop to next keyframe rather than buffering unboundedly.
+const MAX_INPUT_QUEUE_BEFORE_DROP = 300;
 const MAX_FRAME_HISTORY = 60;
 const MAX_PAUSED_OUTPUT_QUEUE = 120;
 const MAX_PAUSED_INPUT_QUEUE = 600;
+
+// ============================================================================
+// Annex B <-> AVCC Frame Conversion (inlined to avoid worker import issues)
+// ============================================================================
+
+/** Check if frame data starts with an Annex B start code (0x000001 or 0x00000001) */
+function hasAnnexBStartCode(data: Uint8Array): boolean {
+  if (data.length < 4) return false;
+  if (data[0] === 0 && data[1] === 0 && data[2] === 0 && data[3] === 1) return true;
+  if (data[0] === 0 && data[1] === 0 && data[2] === 1) return true;
+  return false;
+}
+
+/**
+ * Convert Annex B frame data to AVCC format (replace start codes with 4-byte NAL lengths).
+ * Handles both 3-byte (0x000001) and 4-byte (0x00000001) start codes.
+ */
+function annexBFrameToAvcc(data: Uint8Array): Uint8Array {
+  // Find all NAL unit boundaries
+  const nalUnits: Array<{ start: number; end: number }> = [];
+  let i = 0;
+  while (i < data.length - 2) {
+    // Look for start code
+    if (data[i] === 0 && data[i + 1] === 0) {
+      let startCodeLen = 0;
+      if (i + 3 < data.length && data[i + 2] === 0 && data[i + 3] === 1) {
+        startCodeLen = 4;
+      } else if (data[i + 2] === 1) {
+        startCodeLen = 3;
+      }
+      if (startCodeLen > 0) {
+        // End previous NAL unit
+        if (nalUnits.length > 0) {
+          nalUnits[nalUnits.length - 1].end = i;
+        }
+        nalUnits.push({ start: i + startCodeLen, end: data.length });
+        i += startCodeLen;
+        continue;
+      }
+    }
+    i++;
+  }
+
+  if (nalUnits.length === 0) return data;
+
+  // Calculate total output size: 4 bytes length prefix per NAL + NAL data
+  let totalSize = 0;
+  for (const nal of nalUnits) {
+    totalSize += 4 + (nal.end - nal.start);
+  }
+
+  const out = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const nal of nalUnits) {
+    const nalLen = nal.end - nal.start;
+    // Write 4-byte big-endian length
+    out[offset] = (nalLen >>> 24) & 0xff;
+    out[offset + 1] = (nalLen >>> 16) & 0xff;
+    out[offset + 2] = (nalLen >>> 8) & 0xff;
+    out[offset + 3] = nalLen & 0xff;
+    out.set(data.subarray(nal.start, nal.end), offset + 4);
+    offset += 4 + nalLen;
+  }
+
+  return out;
+}
 
 // ============================================================================
 // Logging
@@ -218,6 +293,10 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       handleFrameStep(msg);
       break;
 
+    case "setrendermode":
+      handleSetRenderMode(msg);
+      break;
+
     case "debugging":
       debugging = msg.value;
       log(`Debugging set to: ${msg.value}`);
@@ -231,6 +310,18 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
 // ============================================================================
 // Pipeline Management
 // ============================================================================
+
+function handleSetRenderMode(msg: MainToWorkerMessage & { type: "setrendermode" }): void {
+  const { idx, directTransfer, uid } = msg;
+  const pipeline = pipelines.get(idx);
+  if (!pipeline) {
+    sendError(uid, idx, "Pipeline not found");
+    return;
+  }
+  pipeline.directTransfer = directTransfer;
+  log(`Pipeline ${idx} directTransfer=${directTransfer}`);
+  sendAck(uid, idx);
+}
 
 function handleCreate(msg: MainToWorkerMessage & { type: "create" }): void {
   const { idx, track, opts, uid } = msg;
@@ -257,13 +348,14 @@ function handleCreate(msg: MainToWorkerMessage & { type: "create" }): void {
       lastInputTimestamp: 0,
       lastOutputTimestamp: 0,
       decoderQueueSize: 0,
-      // Debug info for error diagnosis
       lastChunkType: "" as string,
       lastChunkSize: 0,
       lastChunkBytes: "" as string,
     },
     optimizeForLatency: opts.optimizeForLatency,
     payloadFormat: opts.payloadFormat || "avcc",
+    directTransfer: false,
+    wasmDecoder: null,
   };
 
   pipelines.set(idx, pipeline);
@@ -315,14 +407,16 @@ function handleConfigure(msg: MainToWorkerMessage & { type: "configure" }): void
   }
 }
 
-function configureVideoDecoder(pipeline: PipelineState, description?: Uint8Array): void {
+async function configureVideoDecoder(
+  pipeline: PipelineState,
+  description?: Uint8Array
+): Promise<void> {
   const track = pipeline.track;
 
   // Handle JPEG codec separately via ImageDecoder (Phase 2C)
   if (track.codec === "JPEG" || track.codec.toLowerCase() === "jpeg") {
     log("JPEG codec detected - will use ImageDecoder");
     pipeline.configured = true;
-    // JPEG doesn't need a persistent decoder - each frame is decoded individually
     return;
   }
 
@@ -345,25 +439,78 @@ function configureVideoDecoder(pipeline: PipelineState, description?: Uint8Array
     pipeline.decoder = null;
   }
 
+  // Destroy existing WASM decoder if any
+  if (pipeline.wasmDecoder) {
+    (pipeline.wasmDecoder as WasmVideoDecoder).destroy();
+    pipeline.wasmDecoder = null;
+  }
+
+  const codecString = track.codecstring || track.codec.toLowerCase();
+
   // Match reference rawws.js configOpts pattern:
   // codec, optimizeForLatency, description + hw acceleration hint
   const config: VideoDecoderInit = {
-    codec: track.codecstring || track.codec.toLowerCase(),
+    codec: codecString,
     optimizeForLatency: pipeline.optimizeForLatency,
     hardwareAcceleration: "prefer-hardware",
   };
 
-  // Pass description directly from WebSocket INIT data (per reference rawws.js line 1052)
-  // For Annex B format (ws/video/h264), SPS/PPS comes inline in the bitstream - skip description
-  if (pipeline.payloadFormat === "annexb") {
-    log(`Annex B mode - SPS/PPS inline in bitstream, no description needed`);
-  } else if (description && description.byteLength > 0) {
+  // Pass description directly (matches reference rawws.js: pipeline.decoderConfigOpts.description = header)
+  // For ws/video/h264 (payloadFormat=annexb), no INIT frame arrives so description will be empty —
+  // that's fine because SPS/PPS comes inline in the Annex B bitstream.
+  if (description && description.byteLength > 0) {
     config.description = description;
     log(`Configuring with description (${description.byteLength} bytes)`);
   } else {
-    log(`No description provided - decoder may fail on H.264/HEVC`, "warn");
+    log(`No description provided - SPS/PPS expected inline in bitstream`);
   }
 
+  // Check if native WebCodecs supports this codec — fall back to WASM if not
+  let useWasm = false;
+  try {
+    useWasm = await needsWasmFallback(codecString, config as VideoDecoderConfig);
+  } catch {
+    useWasm = false;
+  }
+
+  if (useWasm && pipeline.directTransfer) {
+    log(`Native VideoDecoder does not support ${codecString} — using WASM fallback`);
+    try {
+      const wasmDec = new WasmVideoDecoder(codecString);
+      await wasmDec.initialize();
+
+      if (description && description.byteLength > 0) {
+        wasmDec.configure(description);
+      }
+
+      wasmDec.onFrame = (output: WasmDecodedOutput) => {
+        if (pipeline.closed) return;
+        emitWasmFrame(pipeline, output);
+      };
+
+      wasmDec.onError = (err: Error) => {
+        log(`WASM decoder error on track ${pipeline.idx}: ${err.message}`, "error");
+        const message: WorkerToMainMessage = {
+          type: "sendevent",
+          kind: "error",
+          message: `WASM decoder error: ${err.message}`,
+          idx: pipeline.idx,
+          uid: uidCounter++,
+        };
+        self.postMessage(message);
+      };
+
+      pipeline.wasmDecoder = wasmDec;
+      pipeline.configured = true;
+      log(`WASM video decoder configured: ${codecString}`);
+      drainInputQueue(pipeline);
+      return;
+    } catch (err) {
+      log(`WASM fallback failed for ${codecString}: ${err} — trying native anyway`, "warn");
+    }
+  }
+
+  // Native WebCodecs path
   log(`Configuring video decoder: ${config.codec}`);
 
   const decoder = new VideoDecoder({
@@ -375,6 +522,50 @@ function configureVideoDecoder(pipeline: PipelineState, description?: Uint8Array
   pipeline.decoder = decoder;
 
   log(`Video decoder configured: ${config.codec}`);
+
+  drainInputQueue(pipeline);
+}
+
+/**
+ * Emit a WASM-decoded YUV frame to the main thread for WebGL rendering.
+ * Transfers Uint8Array buffers for zero-copy.
+ */
+function emitWasmFrame(pipeline: PipelineState, output: WasmDecodedOutput): void {
+  pipeline.stats.framesDecoded++;
+  pipeline.stats.framesOut++;
+  pipeline.stats.lastOutputTimestamp = output.timestamp;
+  frameTiming.decoded = performance.now() * 1000;
+  frameTiming.out = frameTiming.decoded;
+
+  const msg: TransferYUVMessage = {
+    type: "transferyuv",
+    idx: pipeline.idx,
+    timestamp: output.timestamp,
+    y: output.planes.y,
+    u: output.planes.u,
+    v: output.planes.v,
+    width: output.planes.width,
+    height: output.planes.height,
+    format: output.planes.format,
+    colorPrimaries: output.colorPrimaries,
+    transferFunction: output.transferFunction,
+    uid: uidCounter++,
+  };
+
+  // Transfer the ArrayBuffer backing each plane for zero-copy
+  self.postMessage(msg, {
+    transfer: [output.planes.y.buffer, output.planes.u.buffer, output.planes.v.buffer],
+  });
+
+  // Send timeupdate
+  const timeMsg: WorkerToMainMessage = {
+    type: "sendevent",
+    kind: "timeupdate",
+    idx: pipeline.idx,
+    time: output.timestamp / 1e6,
+    uid: uidCounter++,
+  };
+  self.postMessage(timeMsg);
 }
 
 /**
@@ -399,6 +590,8 @@ function mapAudioCodec(codec: string, codecstring?: string): string {
       return "opus";
     case "flac":
       return "flac";
+    case "vorbis":
+      return "vorbis";
     case "ac3":
     case "ac-3":
       return "ac-3";
@@ -472,6 +665,9 @@ function handleDecodedFrame(pipeline: PipelineState, frame: VideoFrame | AudioDa
     decodedAt: performance.now(),
   });
 
+  // Decoder just freed capacity — drain any backpressured chunks from inputQueue
+  drainInputQueue(pipeline);
+
   // Try to output frames
   processOutputQueue(pipeline);
 }
@@ -511,6 +707,7 @@ function resetPipelineAfterError(pipeline: PipelineState): void {
 
   // Mark as needing reconfiguration - we'll wait for next keyframe
   pipeline.configured = false;
+  pipeline.droppingUntilKeyframe = false;
 
   // If decoder is closed, we need to recreate it (can't reset a closed decoder)
   if (pipeline.decoder && pipeline.decoder.state === "closed") {
@@ -532,6 +729,43 @@ function resetPipelineAfterError(pipeline: PipelineState): void {
 // Frame Input/Output
 // ============================================================================
 
+/**
+ * Drain chunks from inputQueue into the decoder, respecting backpressure.
+ *
+ * Feeds queued chunks to the decoder while decodeQueueSize <= threshold.
+ * Called after decoder setup (flush all queued during async config) and
+ * after each decoded frame output (decoder freed a slot).
+ *
+ * This replaces the old "drop when pressured" model with flow control:
+ * chunks are buffered locally instead of dropped, preserving the H.264
+ * reference chain and avoiding moshing artifacts.
+ */
+function drainInputQueue(pipeline: PipelineState): void {
+  if (pipeline.inputQueue.length === 0) return;
+  if (pipeline.closed) return;
+
+  const decoder = pipeline.decoder;
+  const isWasm = !!pipeline.wasmDecoder;
+
+  let fed = 0;
+  while (pipeline.inputQueue.length > 0) {
+    // WASM decoder: no queue pressure concept, feed all
+    // Native decoder: respect queue threshold
+    if (!isWasm && decoder && decoder.decodeQueueSize > MAX_DECODER_QUEUE_SIZE) {
+      break;
+    }
+    const chunk = pipeline.inputQueue.shift()!;
+    decodeChunk(pipeline, chunk);
+    fed++;
+  }
+
+  if (fed > 0) {
+    logVerbose(
+      `Drained ${fed} chunks from inputQueue for track ${pipeline.idx} (${pipeline.inputQueue.length} remaining)`
+    );
+  }
+}
+
 function handleReceive(msg: MainToWorkerMessage & { type: "receive" }): void {
   const { idx, chunk } = msg;
   const pipeline = pipelines.get(idx);
@@ -541,11 +775,11 @@ function handleReceive(msg: MainToWorkerMessage & { type: "receive" }): void {
     return;
   }
 
-  if (!pipeline.configured || !pipeline.decoder) {
+  if (!pipeline.configured || (!pipeline.decoder && !pipeline.wasmDecoder)) {
     // Queue for later
     pipeline.inputQueue.push(chunk);
     logVerbose(
-      `Queued chunk for track ${idx} (configured=${pipeline.configured}, decoder=${!!pipeline.decoder})`
+      `Queued chunk for track ${idx} (configured=${pipeline.configured}, decoder=${!!pipeline.decoder}, wasm=${!!pipeline.wasmDecoder})`
     );
     return;
   }
@@ -560,24 +794,35 @@ function handleReceive(msg: MainToWorkerMessage & { type: "receive" }): void {
     return;
   }
 
-  // Log only first 3 chunks per track to confirm receiving
   if (pipeline.stats.framesIn < 3) {
     log(
       `Received chunk ${pipeline.stats.framesIn} for track ${idx}: type=${chunk.type}, ts=${chunk.timestamp / 1000}ms, size=${chunk.data.byteLength}`
     );
   }
 
-  // Check if we need to drop frames due to decoder pressure (Phase 2B)
-  if (shouldDropFramesDueToDecoderPressure(pipeline)) {
+  // Sustained overload: drop until keyframe resets reference chain
+  if (pipeline.droppingUntilKeyframe) {
     if (chunk.type === "key") {
-      // Always accept keyframes - they're needed to resume
+      pipeline.droppingUntilKeyframe = false;
+      log(`Keyframe received after pressure drop — resuming decode for track ${idx}`);
+      pipeline.inputQueue = [];
       decodeChunk(pipeline, chunk);
     } else {
-      // Drop delta frames when decoder is overwhelmed
       pipeline.stats.framesDropped++;
       _totalFramesDropped++;
-      logVerbose(
-        `Dropped delta frame @ ${chunk.timestamp / 1000}ms (decoder queue: ${pipeline.decoder.decodeQueueSize})`
+    }
+    return;
+  }
+
+  // Backpressure: queue locally when decoder is busy, drain via output callback
+  if (isDecoderBusy(pipeline)) {
+    pipeline.inputQueue.push(chunk);
+    if (pipeline.inputQueue.length > MAX_INPUT_QUEUE_BEFORE_DROP) {
+      pipeline.droppingUntilKeyframe = true;
+      const dropped = _dropToNextKeyframe(pipeline);
+      log(
+        `Input queue overflow on track ${idx} (${pipeline.inputQueue.length + dropped}) — dropped ${dropped}`,
+        "warn"
       );
     }
     return;
@@ -587,17 +832,16 @@ function handleReceive(msg: MainToWorkerMessage & { type: "receive" }): void {
 }
 
 /**
- * Check if decoder is under pressure and frames should be dropped
- * Based on Chrome WebCodecs best practices: drop when decodeQueueSize > 2
+ * Check if decoder's internal queue is at capacity.
+ * When true, callers should buffer chunks in inputQueue instead of submitting.
  */
-function shouldDropFramesDueToDecoderPressure(pipeline: PipelineState): boolean {
-  if (frameTiming.paused) return false;
+function isDecoderBusy(pipeline: PipelineState): boolean {
+  if (pipeline.wasmDecoder) return false;
   if (!pipeline.decoder) return false;
-
+  // Audio decodes fast and has no inter-frame dependencies — don't throttle
+  if (pipeline.track.type === "audio") return false;
   const queueSize = pipeline.decoder.decodeQueueSize;
   pipeline.stats.decoderQueueSize = queueSize;
-
-  // Chrome recommendation: drop frames when queue > 2
   return queueSize > MAX_DECODER_QUEUE_SIZE;
 }
 
@@ -645,6 +889,15 @@ function decodeChunk(
       return;
     }
 
+    // WASM fallback path: route to WasmVideoDecoder if active
+    if (pipeline.wasmDecoder && pipeline.track.type === "video") {
+      const wasmDec = pipeline.wasmDecoder as WasmVideoDecoder;
+      pipeline.stats.lastChunkType = chunk.type;
+      pipeline.stats.lastChunkSize = chunk.data.byteLength;
+      wasmDec.decode(chunk.data, chunk.type === "key", chunk.timestamp);
+      return;
+    }
+
     if (!pipeline.decoder) return;
 
     // chunk.timestamp is ALREADY in microseconds (converted by main thread via getPresentationTimestamp)
@@ -660,22 +913,38 @@ function decodeChunk(
     pipeline.stats.lastChunkBytes = firstBytes;
 
     if (pipeline.track.type === "video") {
-      // AVCC mode: frames pass through unchanged (decoder has SPS/PPS from description)
+      let frameData = chunk.data;
+
+      // Runtime Annex B → AVCC conversion: MistServer ws/video/raw sends AVCC init
+      // (AVCDecoderConfigurationRecord) but Annex B frame data. The AVCC description
+      // makes the decoder expect AVCC frames, so we convert at decode time.
+      if (pipeline.annexBConvert === undefined && chunk.type === "key") {
+        pipeline.annexBConvert = hasAnnexBStartCode(frameData);
+        if (pipeline.annexBConvert) {
+          log(`Detected Annex B frame data on track ${pipeline.idx} — enabling AVCC conversion`);
+        }
+      }
+      if (pipeline.annexBConvert) {
+        frameData = annexBFrameToAvcc(frameData);
+      }
+
       const encodedChunk = new EncodedVideoChunk({
         type: chunk.type,
         timestamp: timestampUs,
-        data: chunk.data,
+        data: frameData,
       });
 
       const decoder = pipeline.decoder as VideoDecoder;
       if (pipeline.stats.framesIn <= 3) {
-        const firstBytes = Array.from(chunk.data.slice(0, 16))
+        const first16 = Array.from(chunk.data.slice(0, 16))
           .map((b) => "0x" + b.toString(16).padStart(2, "0"))
           .join(" ");
         log(
           `Calling decode() for track ${pipeline.idx}: state=${decoder.state}, queueSize=${decoder.decodeQueueSize}, chunk type=${chunk.type}, ts=${timestampUs}μs`
         );
-        log(`  First 16 bytes: ${firstBytes}`);
+        log(
+          `  First 16 bytes (raw): ${first16}${pipeline.annexBConvert ? " [converted to AVCC]" : ""}`
+        );
       }
 
       decoder.decode(encodedChunk);
@@ -764,13 +1033,14 @@ function processOutputQueue(pipeline: PipelineState): void {
     return;
   }
 
-  if (!pipeline.writer || pipeline.outputQueue.length === 0) {
-    if (pipeline.outputQueue.length > 0 && !pipeline.writer) {
-      log(
-        `Cannot output: no writer for track ${pipeline.idx} (queue has ${pipeline.outputQueue.length} frames)`,
-        "warn"
-      );
-    }
+  if (pipeline.outputQueue.length === 0) return;
+
+  // Need either a writer (stream mode) or directTransfer enabled
+  if (!pipeline.writer && !pipeline.directTransfer) {
+    log(
+      `Cannot output: no writer and no directTransfer for track ${pipeline.idx} (queue has ${pipeline.outputQueue.length} frames)`,
+      "warn"
+    );
     return;
   }
 
@@ -896,7 +1166,7 @@ function outputFrame(
   entry: DecodedFrame,
   options?: { skipHistory?: boolean }
 ): void {
-  if (!pipeline.writer || pipeline.closed) {
+  if (pipeline.closed) {
     entry.frame.close();
     return;
   }
@@ -906,7 +1176,6 @@ function outputFrame(
   pipeline.stats.framesOut++;
   pipeline.stats.lastOutputTimestamp = entry.timestamp;
 
-  // Log first few output frames
   if (pipeline.stats.framesOut <= 3) {
     log(
       `Output frame ${pipeline.stats.framesOut} for track ${pipeline.idx}: ts=${entry.timestamp}μs`
@@ -918,12 +1187,51 @@ function outputFrame(
     pushFrameHistory(pipeline, entry.frame as VideoFrame, entry.timestamp);
   }
 
-  // Write returns a Promise - handle rejection to avoid unhandled promise errors
-  // Frame ownership is transferred to the stream, so we don't need to close() on success
+  // Direct transfer mode: send frame to main thread via postMessage for WebGL/AudioWorklet rendering
+  if (pipeline.directTransfer) {
+    const msg: TransferFrameMessage = {
+      type: "transferframe",
+      idx: pipeline.idx,
+      trackType: pipeline.track.type as "video" | "audio",
+      frame: entry.frame,
+      timestamp: entry.timestamp,
+      uid: uidCounter++,
+    };
+    try {
+      // Transfer ownership of the frame to main thread (zero-copy)
+      self.postMessage(msg, { transfer: [entry.frame as unknown as Transferable] });
+    } catch (err) {
+      // Firefox may not support AudioData/VideoFrame as Transferable — fall back to structured clone
+      log(`Transfer failed for ${pipeline.track.type} frame, using clone: ${err}`, "warn");
+      try {
+        self.postMessage(msg);
+        entry.frame.close();
+      } catch {
+        entry.frame.close();
+      }
+    }
+
+    // Send timeupdate
+    const timeMsg: WorkerToMainMessage = {
+      type: "sendevent",
+      kind: "timeupdate",
+      idx: pipeline.idx,
+      time: entry.timestamp / 1e6,
+      uid: uidCounter++,
+    };
+    self.postMessage(timeMsg);
+    return;
+  }
+
+  // Stream mode: write to WritableStream (MediaStreamTrackGenerator)
+  if (!pipeline.writer) {
+    entry.frame.close();
+    return;
+  }
+
   pipeline.writer
     .write(entry.frame)
     .then(() => {
-      // Send timeupdate event on successful write
       const message: WorkerToMainMessage = {
         type: "sendevent",
         kind: "timeupdate",
@@ -934,15 +1242,12 @@ function outputFrame(
       self.postMessage(message);
     })
     .catch((err: Error) => {
-      // Check for "stream closed" errors - these are expected during cleanup
       const errStr = String(err);
       if (errStr.includes("Stream closed") || errStr.includes("InvalidStateError")) {
-        // Expected during player cleanup - silently mark pipeline as closed
         pipeline.closed = true;
       } else {
         log(`Failed to write frame: ${err}`, "error");
       }
-      // Frame may not have been consumed by the stream - try to close it
       try {
         entry.frame.close();
       } catch {
@@ -1294,6 +1599,12 @@ function closePipeline(pipeline: PipelineState, uid: number): void {
     } catch {
       // Ignore close errors
     }
+  }
+
+  // Destroy WASM decoder
+  if (pipeline.wasmDecoder) {
+    (pipeline.wasmDecoder as WasmVideoDecoder).destroy();
+    pipeline.wasmDecoder = null;
   }
 
   // Close writer

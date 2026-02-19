@@ -38,6 +38,7 @@ export interface WebSocketControllerEvents {
   ontime: OnTimeMessage;
   tracks: TrackInfo[];
   chunk: RawChunk;
+  pause: { paused: boolean };
   stop: void;
   error: Error;
 }
@@ -466,8 +467,13 @@ export class WebSocketController {
           break;
 
         case "pause":
+          // Server-initiated pause (e.g., buffer underrun on server side)
+          // Per rawws.js:661-662, forward the paused state to the player
+          this.emit("pause", { paused: !!(message as any).paused });
+          break;
+
         case "set_speed":
-          // Acknowledgments - no action needed
+          // Acknowledgment - no action needed
           break;
 
         default:

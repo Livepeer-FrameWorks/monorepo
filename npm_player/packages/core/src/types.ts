@@ -1,6 +1,9 @@
 /**
  * Core types for FrameWorks player - framework agnostic
  */
+import type { FwThemePreset, FwThemeOverrides } from "./core/ThemeManager";
+import type { FwLocale, TranslationStrings } from "./core/I18n";
+import type { PlayerKeyMap } from "./core/InteractionController";
 
 /** High-level player state machine for UI */
 export type PlayerState =
@@ -77,6 +80,19 @@ export interface PlayerOptions {
   urlAppend?: string;
   /** Low latency mode for HLS (enables LL-HLS features) */
   lowLatencyMode?: boolean;
+
+  /** Preset theme name */
+  theme?: FwThemePreset;
+  /** Individual CSS token overrides (HSL triplets, e.g. "210 100% 50%") */
+  themeOverrides?: FwThemeOverrides;
+
+  /** Built-in locale for UI strings (en, es, fr, de, nl). Defaults to "en". */
+  locale?: FwLocale;
+  /** Custom translation overrides (applied on top of the locale pack). */
+  translations?: Partial<TranslationStrings>;
+
+  /** Custom keyboard shortcut bindings (merged over defaults). */
+  keyMap?: Partial<PlayerKeyMap>;
 }
 
 /** HLS.js configuration subset */

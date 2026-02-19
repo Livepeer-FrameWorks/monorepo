@@ -259,7 +259,7 @@ func main() {
 				return nil
 			}(),
 		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("purser")); err != nil {
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("purser")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (purser) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (purser) ok")

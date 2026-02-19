@@ -1,0 +1,7 @@
+mutation UpdateSkipperConversation($id: ID!, $title: String!) {
+  updateSkipperConversation(id: $id, title: $title) {
+    id
+    title
+    updatedAt
+  }
+}

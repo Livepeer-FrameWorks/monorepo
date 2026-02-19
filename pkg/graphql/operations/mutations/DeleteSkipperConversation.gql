@@ -1,0 +1,3 @@
+mutation DeleteSkipperConversation($id: ID!) {
+  deleteSkipperConversation(id: $id)
+}

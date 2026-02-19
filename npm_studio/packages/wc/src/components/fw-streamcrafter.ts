@@ -33,44 +33,20 @@ import {
   type MediaSource,
   type QualityProfile,
   type ReconnectionState,
+  type FwThemePreset,
+  type StudioThemeOverrides,
+  applyStudioTheme,
+  applyStudioThemeOverrides,
+  clearStudioTheme,
+  createStudioTranslator,
+  type StudioTranslateFn,
+  type StudioLocale,
 } from "@livepeer-frameworks/streamcrafter-core";
 
 interface AudioProcessingSettings {
   echoCancellation: boolean;
   noiseSuppression: boolean;
   autoGainControl: boolean;
-}
-
-const QUALITY_PROFILES: { id: QualityProfile; label: string; description: string }[] = [
-  { id: "professional", label: "Professional", description: "1080p @ 8 Mbps" },
-  { id: "broadcast", label: "Broadcast", description: "1080p @ 4.5 Mbps" },
-  { id: "conference", label: "Conference", description: "720p @ 2.5 Mbps" },
-];
-
-function getStatusText(state: IngestState, reconnectionState?: ReconnectionState | null): string {
-  if (reconnectionState?.isReconnecting) {
-    return `Reconnecting (${reconnectionState.attemptNumber}/5)...`;
-  }
-  switch (state) {
-    case "idle":
-      return "Idle";
-    case "requesting_permissions":
-      return "Permissions...";
-    case "capturing":
-      return "Ready";
-    case "connecting":
-      return "Connecting...";
-    case "streaming":
-      return "Live";
-    case "reconnecting":
-      return "Reconnecting...";
-    case "error":
-      return "Error";
-    case "destroyed":
-      return "Destroyed";
-    default:
-      return state;
-  }
 }
 
 function getStatusBadgeClass(state: IngestState, isReconnecting: boolean): string {
@@ -106,7 +82,8 @@ export class FwStreamCrafter extends LitElement {
   @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
   @property({ type: Boolean, attribute: "show-settings" }) showSettings = false;
   @property({ type: Boolean }) debug = false;
-  @property({ type: Boolean, attribute: "enable-compositor" }) enableCompositor = false;
+  @property({ type: Boolean, attribute: "enable-compositor" }) enableCompositor = true;
+  @property({ type: String }) theme: FwThemePreset | "" = "";
   @property({ type: String, attribute: "class-name" }) className = "";
   @property({ attribute: false }) onStateChange?:
     | ((state: IngestState, context?: IngestStateContextV2) => void)
@@ -116,6 +93,9 @@ export class FwStreamCrafter extends LitElement {
   @property({ type: String, attribute: "compositor-worker-url" }) compositorWorkerUrl = "";
   @property({ type: String, attribute: "encoder-worker-url" }) encoderWorkerUrl = "";
   @property({ type: String, attribute: "rtc-transform-worker-url" }) rtcTransformWorkerUrl = "";
+  @property({ type: String }) locale: StudioLocale = "en";
+  /** Set to "false" to hide built-in controls. Set to "stock" for minimal controls. */
+  @property({ type: String }) controls: string = "";
 
   @state() private _showSettings = false;
   @state() private _showSources = true;
@@ -133,6 +113,7 @@ export class FwStreamCrafter extends LitElement {
   @query(".fw-sc-context-menu") private _contextMenuEl!: HTMLElement | null;
 
   pc: IngestControllerHost;
+  private _t: StudioTranslateFn = createStudioTranslator({ locale: "en" });
   private _ingestClient: IngestClient | null = null;
   private _lastInitKey = "";
   private _dismissListenersAttached = false;
@@ -154,16 +135,9 @@ export class FwStreamCrafter extends LitElement {
     css`
       :host {
         display: block;
-      }
-      .root {
-        display: flex;
         height: 100%;
-      }
-      .main {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
       }
     `,
   ];
@@ -194,6 +168,10 @@ export class FwStreamCrafter extends LitElement {
   }
 
   willUpdate(changed: Map<string, unknown>) {
+    if (changed.has("locale")) {
+      this._t = createStudioTranslator({ locale: this.locale });
+    }
+
     if (changed.has("whipUrl") || changed.has("gatewayUrl") || changed.has("streamKey")) {
       this._refreshResolvedWhipUrl();
     }
@@ -218,8 +196,19 @@ export class FwStreamCrafter extends LitElement {
     }
   }
 
-  updated() {
+  updated(changed: Map<string, unknown>) {
     this._syncVideoPreview();
+    if (changed.has("theme")) this._applyTheme();
+  }
+
+  private _applyTheme() {
+    const root = this.renderRoot.querySelector<HTMLElement>(".fw-sc-root");
+    if (!root) return;
+    if (!this.theme || this.theme === "default") {
+      clearStudioTheme(root);
+    } else {
+      applyStudioTheme(root, this.theme as FwThemePreset);
+    }
   }
 
   private _refreshResolvedWhipUrl() {
@@ -471,10 +460,10 @@ export class FwStreamCrafter extends LitElement {
 
   private _copyStreamInfo() {
     const s = this.pc.s;
-    const profile = QUALITY_PROFILES.find((p) => p.id === s.qualityProfile);
+    const profileLabel = this._t(s.qualityProfile as any);
     const info = [
       `Status: ${s.state}`,
-      `Quality: ${profile?.label ?? s.qualityProfile} (${profile?.description ?? ""})`,
+      `Quality: ${profileLabel}`,
       `Sources: ${s.sources.length}`,
       this._resolvedWhipUrl ? `WHIP: ${this._resolvedWhipUrl}` : null,
     ]
@@ -548,14 +537,57 @@ export class FwStreamCrafter extends LitElement {
   getController() {
     return this.pc.getController();
   }
+
+  /** Expose the controller host for external access. */
+  get controller(): IngestControllerHost {
+    return this.pc;
+  }
+
   destroy() {
     this._destroyIngestClient();
     this.pc.getController()?.destroy();
   }
 
+  private _getStatusText(state: IngestState, reconnectionState?: ReconnectionState | null): string {
+    if (reconnectionState?.isReconnecting) {
+      return this._t("reconnectingAttempt", { attempt: reconnectionState.attemptNumber, max: 5 });
+    }
+    switch (state) {
+      case "idle":
+        return this._t("idle");
+      case "requesting_permissions":
+        return this._t("requestingPermissions");
+      case "capturing":
+        return this._t("ready");
+      case "connecting":
+        return this._t("connecting");
+      case "streaming":
+        return this._t("live");
+      case "reconnecting":
+        return this._t("reconnecting");
+      case "error":
+        return this._t("error");
+      case "destroyed":
+        return this._t("destroyed");
+      default:
+        return state;
+    }
+  }
+
   protected render() {
     const s = this.pc.s;
-    const statusText = getStatusText(s.state, s.reconnectionState);
+    const hideControls = this.controls === "false";
+
+    // Headless mode: only a wrapper div, user provides all UI via slot
+    if (hideControls) {
+      return html`
+        <div class="root fw-sc-root ${this.className}">
+          <slot></slot>
+        </div>
+      `;
+    }
+
+    const statusText = this._getStatusText(s.state, s.reconnectionState);
     const statusBadgeClass = getStatusBadgeClass(s.state, s.isReconnecting);
     const canAddSource = s.state !== "destroyed" && s.state !== "error";
     const canStream = s.isCapturing && !s.isStreaming && !!this._resolvedWhipUrl;
@@ -579,7 +611,7 @@ export class FwStreamCrafter extends LitElement {
       >
         <div class="main fw-sc-main">
           <div class="fw-sc-header">
-            <span class="fw-sc-header-title">StreamCrafter</span>
+            <span class="fw-sc-header-title">${this._t("streamCrafter")}</span>
             <div class="fw-sc-header-status">
               <span class=${statusBadgeClass}>${statusText}</span>
             </div>
@@ -588,13 +620,13 @@ export class FwStreamCrafter extends LitElement {
           <div class="fw-sc-content">
             <div class="fw-sc-preview-wrapper">
               <div class="fw-sc-preview">
-                <video playsinline muted autoplay aria-label="Stream preview"></video>
+                <video playsinline muted autoplay aria-label=${this._t("streamPreview")}></video>
 
                 ${!s.mediaStream
                   ? html`
                       <div class="fw-sc-preview-placeholder">
                         ${cameraIcon(48)}
-                        <span>Add a camera or screen to preview</span>
+                        <span>${this._t("addSourcePrompt")}</span>
                       </div>
                     `
                   : nothing}
@@ -606,7 +638,9 @@ export class FwStreamCrafter extends LitElement {
                       </div>
                     `
                   : nothing}
-                ${s.isStreaming ? html`<div class="fw-sc-live-badge">Live</div>` : nothing}
+                ${s.isStreaming
+                  ? html`<div class="fw-sc-live-badge">${this._t("live")}</div>`
+                  : nothing}
                 ${this.enableCompositor
                   ? html`
                       <fw-sc-compositor
@@ -617,6 +651,7 @@ export class FwStreamCrafter extends LitElement {
                         .sources=${s.sources}
                         .layers=${activeScene?.layers ?? []}
                         .currentLayout=${this._getCurrentLayout()}
+                        .t=${this._t}
                         @fw-sc-layout-apply=${(event: CustomEvent<{ layout: LayoutConfig }>) =>
                           this._handleCompositorLayoutApply(event)}
                         @fw-sc-cycle-source-order=${(
@@ -643,7 +678,7 @@ export class FwStreamCrafter extends LitElement {
                         this._showSources = !this._showSources;
                       }}
                     >
-                      <span>Mixer (${s.sources.length})</span>
+                      <span>${this._t("mixer")} (${s.sources.length})</span>
                       ${this._showSources ? chevronsRightIcon(14) : chevronsLeftIcon(14)}
                     </div>
                     ${this._showSources
@@ -679,7 +714,7 @@ export class FwStreamCrafter extends LitElement {
           ${s.error || this._endpointError
             ? html`
                 <div class="fw-sc-error">
-                  <div class="fw-sc-error-title">Error</div>
+                  <div class="fw-sc-error-title">${this._t("error")}</div>
                   <div class="fw-sc-error-message">${s.error || this._endpointError}</div>
                 </div>
               `
@@ -687,16 +722,20 @@ export class FwStreamCrafter extends LitElement {
           ${!this._resolvedWhipUrl && !s.error && !this._endpointError && !isResolvingEndpoint
             ? html`
                 <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)">
-                  <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">Warning</div>
-                  <div class="fw-sc-error-message">Configure WHIP endpoint to stream</div>
+                  <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">
+                    ${this._t("warning")}
+                  </div>
+                  <div class="fw-sc-error-message">${this._t("configureWhipEndpoint")}</div>
                 </div>
               `
             : nothing}
           ${isResolvingEndpoint
             ? html`
                 <div class="fw-sc-error" style="border-left-color: hsl(210 80% 65%)">
-                  <div class="fw-sc-error-title" style="color: hsl(210 80% 65%)">Resolving</div>
-                  <div class="fw-sc-error-message">Resolving ingest endpoint...</div>
+                  <div class="fw-sc-error-title" style="color: hsl(210 80% 65%)">
+                    ${this._t("resolvingEndpoint")}
+                  </div>
+                  <div class="fw-sc-error-message">${this._t("resolvingEndpoint")}</div>
                 </div>
               `
             : nothing}
@@ -707,7 +746,7 @@ export class FwStreamCrafter extends LitElement {
               class="fw-sc-action-secondary"
               @click=${() => this.pc.startCamera().catch(console.error)}
               ?disabled=${!canAddSource || hasCamera}
-              title=${hasCamera ? "Camera active" : "Add Camera"}
+              title=${hasCamera ? this._t("cameraActive") : this._t("addCamera")}
             >
               ${cameraIcon(18)}
             </button>
@@ -716,7 +755,7 @@ export class FwStreamCrafter extends LitElement {
               class="fw-sc-action-secondary"
               @click=${() => this.pc.startScreenShare({ audio: true }).catch(console.error)}
               ?disabled=${!canAddSource}
-              title="Share Screen"
+              title=${this._t("shareScreen")}
             >
               ${monitorIcon(18)}
             </button>
@@ -732,7 +771,7 @@ export class FwStreamCrafter extends LitElement {
                 @click=${() => {
                   this._showSettings = !this._showSettings;
                 }}
-                title="Settings"
+                title=${this._t("settings")}
               >
                 ${settingsIcon(16)}
               </button>
@@ -746,7 +785,7 @@ export class FwStreamCrafter extends LitElement {
                     @click=${() => this.pc.startStreaming().catch(console.error)}
                     ?disabled=${!canStream}
                   >
-                    ${s.state === "connecting" ? "Connecting..." : "Go Live"}
+                    ${s.state === "connecting" ? this._t("connecting") : this._t("goLive")}
                   </button>
                 `
               : html`
@@ -755,7 +794,7 @@ export class FwStreamCrafter extends LitElement {
                     class="fw-sc-action-primary fw-sc-action-stop"
                     @click=${() => this.pc.stopStreaming().catch(console.error)}
                   >
-                    Stop Streaming
+                    ${this._t("stopStreaming")}
                   </button>
                 `}
           </div>
@@ -778,7 +817,7 @@ export class FwStreamCrafter extends LitElement {
                           this._copyWhipUrl();
                         }}
                       >
-                        Copy WHIP URL
+                        ${this._t("copyWhipUrl")}
                       </button>
                     `
                   : nothing}
@@ -790,7 +829,7 @@ export class FwStreamCrafter extends LitElement {
                     this._copyStreamInfo();
                   }}
                 >
-                  Copy Stream Info
+                  ${this._t("copyStreamInfo")}
                 </button>
                 ${this.devMode
                   ? html`
@@ -805,7 +844,11 @@ export class FwStreamCrafter extends LitElement {
                         }}
                       >
                         ${settingsIcon(14)}
-                        <span>${this._isAdvancedPanelOpen ? "Hide Advanced" : "Advanced"}</span>
+                        <span
+                          >${this._isAdvancedPanelOpen
+                            ? this._t("hideAdvanced")
+                            : this._t("advanced")}</span
+                        >
                       </button>
                     `
                   : nothing}
@@ -824,6 +867,7 @@ export class FwStreamCrafter extends LitElement {
                 .compositorStats=${this._getCompositorStats()}
                 .sceneCount=${this._getSceneCount()}
                 .layerCount=${this._getLayerCount()}
+                .t=${this._t}
                 @fw-audio-processing-change=${(
                   event: CustomEvent<{ settings: Partial<AudioProcessingSettings> }>
                 ) => this._handleAudioProcessingChange(event)}
@@ -958,7 +1002,7 @@ export class FwStreamCrafter extends LitElement {
                   "fw-sc-icon-btn--muted": !isVisible,
                 })}
                 @click=${() => this._toggleSourceLayerVisibility(source.id)}
-                title=${isVisible ? "Hide from composition" : "Show in composition"}
+                title=${isVisible ? this._t("hideFromComposition") : this._t("showInComposition")}
               >
                 ${isVisible ? eyeIcon(14) : eyeOffIcon(14)}
               </button>
@@ -971,7 +1015,7 @@ export class FwStreamCrafter extends LitElement {
           <div class="fw-sc-source-label">
             ${source.label}
             ${source.primaryVideo && !this.enableCompositor
-              ? html`<span class="fw-sc-primary-badge">PRIMARY</span>`
+              ? html`<span class="fw-sc-primary-badge">${this._t("primary")}</span>`
               : nothing}
           </div>
           <div class="fw-sc-source-type">${source.type}</div>
@@ -987,7 +1031,9 @@ export class FwStreamCrafter extends LitElement {
                   })}
                   @click=${() => this.pc.setPrimaryVideoSource(source.id)}
                   ?disabled=${source.primaryVideo}
-                  title=${source.primaryVideo ? "Primary video source" : "Set as primary video"}
+                  title=${source.primaryVideo
+                    ? this._t("primaryVideoSource")
+                    : this._t("setAsPrimary")}
                 >
                   ${videoIcon(14)}
                 </button>
@@ -1004,7 +1050,7 @@ export class FwStreamCrafter extends LitElement {
             type="button"
             class=${classMap({ "fw-sc-icon-btn": true, "fw-sc-icon-btn--active": source.muted })}
             @click=${() => this.pc.setSourceMuted(source.id, !source.muted)}
-            title=${source.muted ? "Unmute" : "Mute"}
+            title=${source.muted ? this._t("unmute") : this._t("mute")}
           >
             ${source.muted ? micMutedIcon(14) : micIcon(14)}
           </button>
@@ -1013,7 +1059,7 @@ export class FwStreamCrafter extends LitElement {
             class="fw-sc-icon-btn fw-sc-icon-btn--destructive"
             @click=${() => this.pc.removeSource(source.id)}
             ?disabled=${s.isStreaming}
-            title=${s.isStreaming ? "Cannot remove source while streaming" : "Remove source"}
+            title=${s.isStreaming ? this._t("cannotRemoveWhileStreaming") : this._t("removeSource")}
           >
             ${xIcon(14)}
           </button>
@@ -1033,10 +1079,26 @@ export class FwStreamCrafter extends LitElement {
           <div
             style="font-size:10px;color:#565f89;text-transform:uppercase;font-weight:600;margin-bottom:4px;padding-left:4px"
           >
-            Quality
+            ${this._t("quality")}
           </div>
           <div style="display:flex;flex-direction:column;gap:2px">
-            ${QUALITY_PROFILES.map(
+            ${[
+              {
+                id: "professional" as QualityProfile,
+                labelKey: "professional" as const,
+                descKey: "professionalDesc" as const,
+              },
+              {
+                id: "broadcast" as QualityProfile,
+                labelKey: "broadcast" as const,
+                descKey: "broadcastDesc" as const,
+              },
+              {
+                id: "conference" as QualityProfile,
+                labelKey: "conference" as const,
+                descKey: "conferenceDesc" as const,
+              },
+            ].map(
               (profile) => html`
                 <button
                   type="button"
@@ -1057,8 +1119,8 @@ export class FwStreamCrafter extends LitElement {
                     ? "#7aa2f7"
                     : "#a9b1d6"}"
                 >
-                  <div style="font-weight:500">${profile.label}</div>
-                  <div style="font-size:10px;color:#565f89">${profile.description}</div>
+                  <div style="font-weight:500">${this._t(profile.labelKey)}</div>
+                  <div style="font-size:10px;color:#565f89">${this._t(profile.descKey)}</div>
                 </button>
               `
             )}
@@ -1070,25 +1132,25 @@ export class FwStreamCrafter extends LitElement {
                 <div
                   style="font-size:10px;color:#565f89;text-transform:uppercase;font-weight:600;margin-bottom:4px;padding-left:4px"
                 >
-                  Debug
+                  ${this._t("debug")}
                 </div>
                 <div
                   style="display:flex;flex-direction:column;gap:4px;padding-left:4px;font-size:12px;font-family:ui-monospace,monospace"
                 >
                   <div style="display:flex;justify-content:space-between">
-                    <span style="color:#565f89">State</span
+                    <span style="color:#565f89">${this._t("state")}</span
                     ><span style="color:#c0caf5">${s.state}</span>
                   </div>
                   <div style="display:flex;justify-content:space-between">
-                    <span style="color:#565f89">Audio</span>
+                    <span style="color:#565f89">${this._t("audio")}</span>
                     <span style="color:${s.isCapturing ? "#9ece6a" : "#565f89"}">
-                      ${s.isCapturing ? "Active" : "Inactive"}
+                      ${s.isCapturing ? this._t("active") : this._t("inactive")}
                     </span>
                   </div>
                   <div style="display:flex;justify-content:space-between">
-                    <span style="color:#565f89">WHIP</span
+                    <span style="color:#565f89">${this._t("whip")}</span
                     ><span style="color:${this._resolvedWhipUrl ? "#9ece6a" : "#f7768e"}"
-                      >${this._resolvedWhipUrl ? "OK" : "Not set"}</span
+                      >${this._resolvedWhipUrl ? this._t("ok") : this._t("notSet")}</span
                     >
                   </div>
                 </div>

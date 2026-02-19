@@ -277,7 +277,7 @@ func TestSchedulerLoadSourcesMissingDir(t *testing.T) {
 	}
 }
 
-func TestSchedulerLoadSourcesNoEnvExpansion(t *testing.T) {
+func TestSchedulerLoadSourcesEnvExpansion(t *testing.T) {
 	t.Setenv("TEST_SITEMAP_HOST", "https://docs.example.com")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("${TEST_SITEMAP_HOST}/sitemap.xml\n"), 0644); err != nil {
@@ -292,9 +292,8 @@ func TestSchedulerLoadSourcesNoEnvExpansion(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 source, got %d", len(result))
 	}
-	// Env vars are NOT expanded (security hardening) — literal string preserved.
-	if result[0].url != "${TEST_SITEMAP_HOST}/sitemap.xml" {
-		t.Fatalf("expected literal URL (no env expansion), got %q", result[0].url)
+	if result[0].url != "https://docs.example.com/sitemap.xml" {
+		t.Fatalf("expected expanded URL, got %q", result[0].url)
 	}
 }
 
@@ -344,7 +343,7 @@ func TestSchedulerLoadSourcesPageDedup(t *testing.T) {
 	}
 }
 
-func TestSchedulerLoadSourcesPagePrefixNoEnvExpansion(t *testing.T) {
+func TestSchedulerLoadSourcesPagePrefixEnvExpansion(t *testing.T) {
 	t.Setenv("TEST_PAGE_HOST", "https://docs.example.com")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("page:${TEST_PAGE_HOST}/guide\n"), 0644); err != nil {
@@ -359,9 +358,8 @@ func TestSchedulerLoadSourcesPagePrefixNoEnvExpansion(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 source, got %d", len(result))
 	}
-	// Env vars are NOT expanded (security hardening) — literal string preserved.
-	if result[0].url != "${TEST_PAGE_HOST}/guide" || !result[0].direct {
-		t.Fatalf("expected literal direct page (no env expansion), got %+v", result[0])
+	if result[0].url != "https://docs.example.com/guide" || !result[0].direct {
+		t.Fatalf("expected expanded direct page, got %+v", result[0])
 	}
 }
 

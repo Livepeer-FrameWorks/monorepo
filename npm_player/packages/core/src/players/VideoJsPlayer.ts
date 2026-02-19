@@ -1,5 +1,7 @@
 import { BasePlayer } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
+import { isFileProtocol } from "../core/detector";
+import { appendUrlParams, parseUrlParams, stripUrlParams } from "../core/UrlUtils";
 import type {
   StreamSource,
   StreamInfo,
@@ -25,6 +27,14 @@ export class VideoJsPlayerImpl extends BasePlayer {
   private currentStreamInfo: StreamInfo | null = null;
   private liveDurationProxy: LiveDurationProxy | null = null;
 
+  // Live seeking via startunix (ported from NativePlayer/OG html5.js)
+  private liveSeekEnabled = false;
+  private liveSeekBaseUrl: string | null = null;
+  private liveSeekOffsetSec = 0;
+  private liveSeekTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingLiveSeekOffset: number | null = null;
+  private static readonly LIVE_SEEK_DEBOUNCE_MS = 300;
+
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
   }
@@ -34,6 +44,11 @@ export class VideoJsPlayerImpl extends BasePlayer {
     source: StreamSource,
     streamInfo: StreamInfo
   ): boolean | string[] {
+    // VideoJS uses MSE (VHS) which requires http/https (not file://)
+    if (isFileProtocol()) {
+      return false;
+    }
+
     // Check for HTTP/HTTPS protocol mismatch
     try {
       const sourceProtocol = new URL(source.url).protocol;
@@ -159,6 +174,11 @@ export class VideoJsPlayerImpl extends BasePlayer {
 
     this.setupVideoEventListeners(video, options);
 
+    // Set up live seek state (startunix URL rewriting)
+    this.liveSeekBaseUrl = this.stripStartUnixParam(source.url);
+    this.liveSeekOffsetSec = 0;
+    this.pendingLiveSeekOffset = null;
+
     try {
       const mod = await import("video.js");
       const videojs = (mod as any).default || (mod as any);
@@ -279,6 +299,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
             constrainSeek: true,
             liveOffset: 0,
           });
+          this.liveSeekEnabled = true;
           console.debug("[VideoJS] LiveDurationProxy initialized for live stream");
         }
 
@@ -480,8 +501,18 @@ export class VideoJsPlayerImpl extends BasePlayer {
   /**
    * Seek to time using VideoJS API (fixes backwards seeking in HLS).
    * Time should be in the corrected coordinate space (with firstms offset applied).
+   * For live streams, supports startunix URL rewriting for DVR-like seeking.
    */
   seek(time: number): void {
+    // Live seeking via startunix URL reload
+    if (this.liveSeekEnabled && this.liveDurationProxy?.isLive()) {
+      const duration = this.getDuration();
+      let offset = time - duration;
+      if (offset > 0) offset = 0;
+      this.scheduleLiveSeekOffset(offset, false);
+      return;
+    }
+
     const correctedTime = time - this.timeCorrection;
     if (this.videojsPlayer) {
       this.videojsPlayer.currentTime(correctedTime);
@@ -566,6 +597,12 @@ export class VideoJsPlayerImpl extends BasePlayer {
   jumpToLive(): void {
     const video = this.videoElement;
     if (!video) return;
+
+    // Reset startunix offset to return to live edge
+    if (this.liveSeekEnabled && this.liveSeekOffsetSec !== 0) {
+      this.scheduleLiveSeekOffset(0, true);
+      return;
+    }
 
     // VideoJS has a liveTracker module for live streams
     if (this.videojsPlayer && this.videojsPlayer.liveTracker) {
@@ -692,6 +729,77 @@ export class VideoJsPlayerImpl extends BasePlayer {
     this.proxyElement = null;
     this.currentStreamInfo = null;
     this.timeCorrection = 0;
+    this.liveSeekEnabled = false;
+    this.liveSeekOffsetSec = 0;
+    this.liveSeekBaseUrl = null;
+    if (this.liveSeekTimer) {
+      clearTimeout(this.liveSeekTimer);
+      this.liveSeekTimer = null;
+    }
+    this.pendingLiveSeekOffset = null;
     this.listeners.clear();
+  }
+
+  // ============================================================================
+  // Live Seeking via startunix (ported from NativePlayer/OG html5.js)
+  // ============================================================================
+
+  private stripStartUnixParam(url: string): string {
+    const params = parseUrlParams(url);
+    delete params.startunix;
+    return appendUrlParams(stripUrlParams(url), params);
+  }
+
+  private buildLiveSeekUrl(offsetSec: number): string {
+    const base = this.liveSeekBaseUrl || "";
+    if (!base) return "";
+    if (!offsetSec || offsetSec >= 0) {
+      return this.stripStartUnixParam(base);
+    }
+    const params = parseUrlParams(base);
+    params.startunix = String(offsetSec);
+    return appendUrlParams(stripUrlParams(base), params);
+  }
+
+  private scheduleLiveSeekOffset(offsetSec: number, immediate: boolean): void {
+    const clamped = Math.min(0, offsetSec);
+    if (immediate) {
+      if (this.liveSeekTimer) {
+        clearTimeout(this.liveSeekTimer);
+        this.liveSeekTimer = null;
+      }
+      this.pendingLiveSeekOffset = null;
+      this.applyLiveSeekOffset(clamped);
+      return;
+    }
+
+    this.pendingLiveSeekOffset = clamped;
+    if (this.liveSeekTimer) {
+      clearTimeout(this.liveSeekTimer);
+    }
+    this.liveSeekTimer = setTimeout(() => {
+      this.liveSeekTimer = null;
+      if (this.pendingLiveSeekOffset !== null) {
+        const pending = this.pendingLiveSeekOffset;
+        this.pendingLiveSeekOffset = null;
+        this.applyLiveSeekOffset(pending);
+      }
+    }, VideoJsPlayerImpl.LIVE_SEEK_DEBOUNCE_MS);
+  }
+
+  private applyLiveSeekOffset(offsetSec: number): void {
+    if (!this.videojsPlayer) return;
+    const clamped = Math.min(0, offsetSec);
+    if (Math.abs(clamped - this.liveSeekOffsetSec) < 0.05) return;
+
+    this.liveSeekOffsetSec = clamped;
+    const nextUrl = this.buildLiveSeekUrl(clamped);
+    if (!nextUrl) return;
+
+    console.debug("[VideoJS] Reloading source with startunix offset:", clamped);
+    this.videojsPlayer.src({
+      src: nextUrl,
+      type: this.getVideoJsType(this.capability.mimes[0]),
+    });
   }
 }

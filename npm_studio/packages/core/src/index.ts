@@ -17,14 +17,47 @@ export { IngestControllerV2 } from "./core/IngestControllerV2"; // Alias for bac
 export {
   EncoderManager,
   createEncoderConfig,
+  createMultiCodecEncoderConfig,
   DEFAULT_VIDEO_SETTINGS,
   DEFAULT_AUDIO_SETTINGS,
   type EncodedVideoChunkData,
   type EncodedAudioChunkData,
+  type VideoCodecFamily,
 } from "./core/EncoderManager";
+export {
+  selectH264Codec,
+  selectVP9Codec,
+  selectAV1Codec,
+  selectCodecString,
+  createEncoderConfig as createCodecEncoderConfig,
+  getDefaultVideoSettings,
+  getDefaultAudioSettings,
+  getKeyframeInterval,
+  detectEncoderCapabilities,
+  mimeToCodecFamily,
+  type CodecCapabilities,
+} from "./core/CodecProfiles";
+
+// Recording
+export { WebMWriter, type WebMWriterOptions, type WebMTrackConfig } from "./recording/WebMWriter";
+export { RecordingManager, type RecordingManagerOptions } from "./recording/RecordingManager";
+
+// Audio processing
+export { HighPassFilter, type HighPassFilterOptions } from "./audio/HighPassFilter";
+export { NoiseGate, type NoiseGateOptions } from "./audio/NoiseGate";
+export { ThreeBandEQ, type ThreeBandEQOptions } from "./audio/ThreeBandEQ";
+export { DeEsser, type DeEsserOptions } from "./audio/DeEsser";
+export { SidechainDucker, type SidechainDuckerOptions } from "./audio/SidechainDucker";
+
+// Bitrate adaptation
+export {
+  BitrateAdaptation,
+  type BitrateAdaptationOptions,
+  type CongestionLevel,
+} from "./core/BitrateAdaptation";
 
 // Phase 2: Audio mixing and reconnection
-export { AudioMixer } from "./core/AudioMixer";
+export { AudioMixer, type AudioProcessingConfig } from "./core/AudioMixer";
 export { ReconnectionManager, DEFAULT_RECONNECTION_CONFIG } from "./core/ReconnectionManager";
 
 // Phase 3.5: Gateway integration (ingest endpoint resolution)
@@ -56,8 +89,12 @@ export {
   getEncoderSettings,
 } from "./core/MediaConstraints";
 
+// Media file playback
+export { MediaFileSource, type MediaFileSourceEvents } from "./core/MediaFileSource";
+
 // Phase 3: Compositor and scene management
 export { SceneManager } from "./core/SceneManager";
+export { TextOverlaySource, type TextOverlayConfig } from "./core/TextOverlaySource";
 export {
   TransitionEngine,
   createDefaultTransitionConfig,
@@ -99,3 +136,44 @@ export type { CompositorRenderer } from "./core/renderers";
 export { Canvas2DRenderer } from "./core/renderers/Canvas2DRenderer";
 export { WebGLRenderer } from "./core/renderers/WebGLRenderer";
 export { WebGPURenderer } from "./core/renderers/WebGPURenderer";
+
+// Theming
+export {
+  resolveStudioTheme,
+  getAvailableStudioThemes,
+  applyStudioTheme,
+  applyStudioThemeOverrides,
+  clearStudioTheme,
+  studioThemeOverridesToStyle,
+} from "./StudioThemeManager";
+export type { FwThemePreset, StudioThemeOverrides } from "./StudioThemeManager";
+
+// Internationalization
+export {
+  DEFAULT_STUDIO_TRANSLATIONS,
+  getStudioLocalePack,
+  getAvailableStudioLocales,
+  createStudioTranslator,
+  studioTranslate,
+} from "./I18n";
+export type {
+  StudioTranslationStrings,
+  StudioTranslateFn,
+  StudioLocale,
+  StudioI18nConfig,
+} from "./I18n";
+
+// Configurable hotkeys
+export { DEFAULT_STUDIO_KEY_MAP, buildStudioKeyLookup, matchStudioKey } from "./StudioKeyMap";
+export type { StudioKeyMap } from "./StudioKeyMap";
+
+// Vanilla facade
+export { createStreamCrafter } from "./vanilla/createStreamCrafter";
+export type {
+  CreateStreamCrafterConfig,
+  StreamCrafterInstance,
+} from "./vanilla/createStreamCrafter";
+
+// Reactive state
+export { createStudioReactiveState } from "./vanilla/StudioReactiveState";
+export type { StudioReactiveState, StudioStateMap } from "./vanilla/StudioReactiveState";

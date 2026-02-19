@@ -5,6 +5,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
   PlayerController,
+  createTranslator,
   type PlayerControllerConfig,
   type PlayerState,
   type StreamState,
@@ -13,6 +14,8 @@ import {
   type ContentEndpoints,
   type ContentMetadata,
   type ClassifiedError,
+  type TranslateFn,
+  type I18nConfig,
 } from "@livepeer-frameworks/player-core";
 
 export interface PlayerControllerHostState {
@@ -105,9 +108,18 @@ export class PlayerControllerHost implements ReactiveController {
 
   s: PlayerControllerHostState = { ...initialState };
 
+  /** Translation function, updated when locale changes. */
+  t: TranslateFn = createTranslator({ locale: "en" });
+
   constructor(host: HostElement) {
     this.host = host;
     host.addController(this);
+  }
+
+  /** Rebuild the translator when locale or custom translations change. */
+  updateTranslator(config: I18nConfig) {
+    this.t = createTranslator(config);
+    this.host.requestUpdate();
   }
 
   // ---- Configuration & Lifecycle ----
@@ -433,6 +445,12 @@ export class PlayerControllerHost implements ReactiveController {
 
   async retry() {
     await this.controller?.retry();
+  }
+  async tryNextSource() {
+    await this.controller?.retryWithFallback();
+  }
+  canAttemptFallback(): boolean {
+    return this.controller?.canAttemptFallback() ?? false;
   }
   async reload() {
     await this.controller?.reload();

@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import type { StreamStatus } from "@livepeer-frameworks/player-core";
+import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
 import { sharedStyles } from "../styles/shared-styles.js";
 
 @customElement("fw-stream-state-overlay")
@@ -11,6 +12,13 @@ export class FwStreamStateOverlay extends LitElement {
   @property({ type: Boolean }) visible = true;
   @property({ type: Boolean, attribute: "retry-enabled" }) retryEnabled = false;
   @property({ attribute: false }) onRetry?: () => void;
+  @property({ attribute: false }) translator?: TranslateFn;
+
+  private _defaultTranslator: TranslateFn = createTranslator({ locale: "en" });
+
+  private get _t(): TranslateFn {
+    return this.translator ?? this._defaultTranslator;
+  }
 
   static styles = [
     sharedStyles,
@@ -294,15 +302,15 @@ export class FwStreamStateOverlay extends LitElement {
                 `
               : nothing}
             ${this.status === "OFFLINE"
-              ? html`<p class="hint">The stream will start when the broadcaster goes live</p>`
+              ? html`<p class="hint">${this._t("broadcasterGoLive")}</p>`
               : nothing}
             ${this.status === "BOOTING" || this.status === "WAITING_FOR_DATA"
-              ? html`<p class="hint">Please wait while the stream prepares...</p>`
+              ? html`<p class="hint">${this._t("streamPreparing")}</p>`
               : nothing}
             ${!showRetry
               ? html`<div class="polling-indicator">
                   <span class="polling-dot"></span>
-                  <span>Checking stream status...</span>
+                  <span>${this._t("checkingStatus")}</span>
                 </div>`
               : nothing}
           </div>
@@ -312,9 +320,9 @@ export class FwStreamStateOverlay extends LitElement {
                   type="button"
                   class="btn-flush"
                   @click=${this._handleRetry}
-                  aria-label="Retry connection"
+                  aria-label=${this._t("retryConnection")}
                 >
-                  Retry Connection
+                  ${this._t("retryConnection")}
                 </button>
               </div>`
             : nothing}

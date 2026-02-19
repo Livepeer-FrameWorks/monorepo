@@ -8,6 +8,13 @@
  */
 
 import { TypedEventEmitter } from "./EventEmitter";
+import {
+  type VideoCodecFamily,
+  getDefaultVideoSettings,
+  getDefaultAudioSettings,
+  getKeyframeInterval,
+  createEncoderConfig as createMultiCodecConfig,
+} from "./CodecProfiles";
 import type {
   EncoderConfig,
   VideoEncoderSettings,
@@ -91,46 +98,17 @@ interface PendingRequest {
 }
 
 // ============================================================================
-// Default encoder settings
+// Default encoder settings (H.264, backward-compatible)
 // ============================================================================
 
 export const DEFAULT_VIDEO_SETTINGS: Record<string, VideoEncoderSettings> = {
-  professional: {
-    codec: "avc1.4d0032", // H.264 High Profile Level 5.0
-    width: 1920,
-    height: 1080,
-    bitrate: 8_000_000,
-    framerate: 30,
-  },
-  broadcast: {
-    codec: "avc1.4d0028", // H.264 High Profile Level 4.0
-    width: 1920,
-    height: 1080,
-    bitrate: 4_500_000,
-    framerate: 30,
-  },
-  conference: {
-    codec: "avc1.4d001f", // H.264 High Profile Level 3.1
-    width: 1280,
-    height: 720,
-    bitrate: 2_500_000,
-    framerate: 30,
-  },
-  low: {
-    codec: "avc1.42001e", // H.264 Baseline Profile Level 3.0
-    width: 640,
-    height: 480,
-    bitrate: 1_000_000,
-    framerate: 24,
-  },
+  professional: getDefaultVideoSettings("professional", "h264"),
+  broadcast: getDefaultVideoSettings("broadcast", "h264"),
+  conference: getDefaultVideoSettings("conference", "h264"),
+  low: getDefaultVideoSettings("low", "h264"),
 };
 
-export const DEFAULT_AUDIO_SETTINGS: AudioEncoderSettings = {
-  codec: "opus",
-  sampleRate: 48000,
-  numberOfChannels: 2,
-  bitrate: 128_000,
-};
+export const DEFAULT_AUDIO_SETTINGS: AudioEncoderSettings = getDefaultAudioSettings("broadcast");
 
 // ============================================================================
 // EncoderManager
@@ -642,6 +620,28 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
   }
 
   /**
+   * Feed a VideoFrame directly to the encoder worker, bypassing
+   * MediaStreamTrackProcessor. Used by the compositor direct-frame path.
+   * Caller transfers ownership — the frame must not be used after this call.
+   */
+  feedVideoFrame(frame: VideoFrame): void {
+    if (!this.worker || !this.isRunning) {
+      frame.close();
+      return;
+    }
+
+    try {
+      this.worker.postMessage({ type: "videoFrame", data: frame }, [frame]);
+    } catch {
+      try {
+        frame.close();
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+
+  /**
    * Start audio data processing loop.
    */
   private async startAudioProcessing(): Promise<void> {
@@ -859,8 +859,22 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
    * Destroy the encoder manager.
    */
   destroy(): void {
-    this.stop();
+    this.isRunning = false;
     this.isInitialized = false;
+
+    // Cancel readers synchronously (best-effort, worker termination handles the rest)
+    if (this.videoReader) {
+      try {
+        this.videoReader.cancel();
+      } catch {}
+      this.videoReader = null;
+    }
+    if (this.audioReader) {
+      try {
+        this.audioReader.cancel();
+      } catch {}
+      this.audioReader = null;
+    }
 
     // Clear processors
     this.videoProcessor = null;
@@ -873,7 +887,7 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
     }
     this.pendingRequests.clear();
 
-    // Terminate worker
+    // Terminate worker (forcefully stops all encoding)
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;
@@ -884,75 +898,28 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
 }
 
 /**
- * Select appropriate H.264 codec profile/level based on resolution and framerate.
- * Uses High Profile with the minimum level that supports the given parameters.
- *
- * H.264 Level capabilities (High Profile):
- * - Level 3.1 (4d001f): 1280x720 @ 30fps, 14 Mbps
- * - Level 4.0 (4d0028): 1920x1080 @ 30fps or 1280x720 @ 60fps, 20 Mbps
- * - Level 5.0 (4d0032): 1920x1080 @ 60fps or 2560x1440 @ 30fps, 25 Mbps
- * - Level 5.1 (4d0033): 2560x1440 @ 60fps or 3840x2160 @ 30fps, 40 Mbps
- * - Level 5.2 (4d0034): 3840x2160 @ 60fps, 60 Mbps
- */
-function selectH264Codec(width: number, height: number, framerate: number): string {
-  const pixels = width * height;
-
-  // 4K (3840x2160)
-  if (pixels >= 3840 * 2160) {
-    return framerate > 30 ? "avc1.640034" : "avc1.640033"; // Level 5.2 or 5.1
-  }
-  // 1440p (2560x1440)
-  if (pixels >= 2560 * 1440) {
-    return framerate > 30 ? "avc1.640033" : "avc1.640032"; // Level 5.1 or 5.0
-  }
-  // 1080p (1920x1080)
-  if (pixels >= 1920 * 1080) {
-    return framerate > 30 ? "avc1.640032" : "avc1.64002a"; // Level 5.0 or 4.2
-  }
-  // 720p (1280x720)
-  if (pixels >= 1280 * 720) {
-    return framerate > 30 ? "avc1.64002a" : "avc1.640028"; // Level 4.2 or 4.0
-  }
-  // Lower resolutions
-  return "avc1.64001f"; // Level 3.1 (High Profile)
-}
-
-/**
- * Create default encoder config for a quality profile.
- * Optionally merge with encoder overrides from UI.
- * Automatically selects an appropriate H.264 codec based on final resolution/framerate.
+ * Create encoder config for a quality profile (defaults to H.264).
+ * For multi-codec support, use createMultiCodecEncoderConfig or import from CodecProfiles.
  */
 export function createEncoderConfig(
   profile: "professional" | "broadcast" | "conference" | "low" = "broadcast",
   overrides?: EncoderOverrides
 ): EncoderConfig {
-  const baseVideo = DEFAULT_VIDEO_SETTINGS[profile];
-  const baseAudio = DEFAULT_AUDIO_SETTINGS;
-
-  // Calculate final video settings
-  const finalWidth = overrides?.video?.width ?? baseVideo.width;
-  const finalHeight = overrides?.video?.height ?? baseVideo.height;
-  const finalFramerate = overrides?.video?.framerate ?? baseVideo.framerate;
-
-  // Select appropriate codec for final resolution/framerate
-  const codec = selectH264Codec(finalWidth, finalHeight, finalFramerate);
-
-  return {
-    video: {
-      ...baseVideo,
-      codec, // Use dynamically selected codec
-      width: finalWidth,
-      height: finalHeight,
-      framerate: finalFramerate,
-      ...(overrides?.video?.bitrate !== undefined && { bitrate: overrides.video.bitrate }),
-    },
-    audio: {
-      ...baseAudio,
-      ...(overrides?.audio?.bitrate !== undefined && { bitrate: overrides.audio.bitrate }),
-      ...(overrides?.audio?.sampleRate !== undefined && { sampleRate: overrides.audio.sampleRate }),
-      ...(overrides?.audio?.numberOfChannels !== undefined && {
-        numberOfChannels: overrides.audio.numberOfChannels,
-      }),
-    },
-  };
+  return createMultiCodecConfig(profile, "h264", overrides);
 }
+
+/**
+ * Create encoder config with explicit codec family selection.
+ * Supports H.264, VP9, and AV1 with codec-appropriate bitrate targets.
+ */
+export function createMultiCodecEncoderConfig(
+  profile: "professional" | "broadcast" | "conference" | "low" = "broadcast",
+  codecFamily: VideoCodecFamily = "h264",
+  overrides?: EncoderOverrides
+): EncoderConfig {
+  const config = createMultiCodecConfig(profile, codecFamily, overrides);
+  config.keyframeInterval = getKeyframeInterval(codecFamily);
+  return config;
+}
+
+export { type VideoCodecFamily } from "./CodecProfiles";

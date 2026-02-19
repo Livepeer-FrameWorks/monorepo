@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import { FwStreamCrafter } from "../src/components/fw-streamcrafter.js";
 import {
   STREAMCRAFTER_COMPONENT_PARITY_CALLBACK_MARKERS,
-  STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_LABELS,
+  STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_I18N_KEYS,
   STREAMCRAFTER_WRAPPER_PARITY_ACTION_METHODS,
 } from "../../test-contract/streamcrafter-wrapper-contract";
 
@@ -27,9 +27,9 @@ describe("FwStreamCrafter", () => {
     expect(typeof proto.destroy).toBe("function");
   });
 
-  it("contains shared context-menu labels", () => {
-    for (const label of Object.values(STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_LABELS)) {
-      expect(source).toContain(label);
+  it("references shared context-menu i18n keys", () => {
+    for (const key of STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_I18N_KEYS) {
+      expect(source).toContain(`"${key}"`);
     }
   });
 

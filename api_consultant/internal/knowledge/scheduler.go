@@ -184,7 +184,7 @@ func (s *CrawlScheduler) loadSources() []crawlSource {
 					if line == "" || strings.HasPrefix(line, "#") {
 						continue
 					}
-					add(line)
+					add(os.ExpandEnv(line))
 				}
 			}()
 		}

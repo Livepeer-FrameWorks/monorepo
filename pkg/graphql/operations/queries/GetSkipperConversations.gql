@@ -1,0 +1,8 @@
+query GetSkipperConversations($limit: Int, $offset: Int) {
+  skipperConversations(limit: $limit, offset: $offset) {
+    id
+    title
+    createdAt
+    updatedAt
+  }
+}

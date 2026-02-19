@@ -11,6 +11,7 @@ import type {
   TransitionConfig,
   TransitionType,
 } from "@livepeer-frameworks/streamcrafter-core";
+import { useStudioTranslate } from "../context/StudioI18nContext";
 
 export interface SceneSwitcherProps {
   scenes: Scene[];
@@ -41,6 +42,7 @@ export function SceneSwitcher({
   showTransitionControls = true,
   className = "",
 }: SceneSwitcherProps) {
+  const t = useStudioTranslate();
   const [selectedTransition, setSelectedTransition] = useState<TransitionType>(
     transitionConfig.type
   );
@@ -89,7 +91,7 @@ export function SceneSwitcher({
   return (
     <div className={`fw-sc-scene-switcher ${className}`}>
       <div className="fw-sc-scene-switcher-header">
-        <span className="fw-sc-scene-switcher-title">Scenes</span>
+        <span className="fw-sc-scene-switcher-title">{t("scenes")}</span>
         {showTransitionControls && (
           <div className="fw-sc-transition-controls">
             <select
@@ -97,12 +99,12 @@ export function SceneSwitcher({
               value={selectedTransition}
               onChange={(e) => setSelectedTransition(e.target.value as TransitionType)}
             >
-              <option value="cut">Cut</option>
-              <option value="fade">Fade</option>
-              <option value="slide-left">Slide Left</option>
-              <option value="slide-right">Slide Right</option>
-              <option value="slide-up">Slide Up</option>
-              <option value="slide-down">Slide Down</option>
+              <option value="cut">{t("cut")}</option>
+              <option value="fade">{t("fade")}</option>
+              <option value="slide-left">{t("slideLeft")}</option>
+              <option value="slide-right">{t("slideRight")}</option>
+              <option value="slide-up">{t("slideUp")}</option>
+              <option value="slide-down">{t("slideDown")}</option>
             </select>
             <input
               type="number"
@@ -112,7 +114,7 @@ export function SceneSwitcher({
               min={0}
               max={3000}
               step={100}
-              title="Transition duration (ms)"
+              title={t("transitionDuration")}
             />
             <span className="fw-sc-transition-unit">ms</span>
           </div>
@@ -133,7 +135,7 @@ export function SceneSwitcher({
               <button
                 className="fw-sc-scene-delete"
                 onClick={(e) => handleDeleteClick(e, scene.id)}
-                title="Delete scene"
+                title={t("deleteScene")}
               >
                 ×
               </button>
@@ -142,7 +144,7 @@ export function SceneSwitcher({
         ))}
 
         {onSceneCreate && (
-          <button className="fw-sc-scene-add" onClick={onSceneCreate} title="Create new scene">
+          <button className="fw-sc-scene-add" onClick={onSceneCreate} title={t("createNewScene")}>
             +
           </button>
         )}

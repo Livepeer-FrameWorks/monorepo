@@ -1,4 +1,4 @@
-import { usePlayground } from "@/context/PlaygroundContext";
+import { usePlayground } from "@/context/usePlayground";
 import { UriRow } from "./UriRow";
 
 export function IngestUrisSlab() {

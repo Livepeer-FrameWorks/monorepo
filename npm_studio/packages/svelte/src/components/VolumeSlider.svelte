@@ -68,8 +68,16 @@
   }
 
   // Colors
-  let popupColor = $derived(isBoost ? "#e0af68" : isDefault ? "#9ece6a" : "#7aa2f7");
-  let markerColor = $derived(isDefault ? "#9ece6a" : "rgba(158, 206, 106, 0.3)");
+  let popupColor = $derived(
+    isBoost
+      ? "hsl(var(--fw-sc-warning))"
+      : isDefault
+        ? "hsl(var(--fw-sc-success))"
+        : "hsl(var(--fw-sc-accent))"
+  );
+  let markerColor = $derived(
+    isDefault ? "hsl(var(--fw-sc-success))" : "hsl(var(--fw-sc-success) / 0.3)"
+  );
 </script>
 
 <div class="volume-slider" style:min-width={compact ? "60px" : "100px"}>
@@ -99,7 +107,7 @@
       ontouchstart={handleMouseDown}
       ontouchend={handleMouseUp}
       class="volume-input"
-      style:accent-color={isBoost ? "#e0af68" : "#7aa2f7"}
+      style:accent-color={isBoost ? "hsl(var(--fw-sc-warning))" : "hsl(var(--fw-sc-accent))"}
     />
   </div>
 </div>
@@ -116,7 +124,7 @@
     transform: translateX(-50%);
     margin-bottom: 8px;
     padding: 4px 8px;
-    color: #1a1b26;
+    color: hsl(var(--fw-sc-on-accent, 235 19% 13%));
     border-radius: 4px;
     font-size: 12px;
     font-weight: 600;

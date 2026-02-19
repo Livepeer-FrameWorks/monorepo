@@ -48,6 +48,9 @@ export { default as ThumbnailOverlay } from "./ThumbnailOverlay.svelte";
 export { default as StatsPanel } from "./StatsPanel.svelte";
 export { default as DevModePanel } from "./DevModePanel.svelte";
 
+// Composable control components
+export * from "./controls";
+
 // Icon components
 export * from "./icons";
 
@@ -65,6 +68,9 @@ export {
   PlayerController,
   PlayerManager,
   globalPlayerManager,
+  createTranslator,
+  getAvailableLocales,
+  getLocaleDisplayName,
 } from "@livepeer-frameworks/player-core";
 export type {
   PlayerControllerConfig,
@@ -88,4 +94,8 @@ export type {
   PlayerCombination,
   PlayerManagerOptions,
   PlayerManagerEvents,
+  FwLocale,
+  TranslateFn,
+  TranslationStrings,
+  I18nConfig,
 } from "@livepeer-frameworks/player-core";

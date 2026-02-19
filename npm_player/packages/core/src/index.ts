@@ -33,7 +33,8 @@ export { GatewayClient } from "./core/GatewayClient";
 export { StreamStateClient } from "./core/StreamStateClient";
 export { QualityMonitor } from "./core/QualityMonitor";
 export { ABRController } from "./core/ABRController";
-export { InteractionController } from "./core/InteractionController";
+export { InteractionController, DEFAULT_KEY_MAP } from "./core/InteractionController";
+export type { PlayerKeyMap } from "./core/InteractionController";
 export { MistSignaling } from "./core/MistSignaling";
 export { MistReporter } from "./core/MistReporter";
 export { MetaTrackManager } from "./core/MetaTrackManager";
@@ -85,8 +86,77 @@ export type {
 export * from "./core/TimeFormat";
 export type { TimeDisplayParams } from "./core/TimeFormat";
 
+// Theming
+export {
+  applyTheme,
+  applyThemeOverrides,
+  clearTheme,
+  themeOverridesToStyle,
+  resolveTheme,
+  getAvailableThemes,
+  getThemeDisplayName,
+} from "./core/ThemeManager";
+export type { FwThemePreset, FwThemeOverrides } from "./core/ThemeManager";
+
+// Internationalization
+export {
+  DEFAULT_TRANSLATIONS,
+  createTranslator,
+  translate,
+  getAvailableLocales,
+  getLocaleDisplayName,
+  getLocalePack,
+} from "./core/I18n";
+export type { TranslationStrings, FwLocale, I18nConfig, TranslateFn } from "./core/I18n";
+
+// Audio gain (Web Audio API volume boost)
+export { AudioGainController } from "./core/AudioGainController";
+export type { AudioGainConfig } from "./core/AudioGainController";
+
+// AirPlay (Safari)
+export { AirPlayController } from "./core/AirPlayController";
+
+// Responsive breakpoints (ResizeObserver)
+export { BreakpointObserver } from "./core/BreakpointObserver";
+export type { BreakpointConfig } from "./core/BreakpointObserver";
+
+// Thumbnail VTT sprite sheet parser
+export { parseThumbnailVtt, findCueAtTime, fetchThumbnailVtt } from "./core/ThumbnailVttParser";
+export type { ThumbnailCue } from "./core/ThumbnailVttParser";
+
 // Styles
 export { ensurePlayerStyles, injectPlayerStyles } from "./styles";
+
+// Vanilla facade
+export { createPlayer } from "./vanilla/createPlayer";
+export type {
+  CreatePlayerConfig,
+  PlayerInstance,
+  PlayerCapabilities,
+} from "./vanilla/createPlayer";
+
+// Reactive state (per-property subscriptions)
+export { createReactiveState } from "./vanilla/ReactiveState";
+export type { ReactiveState, ReactiveStateProperty } from "./vanilla/ReactiveState";
+
+// Blueprint system
+export type {
+  BlueprintContext,
+  BlueprintFactory,
+  BlueprintMap,
+  StructureDescriptor,
+} from "./vanilla/Blueprint";
+export { DEFAULT_BLUEPRINTS } from "./vanilla/defaultBlueprints";
+export { DEFAULT_STRUCTURE } from "./vanilla/defaultStructure";
+export { buildStructure } from "./vanilla/StructureBuilder";
+
+// Skin registry
+export { FwSkins, registerSkin, resolveSkin } from "./vanilla/SkinRegistry";
+export type { SkinDefinition, ResolvedSkin } from "./vanilla/SkinRegistry";
+
+// Simplified player registration
+export { registerPlayer } from "./vanilla/registerPlayer";
+export type { SimplePlayerDefinition } from "./vanilla/registerPlayer";
 
 // Utility functions
 export { cn } from "./lib/utils";

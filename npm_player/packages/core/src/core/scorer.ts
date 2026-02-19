@@ -260,8 +260,8 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     // MP4/WS (MEWS): 2-5s latency, good fallback
     "ws/video/mp4": 0.3,
     "wss/video/mp4": 0.3,
-    // Progressive MP4: lower latency than HLS (5-10s vs 10-30s)
-    "html5/video/mp4": 0.15,
+    // Progressive MP4: lower latency than HLS (2-5s vs 10-30s)
+    "html5/video/mp4": 0.35,
     // HLS: high latency, minimal bonus
     "html5/application/vnd.apple.mpegurl": 0.05,
   },

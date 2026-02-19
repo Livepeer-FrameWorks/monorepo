@@ -18,6 +18,7 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Label } from "$lib/components/ui/label";
   import { toast } from "$lib/stores/toast.js";
+  import { themeStore } from "$lib/stores/theme.svelte";
 
   // Houdini stores
   const streamsStore = new GetStreamsConnectionStore();
@@ -247,6 +248,7 @@
                   showSettings={false}
                   devMode={true}
                   debug={false}
+                  theme={themeStore.playerTheme}
                   enableCompositor={advancedSettings.enableCompositor}
                   compositorConfig={{ renderer: advancedSettings.compositorRenderer }}
                   onStateChange={handleStateChange}

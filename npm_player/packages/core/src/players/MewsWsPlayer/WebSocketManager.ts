@@ -17,6 +17,8 @@ export class WebSocketManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private wasConnected = false;
   private isDestroyed = false;
+  private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
+  private static readonly CONNECTION_TIMEOUT_MS = 5000;
 
   // Track pending retry timers so they can be cancelled on destroy
   private pendingRetryTimers: Set<ReturnType<typeof setTimeout>> = new Set();
@@ -55,7 +57,17 @@ export class WebSocketManager {
     ws.binaryType = "arraybuffer";
     this.ws = ws;
 
+    // Connection timeout — if WS doesn't open within 5s, treat as failed
+    this.clearConnectionTimeout();
+    this.connectionTimeout = setTimeout(() => {
+      if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close();
+        this.onError("WebSocket connection timeout");
+      }
+    }, WebSocketManager.CONNECTION_TIMEOUT_MS);
+
     ws.onopen = () => {
+      this.clearConnectionTimeout();
       this.wasConnected = true;
       this.reconnectAttempts = 0;
       this.clearReconnectTimer();
@@ -148,6 +160,13 @@ export class WebSocketManager {
     }
   }
 
+  private clearConnectionTimeout(): void {
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
+  }
+
   private clearReconnectTimer(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -158,6 +177,7 @@ export class WebSocketManager {
   destroy(): void {
     console.debug("[WebSocketManager] destroy() called");
     this.isDestroyed = true;
+    this.clearConnectionTimeout();
     this.clearReconnectTimer();
 
     // Cancel ALL pending retry timers to prevent any scheduled sends

@@ -77,7 +77,7 @@ export interface UseCompositorReturn {
 export function useCompositor({
   controller,
   config,
-  autoEnable = false,
+  autoEnable = true,
 }: UseCompositorOptions): UseCompositorReturn {
   const [isEnabled, setIsEnabled] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -110,12 +110,17 @@ export function useCompositor({
 
   // Auto-enable if requested
   useEffect(() => {
+    let mounted = true;
     if (autoEnable && controller && !isEnabled) {
       controller.enableCompositor(configRef.current).then(() => {
+        if (!mounted) return;
         setIsEnabled(true);
         syncState();
       });
     }
+    return () => {
+      mounted = false;
+    };
   }, [autoEnable, controller, isEnabled, syncState]);
 
   // Set up event listeners

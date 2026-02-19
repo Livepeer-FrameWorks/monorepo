@@ -1,6 +1,10 @@
 import { browser } from "$app/environment";
-
-const GQL_ENDPOINT = "/api/graphql";
+import {
+  GetSkipperReportsStore,
+  GetSkipperUnreadReportCountStore,
+  MarkSkipperReportsReadStore,
+  type GetSkipperReports$result,
+} from "$houdini";
 
 export interface SkipperReport {
   id: string;
@@ -13,40 +17,29 @@ export interface SkipperReport {
   readAt: string | null;
 }
 
-interface ReportsResponse {
-  data?: {
-    skipperReports: {
-      nodes: SkipperReport[];
-      totalCount: number;
-      unreadCount: number;
-    };
-  };
-}
+type SkipperReportNode = GetSkipperReports$result["skipperReports"]["nodes"][number];
 
-interface UnreadCountResponse {
-  data?: {
-    skipperUnreadReportCount: number;
+function toSkipperReport(node: SkipperReportNode): SkipperReport {
+  return {
+    id: node.id,
+    trigger: node.trigger,
+    summary: node.summary,
+    metricsReviewed: [...node.metricsReviewed],
+    rootCause: node.rootCause,
+    recommendations: node.recommendations.map((rec) => ({
+      text: rec.text,
+      confidence: rec.confidence,
+    })),
+    createdAt: node.createdAt,
+    readAt: node.readAt,
   };
-}
-
-interface MarkReadResponse {
-  data?: {
-    markSkipperReportsRead: number;
-  };
-}
-
-async function gql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-  const res = await fetch(GQL_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!res.ok) throw new Error(`GraphQL request failed: ${res.status}`);
-  return res.json();
 }
 
 function createNotificationStore() {
+  const reportsQuery = new GetSkipperReportsStore();
+  const unreadCountQuery = new GetSkipperUnreadReportCountStore();
+  const markReadMutation = new MarkSkipperReportsReadStore();
+
   let reports = $state<SkipperReport[]>([]);
   let totalCount = $state(0);
   let unreadCount = $state(0);
@@ -58,23 +51,19 @@ function createNotificationStore() {
     if (!browser) return;
     loading = true;
     try {
-      const resp = await gql<ReportsResponse>(
-        `query GetSkipperReports($limit: Int, $offset: Int) {
-          skipperReports(limit: $limit, offset: $offset) {
-            nodes {
-              id trigger summary metricsReviewed rootCause
-              recommendations { text confidence }
-              createdAt readAt
-            }
-            totalCount unreadCount
-          }
-        }`,
-        { limit, offset }
-      );
-      if (resp.data) {
-        reports = resp.data.skipperReports.nodes;
-        totalCount = resp.data.skipperReports.totalCount;
-        unreadCount = resp.data.skipperReports.unreadCount;
+      const resp = await reportsQuery.fetch({
+        policy: "NetworkOnly",
+        variables: { limit, offset },
+      });
+      if (resp.errors?.length) {
+        throw new Error(resp.errors[0].message);
+      }
+
+      const skipperReports = resp.data?.skipperReports;
+      if (skipperReports) {
+        reports = skipperReports.nodes.map(toSkipperReport);
+        totalCount = skipperReports.totalCount;
+        unreadCount = skipperReports.unreadCount;
       }
       initialized = true;
     } catch (err) {
@@ -87,7 +76,11 @@ function createNotificationStore() {
   async function refreshUnreadCount() {
     if (!browser) return;
     try {
-      const resp = await gql<UnreadCountResponse>(`query { skipperUnreadReportCount }`);
+      const resp = await unreadCountQuery.fetch({ policy: "NetworkOnly" });
+      if (resp.errors?.length) {
+        throw new Error(resp.errors[0].message);
+      }
+
       if (resp.data) {
         unreadCount = resp.data.skipperUnreadReportCount;
       }
@@ -99,14 +92,17 @@ function createNotificationStore() {
   async function markAllRead() {
     if (!browser) return;
     try {
-      await gql<MarkReadResponse>(
-        `mutation MarkSkipperReportsRead($ids: [ID!]) {
-          markSkipperReportsRead(ids: $ids)
-        }`,
-        { ids: null }
-      );
-      reports = reports.map((r) => (r.readAt ? r : { ...r, readAt: new Date().toISOString() }));
-      unreadCount = 0;
+      const resp = await markReadMutation.mutate({ ids: null });
+      if (resp.errors?.length) {
+        throw new Error(resp.errors[0].message);
+      }
+
+      const markedCount = resp.data?.markSkipperReportsRead ?? 0;
+      if (markedCount <= 0) return;
+
+      const now = new Date().toISOString();
+      reports = reports.map((r) => (r.readAt ? r : { ...r, readAt: now }));
+      unreadCount = Math.max(0, unreadCount - markedCount);
     } catch (err) {
       console.error("Failed to mark reports read:", err);
     }
@@ -115,27 +111,26 @@ function createNotificationStore() {
   async function markRead(ids: string[]) {
     if (!browser || ids.length === 0) return;
     try {
-      const resp = await gql<MarkReadResponse>(
-        `mutation MarkSkipperReportsRead($ids: [ID!]) {
-          markSkipperReportsRead(ids: $ids)
-        }`,
-        { ids }
-      );
-      if (resp.data) {
-        const idSet = new Set(ids);
-        reports = reports.map((r) =>
-          idSet.has(r.id) && !r.readAt ? { ...r, readAt: new Date().toISOString() } : r
-        );
-        unreadCount = Math.max(0, unreadCount - resp.data.markSkipperReportsRead);
+      const resp = await markReadMutation.mutate({ ids });
+      if (resp.errors?.length) {
+        throw new Error(resp.errors[0].message);
       }
+
+      const markedCount = resp.data?.markSkipperReportsRead ?? 0;
+      if (markedCount <= 0) return;
+
+      const now = new Date().toISOString();
+      const idSet = new Set(ids);
+      reports = reports.map((r) => (idSet.has(r.id) && !r.readAt ? { ...r, readAt: now } : r));
+      unreadCount = Math.max(0, unreadCount - markedCount);
     } catch (err) {
       console.error("Failed to mark reports read:", err);
     }
   }
 
   function handleRealtimeEvent() {
-    refreshUnreadCount();
-    loadReports();
+    void refreshUnreadCount();
+    void loadReports();
   }
 
   function togglePanel() {

@@ -87,6 +87,14 @@ export interface DebuggingMessage {
   uid: number;
 }
 
+export interface SetRenderModeMessage {
+  type: "setrendermode";
+  idx: number;
+  /** When true, worker transfers frames via postMessage instead of writing to stream */
+  directTransfer: boolean;
+  uid: number;
+}
+
 export type MainToWorkerMessage =
   | CreateMessage
   | ConfigureMessage
@@ -97,7 +105,8 @@ export type MainToWorkerMessage =
   | FrameTimingMessage
   | SeekMessage
   | FrameStepMessage
-  | DebuggingMessage;
+  | DebuggingMessage
+  | SetRenderModeMessage;
 
 // ============================================================================
 // Worker -> Main Thread Messages
@@ -171,6 +180,32 @@ export interface WriteFrameMessage {
   uid: number;
 }
 
+/** Direct frame transfer: worker sends decoded frame for WebGL/AudioWorklet rendering */
+export interface TransferFrameMessage {
+  type: "transferframe";
+  idx: number;
+  trackType: "video" | "audio";
+  frame: VideoFrame | AudioData;
+  timestamp: number; // microseconds
+  uid: number;
+}
+
+/** WASM-decoded YUV planes: worker sends raw YUV data for WebGL renderYUV() */
+export interface TransferYUVMessage {
+  type: "transferyuv";
+  idx: number;
+  timestamp: number; // microseconds
+  y: Uint8Array | Uint16Array;
+  u: Uint8Array | Uint16Array;
+  v: Uint8Array | Uint16Array;
+  width: number;
+  height: number;
+  format: string; // PixelFormat: "I420" | "I422" | "I444" | "I420P10"
+  colorPrimaries?: string;
+  transferFunction?: string;
+  uid: number;
+}
+
 export type WorkerToMainMessage =
   | AddTrackMessage
   | RemoveTrackMessage
@@ -180,7 +215,9 @@ export type WorkerToMainMessage =
   | SendEventMessage
   | StatsUpdateMessage
   | AckMessage
-  | WriteFrameMessage;
+  | WriteFrameMessage
+  | TransferFrameMessage
+  | TransferYUVMessage;
 
 // ============================================================================
 // Internal Worker Types
@@ -244,6 +281,14 @@ export interface PipelineState {
   optimizeForLatency: boolean;
   /** Payload format: 'avcc' (length-prefixed) or 'annexb' (start-code delimited) */
   payloadFormat: "avcc" | "annexb";
+  /** When true, transfer frames to main thread via postMessage instead of writing to stream */
+  directTransfer: boolean;
+  /** WASM fallback decoder — set when native VideoDecoder doesn't support the codec */
+  wasmDecoder: unknown | null;
+  /** Set at runtime when first keyframe has Annex B start codes despite AVCC description */
+  annexBConvert?: boolean;
+  /** Pressure drop: dropping all frames until next keyframe to avoid moshing */
+  droppingUntilKeyframe?: boolean;
 }
 
 // ============================================================================

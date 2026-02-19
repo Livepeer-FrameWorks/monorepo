@@ -16,6 +16,7 @@ export const MyStream = ({ playbackId }) => (
   <Player
     contentId={playbackId}
     contentType="live"
+    theme="tokyo-night"
     options={{
       autoplay: true,
       muted: true,
@@ -52,6 +53,20 @@ const snippetPlayerWc = `<!-- IIFE via npm CDN — no bundler needed -->
   controls
 ></fw-player>`;
 
+const snippetPlayerVanilla = `import { createPlayer } from '@livepeer-frameworks/player-core'
+
+const player = createPlayer({
+  target: '#player',
+  contentId: 'pk_...',
+  contentType: 'live',
+  gatewayUrl: '${config.gatewayUrl}',
+  theme: 'dracula',
+})
+
+player.state.on('playing', (isPlaying) => {
+  console.log(isPlaying ? 'Playing' : 'Paused')
+})`;
+
 const snippetIngestReact = `import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
 import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
@@ -75,6 +90,23 @@ const snippetIngestSvelte = `<script lang="ts">
   streamKey="sk_live_..."
   initialProfile="broadcast"
 />`;
+
+const snippetIngestVanilla = `import { createStreamCrafter } from '@livepeer-frameworks/streamcrafter-core'
+
+const studio = createStreamCrafter({
+  target: '#studio',
+  whipUrl: 'https://edge-ingest.example.com/webrtc/stream-key',
+  profile: 'broadcast',
+  theme: 'dracula',
+  locale: 'en',
+})
+
+studio.on('stateChange', ({ state }) => {
+  console.log(state === 'streaming' ? 'LIVE' : state)
+})
+
+await studio.startCamera()
+await studio.goLive()`;
 
 const snippetIngestWc = `<!-- IIFE via npm CDN — no bundler needed -->
 <!-- unpkg -->
@@ -118,11 +150,13 @@ export default function SdkCodePreview({ variant = "default", className }) {
       react: snippetPlayerReact,
       svelte: snippetPlayerSvelte,
       wc: snippetPlayerWc,
+      vanilla: snippetPlayerVanilla,
     },
     ingest: {
       react: snippetIngestReact,
       svelte: snippetIngestSvelte,
       wc: snippetIngestWc,
+      vanilla: snippetIngestVanilla,
     },
     graphql: snippetGraphql,
   };
@@ -131,12 +165,14 @@ export default function SdkCodePreview({ variant = "default", className }) {
     react: "React",
     svelte: "Svelte",
     wc: "Web Components",
+    vanilla: "Vanilla",
   };
 
   const frameworkLangLabels = {
     react: "React / TSX",
     svelte: "Svelte 5",
     wc: "HTML",
+    vanilla: "JavaScript",
   };
 
   const hasFrameworkTabs = activeProductTab === "player" || activeProductTab === "ingest";
@@ -188,25 +224,27 @@ export default function SdkCodePreview({ variant = "default", className }) {
           </div>
           {hasFrameworkTabs ? (
             <div className="flex flex-wrap gap-1">
-              {Object.entries(frameworkLabels).map(([id, label]) => (
-                <button
-                  key={id}
-                  onClick={() =>
-                    setActiveFrameworkByProduct((prev) => ({
-                      ...prev,
-                      [activeProductTab]: id,
-                    }))
-                  }
-                  className={cn(
-                    "px-2.5 py-1 text-[11px] font-medium rounded-md transition-all outline-none border",
-                    activeFramework === id
-                      ? "bg-white/10 text-foreground border-white/20"
-                      : "text-muted-foreground hover:text-foreground hover:bg-white/5 border-transparent"
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
+              {Object.entries(frameworkLabels)
+                .filter(([id]) => snippets[activeProductTab]?.[id])
+                .map(([id, label]) => (
+                  <button
+                    key={id}
+                    onClick={() =>
+                      setActiveFrameworkByProduct((prev) => ({
+                        ...prev,
+                        [activeProductTab]: id,
+                      }))
+                    }
+                    className={cn(
+                      "px-2.5 py-1 text-[11px] font-medium rounded-md transition-all outline-none border",
+                      activeFramework === id
+                        ? "bg-white/10 text-foreground border-white/20"
+                        : "text-muted-foreground hover:text-foreground hover:bg-white/5 border-transparent"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
             </div>
           ) : null}
         </div>

@@ -1,20 +1,7 @@
-import {
-  createContext,
-  useContext,
-  useState,
-  useMemo,
-  useEffect,
-  useCallback,
-  type ReactNode,
-} from "react";
-import type {
-  PlaygroundState,
-  PlaygroundActions,
-  MistSource,
-  IngestUris,
-  PlayerType,
-} from "../lib/types";
-import { DEFAULTS, STORAGE_KEYS } from "../lib/constants";
+import { useState, useMemo, useEffect, useCallback, type ReactNode } from "react";
+import type { MistSource, IngestUris, PlayerType, ConnectionStatus } from "../lib/types";
+import { PlaygroundContext, type PlaygroundContextValue } from "./usePlayground";
+import { DEFAULTS, STORAGE_KEYS, POLL_INTERVAL_MS } from "../lib/constants";
 import {
   sanitizeBaseUrl,
   buildViewerBase,
@@ -24,10 +11,83 @@ import {
   saveString,
   extractHostname,
 } from "../lib/mist-utils";
+import { resolveTheme } from "@livepeer-frameworks/player-core";
+import type { FwThemeOverrides, FwThemePreset } from "@livepeer-frameworks/player-core";
 
-type PlaygroundContextValue = PlaygroundState & PlaygroundActions;
+// Values for CSS-only themes (defined in CSS files, not in ThemeManager JS)
+const CSS_ONLY_OVERRIDES: Record<string, FwThemeOverrides> = {
+  light: {
+    surfaceDeep: "0 0% 97%",
+    surface: "220 10% 94%",
+    surfaceRaised: "220 10% 90%",
+    surfaceActive: "220 10% 85%",
+    text: "220 20% 15%",
+    textBright: "220 20% 5%",
+    textMuted: "220 10% 45%",
+    textFaint: "220 10% 70%",
+    accent: "218 80% 50%",
+    accentSecondary: "195 80% 42%",
+    success: "140 60% 35%",
+    danger: "0 70% 50%",
+    warning: "35 80% 45%",
+  },
+  "neutral-dark": {
+    surfaceDeep: "0 0% 8%",
+    surface: "0 0% 12%",
+    surfaceRaised: "0 0% 16%",
+    surfaceActive: "0 0% 22%",
+    text: "0 0% 82%",
+    textBright: "0 0% 95%",
+    textMuted: "0 0% 55%",
+    textFaint: "0 0% 38%",
+    accent: "210 100% 55%",
+    accentSecondary: "195 80% 55%",
+    success: "140 60% 50%",
+    danger: "0 70% 55%",
+    warning: "35 80% 55%",
+  },
+};
 
-const PlaygroundContext = createContext<PlaygroundContextValue | null>(null);
+// Map theme tokens → playground --tn-* CSS custom properties
+const THEME_TO_TN: [keyof FwThemeOverrides, string][] = [
+  ["surfaceDeep", "--tn-bg-dark"],
+  ["surface", "--tn-bg"],
+  ["surfaceRaised", "--tn-bg-highlight"],
+  ["surfaceActive", "--tn-bg-visual"],
+  ["text", "--tn-fg"],
+  ["textMuted", "--tn-fg-dark"],
+  ["textFaint", "--tn-fg-gutter"],
+  ["textFaint", "--tn-comment"],
+  ["surfaceRaised", "--tn-terminal"],
+  ["accent", "--tn-blue"],
+  ["accentSecondary", "--tn-cyan"],
+  ["accentSecondary", "--tn-teal"],
+  ["success", "--tn-green"],
+  ["warning", "--tn-yellow"],
+  ["warning", "--tn-orange"],
+  ["danger", "--tn-red"],
+  ["danger", "--tn-magenta"],
+  ["accent", "--tn-purple"],
+];
+
+const ALL_TN_PROPS = [...new Set(THEME_TO_TN.map(([, prop]) => prop))];
+
+function applyPlaygroundTheme(preset: FwThemePreset): void {
+  const root = document.documentElement;
+
+  if (preset === "default") {
+    for (const prop of ALL_TN_PROPS) root.style.removeProperty(prop);
+    return;
+  }
+
+  const overrides = resolveTheme(preset) ?? CSS_ONLY_OVERRIDES[preset];
+  if (!overrides) return;
+
+  for (const [key, prop] of THEME_TO_TN) {
+    const value = overrides[key];
+    if (value) root.style.setProperty(prop, value);
+  }
+}
 
 function getInitialValue(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
@@ -53,11 +113,17 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   const [autoplayMuted, setAutoplayMuted] = useState(DEFAULTS.autoplayMuted);
   const [selectedProtocol, setSelectedProtocol] = useState<string | null>(null);
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerType>("auto");
+  const [theme, setTheme] =
+    useState<import("@livepeer-frameworks/player-core").FwThemePreset>("default");
 
   // Polled playback state
   const [playbackSources, setPlaybackSources] = useState<MistSource[]>([]);
   const [playbackLoading, setPlaybackLoading] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+
+  // Active streams (auto-polled)
+  const [activeStreams, setActiveStreams] = useState<string[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle");
 
   // Derived values
   const viewerBase = useMemo(() => buildViewerBase(baseUrl, viewerPath), [baseUrl, viewerPath]);
@@ -143,6 +209,38 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     fetchPlaybackSources();
   }, [fetchPlaybackSources]);
 
+  const refreshStreams = useCallback(() => {
+    fetchPlaybackSources();
+  }, [fetchPlaybackSources]);
+
+  // Apply theme to playground shell (updates :root --tn-* variables)
+  useEffect(() => {
+    applyPlaygroundTheme(theme);
+  }, [theme]);
+
+  // Derive connection status + active streams from playback sources
+  // (polled via /json_{streamName}.js — the correct MistServer HTTP output endpoint)
+  useEffect(() => {
+    if (playbackLoading) return;
+    if (playbackSources.length > 0) {
+      setConnectionStatus("connected");
+      setActiveStreams([streamName]);
+    } else if (playbackError) {
+      setConnectionStatus("failed");
+      setActiveStreams([]);
+    } else {
+      setConnectionStatus("idle");
+      setActiveStreams([]);
+    }
+  }, [playbackSources, playbackError, playbackLoading, streamName]);
+
+  // Auto-poll stream info via /json_{streamName}.js
+  useEffect(() => {
+    fetchPlaybackSources();
+    const interval = setInterval(fetchPlaybackSources, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [fetchPlaybackSources]);
+
   const value = useMemo<PlaygroundContextValue>(
     () => ({
       // State
@@ -155,10 +253,13 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       playbackSources,
       playbackLoading,
       playbackError,
+      activeStreams,
+      connectionStatus,
       thumbnailUrl,
       autoplayMuted,
       selectedProtocol,
       selectedPlayer,
+      theme,
       // Actions
       setBaseUrl,
       setViewerPath,
@@ -166,8 +267,10 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       setThumbnailUrl,
       setAutoplayMuted,
       pollSources,
+      refreshStreams,
       setSelectedProtocol,
       setSelectedPlayer,
+      setTheme,
     }),
     [
       baseUrl,
@@ -179,6 +282,8 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       playbackSources,
       playbackLoading,
       playbackError,
+      activeStreams,
+      connectionStatus,
       thumbnailUrl,
       autoplayMuted,
       selectedProtocol,
@@ -189,18 +294,13 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       setThumbnailUrl,
       setAutoplayMuted,
       pollSources,
+      refreshStreams,
       setSelectedProtocol,
       setSelectedPlayer,
+      theme,
+      setTheme,
     ]
   );
 
   return <PlaygroundContext.Provider value={value}>{children}</PlaygroundContext.Provider>;
-}
-
-export function usePlayground(): PlaygroundContextValue {
-  const context = useContext(PlaygroundContext);
-  if (!context) {
-    throw new Error("usePlayground must be used within a PlaygroundProvider");
-  }
-  return context;
 }

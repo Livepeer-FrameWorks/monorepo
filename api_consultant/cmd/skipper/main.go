@@ -597,7 +597,7 @@ func main() {
 				return nil
 			}(),
 		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(qmClient, req, logger, qmbootstrap.DefaultRetryConfig("skipper")); err != nil {
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("skipper")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (skipper) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (skipper) ok")

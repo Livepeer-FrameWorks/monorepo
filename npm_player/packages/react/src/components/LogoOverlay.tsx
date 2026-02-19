@@ -48,7 +48,7 @@ const LogoOverlay: React.FC<LogoOverlayProps> = ({
         target="_blank"
         rel="noreferrer"
         className={cn(
-          "fw-player-surface absolute z-40 inline-flex items-center justify-center opacity-90",
+          "absolute z-40 inline-flex items-center justify-center opacity-90",
           POSITION_MAP[position]
         )}
       >
@@ -60,7 +60,7 @@ const LogoOverlay: React.FC<LogoOverlayProps> = ({
   return (
     <div
       className={cn(
-        "fw-player-surface absolute z-40 inline-flex items-center justify-center opacity-90",
+        "absolute z-40 inline-flex items-center justify-center opacity-90",
         POSITION_MAP[position]
       )}
     >

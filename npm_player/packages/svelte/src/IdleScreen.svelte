@@ -13,7 +13,9 @@
   - Status overlay at bottom
 -->
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, getContext } from "svelte";
+  import type { Readable } from "svelte/store";
+  import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
   import type { StreamStatus } from "@livepeer-frameworks/player-core";
   import DvdLogo from "./DvdLogo.svelte";
   import logomarkAsset from "./assets/logomark.svg";
@@ -26,13 +28,19 @@
     onRetry?: () => void;
   }
 
+  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
+  const fallbackT = createTranslator({ locale: "en" });
+  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+
   let {
     status = "OFFLINE",
-    message = "Waiting for stream...",
+    message = undefined,
     percentage = undefined,
     error = undefined,
     onRetry = undefined,
   }: Props = $props();
+
+  let effectiveMessage = $derived(message ?? t("waitingForStream"));
 
   // Container ref for mouse tracking
   let containerRef: HTMLDivElement | undefined = $state();
@@ -316,7 +324,7 @@
   let _statusLabel = $derived(getStatusLabel(status));
   let showRetry = $derived((status === "ERROR" || status === "INVALID") && onRetry);
   let showProgress = $derived(status === "INITIALIZING" && percentage !== undefined);
-  let displayMessage = $derived(error || message);
+  let displayMessage = $derived(error || effectiveMessage);
   let isLoading = $derived(
     status === "INITIALIZING" || status === "BOOTING" || status === "WAITING_FOR_DATA" || !status
   );
@@ -522,7 +530,7 @@
 
     <!-- Retry button -->
     {#if showRetry}
-      <button type="button" class="retry-button" onclick={onRetry}> Retry </button>
+      <button type="button" class="retry-button" onclick={onRetry}> {t("retry")} </button>
     {/if}
   </div>
 

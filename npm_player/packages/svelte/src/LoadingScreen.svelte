@@ -12,16 +12,23 @@
   - Animated background gradient shifts
 -->
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, getContext } from "svelte";
+  import type { Readable } from "svelte/store";
+  import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
   import DvdLogo from "./DvdLogo.svelte";
   import logomarkAsset from "./assets/logomark.svg";
+
+  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
+  const fallbackT = createTranslator({ locale: "en" });
+  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
 
   interface Props {
     message?: string;
     logoSrc?: string;
   }
 
-  let { message = "Waiting for source...", logoSrc }: Props = $props();
+  let { message = undefined, logoSrc }: Props = $props();
+  let effectiveMessage = $derived(message ?? t("waitingForSource"));
 
   // Use imported asset as default if logoSrc not provided
   let effectiveLogoSrc = $derived(logoSrc || logomarkAsset);
@@ -42,35 +49,10 @@
   let offset = $state({ x: 0, y: 0 });
   let isHovered = $state(false);
 
-  // Tokyo Night inspired pastel colors for bubbles
-  const bubbleColors = [
-    "rgba(122, 162, 247, 0.2)", // Terminal Blue
-    "rgba(187, 154, 247, 0.2)", // Terminal Magenta
-    "rgba(158, 206, 106, 0.2)", // Strings/CSS classes
-    "rgba(115, 218, 202, 0.2)", // Terminal Green
-    "rgba(125, 207, 255, 0.2)", // Terminal Cyan
-    "rgba(247, 118, 142, 0.2)", // Keywords/Terminal Red
-    "rgba(224, 175, 104, 0.2)", // Terminal Yellow
-    "rgba(42, 195, 222, 0.2)", // Language functions
-  ];
-
-  // Particle colors
-  const particleColors = [
-    "#7aa2f7", // Terminal Blue
-    "#bb9af7", // Terminal Magenta
-    "#9ece6a", // Strings/CSS classes
-    "#73daca", // Terminal Green
-    "#7dcfff", // Terminal Cyan
-    "#f7768e", // Keywords/Terminal Red
-    "#e0af68", // Terminal Yellow
-    "#2ac3de", // Language functions
-  ];
-
   // Generate random particles
-  const particles = Array.from({ length: 12 }, (_, i) => ({
+  const particles = Array.from({ length: 12 }, () => ({
     left: Math.random() * 100,
     size: Math.random() * 4 + 2,
-    color: particleColors[i % 8],
     duration: 8 + Math.random() * 4,
     delay: Math.random() * 8,
   }));
@@ -80,16 +62,14 @@
     position: { top: number; left: number };
     size: number;
     opacity: number;
-    color: string;
     timeoutId: ReturnType<typeof setTimeout> | null;
   }
 
   let bubbles = $state<BubbleState[]>(
-    Array.from({ length: 8 }, (_, i) => ({
+    Array.from({ length: 8 }, () => ({
       position: { top: Math.random() * 80 + 10, left: Math.random() * 80 + 10 },
       size: Math.random() * 60 + 30,
       opacity: 0,
-      color: bubbleColors[i % bubbleColors.length],
       timeoutId: null,
     }))
   );
@@ -361,7 +341,7 @@
   bind:this={containerRef}
   class="loading-container fw-player-root"
   role="status"
-  aria-label="Loading"
+  aria-label={t("loading")}
   onmousemove={handleMouseMove}
   onmouseleave={handleMouseLeave}
 >
@@ -383,7 +363,6 @@
         left: {particle.left}%;
         width: {particle.size}px;
         height: {particle.size}px;
-        background: {particle.color};
         animation-duration: {particle.duration}s;
         animation-delay: {particle.delay}s;
       "
@@ -399,7 +378,6 @@
         left: {bubble.position.left}%;
         width: {bubble.size}px;
         height: {bubble.size}px;
-        background: {bubble.color};
         opacity: {bubble.opacity};
       "
     ></div>
@@ -435,7 +413,7 @@
 
   <!-- Message -->
   <div class="message">
-    {message}
+    {effectiveMessage}
   </div>
 
   <!-- Subtle overlay texture -->
@@ -544,11 +522,11 @@
     min-height: 300px;
     background: linear-gradient(
       135deg,
-      hsl(var(--tn-bg-dark, 235 21% 11%)) 0%,
-      hsl(var(--tn-bg, 233 23% 17%)) 25%,
-      hsl(var(--tn-bg-dark, 235 21% 11%)) 50%,
-      hsl(var(--tn-bg, 233 23% 17%)) 75%,
-      hsl(var(--tn-bg-dark, 235 21% 11%)) 100%
+      hsl(var(--fw-surface-deep, 235 21% 11%)) 0%,
+      hsl(var(--fw-surface, 233 23% 17%)) 25%,
+      hsl(var(--fw-surface-deep, 235 21% 11%)) 50%,
+      hsl(var(--fw-surface, 233 23% 17%)) 75%,
+      hsl(var(--fw-surface-deep, 235 21% 11%)) 100%
     );
     background-size: 400% 400%;
     animation: gradientShift 16s ease-in-out infinite;
@@ -579,6 +557,56 @@
     user-select: none;
   }
 
+  .particle:nth-child(8n + 1) {
+    background: hsl(var(--fw-accent, 218 79% 73%));
+  }
+  .particle:nth-child(8n + 2) {
+    background: hsl(var(--fw-accent-secondary, 268 75% 76%));
+  }
+  .particle:nth-child(8n + 3) {
+    background: hsl(var(--fw-success, 97 52% 51%));
+  }
+  .particle:nth-child(8n + 4) {
+    background: hsl(var(--fw-info, 197 95% 74%));
+  }
+  .particle:nth-child(8n + 5) {
+    background: hsl(var(--fw-danger, 352 86% 71%));
+  }
+  .particle:nth-child(8n + 6) {
+    background: hsl(var(--fw-warning, 33 81% 64%));
+  }
+  .particle:nth-child(8n + 7) {
+    background: hsl(var(--fw-accent, 218 79% 73%) / 0.8);
+  }
+  .particle:nth-child(8n + 8) {
+    background: hsl(var(--fw-accent-secondary, 268 75% 76%) / 0.8);
+  }
+
+  .bubble:nth-child(8n + 1) {
+    background: hsl(var(--fw-accent, 218 79% 73%) / 0.2);
+  }
+  .bubble:nth-child(8n + 2) {
+    background: hsl(var(--fw-accent-secondary, 268 75% 76%) / 0.2);
+  }
+  .bubble:nth-child(8n + 3) {
+    background: hsl(var(--fw-success, 97 52% 51%) / 0.2);
+  }
+  .bubble:nth-child(8n + 4) {
+    background: hsl(var(--fw-info, 197 95% 74%) / 0.2);
+  }
+  .bubble:nth-child(8n + 5) {
+    background: hsl(var(--fw-danger, 352 86% 71%) / 0.2);
+  }
+  .bubble:nth-child(8n + 6) {
+    background: hsl(var(--fw-warning, 33 81% 64%) / 0.2);
+  }
+  .bubble:nth-child(8n + 7) {
+    background: hsl(var(--fw-accent, 218 79% 73%) / 0.15);
+  }
+  .bubble:nth-child(8n + 8) {
+    background: hsl(var(--fw-accent-secondary, 268 75% 76%) / 0.15);
+  }
+
   .center-logo {
     position: absolute;
     top: 50%;
@@ -594,7 +622,7 @@
   .logo-pulse {
     position: absolute;
     border-radius: 50%;
-    background: rgba(122, 162, 247, 0.15);
+    background: hsl(var(--fw-accent, 218 79% 73%) / 0.15);
     animation: logoPulse 3s ease-in-out infinite;
     user-select: none;
     pointer-events: none;
@@ -615,7 +643,7 @@
   .logo-image {
     position: relative;
     z-index: 1;
-    filter: drop-shadow(0 4px 8px rgba(36, 40, 59, 0.3));
+    filter: drop-shadow(0 4px 8px hsl(var(--fw-surface-deep, 235 21% 11%) / 0.3));
     transition: all 0.3s ease-out;
     user-select: none;
     -webkit-user-drag: none;
@@ -623,7 +651,7 @@
   }
 
   .logo-image.hovered {
-    filter: drop-shadow(0 6px 12px rgba(36, 40, 59, 0.4)) brightness(1.1);
+    filter: drop-shadow(0 6px 12px hsl(var(--fw-surface-deep, 235 21% 11%) / 0.4)) brightness(1.1);
     transform: scale(1.1);
     cursor: pointer;
   }
@@ -633,12 +661,12 @@
     bottom: 20%;
     left: 50%;
     transform: translateX(-50%);
-    color: #a9b1d6;
+    color: hsl(var(--fw-text-muted, 227 24% 74%));
     font-size: 16px;
     font-weight: 500;
     text-align: center;
     animation: fadeInOut 2s ease-in-out infinite;
-    text-shadow: 0 2px 4px rgba(36, 40, 59, 0.5);
+    text-shadow: 0 2px 4px hsl(var(--fw-surface-deep, 235 21% 11%) / 0.5);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     user-select: none;
     pointer-events: none;
@@ -651,9 +679,21 @@
     right: 0;
     bottom: 0;
     background:
-      radial-gradient(circle at 20% 80%, rgba(122, 162, 247, 0.03) 0%, transparent 50%),
-      radial-gradient(circle at 80% 20%, rgba(187, 154, 247, 0.03) 0%, transparent 50%),
-      radial-gradient(circle at 40% 40%, rgba(158, 206, 106, 0.02) 0%, transparent 50%);
+      radial-gradient(
+        circle at 20% 80%,
+        hsl(var(--fw-accent, 218 79% 73%) / 0.03) 0%,
+        transparent 50%
+      ),
+      radial-gradient(
+        circle at 80% 20%,
+        hsl(var(--fw-accent-secondary, 268 75% 76%) / 0.03) 0%,
+        transparent 50%
+      ),
+      radial-gradient(
+        circle at 40% 40%,
+        hsl(var(--fw-success, 97 52% 51%) / 0.02) 0%,
+        transparent 50%
+      );
     pointer-events: none;
     user-select: none;
   }
@@ -671,8 +711,8 @@
     position: absolute;
     width: 12px;
     height: 3px;
-    background-color: #ffffff;
-    box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+    background-color: hsl(var(--fw-text-bright, 220 13% 91%));
+    box-shadow: 0 0 8px hsl(var(--fw-text-bright, 220 13% 91%) / 0.8);
     border-radius: 1px;
   }
 

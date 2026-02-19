@@ -9,6 +9,8 @@
   - Compositor: Renderer info, performance stats
 -->
 <script lang="ts">
+  import { getContext } from "svelte";
+  import type { Readable } from "svelte/store";
   import type {
     IngestState,
     IngestStats,
@@ -17,11 +19,13 @@
     RendererType,
     RendererStats,
     EncoderOverrides,
+    StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
   import {
     createEncoderConfig,
     getAudioConstraints,
     getEncoderSettings,
+    createStudioTranslator,
   } from "@livepeer-frameworks/streamcrafter-core";
   import VolumeSlider from "./VolumeSlider.svelte";
 
@@ -174,7 +178,7 @@
     compositorStats = null,
     sceneCount = 0,
     layerCount = 0,
-    useWebCodecs = false,
+    useWebCodecs = true,
     isWebCodecsActive = false,
     encoderStats = null,
     onUseWebCodecsChange,
@@ -182,6 +186,10 @@
     encoderOverrides = {},
     onEncoderOverridesChange,
   }: Props = $props();
+
+  const translatorCtx = getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator");
+  const fallbackT = createStudioTranslator({ locale: "en" });
+  let t: StudioTranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
 
   let profileEncoderSettings = $derived(getEncoderSettings(qualityProfile));
   let effectiveEncoderConfig = $derived(
@@ -214,23 +222,23 @@
   }
 
   // Audio processing toggles
-  const audioToggles = [
+  let audioToggles = $derived([
     {
       key: "echoCancellation" as const,
-      label: "Echo Cancellation",
-      description: "Reduce echo from speakers",
+      label: t("echoCancellation"),
+      description: t("echoCancellationDesc"),
     },
     {
       key: "noiseSuppression" as const,
-      label: "Noise Suppression",
-      description: "Filter background noise",
+      label: t("noiseSuppression"),
+      description: t("noiseSuppressionDesc"),
     },
     {
       key: "autoGainControl" as const,
-      label: "Auto Gain Control",
-      description: "Normalize audio levels",
+      label: t("autoGainControl"),
+      description: t("autoGainControlDesc"),
     },
-  ];
+  ]);
 </script>
 
 {#if isOpen}
@@ -242,21 +250,21 @@
         class="fw-dev-mode-tab {activeTab === 'audio' ? 'fw-dev-mode-tab--active' : ''}"
         onclick={() => (activeTab = "audio")}
       >
-        Audio
+        {t("audio")}
       </button>
       <button
         type="button"
         class="fw-dev-mode-tab {activeTab === 'stats' ? 'fw-dev-mode-tab--active' : ''}"
         onclick={() => (activeTab = "stats")}
       >
-        Stats
+        {t("stats")}
       </button>
       <button
         type="button"
         class="fw-dev-mode-tab {activeTab === 'info' ? 'fw-dev-mode-tab--active' : ''}"
         onclick={() => (activeTab = "info")}
       >
-        Info
+        {t("info")}
       </button>
       {#if compositorEnabled}
         <button
@@ -264,7 +272,7 @@
           class="fw-dev-mode-tab {activeTab === 'compositor' ? 'fw-dev-mode-tab--active' : ''}"
           onclick={() => (activeTab = "compositor")}
         >
-          Comp
+          {t("comp")}
         </button>
       {/if}
       <div style="flex: 1;"></div>
@@ -272,7 +280,7 @@
         type="button"
         class="fw-dev-mode-close"
         onclick={onClose}
-        aria-label="Close advanced panel"
+        aria-label={t("closeAdvancedPanel")}
       >
         <svg
           width="12"
@@ -292,7 +300,7 @@
       <div class="fw-dev-mode-content">
         <!-- Master Volume -->
         <div class="fw-dev-mode-section">
-          <div class="fw-dev-mode-section-header">Master Volume</div>
+          <div class="fw-dev-mode-section-header">{t("masterVolume")}</div>
           <div class="fw-dev-mode-volume-control">
             <VolumeSlider value={masterVolume} onChange={onMasterVolumeChange} max={2} />
             <span
@@ -312,15 +320,15 @@
 
         <!-- Audio Level Meter -->
         <div class="fw-dev-mode-section">
-          <div class="fw-dev-mode-section-header">Output Level</div>
+          <div class="fw-dev-mode-section-header">{t("outputLevel")}</div>
           <div class="fw-dev-mode-meter">
             <div
               class="fw-dev-mode-meter-fill"
               style="width: {audioLevel * 100}%; background: {audioLevel > 0.9
-                ? '#f7768e'
+                ? 'hsl(var(--fw-sc-danger))'
                 : audioLevel > 0.7
-                  ? '#e0af68'
-                  : '#9ece6a'};"
+                  ? 'hsl(var(--fw-sc-warning))'
+                  : 'hsl(var(--fw-sc-success))'};"
             ></div>
           </div>
           <div class="fw-dev-mode-meter-labels">
@@ -332,22 +340,22 @@
         <!-- Audio Mixing Status -->
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-row">
-            <span class="fw-dev-mode-section-header">Audio Mixing</span>
+            <span class="fw-dev-mode-section-header">{t("audioMixing")}</span>
             <span
               class="fw-dev-mode-badge {audioMixingEnabled ? 'fw-dev-mode-badge--success' : ''}"
             >
-              {audioMixingEnabled ? "ON" : "OFF"}
+              {audioMixingEnabled ? t("on") : t("off")}
             </span>
           </div>
           {#if audioMixingEnabled}
-            <div class="fw-dev-mode-hint">Compressor + Limiter active</div>
+            <div class="fw-dev-mode-hint">{t("compressorLimiterActive")}</div>
           {/if}
         </div>
 
         <!-- Audio Processing Controls -->
         <div class="fw-dev-mode-section fw-dev-mode-section--flush">
           <div class="fw-dev-mode-section-header-bg">
-            <span class="fw-dev-mode-section-header">Processing</span>
+            <span class="fw-dev-mode-section-header">{t("processing")}</span>
             <span class="fw-dev-mode-profile-tag">profile: {qualityProfile}</span>
           </div>
           {#each audioToggles as toggle, idx (toggle.key)}
@@ -357,7 +365,7 @@
                 <div class="fw-dev-mode-toggle-label">
                   {toggle.label}
                   {#if isModified}
-                    <span class="fw-dev-mode-modified-badge">Modified</span>
+                    <span class="fw-dev-mode-modified-badge">{t("modified")}</span>
                   {/if}
                 </div>
                 <div class="fw-dev-mode-toggle-desc">{toggle.description}</div>
@@ -378,11 +386,11 @@
             </div>
           {/each}
           <div class="fw-dev-mode-info-row">
-            <span>Sample Rate</span>
+            <span>{t("sampleRate")}</span>
             <span class="fw-dev-mode-mono">{profileDefaults.sampleRate} Hz</span>
           </div>
           <div class="fw-dev-mode-info-row">
-            <span>Channels</span>
+            <span>{t("channels")}</span>
             <span class="fw-dev-mode-mono">{profileDefaults.channelCount}</span>
           </div>
         </div>
@@ -394,7 +402,7 @@
       <div class="fw-dev-mode-content">
         <!-- Connection State -->
         <div class="fw-dev-mode-section">
-          <div class="fw-dev-mode-section-header">Connection</div>
+          <div class="fw-dev-mode-section-header">{t("connection")}</div>
           <div class="fw-dev-mode-state fw-dev-mode-state--{ingestState}">
             {ingestState.charAt(0).toUpperCase() + ingestState.slice(1)}
           </div>
@@ -404,54 +412,56 @@
         {#if stats}
           <div class="fw-dev-mode-section fw-dev-mode-section--flush">
             <div class="fw-dev-mode-info-row">
-              <span>Bitrate</span>
+              <span>{t("bitrate")}</span>
               <span>{formatBitrate(stats.video.bitrate + stats.audio.bitrate)}</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Video</span>
+              <span>{t("video")}</span>
               <span class="fw-dev-mode-value--primary">{formatBitrate(stats.video.bitrate)}</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Audio</span>
+              <span>{t("audio")}</span>
               <span class="fw-dev-mode-value--primary">{formatBitrate(stats.audio.bitrate)}</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Frame Rate</span>
+              <span>{t("frameRate")}</span>
               <span>{stats.video.framesPerSecond.toFixed(0)} fps</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Frames Encoded</span>
+              <span>{t("framesEncoded")}</span>
               <span>{stats.video.framesEncoded}</span>
             </div>
             {#if stats.video.packetsLost > 0 || stats.audio.packetsLost > 0}
               <div class="fw-dev-mode-info-row">
-                <span>Packets Lost</span>
+                <span>{t("packetsLost")}</span>
                 <span class="fw-dev-mode-value--error"
                   >{stats.video.packetsLost + stats.audio.packetsLost}</span
                 >
               </div>
             {/if}
             <div class="fw-dev-mode-info-row">
-              <span>RTT</span>
+              <span>{t("rtt")}</span>
               <span class={stats.connection.rtt > 200 ? "fw-dev-mode-value--warning" : ""}
                 >{stats.connection.rtt.toFixed(0)} ms</span
               >
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>ICE State</span>
+              <span>{t("iceState")}</span>
               <span style="text-transform: capitalize;">{stats.connection.iceState}</span>
             </div>
           </div>
         {:else}
           <div class="fw-dev-mode-empty">
-            {ingestState === "streaming" ? "Waiting for stats..." : "Start streaming to see stats"}
+            {ingestState === "streaming" ? t("waitingForStats") : t("startStreamingForStats")}
           </div>
         {/if}
 
         <!-- Error -->
         {#if error}
           <div class="fw-dev-mode-error">
-            <div class="fw-dev-mode-section-header fw-dev-mode-section-header--error">Error</div>
+            <div class="fw-dev-mode-section-header fw-dev-mode-section-header--error">
+              {t("error")}
+            </div>
             <div class="fw-dev-mode-error-text">{error}</div>
           </div>
         {/if}
@@ -463,7 +473,7 @@
       <div class="fw-dev-mode-content">
         <!-- Quality Profile -->
         <div class="fw-dev-mode-section">
-          <div class="fw-dev-mode-section-header">Quality Profile</div>
+          <div class="fw-dev-mode-section-header">{t("qualityProfile")}</div>
           <div class="fw-dev-mode-profile-name">{qualityProfile}</div>
           <div class="fw-dev-mode-hint">
             {profileEncoderSettings.video.width}x{profileEncoderSettings.video.height} @ {formatBitrate(
@@ -474,11 +484,11 @@
 
         <!-- WHIP URL -->
         <div class="fw-dev-mode-section">
-          <div class="fw-dev-mode-section-header">WHIP Endpoint</div>
-          <div class="fw-dev-mode-url">{whipUrl || "Not configured"}</div>
+          <div class="fw-dev-mode-section-header">{t("whipEndpoint")}</div>
+          <div class="fw-dev-mode-url">{whipUrl || t("notConfigured")}</div>
           {#if whipUrl}
             <button type="button" class="fw-dev-mode-copy-btn" onclick={copyWhipUrl}
-              >Copy URL</button
+              >{t("copyUrl")}</button
             >
           {/if}
         </div>
@@ -486,23 +496,23 @@
         <!-- Encoder Settings -->
         <div class="fw-dev-mode-section fw-dev-mode-section--flush">
           <div class="fw-dev-mode-section-header-bg">
-            <span class="fw-dev-mode-section-header">Encoder</span>
+            <span class="fw-dev-mode-section-header">{t("encoder")}</span>
             {#if hasEncoderOverrides}
               <button
                 type="button"
                 class="fw-dev-mode-reset-btn"
                 onclick={() => onEncoderOverridesChange?.({})}
               >
-                Reset to Profile
+                {t("resetToProfile")}
               </button>
             {/if}
           </div>
           <div class="fw-dev-mode-info-row">
-            <span>Video Codec</span>
+            <span>{t("videoCodec")}</span>
             <span class="fw-dev-mode-mono">{effectiveEncoderConfig.video.codec}</span>
           </div>
           <div class="fw-dev-mode-info-row">
-            <span>Resolution</span>
+            <span>{t("resolution")}</span>
             <select
               class="fw-dev-mode-select {encoderOverrides?.video?.width ||
               encoderOverrides?.video?.height
@@ -532,7 +542,7 @@
           </div>
           {#if videoTrackSettings?.width && videoTrackSettings?.height}
             <div class="fw-dev-mode-info-row">
-              <span>Actual Resolution</span>
+              <span>{t("actualResolution")}</span>
               <span class="fw-dev-mode-mono"
                 >{Math.round(videoTrackSettings.width)}x{Math.round(
                   videoTrackSettings.height
@@ -541,7 +551,7 @@
             </div>
           {/if}
           <div class="fw-dev-mode-info-row">
-            <span>Framerate</span>
+            <span>{t("framerate")}</span>
             <select
               class="fw-dev-mode-select {encoderOverrides?.video?.framerate
                 ? 'fw-dev-mode-select--overridden'
@@ -567,12 +577,12 @@
           </div>
           {#if videoTrackSettings?.frameRate}
             <div class="fw-dev-mode-info-row">
-              <span>Actual Framerate</span>
+              <span>{t("actualFramerate")}</span>
               <span class="fw-dev-mode-mono">{Math.round(videoTrackSettings.frameRate)} fps</span>
             </div>
           {/if}
           <div class="fw-dev-mode-info-row">
-            <span>Video Bitrate</span>
+            <span>{t("videoBitrate")}</span>
             <select
               class="fw-dev-mode-select {encoderOverrides?.video?.bitrate
                 ? 'fw-dev-mode-select--overridden'
@@ -597,11 +607,11 @@
             </select>
           </div>
           <div class="fw-dev-mode-info-row">
-            <span>Audio Codec</span>
+            <span>{t("audioCodec")}</span>
             <span class="fw-dev-mode-mono">{effectiveEncoderConfig.audio.codec}</span>
           </div>
           <div class="fw-dev-mode-info-row">
-            <span>Audio Bitrate</span>
+            <span>{t("audioBitrate")}</span>
             <select
               class="fw-dev-mode-select {encoderOverrides?.audio?.bitrate
                 ? 'fw-dev-mode-select--overridden'
@@ -626,14 +636,14 @@
             </select>
           </div>
           {#if ingestState === "streaming"}
-            <div class="fw-dev-mode-locked-notice">Settings locked while streaming</div>
+            <div class="fw-dev-mode-locked-notice">{t("settingsLockedWhileStreaming")}</div>
           {/if}
         </div>
 
         <!-- Sources -->
         <div class="fw-dev-mode-section fw-dev-mode-section--flush">
           <div class="fw-dev-mode-section-header-bg">
-            <span class="fw-dev-mode-section-header">Sources ({sources.length})</span>
+            <span class="fw-dev-mode-section-header">{t("sources")} ({sources.length})</span>
           </div>
           {#if sources.length > 0}
             {#each sources as source, idx (source.id)}
@@ -649,16 +659,16 @@
                 <div class="fw-dev-mode-source-meta">
                   <span>Vol: {Math.round(source.volume * 100)}%</span>
                   {#if source.muted}
-                    <span class="fw-dev-mode-value--error">Muted</span>
+                    <span class="fw-dev-mode-value--error">{t("mute")}</span>
                   {/if}
                   {#if !source.active}
-                    <span class="fw-dev-mode-value--warning">Inactive</span>
+                    <span class="fw-dev-mode-value--warning">{t("inactive")}</span>
                   {/if}
                 </div>
               </div>
             {/each}
           {:else}
-            <div class="fw-dev-mode-empty">No sources added</div>
+            <div class="fw-dev-mode-empty">{t("noSourcesAdded")}</div>
           {/if}
         </div>
       </div>
@@ -669,7 +679,7 @@
       <div class="fw-dev-mode-content">
         <!-- Renderer Info -->
         <div class="fw-dev-mode-section">
-          <div class="fw-dev-mode-section-header">Renderer</div>
+          <div class="fw-dev-mode-section-header">{t("renderer")}</div>
           <div class="fw-dev-mode-renderer fw-dev-mode-renderer--{compositorRendererType}">
             {#if compositorRendererType === "webgpu"}
               WebGPU
@@ -678,24 +688,24 @@
             {:else if compositorRendererType === "canvas2d"}
               Canvas2D
             {:else}
-              Not initialized
+              {t("notInitialized")}
             {/if}
           </div>
-          <div class="fw-dev-mode-hint">Set renderer in config before starting</div>
+          <div class="fw-dev-mode-hint">{t("setRendererHint")}</div>
         </div>
 
         <!-- Stats -->
         {#if compositorStats}
           <div class="fw-dev-mode-section fw-dev-mode-section--flush">
             <div class="fw-dev-mode-section-header-bg">
-              <span class="fw-dev-mode-section-header">Performance</span>
+              <span class="fw-dev-mode-section-header">{t("performance")}</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Frame Rate</span>
+              <span>{t("frameRate")}</span>
               <span class="fw-dev-mode-mono">{compositorStats.fps} fps</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Frame Time</span>
+              <span>{t("frameTime")}</span>
               <span
                 class="fw-dev-mode-mono {compositorStats.frameTimeMs > 16
                   ? 'fw-dev-mode-value--warning'
@@ -706,7 +716,7 @@
             </div>
             {#if compositorStats.gpuMemoryMB !== undefined}
               <div class="fw-dev-mode-info-row">
-                <span>GPU Memory</span>
+                <span>{t("gpuMemory")}</span>
                 <span class="fw-dev-mode-mono">{compositorStats.gpuMemoryMB.toFixed(1)} MB</span>
               </div>
             {/if}
@@ -716,14 +726,14 @@
         <!-- Scenes & Layers -->
         <div class="fw-dev-mode-section fw-dev-mode-section--flush">
           <div class="fw-dev-mode-section-header-bg">
-            <span class="fw-dev-mode-section-header">Composition</span>
+            <span class="fw-dev-mode-section-header">{t("composition")}</span>
           </div>
           <div class="fw-dev-mode-info-row">
-            <span>Scenes</span>
+            <span>{t("scenes")}</span>
             <span class="fw-dev-mode-mono">{sceneCount}</span>
           </div>
           <div class="fw-dev-mode-info-row">
-            <span>Layers</span>
+            <span>{t("layers")}</span>
             <span class="fw-dev-mode-mono">{layerCount}</span>
           </div>
         </div>
@@ -731,16 +741,16 @@
         <!-- Encoder Section -->
         <div class="fw-dev-mode-section fw-dev-mode-section--flush">
           <div class="fw-dev-mode-section-header-bg">
-            <span class="fw-dev-mode-section-header">Encoder</span>
+            <span class="fw-dev-mode-section-header">{t("encoder")}</span>
           </div>
           <div class="fw-dev-mode-info-row">
-            <span>Type</span>
+            <span>{t("type")}</span>
             <span
               class="fw-dev-mode-encoder-badge {useWebCodecs && isWebCodecsAvailable
                 ? 'fw-dev-mode-encoder-badge--webcodecs'
                 : 'fw-dev-mode-encoder-badge--browser'}"
             >
-              {useWebCodecs && isWebCodecsAvailable ? "WebCodecs" : "Browser"}
+              {useWebCodecs && isWebCodecsAvailable ? t("webCodecs") : t("browser")}
               {#if ingestState === "streaming"}
                 <span style="opacity: 0.7; margin-left: 4px;">
                   {isWebCodecsActive ? "(active)" : "(pending)"}
@@ -750,11 +760,9 @@
           </div>
           <div class="fw-dev-mode-toggle-row">
             <div class="fw-dev-mode-toggle-info">
-              <div class="fw-dev-mode-toggle-label">Use WebCodecs</div>
+              <div class="fw-dev-mode-toggle-label">{t("useWebCodecs")}</div>
               <div class="fw-dev-mode-toggle-desc">
-                {ingestState === "streaming"
-                  ? "Change takes effect on next stream"
-                  : "Enable advanced WebCodecs encoder"}
+                {ingestState === "streaming" ? t("changeTakesEffect") : t("enableWebCodecsDesc")}
               </div>
             </div>
             <button
@@ -764,19 +772,19 @@
               disabled={ingestState === "streaming" || !isWebCodecsAvailable}
               role="switch"
               aria-checked={useWebCodecs}
-              aria-label="Use WebCodecs"
+              aria-label={t("useWebCodecs")}
             >
               <span class="fw-dev-mode-switch-thumb"></span>
             </button>
           </div>
           {#if !isWebCodecsAvailable}
             <div class="fw-dev-mode-locked-notice fw-dev-mode-value--error">
-              Not available - RTCRtpScriptTransform unsupported
+              {t("webCodecsUnsupported")}
             </div>
           {/if}
           {#if isWebCodecsAvailable && ingestState === "streaming" && useWebCodecs !== isWebCodecsActive}
             <div class="fw-dev-mode-locked-notice fw-dev-mode-value--warning">
-              Change takes effect on next stream
+              {t("changeTakesEffect")}
             </div>
           {/if}
         </div>
@@ -785,14 +793,14 @@
         {#if isWebCodecsActive && encoderStats}
           <div class="fw-dev-mode-section fw-dev-mode-section--flush">
             <div class="fw-dev-mode-section-header-bg">
-              <span class="fw-dev-mode-section-header">Encoder Stats</span>
+              <span class="fw-dev-mode-section-header">{t("encoderStats")}</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Video Frames</span>
+              <span>{t("videoFrames")}</span>
               <span class="fw-dev-mode-mono">{encoderStats.video.framesEncoded}</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Video Pending</span>
+              <span>{t("videoPending")}</span>
               <span
                 class="fw-dev-mode-mono {encoderStats.video.framesPending > 5
                   ? 'fw-dev-mode-value--warning'
@@ -802,17 +810,17 @@
               </span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Video Bytes</span>
+              <span>{t("videoBytes")}</span>
               <span class="fw-dev-mode-mono"
                 >{(encoderStats.video.bytesEncoded / 1024 / 1024).toFixed(2)} MB</span
               >
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Audio Samples</span>
+              <span>{t("audioSamples")}</span>
               <span class="fw-dev-mode-mono">{encoderStats.audio.samplesEncoded}</span>
             </div>
             <div class="fw-dev-mode-info-row">
-              <span>Audio Bytes</span>
+              <span>{t("audioBytes")}</span>
               <span class="fw-dev-mode-mono"
                 >{(encoderStats.audio.bytesEncoded / 1024).toFixed(1)} KB</span
               >
@@ -838,9 +846,9 @@
 
 <style>
   .fw-dev-mode-panel {
-    background: #1a1b26;
-    border-left: 1px solid rgba(65, 72, 104, 0.5);
-    color: #a9b1d6;
+    background: hsl(var(--fw-sc-surface-deep));
+    border-left: 1px solid hsl(var(--fw-sc-border) / 0.5);
+    color: hsl(var(--fw-sc-text-muted));
     font-size: 12px;
     font-family:
       ui-monospace,
@@ -860,8 +868,8 @@
   .fw-dev-mode-tabs {
     display: flex;
     align-items: center;
-    border-bottom: 1px solid rgba(65, 72, 104, 0.3);
-    background: #16161e;
+    border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
+    background: hsl(var(--fw-sc-surface));
   }
 
   .fw-dev-mode-tab {
@@ -871,25 +879,25 @@
     letter-spacing: 0.05em;
     font-weight: 600;
     transition: all 0.15s;
-    border-right: 1px solid rgba(65, 72, 104, 0.3);
+    border-right: 1px solid hsl(var(--fw-sc-border) / 0.3);
     background: transparent;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     cursor: pointer;
     border: none;
-    border-right: 1px solid rgba(65, 72, 104, 0.3);
+    border-right: 1px solid hsl(var(--fw-sc-border) / 0.3);
   }
 
   .fw-dev-mode-tab:hover {
-    color: #a9b1d6;
+    color: hsl(var(--fw-sc-text-muted));
   }
 
   .fw-dev-mode-tab--active {
-    background: #1a1b26;
-    color: #c0caf5;
+    background: hsl(var(--fw-sc-surface-deep));
+    color: hsl(var(--fw-sc-text));
   }
 
   .fw-dev-mode-close {
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     background: transparent;
     border: none;
     padding: 8px;
@@ -898,7 +906,7 @@
   }
 
   .fw-dev-mode-close:hover {
-    color: #a9b1d6;
+    color: hsl(var(--fw-sc-text-muted));
   }
 
   .fw-dev-mode-content {
@@ -908,7 +916,7 @@
 
   .fw-dev-mode-section {
     padding: 12px;
-    border-bottom: 1px solid rgba(65, 72, 104, 0.3);
+    border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
   }
 
   .fw-dev-mode-section--flush {
@@ -917,7 +925,7 @@
 
   .fw-dev-mode-section-header {
     font-size: 10px;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 600;
@@ -926,7 +934,7 @@
 
   .fw-dev-mode-section-header-bg {
     padding: 8px 12px;
-    background: #16161e;
+    background: hsl(var(--fw-sc-surface));
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -938,7 +946,7 @@
 
   .fw-dev-mode-profile-tag {
     font-size: 9px;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     font-family: monospace;
   }
 
@@ -959,11 +967,11 @@
     height: 6px;
     border-radius: 3px;
     cursor: pointer;
-    accent-color: #7aa2f7;
+    accent-color: hsl(var(--fw-sc-accent));
   }
 
   .fw-dev-mode-slider--boosted {
-    accent-color: #e0af68;
+    accent-color: hsl(var(--fw-sc-warning));
   }
 
   .fw-dev-mode-volume-value {
@@ -971,22 +979,22 @@
     font-family: monospace;
     min-width: 48px;
     text-align: right;
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
   }
 
   .fw-dev-mode-volume--boosted {
-    color: #e0af68;
+    color: hsl(var(--fw-sc-warning));
   }
 
   .fw-dev-mode-boost-label {
     font-size: 10px;
-    color: #e0af68;
+    color: hsl(var(--fw-sc-warning));
     margin-top: 4px;
   }
 
   .fw-dev-mode-meter {
     height: 8px;
-    background: rgba(65, 72, 104, 0.3);
+    background: hsl(var(--fw-sc-border) / 0.3);
     border-radius: 4px;
     overflow: hidden;
   }
@@ -1000,7 +1008,7 @@
     display: flex;
     justify-content: space-between;
     font-size: 10px;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     margin-top: 4px;
   }
 
@@ -1008,18 +1016,18 @@
     font-size: 12px;
     font-family: monospace;
     padding: 2px 6px;
-    background: rgba(65, 72, 104, 0.3);
-    color: #565f89;
+    background: hsl(var(--fw-sc-border) / 0.3);
+    color: hsl(var(--fw-sc-text-faint));
   }
 
   .fw-dev-mode-badge--success {
-    background: rgba(158, 206, 106, 0.2);
-    color: #9ece6a;
+    background: hsl(var(--fw-sc-success) / 0.2);
+    color: hsl(var(--fw-sc-success));
   }
 
   .fw-dev-mode-hint {
     font-size: 10px;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     margin-top: 4px;
   }
 
@@ -1031,7 +1039,7 @@
   }
 
   .fw-dev-mode-toggle-row--bordered {
-    border-top: 1px solid rgba(65, 72, 104, 0.2);
+    border-top: 1px solid hsl(var(--fw-sc-border) / 0.2);
   }
 
   .fw-dev-mode-toggle-info {
@@ -1040,7 +1048,7 @@
   }
 
   .fw-dev-mode-toggle-label {
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
     font-size: 12px;
     display: flex;
     align-items: center;
@@ -1049,7 +1057,7 @@
 
   .fw-dev-mode-toggle-desc {
     font-size: 10px;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     margin-top: 2px;
   }
 
@@ -1058,8 +1066,8 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #e0af68;
-    background: rgba(224, 175, 104, 0.2);
+    color: hsl(var(--fw-sc-warning));
+    background: hsl(var(--fw-sc-warning) / 0.2);
     padding: 2px 4px;
   }
 
@@ -1072,12 +1080,12 @@
     cursor: pointer;
     border-radius: 10px;
     border: 2px solid transparent;
-    background: #414868;
+    background: hsl(var(--fw-sc-border));
     transition: background-color 0.2s;
   }
 
   .fw-dev-mode-switch--on {
-    background: #7aa2f7;
+    background: hsl(var(--fw-sc-accent));
   }
 
   .fw-dev-mode-switch-thumb {
@@ -1099,12 +1107,12 @@
     display: flex;
     justify-content: space-between;
     padding: 8px 12px;
-    border-top: 1px solid rgba(65, 72, 104, 0.2);
-    color: #565f89;
+    border-top: 1px solid hsl(var(--fw-sc-border) / 0.2);
+    color: hsl(var(--fw-sc-text-faint));
   }
 
   .fw-dev-mode-info-row span:last-child {
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
   }
 
   .fw-dev-mode-mono {
@@ -1112,73 +1120,73 @@
   }
 
   .fw-dev-mode-value--primary {
-    color: #7aa2f7 !important;
+    color: hsl(var(--fw-sc-accent)) !important;
   }
 
   .fw-dev-mode-value--error {
-    color: #f7768e !important;
+    color: hsl(var(--fw-sc-danger)) !important;
   }
 
   .fw-dev-mode-value--warning {
-    color: #e0af68 !important;
+    color: hsl(var(--fw-sc-warning)) !important;
   }
 
   .fw-dev-mode-empty {
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     text-align: center;
     padding: 24px;
   }
 
   .fw-dev-mode-error {
     padding: 12px;
-    border-top: 1px solid rgba(247, 118, 142, 0.3);
-    background: rgba(247, 118, 142, 0.1);
+    border-top: 1px solid hsl(var(--fw-sc-danger) / 0.3);
+    background: hsl(var(--fw-sc-danger) / 0.1);
   }
 
   .fw-dev-mode-section-header--error {
-    color: #f7768e;
+    color: hsl(var(--fw-sc-danger));
     margin-bottom: 4px;
   }
 
   .fw-dev-mode-error-text {
     font-size: 12px;
-    color: #f7768e;
+    color: hsl(var(--fw-sc-danger));
   }
 
   .fw-dev-mode-state {
     font-size: 14px;
     font-weight: 600;
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
   }
 
   .fw-dev-mode-state--streaming {
-    color: #9ece6a;
+    color: hsl(var(--fw-sc-success));
   }
 
   .fw-dev-mode-state--connecting {
-    color: #7aa2f7;
+    color: hsl(var(--fw-sc-accent));
   }
 
   .fw-dev-mode-state--error {
-    color: #f7768e;
+    color: hsl(var(--fw-sc-danger));
   }
 
   .fw-dev-mode-profile-name {
     font-size: 14px;
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
     text-transform: capitalize;
   }
 
   .fw-dev-mode-url {
     font-size: 12px;
-    color: #7aa2f7;
+    color: hsl(var(--fw-sc-accent));
     word-break: break-all;
   }
 
   .fw-dev-mode-copy-btn {
     margin-top: 8px;
     font-size: 10px;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     background: transparent;
     border: none;
     cursor: pointer;
@@ -1187,12 +1195,12 @@
   }
 
   .fw-dev-mode-copy-btn:hover {
-    color: #a9b1d6;
+    color: hsl(var(--fw-sc-text-muted));
   }
 
   .fw-dev-mode-reset-btn {
     font-size: 10px;
-    color: #bb9af7;
+    color: hsl(var(--fw-sc-accent-secondary));
     background: transparent;
     border: none;
     cursor: pointer;
@@ -1200,14 +1208,14 @@
   }
 
   .fw-dev-mode-reset-btn:hover {
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
   }
 
   .fw-dev-mode-select {
-    background: rgba(65, 72, 104, 0.3);
-    border: 1px solid rgba(65, 72, 104, 0.5);
+    background: hsl(var(--fw-sc-border) / 0.3);
+    border: 1px solid hsl(var(--fw-sc-border) / 0.5);
     border-radius: 4px;
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
     padding: 4px 8px;
     font-size: 12px;
     font-family: inherit;
@@ -1222,15 +1230,15 @@
   }
 
   .fw-dev-mode-select--overridden {
-    background: rgba(187, 154, 247, 0.15);
-    border-color: rgba(187, 154, 247, 0.4);
-    color: #bb9af7;
+    background: hsl(var(--fw-sc-accent-secondary) / 0.15);
+    border-color: hsl(var(--fw-sc-accent-secondary) / 0.4);
+    color: hsl(var(--fw-sc-accent-secondary));
   }
 
   .fw-dev-mode-locked-notice {
     padding: 8px 12px;
     font-size: 10px;
-    color: #e0af68;
+    color: hsl(var(--fw-sc-warning));
   }
 
   .fw-dev-mode-source-row {
@@ -1238,7 +1246,7 @@
   }
 
   .fw-dev-mode-source-row--bordered {
-    border-top: 1px solid rgba(65, 72, 104, 0.2);
+    border-top: 1px solid hsl(var(--fw-sc-border) / 0.2);
   }
 
   .fw-dev-mode-source-header {
@@ -1255,22 +1263,22 @@
   }
 
   .fw-dev-mode-source-type--camera {
-    background: rgba(122, 162, 247, 0.2);
-    color: #7aa2f7;
+    background: hsl(var(--fw-sc-accent) / 0.2);
+    color: hsl(var(--fw-sc-accent));
   }
 
   .fw-dev-mode-source-type--screen {
-    background: rgba(158, 206, 106, 0.2);
-    color: #9ece6a;
+    background: hsl(var(--fw-sc-success) / 0.2);
+    color: hsl(var(--fw-sc-success));
   }
 
   .fw-dev-mode-source-type--custom {
-    background: rgba(224, 175, 104, 0.2);
-    color: #e0af68;
+    background: hsl(var(--fw-sc-warning) / 0.2);
+    color: hsl(var(--fw-sc-warning));
   }
 
   .fw-dev-mode-source-label {
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
     font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1282,30 +1290,30 @@
     gap: 12px;
     margin-top: 4px;
     font-size: 10px;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
   }
 
   .fw-dev-mode-renderer {
     font-size: 14px;
     font-weight: 600;
-    color: #c0caf5;
+    color: hsl(var(--fw-sc-text));
   }
 
   .fw-dev-mode-renderer--webgpu {
-    color: #bb9af7;
+    color: hsl(var(--fw-sc-accent-secondary));
   }
 
   .fw-dev-mode-renderer--webgl {
-    color: #7aa2f7;
+    color: hsl(var(--fw-sc-accent));
   }
 
   .fw-dev-mode-renderer--canvas2d {
-    color: #9ece6a;
+    color: hsl(var(--fw-sc-success));
   }
 
   .fw-dev-mode-compositor-info {
     font-size: 10px;
-    color: #565f89;
+    color: hsl(var(--fw-sc-text-faint));
     line-height: 1.5;
   }
 
@@ -1316,13 +1324,13 @@
   }
 
   .fw-dev-mode-encoder-badge--webcodecs {
-    background: rgba(187, 154, 247, 0.2);
-    color: #bb9af7;
+    background: hsl(var(--fw-sc-accent-secondary) / 0.2);
+    color: hsl(var(--fw-sc-accent-secondary));
   }
 
   .fw-dev-mode-encoder-badge--browser {
-    background: rgba(122, 162, 247, 0.2);
-    color: #7aa2f7;
+    background: hsl(var(--fw-sc-accent) / 0.2);
+    color: hsl(var(--fw-sc-accent));
   }
 
   .fw-dev-mode-switch:disabled {

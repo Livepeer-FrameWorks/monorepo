@@ -1,4 +1,4 @@
-import type { ContentEndpoints } from "@livepeer-frameworks/player-core";
+import type { ContentEndpoints, FwThemePreset } from "@livepeer-frameworks/player-core";
 
 // Re-export for convenience
 export type { ContentEndpoints };
@@ -46,6 +46,8 @@ export type MistJsonResponse = {
 // Available player implementations
 export type PlayerType = "auto" | "direct" | "hlsjs" | "dashjs" | "videojs" | "mist";
 
+export type ConnectionStatus = "idle" | "connected" | "failed";
+
 // Playground state types
 export type PlaygroundState = {
   // Connection config
@@ -63,6 +65,10 @@ export type PlaygroundState = {
   playbackLoading: boolean;
   playbackError: string | null;
 
+  // Active streams (auto-polled from MistServer API)
+  activeStreams: string[];
+  connectionStatus: ConnectionStatus;
+
   // Player config
   thumbnailUrl: string;
   autoplayMuted: boolean;
@@ -70,6 +76,9 @@ export type PlaygroundState = {
   // Protocol/Player selection
   selectedProtocol: string | null; // null = auto-select
   selectedPlayer: PlayerType;
+
+  // Theme
+  theme: FwThemePreset;
 };
 
 export type PlaygroundActions = {
@@ -79,6 +88,8 @@ export type PlaygroundActions = {
   setThumbnailUrl: (url: string) => void;
   setAutoplayMuted: (muted: boolean) => void;
   pollSources: () => void;
+  refreshStreams: () => void;
   setSelectedProtocol: (protocol: string | null) => void;
   setSelectedPlayer: (player: PlayerType) => void;
+  setTheme: (theme: FwThemePreset) => void;
 };

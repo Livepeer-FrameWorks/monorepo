@@ -103,6 +103,7 @@ function makeConfig(overrides: Partial<InteractionControllerConfig> = {}) {
 
 describe("InteractionController", () => {
   let origDocument: PropertyDescriptor | undefined;
+  let origElement: any;
   let origHTMLElement: any;
   let docListeners: Map<string, Function[]>;
 
@@ -111,9 +112,11 @@ describe("InteractionController", () => {
     vi.spyOn(Date, "now").mockReturnValue(10000);
     docListeners = new Map();
 
-    // Stub HTMLElement so `instanceof HTMLElement` works in Node.js
+    // Stub Element / HTMLElement so `instanceof` works in Node.js
+    origElement = (globalThis as any).Element;
     origHTMLElement = (globalThis as any).HTMLElement;
-    (globalThis as any).HTMLElement = class HTMLElement {};
+    (globalThis as any).Element = class Element {};
+    (globalThis as any).HTMLElement = class HTMLElement extends (globalThis as any).Element {};
 
     origDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
     Object.defineProperty(globalThis, "document", {
@@ -140,6 +143,11 @@ describe("InteractionController", () => {
       (globalThis as any).HTMLElement = origHTMLElement;
     } else {
       delete (globalThis as any).HTMLElement;
+    }
+    if (origElement !== undefined) {
+      (globalThis as any).Element = origElement;
+    } else {
+      delete (globalThis as any).Element;
     }
   });
 

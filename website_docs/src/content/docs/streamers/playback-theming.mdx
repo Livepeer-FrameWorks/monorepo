@@ -1,0 +1,277 @@
+---
+title: "Player — Theming & Customization"
+description: "Theme presets, design tokens, internationalization, and configurable hotkeys."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Preset Themes
+
+Both the Player and StreamCrafter ship with built-in theme presets. Apply with a single prop:
+
+```tsx
+// React
+<Player contentId="pk_..." contentType="live" theme="dracula" />
+<StreamCrafter whipUrl="..." theme="tokyo-night" />
+```
+
+```html
+<!-- Web Components -->
+<fw-player content-id="pk_..." theme="nord"></fw-player>
+<fw-streamcrafter whip-url="..." theme="catppuccin"></fw-streamcrafter>
+```
+
+```ts
+// Vanilla
+const player = createPlayer({ ..., theme: "rose-pine" });
+const studio = createStreamCrafter({ ..., theme: "gruvbox" });
+```
+
+### Available Themes
+
+| Theme               | Mode  | Accent      |
+| ------------------- | ----- | ----------- |
+| `default`           | Dark  | Blue        |
+| `light`             | Light | Blue        |
+| `neutral-dark`      | Dark  | Gray        |
+| `tokyo-night`       | Dark  | Purple      |
+| `tokyo-night-light` | Light | Purple      |
+| `dracula`           | Dark  | Pink        |
+| `nord`              | Dark  | Frost blue  |
+| `catppuccin`        | Dark  | Mauve       |
+| `catppuccin-light`  | Light | Mauve       |
+| `gruvbox`           | Dark  | Orange      |
+| `gruvbox-light`     | Light | Orange      |
+| `one-dark`          | Dark  | Blue        |
+| `github-dark`       | Dark  | Blue        |
+| `rose-pine`         | Dark  | Rose        |
+| `solarized`         | Dark  | Yellow      |
+| `solarized-light`   | Light | Yellow      |
+| `ayu-mirage`        | Dark  | Blue-orange |
+
+### Runtime Theme Switching
+
+```ts
+// Vanilla player
+player.theme = "tokyo-night";
+
+// Vanilla studio
+studio.theme = "catppuccin";
+```
+
+## Design Tokens (CSS Custom Properties)
+
+All tokens use bare HSL triplets. Consume via `hsl(var(--fw-*) / <alpha>)` for opacity support.
+
+### Player Tokens (`--fw-*`)
+
+**Colors**
+
+| Token                   | Purpose                       |
+| ----------------------- | ----------------------------- |
+| `--fw-accent`           | Primary interactive color     |
+| `--fw-accent-secondary` | Secondary accent              |
+| `--fw-success`          | Success indicators            |
+| `--fw-danger`           | Error and destructive actions |
+| `--fw-warning`          | Warning indicators            |
+| `--fw-live`             | Live badge and pulse          |
+
+**Surfaces**
+
+| Token                 | Purpose                             |
+| --------------------- | ----------------------------------- |
+| `--fw-surface`        | Default background                  |
+| `--fw-surface-deep`   | Deepest background layer            |
+| `--fw-surface-raised` | Elevated elements (controls, menus) |
+| `--fw-surface-active` | Active/pressed state                |
+
+**Text**
+
+| Token              | Purpose                |
+| ------------------ | ---------------------- |
+| `--fw-text`        | Primary text           |
+| `--fw-text-bright` | High-emphasis text     |
+| `--fw-text-muted`  | Secondary text         |
+| `--fw-text-faint`  | Disabled and hint text |
+
+**Layout**
+
+| Token               | Purpose         |
+| ------------------- | --------------- |
+| `--fw-shadow-color` | Shadow HSL base |
+| `--fw-radius`       | Border radius   |
+
+### Studio Tokens (`--fw-sc-*`)
+
+| Token                | Purpose                   |
+| -------------------- | ------------------------- |
+| `--fw-sc-bg`         | Background                |
+| `--fw-sc-surface`    | Panel surfaces            |
+| `--fw-sc-border`     | Border color              |
+| `--fw-sc-text`       | Primary text              |
+| `--fw-sc-text-muted` | Secondary text            |
+| `--fw-sc-accent`     | Interactive elements      |
+| `--fw-sc-success`    | Success/live indicators   |
+| `--fw-sc-danger`     | Error/destructive actions |
+
+### Custom Overrides
+
+**CSS (global)**
+
+```css
+/* Player */
+fw-player,
+.fw-player-root {
+  --fw-accent: 280 70% 60%;
+  --fw-surface: 0 0% 10%;
+}
+
+/* Studio */
+fw-streamcrafter,
+.fw-sc-root {
+  --fw-sc-accent: 262 80% 60%;
+  --fw-sc-bg: 230 15% 12%;
+}
+```
+
+**JavaScript (per-instance)**
+
+```ts
+// Player
+player.setThemeOverrides({
+  accent: "262 80% 60%",
+  surface: "230 15% 12%",
+  radius: "12px",
+});
+player.clearTheme(); // Reset to preset
+
+// Studio
+studio.theme = "custom"; // then override via CSS
+```
+
+## Internationalization
+
+Five built-in locale packs: `en`, `es`, `fr`, `de`, `nl`.
+
+### Player i18n
+
+```tsx
+// React — use built-in locale
+<Player
+  contentId="pk_..."
+  contentType="live"
+  options={{ locale: "de" }}
+/>
+
+// React — custom translations
+<Player
+  contentId="pk_..."
+  contentType="live"
+  options={{
+    translations: {
+      play: "Abspielen",
+      pause: "Pause",
+      mute: "Stummschalten",
+      unmute: "Ton einschalten",
+      fullscreen: "Vollbild",
+      exitFullscreen: "Vollbild beenden",
+    },
+  }}
+/>
+```
+
+```ts
+// Vanilla — import locale pack
+import { getLocalePack } from "@livepeer-frameworks/player-core";
+
+const player = createPlayer({
+  ...,
+  locale: "de",
+});
+
+// Or fetch specific translation strings
+const deTranslations = getLocalePack("de");
+```
+
+### Studio i18n
+
+```tsx
+// React
+<StreamCrafter whipUrl="..." locale="es" />;
+
+// Vanilla
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  locale: "de",
+  translations: {
+    goLive: "Live gehen",
+    stopStreaming: "Stoppen",
+  },
+});
+```
+
+## Configurable Hotkeys
+
+### Player Hotkeys
+
+Override default keyboard shortcuts:
+
+```tsx
+<Player
+  contentId="pk_..."
+  contentType="live"
+  options={{
+    keyMap: {
+      playPause: ["k"],
+      skipBack: ["j", "ArrowLeft"],
+      skipForward: ["l", "ArrowRight"],
+      volumeUp: ["ArrowUp"],
+      volumeDown: ["ArrowDown"],
+      toggleMute: ["m"],
+      toggleFullscreen: ["f"],
+    },
+  }}
+/>
+```
+
+Default player shortcuts:
+
+| Shortcut            | Action                   |
+| ------------------- | ------------------------ |
+| Space / K           | Play/Pause               |
+| J / ArrowLeft       | Skip back 10s            |
+| L / ArrowRight      | Skip forward 10s         |
+| ArrowUp / ArrowDown | Volume +/- 10%           |
+| M                   | Mute/Unmute              |
+| F                   | Fullscreen               |
+| C                   | Captions                 |
+| 0-9                 | Seek to 0-90%            |
+| , / .               | Prev/Next frame (paused) |
+
+**Mouse / Touch:**
+
+| Gesture                 | Action            |
+| ----------------------- | ----------------- |
+| Double-click            | Fullscreen toggle |
+| Double-tap (left/right) | Skip +/- 10s      |
+| Click & Hold            | 2x speed          |
+
+<Aside type="note" title="Live Constraints">
+  Live-only streams disable seeking, skip, 2x hold, and frame-step. Live with DVR buffer enables
+  these features.
+</Aside>
+
+### Studio Hotkeys
+
+```ts
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  keyMap: {
+    toggleStreaming: ["g"],
+    toggleMute: ["m"],
+    addCamera: ["c"],
+    addScreen: ["s"],
+    toggleSettings: [","],
+  },
+});
+```

@@ -17,6 +17,7 @@ import type {
 import { WebSocketManager } from "./WebSocketManager";
 import { SourceBufferManager } from "./SourceBufferManager";
 import { translateCodec } from "../../core/CodecUtils";
+import { getBrowserInfo, isFileProtocol, isIPadWithBrokenHEVC } from "../../core/detector";
 import type { MewsMessage, AnalyticsConfig, OnTimeMessage, MewsMessageListener } from "./types";
 
 export class MewsWsPlayerImpl extends BasePlayer {
@@ -89,6 +90,17 @@ export class MewsWsPlayerImpl extends BasePlayer {
       return false;
     }
 
+    // file:// protocol cannot use MSE (CORS blocks it)
+    if (isFileProtocol()) {
+      return false;
+    }
+
+    // Safari cannot play WebM via MSE (reference html5.js:28-29)
+    const browser = getBrowserInfo();
+    if (mimetype.includes("webm") && browser.isSafari) {
+      return false;
+    }
+
     // MacOS exemption (reference mews.js behavior)
     // MediaSource has bugs on Safari/MacOS - prefer HLS
     const isMac = /Mac OS X/.test(navigator.userAgent);
@@ -101,11 +113,19 @@ export class MewsWsPlayerImpl extends BasePlayer {
     const playableTracks: Record<string, number> = {};
     let hasSubtitles = false;
 
+    // iPad claims HEVC MSE support but fails in practice (iPadOS < 17)
+    // Skip HEVC tracks so MEWS falls through to HLS which handles HEVC natively
+    const skipHEVC = isIPadWithBrokenHEVC();
+
     // Test actual stream codecs against MediaSource
     this.supportedCodecs = [];
     for (const track of streamInfo.meta.tracks) {
       if (track.type === "meta") {
         if (track.codec === "subtitle") hasSubtitles = true;
+        continue;
+      }
+
+      if (skipHEVC && (track.codec === "HEVC" || track.codec === "H265")) {
         continue;
       }
 

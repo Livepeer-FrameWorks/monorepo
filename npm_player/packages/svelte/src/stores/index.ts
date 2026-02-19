@@ -71,6 +71,9 @@ export {
   type PlayerSelectionStore,
 } from "./playerSelection";
 
+// i18n (locale + translator)
+export { localeStore, translatorStore } from "./i18n";
+
 // PlayerController store (central orchestrator)
 export {
   createPlayerControllerStore,

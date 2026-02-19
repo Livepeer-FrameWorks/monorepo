@@ -1,10 +1,9 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-core",
-  "version": "0.1.6",
+  "version": "0.2.1",
   "type": "module",
   "description": "Core streaming logic for StreamCrafter - framework agnostic WebCodecs-based browser streaming",
-  "main": "dist/cjs/index.cjs",
-  "module": "dist/esm/index.js",
+  "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
   "style": "dist/streamcrafter.css",
   "files": [
@@ -15,14 +14,12 @@
     ".": {
       "source": "./src/index.ts",
       "types": "./dist/types/index.d.ts",
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.cjs"
+      "default": "./dist/esm/index.js"
     },
     "./vanilla": {
       "source": "./src/vanilla/index.ts",
       "types": "./dist/types/vanilla/index.d.ts",
-      "import": "./dist/esm/vanilla.js",
-      "require": "./dist/cjs/vanilla.cjs"
+      "default": "./dist/esm/vanilla.js"
     },
     "./streamcrafter.css": "./dist/streamcrafter.css",
     "./styles.css": "./dist/streamcrafter.css",

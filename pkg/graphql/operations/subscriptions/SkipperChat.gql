@@ -1,0 +1,47 @@
+subscription SkipperChat($input: SkipperChatInput!) {
+  skipperChat(input: $input) {
+    ... on SkipperToken {
+      __typename
+      content
+    }
+    ... on SkipperToolStartEvent {
+      __typename
+      tool
+    }
+    ... on SkipperToolEndEvent {
+      __typename
+      tool
+      error
+    }
+    ... on SkipperMeta {
+      __typename
+      confidence
+      citations {
+        label
+        url
+      }
+      externalLinks {
+        label
+        url
+      }
+      details {
+        title
+        payload
+      }
+      blocks {
+        content
+        confidence
+        sources {
+          label
+          url
+        }
+      }
+    }
+    ... on SkipperDone {
+      __typename
+      conversationId
+      tokensInput
+      tokensOutput
+    }
+  }
+}

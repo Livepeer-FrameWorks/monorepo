@@ -1,7 +1,8 @@
 import { BasePlayer } from "../core/PlayerInterface";
-import { checkProtocolMismatch, getBrowserInfo } from "../core/detector";
+import { checkProtocolMismatch, getBrowserInfo, isFileProtocol } from "../core/detector";
 import { translateCodec } from "../core/CodecUtils";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
+import { appendUrlParams, parseUrlParams, stripUrlParams } from "../core/UrlUtils";
 import type {
   StreamSource,
   StreamInfo,
@@ -25,6 +26,14 @@ export class HlsJsPlayerImpl extends BasePlayer {
   private destroyed = false;
   private liveDurationProxy: LiveDurationProxy | null = null;
 
+  // Live seeking via startunix (ported from NativePlayer pattern)
+  private liveSeekEnabled = false;
+  private liveSeekBaseUrl: string | null = null;
+  private liveSeekOffsetSec = 0;
+  private liveSeekTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingLiveSeekOffset: number | null = null;
+  private static readonly LIVE_SEEK_DEBOUNCE_MS = 300;
+
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
   }
@@ -36,6 +45,11 @@ export class HlsJsPlayerImpl extends BasePlayer {
   ): boolean | string[] {
     // Check protocol mismatch
     if (checkProtocolMismatch(source.url)) {
+      return false;
+    }
+
+    // HLS.js uses MSE which requires http/https (not file://)
+    if (isFileProtocol()) {
       return false;
     }
 
@@ -161,6 +175,11 @@ export class HlsJsPlayerImpl extends BasePlayer {
       const Hls = (mod as any).default || (mod as any);
       console.log("[HLS.js] hls.js module imported, Hls.isSupported():", Hls.isSupported?.());
 
+      // Set up live seek state (startunix URL rewriting)
+      this.liveSeekBaseUrl = this.stripStartUnixParam(source.url);
+      this.liveSeekOffsetSec = 0;
+      this.pendingLiveSeekOffset = null;
+
       if (Hls.isSupported()) {
         // Build optimized HLS.js config with user overrides
         const hlsConfig: HlsJsConfig = {
@@ -226,6 +245,11 @@ export class HlsJsPlayerImpl extends BasePlayer {
               liveOffset: 0,
             });
             console.debug("[HLS.js] LiveDurationProxy initialized for live stream");
+          }
+
+          // Enable live seeking via startunix once we confirm it's live
+          if (isLive) {
+            this.liveSeekEnabled = true;
           }
 
           if (options.autoplay) {
@@ -297,6 +321,14 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
     this.videoElement = null;
     this.container = null;
+    this.liveSeekEnabled = false;
+    this.liveSeekOffsetSec = 0;
+    this.liveSeekBaseUrl = null;
+    if (this.liveSeekTimer) {
+      clearTimeout(this.liveSeekTimer);
+      this.liveSeekTimer = null;
+    }
+    this.pendingLiveSeekOffset = null;
     this.listeners.clear();
   }
 
@@ -328,13 +360,24 @@ export class HlsJsPlayerImpl extends BasePlayer {
   }
 
   /**
-   * Seek to a position with live-aware constraints
+   * Seek to a position with live-aware constraints.
+   * For live streams with startunix support, rebuilds the URL to seek
+   * behind the live edge (ported from OG html5.js:213-228).
    */
   seek(time: number): void {
     const video = this.videoElement;
     if (!video) return;
 
-    // For live streams, use the proxy which constrains to buffer
+    // Live seeking via startunix URL reload
+    if (this.liveSeekEnabled && this.liveDurationProxy?.isLive()) {
+      const duration = this.getDuration();
+      let offset = time - duration;
+      if (offset > 0) offset = 0;
+      this.scheduleLiveSeekOffset(offset, false);
+      return;
+    }
+
+    // For live streams without startunix, use the proxy which constrains to buffer
     if (this.liveDurationProxy && this.liveDurationProxy.isLive()) {
       this.liveDurationProxy.seek(time);
       return;
@@ -351,6 +394,12 @@ export class HlsJsPlayerImpl extends BasePlayer {
   jumpToLive(): void {
     const video = this.videoElement;
     if (!video) return;
+
+    // Reset startunix offset to return to live edge
+    if (this.liveSeekEnabled && this.liveSeekOffsetSec !== 0) {
+      this.scheduleLiveSeekOffset(0, true);
+      return;
+    }
 
     // HLS.js provides liveSyncPosition for live streams - use that first
     if (
@@ -499,6 +548,27 @@ export class HlsJsPlayerImpl extends BasePlayer {
     }
   }
 
+  // Audio track selection via HLS.js audioTracks API
+  getAudioTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    if (!this.hls) return [];
+    const tracks = this.hls.audioTracks || [];
+    const currentId = this.hls.audioTrack;
+    return tracks.map((t: any, i: number) => ({
+      id: String(i),
+      label: t.name || t.lang || `Audio ${i + 1}`,
+      lang: t.lang,
+      active: i === currentId,
+    }));
+  }
+
+  selectAudioTrack(id: string): void {
+    if (!this.hls) return;
+    const idx = parseInt(id, 10);
+    if (!isNaN(idx) && idx >= 0 && idx < (this.hls.audioTracks?.length ?? 0)) {
+      this.hls.audioTrack = idx;
+    }
+  }
+
   /**
    * Get HLS.js-specific stats for accurate bitrate and bandwidth
    */
@@ -557,5 +627,65 @@ export class HlsJsPlayerImpl extends BasePlayer {
       buffered,
       latency,
     };
+  }
+
+  // ============================================================================
+  // Live Seeking via startunix (ported from NativePlayer/OG html5.js)
+  // ============================================================================
+
+  private stripStartUnixParam(url: string): string {
+    const params = parseUrlParams(url);
+    delete params.startunix;
+    return appendUrlParams(stripUrlParams(url), params);
+  }
+
+  private buildLiveSeekUrl(offsetSec: number): string {
+    const base = this.liveSeekBaseUrl || "";
+    if (!base) return "";
+    if (!offsetSec || offsetSec >= 0) {
+      return this.stripStartUnixParam(base);
+    }
+    const params = parseUrlParams(base);
+    params.startunix = String(offsetSec);
+    return appendUrlParams(stripUrlParams(base), params);
+  }
+
+  private scheduleLiveSeekOffset(offsetSec: number, immediate: boolean): void {
+    const clamped = Math.min(0, offsetSec);
+    if (immediate) {
+      if (this.liveSeekTimer) {
+        clearTimeout(this.liveSeekTimer);
+        this.liveSeekTimer = null;
+      }
+      this.pendingLiveSeekOffset = null;
+      this.applyLiveSeekOffset(clamped);
+      return;
+    }
+
+    this.pendingLiveSeekOffset = clamped;
+    if (this.liveSeekTimer) {
+      clearTimeout(this.liveSeekTimer);
+    }
+    this.liveSeekTimer = setTimeout(() => {
+      this.liveSeekTimer = null;
+      if (this.pendingLiveSeekOffset !== null) {
+        const pending = this.pendingLiveSeekOffset;
+        this.pendingLiveSeekOffset = null;
+        this.applyLiveSeekOffset(pending);
+      }
+    }, HlsJsPlayerImpl.LIVE_SEEK_DEBOUNCE_MS);
+  }
+
+  private applyLiveSeekOffset(offsetSec: number): void {
+    if (!this.hls) return;
+    const clamped = Math.min(0, offsetSec);
+    if (Math.abs(clamped - this.liveSeekOffsetSec) < 0.05) return;
+
+    this.liveSeekOffsetSec = clamped;
+    const nextUrl = this.buildLiveSeekUrl(clamped);
+    if (!nextUrl) return;
+
+    console.debug("[HLS.js] Reloading source with startunix offset:", clamped);
+    this.hls.loadSource(nextUrl);
   }
 }

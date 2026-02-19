@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/failsafe-go/failsafe-go"
 	"github.com/failsafe-go/failsafe-go/circuitbreaker"
-	"github.com/failsafe-go/failsafe-go/failsafegrpc"
 	"github.com/failsafe-go/failsafe-go/retrypolicy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -133,11 +133,22 @@ func NewGRPCCircuitBreaker[T any](cfg CircuitBreakerConfig) circuitbreaker.Circu
 }
 
 // FailsafeUnaryInterceptor returns a gRPC unary client interceptor with retry + circuit breaker.
-// Uses failsafegrpc's built-in interceptor for correct per-attempt context propagation.
+//
+// We deliberately avoid failsafegrpc.NewUnaryClientInterceptor here because it
+// mutates a captured executor variable across calls (executor = executor.WithContext(mergedCtx)).
+// When a call's context is later canceled, MergeContexts on the next call produces an
+// immediately-canceled context, making ALL subsequent RPCs on that connection fail with
+// "context canceled". This was introduced by the fix for failsafe-go#122 (v0.9.2) and is
+// still present as of v0.9.6. Safe to revisit if failsafe-go fixes the stale-context issue.
 func FailsafeUnaryInterceptor(serviceName string, logger logging.Logger) grpc.UnaryClientInterceptor {
 	retry := newGRPCRetryPolicy()
 	cb := newGRPCCircuitBreaker(serviceName, logger)
-	return failsafegrpc.NewUnaryClientInterceptor[any](retry, cb)
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		_, err := failsafe.With[any](retry, cb).WithContext(ctx).GetWithExecution(func(exec failsafe.Execution[any]) (any, error) {
+			return nil, invoker(exec.Context(), method, req, reply, cc, opts...)
+		})
+		return err
+	}
 }
 
 // FailsafeStreamInterceptor returns a gRPC stream client interceptor with circuit breaker.

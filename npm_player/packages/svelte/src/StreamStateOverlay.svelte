@@ -10,6 +10,9 @@
   - Retry button for errors
 -->
 <script lang="ts">
+  import { getContext } from "svelte";
+  import type { Readable } from "svelte/store";
+  import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
   import type { StreamStatus } from "@livepeer-frameworks/player-core";
 
   interface Props {
@@ -35,6 +38,10 @@
     visible = true,
     class: className = "",
   }: Props = $props();
+
+  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
+  const fallbackT = createTranslator({ locale: "en" });
+  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
 
   // Computed states
   let showRetry = $derived(status === "ERROR" || status === "INVALID" || status === "OFFLINE");
@@ -143,7 +150,7 @@
           <p
             style="margin-top: 0.5rem; font-size: 0.75rem; color: hsl(var(--tn-fg-dark, 233 23% 60%));"
           >
-            The stream will start when the broadcaster goes live
+            {t("broadcasterGoLive")}
           </p>
         {/if}
 
@@ -151,7 +158,7 @@
           <p
             style="margin-top: 0.5rem; font-size: 0.75rem; color: hsl(var(--tn-fg-dark, 233 23% 60%));"
           >
-            Please wait while the stream prepares...
+            {t("streamPreparing")}
           </p>
         {/if}
 
@@ -159,7 +166,7 @@
         {#if !showRetry}
           <div class="polling-indicator">
             <span class="polling-dot"></span>
-            <span>Checking stream status...</span>
+            <span>{t("checkingStatus")}</span>
           </div>
         {/if}
       </div>
@@ -167,8 +174,13 @@
       <!-- Slab actions - flush retry button -->
       {#if showRetry && onRetry}
         <div class="slab-actions">
-          <button type="button" class="btn-flush" onclick={onRetry} aria-label="Retry connection">
-            Retry Connection
+          <button
+            type="button"
+            class="btn-flush"
+            onclick={onRetry}
+            aria-label={t("retryConnection")}
+          >
+            {t("retryConnection")}
           </button>
         </div>
       {/if}

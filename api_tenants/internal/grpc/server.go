@@ -522,6 +522,48 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 	return &resp, nil
 }
 
+// ensureServiceExists atomically gets or creates a service catalog entry.
+// Uses pg_advisory_xact_lock to serialize concurrent callers for the same
+// service type, preventing the TOCTOU race where two instances both see
+// "no rows" and both try to INSERT.
+func (s *QuartermasterServer) ensureServiceExists(ctx context.Context, serviceType, protocol string) (string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "failed to begin service lookup transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Advisory lock keyed on service type — second caller blocks until first commits
+	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, serviceType)
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "failed to acquire advisory lock: %v", err)
+	}
+
+	var serviceID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1
+	`, serviceType).Scan(&serviceID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		serviceID = serviceType
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO quartermaster.services (service_id, name, plane, type, protocol, is_active, created_at, updated_at)
+			VALUES ($1, $2, 'control', $3, $4, true, NOW(), NOW())
+		`, serviceID, serviceType, serviceType, protocol)
+		if err != nil {
+			s.logger.WithError(err).WithField("service_type", serviceType).Error("Failed to create service")
+			return "", status.Errorf(codes.Internal, "failed to create service: %v", err)
+		}
+	} else if err != nil {
+		return "", status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", status.Errorf(codes.Internal, "failed to commit service lookup: %v", err)
+	}
+	return serviceID, nil
+}
+
 // BootstrapService handles service registration with idempotent instance management
 func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error) {
 	type queryExecutor interface {
@@ -666,28 +708,14 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered mesh address)")
 	}
 
-	// 3. Get or create service record (service_id/type default to request type)
-	var serviceID string
-	err := exec.QueryRowContext(ctx, `
-		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1
-	`, serviceType).Scan(&serviceID)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		serviceID = serviceType
-		defaultProtocol := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
-		if defaultProtocol == "" {
-			defaultProtocol = "http"
-		}
-		_, err = exec.ExecContext(ctx, `
-			INSERT INTO quartermaster.services (service_id, name, plane, type, protocol, is_active, created_at, updated_at)
-			VALUES ($1, $2, 'control', $3, $4, true, NOW(), NOW())
-		`, serviceID, serviceType, serviceType, defaultProtocol)
-		if err != nil {
-			s.logger.WithError(err).WithField("service_type", serviceType).Error("Failed to create service")
-			return nil, status.Errorf(codes.Internal, "failed to create service: %v", err)
-		}
-	} else if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	// 3. Get or create service record (serialized via advisory lock to prevent TOCTOU races)
+	defaultProtocol := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
+	if defaultProtocol == "" {
+		defaultProtocol = "http"
+	}
+	serviceID, err := s.ensureServiceExists(ctx, serviceType, defaultProtocol)
+	if err != nil {
+		return nil, err
 	}
 
 	// 4. Normalize service ID for instance naming

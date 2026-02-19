@@ -543,6 +543,11 @@ export class PlayerManager {
       }
     }
 
+    // Debug: log scorer summary
+    if (this.options.debug) {
+      this.logScorerSummary(combinations, requiredTracks, effectiveMode);
+    }
+
     // Add Legacy player option
     const legacyPlayer = this.players.get("mist-legacy");
     if (legacyPlayer && streamInfo.source.length > 0) {
@@ -1107,6 +1112,57 @@ export class PlayerManager {
     if (this.options.debug) {
       console.log(`[PlayerManager] ${message}`);
     }
+  }
+
+  private logScorerSummary(
+    combinations: PlayerCombination[],
+    requiredTracks: string[],
+    mode: PlaybackMode
+  ): void {
+    const compatible = combinations.filter((c) => c.compatible).sort((a, b) => b.score - a.score);
+    const incompatible = combinations.filter((c) => !c.compatible);
+
+    // Group incompatible by player to show rejection reasons
+    const rejectionsByPlayer = new Map<string, Map<string, number>>();
+    for (const c of incompatible) {
+      const reason = c.incompatibleReason || "unknown";
+      if (!rejectionsByPlayer.has(c.player)) {
+        rejectionsByPlayer.set(c.player, new Map());
+      }
+      const reasons = rejectionsByPlayer.get(c.player)!;
+      reasons.set(reason, (reasons.get(reason) || 0) + 1);
+    }
+
+    const lines: string[] = [`Scorer (mode: ${mode}, required: ${requiredTracks.join("+")}):`];
+
+    // Top compatible combos (max 8)
+    for (let i = 0; i < Math.min(compatible.length, 8); i++) {
+      const c = compatible[i];
+      const tracks = c.scoreBreakdown?.trackTypes?.join("+") || "?";
+      const mb = c.scoreBreakdown?.modeBonus?.toFixed(2) || "0";
+      const rb = c.scoreBreakdown?.routingBonus?.toFixed(2) || "0";
+      lines.push(
+        `  #${i + 1} ${c.player} + ${c.sourceType}: ${c.score.toFixed(3)} [${tracks}] mode:${mb} route:${rb}`
+      );
+    }
+    if (compatible.length > 8) {
+      lines.push(`  ... +${compatible.length - 8} more`);
+    }
+    if (compatible.length === 0) {
+      lines.push("  (no compatible combos)");
+    }
+
+    // Show players with zero compatible entries
+    const compatiblePlayers = new Set(compatible.map((c) => c.player));
+    for (const [player, reasons] of rejectionsByPlayer) {
+      if (compatiblePlayers.has(player)) continue;
+      const reasonStrs = Array.from(reasons.entries())
+        .map(([r, n]) => `${n}× ${r}`)
+        .join(", ");
+      lines.push(`  ✗ ${player}: ${reasonStrs}`);
+    }
+
+    console.log(`[PlayerManager] ${lines.join("\n  ")}`);
   }
 
   // ==========================================================================

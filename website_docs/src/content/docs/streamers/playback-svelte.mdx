@@ -1,0 +1,194 @@
+---
+title: "Player — Svelte"
+description: "Svelte 5 integration for video playback with the FrameWorks Player."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Installation
+
+```bash
+npm install @livepeer-frameworks/player-svelte
+```
+
+```svelte
+<script>
+  import "@livepeer-frameworks/player-svelte/player.css";
+</script>
+```
+
+## Drop-in Component
+
+```svelte
+<script lang="ts">
+  import { Player } from "@livepeer-frameworks/player-svelte";
+  import "@livepeer-frameworks/player-svelte/player.css";
+</script>
+
+<Player
+  contentType="live"
+  contentId="<YOUR_PLAYBACK_ID>"
+  options={{
+    gatewayUrl: "%GATEWAY_URL%/graphql",
+    autoplay: true,
+    muted: true,
+  }}
+/>
+```
+
+### Direct MistServer Node
+
+```svelte
+<Player
+  contentType="live"
+  contentId="<YOUR_PLAYBACK_ID>"
+  options={{ mistUrl: "https://edge.example.com" }}
+/>
+```
+
+### DVR and Clips
+
+```svelte
+<Player contentType="dvr" contentId="pk_..." options={{ gatewayUrl: "..." }} />
+<Player contentType="clip" contentId="pk_..." options={{ gatewayUrl: "..." }} />
+```
+
+## Composable Controls
+
+Pass a `children` snippet to replace the default controls:
+
+```svelte
+<script lang="ts">
+  import {
+    Player,
+    PlayButton,
+    SkipButton,
+    VolumeControl,
+    TimeDisplay,
+    LiveBadge,
+    FullscreenButton,
+    SettingsMenu,
+  } from "@livepeer-frameworks/player-svelte";
+  import "@livepeer-frameworks/player-svelte/player.css";
+</script>
+
+<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+  {#snippet children()}
+    <div class="my-controls">
+      <PlayButton />
+      <SkipButton direction="back" />
+      <SkipButton direction="forward" />
+      <TimeDisplay />
+      <LiveBadge />
+      <VolumeControl />
+      <SettingsMenu />
+      <FullscreenButton />
+    </div>
+  {/snippet}
+</Player>
+```
+
+Sub-components auto-connect to the parent `<Player>` via Svelte 5 context (`getContext("fw-player-controller")`).
+
+### Sub-Component Reference
+
+| Component          | Purpose                                                    |
+| ------------------ | ---------------------------------------------------------- |
+| `PlayButton`       | Play/pause toggle                                          |
+| `SkipButton`       | Skip forward/back (pass `direction="back"` or `"forward"`) |
+| `VolumeControl`    | Volume slider with mute toggle                             |
+| `TimeDisplay`      | Current time / duration display                            |
+| `LiveBadge`        | Live indicator with jump-to-live                           |
+| `FullscreenButton` | Fullscreen toggle                                          |
+| `SettingsMenu`     | Quality, speed, and track selection                        |
+
+## Custom UI with Context
+
+For fully custom controls inside a `<Player>`, use Svelte 5 context. The `<Player>` sets context with reactive getters — Svelte 5's fine-grained reactivity tracks access automatically.
+
+```svelte
+<!-- CustomControls.svelte -->
+<script lang="ts">
+  import { getContext } from "svelte";
+
+  const pc: any = getContext("fw-player-controller");
+</script>
+
+<div class="my-custom-controls">
+  <p>State: {pc?.isPlaying ? "Playing" : "Paused"}</p>
+  <p>Time: {pc?.currentTime?.toFixed(1)}s / {pc?.duration}s</p>
+
+  <button onclick={() => pc?.togglePlay()}>
+    {pc?.isPlaying ? "Pause" : "Play"}
+  </button>
+  <button onclick={() => pc?.toggleMute()}>
+    {pc?.isMuted ? "Unmute" : "Mute"}
+  </button>
+  <input
+    type="range"
+    min={0}
+    max={1}
+    step={0.01}
+    value={pc?.volume ?? 1}
+    oninput={(e) => pc?.setVolume(e.currentTarget.valueAsNumber)}
+  />
+</div>
+```
+
+Then use it as children:
+
+```svelte
+<script lang="ts">
+  import { Player } from "@livepeer-frameworks/player-svelte";
+  import CustomControls from "./CustomControls.svelte";
+</script>
+
+<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+  {#snippet children()}
+    <CustomControls />
+  {/snippet}
+</Player>
+```
+
+### Context Properties
+
+The context object from `getContext("fw-player-controller")` provides:
+
+| Property            | Type             | Description                        |
+| ------------------- | ---------------- | ---------------------------------- |
+| `isPlaying`         | `boolean`        | Whether actively playing           |
+| `isPaused`          | `boolean`        | Whether paused                     |
+| `isMuted`           | `boolean`        | Whether muted                      |
+| `volume`            | `number`         | Volume (0-1)                       |
+| `currentTime`       | `number`         | Current playback position          |
+| `duration`          | `number`         | Total duration (Infinity for live) |
+| `isFullscreen`      | `boolean`        | Whether in fullscreen              |
+| `isEffectivelyLive` | `boolean`        | Whether live content               |
+| `isBuffering`       | `boolean`        | Whether buffering                  |
+| `isLoopEnabled`     | `boolean`        | Whether loop is on                 |
+| `error`             | `string \| null` | Current error                      |
+| `qualities`         | `Quality[]`      | Available quality levels           |
+
+| Method               | Description                  |
+| -------------------- | ---------------------------- |
+| `togglePlay()`       | Toggle play/pause            |
+| `toggleMute()`       | Toggle mute                  |
+| `toggleFullscreen()` | Toggle fullscreen            |
+| `toggleLoop()`       | Toggle loop                  |
+| `setVolume(n)`       | Set volume (0-1)             |
+| `jumpToLive()`       | Jump to live edge            |
+| `seek(t)`            | Seek to time (seconds)       |
+| `selectQuality(id)`  | Select a quality level       |
+| `getQualities()`     | Get available quality levels |
+
+## Props Reference
+
+| Prop            | Type                                 | Description               |
+| --------------- | ------------------------------------ | ------------------------- |
+| `contentId`     | `string`                             | Playback ID               |
+| `contentType`   | `'live' \| 'dvr' \| 'clip' \| 'vod'` | Content type              |
+| `endpoints`     | `ContentEndpoints`                   | Pre-resolved endpoints    |
+| `thumbnailUrl`  | `string`                             | Poster image              |
+| `theme`         | `string`                             | Theme preset              |
+| `options`       | `PlayerOptions`                      | Configuration options     |
+| `onStateChange` | `function`                           | State transition callback |

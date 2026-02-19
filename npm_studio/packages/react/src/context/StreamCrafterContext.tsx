@@ -12,14 +12,35 @@ import {
 
 const StreamCrafterContext = createContext<UseStreamCrafterReturn | null>(null);
 
-export interface StreamCrafterProviderProps {
+export type StreamCrafterProviderProps = {
   children: ReactNode;
-  config: UseStreamCrafterOptions;
+} & (
+  | { config: UseStreamCrafterOptions; value?: never }
+  | { value: UseStreamCrafterReturn; config?: never }
+);
+
+/**
+ * Provides StreamCrafter state to child components.
+ *
+ * Two modes:
+ * - `config` — creates a new hook instance internally
+ * - `value` — wraps children with a pre-computed hook return (used by StreamCrafter component)
+ */
+export function StreamCrafterProvider({ children, config, value }: StreamCrafterProviderProps) {
+  if (value !== undefined) {
+    return <StreamCrafterContext.Provider value={value}>{children}</StreamCrafterContext.Provider>;
+  }
+  return <HookProvider config={config!}>{children}</HookProvider>;
 }
 
-export function StreamCrafterProvider({ children, config }: StreamCrafterProviderProps) {
+function HookProvider({
+  children,
+  config,
+}: {
+  children: ReactNode;
+  config: UseStreamCrafterOptions;
+}) {
   const streamCrafter = useStreamCrafter(config);
-
   return (
     <StreamCrafterContext.Provider value={streamCrafter}>{children}</StreamCrafterContext.Provider>
   );
@@ -31,4 +52,9 @@ export function useStreamCrafterContext(): UseStreamCrafterReturn {
     throw new Error("useStreamCrafterContext must be used within a StreamCrafterProvider");
   }
   return context;
+}
+
+/** Returns the context value or null if not inside a provider. */
+export function useStreamCrafterContextOptional(): UseStreamCrafterReturn | null {
+  return useContext(StreamCrafterContext);
 }

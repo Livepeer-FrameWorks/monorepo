@@ -16,6 +16,8 @@ import {
   type EncoderOverrides,
   type RendererType,
   type RendererStats,
+  type StudioTranslateFn,
+  createStudioTranslator,
 } from "@livepeer-frameworks/streamcrafter-core";
 
 type TabId = "audio" | "stats" | "info" | "compositor";
@@ -85,6 +87,8 @@ function hasAnyDefinedValue(object?: Record<string, unknown>): boolean {
 
 @customElement("fw-sc-advanced")
 export class FwScAdvanced extends LitElement {
+  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
+  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ attribute: false }) ic!: IngestControllerHost;
   @property({ type: String, attribute: "whip-url" }) whipUrl = "";
   @property({ attribute: false }) audioProcessing: AudioProcessingSettings = {
@@ -99,6 +103,7 @@ export class FwScAdvanced extends LitElement {
   @property({ attribute: false }) compositorStats: RendererStats | null = null;
   @property({ type: Number, attribute: "scene-count" }) sceneCount = 0;
   @property({ type: Number, attribute: "layer-count" }) layerCount = 0;
+  @property({ attribute: false }) t: StudioTranslateFn = createStudioTranslator({ locale: "en" });
 
   @state() private _activeTab: TabId = "audio";
 
@@ -112,8 +117,8 @@ export class FwScAdvanced extends LitElement {
       .panel {
         width: 280px;
         height: 100%;
-        border-left: 1px solid rgba(65, 72, 104, 0.5);
-        background: #1a1b26;
+        border-left: 1px solid hsl(var(--fw-sc-border) / 0.5);
+        background: hsl(var(--fw-sc-surface-deep));
         display: flex;
         flex-direction: column;
         font-size: 12px;
@@ -124,15 +129,15 @@ export class FwScAdvanced extends LitElement {
           Menlo,
           Consolas,
           monospace;
-        color: #a9b1d6;
+        color: hsl(var(--fw-sc-text-muted));
         flex-shrink: 0;
         z-index: 40;
       }
       .header {
         display: flex;
         align-items: center;
-        border-bottom: 1px solid rgba(65, 72, 104, 0.3);
-        background: #16161e;
+        border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
+        background: hsl(var(--fw-sc-surface));
       }
       .tab {
         padding: 8px 12px;
@@ -142,25 +147,25 @@ export class FwScAdvanced extends LitElement {
         font-weight: 600;
         border: none;
         background: transparent;
-        color: #565f89;
+        color: hsl(var(--fw-sc-text-faint));
         cursor: pointer;
         transition: all 0.15s;
       }
       .tab--active {
-        background: #1a1b26;
-        color: #c0caf5;
+        background: hsl(var(--fw-sc-surface-deep));
+        color: hsl(var(--fw-sc-text));
       }
       .close {
         display: flex;
         background: transparent;
         border: none;
-        color: #565f89;
+        color: hsl(var(--fw-sc-text-faint));
         cursor: pointer;
         padding: 8px;
         transition: color 0.15s;
       }
       .close:hover {
-        color: #c0caf5;
+        color: hsl(var(--fw-sc-text));
       }
       .body {
         flex: 1;
@@ -168,7 +173,7 @@ export class FwScAdvanced extends LitElement {
       }
       .section-header {
         font-size: 10px;
-        color: #565f89;
+        color: hsl(var(--fw-sc-text-faint));
         text-transform: uppercase;
         letter-spacing: 0.05em;
         font-weight: 600;
@@ -176,11 +181,11 @@ export class FwScAdvanced extends LitElement {
       }
       .section {
         padding: 12px;
-        border-bottom: 1px solid rgba(65, 72, 104, 0.3);
+        border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
       }
       .section-dark {
         padding: 8px 12px;
-        background: #16161e;
+        background: hsl(var(--fw-sc-surface));
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -190,19 +195,19 @@ export class FwScAdvanced extends LitElement {
         justify-content: space-between;
         align-items: center;
         padding: 8px 12px;
-        border-top: 1px solid rgba(65, 72, 104, 0.2);
+        border-top: 1px solid hsl(var(--fw-sc-border) / 0.2);
       }
       .row-label {
-        color: #565f89;
+        color: hsl(var(--fw-sc-text-faint));
       }
       .row-value {
-        color: #c0caf5;
+        color: hsl(var(--fw-sc-text));
         font-family: ui-monospace, monospace;
         font-variant-numeric: tabular-nums;
       }
       .level-bar {
         height: 8px;
-        background: rgba(65, 72, 104, 0.3);
+        background: hsl(var(--fw-sc-border) / 0.3);
         border-radius: 4px;
         overflow: hidden;
       }
@@ -214,7 +219,7 @@ export class FwScAdvanced extends LitElement {
         display: flex;
         justify-content: space-between;
         font-size: 10px;
-        color: #565f89;
+        color: hsl(var(--fw-sc-text-faint));
         margin-top: 4px;
       }
       .badge {
@@ -248,10 +253,10 @@ export class FwScAdvanced extends LitElement {
         transition: left 0.2s;
       }
       .toggle--on {
-        background: #7aa2f7;
+        background: hsl(var(--fw-sc-accent));
       }
       .toggle--off {
-        background: rgba(65, 72, 104, 0.5);
+        background: hsl(var(--fw-sc-border) / 0.5);
       }
       .toggle--on .toggle-knob {
         left: 18px;
@@ -264,15 +269,15 @@ export class FwScAdvanced extends LitElement {
         justify-content: space-between;
         align-items: center;
         padding: 10px 12px;
-        border-top: 1px solid rgba(65, 72, 104, 0.2);
+        border-top: 1px solid hsl(var(--fw-sc-border) / 0.2);
       }
       .processing-label {
         font-size: 12px;
-        color: #c0caf5;
+        color: hsl(var(--fw-sc-text));
       }
       .processing-desc {
         font-size: 10px;
-        color: #565f89;
+        color: hsl(var(--fw-sc-text-faint));
         margin-top: 2px;
       }
       .source-type {
@@ -282,24 +287,24 @@ export class FwScAdvanced extends LitElement {
         text-transform: uppercase;
       }
       .select {
-        background: rgba(65, 72, 104, 0.3);
-        border: 1px solid rgba(65, 72, 104, 0.5);
+        background: hsl(var(--fw-sc-border) / 0.3);
+        border: 1px solid hsl(var(--fw-sc-border) / 0.5);
         border-radius: 4px;
-        color: #c0caf5;
+        color: hsl(var(--fw-sc-text));
         padding: 4px 8px;
         font-size: 12px;
         font-family: inherit;
         min-width: 100px;
       }
       .select--overridden {
-        background: rgba(187, 154, 247, 0.15);
-        border-color: rgba(187, 154, 247, 0.4);
-        color: #bb9af7;
+        background: hsl(var(--fw-sc-accent-secondary) / 0.15);
+        border-color: hsl(var(--fw-sc-accent-secondary) / 0.4);
+        color: hsl(var(--fw-sc-accent-secondary));
       }
       .mini-button {
         margin-top: 8px;
         font-size: 10px;
-        color: #565f89;
+        color: hsl(var(--fw-sc-text-faint));
         background: transparent;
         border: none;
         cursor: pointer;
@@ -307,7 +312,7 @@ export class FwScAdvanced extends LitElement {
       }
       .info-copy {
         font-size: 10px;
-        color: #565f89;
+        color: hsl(var(--fw-sc-text-faint));
         line-height: 1.5;
       }
       .modified-badge {
@@ -315,8 +320,8 @@ export class FwScAdvanced extends LitElement {
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: #e0af68;
-        background: rgba(224, 175, 104, 0.2);
+        color: hsl(var(--fw-sc-warning));
+        background: hsl(var(--fw-sc-warning) / 0.2);
         padding: 2px 4px;
       }
     `,
@@ -334,7 +339,7 @@ export class FwScAdvanced extends LitElement {
               this._activeTab = "audio";
             }}
           >
-            Audio
+            ${this.t("audio")}
           </button>
           <button
             class=${classMap({ tab: true, "tab--active": this._activeTab === "stats" })}
@@ -342,7 +347,7 @@ export class FwScAdvanced extends LitElement {
               this._activeTab = "stats";
             }}
           >
-            Stats
+            ${this.t("stats")}
           </button>
           <button
             class=${classMap({ tab: true, "tab--active": this._activeTab === "info" })}
@@ -350,7 +355,7 @@ export class FwScAdvanced extends LitElement {
               this._activeTab = "info";
             }}
           >
-            Info
+            ${this.t("info")}
           </button>
           ${this.compositorEnabled
             ? html`
@@ -363,7 +368,7 @@ export class FwScAdvanced extends LitElement {
                     this._activeTab = "compositor";
                   }}
                 >
-                  Comp
+                  ${this.t("comp")}
                 </button>
               `
             : nothing}
@@ -372,7 +377,7 @@ export class FwScAdvanced extends LitElement {
             class="close"
             @click=${() =>
               this.dispatchEvent(new CustomEvent("fw-close", { bubbles: true, composed: true }))}
-            aria-label="Close advanced panel"
+            aria-label=${this.t("closeAdvancedPanel")}
           >
             ${xIcon(12)}
           </button>
@@ -394,8 +399,18 @@ export class FwScAdvanced extends LitElement {
     const s = this.ic.s;
     const masterVolume = this.ic.getMasterVolume();
     const audioLevel = s.audioLevel;
-    const levelColor = audioLevel > 0.9 ? "#f7768e" : audioLevel > 0.7 ? "#e0af68" : "#9ece6a";
-    const volColor = masterVolume > 1 ? "#e0af68" : masterVolume === 1 ? "#9ece6a" : "#c0caf5";
+    const levelColor =
+      audioLevel > 0.9
+        ? "hsl(var(--fw-sc-danger))"
+        : audioLevel > 0.7
+          ? "hsl(var(--fw-sc-warning))"
+          : "hsl(var(--fw-sc-success))";
+    const volColor =
+      masterVolume > 1
+        ? "hsl(var(--fw-sc-warning))"
+        : masterVolume === 1
+          ? "hsl(var(--fw-sc-success))"
+          : "hsl(var(--fw-sc-text))";
 
     const profileDefaults = getAudioConstraints(s.qualityProfile);
     const processing = {
@@ -406,24 +421,24 @@ export class FwScAdvanced extends LitElement {
     const toggles = [
       {
         key: "echoCancellation" as const,
-        label: "Echo Cancellation",
-        description: "Reduce echo from speakers",
+        label: this.t("echoCancellation"),
+        description: this.t("echoCancellationDesc"),
       },
       {
         key: "noiseSuppression" as const,
-        label: "Noise Suppression",
-        description: "Filter background noise",
+        label: this.t("noiseSuppression"),
+        description: this.t("noiseSuppressionDesc"),
       },
       {
         key: "autoGainControl" as const,
-        label: "Auto Gain Control",
-        description: "Normalize audio levels",
+        label: this.t("autoGainControl"),
+        description: this.t("autoGainControlDesc"),
       },
     ];
 
     return html`
       <div class="section">
-        <div class="section-header">Master Volume</div>
+        <div class="section-header">${this.t("masterVolume")}</div>
         <div style="display:flex;align-items:center;gap:12px">
           <fw-sc-volume
             .value=${masterVolume}
@@ -437,14 +452,14 @@ export class FwScAdvanced extends LitElement {
           </span>
         </div>
         ${masterVolume > 1
-          ? html`<div style="font-size:10px;color:#e0af68;margin-top:4px">
+          ? html`<div style="font-size:10px;color:hsl(var(--fw-sc-warning));margin-top:4px">
               +${((masterVolume - 1) * 100).toFixed(0)}% boost
             </div>`
           : nothing}
       </div>
 
       <div class="section">
-        <div class="section-header">Output Level</div>
+        <div class="section-header">${this.t("outputLevel")}</div>
         <div class="level-bar">
           <div class="level-fill" style="width:${audioLevel * 100}%;background:${levelColor}"></div>
         </div>
@@ -453,16 +468,25 @@ export class FwScAdvanced extends LitElement {
 
       <div class="section">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span class="section-header" style="margin-bottom:0">Audio Mixing</span>
-          <span class="badge" style="background:rgba(158,206,106,0.2);color:#9ece6a"> ON </span>
+          <span class="section-header" style="margin-bottom:0">${this.t("audioMixing")}</span>
+          <span
+            class="badge"
+            style="background:hsl(var(--fw-sc-success) / 0.2);color:hsl(var(--fw-sc-success))"
+          >
+            ${this.t("on")}
+          </span>
         </div>
-        <div style="font-size:10px;color:#565f89;margin-top:4px">Compressor + Limiter active</div>
+        <div style="font-size:10px;color:hsl(var(--fw-sc-text-faint));margin-top:4px">
+          ${this.t("compressorLimiterActive")}
+        </div>
       </div>
 
-      <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+      <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
         <div class="section-dark">
-          <span class="section-header" style="margin-bottom:0">Processing</span>
-          <span style="font-size:9px;color:#565f89"> profile: ${s.qualityProfile} </span>
+          <span class="section-header" style="margin-bottom:0">${this.t("processing")}</span>
+          <span style="font-size:9px;color:hsl(var(--fw-sc-text-faint))">
+            profile: ${s.qualityProfile}
+          </span>
         </div>
         ${toggles.map(({ key, label, description }) => {
           const isModified = processing[key] !== profileDefaults[key];
@@ -471,7 +495,9 @@ export class FwScAdvanced extends LitElement {
               <div style="display:flex;flex-direction:column;gap:0;min-width:0;flex:1">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span class="processing-label">${label}</span>
-                  ${isModified ? html`<span class="modified-badge">Modified</span>` : nothing}
+                  ${isModified
+                    ? html`<span class="modified-badge">${this.t("modified")}</span>`
+                    : nothing}
                 </div>
                 <div class="processing-desc">${description}</div>
               </div>
@@ -491,11 +517,11 @@ export class FwScAdvanced extends LitElement {
           `;
         })}
         <div class="row">
-          <span class="row-label">Sample Rate</span>
+          <span class="row-label">${this.t("sampleRate")}</span>
           <span class="row-value">${profileDefaults.sampleRate} Hz</span>
         </div>
         <div class="row">
-          <span class="row-label">Channels</span>
+          <span class="row-label">${this.t("channels")}</span>
           <span class="row-value">${profileDefaults.channelCount}</span>
         </div>
       </div>
@@ -507,16 +533,16 @@ export class FwScAdvanced extends LitElement {
     const stats = s.stats;
     const stateColor =
       s.state === "streaming"
-        ? "#9ece6a"
+        ? "hsl(var(--fw-sc-success))"
         : s.state === "connecting"
-          ? "#7aa2f7"
+          ? "hsl(var(--fw-sc-accent))"
           : s.state === "error"
-            ? "#f7768e"
-            : "#c0caf5";
+            ? "hsl(var(--fw-sc-danger))"
+            : "hsl(var(--fw-sc-text))";
 
     return html`
       <div class="section">
-        <div class="section-header" style="margin-bottom:4px">Connection</div>
+        <div class="section-header" style="margin-bottom:4px">${this.t("connection")}</div>
         <div style="font-size:14px;font-weight:600;color:${stateColor}">
           ${s.state.charAt(0).toUpperCase() + s.state.slice(1)}
         </div>
@@ -524,69 +550,75 @@ export class FwScAdvanced extends LitElement {
       ${stats
         ? html`
             <div class="row">
-              <span class="row-label">Bitrate</span>
+              <span class="row-label">${this.t("bitrate")}</span>
               <span class="row-value">
                 ${formatBitrate(stats.video.bitrate + stats.audio.bitrate)}
               </span>
             </div>
             <div class="row">
-              <span class="row-label">Video</span>
-              <span class="row-value" style="color:#7aa2f7">
+              <span class="row-label">${this.t("video")}</span>
+              <span class="row-value" style="color:hsl(var(--fw-sc-accent))">
                 ${formatBitrate(stats.video.bitrate)}
               </span>
             </div>
             <div class="row">
-              <span class="row-label">Audio</span>
-              <span class="row-value" style="color:#7aa2f7">
+              <span class="row-label">${this.t("audio")}</span>
+              <span class="row-value" style="color:hsl(var(--fw-sc-accent))">
                 ${formatBitrate(stats.audio.bitrate)}
               </span>
             </div>
             <div class="row">
-              <span class="row-label">Frame Rate</span>
+              <span class="row-label">${this.t("frameRate")}</span>
               <span class="row-value"> ${stats.video.framesPerSecond.toFixed(0)} fps </span>
             </div>
             <div class="row">
-              <span class="row-label">Frames Encoded</span>
+              <span class="row-label">${this.t("framesEncoded")}</span>
               <span class="row-value">${stats.video.framesEncoded}</span>
             </div>
             ${stats.video.packetsLost > 0 || stats.audio.packetsLost > 0
               ? html`
                   <div class="row">
-                    <span class="row-label">Packets Lost</span>
-                    <span class="row-value" style="color:#f7768e">
+                    <span class="row-label">${this.t("packetsLost")}</span>
+                    <span class="row-value" style="color:hsl(var(--fw-sc-danger))">
                       ${stats.video.packetsLost + stats.audio.packetsLost}
                     </span>
                   </div>
                 `
               : nothing}
             <div class="row">
-              <span class="row-label">RTT</span>
+              <span class="row-label">${this.t("rtt")}</span>
               <span
                 class="row-value"
-                style="color:${stats.connection.rtt > 200 ? "#e0af68" : "#c0caf5"}"
+                style="color:${stats.connection.rtt > 200
+                  ? "hsl(var(--fw-sc-warning))"
+                  : "hsl(var(--fw-sc-text))"}"
               >
                 ${stats.connection.rtt.toFixed(0)} ms
               </span>
             </div>
             <div class="row">
-              <span class="row-label">ICE State</span>
+              <span class="row-label">${this.t("iceState")}</span>
               <span class="row-value" style="text-transform:capitalize">
                 ${stats.connection.iceState}
               </span>
             </div>
           `
         : html`
-            <div style="color:#565f89;text-align:center;padding:24px">
-              ${s.state === "streaming" ? "Waiting for stats..." : "Start streaming to see stats"}
+            <div style="color:hsl(var(--fw-sc-text-faint));text-align:center;padding:24px">
+              ${s.state === "streaming"
+                ? this.t("waitingForStats")
+                : this.t("startStreamingForStats")}
             </div>
           `}
       ${s.error
         ? html`
             <div
-              style="padding:12px;border-top:1px solid rgba(247,118,142,0.3);background:rgba(247,118,142,0.1)"
+              style="padding:12px;border-top:1px solid hsl(var(--fw-sc-danger) / 0.3);background:hsl(var(--fw-sc-danger) / 0.1)"
             >
-              <div class="section-header" style="color:#f7768e;margin-bottom:4px">Error</div>
-              <div style="font-size:12px;color:#f7768e">${s.error}</div>
+              <div class="section-header" style="color:hsl(var(--fw-sc-danger));margin-bottom:4px">
+                ${this.t("error")}
+              </div>
+              <div style="font-size:12px;color:hsl(var(--fw-sc-danger))">${s.error}</div>
             </div>
           `
         : nothing}
@@ -608,51 +640,51 @@ export class FwScAdvanced extends LitElement {
 
     return html`
       <div class="section">
-        <div class="section-header" style="margin-bottom:4px">Quality Profile</div>
-        <div style="font-size:14px;color:#c0caf5;text-transform:capitalize">
+        <div class="section-header" style="margin-bottom:4px">${this.t("qualityProfile")}</div>
+        <div style="font-size:14px;color:hsl(var(--fw-sc-text));text-transform:capitalize">
           ${s.qualityProfile}
         </div>
-        <div style="font-size:10px;color:#565f89;margin-top:4px">
+        <div style="font-size:10px;color:hsl(var(--fw-sc-text-faint));margin-top:4px">
           ${profileEncoderSettings.video.width}x${profileEncoderSettings.video.height} @
           ${formatBitrate(profileEncoderSettings.video.bitrate)}
         </div>
       </div>
 
       <div class="section">
-        <div class="section-header" style="margin-bottom:4px">WHIP Endpoint</div>
-        <div style="font-size:12px;color:#7aa2f7;word-break:break-all">
-          ${this.whipUrl || "Not configured"}
+        <div class="section-header" style="margin-bottom:4px">${this.t("whipEndpoint")}</div>
+        <div style="font-size:12px;color:hsl(var(--fw-sc-accent));word-break:break-all">
+          ${this.whipUrl || this.t("notConfigured")}
         </div>
         ${this.whipUrl
           ? html`
               <button type="button" class="mini-button" @click=${() => this._copyWhipUrl()}>
-                Copy URL
+                ${this.t("copyUrl")}
               </button>
             `
           : nothing}
       </div>
 
-      <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+      <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
         <div class="section-dark">
-          <span class="section-header" style="margin-bottom:0">Encoder</span>
+          <span class="section-header" style="margin-bottom:0">${this.t("encoder")}</span>
           ${hasEncoderOverrides
             ? html`
                 <button
                   type="button"
-                  style="font-size:10px;color:#bb9af7;background:transparent;border:none;cursor:pointer;padding:2px 6px"
+                  style="font-size:10px;color:hsl(var(--fw-sc-accent-secondary));background:transparent;border:none;cursor:pointer;padding:2px 6px"
                   @click=${() => this._emitEncoderOverridesChange({})}
                 >
-                  Reset to Profile
+                  ${this.t("resetToProfile")}
                 </button>
               `
             : nothing}
         </div>
         <div class="row">
-          <span class="row-label">Video Codec</span>
+          <span class="row-label">${this.t("videoCodec")}</span>
           <span class="row-value">${effectiveEncoderConfig.video.codec}</span>
         </div>
         <div class="row">
-          <span class="row-label">Resolution</span>
+          <span class="row-label">${this.t("resolution")}</span>
           <select
             class=${classMap({
               select: true,
@@ -687,7 +719,7 @@ export class FwScAdvanced extends LitElement {
         ${videoTrackSettings?.width && videoTrackSettings?.height
           ? html`
               <div class="row">
-                <span class="row-label">Actual Resolution</span>
+                <span class="row-label">${this.t("actualResolution")}</span>
                 <span class="row-value">
                   ${Math.round(videoTrackSettings.width)}x${Math.round(videoTrackSettings.height)}
                 </span>
@@ -695,7 +727,7 @@ export class FwScAdvanced extends LitElement {
             `
           : nothing}
         <div class="row">
-          <span class="row-label">Framerate</span>
+          <span class="row-label">${this.t("framerate")}</span>
           <select
             class=${classMap({
               select: true,
@@ -726,13 +758,13 @@ export class FwScAdvanced extends LitElement {
         ${videoTrackSettings?.frameRate
           ? html`
               <div class="row">
-                <span class="row-label">Actual Framerate</span>
+                <span class="row-label">${this.t("actualFramerate")}</span>
                 <span class="row-value">${Math.round(videoTrackSettings.frameRate)} fps</span>
               </div>
             `
           : nothing}
         <div class="row">
-          <span class="row-label">Video Bitrate</span>
+          <span class="row-label">${this.t("videoBitrate")}</span>
           <select
             class=${classMap({
               select: true,
@@ -761,11 +793,11 @@ export class FwScAdvanced extends LitElement {
           </select>
         </div>
         <div class="row">
-          <span class="row-label">Audio Codec</span>
+          <span class="row-label">${this.t("audioCodec")}</span>
           <span class="row-value">${effectiveEncoderConfig.audio.codec}</span>
         </div>
         <div class="row">
-          <span class="row-label">Audio Bitrate</span>
+          <span class="row-label">${this.t("audioBitrate")}</span>
           <select
             class=${classMap({
               select: true,
@@ -795,56 +827,68 @@ export class FwScAdvanced extends LitElement {
         </div>
         ${s.state === "streaming"
           ? html`
-              <div style="padding:8px 12px;font-size:10px;color:#e0af68">
-                Settings locked while streaming
+              <div style="padding:8px 12px;font-size:10px;color:hsl(var(--fw-sc-warning))">
+                ${this.t("settingsLockedWhileStreaming")}
               </div>
             `
           : nothing}
       </div>
 
-      <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+      <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
         <div class="section-dark">
-          <span class="section-header" style="margin-bottom:0">Sources (${s.sources.length})</span>
+          <span class="section-header" style="margin-bottom:0"
+            >${this.t("sources")} (${s.sources.length})</span
+          >
         </div>
         ${s.sources.length > 0
           ? s.sources.map(
               (source, index) => html`
                 <div
                   style="padding:8px 12px;${index > 0
-                    ? "border-top:1px solid rgba(65,72,104,0.2)"
+                    ? "border-top:1px solid hsl(var(--fw-sc-border) / 0.2)"
                     : ""}"
                 >
                   <div style="display:flex;align-items:center;gap:8px">
                     <span
                       class="source-type"
                       style="background:${source.type === "camera"
-                        ? "rgba(122,162,247,0.2)"
+                        ? "hsl(var(--fw-sc-accent) / 0.2)"
                         : source.type === "screen"
-                          ? "rgba(158,206,106,0.2)"
-                          : "rgba(224,175,104,0.2)"};color:${source.type === "camera"
-                        ? "#7aa2f7"
+                          ? "hsl(var(--fw-sc-success) / 0.2)"
+                          : "hsl(var(--fw-sc-warning) / 0.2)"};color:${source.type === "camera"
+                        ? "hsl(var(--fw-sc-accent))"
                         : source.type === "screen"
-                          ? "#9ece6a"
-                          : "#e0af68"}"
+                          ? "hsl(var(--fw-sc-success))"
+                          : "hsl(var(--fw-sc-warning))"}"
                     >
                       ${source.type}
                     </span>
                     <span
-                      style="color:#c0caf5;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                      style="color:hsl(var(--fw-sc-text));font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
                     >
                       ${source.label}
                     </span>
                   </div>
-                  <div style="display:flex;gap:12px;margin-top:4px;font-size:10px;color:#565f89">
+                  <div
+                    style="display:flex;gap:12px;margin-top:4px;font-size:10px;color:hsl(var(--fw-sc-text-faint))"
+                  >
                     <span>Vol: ${Math.round(source.volume * 100)}%</span>
-                    ${source.muted ? html`<span style="color:#f7768e">Muted</span>` : nothing}
-                    ${!source.active ? html`<span style="color:#e0af68">Inactive</span>` : nothing}
+                    ${source.muted
+                      ? html`<span style="color:hsl(var(--fw-sc-danger))">${this.t("mute")}</span>`
+                      : nothing}
+                    ${!source.active
+                      ? html`<span style="color:hsl(var(--fw-sc-warning))"
+                          >${this.t("inactive")}</span
+                        >`
+                      : nothing}
                   </div>
                 </div>
               `
             )
-          : html`<div style="padding:16px 12px;color:#565f89;text-align:center">
-              No sources added
+          : html`<div
+              style="padding:16px 12px;color:hsl(var(--fw-sc-text-faint));text-align:center"
+            >
+              ${this.t("noSourcesAdded")}
             </div>`}
       </div>
     `;
@@ -854,7 +898,12 @@ export class FwScAdvanced extends LitElement {
     const s = this.ic.s;
     const rt = this.compositorRendererType;
     const stats = this.compositorStats;
-    const rendererColor = rt === "webgpu" ? "#bb9af7" : rt === "webgl" ? "#7aa2f7" : "#9ece6a";
+    const rendererColor =
+      rt === "webgpu"
+        ? "hsl(var(--fw-sc-accent-secondary))"
+        : rt === "webgl"
+          ? "hsl(var(--fw-sc-accent))"
+          : "hsl(var(--fw-sc-success))";
     const rendererLabel =
       rt === "webgpu"
         ? "WebGPU"
@@ -862,32 +911,34 @@ export class FwScAdvanced extends LitElement {
           ? "WebGL"
           : rt === "canvas2d"
             ? "Canvas2D"
-            : "Not initialized";
+            : this.t("notInitialized");
 
     return html`
       <div class="section">
-        <div class="section-header">Renderer</div>
+        <div class="section-header">${this.t("renderer")}</div>
         <div style="font-size:14px;font-weight:600;color:${rendererColor}">${rendererLabel}</div>
-        <div style="font-size:10px;color:#565f89;margin-top:4px">
-          Set renderer in config before starting
+        <div style="font-size:10px;color:hsl(var(--fw-sc-text-faint));margin-top:4px">
+          ${this.t("setRendererHint")}
         </div>
       </div>
 
       ${stats
         ? html`
-            <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+            <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
               <div class="section-dark">
-                <span class="section-header" style="margin-bottom:0">Performance</span>
+                <span class="section-header" style="margin-bottom:0">${this.t("performance")}</span>
               </div>
               <div class="row">
-                <span class="row-label">Frame Rate</span>
+                <span class="row-label">${this.t("frameRate")}</span>
                 <span class="row-value">${stats.fps} fps</span>
               </div>
               <div class="row">
-                <span class="row-label">Frame Time</span>
+                <span class="row-label">${this.t("frameTime")}</span>
                 <span
                   class="row-value"
-                  style="color:${stats.frameTimeMs > 16 ? "#e0af68" : "#c0caf5"}"
+                  style="color:${stats.frameTimeMs > 16
+                    ? "hsl(var(--fw-sc-warning))"
+                    : "hsl(var(--fw-sc-text))"}"
                 >
                   ${stats.frameTimeMs.toFixed(2)} ms
                 </span>
@@ -895,7 +946,7 @@ export class FwScAdvanced extends LitElement {
               ${stats.gpuMemoryMB !== undefined
                 ? html`
                     <div class="row">
-                      <span class="row-label">GPU Memory</span>
+                      <span class="row-label">${this.t("gpuMemory")}</span>
                       <span class="row-value"> ${stats.gpuMemoryMB.toFixed(1)} MB </span>
                     </div>
                   `
@@ -904,35 +955,35 @@ export class FwScAdvanced extends LitElement {
           `
         : nothing}
 
-      <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+      <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
         <div class="section-dark">
-          <span class="section-header" style="margin-bottom:0">Composition</span>
+          <span class="section-header" style="margin-bottom:0">${this.t("composition")}</span>
         </div>
         <div class="row">
-          <span class="row-label">Scenes</span>
+          <span class="row-label">${this.t("scenes")}</span>
           <span class="row-value">${this.sceneCount}</span>
         </div>
         <div class="row">
-          <span class="row-label">Layers</span>
+          <span class="row-label">${this.t("layers")}</span>
           <span class="row-value">${this.layerCount}</span>
         </div>
       </div>
 
-      <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+      <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
         <div class="section-dark">
-          <span class="section-header" style="margin-bottom:0">Encoder</span>
+          <span class="section-header" style="margin-bottom:0">${this.t("encoder")}</span>
         </div>
         <div class="row">
-          <span class="row-label">Type</span>
+          <span class="row-label">${this.t("type")}</span>
           <span
             class="badge"
             style="background:${s.useWebCodecs && s.isWebCodecsAvailable
-              ? "rgba(187,154,247,0.2)"
-              : "rgba(122,162,247,0.2)"};color:${s.useWebCodecs && s.isWebCodecsAvailable
-              ? "#bb9af7"
-              : "#7aa2f7"}"
+              ? "hsl(var(--fw-sc-accent-secondary) / 0.2)"
+              : "hsl(var(--fw-sc-accent) / 0.2)"};color:${s.useWebCodecs && s.isWebCodecsAvailable
+              ? "hsl(var(--fw-sc-accent-secondary))"
+              : "hsl(var(--fw-sc-accent))"}"
           >
-            ${s.useWebCodecs && s.isWebCodecsAvailable ? "WebCodecs" : "Browser"}
+            ${s.useWebCodecs && s.isWebCodecsAvailable ? this.t("webCodecs") : this.t("browser")}
             ${s.state === "streaming"
               ? html`<span style="opacity:0.7;margin-left:4px">
                   ${s.isWebCodecsActive ? "(active)" : "(pending)"}
@@ -942,8 +993,8 @@ export class FwScAdvanced extends LitElement {
         </div>
         <div class="processing-row">
           <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
-            <span class="processing-label">Use WebCodecs</span>
-            <span class="processing-desc">Enable advanced WebCodecs encoder</span>
+            <span class="processing-label">${this.t("useWebCodecs")}</span>
+            <span class="processing-desc">${this.t("enableWebCodecsDesc")}</span>
           </div>
           <button
             type="button"
@@ -957,50 +1008,54 @@ export class FwScAdvanced extends LitElement {
           </button>
         </div>
         ${!s.isWebCodecsAvailable
-          ? html`<div style="padding:8px 12px;font-size:10px;color:#f7768e">
-              Not available - RTCRtpScriptTransform unsupported
+          ? html`<div style="padding:8px 12px;font-size:10px;color:hsl(var(--fw-sc-danger))">
+              ${this.t("webCodecsUnsupported")}
             </div>`
           : nothing}
         ${s.isWebCodecsAvailable &&
         s.state === "streaming" &&
         s.useWebCodecs !== s.isWebCodecsActive
-          ? html`<div style="padding:8px 12px;font-size:10px;color:#e0af68">
-              Change takes effect on next stream
+          ? html`<div style="padding:8px 12px;font-size:10px;color:hsl(var(--fw-sc-warning))">
+              ${this.t("changeTakesEffect")}
             </div>`
           : nothing}
       </div>
 
       ${s.isWebCodecsActive && s.encoderStats
         ? html`
-            <div style="border-bottom:1px solid rgba(65,72,104,0.3)">
+            <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
               <div class="section-dark">
-                <span class="section-header" style="margin-bottom:0">Encoder Stats</span>
+                <span class="section-header" style="margin-bottom:0"
+                  >${this.t("encoderStats")}</span
+                >
               </div>
               <div class="row">
-                <span class="row-label">Video Frames</span>
+                <span class="row-label">${this.t("videoFrames")}</span>
                 <span class="row-value">${s.encoderStats.video.framesEncoded}</span>
               </div>
               <div class="row">
-                <span class="row-label">Video Pending</span>
+                <span class="row-label">${this.t("videoPending")}</span>
                 <span
                   class="row-value"
-                  style="color:${s.encoderStats.video.framesPending > 5 ? "#e0af68" : "#c0caf5"}"
+                  style="color:${s.encoderStats.video.framesPending > 5
+                    ? "hsl(var(--fw-sc-warning))"
+                    : "hsl(var(--fw-sc-text))"}"
                 >
                   ${s.encoderStats.video.framesPending}
                 </span>
               </div>
               <div class="row">
-                <span class="row-label">Video Bytes</span>
+                <span class="row-label">${this.t("videoBytes")}</span>
                 <span class="row-value">
                   ${(s.encoderStats.video.bytesEncoded / 1024 / 1024).toFixed(2)} MB
                 </span>
               </div>
               <div class="row">
-                <span class="row-label">Audio Samples</span>
+                <span class="row-label">${this.t("audioSamples")}</span>
                 <span class="row-value">${s.encoderStats.audio.samplesEncoded}</span>
               </div>
               <div class="row">
-                <span class="row-label">Audio Bytes</span>
+                <span class="row-label">${this.t("audioBytes")}</span>
                 <span class="row-value">
                   ${(s.encoderStats.audio.bytesEncoded / 1024).toFixed(1)} KB
                 </span>

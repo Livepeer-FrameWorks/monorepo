@@ -197,7 +197,39 @@ export default defineConfig({
       sidebar: [
         {
           label: "For Streamers",
-          autogenerate: { directory: "streamers" },
+          items: [
+            { slug: "streamers/quick-start" },
+            { slug: "streamers/encoder-setup" },
+            { slug: "streamers/integration-guide" },
+            {
+              label: "StreamCrafter (Ingest)",
+              items: [
+                { slug: "streamers/ingest" },
+                { slug: "streamers/ingest-react" },
+                { slug: "streamers/ingest-svelte" },
+                { slug: "streamers/ingest-wc" },
+                { slug: "streamers/ingest-vanilla" },
+                { slug: "streamers/ingest-compositor" },
+                { slug: "streamers/ingest-advanced" },
+              ],
+            },
+            {
+              label: "Player (Playback)",
+              items: [
+                { slug: "streamers/playback" },
+                { slug: "streamers/playback-react" },
+                { slug: "streamers/playback-svelte" },
+                { slug: "streamers/playback-wc" },
+                { slug: "streamers/playback-vanilla" },
+                { slug: "streamers/playback-theming" },
+                { slug: "streamers/playback-advanced" },
+              ],
+            },
+            { slug: "streamers/recordings" },
+            { slug: "streamers/api-reference" },
+            { slug: "streamers/billing" },
+            { slug: "streamers/troubleshooting" },
+          ],
         },
         {
           label: "For Agents",

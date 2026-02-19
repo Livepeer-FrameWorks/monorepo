@@ -1,10 +1,16 @@
 <script lang="ts">
+  import { getContext } from "svelte";
+  import type { Readable } from "svelte/store";
   import CameraIcon from "../icons/CameraIcon.svelte";
   import EyeIcon from "../icons/EyeIcon.svelte";
   import MonitorIcon from "../icons/MonitorIcon.svelte";
   import SettingsIcon from "../icons/SettingsIcon.svelte";
   import VideoIcon from "../icons/VideoIcon.svelte";
   import type { Layer, LayerTransform, MediaSource } from "@livepeer-frameworks/streamcrafter-core";
+  import {
+    createStudioTranslator,
+    type StudioTranslateFn,
+  } from "@livepeer-frameworks/streamcrafter-core";
 
   interface Props {
     layers: Layer[];
@@ -29,6 +35,10 @@
     selectedLayerId = null,
     class: className = "",
   }: Props = $props();
+
+  const translatorCtx = getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator");
+  const fallbackT = createStudioTranslator({ locale: "en" });
+  let t: StudioTranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
 
   let draggedId = $state<string | null>(null);
   let dragOverId = $state<string | null>(null);
@@ -116,13 +126,13 @@
 
 <div class="fw-sc-layer-list {className}">
   <div class="fw-sc-layer-list-header">
-    <span class="fw-sc-layer-list-title">Layers</span>
+    <span class="fw-sc-layer-list-title">{t("layers")}</span>
     <span class="fw-sc-layer-count">{layers.length}</span>
   </div>
 
   <div class="fw-sc-layer-items">
     {#if sortedLayers.length === 0}
-      <div class="fw-sc-layer-empty">No layers. Add a source to get started.</div>
+      <div class="fw-sc-layer-empty">{t("noLayers")}</div>
     {:else}
       {#each sortedLayers as layer, index (layer.id)}
         {@const sourceType = getSourceType(layer.sourceId)}
@@ -158,7 +168,7 @@
               e.stopPropagation();
               onVisibilityToggle(layer.id, !layer.visible);
             }}
-            title={layer.visible ? "Hide layer" : "Show layer"}
+            title={layer.visible ? t("hideLayer") : t("showLayer")}
           >
             <EyeIcon size={14} visible={layer.visible} />
           </button>
@@ -198,7 +208,7 @@
                 handleMoveUp(layer.id);
               }}
               disabled={index === 0}
-              title="Move up"
+              title={t("moveUp")}
             >
               ↑
             </button>
@@ -210,7 +220,7 @@
                 handleMoveDown(layer.id);
               }}
               disabled={index === sortedLayers.length - 1}
-              title="Move down"
+              title={t("moveDown")}
             >
               ↓
             </button>
@@ -224,7 +234,7 @@
                   e.stopPropagation();
                   editingLayerId = editingLayerId === layer.id ? null : layer.id;
                 }}
-                title="Edit opacity"
+                title={t("editOpacity")}
               >
                 <SettingsIcon size={12} />
               </button>
@@ -237,7 +247,7 @@
                   e.stopPropagation();
                   onRemove(layer.id);
                 }}
-                title="Remove layer"
+                title={t("removeLayer")}
               >
                 ×
               </button>

@@ -141,7 +141,7 @@ func main() {
 				return nil
 			}(),
 		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("decklog")); err != nil {
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("decklog")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (decklog) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (decklog) ok")

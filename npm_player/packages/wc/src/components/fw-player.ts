@@ -15,7 +15,14 @@ import {
   pictureInPictureIcon,
   loopIcon,
 } from "../icons/index.js";
-import type { ContentEndpoints, PlaybackMode } from "@livepeer-frameworks/player-core";
+import type {
+  ContentEndpoints,
+  PlaybackMode,
+  FwThemePreset,
+  FwThemeOverrides,
+  FwLocale,
+} from "@livepeer-frameworks/player-core";
+import { applyTheme, applyThemeOverrides, clearTheme } from "@livepeer-frameworks/player-core";
 
 @customElement("fw-player")
 export class FwPlayer extends LitElement {
@@ -37,6 +44,11 @@ export class FwPlayer extends LitElement {
   @property({ attribute: "thumbnail-url" }) thumbnailUrl?: string;
   @property({ attribute: "playback-mode" }) playbackMode: PlaybackMode = "auto";
 
+  // ---- Theme ----
+  @property({ attribute: "theme" }) theme?: FwThemePreset;
+  @property({ attribute: false }) themeOverrides?: FwThemeOverrides;
+  @property({ attribute: "locale" }) locale?: FwLocale;
+
   // ---- JS-only properties (not reflected) ----
   @property({ attribute: false }) endpoints?: ContentEndpoints;
 
@@ -46,6 +58,12 @@ export class FwPlayer extends LitElement {
   @state() private _skipDirection: "back" | "forward" | null = null;
   @state() private _contextMenuOpen = false;
   @state() private _contextMenuMounted = false;
+
+  // Error fade-out
+  @state() private _displayedError: string | null = null;
+  @state() private _displayedIsPassive = false;
+  @state() private _isErrorDismissing = false;
+  private _errorDismissTimer: ReturnType<typeof setTimeout> | null = null;
   @state() private _contextMenuState: "open" | "closed" = "closed";
   @state() private _contextMenuSide: "top" | "bottom" | "left" | "right" = "bottom";
   @state() private _contextMenuX = 0;
@@ -66,6 +84,8 @@ export class FwPlayer extends LitElement {
         position: relative;
         width: 100%;
         height: 100%;
+        min-height: 0;
+        overflow: hidden;
         contain: layout style;
       }
       :host([hidden]) {
@@ -87,6 +107,30 @@ export class FwPlayer extends LitElement {
   // ---- Lifecycle ----
 
   protected willUpdate(changed: PropertyValues) {
+    if (changed.has("locale")) {
+      this.pc.updateTranslator({ locale: this.locale ?? "en" });
+    }
+
+    // Error fade-out: sync displayed error from controller state
+    const es = this.pc.s;
+    if (es.error) {
+      if (this._errorDismissTimer) {
+        clearTimeout(this._errorDismissTimer);
+        this._errorDismissTimer = null;
+      }
+      this._displayedError = es.error;
+      this._displayedIsPassive = es.isPassiveError;
+      this._isErrorDismissing = false;
+    } else if (this._displayedError && !this._isErrorDismissing) {
+      this._isErrorDismissing = true;
+      this._errorDismissTimer = setTimeout(() => {
+        this._displayedError = null;
+        this._displayedIsPassive = false;
+        this._isErrorDismissing = false;
+        this._errorDismissTimer = null;
+      }, 300);
+    }
+
     if (
       changed.has("contentId") ||
       changed.has("contentType") ||
@@ -134,6 +178,10 @@ export class FwPlayer extends LitElement {
     if (this._contextMenuCloseTimer) {
       clearTimeout(this._contextMenuCloseTimer);
       this._contextMenuCloseTimer = undefined;
+    }
+    if (this._errorDismissTimer) {
+      clearTimeout(this._errorDismissTimer);
+      this._errorDismissTimer = null;
     }
     this._resetContextMenuTypeahead();
   }
@@ -407,6 +455,18 @@ export class FwPlayer extends LitElement {
   private _toastTimer?: ReturnType<typeof setTimeout>;
 
   protected updated(changed: PropertyValues) {
+    // Apply theme changes (preset or overrides) via JS custom properties
+    if (changed.has("theme") || changed.has("themeOverrides")) {
+      const root = this.shadowRoot?.querySelector<HTMLElement>('[part="root"]');
+      if (root) {
+        clearTheme(root);
+        if (this.theme && this.theme !== "default") {
+          applyTheme(root, this.theme);
+        }
+        if (this.themeOverrides) applyThemeOverrides(root, this.themeOverrides);
+      }
+    }
+
     if (this.pc.s.toast) {
       clearTimeout(this._toastTimer);
       this._toastTimer = setTimeout(() => this.pc.dismissToast(), 3000);
@@ -443,9 +503,9 @@ export class FwPlayer extends LitElement {
   private get _waitingMessage() {
     const s = this.pc.s;
     if (this.gatewayUrl && s.state === "gateway_loading") {
-      return "Resolving viewing endpoint...";
+      return this.pc.t("resolvingEndpoint");
     }
-    return "Waiting for endpoint...";
+    return this.pc.t("waitingForStream");
   }
 
   private get _useStockControls() {
@@ -454,6 +514,11 @@ export class FwPlayer extends LitElement {
       this.nativeControls ||
       this.pc.s.currentPlayerInfo?.shortname === "mist-legacy"
     );
+  }
+
+  /** Expose the PlayerControllerHost for composable controls */
+  get controller(): PlayerControllerHost {
+    return this.pc;
   }
 
   // ---- Public API methods ----
@@ -527,6 +592,7 @@ export class FwPlayer extends LitElement {
           flex: this.devMode,
         })}
         data-player-container="true"
+        data-theme=${this.theme && this.theme !== "default" ? this.theme : nothing}
         tabindex="0"
         @mouseenter=${() => this.pc.handleMouseEnter()}
         @mouseleave=${() => this.pc.handleMouseLeave()}
@@ -610,7 +676,7 @@ export class FwPlayer extends LitElement {
             ? html`
                 <fw-idle-screen
                   .status=${s.isEffectivelyLive ? s.streamState?.status : undefined}
-                  .message=${s.isEffectivelyLive ? s.streamState?.message : "Loading video..."}
+                  .message=${s.isEffectivelyLive ? s.streamState?.message : this.pc.t("loading")}
                   .percentage=${s.isEffectivelyLive ? s.streamState?.percentage : undefined}
                   @fw-retry=${() => {
                     this.pc.clearError();
@@ -623,81 +689,107 @@ export class FwPlayer extends LitElement {
           <!-- Buffering spinner -->
           ${this._showBufferingSpinner
             ? html`
-                <div
-                  role="status"
-                  aria-live="polite"
-                  class="fw-player-surface absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm z-20"
-                >
-                  <div
-                    class="flex items-center gap-3 rounded-lg border border-white/10 bg-black/70 px-4 py-3 text-sm text-white shadow-lg"
-                  >
-                    <div
-                      class="w-4 h-4 border-2 border-white/10 rounded-full animate-spin"
-                      style="border-top-color: white;"
-                    ></div>
-                    <span>Buffering...</span>
+                <div role="status" aria-live="polite" class="fw-buffering-overlay">
+                  <div class="fw-buffering-pill">
+                    <div class="fw-buffering-spinner"></div>
+                    <span>${this.pc.t("buffering")}</span>
                   </div>
                 </div>
               `
             : nothing}
 
-          <!-- Error overlay -->
-          ${!s.shouldShowIdleScreen && s.error
+          <!-- Passive error toast (non-blocking) -->
+          ${!s.shouldShowIdleScreen && this._displayedError && this._displayedIsPassive
+            ? html`
+                <div
+                  class="absolute bottom-20 left-1/2 -translate-x-1/2 z-30"
+                  style="transition:opacity 300ms;opacity:${this._isErrorDismissing ? "0" : "1"}"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div
+                    class="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm"
+                  >
+                    <span class="text-yellow-400 text-xs font-semibold uppercase"
+                      >${this.pc.t("warning")}</span
+                    >
+                    <span>${this._displayedError}</span>
+                    <button
+                      type="button"
+                      @click=${() => this.pc.clearError()}
+                      class="ml-0.5 text-white/60 hover\\:text-white cursor-pointer"
+                      aria-label=${this.pc.t("dismiss")}
+                    >
+                      ${closeIcon()}
+                    </button>
+                  </div>
+                </div>
+              `
+            : nothing}
+
+          <!-- Fatal error overlay (blocking) — auto-dismisses on playback resume -->
+          ${!s.shouldShowIdleScreen && this._displayedError && !this._displayedIsPassive
             ? html`
                 <div
                   role="alert"
                   aria-live="assertive"
-                  class=${classMap({
-                    "fw-error-overlay": true,
-                    "fw-error-overlay--passive": s.isPassiveError,
-                    "fw-error-overlay--fullscreen": !s.isPassiveError,
-                  })}
+                  class="fw-error-overlay fw-error-overlay--fullscreen"
+                  style="transition:opacity 300ms;opacity:${this._isErrorDismissing ? "0" : "1"}"
                 >
-                  <div
-                    class=${classMap({
-                      "fw-error-popup": true,
-                      "fw-error-popup--passive": s.isPassiveError,
-                      "fw-error-popup--fullscreen": !s.isPassiveError,
-                    })}
-                  >
-                    <div
-                      class=${classMap({
-                        "fw-error-header": true,
-                        "fw-error-header--warning": s.isPassiveError,
-                        "fw-error-header--error": !s.isPassiveError,
-                      })}
-                    >
-                      <span
-                        class=${classMap({
-                          "fw-error-title": true,
-                          "fw-error-title--warning": s.isPassiveError,
-                          "fw-error-title--error": !s.isPassiveError,
-                        })}
-                        >${s.isPassiveError ? "Warning" : "Error"}</span
+                  <div class="fw-error-popup fw-error-popup--fullscreen">
+                    <div class="fw-error-header fw-error-header--error">
+                      <span class="fw-error-title fw-error-title--error"
+                        >${this.pc.t("error")}</span
                       >
                       <button
                         type="button"
                         class="fw-error-close"
                         @click=${() => this.pc.clearError()}
-                        aria-label="Dismiss"
+                        aria-label=${this.pc.t("dismiss")}
                       >
                         ${closeIcon()}
                       </button>
                     </div>
                     <div class="fw-error-body">
-                      <p class="fw-error-message">Playback issue</p>
+                      <p class="fw-error-message">${this._displayedError}</p>
                     </div>
                     <div class="fw-error-actions">
                       <button
                         type="button"
                         class="fw-error-btn"
-                        aria-label="Retry playback"
+                        aria-label=${this.pc.t("retry")}
                         @click=${() => {
                           this.pc.clearError();
                           this.pc.retry();
                         }}
                       >
-                        Retry
+                        ${this.pc.t("retry")}
+                      </button>
+                      ${this.pc.canAttemptFallback()
+                        ? html`
+                            <button
+                              type="button"
+                              class="fw-error-btn fw-error-btn--secondary"
+                              aria-label=${this.pc.t("tryNext")}
+                              @click=${() => {
+                                this.pc.clearError();
+                                this.pc.tryNextSource();
+                              }}
+                            >
+                              ${this.pc.t("tryNext")}
+                            </button>
+                          `
+                        : nothing}
+                      <button
+                        type="button"
+                        class="fw-error-btn fw-error-btn--secondary"
+                        aria-label=${this.pc.t("reloadPlayer")}
+                        @click=${() => {
+                          this.pc.clearError();
+                          this.pc.reload();
+                        }}
+                      >
+                        ${this.pc.t("reloadPlayer")}
                       </button>
                     </div>
                   </div>
@@ -721,7 +813,7 @@ export class FwPlayer extends LitElement {
                       type="button"
                       @click=${() => this.pc.dismissToast()}
                       class="ml-0.5 text-white/60 hover\\:text-white cursor-pointer"
-                      aria-label="Dismiss"
+                      aria-label=${this.pc.t("dismiss")}
                     >
                       ${closeIcon()}
                     </button>
@@ -730,23 +822,29 @@ export class FwPlayer extends LitElement {
               `
             : nothing}
 
-          <!-- Player controls -->
+          <!-- Player controls: slot allows custom controls, fallback renders defaults -->
           ${!this._useStockControls
             ? html`
-                <fw-player-controls
-                  part="controls"
-                  .pc=${this.pc}
-                  .playbackMode=${this.playbackMode}
-                  .isContentLive=${s.isEffectivelyLive}
-                  .devMode=${this.devMode}
-                  .isStatsOpen=${this._isStatsOpen}
-                  @fw-stats-toggle=${() => {
-                    this._isStatsOpen = !this._isStatsOpen;
-                  }}
-                  @fw-mode-change=${(event: CustomEvent<{ mode: PlaybackMode }>) => {
-                    this.playbackMode = event.detail.mode;
-                  }}
-                ></fw-player-controls>
+                <slot name="controls">
+                  <fw-player-controls
+                    part="controls"
+                    .pc=${this.pc}
+                    .playbackMode=${this.playbackMode}
+                    .isContentLive=${s.isEffectivelyLive}
+                    .devMode=${this.devMode}
+                    .isStatsOpen=${this._isStatsOpen}
+                    .activeLocale=${this.locale ?? "en"}
+                    @fw-stats-toggle=${() => {
+                      this._isStatsOpen = !this._isStatsOpen;
+                    }}
+                    @fw-mode-change=${(event: CustomEvent<{ mode: PlaybackMode }>) => {
+                      this.playbackMode = event.detail.mode;
+                    }}
+                    @fw-locale-change=${(e: CustomEvent) => {
+                      this.locale = e.detail.locale;
+                    }}
+                  ></fw-player-controls>
+                </slot>
               `
             : nothing}
         </div>
@@ -776,7 +874,7 @@ export class FwPlayer extends LitElement {
               data-context-menu="true"
               data-state=${this._contextMenuState}
               data-side=${this._contextMenuSide}
-              class="fw-player-surface fw-context-menu"
+              class="fw-context-menu"
               role="menu"
               aria-label="Player options"
               tabindex="-1"
@@ -798,7 +896,7 @@ export class FwPlayer extends LitElement {
                 }}
               >
                 <span class="opacity-70 shrink-0">${statsIcon(14)}</span>
-                <span>${this._isStatsOpen ? "Hide Stats" : "Stats"}</span>
+                <span>${this._isStatsOpen ? this.pc.t("hideStats") : this.pc.t("showStats")}</span>
               </button>
               ${this.devMode
                 ? html`
@@ -816,7 +914,11 @@ export class FwPlayer extends LitElement {
                       }}
                     >
                       <span class="opacity-70 shrink-0">${settingsIcon(14)}</span>
-                      <span>${this._isDevPanelOpen ? "Hide Settings" : "Settings"}</span>
+                      <span
+                        >${this._isDevPanelOpen
+                          ? this.pc.t("hideSettings")
+                          : this.pc.t("settings")}</span
+                      >
                     </button>
                   `
                 : nothing}
@@ -835,7 +937,7 @@ export class FwPlayer extends LitElement {
                 }}
               >
                 <span class="opacity-70 shrink-0">${pictureInPictureIcon(14)}</span>
-                <span>Picture-in-Picture</span>
+                <span>${this.pc.t("pictureInPicture")}</span>
               </button>
               <button
                 type="button"
@@ -851,7 +953,7 @@ export class FwPlayer extends LitElement {
                 }}
               >
                 <span class="opacity-70 shrink-0">${loopIcon(14)}</span>
-                <span>${s.isLoopEnabled ? "Disable Loop" : "Enable Loop"}</span>
+                <span>${s.isLoopEnabled ? this.pc.t("disableLoop") : this.pc.t("enableLoop")}</span>
               </button>
             </div>
           `

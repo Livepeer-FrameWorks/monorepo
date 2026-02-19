@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTranslator } from "@livepeer-frameworks/player-core";
 import { FwVolumeControl } from "../src/components/fw-volume-control.js";
+
+const defaultT = createTranslator({ locale: "en" });
 
 function createMockPc() {
   return {
@@ -8,6 +11,7 @@ function createMockPc() {
       volume: 0.5,
       videoElement: null,
     },
+    t: defaultT,
     setVolume: vi.fn(),
     toggleMute: vi.fn(),
   };

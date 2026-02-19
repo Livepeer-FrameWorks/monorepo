@@ -13,6 +13,7 @@
  * - Output track management
  */
 
+import { TextOverlaySource, type TextOverlayConfig } from "./TextOverlaySource";
 import { TypedEventEmitter } from "./EventEmitter";
 import type {
   Scene,
@@ -75,6 +76,17 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
   // Stats
   private lastStats: RendererStats = { fps: 0, frameTimeMs: 0 };
+
+  // Direct frame output callback (bypasses captureStream for WebCodecs path)
+  private frameCallback: ((frame: VideoFrame) => void) | null = null;
+
+  // Overlay tracking
+  private textOverlays: Map<string, { source: TextOverlaySource; layerIds: Map<string, string> }> =
+    new Map();
+  private persistentOverlays: Map<
+    string,
+    { sourceId: string; transform?: Partial<LayerTransform> }
+  > = new Map();
 
   constructor(config?: Partial<CompositorConfig>, options?: { workerUrl?: string }) {
     super();
@@ -357,6 +369,15 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         this.emit("rendererChanged", { renderer: message.renderer });
         break;
 
+      case "compositorFrame":
+        if (this.frameCallback) {
+          this.frameCallback(message.frame);
+        } else {
+          // No consumer — close frame to avoid memory leak
+          message.frame.close();
+        }
+        break;
+
       case "error":
         this.emit("error", { message: message.message });
         break;
@@ -394,6 +415,19 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     this.scenes.set(id, scene);
     this.emit("sceneCreated", { scene });
+
+    // Auto-add persistent overlays to new scenes
+    for (const [sourceId, overlay] of this.persistentOverlays) {
+      const defaultTransform: Partial<LayerTransform> = {
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        opacity: 1,
+        ...overlay.transform,
+      };
+      this.addLayer(id, sourceId, defaultTransform);
+    }
 
     return scene;
   }
@@ -842,6 +876,158 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   }
 
   // ============================================================================
+  // Text Overlays
+  // ============================================================================
+
+  /**
+   * Add a text overlay to a scene.
+   * Creates a TextOverlaySource, renders the bitmap, sends it to the worker,
+   * and creates a layer at a high z-index.
+   */
+  addTextOverlay(
+    sceneId: string,
+    config: TextOverlayConfig,
+    transform?: Partial<LayerTransform>
+  ): { layerId: string; sourceId: string } {
+    const scene = this.scenes.get(sceneId);
+    if (!scene) throw new Error(`Scene not found: ${sceneId}`);
+
+    const sourceId = `text-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const overlaySource = new TextOverlaySource(sourceId, this.config.width, this.config.height);
+    const bitmap = overlaySource.render(config);
+
+    this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
+
+    const defaultTransform: Partial<LayerTransform> = {
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+      opacity: 1,
+      ...transform,
+    };
+    const layer = this.addLayer(sceneId, sourceId, defaultTransform);
+
+    this.textOverlays.set(sourceId, {
+      source: overlaySource,
+      layerIds: new Map([[sceneId, layer.id]]),
+    });
+
+    return { layerId: layer.id, sourceId };
+  }
+
+  /**
+   * Update the text content/style of an existing text overlay.
+   */
+  updateTextOverlay(sourceId: string, config: TextOverlayConfig): void {
+    const overlay = this.textOverlays.get(sourceId);
+    if (!overlay) throw new Error(`Text overlay not found: ${sourceId}`);
+
+    const bitmap = overlay.source.render(config);
+    this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
+  }
+
+  /**
+   * Remove a text overlay from all scenes it belongs to.
+   */
+  removeTextOverlay(sourceId: string): void {
+    const overlay = this.textOverlays.get(sourceId);
+    if (!overlay) return;
+
+    for (const [sceneId, layerId] of overlay.layerIds) {
+      const scene = this.scenes.get(sceneId);
+      if (scene) {
+        const idx = scene.layers.findIndex((l) => l.id === layerId);
+        if (idx !== -1) {
+          scene.layers.splice(idx, 1);
+          this.updateSceneInWorker(scene);
+          this.emit("layerRemoved", { sceneId, layerId });
+        }
+      }
+    }
+
+    this.textOverlays.delete(sourceId);
+    this.persistentOverlays.delete(sourceId);
+  }
+
+  // ============================================================================
+  // Image Overlays
+  // ============================================================================
+
+  /**
+   * Add an image overlay to a scene (wraps bindImageSource + addLayer).
+   */
+  async addImageOverlay(
+    sceneId: string,
+    imageUrl: string,
+    transform?: Partial<LayerTransform>
+  ): Promise<{ layerId: string; sourceId: string }> {
+    const scene = this.scenes.get(sceneId);
+    if (!scene) throw new Error(`Scene not found: ${sceneId}`);
+
+    const sourceId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    await this.bindImageSource(sourceId, imageUrl);
+
+    const defaultTransform: Partial<LayerTransform> = {
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+      opacity: 1,
+      ...transform,
+    };
+    const layer = this.addLayer(sceneId, sourceId, defaultTransform);
+
+    return { layerId: layer.id, sourceId };
+  }
+
+  /**
+   * Add a persistent overlay that is automatically added to every scene
+   * (existing and future). Useful for watermarks/logos.
+   */
+  async addPersistentOverlay(
+    imageUrl: string,
+    transform?: Partial<LayerTransform>
+  ): Promise<string> {
+    const sourceId = `persist-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    await this.bindImageSource(sourceId, imageUrl);
+
+    this.persistentOverlays.set(sourceId, { sourceId, transform });
+
+    // Add to all existing scenes
+    for (const [sceneId, _scene] of this.scenes) {
+      const defaultTransform: Partial<LayerTransform> = {
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        opacity: 1,
+        ...transform,
+      };
+      this.addLayer(sceneId, sourceId, defaultTransform);
+    }
+
+    return sourceId;
+  }
+
+  /**
+   * Remove a persistent overlay from all scenes.
+   */
+  removePersistentOverlay(sourceId: string): void {
+    this.persistentOverlays.delete(sourceId);
+
+    for (const [sceneId, scene] of this.scenes) {
+      const idx = scene.layers.findIndex((l) => l.sourceId === sourceId);
+      if (idx !== -1) {
+        const layerId = scene.layers[idx].id;
+        scene.layers.splice(idx, 1);
+        this.updateSceneInWorker(scene);
+        this.emit("layerRemoved", { sceneId, layerId });
+      }
+    }
+  }
+
+  // ============================================================================
   // Filters
   // ============================================================================
 
@@ -869,6 +1055,18 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     }
 
     return this.outputStream.getVideoTracks()[0] || null;
+  }
+
+  /**
+   * Enable direct frame output — compositor posts VideoFrames via callback
+   * instead of relying on captureStream(). This eliminates one encode-decode
+   * cycle when used with the WebCodecs encoding path.
+   *
+   * @param callback Receives each composited VideoFrame. Caller must close() frames.
+   */
+  setFrameCallback(callback: ((frame: VideoFrame) => void) | null): void {
+    this.frameCallback = callback;
+    this.sendToWorker({ type: "setDirectFrameOutput", enabled: callback !== null });
   }
 
   /**
@@ -985,9 +1183,14 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     this.scenes.clear();
     this.activeSceneId = null;
 
+    // Clear overlays
+    this.textOverlays.clear();
+    this.persistentOverlays.clear();
+
     // Clear output
     this.outputStream = null;
     this.outputCanvas = null;
+    this.frameCallback = null;
 
     this.workerReady = false;
     this.removeAllListeners();

@@ -7,6 +7,7 @@
 
 import React, { useState, useCallback } from "react";
 import type { Layer, LayerTransform, MediaSource } from "@livepeer-frameworks/streamcrafter-core";
+import { useStudioTranslate } from "../context/StudioI18nContext";
 
 // SVG Icons
 function EyeIcon() {
@@ -141,6 +142,7 @@ export function LayerList({
   selectedLayerId,
   className = "",
 }: LayerListProps) {
+  const t = useStudioTranslate();
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
@@ -264,13 +266,13 @@ export function LayerList({
   return (
     <div className={`fw-sc-layer-list ${className}`}>
       <div className="fw-sc-layer-list-header">
-        <span className="fw-sc-layer-list-title">Layers</span>
+        <span className="fw-sc-layer-list-title">{t("layers")}</span>
         <span className="fw-sc-layer-count">{layers.length}</span>
       </div>
 
       <div className="fw-sc-layer-items">
         {sortedLayers.length === 0 ? (
-          <div className="fw-sc-layer-empty">No layers. Add a source to get started.</div>
+          <div className="fw-sc-layer-empty">{t("noLayers")}</div>
         ) : (
           sortedLayers.map((layer, index) => (
             <div
@@ -291,7 +293,7 @@ export function LayerList({
                   e.stopPropagation();
                   onVisibilityToggle(layer.id, !layer.visible);
                 }}
-                title={layer.visible ? "Hide layer" : "Show layer"}
+                title={layer.visible ? t("hideLayer") : t("showLayer")}
               >
                 {layer.visible ? <EyeIcon /> : <EyeOffIcon />}
               </button>
@@ -326,7 +328,7 @@ export function LayerList({
                     handleMoveUp(layer.id);
                   }}
                   disabled={index === 0}
-                  title="Move up"
+                  title={t("moveUp")}
                 >
                   ↑
                 </button>
@@ -339,7 +341,7 @@ export function LayerList({
                     handleMoveDown(layer.id);
                   }}
                   disabled={index === sortedLayers.length - 1}
-                  title="Move down"
+                  title={t("moveDown")}
                 >
                   ↓
                 </button>
@@ -352,7 +354,7 @@ export function LayerList({
                       e.stopPropagation();
                       setEditingLayerId(editingLayerId === layer.id ? null : layer.id);
                     }}
-                    title="Edit opacity"
+                    title={t("editOpacity")}
                   >
                     <GearIcon />
                   </button>
@@ -366,7 +368,7 @@ export function LayerList({
                       e.stopPropagation();
                       onRemove(layer.id);
                     }}
-                    title="Remove layer"
+                    title={t("removeLayer")}
                   >
                     ×
                   </button>

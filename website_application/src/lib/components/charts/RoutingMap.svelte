@@ -124,7 +124,10 @@
     const leafletModule = await import("leaflet");
     L = leafletModule.default;
 
-    delete (L.Icon.Default.prototype as any)._getIconUrl;
+    const iconDefaultPrototype = L.Icon.Default.prototype as typeof L.Icon.Default.prototype & {
+      _getIconUrl?: unknown;
+    };
+    delete iconDefaultPrototype._getIconUrl;
     L.Icon.Default.mergeOptions({
       iconRetinaUrl: markerIconRetinaUrl,
       iconUrl: markerIconUrl,

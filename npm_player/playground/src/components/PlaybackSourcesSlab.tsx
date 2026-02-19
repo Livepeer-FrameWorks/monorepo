@@ -1,4 +1,4 @@
-import { usePlayground } from "@/context/PlaygroundContext";
+import { usePlayground } from "@/context/usePlayground";
 import { UriRow } from "./UriRow";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";

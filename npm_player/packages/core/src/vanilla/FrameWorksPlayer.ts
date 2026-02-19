@@ -27,6 +27,8 @@
 
 import type { PlayerControllerConfig, PlayerControllerEvents } from "../core/PlayerController";
 import { PlayerController } from "../core/PlayerController";
+import { applyTheme, applyThemeOverrides, clearTheme } from "../core/ThemeManager";
+import type { FwThemePreset, FwThemeOverrides } from "../core/ThemeManager";
 import type {
   PlayerState,
   PlayerStateContext,
@@ -274,6 +276,28 @@ export class FrameWorksPlayer {
   /** Get current latency (for live streams) */
   getLatency(): Promise<unknown> {
     return this.controller.getLatency();
+  }
+
+  // ============================================================================
+  // Theming
+  // ============================================================================
+
+  /** Apply a theme preset. */
+  setTheme(preset: FwThemePreset): void {
+    const root = this.container.querySelector<HTMLElement>(".fw-player-surface") ?? this.container;
+    applyTheme(root, preset);
+  }
+
+  /** Apply custom theme overrides on top of the current preset. */
+  setThemeOverrides(overrides: FwThemeOverrides): void {
+    const root = this.container.querySelector<HTMLElement>(".fw-player-surface") ?? this.container;
+    applyThemeOverrides(root, overrides);
+  }
+
+  /** Clear all theme settings (revert to default). */
+  clearTheme(): void {
+    const root = this.container.querySelector<HTMLElement>(".fw-player-surface") ?? this.container;
+    clearTheme(root);
   }
 
   // ============================================================================

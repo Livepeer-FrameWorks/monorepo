@@ -31,15 +31,23 @@ import type {
   WebCodecsStats,
   MainToWorkerMessage,
   WorkerToMainMessage,
+  RenderMode,
+  WorkerStats,
 } from "./types";
+import type { MetaTrackEvent } from "../../types";
 import { WebSocketController } from "./WebSocketController";
 import { SyncController } from "./SyncController";
+import { MetadataWebSocket, buildMetadataWsUrl } from "./MetadataWebSocket";
 import { getPresentationTimestamp, isInitData } from "./RawChunkParser";
 import { mergeLatencyProfile, selectDefaultProfile } from "./LatencyProfiles";
 import {
   createTrackGenerator,
   hasNativeMediaStreamTrackGenerator,
 } from "./polyfills/MediaStreamTrackGenerator";
+import { translateCodec, buildDescription } from "../../core/CodecUtils";
+import { WebGLRenderer } from "../../rendering/WebGLRenderer";
+import { CanvasRenderer } from "../../rendering/CanvasRenderer";
+import { AudioWorkletRenderer } from "../../rendering/AudioWorkletRenderer";
 
 /**
  * Detect if running on Safari (which has VideoTrackGenerator in worker but not MediaStreamTrackGenerator on main thread)
@@ -102,10 +110,14 @@ interface PipelineInfo {
   track: TrackInfo;
   generator: ReturnType<typeof createTrackGenerator> | null;
   configured: boolean;
+  /** Video: drop delta frames until first keyframe after configure */
+  awaitingKeyframe: boolean;
   /** Safari audio: writer for audio frames relayed from worker */
   safariAudioWriter?: WritableStreamDefaultWriter<AudioData>;
   /** Safari audio: the audio generator created on main thread */
   safariAudioGenerator?: MediaStreamTrack;
+  /** Direct rendering audio: writer for routing AudioData through polyfill → video.srcObject */
+  audioWriter?: WritableStreamDefaultWriter<AudioData>;
 }
 
 /**
@@ -122,9 +134,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // NOTE: ws/video/mp4 is MP4-fragmented which needs MEWS player (uses MSE)
     mimes: [
       "ws/video/raw",
-      "wss/video/raw", // Raw codec frames - AVCC format (audio + video)
+      "wss/video/raw", // Raw codec frames: AVCC init, Annex B frame data (audio + video)
       "ws/video/h264",
-      "wss/video/h264", // Annex B H264/HEVC (video-only, same 12-byte header)
+      "wss/video/h264", // Annex B H264/HEVC, no init frame (video-only, same 12-byte header)
     ],
   };
 
@@ -133,6 +145,13 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private worker: Worker | null = null;
   private mediaStream: MediaStream | null = null;
   private container: HTMLElement | null = null;
+
+  // Rendering pipeline (WebGL mode)
+  private renderCanvas: HTMLCanvasElement | null = null;
+  private webglRenderer: WebGLRenderer | null = null;
+  private canvasRenderer: CanvasRenderer | null = null;
+  private audioRenderer: AudioWorkletRenderer | null = null;
+  private useDirectRendering = false;
   private pipelines = new Map<number, PipelineInfo>();
   private tracks: TrackInfo[] = [];
   private tracksByIndex = new Map<number, TrackInfo>(); // Track metadata indexed by track idx
@@ -159,11 +178,20 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private _bytesReceived = 0;
   private _messagesReceived = 0;
   private _isPaused = true;
+  private _lastWorkerStats: WorkerStats | null = null;
   private _suppressPlayPauseSync = false;
   private _onVideoPlay?: () => void;
   private _onVideoPause?: () => void;
   private _pendingStepPause = false;
   private _stepPauseTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  // Metadata/subtitle track support
+  private metadataWs: MetadataWebSocket | null = null;
+  private activeSubtitleTrackId: string | null = null;
+  private pendingMetaSubs: Array<{
+    trackId: string;
+    callback: (event: MetaTrackEvent) => void;
+  }> = [];
 
   // Codec support cache - keyed by "codec|init_hash"
   private static codecCache = new Map<string, boolean>();
@@ -176,7 +204,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     codecstring?: string;
     init?: string;
   }): string {
-    const codecStr = track.codecstring ?? track.codec?.toLowerCase() ?? "";
+    const codecStr = track.codecstring || track.codec?.toLowerCase() || "";
     // Simple hash of init data for cache key (just first/last bytes + length)
     const init = track.init ?? "";
     const initHash =
@@ -196,16 +224,23 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // Check cache first
     if (WebCodecsPlayerImpl.codecCache.has(cacheKey)) {
       const cached = WebCodecsPlayerImpl.codecCache.get(cacheKey)!;
-      return { supported: cached, config: { codec: track.codecstring ?? track.codec } };
+      return { supported: cached, config: { codec: track.codecstring || track.codec } };
     }
 
-    // Build codec config
-    const codecStr = track.codecstring ?? (track.codec ?? "").toLowerCase();
+    // Build codec config using translateCodec for proper WebCodecs codec strings
+    const codecStr = translateCodec(track as any);
     const config: any = { codec: codecStr };
 
-    // Add description (init data) if present
-    if (track.init && track.init !== "") {
-      config.description = str2bin(track.init);
+    // Build properly formatted description from init data
+    const desc =
+      track.init && track.init !== "" ? buildDescription(track.codec, str2bin(track.init)) : null;
+    if (desc) config.description = desc;
+
+    // Codecs that REQUIRE description per W3C WebCodecs registrations
+    const DESCRIPTION_REQUIRED = ["vorbis"];
+    if (DESCRIPTION_REQUIRED.includes(codecStr) && !config.description) {
+      WebCodecsPlayerImpl.codecCache.set(cacheKey, false);
+      return { supported: false, config };
     }
 
     let result: { supported: boolean; config: any };
@@ -279,6 +314,25 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     return Array.from(supportedTypes);
   }
 
+  /**
+   * Determine whether to use WebGL direct rendering based on render mode and browser.
+   * Auto mode: use WebGL on Firefox/Safari (replaces polyfills), native on Chrome.
+   */
+  private static shouldUseDirectRendering(mode: RenderMode): boolean {
+    if (mode === "webgl") return true;
+    if (mode === "native") return false;
+
+    // Auto: use direct rendering when native MediaStreamTrackGenerator is absent
+    // (Firefox, Safari without polyfill) since WebGL avoids the canvas captureStream hack
+    if (!hasNativeMediaStreamTrackGenerator()) return true;
+
+    // On Safari, prefer direct rendering to avoid the frame relay path
+    if (isSafari()) return true;
+
+    // Chrome has native MediaStreamTrackGenerator — use it
+    return false;
+  }
+
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
   }
@@ -306,26 +360,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       return false;
     }
 
-    // Check track codec support using cache when available
-    // Reference: rawws.js tests codecs via isConfigSupported() before selection
+    // Assume all codecs are available — real validation is async and runs in initialize()
+    // via checkCodecSupport(). Reference rawws.js:29-32 uses the same pattern:
+    // "for now, assume all codecs are available. we will perform the actual testing
+    //  in player buildup and nextCombo if it's bad"
     const playableTracks: Record<string, boolean> = {};
 
     for (const track of streamInfo.meta.tracks) {
       if (track.type === "video" || track.type === "audio") {
-        // Check cache for this track's codec
-        const cacheKey = WebCodecsPlayerImpl.getCodecCacheKey(track as any);
-        if (WebCodecsPlayerImpl.codecCache.has(cacheKey)) {
-          // Use cached result
-          if (WebCodecsPlayerImpl.codecCache.get(cacheKey)) {
-            playableTracks[track.type] = true;
-          }
-        } else {
-          // Not in cache - assume supported for now, validate in initialize()
-          // This is necessary because isBrowserSupported is synchronous
-          playableTracks[track.type] = true;
-        }
+        playableTracks[track.type] = true;
       } else if (track.type === "meta" && track.codec === "subtitle") {
-        // Subtitles supported via text track
         playableTracks["subtitle"] = true;
       }
     }
@@ -356,6 +400,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.queuedInitData.clear();
     this.queuedChunks.clear();
     this.isDestroyed = false;
+    this.useDirectRendering = false;
     this._duration = Infinity;
     this._currentTime = 0;
     this._bufferMs = 0;
@@ -364,9 +409,14 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this._framesDecoded = 0;
     this._bytesReceived = 0;
     this._messagesReceived = 0;
+    this.metadataWs?.destroy();
+    this.metadataWs = null;
+    this.activeSubtitleTrackId = null;
+    this.pendingMetaSubs = [];
 
-    // Detect payload format from source MIME type
-    // ws/video/h264 uses Annex B (start code delimited NALs), ws/video/raw uses AVCC (length-prefixed)
+    // ws/video/h264 sends no INIT frame — SPS/PPS inline in Annex B bitstream, no description needed.
+    // ws/video/raw sends AVCC init data — used as decoder description. Frame data may be Annex B
+    // (detected and converted at runtime in the worker).
     this.payloadFormat = source.type?.includes("h264") ? "annexb" : "avcc";
     if (this.payloadFormat === "annexb") {
       this.log("Using Annex B payload format (ws/video/h264)");
@@ -455,9 +505,22 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     video.addEventListener("play", this._onVideoPlay);
     video.addEventListener("pause", this._onVideoPause);
 
-    // Create MediaStream for output
+    // Determine render mode
+    const renderMode: RenderMode = wcOptions.renderMode ?? "auto";
+    this.useDirectRendering = WebCodecsPlayerImpl.shouldUseDirectRendering(renderMode);
+
+    if (this.useDirectRendering) {
+      this.log(`Using WebGL direct rendering (mode=${renderMode})`);
+      this.setupDirectRendering(container, video);
+    } else {
+      this.log(`Using native MediaStreamTrackGenerator (mode=${renderMode})`);
+    }
+
+    // Create MediaStream for output (only used in native mode)
     this.mediaStream = new MediaStream();
-    video.srcObject = this.mediaStream;
+    if (!this.useDirectRendering) {
+      video.srcObject = this.mediaStream;
+    }
 
     // Initialize worker
     await this.initializeWorker();
@@ -466,6 +529,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.syncController = new SyncController({
       profile,
       isLive: this.streamType === "live",
+      audioClockProvider: this.audioRenderer
+        ? () => this.audioRenderer?.getCurrentTime() ?? 0
+        : undefined,
       onSpeedChange: (main, tweak) => {
         this.sendToWorker({
           type: "frametiming",
@@ -528,6 +594,18 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }
     }
 
+    // If stream has audio tracks but none validated, reject so PlayerManager falls back
+    // to a player that can handle the audio (e.g., HLS.js, native HTML5)
+    const hasAudioTracks = streamInfo?.meta?.tracks?.some((t) => t.type === "audio");
+    if (hasAudioTracks && supportedAudioCodecs.size === 0 && supportedVideoCodecs.size > 0) {
+      const audioCodecs = streamInfo!.meta.tracks
+        .filter((t) => t.type === "audio")
+        .map((t) => t.codec);
+      throw new Error(
+        `WebCodecs cannot decode audio codec(s): ${audioCodecs.join(", ")}. Falling back.`
+      );
+    }
+
     // If no codecs validated, check if we have any tracks at all
     if (supportedAudioCodecs.size === 0 && supportedVideoCodecs.size === 0) {
       // Fallback: Use default codec list if no tracks provided or all failed
@@ -569,6 +647,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }
     }
 
+    // Initialize metadata WebSocket for subtitle/meta tracks (separate socket)
+    this.initMetadataWebSocket(source.url);
+
     // Set up video event listeners
     this.setupVideoEventListeners(video, options);
 
@@ -579,9 +660,140 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     return video;
   }
 
+  /**
+   * Set up WebGL canvas + AudioWorklet for direct rendering mode.
+   * The canvas overlays the hidden video element.
+   */
+  private setupDirectRendering(container: HTMLElement, video: HTMLVideoElement): void {
+    // Hide the video element (kept for IPlayer interface contract)
+    video.style.position = "absolute";
+    video.style.width = "0";
+    video.style.height = "0";
+    video.style.opacity = "0";
+    video.style.pointerEvents = "none";
+
+    // Create rendering canvas
+    this.renderCanvas = document.createElement("canvas");
+    this.renderCanvas.classList.add("fw-player-video", "fw-player-canvas");
+    this.renderCanvas.style.width = "100%";
+    this.renderCanvas.style.height = "100%";
+    this.renderCanvas.style.objectFit = "contain";
+    container.appendChild(this.renderCanvas);
+
+    // Try WebGL, fall back to Canvas2D
+    try {
+      this.webglRenderer = new WebGLRenderer(this.renderCanvas, { prefer16bit: true });
+      this.log(
+        "WebGL renderer initialized" + (this.webglRenderer.hasWebGL2 ? " (WebGL2)" : " (WebGL1)")
+      );
+    } catch (err) {
+      this.log(`WebGL failed, falling back to Canvas2D: ${err}`, "warn");
+      this.canvasRenderer = new CanvasRenderer(this.renderCanvas);
+    }
+
+    // Set up AudioWorklet renderer
+    this.audioRenderer = new AudioWorkletRenderer();
+    this.audioRenderer.onUnderrun = () => {
+      this.log("Audio underrun", "warn");
+    };
+    // Start is deferred until first audio frame arrives (needs user gesture context)
+  }
+
+  /**
+   * Handle transferred frame from worker in direct rendering mode.
+   */
+  private handleTransferFrame(msg: any): void {
+    if (this.isDestroyed) {
+      try {
+        msg.frame?.close();
+      } catch {}
+      return;
+    }
+
+    if (msg.trackType === "video") {
+      const frame = msg.frame as VideoFrame;
+      if (this.webglRenderer && !this.webglRenderer.isContextLost) {
+        this.webglRenderer.render(frame);
+      } else if (this.canvasRenderer) {
+        this.canvasRenderer.render(frame);
+      } else {
+        // WebGL context was lost and no Canvas2D fallback — try to create one
+        if (this.renderCanvas && this.webglRenderer?.isContextLost) {
+          this.log("WebGL context permanently lost, creating Canvas2D fallback");
+          this.webglRenderer.destroy();
+          this.webglRenderer = null;
+          this.canvasRenderer = new CanvasRenderer(this.renderCanvas);
+          this.canvasRenderer.render(frame);
+        } else {
+          frame.close();
+        }
+      }
+    } else if (msg.trackType === "audio") {
+      const audioData = msg.frame as AudioData;
+
+      // Check if this audio pipeline uses polyfill → video.srcObject (Firefox/Safari)
+      const pipeline = this.pipelines.get(msg.idx);
+      if (pipeline?.audioWriter) {
+        pipeline.audioWriter.write(audioData).catch(() => {
+          try {
+            audioData.close();
+          } catch {}
+        });
+      } else if (this.audioRenderer) {
+        // Chromium/Brave: AudioWorkletRenderer → speakers directly
+        if (!this.audioRenderer.getAudioContext()) {
+          this.audioRenderer.start().catch((err) => {
+            this.log(`AudioWorklet start failed: ${err}`, "warn");
+          });
+        }
+        this.audioRenderer.feed(audioData);
+      } else {
+        audioData.close();
+      }
+    }
+  }
+
+  private handleTransferYUV(msg: {
+    y: Uint8Array;
+    u: Uint8Array;
+    v: Uint8Array;
+    width: number;
+    height: number;
+    format: string;
+    timestamp: number;
+    colorPrimaries?: string;
+    transferFunction?: string;
+  }): void {
+    if (this.isDestroyed) return;
+
+    const planes = {
+      y: msg.y,
+      u: msg.u,
+      v: msg.v,
+      width: msg.width,
+      height: msg.height,
+      format: msg.format as any,
+    };
+
+    if (msg.colorPrimaries || msg.transferFunction) {
+      this.webglRenderer?.setColorSpace(msg.colorPrimaries as any, msg.transferFunction as any);
+    }
+
+    if (this.webglRenderer && !this.webglRenderer.isContextLost) {
+      this.webglRenderer.renderYUV(planes);
+    } else if (this.canvasRenderer) {
+      this.canvasRenderer.renderYUV(planes);
+    } else if (this.renderCanvas && this.webglRenderer?.isContextLost) {
+      this.log("WebGL context permanently lost, creating Canvas2D fallback");
+      this.webglRenderer.destroy();
+      this.webglRenderer = null;
+      this.canvasRenderer = new CanvasRenderer(this.renderCanvas);
+      this.canvasRenderer.renderYUV(planes);
+    }
+  }
+
   async destroy(): Promise<void> {
     if (this.isDestroyed) return;
-    this.isDestroyed = true;
 
     this.log("Destroying WebCodecs player");
 
@@ -594,15 +806,25 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       this._statsInterval = null;
     }
 
+    // Stop metadata WebSocket
+    this.metadataWs?.destroy();
+    this.metadataWs = null;
+    this.pendingMetaSubs = [];
+    this.activeSubtitleTrackId = null;
+
     // Stop WebSocket
     this.wsController?.disconnect();
     this.wsController = null;
 
-    // Close all pipelines
+    // Close all pipelines (before setting isDestroyed so sendToWorker doesn't reject)
     for (const pipeline of this.pipelines.values()) {
       await this.closePipeline(pipeline.idx, false);
     }
     this.pipelines.clear();
+
+    // Set after closePipeline loop — WS is disconnected and frame callbacks cancelled,
+    // so no new messages will arrive that would call sendToWorker.
+    this.isDestroyed = true;
 
     // Terminate worker
     this.worker?.terminate();
@@ -616,6 +838,24 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         this.mediaStream.removeTrack(track);
       }
       this.mediaStream = null;
+    }
+
+    // Clean up direct renderers
+    if (this.webglRenderer) {
+      this.webglRenderer.destroy();
+      this.webglRenderer = null;
+    }
+    if (this.canvasRenderer) {
+      this.canvasRenderer.destroy();
+      this.canvasRenderer = null;
+    }
+    if (this.audioRenderer) {
+      this.audioRenderer.destroy();
+      this.audioRenderer = null;
+    }
+    if (this.renderCanvas) {
+      this.renderCanvas.remove();
+      this.renderCanvas = null;
     }
 
     // Clean up video element
@@ -639,6 +879,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     }
 
     this.syncController = null;
+    this.useDirectRendering = false;
     // NOTE: Don't clear tracks/tracksByIndex/queues here!
     // Since PlayerManager reuses instances, a concurrent initialize() may have
     // already pre-populated these. Clearing happens at the START of initialize().
@@ -869,6 +1110,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         break;
       }
 
+      case "transferframe": {
+        this.handleTransferFrame(msg);
+        break;
+      }
+
+      case "transferyuv": {
+        this.handleTransferYUV(msg as any);
+        break;
+      }
+
       case "log": {
         if (this.debugging) {
           const level = (msg as any).level ?? "info";
@@ -880,7 +1131,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }
 
       case "stats": {
-        // Could emit stats for monitoring
+        this._lastWorkerStats = (msg as any).stats ?? null;
         break;
       }
 
@@ -903,6 +1154,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.wsController.on("ontime", (msg) => this.handleOnTime(msg));
     this.wsController.on("tracks", (tracks) => this.handleTracksChange(tracks));
     this.wsController.on("chunk", (chunk) => this.handleChunk(chunk));
+    this.wsController.on("pause", (msg) => this.handleServerPause(msg));
     this.wsController.on("stop", () => this.handleStop());
     this.wsController.on("error", (err) => this.handleError(err));
     this.wsController.on("statechange", (state) => {
@@ -1173,6 +1425,18 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       return;
     }
 
+    // Video keyframe gate: drop delta frames until first keyframe after configure.
+    // Joining a live stream mid-GOP means the server sends deltas before the next
+    // keyframe. Decoding those without a reference produces moshing artifacts.
+    if (pipeline.awaitingKeyframe) {
+      if (chunk.type === "key") {
+        pipeline.awaitingKeyframe = false;
+        this.log(`First keyframe received for track ${chunk.trackIndex}, starting decode`);
+      } else {
+        return;
+      }
+    }
+
     // Track jitter
     this.syncController?.recordChunkArrival(chunk.trackIndex, chunk.timestamp);
 
@@ -1195,6 +1459,22 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.worker?.postMessage(msg, [chunk.data.buffer]);
   }
 
+  /**
+   * Handle server-initiated pause (e.g., server-side buffer underrun).
+   * Per rawws.js:661-662, we pause frame timing so the worker stops outputting frames.
+   */
+  private handleServerPause(msg: { paused: boolean }): void {
+    if (msg.paused) {
+      this.log("Server requested pause");
+      this.sendToWorker({
+        type: "frametiming",
+        action: "setPaused",
+        paused: true,
+        uid: this.workerUidCounter++,
+      }).catch(() => {});
+    }
+  }
+
   private handleStop(): void {
     this.log("Stream stopped");
     this.emit("ended", undefined);
@@ -1203,6 +1483,103 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private handleError(err: Error): void {
     this.log(`WebSocket error: ${err.message}`, "error");
     this.emit("error", err);
+  }
+
+  // ============================================================================
+  // Metadata WebSocket + Subtitle/Text Track API
+  // ============================================================================
+
+  /**
+   * Initialize the metadata WebSocket for subtitle/meta track delivery.
+   * Uses a separate socket at the same URL with ?rate=1.
+   */
+  private initMetadataWebSocket(sourceUrl: string): void {
+    const hasMetaTracks = Array.from(this.tracksByIndex.values()).some((t) => t.type === "meta");
+
+    if (!hasMetaTracks && this.pendingMetaSubs.length === 0) {
+      return;
+    }
+
+    const metaUrl = buildMetadataWsUrl(sourceUrl);
+    this.metadataWs = new MetadataWebSocket(
+      metaUrl,
+      () => this._currentTime,
+      () => this.videoElement?.playbackRate ?? 1,
+      () => this._isPaused,
+      { debug: this.debugging }
+    );
+
+    // Drain pending subscriptions that were registered before the socket existed
+    for (const sub of this.pendingMetaSubs) {
+      this.metadataWs.subscribe(sub.trackId, sub.callback);
+    }
+    this.pendingMetaSubs = [];
+
+    this.log(`Metadata WebSocket initialized at ${metaUrl}`);
+  }
+
+  /**
+   * Subscribe to metadata track events (subtitles, scores, etc.).
+   * Returns an unsubscribe function.
+   */
+  subscribeToMetaTrack(trackId: string, callback: (event: MetaTrackEvent) => void): () => void {
+    if (this.metadataWs) {
+      return this.metadataWs.subscribe(trackId, callback);
+    }
+
+    // Queue subscription until metadata socket is ready
+    this.pendingMetaSubs.push({ trackId, callback });
+    return () => {
+      this.pendingMetaSubs = this.pendingMetaSubs.filter(
+        (s) => s.trackId !== trackId || s.callback !== callback
+      );
+    };
+  }
+
+  /**
+   * Get available text/subtitle tracks.
+   */
+  getTextTracks(): Array<{
+    id: string;
+    label: string;
+    lang?: string;
+    active: boolean;
+  }> {
+    const tracks: Array<{
+      id: string;
+      label: string;
+      lang?: string;
+      active: boolean;
+    }> = [];
+
+    for (const [idx, track] of this.tracksByIndex) {
+      if (track.type === "meta" && track.codec?.toLowerCase() === "subtitle") {
+        tracks.push({
+          id: String(idx),
+          label: track.codecstring || `Subtitle ${idx}`,
+          active: this.activeSubtitleTrackId === String(idx),
+        });
+      }
+    }
+
+    return tracks;
+  }
+
+  /**
+   * Select a subtitle track by ID, or null to disable.
+   */
+  selectTextTrack(id: string | null): void {
+    // Unsubscribe from current track
+    if (this.activeSubtitleTrackId !== null) {
+      this.activeSubtitleTrackId = null;
+    }
+
+    if (id === null) {
+      return;
+    }
+
+    this.activeSubtitleTrackId = id;
+    this.log(`Selected subtitle track: ${id}`);
   }
 
   // ============================================================================
@@ -1219,6 +1596,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       track,
       generator: null,
       configured: false,
+      awaitingKeyframe: false,
     };
 
     this.pipelines.set(track.idx, pipeline);
@@ -1236,11 +1614,65 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       uid: this.workerUidCounter++,
     });
 
-    // Create track generator - three paths:
-    // 1. Chrome/Edge: MediaStreamTrackGenerator on main thread, transfer writable to worker
-    // 2. Safari: VideoTrackGenerator in worker (video) or frame relay (audio)
-    // 3. Firefox: Use canvas/AudioWorklet polyfill
-    if (hasNativeMediaStreamTrackGenerator()) {
+    // Track generator routing (MediaStreamTrackGenerator is Chrome-only, non-standard):
+    // - Direct rendering video: postMessage → WebGL canvas (Firefox, Safari, or explicit webgl mode)
+    // - Direct rendering audio (Firefox/Safari): polyfill AudioWorklet → MediaStreamDestination → video.srcObject
+    // - Direct rendering audio (Chromium): AudioWorkletRenderer → AudioContext.destination
+    // - Chrome/Edge native: MediaStreamTrackGenerator writable transferred to worker
+    // - Safari native: VideoTrackGenerator in worker (video) or frame relay (audio)
+    // - Firefox polyfill: canvas/AudioWorklet polyfill (non-direct-rendering fallback)
+    if (this.useDirectRendering && track.type === "video") {
+      // Direct rendering for video: worker sends VideoFrames via postMessage → WebGL canvas
+      this.log(`Direct rendering for track ${track.idx} (video)`);
+      await this.sendToWorker({
+        type: "setrendermode",
+        idx: track.idx,
+        directTransfer: true,
+        uid: this.workerUidCounter++,
+      });
+    } else if (
+      this.useDirectRendering &&
+      track.type === "audio" &&
+      (isSafari() || !hasNativeMediaStreamTrackGenerator())
+    ) {
+      // Firefox/Safari audio in direct rendering mode: route through polyfill → video.srcObject.
+      // Chrome's MediaStreamTrackGenerator({kind:'audio'}) is non-standard and Chromium-only.
+      // Safari may expose MediaStreamTrackGenerator for video (VideoTrackGenerator) but NOT audio.
+      // Firefox has neither. Always use polyfill on non-Chromium browsers.
+      this.log(`Audio via polyfill for track ${track.idx} (direct rendering mode)`);
+      await this.sendToWorker({
+        type: "setrendermode",
+        idx: track.idx,
+        directTransfer: true,
+        uid: this.workerUidCounter++,
+      });
+
+      pipeline.generator = createTrackGenerator("audio");
+      if (pipeline.generator.waitForInit) {
+        await pipeline.generator.waitForInit();
+      }
+
+      // Get a writer so handleTransferFrame can feed AudioData from the worker
+      pipeline.audioWriter = (pipeline.generator.writable as WritableStream<AudioData>).getWriter();
+
+      if (this.mediaStream) {
+        this.mediaStream.addTrack(pipeline.generator.getTrack());
+      }
+
+      // Set video.srcObject for audio output (video display uses WebGL canvas)
+      if (this.videoElement && !this.videoElement.srcObject) {
+        this.videoElement.srcObject = this.mediaStream;
+      }
+    } else if (this.useDirectRendering) {
+      // Chromium/Brave audio in direct rendering mode: AudioWorkletRenderer handles it
+      this.log(`Direct rendering for track ${track.idx} (${track.type})`);
+      await this.sendToWorker({
+        type: "setrendermode",
+        idx: track.idx,
+        directTransfer: true,
+        uid: this.workerUidCounter++,
+      });
+    } else if (hasNativeMediaStreamTrackGenerator()) {
       // Chrome/Edge: Create generator and transfer writable to worker
       // @ts-ignore
       const generator = new MediaStreamTrackGenerator({ kind: track.type });
@@ -1330,38 +1762,60 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     const pipeline = this.pipelines.get(idx);
     if (!pipeline || pipeline.configured) return;
 
+    pipeline.configured = true; // Prevent re-entry during await
+    if (pipeline.track.type === "video") {
+      pipeline.awaitingKeyframe = true;
+    }
+
     this.log(`Configuring decoder for track ${idx}`);
 
     // Copy the header to avoid transfer issues (neutered buffers)
-    // The structured clone will copy this automatically
     const headerCopy = new Uint8Array(header);
 
-    await this.sendToWorker({
-      type: "configure",
-      idx,
-      header: headerCopy,
-      uid: this.workerUidCounter++,
-    });
+    // For video: pass raw init data as description (matches reference rawws.js: description = header).
+    // MistServer HTTP info provides valid AVCDecoderConfigurationRecord / HEVCDecoderConfigurationRecord.
+    // For audio: normalize init data (e.g., Vorbis header validation, AAC AudioSpecificConfig).
+    const normalizedHeader =
+      pipeline.track && pipeline.track.type === "audio"
+        ? (buildDescription(pipeline.track.codec, headerCopy) ?? headerCopy)
+        : headerCopy;
 
-    pipeline.configured = true;
+    try {
+      await this.sendToWorker({
+        type: "configure",
+        idx,
+        header: normalizedHeader,
+        uid: this.workerUidCounter++,
+      });
+    } catch (err) {
+      pipeline.configured = false; // Allow retry on failure
+      throw err;
+    }
 
     // Flush any queued chunks now that decoder is configured
     const queued = this.queuedChunks.get(idx);
     if (queued && queued.length > 0) {
       this.log(`Flushing ${queued.length} queued chunks for track ${idx}`);
-      // Find first keyframe to start from (can't decode deltas without reference)
-      let startIdx = 0;
-      for (let i = 0; i < queued.length; i++) {
-        if (queued[i].type === "key") {
-          startIdx = i;
-          break;
+
+      if (pipeline.track.type === "video") {
+        // Find first keyframe — decoder can't produce clean output from deltas alone
+        const keyIdx = queued.findIndex((c) => c.type === "key");
+        if (keyIdx === -1) {
+          this.log(`No keyframe in queue for track ${idx}, dropping ${queued.length} delta frames`);
+          this.queuedChunks.delete(idx);
+          return;
         }
-      }
-      if (startIdx > 0) {
-        this.log(`Skipping ${startIdx} delta frames, starting from keyframe`);
-      }
-      for (let i = startIdx; i < queued.length; i++) {
-        this.sendChunkToWorker(queued[i]);
+        if (keyIdx > 0) {
+          this.log(`Skipping ${keyIdx} delta frames, starting from keyframe`);
+        }
+        pipeline.awaitingKeyframe = false;
+        for (let i = keyIdx; i < queued.length; i++) {
+          this.sendChunkToWorker(queued[i]);
+        }
+      } else {
+        for (const chunk of queued) {
+          this.sendChunkToWorker(chunk);
+        }
       }
       this.queuedChunks.delete(idx);
     }
@@ -1373,13 +1827,21 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
     this.log(`Closing pipeline ${idx}`);
 
-    // Close worker pipeline
+    // Close worker pipeline (catch errors during teardown — worker may already be gone)
     await this.sendToWorker({
       type: "close",
       idx,
       waitEmpty,
       uid: this.workerUidCounter++,
-    });
+    }).catch(() => {});
+
+    // Release audio polyfill writer before closing generator
+    if (pipeline.audioWriter) {
+      try {
+        pipeline.audioWriter.releaseLock();
+      } catch {}
+      pipeline.audioWriter = undefined;
+    }
 
     // Close generator
     pipeline.generator?.close();
@@ -1397,6 +1859,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   async play(): Promise<void> {
     this._isPaused = false;
     this.wsController?.play();
+    this.metadataWs?.notifyPlay();
     this.sendToWorker({
       type: "frametiming",
       action: "setPaused",
@@ -1409,6 +1872,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   pause(): void {
     this._isPaused = true;
     this.wsController?.hold();
+    this.metadataWs?.notifyPause();
     this.sendToWorker({
       type: "frametiming",
       action: "setPaused",
@@ -1501,6 +1965,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // Send seek to server
     const desiredBuffer = this.syncController.getDesiredBuffer();
     this.wsController.seek(timeMs, desiredBuffer);
+
+    // Sync metadata socket
+    this.metadataWs?.notifySeek();
 
     // Mark seek complete after first frame (handled by worker)
     // In practice, we'd wait for first frame callback
@@ -1605,6 +2072,22 @@ export class WebCodecsPlayerImpl extends BasePlayer {
    */
   async getStats(): Promise<WebCodecsStats> {
     const syncState = this.syncController?.getState();
+    const workerPipelines = this._lastWorkerStats?.pipelines;
+
+    // Extract per-track queue sizes from worker stats
+    let videoQueueSize = 0;
+    let audioQueueSize = 0;
+    if (workerPipelines) {
+      for (const [idx, pipeStats] of Object.entries(workerPipelines)) {
+        const track = this.tracksByIndex.get(Number(idx));
+        if (track?.type === "video") {
+          videoQueueSize = pipeStats.queues.decoder;
+        } else if (track?.type === "audio") {
+          audioQueueSize = pipeStats.queues.decoder;
+        }
+      }
+    }
+
     return {
       latency: {
         buffer: syncState?.buffer.current ?? 0,
@@ -1616,8 +2099,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         playbackSpeed: syncState?.playbackSpeed ?? 1,
       },
       decoder: {
-        videoQueueSize: 0, // Will be populated from worker stats
-        audioQueueSize: 0,
+        videoQueueSize,
+        audioQueueSize,
         framesDropped: this._framesDropped,
         framesDecoded: this._framesDecoded,
       },
@@ -1625,7 +2108,45 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         bytesReceived: this._bytesReceived,
         messagesReceived: this._messagesReceived,
       },
+      pipelines: workerPipelines ?? undefined,
     };
+  }
+
+  // ============================================================================
+  // Rendering API
+  // ============================================================================
+
+  /**
+   * Capture the current video frame as a data URL.
+   * Only available in WebGL/Canvas2D render mode.
+   */
+  snapshot(type: "png" | "jpeg" | "webp" = "png", quality = 0.92): string | null {
+    if (this.webglRenderer) return this.webglRenderer.snapshot(type, quality);
+    if (this.canvasRenderer) return this.canvasRenderer.snapshot(type, quality);
+    return null;
+  }
+
+  /**
+   * Set video rotation (0, 90, 180, 270 degrees).
+   * Only available in WebGL render mode.
+   */
+  setRotation(degrees: number): void {
+    this.webglRenderer?.setRotation(degrees);
+  }
+
+  /**
+   * Set video mirror/flip.
+   * Only available in WebGL render mode.
+   */
+  setMirror(horizontal: boolean, vertical?: boolean): void {
+    this.webglRenderer?.setMirror(horizontal, vertical);
+  }
+
+  /**
+   * Whether this player instance is using WebGL/Canvas2D direct rendering.
+   */
+  get isDirectRendering(): boolean {
+    return this.useDirectRendering;
   }
 
   // ============================================================================
@@ -1704,6 +2225,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 // Export for direct use
 export { WebSocketController } from "./WebSocketController";
 export { SyncController } from "./SyncController";
+export { MetadataWebSocket, buildMetadataWsUrl } from "./MetadataWebSocket";
 export { JitterTracker, MultiTrackJitterTracker } from "./JitterBuffer";
 export { getLatencyProfile, mergeLatencyProfile, LATENCY_PROFILES } from "./LatencyProfiles";
 export { parseRawChunk, RawChunkParser } from "./RawChunkParser";

@@ -148,6 +148,14 @@ export default defineConfig({
         __dirname,
         "../packages/core/src/styles/player.css"
       ),
+      "@livepeer-frameworks/player-core/themes/light.css": path.resolve(
+        __dirname,
+        "../packages/core/src/styles/themes/light.css"
+      ),
+      "@livepeer-frameworks/player-core/themes/neutral-dark.css": path.resolve(
+        __dirname,
+        "../packages/core/src/styles/themes/neutral-dark.css"
+      ),
       "@livepeer-frameworks/player-core": path.resolve(__dirname, "../packages/core/src"),
       "@livepeer-frameworks/player-react": path.resolve(__dirname, "../packages/react/src"),
       "@livepeer-frameworks/player-svelte": path.resolve(__dirname, "../packages/svelte/src"),

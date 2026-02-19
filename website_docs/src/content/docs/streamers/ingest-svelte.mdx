@@ -1,0 +1,155 @@
+---
+title: "StreamCrafter — Svelte"
+description: "Svelte 5 integration for browser-based streaming with StreamCrafter."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Installation
+
+```bash
+npm install @livepeer-frameworks/streamcrafter-svelte
+```
+
+Import the CSS once in your app:
+
+```svelte
+<script>
+  import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
+</script>
+```
+
+## Drop-in Component
+
+The `<StreamCrafter />` component is fully self-contained.
+
+**Gateway Mode (Recommended):**
+
+```svelte
+<script lang="ts">
+  import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-svelte";
+  import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
+</script>
+
+<StreamCrafter gatewayUrl="%GATEWAY_URL%/graphql" streamKey="abc-123" initialProfile="broadcast" />
+```
+
+**Direct Mode:**
+
+```svelte
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
+```
+
+## Composable Components
+
+Pass a `children` snippet to replace the default UI with sub-components:
+
+```svelte
+<script lang="ts">
+  import {
+    StreamCrafter,
+    StudioPreview,
+    StudioMixer,
+    StudioActionBar,
+    StudioSettings,
+    StudioStatusBadge,
+  } from "@livepeer-frameworks/streamcrafter-svelte";
+  import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
+</script>
+
+<StreamCrafter gatewayUrl="%GATEWAY_URL%/graphql" streamKey="my-key">
+  {#snippet children()}
+    <div class="my-layout">
+      <StudioStatusBadge />
+      <StudioPreview />
+      <div class="sidebar">
+        <StudioMixer />
+        <StudioSettings />
+      </div>
+      <StudioActionBar />
+    </div>
+  {/snippet}
+</StreamCrafter>
+```
+
+Sub-components auto-connect to the parent `<StreamCrafter>` via Svelte 5 context.
+
+### Sub-Component Reference
+
+| Component           | Purpose                                                   |
+| ------------------- | --------------------------------------------------------- |
+| `StudioPreview`     | Video preview with live badge                             |
+| `StudioMixer`       | Source list with volume sliders, mute, and remove buttons |
+| `StudioActionBar`   | Camera, Screen Share, Settings, and Go Live buttons       |
+| `StudioSettings`    | Quality profile selector popup                            |
+| `StudioStatusBadge` | State badge (Idle, Capturing, Live, etc.)                 |
+
+## Custom UI with Stores
+
+For complete UI control, use `createStreamCrafterContextV2`:
+
+```svelte
+<script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { createStreamCrafterContextV2 } from "@livepeer-frameworks/streamcrafter-svelte";
+
+  const crafter = createStreamCrafterContextV2();
+  let videoEl: HTMLVideoElement;
+
+  onMount(() => {
+    crafter.initialize({
+      whipUrl: "%INGEST_URL%/webrtc/key",
+      profile: "broadcast",
+      reconnection: { enabled: true },
+    });
+  });
+
+  onDestroy(() => crafter.destroy());
+</script>
+
+<div>
+  <video bind:this={videoEl} autoplay muted />
+  <p>State: {crafter.state}</p>
+  <p>Sources: {crafter.sources.length}</p>
+  <button onclick={() => crafter.startCamera()}>Add Camera</button>
+  <button onclick={() => crafter.startScreenShare({ audio: true })}>Share Screen</button>
+  <button
+    onclick={() => (crafter.isStreaming ? crafter.stopStreaming() : crafter.startStreaming())}
+  >
+    {crafter.isStreaming ? "Stop" : "Go Live"}
+  </button>
+</div>
+```
+
+<Aside type="note" title="Gateway in custom UI">
+  `createStreamCrafterContextV2` accepts `whipUrl` directly. For gateway resolution in a custom UI,
+  resolve a WHIP URL first with `IngestClient` from `@livepeer-frameworks/streamcrafter-core`.
+</Aside>
+
+### Store Properties
+
+The store exposes reactive state via Svelte 5's `$state`:
+
+| Property         | Type                  | Description               |
+| ---------------- | --------------------- | ------------------------- |
+| `state`          | `IngestState`         | Current lifecycle state   |
+| `isStreaming`    | `boolean`             | Whether currently live    |
+| `isCapturing`    | `boolean`             | Whether media is captured |
+| `isReconnecting` | `boolean`             | Whether reconnecting      |
+| `sources`        | `MediaSource[]`       | Active media sources      |
+| `mediaStream`    | `MediaStream \| null` | Combined output stream    |
+| `qualityProfile` | `QualityProfile`      | Current quality settings  |
+
+### Store Methods
+
+| Method                      | Description              |
+| --------------------------- | ------------------------ |
+| `startCamera(opts?)`        | Add camera source        |
+| `startScreenShare(opts?)`   | Add screen share source  |
+| `startStreaming()`          | Go live                  |
+| `stopStreaming()`           | Stop streaming           |
+| `removeSource(id)`          | Remove a source          |
+| `setSourceVolume(id, vol)`  | Set source volume (0-1)  |
+| `setSourceMuted(id, muted)` | Mute/unmute source       |
+| `setQualityProfile(name)`   | Change quality profile   |
+| `controller`                | Direct controller access |

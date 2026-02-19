@@ -16,7 +16,7 @@ import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
 import { ABRController } from "./ABRController";
 import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
-import { QualityMonitor } from "./QualityMonitor";
+import { QualityMonitor, type PlayerProtocol } from "./QualityMonitor";
 import { MetaTrackManager } from "./MetaTrackManager";
 import {
   calculateSeekableRange,
@@ -583,6 +583,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _isTransitioning: boolean = false;
   private _errorCount: number = 0;
   private _lastErrorTime: number = 0;
+  private _retrySuppressUntil: number = 0;
+  private _playbackResumedSinceError: boolean = false;
 
   // ============================================================================
   // Stream State Tracking (Phase A4)
@@ -645,6 +647,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private metaTrackManager: MetaTrackManager | null = null;
   private _playbackQuality: PlaybackQuality | null = null;
   private bootMs: number = Date.now();
+  private playerManagerUnsubs: Array<() => void> = [];
 
   constructor(config: PlayerControllerConfig) {
     super();
@@ -652,8 +655,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.playerManager = config.playerManager || globalPlayerManager;
 
     // Forward error handling events from PlayerManager
-    this.playerManager.on("protocolSwapped", (data) => this.emit("protocolSwapped", data));
-    this.playerManager.on("playbackFailed", (data) => this.emit("playbackFailed", data));
+    this.playerManagerUnsubs.push(
+      this.playerManager.on("protocolSwapped", (data) => this.emit("protocolSwapped", data)),
+      this.playerManager.on("playbackFailed", (data) => this.emit("playbackFailed", data))
+    );
 
     // Load loop state from localStorage
     try {
@@ -707,8 +712,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       // Step 2: Start stream state polling (for live content)
       this.startStreamStatePolling();
 
-      // Step 3: Build StreamInfo and initialize player
-      this.streamInfo = this.buildStreamInfo(this.endpoints);
+      if (!this.streamInfo) {
+        this.streamInfo = this.buildStreamInfo(this.endpoints);
+      }
 
       if (!this.streamInfo || this.streamInfo.source.length === 0) {
         this.setState("error", { error: "No playable sources found" });
@@ -762,6 +768,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   destroy(): void {
     if (this.isDestroyed) return;
+
+    this.playerManagerUnsubs.forEach((fn) => fn());
+    this.playerManagerUnsubs = [];
 
     this.detach();
     this.setState("destroyed");
@@ -1531,6 +1540,74 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.currentPlayer?.selectTextTrack?.(id);
   }
 
+  /** Get available audio tracks */
+  getAudioTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    return this.currentPlayer?.getAudioTracks?.() ?? [];
+  }
+
+  /** Select an audio track by id */
+  selectAudioTrack(id: string): void {
+    this.currentPlayer?.selectAudioTrack?.(id);
+  }
+
+  /** Unified track listing: video qualities, audio tracks, and text tracks */
+  getTracks(): Array<{
+    id: string;
+    kind: "video" | "audio" | "text";
+    label: string;
+    lang?: string;
+    active: boolean;
+    bitrate?: number;
+    width?: number;
+    height?: number;
+  }> {
+    const tracks: Array<{
+      id: string;
+      kind: "video" | "audio" | "text";
+      label: string;
+      lang?: string;
+      active: boolean;
+      bitrate?: number;
+      width?: number;
+      height?: number;
+    }> = [];
+
+    for (const q of this.getQualities()) {
+      if (q.isAuto) continue;
+      tracks.push({
+        id: `video:${q.id}`,
+        kind: "video",
+        label: q.label,
+        active: q.active ?? false,
+        bitrate: q.bitrate,
+        width: q.width,
+        height: q.height,
+      });
+    }
+
+    for (const a of this.getAudioTracks()) {
+      tracks.push({
+        id: `audio:${a.id}`,
+        kind: "audio",
+        label: a.label,
+        lang: a.lang,
+        active: a.active,
+      });
+    }
+
+    for (const t of this.getTextTracks()) {
+      tracks.push({
+        id: `text:${t.id}`,
+        kind: "text",
+        label: t.label,
+        lang: t.lang,
+        active: t.active,
+      });
+    }
+
+    return tracks;
+  }
+
   private getEffectiveCurrentTime(): number {
     if (this.currentPlayer && typeof this.currentPlayer.getCurrentTime === "function") {
       const t = this.currentPlayer.getCurrentTime();
@@ -1638,6 +1715,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   /** Toggle play/pause */
   togglePlay(): void {
     const isPaused = this.currentPlayer?.isPaused?.() ?? this.videoElement?.paused ?? true;
+    this.log(`[togglePlay] isPaused=${isPaused}`);
     if (isPaused) {
       if (this.currentPlayer?.play) {
         this.currentPlayer.play().catch(() => {});
@@ -1850,6 +1928,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * Called after video metadata is loaded.
    */
   private detectAudioTracks(): void {
+    // Primary: trust MistServer stream metadata (matches ddvtech embed approach)
+    const mistHasAudio = this.streamState?.streamInfo?.hasAudio;
+    if (mistHasAudio !== undefined) {
+      this._hasAudio = mistHasAudio;
+      this.emitSeekingState();
+      return;
+    }
+
     const el = this.videoElement;
     if (!el) return;
 
@@ -1857,6 +1943,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (el.srcObject instanceof MediaStream) {
       const audioTracks = el.srcObject.getAudioTracks();
       this._hasAudio = audioTracks.length > 0;
+      this.emitSeekingState();
       return;
     }
 
@@ -1865,11 +1952,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const elWithAudio = el as HTMLVideoElement & { audioTracks?: { length: number } };
     if (elWithAudio.audioTracks && elWithAudio.audioTracks.length !== undefined) {
       this._hasAudio = elWithAudio.audioTracks.length > 0;
+      this.emitSeekingState();
       return;
     }
 
     // Default to true if we can't detect
     this._hasAudio = true;
+    this.emitSeekingState();
   }
 
   // ============================================================================
@@ -1879,17 +1968,23 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   /**
    * Attempt to clear error automatically if playback is progressing.
    * Called on timeupdate, playing, and canplay events.
+   * Mirrors ddvtech: auto-dismiss on playback resume with 2s cooldown.
    */
   private attemptClearError(): void {
     if (!this._errorText || this._errorCleared) return;
 
+    // Mark that playback has resumed since the error was shown
+    this._playbackResumedSinceError = true;
+
     const now = Date.now();
     const elapsed = now - this._errorShownAt;
 
-    if (elapsed >= PlayerController.AUTO_CLEAR_ERROR_DELAY_MS) {
+    // Clear if enough time has passed AND playback resumed
+    if (elapsed >= PlayerController.AUTO_CLEAR_ERROR_DELAY_MS && this._playbackResumedSinceError) {
       this._errorCleared = true;
       this._errorText = null;
       this._isPassiveError = false;
+      this._playbackResumedSinceError = false;
       this.log("Error auto-cleared after playback resumed");
       this.emit("errorCleared", undefined as never);
     }
@@ -1952,6 +2047,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       return;
     }
 
+    // Suppress errors during retry window to prevent popup flash-back
+    if (Date.now() < this._retrySuppressUntil) {
+      this.log(`Ignoring error during retry suppression window: ${error}`);
+      return;
+    }
+
     // Check if video is still playing (passive error scenario)
     const video = this.videoElement;
     const isVideoPlaying = video && !video.paused && video.currentTime > 0;
@@ -1970,6 +2071,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this._errorCount = 0;
         this._errorText = null;
         this._isPassiveError = false;
+        this.qualityMonitor?.resetFallbackState();
         this.log("Fallback succeeded");
         return;
       }
@@ -1980,11 +2082,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // Set error state
     this._errorShownAt = Date.now();
     this._errorCleared = false;
+    this._playbackResumedSinceError = false;
     this._errorText = error;
     this._isPassiveError = isVideoPlaying ?? false;
 
     this.setState("error", { error });
     this.emit("error", { error });
+  }
+
+  /** Check if a fallback player/source combo is available */
+  canAttemptFallback(): boolean {
+    return this.playerManager.canAttemptFallback();
   }
 
   /**
@@ -1996,6 +2104,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       return false;
     }
 
+    this._retrySuppressUntil = Date.now() + PlayerController.RETRY_SUPPRESS_MS;
     this._isTransitioning = true;
     const success = await this.playerManager.tryPlaybackFallback();
     this._isTransitioning = false;
@@ -2003,19 +2112,26 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (success) {
       this._errorCount = 0;
       this.clearError();
+      this.qualityMonitor?.resetFallbackState();
     }
 
     return success;
   }
 
-  /** Toggle fullscreen */
+  /** Toggle fullscreen (with screen orientation lock on mobile) */
   async toggleFullscreen(): Promise<void> {
     if (typeof document === "undefined") return;
 
     if (document.fullscreenElement) {
+      try {
+        (screen.orientation as any).unlock?.();
+      } catch {}
       await document.exitFullscreen().catch(() => {});
     } else if (this.container) {
       await this.container.requestFullscreen().catch(() => {});
+      try {
+        await (screen.orientation as any).lock?.("landscape");
+      } catch {}
     }
   }
 
@@ -2046,9 +2162,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   // Advanced Control
   // ============================================================================
 
+  private static readonly RETRY_SUPPRESS_MS = 2000;
+
   /** Force a retry of the current playback */
   async retry(): Promise<void> {
     if (!this.container || !this.streamInfo) return;
+    this._retrySuppressUntil = Date.now() + PlayerController.RETRY_SUPPRESS_MS;
 
     try {
       this.playerManager.destroy();
@@ -2077,6 +2196,26 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   /** Get current latency (for live streams) */
   async getLatency(): Promise<unknown> {
     return this.currentPlayer?.getLatency?.();
+  }
+
+  /** Capture a screenshot as a data URL */
+  snapshot(type?: "png" | "jpeg" | "webp", quality?: number): string | null {
+    return this.currentPlayer?.snapshot?.(type, quality) ?? null;
+  }
+
+  /** Set video rotation (0, 90, 180, 270 degrees) */
+  setRotation(degrees: number): void {
+    this.currentPlayer?.setRotation?.(degrees);
+  }
+
+  /** Set mirror/flip */
+  setMirror(horizontal: boolean): void {
+    this.currentPlayer?.setMirror?.(horizontal);
+  }
+
+  /** Whether the current player uses direct rendering (WebGL/Canvas) */
+  isDirectRendering(): boolean {
+    return this.currentPlayer?.isDirectRendering ?? false;
   }
 
   // ============================================================================
@@ -2110,6 +2249,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   async reload(): Promise<void> {
     if (!this.container || this.isDestroyed) return;
+    this._retrySuppressUntil = Date.now() + PlayerController.RETRY_SUPPRESS_MS;
 
     const container = this.container;
     this.detach();
@@ -2267,7 +2407,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     try {
       let baseUrl = mistUrl;
       while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
-      const jsonUrl = `${baseUrl}/json_${encodeURIComponent(contentId)}.js`;
+      const jsonUrl = `${baseUrl}/json_${encodeURIComponent(contentId)}.js?metaeverywhere=1&inclzero=1`;
       this.log(`[resolveFromMistServer] Fetching ${jsonUrl}`);
 
       const response = await fetch(jsonUrl, { cache: "no-store" });
@@ -2287,47 +2427,47 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         throw new Error(data.error);
       }
 
-      const sources: Array<{ url: string; type: string }> = Array.isArray(data.source)
+      const rawSources: Array<{ url: string; type: string }> = Array.isArray(data.source)
         ? data.source
         : [];
-      if (sources.length === 0) {
+      if (rawSources.length === 0) {
         throw new Error("No sources available from MistServer");
       }
 
-      // Build outputs map from all sources
-      const outputs: Record<string, { protocol: string; url: string }> = {};
-      for (const source of sources) {
-        const protocol = this.mapMistTypeToProtocol(source.type);
-        if (!outputs[protocol]) {
-          outputs[protocol] = { protocol, url: source.url };
-        }
-      }
-
-      // Select primary source (prefer HLS/DASH over WebSocket-based)
-      const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
-      const primarySource =
-        httpSources.length > 0 ? this.selectBestSource(httpSources) : sources[0];
-
-      const primary = {
-        nodeId: `mist-${contentId}`,
-        protocol: this.mapMistTypeToProtocol(primarySource.type),
-        url: primarySource.url,
-        baseUrl: mistUrl,
-        outputs,
-      };
-
-      this.endpoints = { primary, fallbacks: [] };
-      this.setMetadataSeed(null);
-
-      // Parse track metadata from MistServer response
+      let tracks: StreamTrack[] = [];
       if (data.meta?.tracks && typeof data.meta.tracks === "object") {
-        const tracks = this.parseMistTracks(data.meta.tracks);
+        tracks = this.parseMistTracks(data.meta.tracks);
         this.mistTracks = tracks.length > 0 ? tracks : null;
         this.log(`[resolveFromMistServer] Parsed ${tracks.length} tracks from MistServer`);
       }
+      if (tracks.length === 0) {
+        tracks = [{ type: "video", codec: "H264", codecstring: "avc1.42E01E" }];
+      }
+
+      this.streamInfo = {
+        source: rawSources as StreamSource[],
+        meta: { tracks },
+        type: data.type === "vod" ? "vod" : "live",
+      };
+
+      const httpSources = rawSources.filter((s) => !s.url.startsWith("ws://"));
+      const primarySource =
+        httpSources.length > 0 ? this.selectBestSource(httpSources) : rawSources[0];
+
+      this.endpoints = {
+        primary: {
+          nodeId: `mist-${contentId}`,
+          protocol: this.mapMistTypeToProtocol(primarySource.type),
+          url: primarySource.url,
+          baseUrl: mistUrl,
+          outputs: {},
+        },
+        fallbacks: [],
+      };
+      this.setMetadataSeed(null);
 
       this.setState("gateway_ready", { gatewayStatus: "ready" });
-      this.log(`[resolveFromMistServer] Resolved: ${primary.protocol} @ ${primary.url}`);
+      this.log(`[resolveFromMistServer] ${rawSources.length} sources, ${tracks.length} tracks`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "MistServer resolution failed";
       this.setState("gateway_error", { gatewayStatus: "error", error: message });
@@ -2497,7 +2637,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       }
     });
     this.cleanupFns.push(unsubState);
-    this.cleanupFns.push(() => this.streamStateClient?.destroy());
+    this.cleanupFns.push(() => {
+      this.streamStateClient?.destroy();
+      this.streamStateClient = null;
+    });
 
     this.streamStateClient.start();
   }
@@ -2528,45 +2671,42 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       const mistUrl = this.config.mistUrl;
       const contentId = this.config.contentId;
 
-      // Build outputs map from all sources
-      const outputs: Record<string, { protocol: string; url: string }> = {};
-      for (const source of sources) {
-        const protocol = this.mapMistTypeToProtocol(source.type);
-        if (!outputs[protocol]) {
-          outputs[protocol] = { protocol, url: source.url };
-        }
+      let tracks: StreamTrack[] = [];
+      if (streamInfo.meta?.tracks && typeof streamInfo.meta.tracks === "object") {
+        tracks = this.parseMistTracks(streamInfo.meta.tracks);
+        this.mistTracks = tracks.length > 0 ? tracks : null;
+        this.log(`[initializeLateFromStreamState] Parsed ${tracks.length} tracks`);
+      }
+      if (tracks.length === 0) {
+        tracks = [{ type: "video", codec: "H264", codecstring: "avc1.42E01E" }];
       }
 
-      // Select primary source (prefer HLS/DASH over WebSocket-based)
+      this.streamInfo = {
+        source: sources as StreamSource[],
+        meta: { tracks },
+        type: streamInfo.type === "vod" ? "vod" : "live",
+      };
+
       const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
       const primarySource =
         httpSources.length > 0 ? this.selectBestSource(httpSources) : sources[0];
 
-      const primary = {
-        nodeId: `mist-${contentId}`,
-        protocol: this.mapMistTypeToProtocol(primarySource.type),
-        url: primarySource.url,
-        baseUrl: mistUrl,
-        outputs,
+      this.endpoints = {
+        primary: {
+          nodeId: `mist-${contentId}`,
+          protocol: this.mapMistTypeToProtocol(primarySource.type),
+          url: primarySource.url,
+          baseUrl: mistUrl,
+          outputs: {},
+        },
+        fallbacks: [],
       };
-
-      this.endpoints = { primary, fallbacks: [] };
       this.setMetadataSeed(this.endpoints.metadata ?? null);
-
-      // Parse track metadata from stream info
-      if (streamInfo.meta?.tracks && typeof streamInfo.meta.tracks === "object") {
-        const tracks = this.parseMistTracks(streamInfo.meta.tracks);
-        this.mistTracks = tracks.length > 0 ? tracks : null;
-        this.log(`[initializeLateFromStreamState] Parsed ${tracks.length} tracks`);
-      }
 
       this.setState("gateway_ready", { gatewayStatus: "ready" });
       this.log(
-        `[initializeLateFromStreamState] Built endpoints from stream state: ${primary.protocol}`
+        `[initializeLateFromStreamState] ${sources.length} sources, ${tracks.length} tracks`
       );
-
-      // Build StreamInfo and initialize player
-      this.streamInfo = this.buildStreamInfo(this.endpoints);
 
       if (!this.streamInfo || this.streamInfo.source.length === 0) {
         this.setState("error", { error: "No playable sources found" });
@@ -2781,6 +2921,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     el.loop = this._isLoopEnabled;
 
     const onWaiting = () => {
+      if (this.shouldSuppressVideoEvents()) return;
       this._isBuffering = true;
       // Start stall timer if not already started
       if (this._stallStartTime === 0) {
@@ -2815,11 +2956,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.setState("paused");
     };
     const onEnded = () => this.setState("ended");
-    const onError = () => {
-      const message = el.error ? el.error.message || "Playback error" : "Playback error";
-      // Use setPassiveError for smart error handling with fallback support
-      this.setPassiveError(message);
-    };
     const onTimeUpdate = () => {
       this.emit("timeUpdate", {
         currentTime: this.getEffectiveCurrentTime(),
@@ -2853,6 +2989,15 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this._supportsPlaybackRate = !this._isWebRTC;
       // Initial seeking state calculation
       this.updateSeekingState();
+      // Safari: audioTracks may be populated after loadedmetadata for HLS streams
+      const elWithAudio = el as HTMLVideoElement & {
+        audioTracks?: { addEventListener?: (type: string, fn: () => void) => void };
+      };
+      if (elWithAudio.audioTracks?.addEventListener) {
+        elWithAudio.audioTracks.addEventListener("addtrack", () => {
+          this.detectAudioTracks();
+        });
+      }
     };
 
     // Fullscreen change handler
@@ -2875,7 +3020,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     el.addEventListener("canplay", onCanPlay);
     el.addEventListener("pause", onPause);
     el.addEventListener("ended", onEnded);
-    el.addEventListener("error", onError);
     el.addEventListener("timeupdate", onTimeUpdate);
     el.addEventListener("durationchange", onDurationChange);
     el.addEventListener("progress", onProgress);
@@ -2891,7 +3035,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       el.removeEventListener("canplay", onCanPlay);
       el.removeEventListener("pause", onPause);
       el.removeEventListener("ended", onEnded);
-      el.removeEventListener("error", onError);
       el.removeEventListener("timeupdate", onTimeUpdate);
       el.removeEventListener("durationchange", onDurationChange);
       el.removeEventListener("progress", onProgress);
@@ -2970,7 +3113,30 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private initializeQualityMonitor(): void {
     if (!this.videoElement) return;
 
-    this.qualityMonitor = new QualityMonitor({ sampleInterval: 1000 });
+    // Map player shortname to QualityMonitor protocol for threshold selection
+    const shortname = this._currentPlayerInfo?.shortname ?? "unknown";
+    const protocolMap: Record<string, PlayerProtocol> = {
+      hlsjs: "hls",
+      videojs: "hls",
+      dashjs: "dash",
+      "mist-webrtc": "webrtc",
+      mews: "webrtc",
+      native: "html5",
+      webcodecs: "html5",
+      "mist-legacy": "html5",
+    };
+    const protocol = protocolMap[shortname] ?? "unknown";
+
+    this.qualityMonitor = new QualityMonitor({
+      sampleInterval: 1000,
+      protocol,
+      onFallbackRequest: ({ score }) => {
+        if (this.isDestroyed || this._isTransitioning) return;
+        const pct = Math.round(score * 100);
+        this.log(`[QualityMonitor] Poor playback (${pct}%)`);
+        this.setPassiveError(`Poor playback quality (${pct}%)`);
+      },
+    });
     this.qualityMonitor.start(this.videoElement);
 
     // Subscribe to quality updates

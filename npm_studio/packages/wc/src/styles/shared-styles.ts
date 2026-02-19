@@ -20,26 +20,32 @@ export const sharedStyles = css`
      Root Container (with scoped CSS variables)
      ============================================= */
     .fw-sc-root {
-      /* Tokyo Night color tokens - scoped to component */
-      --tn-bg-dark: 240 15% 10%; /* #16161e - Darkest surface */
-      --tn-bg: 235 19% 13%; /* #1a1b26 - Main background */
-      --tn-bg-highlight: 229 24% 19%; /* #24283b - Elevated surfaces */
+      /* Semantic color tokens — defaults are Tokyo Night.
+       Override via StudioThemeManager.applyStudioTheme() or data-theme attribute. */
+      --fw-sc-surface-deep: 240 15% 10%;
+      --fw-sc-surface: 235 19% 13%;
+      --fw-sc-surface-raised: 229 24% 19%;
+      --fw-sc-surface-active: 232 27% 25%;
 
-      --tn-fg: 229 73% 86%; /* #c0caf5 - Primary text */
-      --tn-fg-dark: 229 35% 75%; /* #a9b1d6 - Secondary text */
-      --tn-fg-gutter: 229 24% 31%; /* #3b4261 - Borders, seams */
-      --tn-comment: 229 23% 44%; /* #565f89 - Comments, muted */
+      --fw-sc-text: 229 73% 86%;
+      --fw-sc-text-bright: 220 13% 91%;
+      --fw-sc-text-muted: 229 35% 75%;
+      --fw-sc-text-faint: 229 23% 44%;
+      --fw-sc-border: 229 24% 31%;
 
-      --tn-blue: 225 86% 70%; /* #7aa2f7 - Primary actions */
-      --tn-green: 89 51% 61%; /* #9ece6a - Success, live */
-      --tn-red: 349 89% 72%; /* #f7768e - Destructive, errors */
-      --tn-yellow: 36 66% 64%; /* #e0af68 - Warnings */
-      --tn-purple: 264 85% 74%; /* #bb9af7 - Special */
-      --tn-cyan: 197 95% 74%; /* #7dcfff - Info */
+      --fw-sc-accent: 225 86% 70%;
+      --fw-sc-accent-secondary: 264 85% 74%;
+      --fw-sc-success: 89 51% 61%;
+      --fw-sc-danger: 349 89% 72%;
+      --fw-sc-warning: 36 66% 64%;
+      --fw-sc-info: 197 95% 74%;
+      --fw-sc-live: 89 51% 61%;
+      --fw-sc-shadow-color: 235 30% 5%;
+      --fw-sc-on-accent: 235 19% 13%;
 
       /* Component styles */
-      background: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      background: hsl(var(--fw-sc-surface-deep));
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       font-family:
         system-ui,
         -apple-system,
@@ -49,10 +55,10 @@ export const sharedStyles = css`
         sans-serif;
       font-size: 14px;
       line-height: 1.5;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
       /* Allow root to take full height of parent and manage its children */
       height: 100%;
-      min-height: 500px;
+      min-height: 0;
       display: flex;
       flex-direction: column;
 
@@ -121,9 +127,10 @@ export const sharedStyles = css`
       .fw-sc-mixer {
         width: 320px; /* Slightly wider for better ergonomics */
         flex-shrink: 0;
-        border-left: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+        min-height: 0;
+        border-left: 1px solid hsl(var(--fw-sc-border) / 0.3);
         border-bottom: none;
-        background: hsl(var(--tn-bg));
+        background: hsl(var(--fw-sc-surface));
         display: flex;
         flex-direction: column;
         max-height: none;
@@ -159,14 +166,14 @@ export const sharedStyles = css`
         align-items: center;
         gap: 0.5rem;
         padding: 0.375rem 0.5rem;
-        background: hsl(var(--tn-bg-highlight) / 0.1);
-        border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+        background: hsl(var(--fw-sc-surface-raised) / 0.1);
+        border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
         transition: background 0.2s;
         height: 48px;
       }
 
       .fw-sc-mixer .fw-sc-source:hover {
-        background: hsl(var(--tn-bg-highlight) / 0.3);
+        background: hsl(var(--fw-sc-surface-raised) / 0.3);
       }
 
       /* Icon */
@@ -217,8 +224,8 @@ export const sharedStyles = css`
 
     /* Advanced Panel styling - matches Player DevModePanel */
     .fw-sc-advanced-panel {
-      background: hsl(var(--tn-bg));
-      border-left: 1px solid hsl(var(--tn-fg-gutter) / 0.5);
+      background: hsl(var(--fw-sc-surface));
+      border-left: 1px solid hsl(var(--fw-sc-border) / 0.5);
       width: 280px;
       flex-shrink: 0;
       display: flex;
@@ -238,8 +245,8 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: space-between;
       padding: 0.5rem 1rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-      background: hsl(var(--tn-bg-highlight) / 0.5);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
+      background: hsl(var(--fw-sc-surface-raised) / 0.5);
     }
 
     .fw-sc-header-title {
@@ -247,7 +254,7 @@ export const sharedStyles = css`
       text-transform: uppercase;
       letter-spacing: 0.05em;
       font-size: 0.75rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
     }
 
     .fw-sc-header-status {
@@ -273,24 +280,24 @@ export const sharedStyles = css`
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       cursor: pointer;
       transition: all 0.15s ease;
     }
 
     .fw-sc-header-btn:hover {
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
     }
 
     .fw-sc-header-btn--active {
-      background: hsl(var(--tn-blue) / 0.2);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent) / 0.2);
+      color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-header-btn--active:hover {
-      background: hsl(var(--tn-blue) / 0.3);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent) / 0.3);
+      color: hsl(var(--fw-sc-accent));
     }
 
     /* =============================================
@@ -320,7 +327,7 @@ export const sharedStyles = css`
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       gap: 0.5rem;
     }
 
@@ -341,7 +348,7 @@ export const sharedStyles = css`
       align-items: center;
       gap: 0.375rem;
       padding: 0.25rem 0.5rem;
-      background: hsl(var(--tn-red));
+      background: hsl(var(--fw-sc-danger));
       color: white;
       font-size: 0.7rem;
       font-weight: 700;
@@ -378,15 +385,15 @@ export const sharedStyles = css`
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: hsl(var(--tn-bg-dark) / 0.9);
+      background: hsl(var(--fw-sc-surface-deep) / 0.9);
       gap: 1rem;
     }
 
     .fw-sc-status-spinner {
       width: 32px;
       height: 32px;
-      border: 3px solid hsl(var(--tn-fg-gutter) / 0.3);
-      border-top-color: hsl(var(--tn-blue));
+      border: 3px solid hsl(var(--fw-sc-border) / 0.3);
+      border-top-color: hsl(var(--fw-sc-accent));
       border-radius: 50%;
       animation: fw-sc-spin 1s linear infinite;
     }
@@ -399,7 +406,7 @@ export const sharedStyles = css`
 
     .fw-sc-status-text {
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
     }
 
     /* =============================================
@@ -407,7 +414,7 @@ export const sharedStyles = css`
    ============================================= */
     .fw-sc-vu-meter {
       height: 8px;
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-sc-surface-raised));
       position: relative;
       overflow: hidden;
     }
@@ -416,10 +423,10 @@ export const sharedStyles = css`
       height: 100%;
       background: linear-gradient(
         to right,
-        hsl(var(--tn-green)) 0%,
-        hsl(var(--tn-green)) 60%,
-        hsl(var(--tn-yellow)) 80%,
-        hsl(var(--tn-red)) 100%
+        hsl(var(--fw-sc-success)) 0%,
+        hsl(var(--fw-sc-success)) 60%,
+        hsl(var(--fw-sc-warning)) 80%,
+        hsl(var(--fw-sc-danger)) 100%
       );
       transition: width 50ms ease-out;
     }
@@ -429,7 +436,7 @@ export const sharedStyles = css`
       top: 0;
       height: 100%;
       width: 2px;
-      background: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-text));
       transition: left 50ms ease-out;
     }
 
@@ -437,17 +444,17 @@ export const sharedStyles = css`
     .fw-sc-vu-meter--vertical {
       width: 4px;
       height: 100%;
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-sc-surface-raised));
     }
 
     .fw-sc-vu-meter--vertical .fw-sc-vu-meter-fill {
       width: 100%;
       background: linear-gradient(
         to top,
-        hsl(var(--tn-green)) 0%,
-        hsl(var(--tn-green)) 60%,
-        hsl(var(--tn-yellow)) 80%,
-        hsl(var(--tn-red)) 100%
+        hsl(var(--fw-sc-success)) 0%,
+        hsl(var(--fw-sc-success)) 60%,
+        hsl(var(--fw-sc-warning)) 80%,
+        hsl(var(--fw-sc-danger)) 100%
       );
       transition: height 50ms ease-out;
     }
@@ -456,7 +463,7 @@ export const sharedStyles = css`
    Section (Collapsible Areas)
    ============================================= */
     .fw-sc-section {
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
     }
 
     .fw-sc-section:last-child {
@@ -472,14 +479,14 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       cursor: pointer;
       user-select: none;
-      background: hsl(var(--tn-bg-highlight) / 0.3);
+      background: hsl(var(--fw-sc-surface-raised) / 0.3);
     }
 
     .fw-sc-section-header:hover {
-      background: hsl(var(--tn-bg-highlight) / 0.5);
+      background: hsl(var(--fw-sc-surface-raised) / 0.5);
     }
 
     .fw-sc-section-header svg {
@@ -513,7 +520,7 @@ export const sharedStyles = css`
       align-items: center;
       padding: 0.5rem 1rem;
       gap: 0.5rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.2);
     }
 
     .fw-sc-source:last-child {
@@ -522,7 +529,7 @@ export const sharedStyles = css`
 
     .fw-sc-source--hidden {
       opacity: 0.5;
-      background: hsl(var(--tn-bg-dark) / 0.3);
+      background: hsl(var(--fw-sc-surface-deep) / 0.3);
     }
 
     .fw-sc-source-icon {
@@ -531,7 +538,7 @@ export const sharedStyles = css`
       display: flex;
       align-items: center;
       justify-content: center;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-source-info {
@@ -556,14 +563,14 @@ export const sharedStyles = css`
       text-transform: uppercase;
       letter-spacing: 0.05em;
       padding: 0.125rem 0.375rem;
-      background: hsl(var(--tn-green) / 0.2);
-      color: hsl(var(--tn-green));
+      background: hsl(var(--fw-sc-success) / 0.2);
+      color: hsl(var(--fw-sc-success));
       border-radius: 2px;
     }
 
     .fw-sc-source-type {
       font-size: 0.7rem;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       text-transform: uppercase;
     }
 
@@ -588,7 +595,7 @@ export const sharedStyles = css`
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       cursor: pointer;
       transition:
         background 0.15s,
@@ -596,8 +603,8 @@ export const sharedStyles = css`
     }
 
     .fw-sc-icon-btn:hover {
-      background: hsl(var(--tn-bg-highlight) / 0.5);
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised) / 0.5);
+      color: hsl(var(--fw-sc-text));
     }
 
     .fw-sc-icon-btn:disabled {
@@ -606,29 +613,29 @@ export const sharedStyles = css`
     }
 
     .fw-sc-icon-btn--active {
-      color: hsl(var(--tn-blue));
+      color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-icon-btn--inactive {
       opacity: 0.45;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-icon-btn--primary {
-      color: hsl(var(--tn-green));
+      color: hsl(var(--fw-sc-success));
     }
 
     .fw-sc-icon-btn--primary:disabled {
-      color: hsl(var(--tn-green));
+      color: hsl(var(--fw-sc-success));
       opacity: 1;
     }
 
     .fw-sc-icon-btn--destructive:hover {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-sc-danger));
     }
 
     .fw-sc-icon-btn--muted {
-      color: hsl(var(--tn-comment) / 0.5);
+      color: hsl(var(--fw-sc-text-faint) / 0.5);
     }
 
     .fw-sc-icon-btn svg {
@@ -654,22 +661,22 @@ export const sharedStyles = css`
 
     .fw-sc-setting-label {
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
     }
 
     .fw-sc-select {
       padding: 0.25rem 0.5rem;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       border-radius: 4px;
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
       font-size: 0.875rem;
       cursor: pointer;
     }
 
     .fw-sc-select:focus {
       outline: none;
-      border-color: hsl(var(--tn-blue));
+      border-color: hsl(var(--fw-sc-accent));
     }
 
     /* =============================================
@@ -677,7 +684,7 @@ export const sharedStyles = css`
    ============================================= */
     .fw-sc-actions {
       display: flex;
-      border-top: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-top: 1px solid hsl(var(--fw-sc-border) / 0.3);
     }
 
     .fw-sc-actions button {
@@ -685,12 +692,12 @@ export const sharedStyles = css`
       border: none;
       border-radius: 0;
       background: transparent;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
       font-size: 0.875rem;
       font-weight: 500;
       cursor: pointer;
       transition: background 0.15s;
-      border-right: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-right: 1px solid hsl(var(--fw-sc-border) / 0.3);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -702,11 +709,11 @@ export const sharedStyles = css`
     }
 
     .fw-sc-actions button:hover:not(:disabled) {
-      background: hsl(var(--tn-bg-highlight) / 0.5);
+      background: hsl(var(--fw-sc-surface-raised) / 0.5);
     }
 
     .fw-sc-actions button:disabled {
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       cursor: not-allowed;
     }
 
@@ -721,8 +728,8 @@ export const sharedStyles = css`
     }
 
     .fw-sc-action-secondary--active {
-      background: hsl(var(--tn-blue) / 0.2) !important;
-      color: hsl(var(--tn-blue)) !important;
+      background: hsl(var(--fw-sc-accent) / 0.2) !important;
+      color: hsl(var(--fw-sc-accent)) !important;
     }
 
     /* Settings icon rotation on hover */
@@ -739,26 +746,26 @@ export const sharedStyles = css`
     .fw-sc-action-primary {
       flex: 1;
       font-weight: 600 !important;
-      background: hsl(var(--tn-red)) !important;
+      background: hsl(var(--fw-sc-danger)) !important;
       color: white !important;
     }
 
     .fw-sc-action-primary:hover:not(:disabled) {
-      background: hsl(var(--tn-red) / 0.8) !important;
+      background: hsl(var(--fw-sc-danger) / 0.8) !important;
     }
 
     .fw-sc-action-primary:disabled {
-      background: hsl(var(--tn-bg-highlight)) !important;
-      color: hsl(var(--tn-comment)) !important;
+      background: hsl(var(--fw-sc-surface-raised)) !important;
+      color: hsl(var(--fw-sc-text-faint)) !important;
     }
 
     /* Stop action (when streaming) */
     .fw-sc-action-stop {
-      background: hsl(var(--tn-bg-highlight)) !important;
+      background: hsl(var(--fw-sc-surface-raised)) !important;
     }
 
     .fw-sc-action-stop:hover:not(:disabled) {
-      background: hsl(var(--tn-red) / 0.3) !important;
+      background: hsl(var(--fw-sc-danger) / 0.3) !important;
     }
 
     /* =============================================
@@ -777,28 +784,28 @@ export const sharedStyles = css`
     }
 
     .fw-sc-badge--idle {
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-comment));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-badge--ready {
-      background: hsl(var(--tn-blue) / 0.2);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent) / 0.2);
+      color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-badge--live {
-      background: hsl(var(--tn-red));
+      background: hsl(var(--fw-sc-danger));
       color: white;
     }
 
     .fw-sc-badge--connecting {
-      background: hsl(var(--tn-yellow) / 0.2);
-      color: hsl(var(--tn-yellow));
+      background: hsl(var(--fw-sc-warning) / 0.2);
+      color: hsl(var(--fw-sc-warning));
     }
 
     .fw-sc-badge--error {
-      background: hsl(var(--tn-red) / 0.2);
-      color: hsl(var(--tn-red));
+      background: hsl(var(--fw-sc-danger) / 0.2);
+      color: hsl(var(--fw-sc-danger));
     }
 
     /* =============================================
@@ -807,7 +814,7 @@ export const sharedStyles = css`
     .fw-sc-volume-label {
       font-size: 0.65rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
       min-width: 32px;
       text-align: right;
       font-variant-numeric: tabular-nums;
@@ -818,7 +825,7 @@ export const sharedStyles = css`
       height: 6px;
       -webkit-appearance: none;
       appearance: none;
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-sc-surface-raised));
       border-radius: 3px;
       cursor: pointer;
       position: relative;
@@ -837,8 +844,8 @@ export const sharedStyles = css`
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      background: hsl(var(--tn-fg));
-      border: 2px solid hsl(var(--tn-bg)); /* Ring effect */
+      background: hsl(var(--fw-sc-text));
+      border: 2px solid hsl(var(--fw-sc-surface)); /* Ring effect */
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
       cursor: pointer;
       margin-top: -4px; /* Center thumb on 6px track */
@@ -854,8 +861,8 @@ export const sharedStyles = css`
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      background: hsl(var(--tn-fg));
-      border: 2px solid hsl(var(--tn-bg));
+      background: hsl(var(--fw-sc-text));
+      border: 2px solid hsl(var(--fw-sc-surface));
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
       cursor: pointer;
       transition: transform 0.1s;
@@ -868,13 +875,13 @@ export const sharedStyles = css`
 
     /* Boosted state (>100%) - Add a glow */
     .fw-sc-volume-slider--boosted::-webkit-slider-thumb {
-      background: hsl(var(--tn-yellow));
-      box-shadow: 0 0 5px hsl(var(--tn-yellow) / 0.5);
+      background: hsl(var(--fw-sc-warning));
+      box-shadow: 0 0 5px hsl(var(--fw-sc-warning) / 0.5);
     }
 
     .fw-sc-volume-slider--boosted::-moz-range-thumb {
-      background: hsl(var(--tn-yellow));
-      box-shadow: 0 0 5px hsl(var(--tn-yellow) / 0.5);
+      background: hsl(var(--fw-sc-warning));
+      box-shadow: 0 0 5px hsl(var(--fw-sc-warning) / 0.5);
     }
 
     /* =============================================
@@ -882,19 +889,19 @@ export const sharedStyles = css`
    ============================================= */
     .fw-sc-error {
       padding: 1rem;
-      background: hsl(var(--tn-red) / 0.1);
-      border-left: 3px solid hsl(var(--tn-red));
+      background: hsl(var(--fw-sc-danger) / 0.1);
+      border-left: 3px solid hsl(var(--fw-sc-danger));
     }
 
     .fw-sc-error-title {
       font-weight: 600;
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-sc-danger));
       margin-bottom: 0.25rem;
     }
 
     .fw-sc-error-message {
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
     }
 
     /* =============================================
@@ -924,15 +931,15 @@ export const sharedStyles = css`
       top: calc(100% + 4px);
       right: 0;
       min-width: 200px;
-      background: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      background: hsl(var(--fw-sc-surface-deep));
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
       z-index: 50;
       overflow: hidden;
     }
 
     .fw-sc-dropdown-section {
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.2);
     }
 
     .fw-sc-dropdown-section:last-child {
@@ -945,7 +952,7 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-dropdown-options {
@@ -964,7 +971,7 @@ export const sharedStyles = css`
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
       cursor: pointer;
       text-align: left;
       width: 100%;
@@ -972,7 +979,7 @@ export const sharedStyles = css`
     }
 
     .fw-sc-dropdown-option:hover:not(:disabled) {
-      background: hsl(var(--tn-bg-highlight) / 0.5);
+      background: hsl(var(--fw-sc-surface-raised) / 0.5);
     }
 
     .fw-sc-dropdown-option:disabled {
@@ -981,11 +988,11 @@ export const sharedStyles = css`
     }
 
     .fw-sc-dropdown-option--active {
-      background: hsl(var(--tn-blue) / 0.2);
+      background: hsl(var(--fw-sc-accent) / 0.2);
     }
 
     .fw-sc-dropdown-option--active:hover:not(:disabled) {
-      background: hsl(var(--tn-blue) / 0.3);
+      background: hsl(var(--fw-sc-accent) / 0.3);
     }
 
     .fw-sc-dropdown-option-label {
@@ -995,7 +1002,7 @@ export const sharedStyles = css`
 
     .fw-sc-dropdown-option-desc {
       font-size: 0.7rem;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-dropdown-info {
@@ -1008,12 +1015,12 @@ export const sharedStyles = css`
       align-items: center;
       padding: 0.25rem 0;
       font-size: 0.75rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
     }
 
     .fw-sc-dropdown-info-value {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
     }
 
     /* =============================================
@@ -1022,8 +1029,8 @@ export const sharedStyles = css`
     .fw-sc-context-menu {
       position: fixed;
       min-width: 160px;
-      background: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      background: hsl(var(--fw-sc-surface-deep));
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
       z-index: 100;
       overflow: hidden;
@@ -1035,7 +1042,7 @@ export const sharedStyles = css`
       gap: 0.5rem;
       padding: 0.5rem 0.75rem;
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
       cursor: pointer;
       background: transparent;
       border: none;
@@ -1047,22 +1054,22 @@ export const sharedStyles = css`
     }
 
     .fw-sc-context-menu-item:hover {
-      background: hsl(var(--tn-bg-highlight) / 0.7);
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised) / 0.7);
+      color: hsl(var(--fw-sc-text));
     }
 
     .fw-sc-context-menu-item--destructive {
-      color: hsl(var(--tn-red));
+      color: hsl(var(--fw-sc-danger));
     }
 
     .fw-sc-context-menu-item--destructive:hover {
-      background: hsl(var(--tn-red) / 0.15);
-      color: hsl(var(--tn-red));
+      background: hsl(var(--fw-sc-danger) / 0.15);
+      color: hsl(var(--fw-sc-danger));
     }
 
     .fw-sc-context-menu-separator {
       height: 1px;
-      background: hsl(var(--tn-fg-gutter) / 0.3);
+      background: hsl(var(--fw-sc-border) / 0.3);
       margin: 0.25rem 0;
     }
 
@@ -1072,7 +1079,7 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     /* =============================================
@@ -1081,7 +1088,7 @@ export const sharedStyles = css`
     .fw-sc-compositor-controls {
       display: flex;
       flex-direction: column;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
     }
 
     .fw-sc-compositor-controls--disabled,
@@ -1095,16 +1102,16 @@ export const sharedStyles = css`
 
     .fw-sc-compositor-enable p {
       font-size: 0.875rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
       margin-bottom: 0.75rem;
     }
 
     .fw-sc-compositor-enable-btn {
       padding: 0.5rem 1rem;
-      border: 1px solid hsl(var(--tn-blue));
+      border: 1px solid hsl(var(--fw-sc-accent));
       border-radius: 4px;
-      background: hsl(var(--tn-blue) / 0.1);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent) / 0.1);
+      color: hsl(var(--fw-sc-accent));
       font-size: 0.875rem;
       font-weight: 500;
       cursor: pointer;
@@ -1112,12 +1119,12 @@ export const sharedStyles = css`
     }
 
     .fw-sc-compositor-enable-btn:hover {
-      background: hsl(var(--tn-blue) / 0.2);
+      background: hsl(var(--fw-sc-accent) / 0.2);
     }
 
     .fw-sc-compositor-loading {
       text-align: center;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       font-size: 0.875rem;
     }
 
@@ -1126,8 +1133,8 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: space-between;
       padding: 0.5rem 1rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
-      background: hsl(var(--tn-bg-highlight) / 0.3);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.2);
+      background: hsl(var(--fw-sc-surface-raised) / 0.3);
     }
 
     .fw-sc-compositor-info {
@@ -1141,17 +1148,17 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-compositor-renderer {
       font-size: 0.7rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
     }
 
     .fw-sc-compositor-stats-inline {
       font-size: 0.65rem;
-      color: hsl(var(--tn-fg-gutter));
+      color: hsl(var(--fw-sc-border));
       font-family:
         ui-monospace,
         SFMono-Regular,
@@ -1172,14 +1179,14 @@ export const sharedStyles = css`
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .fw-sc-compositor-disable-btn:hover {
-      background: hsl(var(--tn-red) / 0.2);
-      color: hsl(var(--tn-red));
+      background: hsl(var(--fw-sc-danger) / 0.2);
+      color: hsl(var(--fw-sc-danger));
     }
 
     .fw-sc-compositor-stats {
@@ -1189,12 +1196,12 @@ export const sharedStyles = css`
       padding: 0.25rem 1rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 0.7rem;
-      color: hsl(var(--tn-fg-dark));
-      background: hsl(var(--tn-bg-dark) / 0.5);
+      color: hsl(var(--fw-sc-text-muted));
+      background: hsl(var(--fw-sc-surface-deep) / 0.5);
     }
 
     .fw-sc-stat {
-      color: hsl(var(--tn-cyan));
+      color: hsl(var(--fw-sc-info));
     }
 
     /* =============================================
@@ -1209,15 +1216,15 @@ export const sharedStyles = css`
     .fw-sc-scaling-mode-select {
       padding: 0.25rem 0.5rem;
       font-size: 0.7rem;
-      background: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      background: hsl(var(--fw-sc-surface-deep));
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       border-radius: 4px;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
       cursor: pointer;
     }
 
     .fw-sc-scaling-mode-select:hover {
-      border-color: hsl(var(--tn-fg-gutter) / 0.5);
+      border-color: hsl(var(--fw-sc-border) / 0.5);
     }
 
     /* =============================================
@@ -1225,7 +1232,7 @@ export const sharedStyles = css`
    ============================================= */
     .fw-sc-compositor-sources {
       padding: 0.5rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.2);
     }
 
     .fw-sc-section-label {
@@ -1233,7 +1240,7 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       margin-bottom: 0.5rem;
       padding-left: 0.5rem;
     }
@@ -1249,7 +1256,7 @@ export const sharedStyles = css`
       align-items: center;
       gap: 0.5rem;
       padding: 0.375rem 0.5rem;
-      background: hsl(var(--tn-bg-highlight) / 0.3);
+      background: hsl(var(--fw-sc-surface-raised) / 0.3);
       border-radius: 4px;
       transition: opacity 0.15s;
     }
@@ -1268,26 +1275,26 @@ export const sharedStyles = css`
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .fw-sc-visibility-btn:hover {
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
     }
 
     .fw-sc-source-icon {
       display: flex;
       align-items: center;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-source-label {
       flex: 1;
       font-size: 0.8rem;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1298,7 +1305,7 @@ export const sharedStyles = css`
    ============================================= */
     .fw-sc-layout-presets {
       padding: 0.5rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.2);
     }
 
     .fw-sc-layout-grid {
@@ -1313,23 +1320,23 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: center;
       padding: 0;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       border-radius: 4px;
-      background: hsl(var(--tn-bg-highlight) / 0.3);
-      color: hsl(var(--tn-fg-dark));
+      background: hsl(var(--fw-sc-surface-raised) / 0.3);
+      color: hsl(var(--fw-sc-text-muted));
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .fw-sc-layout-btn:hover {
-      background: hsl(var(--tn-bg-highlight));
-      border-color: hsl(var(--tn-fg-gutter) / 0.5);
+      background: hsl(var(--fw-sc-surface-raised));
+      border-color: hsl(var(--fw-sc-border) / 0.5);
     }
 
     .fw-sc-layout-btn--active {
-      background: hsl(var(--tn-blue) / 0.2);
-      border-color: hsl(var(--tn-blue) / 0.5);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent) / 0.2);
+      border-color: hsl(var(--fw-sc-accent) / 0.5);
+      color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-layout-btn--disabled,
@@ -1340,8 +1347,8 @@ export const sharedStyles = css`
 
     .fw-sc-layout-btn--disabled:hover,
     .fw-sc-layout-btn:disabled:hover {
-      background: hsl(var(--tn-bg-highlight) / 0.3);
-      border-color: hsl(var(--tn-fg-gutter) / 0.3);
+      background: hsl(var(--fw-sc-surface-raised) / 0.3);
+      border-color: hsl(var(--fw-sc-border) / 0.3);
     }
 
     /* Legacy layout preset buttons (for backwards compat) */
@@ -1350,7 +1357,7 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-layout-preset-buttons {
@@ -1365,24 +1372,24 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: center;
       padding: 0;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       border-radius: 4px;
-      background: hsl(var(--tn-bg-highlight) / 0.3);
-      color: hsl(var(--tn-fg-dark));
+      background: hsl(var(--fw-sc-surface-raised) / 0.3);
+      color: hsl(var(--fw-sc-text-muted));
       font-size: 0.75rem;
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .fw-sc-layout-preset-btn:hover {
-      background: hsl(var(--tn-bg-highlight));
-      border-color: hsl(var(--tn-fg-gutter) / 0.5);
+      background: hsl(var(--fw-sc-surface-raised));
+      border-color: hsl(var(--fw-sc-border) / 0.5);
     }
 
     .fw-sc-layout-preset-btn--active {
-      background: hsl(var(--tn-blue) / 0.2);
-      border-color: hsl(var(--tn-blue) / 0.5);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent) / 0.2);
+      border-color: hsl(var(--fw-sc-accent) / 0.5);
+      color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-layout-preset-btn--disabled,
@@ -1394,14 +1401,14 @@ export const sharedStyles = css`
     .fw-sc-layout-preset-btn--disabled:hover,
     .fw-sc-layout-preset-btn:disabled:hover {
       background: transparent;
-      border-color: hsl(var(--tn-fg-gutter) / 0.3);
+      border-color: hsl(var(--fw-sc-border) / 0.3);
     }
 
     /* =============================================
    Scene Switcher
    ============================================= */
     .fw-sc-scene-switcher {
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.2);
     }
 
     .fw-sc-scene-switcher-header {
@@ -1416,7 +1423,7 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-transition-controls {
@@ -1427,38 +1434,38 @@ export const sharedStyles = css`
 
     .fw-sc-transition-select {
       padding: 0.25rem 0.5rem;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       border-radius: 4px;
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
       font-size: 0.75rem;
       cursor: pointer;
     }
 
     .fw-sc-transition-select:focus {
       outline: none;
-      border-color: hsl(var(--tn-blue));
+      border-color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-transition-duration {
       width: 60px;
       padding: 0.25rem 0.5rem;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       border-radius: 4px;
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
       font-size: 0.75rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
 
     .fw-sc-transition-duration:focus {
       outline: none;
-      border-color: hsl(var(--tn-blue));
+      border-color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-transition-unit {
       font-size: 0.7rem;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-scene-list {
@@ -1475,21 +1482,21 @@ export const sharedStyles = css`
       align-items: flex-start;
       padding: 0.5rem 0.75rem;
       min-width: 100px;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       border-radius: 4px;
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .fw-sc-scene-item:hover {
-      border-color: hsl(var(--tn-fg-gutter) / 0.5);
+      border-color: hsl(var(--fw-sc-border) / 0.5);
     }
 
     .fw-sc-scene-item--active {
-      border-color: hsl(var(--tn-green));
-      box-shadow: 0 0 0 1px hsl(var(--tn-green) / 0.3);
+      border-color: hsl(var(--fw-sc-success));
+      box-shadow: 0 0 0 1px hsl(var(--fw-sc-success) / 0.3);
     }
 
     .fw-sc-scene-item--transitioning {
@@ -1504,7 +1511,7 @@ export const sharedStyles = css`
 
     .fw-sc-scene-layer-count {
       font-size: 0.7rem;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-scene-delete {
@@ -1520,7 +1527,7 @@ export const sharedStyles = css`
       border: none;
       border-radius: 2px;
       background: transparent;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       font-size: 14px;
       cursor: pointer;
       opacity: 0;
@@ -1532,8 +1539,8 @@ export const sharedStyles = css`
     }
 
     .fw-sc-scene-delete:hover {
-      background: hsl(var(--tn-red) / 0.2);
-      color: hsl(var(--tn-red));
+      background: hsl(var(--fw-sc-danger) / 0.2);
+      color: hsl(var(--fw-sc-danger));
     }
 
     .fw-sc-scene-add {
@@ -1542,19 +1549,19 @@ export const sharedStyles = css`
       justify-content: center;
       min-width: 40px;
       padding: 0.5rem;
-      border: 1px dashed hsl(var(--tn-fg-gutter) / 0.5);
+      border: 1px dashed hsl(var(--fw-sc-border) / 0.5);
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       font-size: 1.25rem;
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .fw-sc-scene-add:hover {
-      border-color: hsl(var(--tn-blue));
-      color: hsl(var(--tn-blue));
-      background: hsl(var(--tn-blue) / 0.1);
+      border-color: hsl(var(--fw-sc-accent));
+      color: hsl(var(--fw-sc-accent));
+      background: hsl(var(--fw-sc-accent) / 0.1);
     }
 
     /* New Scene Input */
@@ -1562,29 +1569,29 @@ export const sharedStyles = css`
       display: flex;
       gap: 0.5rem;
       padding: 0.5rem 1rem;
-      background: hsl(var(--tn-bg-dark) / 0.5);
+      background: hsl(var(--fw-sc-surface-deep) / 0.5);
     }
 
     .fw-sc-new-scene-input input {
       flex: 1;
       padding: 0.375rem 0.5rem;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       border-radius: 4px;
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
       font-size: 0.875rem;
     }
 
     .fw-sc-new-scene-input input:focus {
       outline: none;
-      border-color: hsl(var(--tn-blue));
+      border-color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-new-scene-input button {
       padding: 0.375rem 0.75rem;
       border: none;
       border-radius: 4px;
-      background: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent));
       color: white;
       font-size: 0.75rem;
       font-weight: 500;
@@ -1593,23 +1600,23 @@ export const sharedStyles = css`
     }
 
     .fw-sc-new-scene-input button:hover {
-      background: hsl(var(--tn-blue) / 0.8);
+      background: hsl(var(--fw-sc-accent) / 0.8);
     }
 
     .fw-sc-new-scene-input button:last-child {
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg-dark));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text-muted));
     }
 
     .fw-sc-new-scene-input button:last-child:hover {
-      background: hsl(var(--tn-bg-highlight) / 0.8);
+      background: hsl(var(--fw-sc-surface-raised) / 0.8);
     }
 
     /* =============================================
    Layer List
    ============================================= */
     .fw-sc-layer-list {
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.2);
     }
 
     .fw-sc-layer-list-header {
@@ -1617,7 +1624,7 @@ export const sharedStyles = css`
       align-items: center;
       justify-content: space-between;
       padding: 0.5rem 1rem;
-      background: hsl(var(--tn-bg-highlight) / 0.3);
+      background: hsl(var(--fw-sc-surface-raised) / 0.3);
     }
 
     .fw-sc-layer-list-title {
@@ -1625,13 +1632,13 @@ export const sharedStyles = css`
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
     }
 
     .fw-sc-layer-count {
       font-size: 0.7rem;
-      color: hsl(var(--tn-fg-dark));
-      background: hsl(var(--tn-bg-highlight));
+      color: hsl(var(--fw-sc-text-muted));
+      background: hsl(var(--fw-sc-surface-raised));
       padding: 0.125rem 0.375rem;
       border-radius: 8px;
     }
@@ -1644,7 +1651,7 @@ export const sharedStyles = css`
     .fw-sc-layer-empty {
       padding: 1rem;
       text-align: center;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       font-size: 0.875rem;
     }
 
@@ -1653,7 +1660,7 @@ export const sharedStyles = css`
       align-items: center;
       gap: 0.5rem;
       padding: 0.5rem 1rem;
-      border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.15);
+      border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.15);
       cursor: pointer;
       transition: background 0.15s;
     }
@@ -1663,15 +1670,15 @@ export const sharedStyles = css`
     }
 
     .fw-sc-layer-item:hover {
-      background: hsl(var(--tn-bg-highlight) / 0.3);
+      background: hsl(var(--fw-sc-surface-raised) / 0.3);
     }
 
     .fw-sc-layer-item--selected {
-      background: hsl(var(--tn-blue) / 0.1);
+      background: hsl(var(--fw-sc-accent) / 0.1);
     }
 
     .fw-sc-layer-item--selected:hover {
-      background: hsl(var(--tn-blue) / 0.15);
+      background: hsl(var(--fw-sc-accent) / 0.15);
     }
 
     .fw-sc-layer-item--dragging {
@@ -1679,7 +1686,7 @@ export const sharedStyles = css`
     }
 
     .fw-sc-layer-item--drag-over {
-      border-top: 2px solid hsl(var(--tn-blue));
+      border-top: 2px solid hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-layer-item--hidden {
@@ -1696,17 +1703,17 @@ export const sharedStyles = css`
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .fw-sc-layer-visibility:hover {
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-sc-surface-raised));
     }
 
     .fw-sc-layer-visibility--visible {
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
     }
 
     .fw-sc-layer-icon {
@@ -1733,7 +1740,7 @@ export const sharedStyles = css`
       height: 4px;
       -webkit-appearance: none;
       appearance: none;
-      background: hsl(var(--tn-bg-highlight));
+      background: hsl(var(--fw-sc-surface-raised));
       border-radius: 2px;
       cursor: pointer;
     }
@@ -1743,7 +1750,7 @@ export const sharedStyles = css`
       width: 12px;
       height: 12px;
       border-radius: 50%;
-      background: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-text));
       cursor: pointer;
     }
 
@@ -1751,14 +1758,14 @@ export const sharedStyles = css`
       width: 12px;
       height: 12px;
       border-radius: 50%;
-      background: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-text));
       border: none;
       cursor: pointer;
     }
 
     .fw-sc-layer-opacity span {
       font-size: 0.7rem;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       min-width: 32px;
     }
@@ -1779,15 +1786,15 @@ export const sharedStyles = css`
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       font-size: 0.875rem;
       cursor: pointer;
       transition: all 0.15s;
     }
 
     .fw-sc-layer-btn:hover:not(:disabled) {
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
     }
 
     .fw-sc-layer-btn:disabled {
@@ -1796,13 +1803,13 @@ export const sharedStyles = css`
     }
 
     .fw-sc-layer-btn--active {
-      background: hsl(var(--tn-blue) / 0.2);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent) / 0.2);
+      color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-layer-btn--danger:hover:not(:disabled) {
-      background: hsl(var(--tn-red) / 0.2);
-      color: hsl(var(--tn-red));
+      background: hsl(var(--fw-sc-danger) / 0.2);
+      color: hsl(var(--fw-sc-danger));
     }
 
     /* ============================================================================
@@ -1833,10 +1840,10 @@ export const sharedStyles = css`
       align-items: center;
       gap: 2px;
       padding: 4px 6px;
-      background: hsl(var(--tn-bg-dark) / 0.9);
+      background: hsl(var(--fw-sc-surface-deep) / 0.9);
       backdrop-filter: blur(8px);
       border-radius: 6px;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     }
 
@@ -1857,36 +1864,36 @@ export const sharedStyles = css`
       border: none;
       border-radius: 4px;
       background: transparent;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
       cursor: pointer;
       transition: all 0.15s ease;
     }
 
     .fw-sc-layout-icon:hover {
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
     }
 
     .fw-sc-layout-icon--active {
-      background: hsl(var(--tn-blue) / 0.2);
-      color: hsl(var(--tn-blue));
+      background: hsl(var(--fw-sc-accent) / 0.2);
+      color: hsl(var(--fw-sc-accent));
     }
 
     .fw-sc-layout-icon--active:hover {
-      background: hsl(var(--tn-blue) / 0.3);
+      background: hsl(var(--fw-sc-accent) / 0.3);
     }
 
     .fw-sc-layout-separator {
       width: 1px;
       height: 14px;
-      background: hsl(var(--tn-fg-gutter) / 0.5);
+      background: hsl(var(--fw-sc-border) / 0.5);
       margin: 0 4px;
     }
 
     .fw-sc-layout-stats {
       font-size: 0.65rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: hsl(var(--tn-fg-dark));
+      color: hsl(var(--fw-sc-text-muted));
       white-space: nowrap;
       padding: 0 2px;
     }
@@ -1897,10 +1904,10 @@ export const sharedStyles = css`
       align-items: center;
       gap: 4px;
       padding: 4px 6px;
-      background: hsl(var(--tn-bg-dark) / 0.9);
+      background: hsl(var(--fw-sc-surface-deep) / 0.9);
       backdrop-filter: blur(8px);
       border-radius: 6px;
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+      border: 1px solid hsl(var(--fw-sc-border) / 0.3);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     }
 
@@ -1911,20 +1918,20 @@ export const sharedStyles = css`
       padding: 3px 8px;
       border: none;
       border-radius: 4px;
-      background: hsl(var(--tn-bg-highlight));
-      color: hsl(var(--tn-fg));
+      background: hsl(var(--fw-sc-surface-raised));
+      color: hsl(var(--fw-sc-text));
       font-size: 0.7rem;
       cursor: pointer;
       transition: all 0.15s ease;
     }
 
     .fw-sc-source-chip:hover {
-      background: hsl(var(--tn-bg-highlight) / 1.5);
+      background: hsl(var(--fw-sc-surface-raised) / 1.5);
     }
 
     .fw-sc-source-chip--hidden {
-      background: hsl(var(--tn-bg-dark));
-      color: hsl(var(--tn-comment));
+      background: hsl(var(--fw-sc-surface-deep));
+      color: hsl(var(--fw-sc-text-faint));
       opacity: 0.6;
     }
 
@@ -1958,7 +1965,7 @@ export const sharedStyles = css`
       font-weight: 500;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      color: hsl(var(--tn-comment));
+      color: hsl(var(--fw-sc-text-faint));
       padding: 0 4px;
     }
 
@@ -1977,12 +1984,12 @@ export const sharedStyles = css`
       left: 50%;
       transform: translateX(-50%);
       padding: 4px 8px;
-      background: hsl(var(--tn-bg-dark));
-      border: 1px solid hsl(var(--tn-fg-gutter) / 0.5);
+      background: hsl(var(--fw-sc-surface-deep));
+      border: 1px solid hsl(var(--fw-sc-border) / 0.5);
       border-radius: 4px;
       font-size: 0.7rem;
       font-weight: 500;
-      color: hsl(var(--tn-fg));
+      color: hsl(var(--fw-sc-text));
       white-space: nowrap;
       z-index: 100;
       pointer-events: none;
@@ -1996,7 +2003,7 @@ export const sharedStyles = css`
       left: 50%;
       transform: translateX(-50%);
       border: 5px solid transparent;
-      border-top-color: hsl(var(--tn-fg-gutter) / 0.5);
+      border-top-color: hsl(var(--fw-sc-border) / 0.5);
     }
 
     .fw-sc-tooltip::before {
@@ -2006,7 +2013,7 @@ export const sharedStyles = css`
       left: 50%;
       transform: translateX(-50%);
       border: 4px solid transparent;
-      border-top-color: hsl(var(--tn-bg-dark));
+      border-top-color: hsl(var(--fw-sc-surface-deep));
       margin-top: -1px;
     }
   } /* End @layer fw-streamcrafter */

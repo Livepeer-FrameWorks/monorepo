@@ -1,10 +1,18 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { closeIcon } from "../icons/index.js";
+import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
 
 @customElement("fw-toast")
 export class FwToast extends LitElement {
   @property({ type: String }) message = "";
+  @property({ attribute: false }) translator?: TranslateFn;
+
+  private _defaultTranslator: TranslateFn = createTranslator({ locale: "en" });
+
+  private get _t(): TranslateFn {
+    return this.translator ?? this._defaultTranslator;
+  }
 
   static styles = css`
     :host {
@@ -53,7 +61,9 @@ export class FwToast extends LitElement {
     return html`
       <div class="toast">
         <span>${this.message}</span>
-        <button type="button" @click=${this._dismiss} aria-label="Dismiss">${closeIcon()}</button>
+        <button type="button" @click=${this._dismiss} aria-label=${this._t("dismiss")}>
+          ${closeIcon()}
+        </button>
       </div>
     `;
   }

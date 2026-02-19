@@ -76,6 +76,9 @@ interface LayoutAnimationState {
 }
 let layoutAnimation: LayoutAnimationState | null = null;
 
+// Direct frame output (bypasses captureStream when WebCodecs is active)
+let directFrameOutput = false;
+
 // Composition loop state
 let compositionLoopId: number | null = null;
 let isRunning = false;
@@ -131,6 +134,11 @@ self.onmessage = async (e: MessageEvent<CompositorMainToWorker>) => {
 
       case "applyFilter":
         handleApplyFilter(message.layerId, message.filter);
+        break;
+
+      case "setDirectFrameOutput":
+        directFrameOutput = message.enabled;
+        console.log("[CompositorWorker] Direct frame output:", message.enabled);
         break;
 
       case "destroy":
@@ -567,6 +575,8 @@ function renderCurrentScene(): void {
   const sceneToRender = interpolatedScene || currentScene;
 
   renderer.renderScene(sceneToRender, frames);
+
+  emitDirectFrame();
 }
 
 function renderTransition(): void {
@@ -577,6 +587,8 @@ function renderTransition(): void {
 
   if (state) {
     renderer.renderTransition(fromSceneSnapshot, toSceneSnapshot, state.progress, state.type);
+
+    emitDirectFrame();
 
     // Check if transition completed
     if (!state.active) {
@@ -606,6 +618,22 @@ function completeTransition(): void {
     type: "transitionComplete",
     sceneId: currentScene?.id ?? "",
   });
+}
+
+// ============================================================================
+// Direct Frame Output
+// ============================================================================
+
+function emitDirectFrame(): void {
+  if (!directFrameOutput || !canvas) return;
+
+  try {
+    // Create a VideoFrame from the OffscreenCanvas (timestamp in microseconds)
+    const frame = new VideoFrame(canvas, { timestamp: Math.round(performance.now() * 1000) });
+    (self as unknown as Worker).postMessage({ type: "compositorFrame", frame }, [frame]);
+  } catch {
+    // VideoFrame creation can fail if canvas is detached or empty
+  }
 }
 
 // ============================================================================

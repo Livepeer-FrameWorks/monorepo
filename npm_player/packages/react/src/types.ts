@@ -1,6 +1,7 @@
 /**
  * React-specific types for FrameWorks player
  */
+import type { ReactNode } from "react";
 import type React from "react";
 import type {
   PlayerOptions,
@@ -26,6 +27,8 @@ export interface PlayerProps {
   options?: Partial<PlayerOptions>;
   /** Detailed state updates for UI (booting, gateway, connecting, playing, etc.) */
   onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
+  /** Custom children replace the default PlayerControls. Use composable controls (PlayButton, VolumeControl, etc.) inside. */
+  children?: ReactNode;
 }
 
 export interface MistPlayerProps {

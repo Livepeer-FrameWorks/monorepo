@@ -28,9 +28,14 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 	mock.ExpectQuery("SELECT kind, COALESCE\\(cluster_id, ''\\), expires_at").
 		WithArgs("token-1").
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "cluster_id", "expires_at"}).AddRow("service", "cluster-1", expiresAt))
+	// ensureServiceExists mini-transaction
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
+	mock.ExpectCommit()
+	// back to main flow
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
 		WithArgs("bridge", "cluster-1", "http", int32(18000)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
@@ -113,9 +118,14 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 	mock.ExpectQuery("SELECT kind, COALESCE\\(cluster_id, ''\\), expires_at").
 		WithArgs("token-1").
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "cluster_id", "expires_at"}).AddRow("service", "cluster-1", expiresAt))
+	// ensureServiceExists mini-transaction
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
+	mock.ExpectCommit()
+	// back to main flow
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
 		WithArgs("bridge", "cluster-1", "http", int32(18000)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
@@ -220,9 +230,14 @@ func TestBootstrapServiceFormatsIPv6AdvertiseAddr(t *testing.T) {
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
+	// ensureServiceExists mini-transaction
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
+	mock.ExpectCommit()
+	// back to main flow
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
 		WithArgs("bridge", "cluster-1", "http", int32(443)).
 		WillReturnError(sql.ErrNoRows)
@@ -264,9 +279,14 @@ func TestBootstrapServiceReRegistrationClearsStoppedAt(t *testing.T) {
 
 	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	// ensureServiceExists mini-transaction
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
+	mock.ExpectCommit()
+	// back to main flow
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
 		WithArgs("bridge", "cluster-1", "http", int32(18000)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
@@ -307,9 +327,14 @@ func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
 
 	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	// ensureServiceExists mini-transaction
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("foghorn").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
 		WithArgs("foghorn").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("foghorn"))
+	mock.ExpectCommit()
+	// back to main flow
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
 		WithArgs("foghorn", "cluster-1", "http", int32(9000)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-2", "inst-foghorn-1234"))

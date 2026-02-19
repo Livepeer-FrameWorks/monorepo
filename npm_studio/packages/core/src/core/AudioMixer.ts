@@ -6,6 +6,23 @@
 
 import { TypedEventEmitter } from "./EventEmitter";
 import type { AudioMixerConfig, AudioMixerEvents, AudioSourceOptions } from "../types";
+import { HighPassFilter, type HighPassFilterOptions } from "../audio/HighPassFilter";
+import { NoiseGate, type NoiseGateOptions } from "../audio/NoiseGate";
+import { ThreeBandEQ } from "../audio/ThreeBandEQ";
+import { DeEsser, type DeEsserOptions } from "../audio/DeEsser";
+import { SidechainDucker, type SidechainDuckerOptions } from "../audio/SidechainDucker";
+
+export interface AudioProcessingConfig {
+  highPass?: { enabled: boolean } & HighPassFilterOptions;
+  noiseGate?: { enabled: boolean } & NoiseGateOptions;
+  eq?: { enabled: boolean; low?: number; mid?: number; high?: number };
+  deEsser?: { enabled: boolean } & DeEsserOptions;
+  sidechain?: {
+    enabled: boolean;
+    keySourceId?: string;
+    targetSourceIds?: string[];
+  } & SidechainDuckerOptions;
+}
 
 interface AudioSourceNode {
   id: string;
@@ -26,6 +43,21 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
   private sources: Map<string, AudioSourceNode> = new Map();
   private config: Required<AudioMixerConfig>;
   private outputStream: MediaStream | null = null;
+
+  // Audio processing chain (inserted between masterGain and compressor)
+  private highPassFilter: HighPassFilter | null = null;
+  private noiseGate: NoiseGate | null = null;
+  private eq: ThreeBandEQ | null = null;
+  private deEsser: DeEsser | null = null;
+  private sidechainDucker: SidechainDucker | null = null;
+  private sidechainKeySourceId: string | null = null;
+
+  // Monitor mix (parallel output for local monitoring)
+  private monitorDestination: MediaStreamAudioDestinationNode | null = null;
+  private monitorGain: GainNode | null = null;
+  private monitorStream: MediaStream | null = null;
+  private monitorTapPoint: "pre-processing" | "post-processing" = "post-processing";
+
   private levelMonitoringActive = false;
   private peakLevel = 0;
   private peakDecayRate = 0.95; // Peak meter decay
@@ -288,6 +320,254 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
     return this.masterGain?.gain.value ?? 1;
   }
 
+  // ==========================================================================
+  // Audio processing
+  // ==========================================================================
+
+  /**
+   * Configure audio processing nodes.
+   * Nodes are created on demand and inserted between masterGain and compressor.
+   * Chain: masterGain → [highPass] → [noiseGate] → [eq] → compressor → analyzer → limiter → dest
+   */
+  setAudioProcessing(config: AudioProcessingConfig): void {
+    if (!this.audioContext || !this.masterGain || !this.compressor) return;
+
+    // High-pass filter
+    if (config.highPass !== undefined) {
+      if (config.highPass.enabled && !this.highPassFilter) {
+        this.highPassFilter = new HighPassFilter(this.audioContext, config.highPass);
+      } else if (!config.highPass.enabled && this.highPassFilter) {
+        this.highPassFilter.destroy();
+        this.highPassFilter = null;
+      } else if (this.highPassFilter && config.highPass.frequency !== undefined) {
+        this.highPassFilter.setFrequency(config.highPass.frequency);
+      }
+    }
+
+    // Noise gate
+    if (config.noiseGate !== undefined) {
+      if (config.noiseGate.enabled && !this.noiseGate) {
+        this.noiseGate = new NoiseGate(this.audioContext, config.noiseGate);
+      } else if (!config.noiseGate.enabled && this.noiseGate) {
+        this.noiseGate.destroy();
+        this.noiseGate = null;
+      } else if (this.noiseGate) {
+        if (config.noiseGate.threshold !== undefined)
+          this.noiseGate.setThreshold(config.noiseGate.threshold);
+        if (config.noiseGate.hold !== undefined) this.noiseGate.setHold(config.noiseGate.hold);
+        if (config.noiseGate.attack !== undefined)
+          this.noiseGate.setAttack(config.noiseGate.attack);
+        if (config.noiseGate.release !== undefined)
+          this.noiseGate.setRelease(config.noiseGate.release);
+      }
+    }
+
+    // EQ
+    if (config.eq !== undefined) {
+      if (config.eq.enabled && !this.eq) {
+        this.eq = new ThreeBandEQ(this.audioContext);
+        if (config.eq.low !== undefined) this.eq.setLow(config.eq.low);
+        if (config.eq.mid !== undefined) this.eq.setMid(config.eq.mid);
+        if (config.eq.high !== undefined) this.eq.setHigh(config.eq.high);
+      } else if (!config.eq.enabled && this.eq) {
+        this.eq.destroy();
+        this.eq = null;
+      } else if (this.eq) {
+        if (config.eq.low !== undefined) this.eq.setLow(config.eq.low);
+        if (config.eq.mid !== undefined) this.eq.setMid(config.eq.mid);
+        if (config.eq.high !== undefined) this.eq.setHigh(config.eq.high);
+      }
+    }
+
+    // De-esser
+    if (config.deEsser !== undefined) {
+      if (config.deEsser.enabled && !this.deEsser) {
+        this.deEsser = new DeEsser(this.audioContext, config.deEsser);
+      } else if (!config.deEsser.enabled && this.deEsser) {
+        this.deEsser.destroy();
+        this.deEsser = null;
+      } else if (this.deEsser) {
+        if (config.deEsser.frequency !== undefined)
+          this.deEsser.setFrequency(config.deEsser.frequency);
+        if (config.deEsser.threshold !== undefined)
+          this.deEsser.setThreshold(config.deEsser.threshold);
+      }
+    }
+
+    // Sidechain ducking
+    if (config.sidechain !== undefined) {
+      if (config.sidechain.enabled && !this.sidechainDucker) {
+        this.sidechainDucker = new SidechainDucker(this.audioContext, config.sidechain);
+        this.sidechainKeySourceId = config.sidechain.keySourceId ?? null;
+
+        // Wire key source
+        if (this.sidechainKeySourceId) {
+          const keySrc = this.sources.get(this.sidechainKeySourceId);
+          if (keySrc) {
+            keySrc.panNode.connect(this.sidechainDucker.keyInput);
+          }
+        }
+
+        // Wire targets
+        const targetIds = config.sidechain.targetSourceIds ?? [];
+        for (const tId of targetIds) {
+          const target = this.sources.get(tId);
+          if (target) {
+            this.sidechainDucker.addTarget(tId, target.gainNode);
+          }
+        }
+      } else if (!config.sidechain.enabled && this.sidechainDucker) {
+        this.sidechainDucker.destroy();
+        this.sidechainDucker = null;
+        this.sidechainKeySourceId = null;
+      }
+    }
+
+    // Rebuild the processing chain
+    this.rebuildProcessingChain();
+  }
+
+  /**
+   * Get the noise gate state (for UI indicators).
+   */
+  getNoiseGateState(): { enabled: boolean; isOpen: boolean } {
+    if (!this.noiseGate) return { enabled: false, isOpen: false };
+    return { enabled: true, isOpen: this.noiseGate.isOpen };
+  }
+
+  /**
+   * Get the high-pass filter state.
+   */
+  getHighPassFilter(): HighPassFilter | null {
+    return this.highPassFilter;
+  }
+
+  /**
+   * Get the EQ instance.
+   */
+  getEQ(): ThreeBandEQ | null {
+    return this.eq;
+  }
+
+  /**
+   * Rebuild the processing chain after adding/removing nodes.
+   * Disconnects existing chain and reconnects in the correct order.
+   */
+  private rebuildProcessingChain(): void {
+    if (
+      !this.masterGain ||
+      !this.compressor ||
+      !this.analyzer ||
+      !this.limiter ||
+      !this.destination
+    )
+      return;
+
+    // Disconnect the existing chain from masterGain forward
+    this.masterGain.disconnect();
+    if (this.highPassFilter) this.highPassFilter.output.disconnect();
+    if (this.noiseGate) this.noiseGate.output.disconnect();
+    if (this.eq) this.eq.output.disconnect();
+    if (this.deEsser) this.deEsser.output.disconnect();
+    this.compressor.disconnect();
+    this.analyzer.disconnect();
+
+    // Build: masterGain → [highPass] → [noiseGate] → [eq] → [deEsser] → compressor → analyzer → limiter → dest
+    let lastNode: AudioNode = this.masterGain;
+
+    // Pre-processing monitor tap
+    if (this.monitorGain && this.monitorDestination && this.monitorTapPoint === "pre-processing") {
+      lastNode.connect(this.monitorGain);
+      this.monitorGain.connect(this.monitorDestination);
+    }
+
+    if (this.highPassFilter) {
+      lastNode.connect(this.highPassFilter.input);
+      lastNode = this.highPassFilter.output;
+    }
+
+    if (this.noiseGate) {
+      lastNode.connect(this.noiseGate.input);
+      lastNode = this.noiseGate.output;
+    }
+
+    if (this.eq) {
+      lastNode.connect(this.eq.input);
+      lastNode = this.eq.output;
+    }
+
+    if (this.deEsser) {
+      lastNode.connect(this.deEsser.input);
+      lastNode = this.deEsser.output;
+    }
+
+    lastNode.connect(this.compressor);
+    this.compressor.connect(this.analyzer);
+    this.analyzer.connect(this.limiter);
+    this.limiter.connect(this.destination);
+
+    // Post-processing monitor tap (default: after compressor, before limiter)
+    if (this.monitorGain && this.monitorDestination && this.monitorTapPoint === "post-processing") {
+      this.compressor.connect(this.monitorGain);
+      this.monitorGain.connect(this.monitorDestination);
+    }
+  }
+
+  // ==========================================================================
+  // Monitor mix
+  // ==========================================================================
+
+  /**
+   * Enable a separate monitor mix output for local monitoring.
+   * Returns a MediaStream that can be routed to a local audio element.
+   */
+  enableMonitorMix(
+    tapPoint: "pre-processing" | "post-processing" = "post-processing"
+  ): MediaStream | null {
+    if (!this.audioContext) return null;
+    if (this.monitorDestination) return this.monitorStream;
+
+    this.monitorDestination = this.audioContext.createMediaStreamDestination();
+    this.monitorGain = this.audioContext.createGain();
+    this.monitorStream = this.monitorDestination.stream;
+    this.monitorTapPoint = tapPoint;
+
+    this.rebuildProcessingChain();
+    return this.monitorStream;
+  }
+
+  /**
+   * Disable the monitor mix output.
+   */
+  disableMonitorMix(): void {
+    if (this.monitorGain) {
+      this.monitorGain.disconnect();
+      this.monitorGain = null;
+    }
+    this.monitorDestination = null;
+    this.monitorStream = null;
+    this.rebuildProcessingChain();
+  }
+
+  /**
+   * Set the monitor mix volume (0-2).
+   */
+  setMonitorVolume(volume: number): void {
+    if (!this.monitorGain) return;
+    this.monitorGain.gain.setTargetAtTime(
+      Math.max(0, Math.min(2, volume)),
+      this.audioContext?.currentTime ?? 0,
+      0.01
+    );
+  }
+
+  /**
+   * Get the monitor mix MediaStream.
+   */
+  getMonitorStream(): MediaStream | null {
+    return this.monitorStream;
+  }
+
   /**
    * Get the mixed output stream
    */
@@ -455,6 +735,29 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
     for (const id of this.sources.keys()) {
       this.removeSource(id);
     }
+
+    // Disconnect audio processing nodes
+    if (this.highPassFilter) {
+      this.highPassFilter.destroy();
+      this.highPassFilter = null;
+    }
+    if (this.noiseGate) {
+      this.noiseGate.destroy();
+      this.noiseGate = null;
+    }
+    if (this.eq) {
+      this.eq.destroy();
+      this.eq = null;
+    }
+    if (this.deEsser) {
+      this.deEsser.destroy();
+      this.deEsser = null;
+    }
+    if (this.sidechainDucker) {
+      this.sidechainDucker.destroy();
+      this.sidechainDucker = null;
+    }
+    this.disableMonitorMix();
 
     // Disconnect processing nodes
     if (this.compressor) {

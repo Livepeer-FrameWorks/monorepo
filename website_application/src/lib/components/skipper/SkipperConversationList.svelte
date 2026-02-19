@@ -3,11 +3,10 @@
   import { getIconComponent } from "$lib/iconUtils";
 
   export interface SkipperConversationSummary {
-    ID: string;
-    Title: string;
-    MessageCount: number;
-    UpdatedAt: string;
-    LastMessageAt?: string | null;
+    id: string;
+    title: string;
+    createdAt: string;
+    updatedAt: string;
   }
 
   interface Props {
@@ -41,8 +40,8 @@
 
   function startRename(convo: SkipperConversationSummary, event: MouseEvent) {
     event.stopPropagation();
-    editingId = convo.ID;
-    editTitle = convo.Title || "";
+    editingId = convo.id;
+    editTitle = convo.title || "";
     menuOpenId = null;
   }
 
@@ -107,23 +106,23 @@
       </div>
     {:else}
       <div class="space-y-0.5 p-2">
-        {#each conversations as convo (convo.ID)}
+        {#each conversations as convo (convo.id)}
           <div class="group relative">
             <button
               type="button"
-              class="w-full rounded-lg px-3 py-2.5 text-left transition {convo.ID === activeId
+              class="w-full rounded-lg px-3 py-2.5 text-left transition {convo.id === activeId
                 ? 'bg-primary/10 text-foreground'
                 : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}"
-              onclick={() => onSelect?.(convo.ID)}
+              onclick={() => onSelect?.(convo.id)}
             >
               <div class="flex items-start gap-2">
                 <MessageCircleIcon
-                  class="mt-0.5 h-3.5 w-3.5 shrink-0 {convo.ID === activeId
+                  class="mt-0.5 h-3.5 w-3.5 shrink-0 {convo.id === activeId
                     ? 'text-primary'
                     : 'text-muted-foreground/50'}"
                 />
                 <div class="min-w-0 flex-1">
-                  {#if editingId === convo.ID}
+                  {#if editingId === convo.id}
                     <!-- svelte-ignore a11y_autofocus -->
                     <div class="flex items-center gap-1">
                       <input
@@ -153,41 +152,37 @@
                     </div>
                   {:else}
                     <p class="truncate pr-6 text-sm font-medium">
-                      {convo.Title || "New conversation"}
+                      {convo.title || "New conversation"}
                     </p>
                   {/if}
                   <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span>
-                      {#if (convo.LastMessageAt || convo.UpdatedAt) && !isNaN(new Date(convo.LastMessageAt || convo.UpdatedAt).getTime())}
-                        {formatDistanceToNow(new Date(convo.LastMessageAt || convo.UpdatedAt), {
+                      {#if convo.updatedAt && !isNaN(new Date(convo.updatedAt).getTime())}
+                        {formatDistanceToNow(new Date(convo.updatedAt), {
                           addSuffix: true,
                         })}
                       {:else}
                         just now
                       {/if}
                     </span>
-                    {#if convo.MessageCount > 0}
-                      <span class="text-muted-foreground/40">&middot;</span>
-                      <span>{convo.MessageCount} msgs</span>
-                    {/if}
                   </div>
                 </div>
               </div>
             </button>
 
-            {#if editingId !== convo.ID}
+            {#if editingId !== convo.id}
               <button
                 type="button"
                 class="absolute right-2 top-2.5 rounded p-1 text-muted-foreground/50 opacity-0 transition hover:bg-muted hover:text-foreground group-hover:opacity-100
-                  {menuOpenId === convo.ID ? 'opacity-100' : ''}"
-                onclick={(e) => toggleMenu(convo.ID, e)}
+                  {menuOpenId === convo.id ? 'opacity-100' : ''}"
+                onclick={(e) => toggleMenu(convo.id, e)}
                 aria-label="Conversation options"
               >
                 <MoreHorizontalIcon class="h-3.5 w-3.5" />
               </button>
             {/if}
 
-            {#if menuOpenId === convo.ID}
+            {#if menuOpenId === convo.id}
               <div
                 class="absolute right-2 top-9 z-10 min-w-[120px] rounded-lg border border-border bg-popover p-1 shadow-md"
               >
@@ -202,7 +197,7 @@
                 <button
                   type="button"
                   class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-red-500 hover:bg-red-500/10"
-                  onclick={(e) => handleDelete(convo.ID, e)}
+                  onclick={(e) => handleDelete(convo.id, e)}
                 >
                   <Trash2Icon class="h-3 w-3" />
                   Delete

@@ -16,6 +16,8 @@
   import ErrorBoundary from "$lib/components/ErrorBoundary.svelte";
   import BetaBadge from "$lib/components/BetaBadge.svelte";
   import NotificationBell from "$lib/components/NotificationBell.svelte";
+  import ThemeModeToggle from "$lib/components/ThemeModeToggle.svelte";
+  import { themeStore } from "$lib/stores/theme.svelte";
   import { Button } from "$lib/components/ui/button";
   import { TooltipProvider } from "$lib/components/ui/tooltip";
   interface User {
@@ -146,11 +148,7 @@
   <div class="min-h-screen bg-background flex items-center justify-center">
     <div class="text-center">
       <div class="inline-flex items-center">
-        <img
-          src="/frameworks-dark-horizontal-lockup-transparent.svg"
-          alt="FrameWorks"
-          class="h-16 animate-pulse"
-        />
+        <img src={themeStore.logoPath} alt="FrameWorks" class="h-16 animate-pulse" />
       </div>
       <div class="mt-4 text-muted-foreground">Loading...</div>
     </div>
@@ -194,11 +192,7 @@
 
               <!-- FrameWorks Branding -->
               <a href={dashboardPath} class="flex items-center hover:opacity-80 transition-opacity">
-                <img
-                  src="/frameworks-dark-horizontal-lockup-transparent.svg"
-                  alt="FrameWorks"
-                  class="h-8"
-                />
+                <img src={themeStore.logoPath} alt="FrameWorks" class="h-8" />
               </a>
 
               <!-- Beta Badge -->
@@ -213,6 +207,9 @@
 
             <!-- Right Actions (Flush & Seamed) -->
             <div class="flex items-stretch">
+              <!-- Theme Mode Toggle (dark/light) -->
+              <ThemeModeToggle />
+
               <!-- Notifications -->
               <NotificationBell />
 
@@ -268,11 +265,7 @@
                     class="flex items-center hover:opacity-80 transition-opacity"
                     onclick={() => openExternal(marketingRootUrl)}
                   >
-                    <img
-                      src="/frameworks-dark-horizontal-lockup-transparent.svg"
-                      alt="FrameWorks"
-                      class="h-10"
-                    />
+                    <img src={themeStore.logoPath} alt="FrameWorks" class="h-10" />
                   </button>
                   <BetaBadge />
                 </div>

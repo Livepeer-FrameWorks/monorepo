@@ -152,6 +152,23 @@ export function isFileProtocol(): boolean {
 }
 
 /**
+ * Detect iPad with broken HEVC MSE support.
+ * Older iPads (iPadOS < 17) report HEVC as supported via MediaSource.isTypeSupported()
+ * but fail in practice. Native HLS handles HEVC fine via hardware decoder.
+ *
+ * Note: Modern iPads masquerade as Mac in user agent, detectable via touch support.
+ */
+export function isIPadWithBrokenHEVC(): boolean {
+  const ua = navigator.userAgent;
+  const isIPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && "ontouchend" in document);
+  if (!isIPad) return false;
+
+  const match = ua.match(/OS (\d+)/);
+  if (!match) return false;
+  return parseInt(match[1], 10) < 17;
+}
+
+/**
  * Get Android version (returns null if not Android)
  */
 export function getAndroidVersion(): number | null {

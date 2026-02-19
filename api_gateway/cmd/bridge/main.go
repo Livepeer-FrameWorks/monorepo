@@ -567,7 +567,7 @@ func main() {
 				return nil
 			}(),
 		}
-		resp, err := qmbootstrap.BootstrapServiceWithRetry(serviceClients.Quartermaster, req, logger, qmbootstrap.DefaultRetryConfig("gateway"))
+		resp, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), serviceClients.Quartermaster, req, logger, qmbootstrap.DefaultRetryConfig("gateway"))
 		if err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
 		} else {

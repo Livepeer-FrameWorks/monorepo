@@ -1,10 +1,9 @@
 {
   "name": "@livepeer-frameworks/player-wc",
-  "version": "0.1.9",
+  "version": "0.2.1",
   "type": "module",
   "description": "Lit Web Components for FrameWorks streaming player — <fw-player> custom element with full UI",
-  "main": "dist/cjs/index.js",
-  "module": "dist/esm/index.js",
+  "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
   "files": [
     "dist",
@@ -14,14 +13,12 @@
     ".": {
       "source": "./src/index.ts",
       "types": "./dist/types/index.d.ts",
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js"
+      "default": "./dist/esm/index.js"
     },
     "./define": {
       "source": "./src/define.ts",
       "types": "./dist/types/define.d.ts",
-      "import": "./dist/esm/define.js",
-      "require": "./dist/cjs/define.js"
+      "default": "./dist/esm/define.js"
     },
     "./fw-player.js": {
       "default": "./dist/fw-player.iife.js"

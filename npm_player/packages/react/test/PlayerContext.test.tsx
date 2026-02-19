@@ -1,11 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import {
-  PlayerProvider,
-  usePlayerContext,
-  usePlayerContextOptional,
-} from "../src/context/PlayerContext";
+import { PlayerProvider } from "../src/context/PlayerContext";
+import { usePlayerContext, usePlayerContextOptional } from "../src/context/player";
 
 // Mock player-core
 vi.mock("@livepeer-frameworks/player-core", () => ({

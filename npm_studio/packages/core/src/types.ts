@@ -108,11 +108,14 @@ export interface RTCOutboundStats {
 // Ingest Controller Types
 // ============================================================================
 
+export type VideoCodecPreference = "h264" | "vp9" | "av1" | "auto";
+
 export interface IngestControllerConfig {
   whipUrl: string;
   iceServers?: RTCIceServer[];
   profile?: QualityProfile;
   useWebCodecs?: boolean;
+  videoCodec?: VideoCodecPreference;
   debug?: boolean;
   workers?: {
     compositor?: string;
@@ -207,6 +210,7 @@ export interface AudioEncoderSettings {
 export interface EncoderConfig {
   video: VideoEncoderSettings;
   audio: AudioEncoderSettings;
+  keyframeInterval?: number;
 }
 
 /**
@@ -272,7 +276,7 @@ export interface WorkerAudioMessage extends WorkerMessage {
 // Multi-Source Types (Phase 2)
 // ============================================================================
 
-export type SourceType = "camera" | "screen" | "custom";
+export type SourceType = "camera" | "screen" | "custom" | "media";
 
 export interface MediaSource {
   id: string;
@@ -356,6 +360,7 @@ export interface IngestControllerConfigV2 extends IngestControllerConfig {
   reconnection?: Partial<ReconnectionConfig>;
   audioMixing?: boolean;
   compositor?: Partial<CompositorConfig>;
+  adaptiveBitrate?: boolean;
 }
 
 export interface IngestControllerEventsV2 extends IngestControllerEvents {
@@ -367,6 +372,13 @@ export interface IngestControllerEventsV2 extends IngestControllerEvents {
   reconnectionSuccess: undefined;
   reconnectionFailed: { error: string };
   webCodecsActive: { active: boolean };
+  bitrateChanged: { bitrate: number; previousBitrate: number; congestion: string };
+  congestionChanged: { level: string; packetLoss: number; rtt: number };
+  recordingStarted: undefined;
+  recordingStopped: { blob: Blob; duration: number; fileSize: number };
+  recordingPaused: undefined;
+  recordingResumed: undefined;
+  recordingProgress: { duration: number; fileSize: number };
 }
 
 export interface IngestStateContextV2 extends IngestStateContext {
@@ -511,7 +523,14 @@ export interface RendererStats {
   gpuMemoryMB?: number;
 }
 
-export type FilterType = "blur" | "colorMatrix" | "glow" | "grayscale" | "sepia" | "invert";
+export type FilterType =
+  | "blur"
+  | "colorMatrix"
+  | "glow"
+  | "grayscale"
+  | "sepia"
+  | "invert"
+  | "chromaKey";
 
 export interface FilterConfig {
   type: FilterType;
@@ -520,6 +539,9 @@ export interface FilterConfig {
   contrast?: number;
   saturation?: number;
   hue?: number;
+  keyColor?: string;
+  keyTolerance?: number;
+  keyEdgeSoftness?: number;
 }
 
 // ============================================================================
@@ -537,7 +559,7 @@ export interface CompositorConfig {
 
 // Default compositor configuration
 export const DEFAULT_COMPOSITOR_CONFIG: CompositorConfig = {
-  enabled: false,
+  enabled: true,
   width: 1920,
   height: 1080,
   frameRate: 30,
@@ -584,6 +606,7 @@ export type CompositorMainToWorker =
   | { type: "resize"; width: number; height: number; frameRate?: number }
   | { type: "setRenderer"; renderer: RendererType }
   | { type: "applyFilter"; layerId: string; filter: FilterConfig }
+  | { type: "setDirectFrameOutput"; enabled: boolean }
   | { type: "destroy" };
 
 export type CompositorWorkerToMain =
@@ -592,6 +615,7 @@ export type CompositorWorkerToMain =
   | { type: "transitionComplete"; sceneId: string }
   | { type: "layoutAnimationComplete" }
   | { type: "rendererChanged"; renderer: RendererType }
+  | { type: "compositorFrame"; frame: VideoFrame }
   | { type: "error"; message: string };
 
 // ============================================================================

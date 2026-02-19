@@ -904,6 +904,7 @@ services:
       args:
         # api_consultant/Dockerfile installs chromium when this is true.
         ENABLE_RENDERING: ${SKIPPER_ENABLE_RENDERING:-false}
+    shm_size: "512m"
     ports:
       - "18018:18018"
       - "19007:19007"

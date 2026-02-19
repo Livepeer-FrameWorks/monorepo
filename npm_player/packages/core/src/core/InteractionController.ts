@@ -9,6 +9,59 @@
  * - All interactions disabled for live streams (where applicable)
  */
 
+/**
+ * Configurable key bindings for player shortcuts.
+ * Each action maps to one or more key identifiers (KeyboardEvent.key values).
+ * Set an action to an empty array to disable it.
+ */
+export interface PlayerKeyMap {
+  /** Play/pause toggle (simple, no hold behavior). Default: ["k", "K"] */
+  playPause: string[];
+  /** Play/pause with hold-for-speed (space bar). Default: [" "] */
+  playPauseHold: string[];
+  /** Seek backward. Default: ["ArrowLeft", "j", "J"] */
+  seekBack: string[];
+  /** Seek forward. Default: ["ArrowRight", "l", "L"] */
+  seekForward: string[];
+  /** Volume up. Default: ["ArrowUp"] */
+  volumeUp: string[];
+  /** Volume down. Default: ["ArrowDown"] */
+  volumeDown: string[];
+  /** Toggle mute. Default: ["m", "M"] */
+  muteToggle: string[];
+  /** Toggle fullscreen. Default: ["f", "F"] */
+  fullscreenToggle: string[];
+  /** Toggle captions. Default: ["c", "C"] */
+  captionsToggle: string[];
+  /** Decrease playback speed. Default: ["<"] */
+  speedDown: string[];
+  /** Increase playback speed. Default: [">"] */
+  speedUp: string[];
+  /** Step to previous frame. Default: [","] */
+  framePrev: string[];
+  /** Step to next frame. Default: ["."] */
+  frameNext: string[];
+  /** Seek to percentage (0-9 keys). Default: ["0","1","2","3","4","5","6","7","8","9"] */
+  seekPercent: string[];
+}
+
+export const DEFAULT_KEY_MAP: PlayerKeyMap = {
+  playPause: ["k", "K"],
+  playPauseHold: [" ", "Spacebar"],
+  seekBack: ["ArrowLeft", "j", "J"],
+  seekForward: ["ArrowRight", "l", "L"],
+  volumeUp: ["ArrowUp"],
+  volumeDown: ["ArrowDown"],
+  muteToggle: ["m", "M"],
+  fullscreenToggle: ["f", "F"],
+  captionsToggle: ["c", "C"],
+  speedDown: ["<"],
+  speedUp: [">"],
+  framePrev: [","],
+  frameNext: ["."],
+  seekPercent: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+};
+
 export interface InteractionControllerConfig {
   container: HTMLElement;
   videoElement: HTMLVideoElement;
@@ -34,6 +87,8 @@ export interface InteractionControllerConfig {
   onIdle?: () => void;
   /** Callback fired when user becomes active after being idle */
   onActive?: () => void;
+  /** Custom key bindings. Merged over DEFAULT_KEY_MAP. */
+  keyMap?: Partial<PlayerKeyMap>;
 }
 
 export interface InteractionState {
@@ -56,6 +111,11 @@ export class InteractionController {
   private config: InteractionControllerConfig;
   private state: InteractionState;
   private isAttached = false;
+
+  /** Resolved key map (default + user overrides) */
+  private keyMap: PlayerKeyMap;
+  /** Reverse lookup: key → action name */
+  private keyToAction: Map<string, keyof PlayerKeyMap>;
 
   // Keyboard tracking
   private spaceKeyDownTime = 0;
@@ -95,6 +155,10 @@ export class InteractionController {
       isIdle: false,
     };
 
+    // Resolve key map
+    this.keyMap = { ...DEFAULT_KEY_MAP, ...config.keyMap };
+    this.keyToAction = this.buildKeyLookup(this.keyMap);
+
     // Bind handlers
     this.boundKeyDown = this.handleKeyDown.bind(this);
     this.boundKeyUp = this.handleKeyUp.bind(this);
@@ -106,6 +170,17 @@ export class InteractionController {
     this.boundDoubleClick = this.handleDoubleClick.bind(this);
     this.boundDocumentKeyDown = this.handleKeyDown.bind(this);
     this.boundDocumentKeyUp = this.handleKeyUp.bind(this);
+  }
+
+  /** Build reverse key→action lookup from a key map */
+  private buildKeyLookup(map: PlayerKeyMap): Map<string, keyof PlayerKeyMap> {
+    const lookup = new Map<string, keyof PlayerKeyMap>();
+    for (const [action, keys] of Object.entries(map)) {
+      for (const key of keys) {
+        lookup.set(key, action as keyof PlayerKeyMap);
+      }
+    }
+    return lookup;
   }
 
   /**
@@ -221,6 +296,12 @@ export class InteractionController {
   updateConfig(updates: Partial<InteractionControllerConfig>): void {
     this.config = { ...this.config, ...updates };
 
+    // Rebuild key lookup if keyMap changed
+    if (updates.keyMap) {
+      this.keyMap = { ...DEFAULT_KEY_MAP, ...this.config.keyMap };
+      this.keyToAction = this.buildKeyLookup(this.keyMap);
+    }
+
     // If we switched to live mode while holding, release
     if (updates.isLive && this.state.isHoldingSpeed) {
       this.releaseSpeedHold();
@@ -232,8 +313,8 @@ export class InteractionController {
   // ─────────────────────────────────────────────────────────────────
 
   private handleKeyDown(e: KeyboardEvent): void {
-    // Ignore if focus is on an input element
     if (this.isInputElement(e.target)) return;
+    if (this.isControlElement(e.target)) return;
     if (e.defaultPrevented) return;
     if (!this.shouldHandleKeyboard(e)) return;
 
@@ -243,109 +324,81 @@ export class InteractionController {
     const { isLive } = this.config;
     const isPaused = this.config.isPaused?.() ?? this.config.videoElement?.paused ?? false;
 
-    switch (e.key) {
-      case " ":
-      case "Spacebar":
+    // Look up action from key map
+    const action = this.keyToAction.get(e.key);
+    if (!action) return;
+
+    switch (action) {
+      case "playPauseHold":
         e.preventDefault();
         this.handleSpaceDown();
         break;
 
-      case "ArrowLeft":
-      case "j":
-      case "J":
-        e.preventDefault();
-        if (!isLive) {
-          this.config.onSeek(-SKIP_AMOUNT_SECONDS);
-        }
-        break;
-
-      case "ArrowRight":
-      case "l":
-      case "L":
-        e.preventDefault();
-        if (!isLive) {
-          this.config.onSeek(SKIP_AMOUNT_SECONDS);
-        }
-        break;
-
-      case "ArrowUp":
-        e.preventDefault();
-        this.config.onVolumeChange(VOLUME_STEP);
-        break;
-
-      case "ArrowDown":
-        e.preventDefault();
-        this.config.onVolumeChange(-VOLUME_STEP);
-        break;
-
-      case "m":
-      case "M":
-        e.preventDefault();
-        this.config.onMuteToggle();
-        break;
-
-      case "f":
-      case "F":
-        e.preventDefault();
-        this.config.onFullscreenToggle();
-        break;
-
-      case "c":
-      case "C":
-        e.preventDefault();
-        this.config.onCaptionsToggle?.();
-        break;
-
-      case "k":
-      case "K":
-        // YouTube-style: K = play/pause (no hold behavior)
+      case "playPause":
         e.preventDefault();
         this.config.onPlayPause();
         break;
 
-      case "<":
-        // Decrease speed (shift+, = <)
+      case "seekBack":
         e.preventDefault();
-        if (!isLive) {
-          this.adjustPlaybackSpeed(-0.25);
-        }
+        if (!isLive) this.config.onSeek(-SKIP_AMOUNT_SECONDS);
         break;
 
-      case ">":
-        // Increase speed (shift+. = >)
+      case "seekForward":
         e.preventDefault();
-        if (!isLive) {
-          this.adjustPlaybackSpeed(0.25);
-        }
+        if (!isLive) this.config.onSeek(SKIP_AMOUNT_SECONDS);
         break;
 
-      case ",":
-        // Previous frame when paused
+      case "volumeUp":
+        e.preventDefault();
+        this.config.onVolumeChange(VOLUME_STEP);
+        break;
+
+      case "volumeDown":
+        e.preventDefault();
+        this.config.onVolumeChange(-VOLUME_STEP);
+        break;
+
+      case "muteToggle":
+        e.preventDefault();
+        this.config.onMuteToggle();
+        break;
+
+      case "fullscreenToggle":
+        e.preventDefault();
+        this.config.onFullscreenToggle();
+        break;
+
+      case "captionsToggle":
+        e.preventDefault();
+        this.config.onCaptionsToggle?.();
+        break;
+
+      case "speedDown":
+        e.preventDefault();
+        if (!isLive) this.adjustPlaybackSpeed(-0.25);
+        break;
+
+      case "speedUp":
+        e.preventDefault();
+        if (!isLive) this.adjustPlaybackSpeed(0.25);
+        break;
+
+      case "framePrev":
         if (this.config.onFrameStep || (!isLive && isPaused)) {
           e.preventDefault();
           this.stepFrame(-1);
         }
         break;
 
-      case ".":
-        // Next frame when paused
+      case "frameNext":
         if (this.config.onFrameStep || (!isLive && isPaused)) {
           e.preventDefault();
           this.stepFrame(1);
         }
         break;
 
-      // Number keys for seeking to percentage
-      case "0":
-      case "1":
-      case "2":
-      case "3":
-      case "4":
-      case "5":
-      case "6":
-      case "7":
-      case "8":
-      case "9":
+      case "seekPercent":
         e.preventDefault();
         if (!isLive && this.config.onSeekPercent) {
           const percent = parseInt(e.key, 10) / 10;
@@ -357,10 +410,12 @@ export class InteractionController {
 
   private handleKeyUp(e: KeyboardEvent): void {
     if (this.isInputElement(e.target)) return;
+    if (this.isControlElement(e.target)) return;
     if (e.defaultPrevented) return;
     if (!this.shouldHandleKeyboard(e)) return;
 
-    if (e.key === " " || e.key === "Spacebar") {
+    // Check if this key is bound to playPauseHold (space-like behavior)
+    if (this.keyToAction.get(e.key) === "playPauseHold") {
       e.preventDefault();
       this.handleSpaceUp();
     }
@@ -456,7 +511,6 @@ export class InteractionController {
   // ─────────────────────────────────────────────────────────────────
 
   private handlePointerDown(e: PointerEvent): void {
-    // Only handle primary button / single touch on the video area
     if (e.button !== 0) return;
     if (this.isControlElement(e.target)) return;
 
@@ -516,6 +570,11 @@ export class InteractionController {
 
   private handlePointerUp(e: PointerEvent): void {
     if (e.button !== 0) return;
+    if (this.isControlElement(e.target)) {
+      this.cancelPointerHold();
+      this.pointerDownTime = 0;
+      return;
+    }
 
     const wasHeld = this.pointerIsHeld;
     this.cancelPointerHold();
@@ -684,7 +743,7 @@ export class InteractionController {
   }
 
   private isControlElement(target: EventTarget | null): boolean {
-    if (!target || !(target instanceof HTMLElement)) return false;
+    if (!target || !(target instanceof Element)) return false;
 
     // Check if clicking on player controls (buttons, sliders, etc.)
     const controlSelectors = [

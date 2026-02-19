@@ -28,6 +28,7 @@ import {
   isMediaStreamSource,
   type MistStreamInfo,
   type PlaybackMode,
+  type FwLocale,
 } from "@livepeer-frameworks/player-core";
 import type { PlayerControllerHost } from "../controllers/player-controller-host.js";
 
@@ -51,6 +52,7 @@ export class FwPlayerControls extends LitElement {
   @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
   @property({ type: Boolean, attribute: "show-stats-button" }) showStatsButton = false;
   @property({ type: Boolean, attribute: "is-stats-open" }) isStatsOpen = false;
+  @property({ attribute: "active-locale" }) activeLocale?: FwLocale;
 
   @state() private _settingsOpen = false;
   @state() private _isNearLiveState = true;
@@ -339,7 +341,6 @@ export class FwPlayerControls extends LitElement {
     return html`
       <div
         class=${classMap({
-          "fw-player-surface": true,
           "fw-controls-wrapper": true,
           "fw-controls-wrapper--visible": shouldShowControls,
           "fw-controls-wrapper--hidden": !shouldShowControls,
@@ -372,7 +373,7 @@ export class FwPlayerControls extends LitElement {
                   type="button"
                   class="fw-btn-flush"
                   ?disabled=${disabled}
-                  aria-label=${state.isPlaying ? "Pause" : "Play"}
+                  aria-label=${state.isPlaying ? this.pc.t("pause") : this.pc.t("play")}
                   @click=${() => this.pc.togglePlay()}
                 >
                   ${state.isPlaying ? pauseIcon(18) : playIcon(18)}
@@ -384,7 +385,7 @@ export class FwPlayerControls extends LitElement {
                         type="button"
                         class="fw-btn-flush hidden sm:flex"
                         ?disabled=${disabled}
-                        aria-label="Skip back 10 seconds"
+                        aria-label=${this.pc.t("skipBackward")}
                         @click=${() => this.pc.seekBy(-10)}
                       >
                         ${skipBackIcon(16)}
@@ -393,7 +394,7 @@ export class FwPlayerControls extends LitElement {
                         type="button"
                         class="fw-btn-flush hidden sm:flex"
                         ?disabled=${disabled}
-                        aria-label="Skip forward 10 seconds"
+                        aria-label=${this.pc.t("skipForward")}
                         @click=${() => this.pc.seekBy(10)}
                       >
                         ${skipForwardIcon(16)}
@@ -426,12 +427,12 @@ export class FwPlayerControls extends LitElement {
                           "fw-live-badge--behind": !liveButtonDisabled,
                         })}
                         title=${!context.hasDvrWindow
-                          ? "Live only"
+                          ? this.pc.t("live")
                           : this._isNearLiveState
-                            ? "At live edge"
-                            : "Jump to live"}
+                            ? this.pc.t("live")
+                            : this.pc.t("live")}
                       >
-                        LIVE
+                        ${this.pc.t("live").toUpperCase()}
                         ${!this._isNearLiveState && context.hasDvrWindow
                           ? seekToLiveIcon(10)
                           : nothing}
@@ -451,8 +452,8 @@ export class FwPlayerControls extends LitElement {
                           "fw-btn-flush": true,
                           "fw-btn-flush--active": this.isStatsOpen,
                         })}
-                        aria-label="Toggle stats"
-                        title="Stats"
+                        aria-label=${this.pc.t("showStats")}
+                        title=${this.pc.t("showStats")}
                         @click=${() =>
                           this.dispatchEvent(
                             new CustomEvent("fw-stats-toggle", {
@@ -474,8 +475,8 @@ export class FwPlayerControls extends LitElement {
                     group: true,
                     "fw-btn-flush--active": this._settingsOpen,
                   })}
-                  aria-label="Settings"
-                  title="Settings"
+                  aria-label=${this.pc.t("settings")}
+                  title=${this.pc.t("settings")}
                   ?disabled=${disabled}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
@@ -495,6 +496,7 @@ export class FwPlayerControls extends LitElement {
                   .open=${this._settingsOpen}
                   .playbackMode=${this.playbackMode}
                   .isContentLive=${this.isContentLive}
+                  .activeLocale=${this.activeLocale}
                   @click=${(event: MouseEvent) => event.stopPropagation()}
                   @fw-close=${() => {
                     this._settingsOpen = false;
@@ -508,7 +510,9 @@ export class FwPlayerControls extends LitElement {
                   type="button"
                   class="fw-btn-flush"
                   ?disabled=${disabled}
-                  aria-label=${state.isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  aria-label=${state.isFullscreen
+                    ? this.pc.t("exitFullscreen")
+                    : this.pc.t("fullscreen")}
                   @click=${() => this.pc.toggleFullscreen()}
                 >
                   ${state.isFullscreen ? fullscreenExitIcon(16) : fullscreenIcon(16)}

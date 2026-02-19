@@ -20,6 +20,7 @@ function createMockVideo(overrides: Record<string, unknown> = {}) {
     currentTime: 5,
     duration: 60,
     playbackRate: 1,
+    readyState: 4,
     buffered: makeBuffered([0, 15]),
     getVideoPlaybackQuality: vi.fn(() => ({
       totalVideoFrames: 1000,

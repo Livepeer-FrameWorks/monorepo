@@ -51,10 +51,10 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       boxShadow: {
-        brand: "0 24px 48px rgba(6, 15, 65, 0.45)",
-        "brand-soft": "0 20px 40px rgba(6, 15, 65, 0.25)",
-        "brand-subtle": "0 12px 28px rgba(6, 15, 65, 0.18)",
-        "brand-strong": "0 32px 64px rgba(6, 15, 65, 0.6)",
+        brand: "0 24px 48px hsl(var(--tn-bg-dark) / 0.45)",
+        "brand-soft": "0 20px 40px hsl(var(--tn-bg-dark) / 0.25)",
+        "brand-subtle": "0 12px 28px hsl(var(--tn-bg-dark) / 0.18)",
+        "brand-strong": "0 32px 64px hsl(var(--tn-bg-dark) / 0.6)",
         "inset-brand": "inset 0 1px 0 hsl(var(--tn-fg) / 0.05)",
       },
       animation: {

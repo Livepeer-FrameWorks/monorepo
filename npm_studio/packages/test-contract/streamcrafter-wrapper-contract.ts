@@ -27,7 +27,7 @@ export const STREAMCRAFTER_WRAPPER_PARITY_INITIAL_STATE = {
   qualityProfile: STREAMCRAFTER_WRAPPER_DEFAULT_QUALITY_PROFILE,
   reconnectionState: null,
   stats: null,
-  useWebCodecs: false,
+  useWebCodecs: true,
   isWebCodecsActive: false,
   encoderStats: null,
 } as const;
@@ -84,12 +84,12 @@ export const STREAMCRAFTER_WRAPPER_PARITY_ACTION_METHODS = [
   "getController",
 ] as const;
 
-export const STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_LABELS = {
-  copyWhipUrl: "Copy WHIP URL",
-  copyStreamInfo: "Copy Stream Info",
-  advanced: "Advanced",
-  hideAdvanced: "Hide Advanced",
-} as const;
+export const STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_I18N_KEYS = [
+  "copyWhipUrl",
+  "copyStreamInfo",
+  "advanced",
+  "hideAdvanced",
+] as const;
 
 export const STREAMCRAFTER_COMPONENT_PARITY_CALLBACK_MARKERS = {
   onStateChange: "onStateChange",

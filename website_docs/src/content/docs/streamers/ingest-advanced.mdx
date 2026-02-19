@@ -1,0 +1,288 @@
+---
+title: "StreamCrafter — Advanced"
+description: "WebCodecs encoding, audio processing, reconnection, and gateway integration."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## WebCodecs Encoder
+
+WebCodecs encoding is **auto-enabled on supported browsers** (Chromium-family with `RTCRtpScriptTransform`). It provides background-safe encoding — the stream continues even when the browser tab loses focus.
+
+<Aside type="tip" title="Automatic Detection">
+  On Chrome/Edge, WebCodecs activates automatically. Firefox and Safari gracefully fall back to
+  standard WebRTC encoding — no configuration needed.
+</Aside>
+
+### How It Works
+
+The encoder runs in a Web Worker and uses `RTCRtpScriptTransform` to inject encoded frames into the WebRTC connection. This bypasses the browser's default encoder, which pauses when the tab is backgrounded.
+
+### Disabling WebCodecs
+
+If you need to force standard WebRTC encoding:
+
+```tsx
+// React
+<StreamCrafter whipUrl="..." useWebCodecs={false} />;
+
+// Vanilla
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  useWebCodecs: false,
+});
+```
+
+### Encoder Overrides
+
+Override default encoding parameters for fine-grained control:
+
+```ts
+studio.setEncoderOverrides({
+  videoBitrate: 4_000_000, // 4 Mbps
+  videoFrameRate: 30,
+  keyFrameInterval: 60, // Keyframe every 2 seconds at 30fps
+  audioBitrate: 128_000, // 128 kbps
+});
+```
+
+| Override           | Type     | Description                 |
+| ------------------ | -------- | --------------------------- |
+| `videoBitrate`     | `number` | Target video bitrate in bps |
+| `videoFrameRate`   | `number` | Target frame rate           |
+| `keyFrameInterval` | `number` | Frames between keyframes    |
+| `audioBitrate`     | `number` | Target audio bitrate in bps |
+
+## Audio Mixing
+
+When multiple sources are active, StreamCrafter automatically mixes their audio using the Web Audio API.
+
+### Per-Source Volume
+
+```ts
+// Set volume (0.0 to 1.0)
+studio.setSourceVolume("camera-1", 0.8);
+studio.setSourceVolume("screen-1", 0.3);
+
+// Mute/unmute
+studio.setSourceMuted("camera-1", true);
+```
+
+### Master Volume
+
+```ts
+studio.masterVolume = 0.5; // Affects all sources
+```
+
+### Audio Processing
+
+The mixer applies basic audio processing to prevent clipping when mixing multiple sources. The output level is automatically normalized based on the number of active audio sources.
+
+## Reconnection
+
+StreamCrafter automatically reconnects when the WHIP connection drops. Enabled by default.
+
+### Configuration
+
+```ts
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  reconnection: {
+    enabled: true,
+    maxAttempts: 5, // Maximum reconnection attempts
+    baseDelay: 1000, // Initial delay (ms)
+    maxDelay: 30000, // Maximum delay (ms)
+    backoffMultiplier: 2, // Exponential backoff factor
+  },
+});
+```
+
+### Reconnection Events
+
+```ts
+studio.on("reconnectionAttempt", ({ attempt, max }) => {
+  console.log(`Reconnecting: attempt ${attempt} of ${max}`);
+});
+
+studio.on("reconnectionSuccess", () => {
+  console.log("Reconnected!");
+});
+
+studio.on("reconnectionFailed", ({ error }) => {
+  console.log("Reconnection failed:", error);
+});
+```
+
+### Reactive State
+
+```ts
+studio.reactiveState.on("reconnecting", (isReconnecting) => {
+  reconnectBanner.hidden = !isReconnecting;
+});
+```
+
+## Gateway Integration
+
+In production, use Gateway Mode to automatically resolve the best WHIP ingest endpoint:
+
+```ts
+const studio = createStreamCrafter({
+  gatewayUrl: "%GATEWAY_URL%/graphql",
+  streamKey: "<YOUR_STREAM_KEY>",
+  profile: "broadcast",
+});
+```
+
+The gateway resolves your stream key to the optimal ingest node based on:
+
+- Geographic proximity
+- Node load and capacity
+- Stream configuration
+
+### Manual Gateway Resolution
+
+For custom UIs that need to resolve a WHIP URL before initializing:
+
+```ts
+import { IngestClient } from "@livepeer-frameworks/streamcrafter-core";
+
+const client = new IngestClient({ gatewayUrl: "%GATEWAY_URL%/graphql" });
+const { whipUrl } = await client.resolveEndpoint("my-stream-key");
+
+// Now use the resolved URL
+const studio = createStreamCrafter({ whipUrl });
+```
+
+## Multi-Source Streaming
+
+### Adding Sources
+
+```ts
+// Camera with constraints
+await studio.startCamera({
+  video: { width: 1920, height: 1080, frameRate: 30 },
+  audio: true,
+});
+
+// Screen share with system audio
+await studio.startScreenShare({ audio: true });
+
+// Custom MediaStream
+await studio.controller.addSource(customStream, {
+  label: "External Source",
+  type: "custom",
+});
+```
+
+### Source Management
+
+```ts
+// List active sources
+const sources = studio.sources;
+// [
+//   { id: "camera-1", type: "camera", label: "FaceTime HD", muted: false, volume: 1 },
+//   { id: "screen-1", type: "screen", label: "Screen", muted: false, volume: 1 }
+// ]
+
+// Set primary video (determines which source is shown in non-compositor mode)
+studio.setPrimaryVideo("camera-1");
+
+// Remove a source
+studio.removeSource("screen-1");
+```
+
+### Source Events
+
+```ts
+studio.on("sourceAdded", (source) => {
+  console.log("New source:", source.label);
+});
+
+studio.on("sourceRemoved", ({ sourceId }) => {
+  console.log("Removed:", sourceId);
+});
+
+studio.on("sourceUpdated", (source) => {
+  console.log("Updated:", source.id, source.volume, source.muted);
+});
+```
+
+## Runtime Theming
+
+StreamCrafter ships with 17 theme presets matching the player's theme system.
+
+```ts
+// Switch theme at runtime
+studio.theme = "tokyo-night";
+```
+
+### CSS Custom Properties
+
+All tokens use the `--fw-sc-*` prefix:
+
+| Token                | Purpose                   |
+| -------------------- | ------------------------- |
+| `--fw-sc-bg`         | Background color          |
+| `--fw-sc-surface`    | Panel surfaces            |
+| `--fw-sc-border`     | Border color              |
+| `--fw-sc-text`       | Primary text              |
+| `--fw-sc-text-muted` | Secondary text            |
+| `--fw-sc-accent`     | Interactive elements      |
+| `--fw-sc-success`    | Success/live indicators   |
+| `--fw-sc-danger`     | Error/destructive actions |
+
+```css
+fw-streamcrafter,
+.fw-sc-root {
+  --fw-sc-accent: 262 80% 60%;
+  --fw-sc-bg: 230 15% 12%;
+}
+```
+
+## Internationalization
+
+Five built-in locales: `en`, `es`, `fr`, `de`, `nl`.
+
+```ts
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  locale: "de",
+});
+
+// Or with custom translations
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  locale: "de",
+  translations: {
+    goLive: "Live gehen",
+    stopStreaming: "Stoppen",
+    addCamera: "Kamera hinzufugen",
+  },
+});
+```
+
+## Configurable Hotkeys
+
+Override default keyboard shortcuts:
+
+```ts
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  keyMap: {
+    toggleStreaming: ["g"],
+    toggleMute: ["m"],
+    addCamera: ["c"],
+    addScreen: ["s"],
+  },
+});
+```
+
+Default hotkeys:
+
+| Action           | Default Key |
+| ---------------- | ----------- |
+| Toggle streaming | `g`         |
+| Toggle mute      | `m`         |
+| Add camera       | `c`         |
+| Add screen share | `s`         |
+| Toggle settings  | `,`         |

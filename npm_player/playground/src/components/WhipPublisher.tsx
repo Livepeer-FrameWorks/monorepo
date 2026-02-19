@@ -6,13 +6,13 @@
  */
 
 import { useState } from "react";
-import { usePlayground } from "@/context/PlaygroundContext";
+import { usePlayground } from "@/context/usePlayground";
 import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
 
 type RendererType = "auto" | "webgpu" | "webgl" | "canvas2d";
 
 export function WhipPublisher() {
-  const { ingestUris } = usePlayground();
+  const { ingestUris, theme } = usePlayground();
   const endpoint = ingestUris.whip;
   const [renderer, setRenderer] = useState<RendererType>("auto");
   const [key, setKey] = useState(0); // Force remount when renderer changes
@@ -51,6 +51,7 @@ export function WhipPublisher() {
           debug={true}
           enableCompositor={true}
           compositorConfig={{ renderer }}
+          theme={theme}
           onStateChange={(state, context) => {
             console.debug("[StreamCrafter] State:", state, context);
           }}

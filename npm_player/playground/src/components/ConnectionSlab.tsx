@@ -1,4 +1,4 @@
-import { usePlayground } from "@/context/PlaygroundContext";
+import { usePlayground } from "@/context/usePlayground";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 

@@ -352,7 +352,7 @@ func main() {
 				return nil
 			}(),
 		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("signalman")); err != nil {
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("signalman")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (signalman) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (signalman) ok")

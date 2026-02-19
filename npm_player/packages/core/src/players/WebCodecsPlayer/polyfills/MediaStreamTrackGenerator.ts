@@ -118,31 +118,33 @@ export class VideoTrackGeneratorPolyfill {
 /**
  * Polyfill for MediaStreamTrackGenerator (audio)
  *
- * Uses AudioWorklet to create a pull-based audio output that prevents
- * the "tin-can" distortion issue from the legacy implementation.
+ * Uses AudioWorklet + createMediaStreamDestination() to shim audio output.
  *
- * Key improvement: Audio samples are pulled by the worklet at a fixed rate,
- * and we feed samples proactively rather than pushing them as they arrive.
+ * Firefox rejects Blob URL modules in AudioWorklet scope, so the worklet code
+ * is loaded via data: URI (matching MistServer rawws.js approach). The worklet
+ * uses a sample-offset pattern for gapless playback: incoming Float32Arrays are
+ * queued and consumed sample-by-sample across process() calls.
  */
 export class AudioTrackGeneratorPolyfill {
   private audioContext: AudioContext;
   private destination: MediaStreamAudioDestinationNode;
+  private gainNode: GainNode;
   private workletNode: AudioWorkletNode | null = null;
   private track: MediaStreamTrack;
   private _writable: WritableStream<AudioData>;
   private closed = false;
   private initialized = false;
+  private ramped = false;
+  private framesSent = 0;
   private initPromise: Promise<void>;
 
-  // Ring buffer for samples (main thread side)
-  private sampleBuffer: Float32Array[] = [];
-  private maxBufferChunks = 20; // ~400ms at 48kHz with 1024 samples/chunk
-
   constructor() {
-    // Create audio context
     this.audioContext = new AudioContext({ latencyHint: "interactive" });
 
-    // Create destination for MediaStreamTrack
+    // Start silent — ramp up after first samples arrive to mask startup underruns
+    this.gainNode = this.audioContext.createGain();
+    this.gainNode.gain.value = 0;
+
     this.destination = this.audioContext.createMediaStreamDestination();
     const tracks = this.destination.stream.getAudioTracks();
     if (tracks.length === 0) {
@@ -150,10 +152,8 @@ export class AudioTrackGeneratorPolyfill {
     }
     this.track = tracks[0];
 
-    // Initialize worklet
     this.initPromise = this.initializeWorklet();
 
-    // Create writable stream for AudioData
     this._writable = new WritableStream<AudioData>({
       write: (data: AudioData) => {
         if (this.closed) {
@@ -161,18 +161,21 @@ export class AudioTrackGeneratorPolyfill {
           return;
         }
 
-        // Convert AudioData to Float32Array
-        const samples = this.audioDataToSamples(data);
+        const planes = this.extractPlanes(data);
         data.close();
 
-        // Add to ring buffer
-        this.sampleBuffer.push(samples);
-        if (this.sampleBuffer.length > this.maxBufferChunks) {
-          this.sampleBuffer.shift(); // Drop oldest
-        }
+        // Forward per-channel planes to worklet
+        if (this.initialized && this.workletNode) {
+          const buffers = planes.map((p) => p.buffer);
+          this.workletNode.port.postMessage(planes, buffers);
 
-        // Feed samples to worklet
-        this.feedSamples();
+          // Startup watermark: let worklet build buffer before ramping gain up
+          this.framesSent++;
+          if (!this.ramped && this.framesSent >= 5) {
+            this.ramped = true;
+            this.gainNode.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.05);
+          }
+        }
       },
       close: () => {
         this.close();
@@ -184,150 +187,117 @@ export class AudioTrackGeneratorPolyfill {
   }
 
   /**
-   * Initialize the AudioWorklet
+   * Initialize AudioWorklet via data: URI (Firefox-compatible).
+   *
+   * Blob URLs are rejected by Firefox's AudioWorklet scope. The OG MistServer
+   * embed uses `data:text/javascript,(function(){...})()` which works across
+   * all browsers that support AudioWorklet.
    */
   private async initializeWorklet(): Promise<void> {
-    // Create worklet code as blob
-    const workletCode = `
-      class SyncedAudioProcessor extends AudioWorkletProcessor {
-        constructor() {
-          super();
-          this.ringBuffer = [];
-          this.maxBufferSize = 10;
+    // Per-channel worklet: q[ch] = queue of Float32Array, a[ch] = current array,
+    // o[ch] = offset. Process 1:1 source→output channels, then .set() to
+    // duplicate the last source channel to any extra outputs (mono→stereo).
+    const workletFn =
+      "function worklet(){" +
+      'registerProcessor("mstg-shim",class extends AudioWorkletProcessor{' +
+      "constructor(){super();this.q=[];this.a=[];this.o=[];this.e=new Float32Array(0);" +
+      "this.port.onmessage=({data})=>{" +
+      "for(let c=0;c<data.length;c++){" +
+      "if(!this.q[c]){this.q[c]=[];this.a[c]=this.e;this.o[c]=0}" +
+      "this.q[c].push(data[c])}}}" +
+      "process(i,outputs){" +
+      "const out=outputs[0];" +
+      "if(!out||!out[0])return true;" +
+      "if(!this.q.length)return true;" +
+      "const len=out[0].length;" +
+      "const sc=this.q.length;" +
+      // Process each source channel that maps 1:1 to an output channel
+      "for(let s=0;s<sc&&s<out.length;s++){" +
+      "for(let j=0;j<len;j++){" +
+      "if(this.o[s]>=this.a[s].length){this.a[s]=this.q[s]&&this.q[s].shift()||this.e;this.o[s]=0}" +
+      "out[s][j]=this.a[s][this.o[s]++]||0}}" +
+      // Duplicate last source channel to extra output channels (mono→stereo)
+      "for(let c=sc;c<out.length;c++)out[c].set(out[sc-1]);" +
+      "return true}" +
+      "})" +
+      "}";
 
-          this.port.onmessage = (e) => {
-            if (e.data.type === 'samples') {
-              // Add samples to ring buffer
-              this.ringBuffer.push(e.data.samples);
-              if (this.ringBuffer.length > this.maxBufferSize) {
-                this.ringBuffer.shift(); // Drop oldest
-              }
-            }
-          };
-        }
+    await this.audioContext.audioWorklet.addModule("data:text/javascript,(" + workletFn + ")()");
 
-        process(inputs, outputs, parameters) {
-          const output = outputs[0];
-          if (!output || output.length === 0) return true;
+    this.workletNode = new AudioWorkletNode(this.audioContext, "mstg-shim", {
+      outputChannelCount: [2],
+    });
+    // Wire: worklet → gain → destination (gain starts at 0 for ramp-in)
+    this.workletNode.connect(this.gainNode);
+    this.gainNode.connect(this.destination);
 
-          const channel = output[0];
-
-          if (this.ringBuffer.length > 0) {
-            const samples = this.ringBuffer.shift();
-            const len = Math.min(samples.length, channel.length);
-            for (let i = 0; i < len; i++) {
-              channel[i] = samples[i];
-            }
-            // Fill remainder with last sample (smooth transition)
-            for (let i = len; i < channel.length; i++) {
-              channel[i] = samples[len - 1] || 0;
-            }
-          } else {
-            // No samples - output silence
-            channel.fill(0);
-          }
-
-          return true;
-        }
-      }
-
-      registerProcessor('synced-audio-processor', SyncedAudioProcessor);
-    `;
-
-    const blob = new Blob([workletCode], { type: "application/javascript" });
-    const url = URL.createObjectURL(blob);
-
-    try {
-      await this.audioContext.audioWorklet.addModule(url);
-
-      this.workletNode = new AudioWorkletNode(this.audioContext, "synced-audio-processor");
-      this.workletNode.connect(this.destination);
-
-      this.initialized = true;
-    } finally {
-      URL.revokeObjectURL(url);
+    // Firefox/Safari create AudioContext in "suspended" state (autoplay policy).
+    // Without resume(), the worklet runs but produces silence.
+    if (this.audioContext.state === "suspended") {
+      await this.audioContext.resume();
     }
+
+    this.initialized = true;
   }
 
   /**
-   * Convert AudioData to mono Float32Array
+   * Extract per-channel planes from AudioData.
+   *
+   * Returns one Float32Array per channel. The worklet maintains independent
+   * queues per channel and writes to however many output channels it has.
+   * If Firefox only provides mono output despite outputChannelCount:[2],
+   * the worklet maps all outputs to source channel 0 (graceful fallback).
    */
-  private audioDataToSamples(data: AudioData): Float32Array {
-    const channels = data.numberOfChannels;
+  private extractPlanes(data: AudioData): Float32Array[] {
     const frames = data.numberOfFrames;
+    const channels = data.numberOfChannels;
+    const isPlanar = data.format ? data.format.includes("planar") : true;
 
-    // Get all samples
-    const allSamples = new Float32Array(frames * channels);
-    data.copyTo(allSamples, { planeIndex: 0 });
-
-    // Convert to mono if needed
-    if (channels === 1) {
-      return allSamples;
-    }
-
-    // Mix down to mono
-    const mono = new Float32Array(frames);
-    for (let i = 0; i < frames; i++) {
-      let sum = 0;
+    if (isPlanar) {
+      // Each planeIndex = one channel
+      const planes: Float32Array[] = [];
       for (let ch = 0; ch < channels; ch++) {
-        sum += allSamples[i * channels + ch];
+        const plane = new Float32Array(frames);
+        data.copyTo(plane, { planeIndex: ch });
+        planes.push(plane);
       }
-      mono[i] = sum / channels;
+      return planes;
     }
 
-    return mono;
+    // Interleaved: single plane [L0, R0, L1, R1, ...] — de-interleave
+    const all = new Float32Array(frames * channels);
+    data.copyTo(all, { planeIndex: 0 });
+    const planes: Float32Array[] = [];
+    for (let ch = 0; ch < channels; ch++) {
+      const plane = new Float32Array(frames);
+      for (let i = 0; i < frames; i++) {
+        plane[i] = all[i * channels + ch];
+      }
+      planes.push(plane);
+    }
+    return planes;
   }
 
-  /**
-   * Feed samples to the worklet
-   */
-  private feedSamples(): void {
-    if (!this.initialized || !this.workletNode || this.sampleBuffer.length === 0) {
-      return;
-    }
-
-    // Send oldest chunk to worklet
-    const samples = this.sampleBuffer.shift();
-    if (samples) {
-      this.workletNode.port.postMessage(
-        { type: "samples", samples },
-        { transfer: [samples.buffer] }
-      );
-    }
-  }
-
-  /**
-   * Get the writable stream for writing AudioData
-   */
   get writable(): WritableStream<AudioData> {
     return this._writable;
   }
 
-  /**
-   * Get the MediaStreamTrack for adding to MediaStream
-   */
   getTrack(): MediaStreamTrack {
     return this.track;
   }
 
-  /**
-   * Wait for initialization to complete
-   */
   async waitForInit(): Promise<void> {
     await this.initPromise;
   }
 
-  /**
-   * Close and cleanup resources
-   */
   close(): void {
     if (this.closed) return;
     this.closed = true;
 
     this.track.stop();
     this.workletNode?.disconnect();
+    this.gainNode.disconnect();
     this.audioContext.close();
-    this.sampleBuffer = [];
   }
 }
 

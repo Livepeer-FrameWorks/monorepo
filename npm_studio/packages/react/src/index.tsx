@@ -10,6 +10,13 @@ export {
   type StreamCrafterProps,
 } from "./components/StreamCrafter";
 
+// Composable sub-components (use inside <StreamCrafter> with children)
+export { StudioPreview, type StudioPreviewProps } from "./components/StudioPreview";
+export { StudioMixer, type StudioMixerProps } from "./components/StudioMixer";
+export { StudioActionBar, type StudioActionBarProps } from "./components/StudioActionBar";
+export { StudioSettings, type StudioSettingsProps } from "./components/StudioSettings";
+export { StudioStatusBadge, type StudioStatusBadgeProps } from "./components/StudioStatusBadge";
+
 // Compositor Components (Phase 3)
 export { SceneSwitcher, type SceneSwitcherProps } from "./components/SceneSwitcher";
 export { LayerList, type LayerListProps } from "./components/LayerList";
@@ -62,6 +69,7 @@ export {
 export {
   StreamCrafterProvider,
   useStreamCrafterContext,
+  useStreamCrafterContextOptional,
   type StreamCrafterProviderProps,
 } from "./context/StreamCrafterContext";
 

@@ -103,7 +103,9 @@ func SetupServiceRouter(
 	router.Use(metricsCollector.MetricsMiddleware())
 
 	// Register real monitoring endpoints
-	router.GET("/health", healthChecker.Handler())
+	healthHandler := healthChecker.Handler()
+	router.GET("/health", healthHandler)
+	router.HEAD("/health", healthHandler)
 	router.GET("/metrics", metricsCollector.Handler())
 
 	return router

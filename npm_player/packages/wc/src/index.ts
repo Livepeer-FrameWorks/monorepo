@@ -30,6 +30,16 @@ export { FwSkipIndicator } from "./components/fw-skip-indicator.js";
 export { FwSpeedIndicator } from "./components/fw-speed-indicator.js";
 export { FwContextMenu } from "./components/fw-context-menu.js";
 
+// Composable control elements
+export {
+  FwPlayButton,
+  FwSkipButton,
+  FwVolumeControl as FwVolumeButton,
+  FwTimeDisplay,
+  FwLiveBadge,
+  FwFullscreenButton,
+} from "./components/controls/index.js";
+
 // Controller
 export { PlayerControllerHost } from "./controllers/player-controller-host.js";
 export type { PlayerControllerHostState } from "./controllers/player-controller-host.js";

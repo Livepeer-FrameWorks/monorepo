@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -46,12 +47,20 @@ type RodRenderer struct {
 // NewRodRenderer launches a headless Chromium process via Rod's launcher.
 // Returns an error if Chrome/Chromium cannot be started.
 func NewRodRenderer() (*RodRenderer, error) {
-	u, err := launcher.New().
+	l := launcher.New().
 		Headless(true).
 		Set("disable-gpu").
-		Set("no-sandbox").
-		Set("disable-dev-shm-usage").
-		Launch()
+		Set("no-sandbox")
+
+	// Prefer system-installed Chromium (e.g. Alpine's `apk add chromium`)
+	// over Rod's auto-download, which fails in minimal containers.
+	if bin, err := exec.LookPath("chromium-browser"); err == nil {
+		l = l.Bin(bin)
+	} else if bin, err := exec.LookPath("chromium"); err == nil {
+		l = l.Bin(bin)
+	}
+
+	u, err := l.Launch()
 	if err != nil {
 		return nil, fmt.Errorf("launch headless browser: %w", err)
 	}

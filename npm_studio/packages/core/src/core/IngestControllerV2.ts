@@ -14,7 +14,11 @@ import { WhipClient } from "./WhipClient";
 import { AudioMixer } from "./AudioMixer";
 import { ReconnectionManager } from "./ReconnectionManager";
 import { SceneManager } from "./SceneManager";
-import { EncoderManager, createEncoderConfig } from "./EncoderManager";
+import { EncoderManager, createMultiCodecEncoderConfig } from "./EncoderManager";
+import type { VideoCodecFamily } from "./CodecProfiles";
+import { RecordingManager } from "../recording/RecordingManager";
+import { BitrateAdaptation } from "./BitrateAdaptation";
+import type { WebMWriterOptions } from "../recording/WebMWriter";
 import { detectCapabilities, isRTCRtpScriptTransformSupported } from "./FeatureDetection";
 import { getVideoConstraints } from "./MediaConstraints";
 import type {
@@ -67,6 +71,17 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   // Phase 2.5: WebCodecs Encoder (Path C)
   private encoderManager: EncoderManager | null = null;
   private encoderOverrides: EncoderOverrides = {};
+  private videoCodecFamily: VideoCodecFamily = "h264";
+
+  // Recording
+  private recordingManager: RecordingManager | null = null;
+
+  // Adaptive bitrate
+  private bitrateAdaptation: BitrateAdaptation | null = null;
+
+  // Lifecycle: listener cleanup
+  private eventForwardingUnsubs: Array<() => void> = [];
+  private whipClientUnsubs: Array<() => void> = [];
 
   constructor(config: IngestControllerConfigV2) {
     super();
@@ -135,52 +150,52 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Set up event forwarding from child components
    */
   private setupEventForwarding(): void {
-    this.deviceManager.on("devicesChanged", (event) => {
-      this.emit("deviceChange", event);
-    });
+    this.eventForwardingUnsubs.push(
+      this.deviceManager.on("devicesChanged", (event) => {
+        this.emit("deviceChange", event);
+      }),
 
-    this.deviceManager.on("error", (event) => {
-      this.emit("error", { error: event.message, recoverable: true });
-    });
+      this.deviceManager.on("error", (event) => {
+        this.emit("error", { error: event.message, recoverable: true });
+      }),
 
-    this.screenCapture.on("ended", (event) => {
-      this.log("Screen capture ended", event);
-      // Find and remove the specific screen source by matching the stream
-      if (event.stream) {
-        for (const [id, source] of this.sources) {
-          if (source.type === "screen" && source.stream === event.stream) {
-            this.removeSource(id);
-            break;
+      this.screenCapture.on("ended", (event) => {
+        this.log("Screen capture ended", event);
+        if (event.stream) {
+          for (const [id, source] of this.sources) {
+            if (source.type === "screen" && source.stream === event.stream) {
+              this.removeSource(id);
+              break;
+            }
           }
         }
-      }
-    });
+      }),
 
-    this.screenCapture.on("error", (event) => {
-      this.emit("error", { error: event.message, recoverable: true });
-    });
+      this.screenCapture.on("error", (event) => {
+        this.emit("error", { error: event.message, recoverable: true });
+      }),
 
-    // Reconnection events
-    this.reconnectionManager.on("attemptStart", (event) => {
-      this.emit("reconnectionAttempt", {
-        attempt: event.attempt,
-        maxAttempts: this.reconnectionManager.getMaxAttempts(),
-      });
-    });
+      this.reconnectionManager.on("attemptStart", (event) => {
+        this.emit("reconnectionAttempt", {
+          attempt: event.attempt,
+          maxAttempts: this.reconnectionManager.getMaxAttempts(),
+        });
+      }),
 
-    this.reconnectionManager.on("attemptSuccess", () => {
-      this.emit("reconnectionSuccess", undefined);
-      this.setState("streaming");
-    });
+      this.reconnectionManager.on("attemptSuccess", () => {
+        this.emit("reconnectionSuccess", undefined);
+        this.setState("streaming");
+      }),
 
-    this.reconnectionManager.on("attemptFailed", (event) => {
-      this.log("Reconnection attempt failed", event);
-    });
+      this.reconnectionManager.on("attemptFailed", (event) => {
+        this.log("Reconnection attempt failed", event);
+      }),
 
-    this.reconnectionManager.on("exhausted", () => {
-      this.emit("reconnectionFailed", { error: "All reconnection attempts exhausted" });
-      this.setState("error", { error: "Connection lost - reconnection failed" });
-    });
+      this.reconnectionManager.on("exhausted", () => {
+        this.emit("reconnectionFailed", { error: "All reconnection attempts exhausted" });
+        this.setState("error", { error: "Connection lost - reconnection failed" });
+      })
+    );
   }
 
   /**
@@ -734,79 +749,155 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private setupWhipClientHandlers(): void {
     if (!this.whipClient) return;
 
-    this.whipClient.on("stateChange", (event) => {
-      this.log("WHIP state changed", event);
-      this.stateContext = {
-        ...this.stateContext,
-        connectionState: event.state,
-      };
+    this.cleanupWhipClientHandlers();
 
-      if (event.state === "connected") {
-        this.setState("streaming");
-        this.startStatsPolling();
-        this.reconnectionManager.reset();
+    this.whipClientUnsubs.push(
+      this.whipClient.on("stateChange", async (event) => {
+        this.log("WHIP state changed", event);
+        this.stateContext = {
+          ...this.stateContext,
+          connectionState: event.state,
+        };
 
-        // Attach WebCodecs encoder transform if supported and codecs are aligned
-        // This must happen AFTER connection is established (senders exist)
-        if (this.useWebCodecs && this.encoderManager && this.whipClient) {
-          this.log("Attempting to attach WebCodecs encoder transform");
-          // Check if codec alignment allows encoded frame insertion
-          const canUseEncoded = this.whipClient.canUseEncodedInsertion();
-          this.log("canUseEncodedInsertion result:", canUseEncoded);
-          if (canUseEncoded) {
-            try {
-              this.whipClient.attachEncoderTransform(
-                this.encoderManager,
-                this.config.workers?.rtcTransform
-              );
-              this.encoderManager.start();
-              this.log("WebCodecs encoder transform attached", {
+        if (event.state === "connected") {
+          this.setState("streaming");
+          this.startStatsPolling();
+          this.reconnectionManager.reset();
+
+          // Attach WebCodecs encoder transform if supported and codecs are aligned
+          // This must happen AFTER connection is established (senders exist)
+          if (this.useWebCodecs && this.encoderManager && this.whipClient) {
+            this.log("Attempting to attach WebCodecs encoder transform");
+            // Check if codec alignment allows encoded frame insertion
+            const canUseEncoded = this.whipClient.canUseEncodedInsertion();
+            this.log("canUseEncodedInsertion result:", canUseEncoded);
+            if (canUseEncoded) {
+              try {
+                // Reconfigure encoder to match negotiated codec if in auto mode
+                await this.reconfigureEncoderForNegotiatedCodec();
+
+                this.whipClient.attachEncoderTransform(
+                  this.encoderManager,
+                  this.config.workers?.rtcTransform
+                );
+                this.encoderManager.start();
+                this.log("WebCodecs encoder transform attached", {
+                  videoCodec: this.whipClient.getNegotiatedVideoCodec(),
+                  codecFamily: this.videoCodecFamily,
+                  audioCodec: this.whipClient.getNegotiatedAudioCodec(),
+                });
+                this.emit("webCodecsActive", { active: true });
+
+                // Start adaptive bitrate if enabled
+                this.startBitrateAdaptation();
+
+                // Enable direct frame output if compositor is active
+                this.enableDirectFrameOutput();
+              } catch (err) {
+                this.log(
+                  "Failed to attach encoder transform, continuing with browser encoding",
+                  err
+                );
+                if (this.encoderManager) {
+                  this.encoderManager.destroy();
+                  this.encoderManager = null;
+                }
+              }
+            } else {
+              this.log("Codec alignment check failed, using browser encoding", {
                 videoCodec: this.whipClient.getNegotiatedVideoCodec(),
                 audioCodec: this.whipClient.getNegotiatedAudioCodec(),
               });
-              // Emit event so UI can update
-              this.emit("webCodecsActive", { active: true });
-            } catch (err) {
-              this.log("Failed to attach encoder transform, continuing with browser encoding", err);
-              // Clean up encoder on failure
               if (this.encoderManager) {
                 this.encoderManager.destroy();
                 this.encoderManager = null;
               }
             }
+          }
+        } else if (event.state === "failed" || event.state === "disconnected") {
+          // Skip reconnection/error handling if user intentionally stopped streaming
+          if (this.isStoppingIntentionally) {
+            return;
+          }
+          if (this.state === "streaming" && this.config.reconnection?.enabled !== false) {
+            this.handleConnectionLost();
           } else {
-            this.log("Codec alignment check failed, using browser encoding", {
-              videoCodec: this.whipClient.getNegotiatedVideoCodec(),
-              audioCodec: this.whipClient.getNegotiatedAudioCodec(),
+            this.setState("error", {
+              error: event.state === "failed" ? "Connection failed" : "Connection lost",
             });
-            // Clean up encoder since we won't use it
-            if (this.encoderManager) {
-              this.encoderManager.destroy();
-              this.encoderManager = null;
-            }
+            this.stopStatsPolling();
           }
         }
-      } else if (event.state === "failed" || event.state === "disconnected") {
-        // Skip reconnection/error handling if user intentionally stopped streaming
+      })
+    );
+
+    this.whipClientUnsubs.push(
+      this.whipClient.on("error", (event) => {
         if (this.isStoppingIntentionally) {
           return;
         }
-        if (this.state === "streaming" && this.config.reconnection?.enabled !== false) {
-          this.handleConnectionLost();
-        } else {
-          this.setState("error", {
-            error: event.state === "failed" ? "Connection failed" : "Connection lost",
-          });
-          this.stopStatsPolling();
-        }
-      }
+        this.emit("error", { error: event.message, recoverable: false });
+      })
+    );
+  }
+
+  private cleanupWhipClientHandlers(): void {
+    this.whipClientUnsubs.forEach((fn) => fn());
+    this.whipClientUnsubs = [];
+  }
+
+  /**
+   * Resolve the initial codec family to use for encoding.
+   * 'auto' defaults to h264 (will be reconfigured after SDP negotiation).
+   */
+  private resolveInitialCodecFamily(): VideoCodecFamily {
+    const pref = this.config.videoCodec ?? "auto";
+    if (pref === "auto") return "h264";
+    return pref;
+  }
+
+  /**
+   * After SDP negotiation, reconfigure encoder to match the server-negotiated codec.
+   * Only reconfigures if videoCodec is 'auto' and the negotiated codec differs from initial.
+   */
+  private async reconfigureEncoderForNegotiatedCodec(): Promise<void> {
+    if (!this.whipClient || !this.encoderManager) return;
+
+    const negotiatedFamily = this.whipClient.getNegotiatedVideoCodecFamily();
+    if (!negotiatedFamily) return;
+
+    // Skip if user explicitly chose a codec (not 'auto')
+    const pref = this.config.videoCodec ?? "auto";
+    if (pref !== "auto") {
+      this.log("Codec explicitly set, skipping negotiation-based reconfigure", { pref });
+      return;
+    }
+
+    // Skip if already configured for this codec
+    if (negotiatedFamily === this.videoCodecFamily) {
+      this.log("Encoder already configured for negotiated codec", { negotiatedFamily });
+      return;
+    }
+
+    this.log("Reconfiguring encoder for negotiated codec", {
+      from: this.videoCodecFamily,
+      to: negotiatedFamily,
     });
 
-    this.whipClient.on("error", (event) => {
-      if (this.isStoppingIntentionally) {
-        return;
-      }
-      this.emit("error", { error: event.message, recoverable: false });
+    const encoderProfile = this.currentProfile === "auto" ? "broadcast" : this.currentProfile;
+    const newConfig = createMultiCodecEncoderConfig(
+      encoderProfile,
+      negotiatedFamily,
+      this.encoderOverrides
+    );
+
+    await this.encoderManager.updateConfig(newConfig);
+    this.videoCodecFamily = negotiatedFamily;
+
+    this.log("Encoder reconfigured for negotiated codec", {
+      codec: newConfig.video.codec,
+      bitrate: newConfig.video.bitrate,
+      keyframeInterval: newConfig.keyframeInterval,
     });
   }
 
@@ -866,7 +957,14 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           // Initialize encoder with output stream
           // Map quality profile to encoder profile (handle 'auto' by defaulting to 'broadcast')
           const encoderProfile = this.currentProfile === "auto" ? "broadcast" : this.currentProfile;
-          const encoderConfig = createEncoderConfig(encoderProfile, this.encoderOverrides);
+          // Resolve codec family: explicit config, or default to h264 (will be reconfigured after negotiation)
+          const initialCodec = this.resolveInitialCodecFamily();
+          this.videoCodecFamily = initialCodec;
+          const encoderConfig = createMultiCodecEncoderConfig(
+            encoderProfile,
+            initialCodec,
+            this.encoderOverrides
+          );
           this.log("Encoder config with overrides:", encoderConfig);
           await this.encoderManager.initialize(this.outputStream, encoderConfig);
           this.log("WebCodecs encoder initialized");
@@ -910,6 +1008,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.log("Handling encoder failure - reconnecting without WebCodecs");
     this.setState("reconnecting");
     this.stopStatsPolling();
+    this.disableDirectFrameOutput();
+    this.stopBitrateAdaptation();
 
     // Clean up encoder
     if (this.encoderManager) {
@@ -961,9 +1061,11 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.log("Connection lost, starting reconnection");
     this.setState("reconnecting");
     this.stopStatsPolling();
+    this.stopBitrateAdaptation();
 
     this.reconnectionManager.start(async () => {
-      // Clean up old client
+      // Clean up old client handlers and connection
+      this.cleanupWhipClientHandlers();
       if (this.whipClient) {
         try {
           await this.whipClient.disconnect();
@@ -1021,6 +1123,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     try {
       this.stopStatsPolling();
+      this.disableDirectFrameOutput();
+      this.stopBitrateAdaptation();
       this.reconnectionManager.stop();
 
       // Stop encoder
@@ -1256,6 +1360,11 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     this.log("Compositor enabled", compositorConfig);
 
+    // If encoder is already active, enable direct frame output
+    if (this.encoderManager && this.isWebCodecsActive()) {
+      this.enableDirectFrameOutput();
+    }
+
     // Update output to use compositor
     this.updateOutputStreamFromSources();
   }
@@ -1265,6 +1374,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   disableCompositor(): void {
     if (this.sceneManager) {
+      this.disableDirectFrameOutput();
       this.sceneManager.destroy();
       this.sceneManager = null;
       this.log("Compositor disabled");
@@ -1415,13 +1525,256 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     return this.encoderManager !== null && this.whipClient?.hasEncoderTransform() === true;
   }
 
+  isAdaptiveBitrateActive(): boolean {
+    return this.bitrateAdaptation !== null;
+  }
+
+  getCurrentBitrate(): number | null {
+    return this.bitrateAdaptation?.bitrate ?? null;
+  }
+
+  getCongestionLevel(): string | null {
+    return this.bitrateAdaptation?.congestionLevel ?? null;
+  }
+
+  // ============================================================================
+  // Direct Frame Output (compositor → encoder bypass)
+  // ============================================================================
+
+  /**
+   * When both compositor and WebCodecs encoder are active, feed composited
+   * VideoFrames directly to the encoder — skipping captureStream() entirely.
+   */
+  private enableDirectFrameOutput(): void {
+    if (!this.sceneManager || !this.encoderManager) return;
+
+    this.sceneManager.setFrameCallback((frame: VideoFrame) => {
+      if (this.encoderManager) {
+        this.encoderManager.feedVideoFrame(frame);
+      } else {
+        frame.close();
+      }
+    });
+    this.log("Direct compositor → encoder frame pipeline enabled");
+  }
+
+  private disableDirectFrameOutput(): void {
+    if (this.sceneManager) {
+      this.sceneManager.setFrameCallback(null);
+    }
+  }
+
+  // ============================================================================
+  // Adaptive Bitrate
+  // ============================================================================
+
+  private startBitrateAdaptation(): void {
+    if (this.config.adaptiveBitrate === false) return;
+    if (!this.whipClient || !this.encoderManager) return;
+
+    const pc = this.whipClient.getPeerConnection();
+    if (!pc) return;
+
+    this.stopBitrateAdaptation();
+
+    const encoderConfig = this.encoderManager.getConfig();
+    this.bitrateAdaptation = new BitrateAdaptation({
+      pc,
+      encoder: this.encoderManager,
+      maxBitrate: encoderConfig?.video.bitrate ?? 4_500_000,
+    });
+
+    this.bitrateAdaptation.on("bitrateChanged", (event) => {
+      this.log("Bitrate adapted", event);
+      this.emit("bitrateChanged", event);
+    });
+
+    this.bitrateAdaptation.on("congestionChanged", (event) => {
+      this.log("Congestion changed", event);
+      this.emit("congestionChanged", event);
+    });
+
+    this.bitrateAdaptation.start();
+    this.log("Adaptive bitrate started", { maxBitrate: encoderConfig?.video.bitrate });
+  }
+
+  private stopBitrateAdaptation(): void {
+    if (this.bitrateAdaptation) {
+      this.bitrateAdaptation.destroy();
+      this.bitrateAdaptation = null;
+    }
+  }
+
+  // ============================================================================
+  // Recording
+  // ============================================================================
+
+  /**
+   * Start recording encoded chunks to a WebM container.
+   * Requires WebCodecs encoding to be active (encoder must be running).
+   * Recording works independently of streaming — can record while not streaming
+   * as long as the encoder is running.
+   */
+  startRecording(): void {
+    if (this.recordingManager?.isRecording) {
+      this.log("Recording already in progress");
+      return;
+    }
+
+    if (!this.encoderManager) {
+      this.log("Cannot record: no encoder active (WebCodecs required)");
+      this.emit("error", { error: "Recording requires WebCodecs encoding", recoverable: true });
+      return;
+    }
+
+    // H.264 is not valid in WebM — recording requires VP9 or AV1
+    if (this.videoCodecFamily === "h264") {
+      this.log("Cannot record: H.264 is not supported in WebM containers. Use VP9 or AV1.");
+      this.emit("error", {
+        error: "Recording requires VP9 or AV1 codec (H.264 not supported in WebM)",
+        recoverable: true,
+      });
+      return;
+    }
+
+    const videoCodec = this.videoCodecFamily === "av1" ? ("V_AV1" as const) : ("V_VP9" as const);
+    const encoderConfig = this.encoderManager.getConfig();
+
+    const muxerOptions: WebMWriterOptions = {
+      video: {
+        width: encoderConfig?.video.width ?? 1920,
+        height: encoderConfig?.video.height ?? 1080,
+      },
+      audio: {
+        sampleRate: encoderConfig?.audio.sampleRate ?? 48000,
+        channels: encoderConfig?.audio.numberOfChannels ?? 2,
+      },
+      videoCodec,
+    };
+
+    this.recordingManager = new RecordingManager({ muxerOptions });
+
+    this.recordingManager.on("progress", (event) => {
+      this.log("Recording progress", event);
+      this.emit("recordingProgress", { duration: event.duration, fileSize: event.fileSize });
+    });
+
+    this.recordingManager.on("stopped", (event) => {
+      this.log("Recording stopped", {
+        duration: event.duration,
+        fileSize: event.fileSize,
+      });
+    });
+
+    this.recordingManager.start(this.encoderManager);
+    this.log("Recording started", { videoCodec, muxerOptions });
+    this.emit("recordingStarted", undefined as any);
+  }
+
+  /**
+   * Stop recording and return the WebM blob.
+   * Returns null if no recording is in progress.
+   */
+  stopRecording(): Blob | null {
+    if (!this.recordingManager) return null;
+
+    const duration = this.recordingManager.duration;
+    const fileSize = this.recordingManager.fileSize;
+    const blob = this.recordingManager.stop();
+    this.recordingManager.destroy();
+    this.recordingManager = null;
+    if (blob) {
+      this.emit("recordingStopped", { blob, duration, fileSize });
+    }
+    return blob;
+  }
+
+  /**
+   * Pause recording (chunks are discarded while paused).
+   */
+  pauseRecording(): void {
+    if (!this.recordingManager) return;
+    this.recordingManager.pause();
+    this.emit("recordingPaused", undefined as any);
+  }
+
+  /**
+   * Resume recording after pause.
+   */
+  resumeRecording(): void {
+    if (!this.recordingManager) return;
+    this.recordingManager.resume();
+    this.emit("recordingResumed", undefined as any);
+  }
+
+  /**
+   * Check if recording is in progress.
+   */
+  isRecordingActive(): boolean {
+    return this.recordingManager?.isRecording === true;
+  }
+
+  /**
+   * Get current recording duration in milliseconds.
+   */
+  getRecordingDuration(): number {
+    return this.recordingManager?.duration ?? 0;
+  }
+
+  /**
+   * Get current recording file size in bytes.
+   */
+  getRecordingFileSize(): number {
+    return this.recordingManager?.fileSize ?? 0;
+  }
+
+  /**
+   * Add a MediaFileSource as a streaming source.
+   * Wraps addCustomSource with type "media" and auto-handles the "ended" event.
+   */
+  addMediaFileSource(
+    source: { getStream(): MediaStream | null; on(event: string, handler: Function): () => void },
+    label = "Media"
+  ): MediaSource | null {
+    const stream = source.getStream();
+    if (!stream) return null;
+
+    const ms = this.addCustomSource(stream, label);
+
+    // Auto-deactivate when playback ends
+    const unsub = source.on("ended", () => {
+      this.removeSource(ms.id);
+      unsub();
+    });
+
+    return ms;
+  }
+
+  /**
+   * Get the current video codec family in use.
+   */
+  getVideoCodecFamily(): VideoCodecFamily {
+    return this.videoCodecFamily;
+  }
+
   /**
    * Destroy the controller
    */
   destroy(): void {
     this.log("Destroying IngestControllerV2");
     this.stopStatsPolling();
+    this.disableDirectFrameOutput();
+    this.stopBitrateAdaptation();
+    this.cleanupWhipClientHandlers();
+    this.eventForwardingUnsubs.forEach((fn) => fn());
+    this.eventForwardingUnsubs = [];
     this.reconnectionManager.destroy();
+
+    // Stop recording
+    if (this.recordingManager) {
+      this.recordingManager.destroy();
+      this.recordingManager = null;
+    }
 
     // Destroy encoder
     if (this.encoderManager) {

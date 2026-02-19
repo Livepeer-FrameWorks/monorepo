@@ -9,8 +9,10 @@ import { utilityStyles } from "../styles/utility-styles.js";
 import {
   SPEED_PRESETS,
   supportsPlaybackRate as coreSupportsPlaybackRate,
+  getAvailableLocales,
+  getLocaleDisplayName,
 } from "@livepeer-frameworks/player-core";
-import type { PlaybackMode } from "@livepeer-frameworks/player-core";
+import type { PlaybackMode, FwLocale } from "@livepeer-frameworks/player-core";
 import type { PlayerControllerHost } from "../controllers/player-controller-host.js";
 
 @customElement("fw-settings-menu")
@@ -23,6 +25,7 @@ export class FwSettingsMenu extends LitElement {
   @property({ type: String, attribute: "quality-value" }) qualityValue?: string;
   @property({ type: String, attribute: "caption-value" }) captionValue?: string;
   @property({ type: Boolean, attribute: "supports-playback-rate" }) supportsPlaybackRate?: boolean;
+  @property({ attribute: "active-locale" }) activeLocale?: FwLocale;
 
   @state() private _playbackRate = 1;
 
@@ -109,6 +112,16 @@ export class FwSettingsMenu extends LitElement {
     this._close();
   }
 
+  private _handleLocaleChange(locale: FwLocale): void {
+    this.dispatchEvent(
+      new CustomEvent("fw-locale-change", {
+        detail: { locale },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   private _deriveFallbackQualities(): Array<{
     id: string;
     label: string;
@@ -166,11 +179,11 @@ export class FwSettingsMenu extends LitElement {
       this.supportsPlaybackRate ?? coreSupportsPlaybackRate(state.videoElement);
 
     return html`
-      <div class="fw-player-surface fw-settings-menu" role="menu" aria-label="Player settings">
+      <div class="fw-settings-menu" role="menu" aria-label=${this.pc.t("settings")}>
         ${this.isContentLive
           ? html`
               <div class="fw-settings-section">
-                <div class="fw-settings-label">Mode</div>
+                <div class="fw-settings-label">${this.pc.t("mode")}</div>
                 <div class="fw-settings-options">
                   ${(["auto", "low-latency", "quality"] as const).map(
                     (mode) => html`
@@ -182,7 +195,11 @@ export class FwSettingsMenu extends LitElement {
                         })}
                         @click=${() => this._handleModeChange(mode)}
                       >
-                        ${mode === "low-latency" ? "Fast" : mode === "quality" ? "Stable" : "Auto"}
+                        ${mode === "low-latency"
+                          ? this.pc.t("fast")
+                          : mode === "quality"
+                            ? this.pc.t("stable")
+                            : this.pc.t("auto")}
                       </button>
                     `
                   )}
@@ -193,7 +210,7 @@ export class FwSettingsMenu extends LitElement {
         ${supportsPlaybackRate
           ? html`
               <div class="fw-settings-section">
-                <div class="fw-settings-label">Speed</div>
+                <div class="fw-settings-label">${this.pc.t("speed")}</div>
                 <div class="fw-settings-options fw-settings-options--wrap">
                   ${SPEED_PRESETS.map(
                     (rate) => html`
@@ -216,7 +233,7 @@ export class FwSettingsMenu extends LitElement {
         ${qualities.length > 0
           ? html`
               <div class="fw-settings-section">
-                <div class="fw-settings-label">Quality</div>
+                <div class="fw-settings-label">${this.pc.t("quality")}</div>
                 <div class="fw-settings-list">
                   <button
                     type="button"
@@ -226,7 +243,7 @@ export class FwSettingsMenu extends LitElement {
                     })}
                     @click=${() => this._handleQualityChange("auto")}
                   >
-                    Auto
+                    ${this.pc.t("auto")}
                   </button>
                   ${qualities.map(
                     (quality) => html`
@@ -249,7 +266,7 @@ export class FwSettingsMenu extends LitElement {
         ${textTracks.length > 0
           ? html`
               <div class="fw-settings-section">
-                <div class="fw-settings-label">Captions</div>
+                <div class="fw-settings-label">${this.pc.t("captions")}</div>
                 <div class="fw-settings-list">
                   <button
                     type="button"
@@ -259,7 +276,7 @@ export class FwSettingsMenu extends LitElement {
                     })}
                     @click=${() => this._handleCaptionChange("none")}
                   >
-                    Off
+                    ${this.pc.t("captionsOff")}
                   </button>
                   ${textTracks.map(
                     (track) => html`
@@ -272,6 +289,29 @@ export class FwSettingsMenu extends LitElement {
                         @click=${() => this._handleCaptionChange(track.id)}
                       >
                         ${track.label || track.id}
+                      </button>
+                    `
+                  )}
+                </div>
+              </div>
+            `
+          : nothing}
+        ${this.activeLocale !== undefined
+          ? html`
+              <div class="fw-settings-section">
+                <div class="fw-settings-label">${this.pc.t("language")}</div>
+                <div class="fw-settings-list">
+                  ${getAvailableLocales().map(
+                    (loc) => html`
+                      <button
+                        type="button"
+                        class=${classMap({
+                          "fw-settings-list-item": true,
+                          "fw-settings-list-item--active": this.activeLocale === loc,
+                        })}
+                        @click=${() => this._handleLocaleChange(loc)}
+                      >
+                        ${getLocaleDisplayName(loc)}
                       </button>
                     `
                   )}

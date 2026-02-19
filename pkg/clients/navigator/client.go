@@ -48,28 +48,21 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 	}
 }
 
-// NewClient creates a new Navigator gRPC client
+// NewClient creates a new Navigator gRPC client with lazy connection.
+// The connection is established on first RPC, not at creation time.
+// Callers must handle RPC errors for unavailable Navigator gracefully.
 func NewClient(config Config) (*Client, error) {
 	if config.Addr == "" {
 		return nil, fmt.Errorf("navigator address is required")
 	}
-	if config.Timeout == 0 {
-		config.Timeout = 5 * time.Second
-	}
 
-	// DialContext+WithBlock ensures we fail fast if Navigator is unreachable.
-	// grpc.NewClient ignores WithBlock/WithTimeout, deferring failures to first RPC.
-	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
-	defer cancel()
-	conn, err := grpc.DialContext( //nolint:staticcheck // Need DialContext+WithBlock to fail fast; grpc.NewClient defers failures to first RPC.
-		ctx,
+	conn, err := grpc.NewClient(
 		config.Addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
-		grpc.WithBlock(), //nolint:staticcheck // See DialContext comment above.
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Navigator gRPC server: %w", err)
+		return nil, fmt.Errorf("failed to create Navigator gRPC client: %w", err)
 	}
 
 	return &Client{

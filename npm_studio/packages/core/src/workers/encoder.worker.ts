@@ -29,6 +29,7 @@ interface AudioEncoderSettings {
 interface EncoderConfig {
   video: VideoEncoderSettings;
   audio: AudioEncoderSettings;
+  keyframeInterval?: number;
 }
 
 interface EncoderStats {
@@ -94,7 +95,7 @@ interface EncodedAudioChunkData {
 const MAX_VIDEO_QUEUE_SIZE = 3; // Low-latency: only buffer ~3 frames
 const MAX_AUDIO_QUEUE_SIZE = 10; // Audio is smaller, buffer a bit more
 const ENCODE_QUEUE_THRESHOLD = 5; // If encoder queue > 5, start dropping
-const KEYFRAME_INTERVAL = 60; // Every 60 frames (~2s at 30fps)
+const DEFAULT_KEYFRAME_INTERVAL = 60; // Every 60 frames (~2s at 30fps)
 const STATS_INTERVAL_MS = 1000;
 
 // ============================================================================
@@ -106,6 +107,7 @@ let audioEncoder: AudioEncoder | null = null;
 let config: EncoderConfig | null = null;
 let isRunning = false;
 let isInitialized = false;
+let keyframeInterval = DEFAULT_KEYFRAME_INTERVAL;
 
 // Queue management for frame processing
 let videoWriteQueue: VideoFrame[] = [];
@@ -340,7 +342,7 @@ async function processVideoQueue(): Promise<void> {
           // Input-driven keyframe scheduling
           const forceKeyframe =
             videoFramesSubmitted === 0 || // First frame
-            videoFramesSubmitted % KEYFRAME_INTERVAL === 0 || // Periodic
+            videoFramesSubmitted % keyframeInterval === 0 || // Periodic
             justRecoveredFromBackpressure || // After recovery
             justReconfigured; // After config change
 
@@ -428,6 +430,7 @@ async function processAudioQueue(): Promise<void> {
 async function initialize(encoderConfig: EncoderConfig, requestId: string): Promise<void> {
   console.log("[EncoderWorker] Initializing with config:", encoderConfig);
   config = encoderConfig;
+  keyframeInterval = encoderConfig.keyframeInterval ?? DEFAULT_KEYFRAME_INTERVAL;
 
   // Reset state
   videoFramesSubmitted = 0;
@@ -542,6 +545,10 @@ async function updateConfig(newConfig: Partial<EncoderConfig>, requestId: string
   }
 
   justReconfigured = true;
+
+  if (newConfig.keyframeInterval !== undefined) {
+    keyframeInterval = newConfig.keyframeInterval;
+  }
 
   if (newConfig.video) {
     config.video = { ...config.video, ...newConfig.video };

@@ -9,6 +9,8 @@
   import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
   import { countryNames } from "$lib/utils/country-names";
   import { getIconComponent } from "$lib/iconUtils";
+  import ThemePicker from "$lib/components/ThemePicker.svelte";
+  import { themeStore } from "$lib/stores/theme.svelte";
   import { connect, getConnectors } from "wagmi/actions";
   import { wagmiConfig } from "$lib/wallet/config";
   import {
@@ -329,6 +331,7 @@
   const WalletIcon = getIconComponent("Wallet");
   const TrashIcon = getIconComponent("Trash2");
   const MailIcon = getIconComponent("Mail");
+  const PaletteIcon = getIconComponent("Palette");
 </script>
 
 <svelte:head>
@@ -387,6 +390,49 @@
               <Button onclick={saveProfile} disabled={loading}>
                 {loading ? "Saving..." : "Save Changes"}
               </Button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Appearance Section Slab -->
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <PaletteIcon class="w-4 h-4 text-primary" />
+              <h3>Appearance</h3>
+            </div>
+          </div>
+          <div class="slab-body--padded">
+            <div class="space-y-6">
+              <div>
+                <h4 class="text-sm font-medium text-foreground mb-3">Theme</h4>
+                <ThemePicker />
+              </div>
+              {#if themeStore.hasMultipleModes}
+                <div>
+                  <h4 class="text-sm font-medium text-foreground mb-3">Mode</h4>
+                  <div class="flex gap-3">
+                    <button
+                      onclick={() => themeStore.setMode("dark")}
+                      class="px-4 py-2 border transition-colors cursor-pointer text-sm
+                        {themeStore.isDark
+                        ? 'border-[hsl(var(--tn-blue))] bg-[hsl(var(--tn-blue)/0.08)] text-foreground'
+                        : 'border-[hsl(var(--tn-fg-gutter)/0.3)] text-muted-foreground hover:text-foreground'}"
+                    >
+                      Dark
+                    </button>
+                    <button
+                      onclick={() => themeStore.setMode("light")}
+                      class="px-4 py-2 border transition-colors cursor-pointer text-sm
+                        {themeStore.isLight
+                        ? 'border-[hsl(var(--tn-blue))] bg-[hsl(var(--tn-blue)/0.08)] text-foreground'
+                        : 'border-[hsl(var(--tn-fg-gutter)/0.3)] text-muted-foreground hover:text-foreground'}"
+                    >
+                      Light
+                    </button>
+                  </div>
+                </div>
+              {/if}
             </div>
           </div>
         </div>

@@ -3,7 +3,7 @@
   Thin wrapper over PlayerController from @livepeer-frameworks/player-core
 -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, setContext, type Snippet } from "svelte";
   import IdleScreen from "./IdleScreen.svelte";
   import SubtitleRenderer from "./SubtitleRenderer.svelte";
   import PlayerControls from "./PlayerControls.svelte";
@@ -23,6 +23,8 @@
   import { StatsIcon, SettingsIcon, PictureInPictureIcon } from "./icons";
   import {
     cn,
+    themeOverridesToStyle,
+    resolveTheme,
     type PlaybackMode,
     type ContentEndpoints,
     type PlayerState,
@@ -30,11 +32,15 @@
     type ContentType,
     type EndpointInfo,
     type PlayerMetadata,
+    type FwThemePreset,
+    type FwThemeOverrides,
+    type FwLocale,
   } from "@livepeer-frameworks/player-core";
   import {
     createPlayerControllerStore,
     type PlayerControllerStore,
   } from "./stores/playerController";
+  import { localeStore, translatorStore } from "./stores/i18n";
   import type { SkipDirection } from "./SkipIndicator.svelte";
 
   // Props - aligned with React Player
@@ -57,9 +63,13 @@
       forceType?: string;
       forceSource?: number;
       playbackMode?: PlaybackMode;
+      theme?: FwThemePreset;
+      themeOverrides?: FwThemeOverrides;
+      locale?: FwLocale;
     };
     onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
     onMetadata?: (metadata: PlayerMetadata) => void;
+    children?: Snippet;
   }
 
   let {
@@ -70,6 +80,7 @@
     options = {},
     onStateChange = undefined,
     onMetadata = undefined,
+    children = undefined,
   }: Props = $props();
 
   // ============================================================================
@@ -79,11 +90,96 @@
   let isDevPanelOpen = $state(false);
   let skipDirection: SkipDirection = $state(null);
 
+  let activeTheme = $state<FwThemePreset>(options?.theme ?? "default");
+  let activeLocale = $state<FwLocale>(options?.locale ?? "en");
+
+  // Sync locale state to i18n store and provide translator context
+  $effect(() => {
+    localeStore.set(activeLocale);
+  });
+  setContext("fw-translator", translatorStore);
+
+  // Provide context for composable controls (reactive getters)
+  setContext("fw-player-controller", {
+    get isPlaying() {
+      return storeState.isPlaying;
+    },
+    get isPaused() {
+      return storeState.isPaused;
+    },
+    get isMuted() {
+      return storeState.isMuted;
+    },
+    get volume() {
+      return storeState.volume;
+    },
+    get currentTime() {
+      return storeState.currentTime;
+    },
+    get duration() {
+      return storeState.duration;
+    },
+    get isFullscreen() {
+      return storeState.isFullscreen;
+    },
+    get isEffectivelyLive() {
+      return storeState.isEffectivelyLive;
+    },
+    get isBuffering() {
+      return storeState.isBuffering;
+    },
+    get isLoopEnabled() {
+      return storeState.isLoopEnabled;
+    },
+    get error() {
+      return storeState.error;
+    },
+    get qualities() {
+      return playerStore?.getQualities() ?? [];
+    },
+    togglePlay: () => playerStore?.togglePlay(),
+    toggleMute: () => playerStore?.toggleMute(),
+    toggleFullscreen: () => playerStore?.toggleFullscreen(),
+    toggleLoop: () => playerStore?.toggleLoop(),
+    setVolume: (v: number) => playerStore?.setVolume(v),
+    jumpToLive: () => playerStore?.jumpToLive(),
+    seek: (t: number) => playerStore?.seek(t),
+    selectQuality: (id: string) => playerStore?.selectQuality(id),
+    getQualities: () => playerStore?.getQualities() ?? [],
+  });
+
   // Playback mode preference (persistent)
   let devPlaybackMode: PlaybackMode = $state("auto");
   $effect(() => {
     if (options?.playbackMode) {
       devPlaybackMode = options.playbackMode;
+    }
+  });
+
+  // Error fade-out: keep overlay visible while it animates out
+  let displayedError: string | null = $state(null);
+  let displayedIsPassive = $state(false);
+  let isErrorDismissing = $state(false);
+  let errorDismissTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const error = storeState.error;
+    const passive = storeState.isPassiveError;
+    if (error) {
+      if (errorDismissTimer) {
+        clearTimeout(errorDismissTimer);
+        errorDismissTimer = null;
+      }
+      displayedError = error;
+      displayedIsPassive = passive;
+      isErrorDismissing = false;
+    } else if (displayedError) {
+      isErrorDismissing = true;
+      errorDismissTimer = setTimeout(() => {
+        displayedError = null;
+        displayedIsPassive = false;
+        isErrorDismissing = false;
+        errorDismissTimer = null;
+      }, 300);
     }
   });
 
@@ -275,9 +371,9 @@
   let waitingMessage = $derived(
     options?.gatewayUrl
       ? storeState.state === "gateway_loading"
-        ? "Resolving viewing endpoint..."
-        : "Waiting for endpoint..."
-      : "Waiting for endpoint..."
+        ? $translatorStore("resolvingEndpoint")
+        : $translatorStore("waitingForStream")
+      : $translatorStore("waitingForStream")
   );
 </script>
 
@@ -292,6 +388,16 @@
           options?.devMode && "flex"
         )}
         data-player-container="true"
+        data-theme={activeTheme && activeTheme !== "default" ? activeTheme : undefined}
+        style={(() => {
+          const presetOverrides = activeTheme ? resolveTheme(activeTheme) : null;
+          const merged = { ...presetOverrides, ...options?.themeOverrides };
+          return Object.keys(merged).length > 0
+            ? Object.entries(themeOverridesToStyle(merged))
+                .map(([k, v]) => `${k}: ${v}`)
+                .join("; ")
+            : undefined;
+        })()}
         role="region"
         aria-label="Video player"
         onmouseenter={() => playerStore?.handleMouseEnter()}
@@ -380,7 +486,7 @@
               status={storeState.isEffectivelyLive ? storeState.streamState?.status : undefined}
               message={storeState.isEffectivelyLive
                 ? storeState.streamState?.message
-                : "Loading video..."}
+                : $translatorStore("loading")}
               percentage={storeState.isEffectivelyLive
                 ? storeState.streamState?.percentage
                 : undefined}
@@ -389,63 +495,72 @@
 
           <!-- Buffering spinner -->
           {#if showBufferingSpinner}
-            <div
-              class="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm z-20"
-            >
-              <div
-                class="flex items-center gap-3 rounded-lg border border-white/10 bg-black/70 px-4 py-3 text-sm text-white shadow-lg"
-              >
-                <div
-                  class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
-                ></div>
-                <span>Buffering...</span>
+            <div role="status" aria-live="polite" class="fw-buffering-overlay">
+              <div class="fw-buffering-pill">
+                <div class="fw-buffering-spinner"></div>
+                <span>{$translatorStore("buffering")}</span>
               </div>
             </div>
           {/if}
 
-          <!-- Error overlay -->
-          {#if storeState.error && !storeState.shouldShowIdleScreen}
+          <!-- Passive error toast (non-blocking) -->
+          {#if displayedError && !storeState.shouldShowIdleScreen && displayedIsPassive}
+            <div
+              class={cn(
+                "absolute bottom-20 left-1/2 -translate-x-1/2 z-30 transition-opacity duration-300",
+                isErrorDismissing
+                  ? "opacity-0"
+                  : "animate-in fade-in slide-in-from-bottom-2 duration-200"
+              )}
+              role="status"
+              aria-live="polite"
+            >
+              <div
+                class="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm"
+              >
+                <span class="text-yellow-400 text-xs font-semibold uppercase"
+                  >{$translatorStore("warning")}</span
+                >
+                <span>{displayedError}</span>
+                <button
+                  type="button"
+                  onclick={() => playerStore?.clearError()}
+                  class="ml-2 text-white/60 hover:text-white"
+                  aria-label={$translatorStore("dismiss")}
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path
+                      d="M9 3L3 9M3 3L9 9"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Fatal error overlay (blocking) — auto-dismisses on playback resume -->
+          {#if displayedError && !storeState.shouldShowIdleScreen && !displayedIsPassive}
             <div
               role="alert"
               aria-live="assertive"
               class={cn(
-                "fw-error-overlay",
-                storeState.isPassiveError
-                  ? "fw-error-overlay--passive"
-                  : "fw-error-overlay--fullscreen"
+                "fw-error-overlay fw-error-overlay--fullscreen transition-opacity duration-300",
+                isErrorDismissing && "opacity-0"
               )}
             >
-              <div
-                class={cn(
-                  "fw-error-popup",
-                  storeState.isPassiveError
-                    ? "fw-error-popup--passive"
-                    : "fw-error-popup--fullscreen"
-                )}
-              >
-                <div
-                  class={cn(
-                    "fw-error-header",
-                    storeState.isPassiveError
-                      ? "fw-error-header--warning"
-                      : "fw-error-header--error"
-                  )}
-                >
-                  <span
-                    class={cn(
-                      "fw-error-title",
-                      storeState.isPassiveError
-                        ? "fw-error-title--warning"
-                        : "fw-error-title--error"
-                    )}
+              <div class="fw-error-popup fw-error-popup--fullscreen">
+                <div class="fw-error-header fw-error-header--error">
+                  <span class="fw-error-title fw-error-title--error"
+                    >{$translatorStore("error")}</span
                   >
-                    {storeState.isPassiveError ? "Warning" : "Error"}
-                  </span>
                   <button
                     type="button"
                     class="fw-error-close"
                     onclick={() => playerStore?.clearError()}
-                    aria-label="Dismiss"
+                    aria-label={$translatorStore("dismiss")}
                   >
                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                       <path
@@ -458,7 +573,7 @@
                   </button>
                 </div>
                 <div class="fw-error-body">
-                  <p class="fw-error-message">Playback issue</p>
+                  <p class="fw-error-message">{displayedError}</p>
                 </div>
                 <div class="fw-error-actions">
                   <button
@@ -468,9 +583,33 @@
                       playerStore?.clearError();
                       playerStore?.retry();
                     }}
-                    aria-label="Retry playback"
+                    aria-label={$translatorStore("retry")}
                   >
-                    Retry
+                    {$translatorStore("retry")}
+                  </button>
+                  {#if playerStore?.getController()?.canAttemptFallback()}
+                    <button
+                      type="button"
+                      class="fw-error-btn fw-error-btn--secondary"
+                      onclick={() => {
+                        playerStore?.clearError();
+                        playerStore?.getController()?.retryWithFallback();
+                      }}
+                      aria-label={$translatorStore("tryNext")}
+                    >
+                      {$translatorStore("tryNext")}
+                    </button>
+                  {/if}
+                  <button
+                    type="button"
+                    class="fw-error-btn fw-error-btn--secondary"
+                    onclick={() => {
+                      playerStore?.clearError();
+                      playerStore?.reload();
+                    }}
+                    aria-label={$translatorStore("reloadPlayer")}
+                  >
+                    {$translatorStore("reloadPlayer")}
                   </button>
                 </div>
               </div>
@@ -492,7 +631,7 @@
                   type="button"
                   onclick={() => playerStore?.dismissToast()}
                   class="ml-2 text-white/60 hover:text-white"
-                  aria-label="Dismiss"
+                  aria-label={$translatorStore("dismiss")}
                 >
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                     <path
@@ -507,8 +646,10 @@
             </div>
           {/if}
 
-          <!-- Player controls -->
-          {#if !useStockControls}
+          <!-- Player controls — custom children or default -->
+          {#if children}
+            {@render children()}
+          {:else if !useStockControls}
             <PlayerControls
               currentTime={storeState.currentTime}
               duration={storeState.duration}
@@ -524,6 +665,10 @@
               onStatsToggle={() => (isStatsOpen = !isStatsOpen)}
               isContentLive={storeState.isEffectivelyLive}
               onJumpToLive={() => playerStore?.getController()?.jumpToLive()}
+              {activeLocale}
+              onLocaleChange={(l) => {
+                activeLocale = l;
+              }}
             />
           {/if}
         </div>
@@ -569,7 +714,7 @@
         }}
       >
         <StatsIcon size={14} class="opacity-70 flex-shrink-0 mr-2" />
-        {isStatsOpen ? "Hide Stats" : "Stats"}
+        {isStatsOpen ? $translatorStore("hideStats") : $translatorStore("showStats")}
       </ContextMenuItem>
       {#if options?.devMode}
         <ContextMenuSeparator />
@@ -579,13 +724,13 @@
           }}
         >
           <SettingsIcon size={14} class="opacity-70 flex-shrink-0 mr-2" />
-          {isDevPanelOpen ? "Hide Settings" : "Settings"}
+          {isDevPanelOpen ? $translatorStore("hideSettings") : $translatorStore("settings")}
         </ContextMenuItem>
       {/if}
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => playerStore?.togglePiP()}>
         <PictureInPictureIcon size={14} class="opacity-70 flex-shrink-0 mr-2" />
-        Picture-in-Picture
+        {$translatorStore("pictureInPicture")}
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => playerStore?.toggleLoop()}>
         <svg
@@ -604,7 +749,9 @@
           <polyline points="7 23 3 19 7 15"></polyline>
           <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
         </svg>
-        {storeState.isLoopEnabled ? "Disable Loop" : "Enable Loop"}
+        {storeState.isLoopEnabled
+          ? $translatorStore("disableLoop")
+          : $translatorStore("enableLoop")}
       </ContextMenuItem>
     </ContextMenuContent>
   </ContextMenuPortal>

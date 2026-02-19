@@ -281,6 +281,7 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
     if (!this.isRunning) return;
 
     const { mistBaseUrl, streamName } = this.config;
+    const currentConnectionId = this.connectionId;
 
     // Clean up existing connection
     if (this.ws) {
@@ -321,10 +322,9 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
       ws.onclose = () => {
         this.ws = null;
 
-        if (!this.isRunning) return;
+        if (!this.isRunning || this.connectionId !== currentConnectionId) return;
 
         // Disable WebSocket and switch to HTTP polling
-        // This ensures pollHttp() schedules repeat polls (see line 365 condition)
         this.config.useWebSocket = false;
         console.debug("[StreamStateClient] WebSocket closed, switching to HTTP polling");
         this.pollHttp();

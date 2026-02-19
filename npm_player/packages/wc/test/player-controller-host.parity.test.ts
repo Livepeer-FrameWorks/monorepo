@@ -12,16 +12,20 @@ const mockOn = vi.fn((event: string, handler: Function) => {
 });
 const mockIsLoopEnabled = vi.fn().mockReturnValue(false);
 
-vi.mock("@livepeer-frameworks/player-core", () => ({
-  PlayerController: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
-    Object.assign(this, {
-      attach: mockAttach,
-      destroy: mockDestroy,
-      on: mockOn,
-      isLoopEnabled: mockIsLoopEnabled,
-    });
-  }),
-}));
+vi.mock("@livepeer-frameworks/player-core", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    PlayerController: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+      Object.assign(this, {
+        attach: mockAttach,
+        destroy: mockDestroy,
+        on: mockOn,
+        isLoopEnabled: mockIsLoopEnabled,
+      });
+    }),
+  };
+});
 
 import { PlayerControllerHost } from "../src/controllers/player-controller-host.js";
 

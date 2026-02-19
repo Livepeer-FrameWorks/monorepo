@@ -3,6 +3,13 @@
   import { auth } from "$lib/stores/auth";
   import { getIconComponent } from "$lib/iconUtils";
   import { notificationStore } from "$lib/stores/notifications.svelte";
+  import {
+    GetSkipperConversationsStore,
+    GetSkipperConversationStore,
+    DeleteSkipperConversationStore,
+    UpdateSkipperConversationStore,
+    SkipperChatStore,
+  } from "$houdini";
   import SkipperMessage, {
     type SkipperChatMessage,
     type SkipperConfidence,
@@ -14,6 +21,14 @@
   import SkipperConversationList, {
     type SkipperConversationSummary,
   } from "$lib/components/skipper/SkipperConversationList.svelte";
+
+  // Houdini stores
+  const conversationsQuery = new GetSkipperConversationsStore();
+  const conversationQuery = new GetSkipperConversationStore();
+  const deleteMutation = new DeleteSkipperConversationStore();
+  const updateMutation = new UpdateSkipperConversationStore();
+  let chatSub: SkipperChatStore | null = null;
+  let chatUnsubscribe: (() => void) | null = null;
 
   let isAuthenticated = false;
   let destroyed = false;
@@ -29,7 +44,6 @@
   let loadingConversations = $state(true);
   let loadingMessages = $state(false);
   let loadError = $state("");
-  let abortController = $state<AbortController | null>(null);
 
   // Refs
   let scrollRef = $state<HTMLDivElement | null>(null);
@@ -83,10 +97,7 @@
   onDestroy(() => {
     destroyed = true;
     unsubscribeAuth();
-    if (abortController) {
-      abortController.abort();
-      abortController = null;
-    }
+    teardownChat();
   });
 
   function createId() {
@@ -118,18 +129,26 @@
     });
   }
 
-  // --- API calls ---
+  // --- GraphQL API calls ---
 
   async function loadConversations() {
     try {
       loadingConversations = true;
-      const response = await fetch("/api/skipper/conversations", {
-        credentials: "include",
+      const resp = await conversationsQuery.fetch({
+        policy: "NetworkOnly",
+        variables: { limit: 50, offset: 0 },
       });
       if (destroyed) return;
-      if (response.ok) {
-        conversations = (await response.json()) ?? [];
+      if (resp.errors?.length) {
+        console.error("Failed to load conversations:", resp.errors);
+        return;
       }
+      conversations = (resp.data?.skipperConversations ?? []).map((c) => ({
+        id: c.id,
+        title: c.title,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+      }));
     } catch (err) {
       if (!destroyed) console.error("Failed to load conversations:", err);
     } finally {
@@ -142,28 +161,32 @@
       loadingMessages = true;
       loadError = "";
       activeConversationId = id;
-      const response = await fetch(`/api/skipper/conversations/${id}`, {
-        credentials: "include",
+      const resp = await conversationQuery.fetch({
+        policy: "NetworkOnly",
+        variables: { id },
       });
       if (destroyed) return;
-      if (!response.ok) {
-        loadError = `Failed to load conversation (${response.status})`;
+      if (resp.errors?.length) {
+        loadError = `Failed to load conversation: ${resp.errors[0].message}`;
         return;
       }
-      const convo = await response.json();
-      if (destroyed) return;
-      messages = (convo.Messages ?? []).map((msg: Record<string, unknown>) => {
-        const sources = parseSources(msg.Sources as string | null);
+      const convo = resp.data?.skipperConversation;
+      if (!convo) {
+        loadError = "Conversation not found";
+        return;
+      }
+      messages = (convo.messages ?? []).map((msg) => {
+        const sources = parseSources(msg.sources);
         return {
-          id: msg.ID as string,
-          role: msg.Role as "user" | "assistant",
-          content: msg.Content as string,
-          confidence: (msg.Confidence as SkipperConfidence) || undefined,
+          id: msg.id,
+          role: msg.role as "user" | "assistant",
+          content: msg.content,
+          confidence: (msg.confidence as SkipperConfidence) || undefined,
           citations: sources.citations,
           externalLinks: sources.externalLinks,
-          details: parseDetails(msg.ToolsUsed as string | null),
-          blocks: parseConfidenceBlocks(msg.ConfidenceBlocks as string | null),
-          createdAt: msg.CreatedAt as string,
+          details: parseDetails(msg.toolsUsed),
+          blocks: parseConfidenceBlocks(msg.confidenceBlocks),
+          createdAt: msg.createdAt,
         };
       });
       await scrollToBottom();
@@ -177,68 +200,58 @@
     }
   }
 
-  function parseSources(raw: string | null): {
+  // GraphQL JSON scalars arrive as already-parsed objects
+  function parseSources(raw: unknown): {
     citations: SkipperChatMessage["citations"];
     externalLinks: SkipperChatMessage["externalLinks"];
   } {
     if (!raw) return { citations: [], externalLinks: [] };
-    try {
-      const sources = JSON.parse(raw);
-      if (!Array.isArray(sources)) return { citations: [], externalLinks: [] };
-      const citations: SkipperChatMessage["citations"] = [];
-      const externalLinks: SkipperChatMessage["externalLinks"] = [];
-      for (const s of sources) {
-        const item = { label: s.Title || s.title || "", url: s.URL || s.url || "" };
-        if (!item.url) continue;
-        if (s.Type === "web" || s.type === "web") {
-          externalLinks.push(item);
-        } else {
-          citations.push(item);
-        }
+    const sources = Array.isArray(raw) ? raw : [];
+    const citations: SkipperChatMessage["citations"] = [];
+    const externalLinks: SkipperChatMessage["externalLinks"] = [];
+    for (const s of sources) {
+      if (!s || typeof s !== "object") continue;
+      const rec = s as Record<string, unknown>;
+      const item = {
+        label: (rec.Title as string) || (rec.title as string) || "",
+        url: (rec.URL as string) || (rec.url as string) || "",
+      };
+      if (!item.url) continue;
+      if (rec.Type === "web" || rec.type === "web") {
+        externalLinks.push(item);
+      } else {
+        citations.push(item);
       }
-      return { citations, externalLinks };
-    } catch {
-      return { citations: [], externalLinks: [] };
     }
+    return { citations, externalLinks };
   }
 
-  function parseDetails(raw: string | null): SkipperChatMessage["details"] {
+  function parseDetails(raw: unknown): SkipperChatMessage["details"] {
     if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      // New wrapped format: { calls: [...], details: [...] }
-      if (parsed && !Array.isArray(parsed)) {
-        if (Array.isArray(parsed.details) && parsed.details.length > 0) {
-          return parsed.details;
-        }
-        if (Array.isArray(parsed.calls) && parsed.calls.length > 0) {
-          return parsed.calls.map((t: Record<string, unknown>) => ({
-            title: `Tool call: ${t.name || t.Name || "unknown"}`,
-            payload: (t.arguments || t.Arguments || {}) as Record<string, unknown>,
-          }));
-        }
-        return [];
+    if (!Array.isArray(raw) && typeof raw === "object") {
+      const obj = raw as Record<string, unknown>;
+      if (Array.isArray(obj.details) && obj.details.length > 0) {
+        return obj.details as SkipperChatMessage["details"];
       }
-      // Old flat-array format: [{ name, arguments }, ...]
-      if (!Array.isArray(parsed)) return [];
-      return parsed.map((t: Record<string, unknown>) => ({
-        title: `Tool call: ${t.name || t.Name || "unknown"}`,
-        payload: (t.arguments || t.Arguments || {}) as Record<string, unknown>,
-      }));
-    } catch {
+      if (Array.isArray(obj.calls) && obj.calls.length > 0) {
+        return (obj.calls as Record<string, unknown>[]).map((t) => ({
+          title: `Tool call: ${t.name || t.Name || "unknown"}`,
+          payload: (t.arguments || t.Arguments || {}) as Record<string, unknown>,
+        }));
+      }
       return [];
     }
+    if (!Array.isArray(raw)) return [];
+    return (raw as Record<string, unknown>[]).map((t) => ({
+      title: `Tool call: ${t.name || t.Name || "unknown"}`,
+      payload: (t.arguments || t.Arguments || {}) as Record<string, unknown>,
+    }));
   }
 
-  function parseConfidenceBlocks(raw: string | null): SkipperConfidenceBlock[] | undefined {
+  function parseConfidenceBlocks(raw: unknown): SkipperConfidenceBlock[] | undefined {
     if (!raw) return undefined;
-    try {
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
-      return parsed as SkipperConfidenceBlock[];
-    } catch {
-      return undefined;
-    }
+    if (!Array.isArray(raw) || raw.length === 0) return undefined;
+    return raw as SkipperConfidenceBlock[];
   }
 
   // --- New conversation ---
@@ -255,14 +268,30 @@
     mobileView = "list";
   }
 
-  function stopStreaming() {
-    if (abortController) {
-      abortController.abort();
-      abortController = null;
+  function teardownChat() {
+    if (chatUnsubscribe) {
+      chatUnsubscribe();
+      chatUnsubscribe = null;
+    }
+    if (chatSub) {
+      chatSub.unlisten();
+      chatSub = null;
     }
   }
 
-  // --- Send message + SSE ---
+  function stopStreaming() {
+    // Mark the current assistant message as stopped if it's empty
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.role === "assistant" && !lastMsg.content?.trim()) {
+      updateMessage(lastMsg.id, { content: "*Response stopped.*", confidence: "unknown" });
+    }
+    teardownChat();
+    isStreaming = false;
+    activeToolName = "";
+    activeToolError = "";
+  }
+
+  // --- Send message via GraphQL subscription ---
 
   async function handleSend(content: string) {
     if (isStreaming) return;
@@ -286,175 +315,138 @@
     activeToolName = "";
     activeToolError = "";
 
-    const controller = new AbortController();
-    abortController = controller;
+    // Tear down any previous subscription
+    teardownChat();
+
+    chatSub = new SkipperChatStore();
+
+    // Inactivity timeout: abort if no events for 90 seconds
     let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+    const INACTIVITY_MS = 90_000;
+    function resetInactivityTimer() {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        console.warn("Chat subscription inactivity timeout");
+        finishStreaming(assistantId, inactivityTimer);
+      }, INACTIVITY_MS);
+    }
+    resetInactivityTimer();
 
-    try {
-      const response = await fetch("/api/skipper/chat", {
-        method: "POST",
-        credentials: "include",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
-        body: JSON.stringify({
-          message: content,
-          conversation_id: activeConversationId || undefined,
-        }),
-      });
+    chatUnsubscribe = chatSub.subscribe((result) => {
+      if (destroyed) return;
+      resetInactivityTimer();
 
-      if (!response.ok || !response.body) {
-        let errorMsg = "Unable to reach Skipper right now.";
-        if (response.ok && !response.body) {
-          errorMsg = "Streaming unavailable.";
+      if (result.errors?.length) {
+        const errMsg = result.errors[0].message || "Something went wrong.";
+        let displayMsg = "Unable to reach Skipper right now.";
+        if (/rate.?limit/i.test(errMsg)) {
+          displayMsg = "Rate limit reached. Please try again in a few minutes.";
+        } else if (/premium|subscription/i.test(errMsg)) {
+          displayMsg = "Skipper requires a premium subscription.";
+        } else if (/auth/i.test(errMsg)) {
+          displayMsg = "Authentication required. Please log in again.";
         } else {
-          try {
-            const err = await response.json();
-            if (response.status === 429) {
-              const mins = Math.ceil((err.retry_after || 60) / 60);
-              errorMsg = `Rate limit reached. Try again in ${mins} minute${mins > 1 ? "s" : ""}.`;
-            } else if (response.status === 403) {
-              errorMsg = err.error || "Skipper requires a premium subscription.";
-            } else if (err.error) {
-              errorMsg = err.error;
-            }
-          } catch {
-            // Response body wasn't JSON
-          }
+          displayMsg = errMsg;
         }
-        updateMessage(assistantId, { content: errorMsg, confidence: "unknown" });
-        isStreaming = false;
-        abortController = null;
+        updateMessage(assistantId, { content: displayMsg, confidence: "unknown" });
+        finishStreaming(assistantId, inactivityTimer);
         return;
       }
 
-      // Capture conversation ID from first response
-      const newConvoId = response.headers.get("X-Conversation-ID");
-      if (newConvoId && !activeConversationId) {
-        activeConversationId = newConvoId;
-      }
+      const event = result.data?.skipperChat;
+      if (!event) return;
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let isDone = false;
-
-      // Abort if no SSE data arrives for 90 seconds (e.g. silent connection drop).
-      const INACTIVITY_MS = 90_000;
-      function resetInactivityTimer() {
-        if (inactivityTimer) clearTimeout(inactivityTimer);
-        inactivityTimer = setTimeout(() => {
-          console.warn("SSE inactivity timeout — aborting");
-          controller.abort();
-        }, INACTIVITY_MS);
-      }
-      resetInactivityTimer();
-
-      while (!isDone) {
-        const { done, value } = await reader.read();
-        resetInactivityTimer();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let separatorIndex = buffer.indexOf("\n\n");
-        while (separatorIndex !== -1) {
-          const rawEvent = buffer.slice(0, separatorIndex);
-          buffer = buffer.slice(separatorIndex + 2);
-          const dataLines = rawEvent
-            .split("\n")
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.replace(/^data:\s?/, ""));
-          const data = dataLines.join("\n").trim();
-
-          if (data === "[DONE]") {
-            isDone = true;
-            break;
+      const typename = (event as Record<string, unknown>).__typename;
+      switch (typename) {
+        case "SkipperToken": {
+          const e = event as { content: string };
+          if (activeToolName) {
+            activeToolName = "";
+            activeToolError = "";
           }
-
-          if (data) {
-            const parsed = tryParseJson(data);
-            if (parsed && typeof parsed === "object") {
-              if (parsed.type === "token" && typeof parsed.content === "string") {
-                // Clear tool status on first token
-                if (activeToolName) {
-                  activeToolName = "";
-                  activeToolError = "";
-                }
-                const current = messages.find((m) => m.id === assistantId)?.content ?? "";
-                updateMessage(assistantId, { content: current + parsed.content });
-              } else if (parsed.type === "tool_start" && typeof parsed.tool === "string") {
-                activeToolName = parsed.tool;
-                activeToolError = "";
-              } else if (parsed.type === "tool_end") {
-                if (parsed.error) {
-                  activeToolError = parsed.error;
-                } else {
-                  activeToolName = "";
-                  activeToolError = "";
-                }
-              } else if (parsed.type === "meta") {
-                updateMessage(assistantId, {
-                  confidence: parsed.confidence as SkipperConfidence,
-                  citations: parsed.citations,
-                  externalLinks: parsed.externalLinks,
-                  details: parsed.details,
-                  blocks: parsed.blocks,
-                });
-              } else if (parsed.type === "done") {
-                isDone = true;
-                break;
-              }
-            }
-          }
-          separatorIndex = buffer.indexOf("\n\n");
+          const current = messages.find((m) => m.id === assistantId)?.content ?? "";
+          updateMessage(assistantId, { content: current + e.content });
+          scheduleScroll();
+          break;
         }
-        scheduleScroll();
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        const current = messages.find((m) => m.id === assistantId)?.content ?? "";
-        if (!current.trim()) {
+        case "SkipperToolStartEvent": {
+          const e = event as { tool: string };
+          activeToolName = e.tool;
+          activeToolError = "";
+          break;
+        }
+        case "SkipperToolEndEvent": {
+          const e = event as { tool: string; error?: string | null };
+          if (e.error) {
+            activeToolError = e.error;
+          } else {
+            activeToolName = "";
+            activeToolError = "";
+          }
+          break;
+        }
+        case "SkipperMeta": {
+          const e = event as {
+            confidence: string;
+            citations: SkipperChatMessage["citations"];
+            externalLinks: SkipperChatMessage["externalLinks"];
+            details: SkipperChatMessage["details"];
+            blocks?: SkipperConfidenceBlock[] | null;
+          };
           updateMessage(assistantId, {
-            content: "*Response stopped.*",
-            confidence: "unknown",
+            confidence: e.confidence as SkipperConfidence,
+            citations: e.citations,
+            externalLinks: e.externalLinks,
+            details: e.details,
+            blocks: e.blocks ?? undefined,
           });
+          break;
         }
-      } else {
-        console.error("Streaming error:", err);
-        updateMessage(assistantId, {
-          content: "Connection lost. Please try again.",
-          confidence: "unknown",
-        });
+        case "SkipperDone": {
+          const e = event as { conversationId: string };
+          if (e.conversationId && !activeConversationId) {
+            activeConversationId = e.conversationId;
+          }
+          finishStreaming(assistantId, inactivityTimer);
+          break;
+        }
       }
-    } finally {
-      if (inactivityTimer) clearTimeout(inactivityTimer);
-      isStreaming = false;
-      activeToolName = "";
-      activeToolError = "";
-      abortController = null;
-      if (destroyed) return;
-      // Detect empty response from orchestrator crash
-      const final = messages.find((m) => m.id === assistantId);
-      if (final && !final.content?.trim()) {
-        updateMessage(assistantId, {
-          content: "Something went wrong. Please try again.",
-          confidence: "unknown",
-        });
-      }
-      // Refresh conversation list to show the new/updated conversation
-      await loadConversations();
+    });
+
+    chatSub.listen({
+      input: {
+        message: content,
+        conversationId: activeConversationId || undefined,
+      },
+    });
+  }
+
+  function finishStreaming(
+    assistantId: string,
+    inactivityTimer: ReturnType<typeof setTimeout> | null
+  ) {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    teardownChat();
+    isStreaming = false;
+    activeToolName = "";
+    activeToolError = "";
+    if (destroyed) return;
+    // Detect empty response from orchestrator crash
+    const final = messages.find((m) => m.id === assistantId);
+    if (final && !final.content?.trim()) {
+      updateMessage(assistantId, {
+        content: "Something went wrong. Please try again.",
+        confidence: "unknown",
+      });
     }
+    void loadConversations();
   }
 
   async function deleteConversation(id: string) {
     if (!confirm("Delete this conversation?")) return;
     try {
-      const response = await fetch(`/api/skipper/conversations/${id}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-      if (!response.ok) return;
+      const resp = await deleteMutation.mutate({ id });
+      if (resp.errors?.length) return;
       if (activeConversationId === id) {
         startNewConversation();
       }
@@ -466,24 +458,11 @@
 
   async function renameConversation(id: string, title: string) {
     try {
-      const response = await fetch(`/api/skipper/conversations/${id}`, {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title }),
-      });
-      if (!response.ok) return;
-      conversations = conversations.map((c) => (c.ID === id ? { ...c, Title: title } : c));
+      const resp = await updateMutation.mutate({ id, title });
+      if (resp.errors?.length) return;
+      conversations = conversations.map((c) => (c.id === id ? { ...c, title } : c));
     } catch (err) {
       console.error("Failed to rename conversation:", err);
-    }
-  }
-
-  function tryParseJson(data: string) {
-    try {
-      return JSON.parse(data);
-    } catch {
-      return null;
     }
   }
 </script>

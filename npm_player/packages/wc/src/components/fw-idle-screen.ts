@@ -4,6 +4,7 @@ import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
 import { LOGOMARK_DATA_URL } from "../constants/media-assets.js";
 import { playHitmarkerSound } from "./shared/hitmarker-audio.js";
+import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
 import "./fw-dvd-logo.js";
 
 interface ParticleState {
@@ -59,6 +60,13 @@ export class FwIdleScreen extends LitElement {
   @property({ type: String, attribute: "logo-src" }) logoSrc?: string;
   @property({ type: Boolean, attribute: "retry-enabled" }) retryEnabled = false;
   @property({ attribute: false }) onRetry?: () => void;
+  @property({ attribute: false }) translator?: TranslateFn;
+
+  private _defaultTranslator: TranslateFn = createTranslator({ locale: "en" });
+
+  private get _t(): TranslateFn {
+    return this.translator ?? this._defaultTranslator;
+  }
   @query(".idle-container") private _containerEl?: HTMLDivElement;
 
   @state() private _logoSize = 100;
@@ -552,7 +560,7 @@ export class FwIdleScreen extends LitElement {
   }
 
   private get _displayMessage() {
-    return this.error || this.message || "Waiting for stream...";
+    return this.error || this.message || this._t("waitingForStream");
   }
 
   private _renderStatusIcon() {
@@ -744,7 +752,7 @@ export class FwIdleScreen extends LitElement {
             : nothing}
           ${this._showRetry
             ? html`<button type="button" class="retry-btn" @click=${this._handleRetry}>
-                Retry
+                ${this._t("retry")}
               </button>`
             : nothing}
         </div>

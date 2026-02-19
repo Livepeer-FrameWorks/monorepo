@@ -1,0 +1,223 @@
+---
+title: "Player — React"
+description: "React integration for video playback with the FrameWorks Player."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Installation
+
+```bash
+npm install @livepeer-frameworks/player-react
+```
+
+```tsx
+import "@livepeer-frameworks/player-react/player.css";
+```
+
+## Drop-in Component
+
+```tsx
+import { Player } from "@livepeer-frameworks/player-react";
+import "@livepeer-frameworks/player-react/player.css";
+
+function LiveStream() {
+  return (
+    <Player
+      contentType="live"
+      contentId="<YOUR_PLAYBACK_ID>"
+      options={{
+        gatewayUrl: "%GATEWAY_URL%/graphql",
+        autoplay: true,
+        muted: true,
+      }}
+    />
+  );
+}
+```
+
+### Direct MistServer Node
+
+```tsx
+<Player
+  contentType="live"
+  contentId="<YOUR_PLAYBACK_ID>"
+  options={{ mistUrl: "https://edge.example.com" }}
+/>
+```
+
+### DVR and Clips
+
+```tsx
+<Player contentType="dvr" contentId="pk_..." options={{ gatewayUrl: "..." }} />
+<Player contentType="clip" contentId="pk_..." options={{ gatewayUrl: "..." }} />
+```
+
+## Composable Controls
+
+Pass `children` to `<Player>` to replace the built-in controls with your own layout. Sub-components auto-connect to the parent via React context.
+
+```tsx
+import {
+  Player,
+  PlayButton,
+  SkipButton,
+  VolumeControl,
+  TimeDisplay,
+  LiveBadge,
+  FullscreenButton,
+  ControlBar,
+  SettingsMenu,
+} from "@livepeer-frameworks/player-react";
+
+function CustomPlayer() {
+  return (
+    <Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+      <ControlBar>
+        <PlayButton />
+        <SkipButton direction="back" />
+        <SkipButton direction="forward" />
+        <TimeDisplay />
+        <LiveBadge />
+        <VolumeControl />
+        <SettingsMenu />
+        <FullscreenButton />
+      </ControlBar>
+    </Player>
+  );
+}
+```
+
+### Sub-Component Reference
+
+| Component          | Purpose                                                    |
+| ------------------ | ---------------------------------------------------------- |
+| `PlayButton`       | Play/pause toggle                                          |
+| `SkipButton`       | Skip forward/back (pass `direction="back"` or `"forward"`) |
+| `VolumeControl`    | Volume slider with mute toggle                             |
+| `TimeDisplay`      | Current time / duration display                            |
+| `LiveBadge`        | Live indicator with jump-to-live                           |
+| `FullscreenButton` | Fullscreen toggle                                          |
+| `SettingsMenu`     | Quality, speed, and track selection                        |
+| `ControlBar`       | Horizontal flex container for controls                     |
+
+All sub-components read state from the nearest `<Player>` parent via `usePlayerContextOptional()`. They render nothing if used outside a `<Player>`.
+
+## Custom UI with Hooks
+
+For complete UI control, use `usePlayerController` directly:
+
+```tsx
+import { usePlayerController } from "@livepeer-frameworks/player-react";
+import { useRef } from "react";
+
+function FullyCustomPlayer() {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const { state, controller } = usePlayerController({
+    contentId: "pk_...",
+    contentType: "live",
+    gatewayUrl: "%GATEWAY_URL%/graphql",
+    autoplay: true,
+    muted: true,
+  });
+
+  return (
+    <div>
+      <div ref={containerRef} style={{ width: "100%", aspectRatio: "16/9" }} />
+      <p>State: {state.state}</p>
+      <p>
+        {state.isPlaying ? "Playing" : "Paused"} | Volume: {state.volume}
+      </p>
+      <button onClick={() => controller?.togglePlay()}>{state.isPlaying ? "Pause" : "Play"}</button>
+      <button onClick={() => controller?.toggleMute()}>{state.isMuted ? "Unmute" : "Mute"}</button>
+    </div>
+  );
+}
+```
+
+### Hook Return
+
+| Property       | Type                     | Description                                                  |
+| -------------- | ------------------------ | ------------------------------------------------------------ |
+| `state`        | `PlayerControllerState`  | Reactive state object (isPlaying, volume, currentTime, etc.) |
+| `controller`   | `PlayerControllerStore`  | Controller with methods (togglePlay, seek, setVolume, etc.)  |
+| `containerRef` | `RefObject<HTMLElement>` | Attach to the container div                                  |
+
+### State Properties
+
+| Property                  | Type             | Description                  |
+| ------------------------- | ---------------- | ---------------------------- |
+| `state.state`             | `PlayerState`    | Current lifecycle state      |
+| `state.isPlaying`         | `boolean`        | Whether playing              |
+| `state.isPaused`          | `boolean`        | Whether paused               |
+| `state.isMuted`           | `boolean`        | Whether muted                |
+| `state.volume`            | `number`         | Volume (0-1)                 |
+| `state.currentTime`       | `number`         | Current position (seconds)   |
+| `state.duration`          | `number`         | Duration (Infinity for live) |
+| `state.isBuffering`       | `boolean`        | Whether buffering            |
+| `state.isFullscreen`      | `boolean`        | Whether in fullscreen        |
+| `state.isEffectivelyLive` | `boolean`        | Whether live content         |
+| `state.error`             | `string \| null` | Current error message        |
+
+````
+
+## Props Reference
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `contentId` | `string` | Playback ID (live/clip/DVR/VOD) |
+| `contentType` | `'live' \| 'dvr' \| 'clip' \| 'vod'` | Content type (affects presets and UI) |
+| `endpoints` | `ContentEndpoints` | Advanced: pass pre-resolved endpoints |
+| `thumbnailUrl` | `string` | Poster image URL |
+| `theme` | `string` | Theme preset name |
+| `options.gatewayUrl` | `string` | Gateway GraphQL endpoint |
+| `options.mistUrl` | `string` | Direct MistServer base URL |
+| `options.autoplay` | `boolean` | Auto-start playback |
+| `options.muted` | `boolean` | Start muted (required for autoplay) |
+| `options.controls` | `boolean` | Show built-in controls |
+| `options.playbackMode` | `string` | Protocol preference (`low-latency`, `quality`, `vod`, `auto`) |
+| `options.forceType` | `string` | Force specific source type (e.g. `whep`) |
+| `options.debug` | `boolean` | Debug logging |
+| `onStateChange` | `function` | State transition callback |
+
+## State Callbacks
+
+```tsx
+<Player
+  contentId="pk_..."
+  contentType="live"
+  options={{ gatewayUrl: "..." }}
+  onStateChange={(state, context) => {
+    // States: booting, gateway_loading, gateway_ready, gateway_error,
+    //         no_endpoint, selecting_player, connecting, buffering,
+    //         playing, paused, ended, error, destroyed
+    console.log("State:", state);
+  }}
+/>
+````
+
+## Playback Modes
+
+`playbackMode` controls protocol preference order:
+
+| Mode          | Preference                 | Use Case              |
+| ------------- | -------------------------- | --------------------- |
+| `low-latency` | WebRTC → MP4/WS → HLS/DASH | Real-time interaction |
+| `quality`     | MP4/WS → HLS/DASH → WebRTC | Stable, high quality  |
+| `vod`         | HLS/MP4 (penalize WHEP)    | Pre-recorded content  |
+| `auto`        | Balanced score-based       | Default               |
+
+```tsx
+<Player
+  contentId="pk_..."
+  contentType="live"
+  options={{ gatewayUrl: "...", playbackMode: "low-latency" }}
+/>
+```
+
+### Force WHEP Only
+
+```tsx
+<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "...", forceType: "whep" }} />
+```

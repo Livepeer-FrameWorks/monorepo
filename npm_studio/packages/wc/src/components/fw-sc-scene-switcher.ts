@@ -12,6 +12,10 @@ import type {
   TransitionConfig,
   TransitionType,
 } from "@livepeer-frameworks/streamcrafter-core";
+import {
+  type StudioTranslateFn,
+  createStudioTranslator,
+} from "@livepeer-frameworks/streamcrafter-core";
 
 const DEFAULT_TRANSITION: TransitionConfig = {
   type: "fade",
@@ -21,6 +25,8 @@ const DEFAULT_TRANSITION: TransitionConfig = {
 
 @customElement("fw-sc-scene-switcher")
 export class FwScSceneSwitcher extends LitElement {
+  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
+  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ attribute: false }) scenes: Scene[] = [];
   @property({ type: String, attribute: "active-scene-id" }) activeSceneId: string | null = null;
   @property({ type: Boolean, attribute: "show-transition-controls" }) showTransitionControls = true;
@@ -28,6 +34,7 @@ export class FwScSceneSwitcher extends LitElement {
   @property({ attribute: false }) onSceneSelect?: (sceneId: string) => void;
   @property({ attribute: false }) onSceneCreate?: () => void;
   @property({ attribute: false }) onSceneDelete?: (sceneId: string) => void;
+  @property({ attribute: false }) t: StudioTranslateFn = createStudioTranslator({ locale: "en" });
   @property({ attribute: false }) onTransitionTo?: (
     sceneId: string,
     transition: TransitionConfig
@@ -61,7 +68,7 @@ export class FwScSceneSwitcher extends LitElement {
     return html`
       <div class="fw-sc-scene-switcher">
         <div class="fw-sc-scene-switcher-header">
-          <span class="fw-sc-scene-switcher-title">Scenes</span>
+          <span class="fw-sc-scene-switcher-title">${this.t("scenes")}</span>
           ${this.showTransitionControls
             ? html`
                 <div class="fw-sc-transition-controls">
@@ -73,12 +80,12 @@ export class FwScSceneSwitcher extends LitElement {
                         .value as TransitionType;
                     }}
                   >
-                    <option value="cut">Cut</option>
-                    <option value="fade">Fade</option>
-                    <option value="slide-left">Slide Left</option>
-                    <option value="slide-right">Slide Right</option>
-                    <option value="slide-up">Slide Up</option>
-                    <option value="slide-down">Slide Down</option>
+                    <option value="cut">${this.t("cut")}</option>
+                    <option value="fade">${this.t("fade")}</option>
+                    <option value="slide-left">${this.t("slideLeft")}</option>
+                    <option value="slide-right">${this.t("slideRight")}</option>
+                    <option value="slide-up">${this.t("slideUp")}</option>
+                    <option value="slide-down">${this.t("slideDown")}</option>
                   </select>
                   <input
                     type="number"
@@ -90,7 +97,7 @@ export class FwScSceneSwitcher extends LitElement {
                     min="0"
                     max="3000"
                     step="100"
-                    title="Transition duration (ms)"
+                    title=${this.t("transitionDuration")}
                   />
                   <span class="fw-sc-transition-unit">ms</span>
                 </div>
@@ -120,7 +127,7 @@ export class FwScSceneSwitcher extends LitElement {
                           e.stopPropagation();
                           this._handleDelete(scene.id);
                         }}
-                        title="Delete scene"
+                        title=${this.t("deleteScene")}
                       >
                         ×
                       </button>
@@ -134,7 +141,7 @@ export class FwScSceneSwitcher extends LitElement {
                 <button
                   class="fw-sc-scene-add"
                   @click=${() => this._handleCreate()}
-                  title="Create new scene"
+                  title=${this.t("createNewScene")}
                 >
                   +
                 </button>

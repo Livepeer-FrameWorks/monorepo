@@ -70,7 +70,7 @@ export interface CreateCompositorStoreOptions {
 }
 
 export function createCompositorStore(options: CreateCompositorStoreOptions): CompositorStore {
-  const { controller, config, autoEnable = false } = options;
+  const { controller, config, autoEnable = true } = options;
 
   const store: Writable<CompositorState> = writable({
     isEnabled: false,

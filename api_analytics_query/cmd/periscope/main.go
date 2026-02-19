@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -147,7 +148,7 @@ func main() {
 				return nil
 			}(),
 		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope_query")); err != nil {
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope_query")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_query) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (periscope_query) ok")

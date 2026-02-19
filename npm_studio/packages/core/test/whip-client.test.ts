@@ -91,8 +91,17 @@ describe("WhipClient", () => {
       const client = makeClient();
       (client as any).state = "connected";
       (client as any).peerConnection = { getSenders: () => [{ transform: {} }] };
-      (client as any).negotiatedVideoCodec = "video/AV1";
+      (client as any).negotiatedVideoCodec = "video/H265";
       expect(client.canUseEncodedInsertion()).toBe(false);
+    });
+
+    it("returns true when video codec is AV1", () => {
+      (globalThis as any).RTCRtpScriptTransform = function () {};
+      const client = makeClient();
+      (client as any).state = "connected";
+      (client as any).peerConnection = { getSenders: () => [{ transform: {} }] };
+      (client as any).negotiatedVideoCodec = "video/AV1";
+      expect(client.canUseEncodedInsertion()).toBe(true);
     });
 
     it("returns true when video codec is VP9", () => {

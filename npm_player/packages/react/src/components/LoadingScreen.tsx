@@ -54,16 +54,15 @@ const AnimatedBubble: React.FC<AnimatedBubbleProps> = ({ index }) => {
     };
   }, [index]);
 
-  // Tokyo Night inspired pastel colors
   const bubbleColors = [
-    "rgba(122, 162, 247, 0.2)", // Terminal Blue
-    "rgba(187, 154, 247, 0.2)", // Terminal Magenta
-    "rgba(158, 206, 106, 0.2)", // Strings/CSS classes
-    "rgba(115, 218, 202, 0.2)", // Terminal Green
-    "rgba(125, 207, 255, 0.2)", // Terminal Cyan
-    "rgba(247, 118, 142, 0.2)", // Keywords/Terminal Red
-    "rgba(224, 175, 104, 0.2)", // Terminal Yellow
-    "rgba(42, 195, 222, 0.2)", // Language functions
+    "hsl(var(--fw-accent, 218 79% 73%) / 0.2)",
+    "hsl(var(--fw-accent-secondary, 268 75% 76%) / 0.2)",
+    "hsl(var(--fw-success, 97 52% 51%) / 0.2)",
+    "hsl(var(--fw-info, 197 95% 74%) / 0.2)",
+    "hsl(var(--fw-info, 197 95% 74%) / 0.2)",
+    "hsl(var(--fw-danger, 352 86% 71%) / 0.2)",
+    "hsl(var(--fw-warning, 33 81% 64%) / 0.2)",
+    "hsl(var(--fw-info, 197 95% 74%) / 0.2)",
   ];
 
   return (
@@ -194,7 +193,7 @@ const CenterLogo: React.FC<CenterLogoProps> = ({ containerRef, scale = 0.2, onHi
           width: `${logoSize * 1.4}px`,
           height: `${logoSize * 1.4}px`,
           borderRadius: "50%",
-          background: "rgba(122, 162, 247, 0.15)",
+          background: "hsl(var(--fw-accent, 218 79% 73%) / 0.15)",
           animation: isHovered
             ? "logoPulse 1s ease-in-out infinite"
             : "logoPulse 3s ease-in-out infinite",
@@ -220,8 +219,8 @@ const CenterLogo: React.FC<CenterLogoProps> = ({ containerRef, scale = 0.2, onHi
             position: "relative",
             zIndex: 1,
             filter: isHovered
-              ? "drop-shadow(0 6px 12px rgba(36, 40, 59, 0.4)) brightness(1.1)"
-              : "drop-shadow(0 4px 8px rgba(36, 40, 59, 0.3))",
+              ? "drop-shadow(0 6px 12px hsl(var(--fw-surface-deep, 235 21% 11%) / 0.4)) brightness(1.1)"
+              : "drop-shadow(0 4px 8px hsl(var(--fw-surface-deep, 235 21% 11%) / 0.3))",
             transform: isHovered ? "scale(1.1)" : "scale(1)",
             transition: "all 0.3s ease-out",
             cursor: isHovered ? "pointer" : "default",
@@ -537,11 +536,11 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
           minHeight: "300px",
           background: `
           linear-gradient(135deg,
-            hsl(var(--tn-bg-dark, 235 21% 11%)) 0%,
-            hsl(var(--tn-bg, 233 23% 17%)) 25%,
-            hsl(var(--tn-bg-dark, 235 21% 11%)) 50%,
-            hsl(var(--tn-bg, 233 23% 17%)) 75%,
-            hsl(var(--tn-bg-dark, 235 21% 11%)) 100%
+            hsl(var(--fw-surface-deep, 235 21% 11%)) 0%,
+            hsl(var(--fw-surface, 233 23% 17%)) 25%,
+            hsl(var(--fw-surface-deep, 235 21% 11%)) 50%,
+            hsl(var(--fw-surface, 233 23% 17%)) 75%,
+            hsl(var(--fw-surface-deep, 235 21% 11%)) 100%
           )
         `,
           backgroundSize: "400% 400%",
@@ -582,10 +581,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
               left: "25%",
               width: "12px",
               height: "3px",
-              backgroundColor: "#ffffff",
+              backgroundColor: "hsl(var(--fw-text-bright, 220 13% 91%))",
               transform: "translate(-50%, -50%) rotate(45deg)",
               animation: "hitmarkerFade45 0.6s ease-out forwards",
-              boxShadow: "0 0 8px rgba(255, 255, 255, 0.8)",
+              boxShadow: "0 0 8px hsl(var(--fw-text-bright, 220 13% 91%) / 0.8)",
               borderRadius: "1px",
             }}
           />
@@ -597,10 +596,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
               left: "75%",
               width: "12px",
               height: "3px",
-              backgroundColor: "#ffffff",
+              backgroundColor: "hsl(var(--fw-text-bright, 220 13% 91%))",
               transform: "translate(-50%, -50%) rotate(-45deg)",
               animation: "hitmarkerFadeNeg45 0.6s ease-out forwards",
-              boxShadow: "0 0 8px rgba(255, 255, 255, 0.8)",
+              boxShadow: "0 0 8px hsl(var(--fw-text-bright, 220 13% 91%) / 0.8)",
               borderRadius: "1px",
             }}
           />
@@ -612,10 +611,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
               left: "25%",
               width: "12px",
               height: "3px",
-              backgroundColor: "#ffffff",
+              backgroundColor: "hsl(var(--fw-text-bright, 220 13% 91%))",
               transform: "translate(-50%, -50%) rotate(-45deg)",
               animation: "hitmarkerFadeNeg45 0.6s ease-out forwards",
-              boxShadow: "0 0 8px rgba(255, 255, 255, 0.8)",
+              boxShadow: "0 0 8px hsl(var(--fw-text-bright, 220 13% 91%) / 0.8)",
               borderRadius: "1px",
             }}
           />
@@ -627,10 +626,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
               left: "75%",
               width: "12px",
               height: "3px",
-              backgroundColor: "#ffffff",
+              backgroundColor: "hsl(var(--fw-text-bright, 220 13% 91%))",
               transform: "translate(-50%, -50%) rotate(45deg)",
               animation: "hitmarkerFade45 0.6s ease-out forwards",
-              boxShadow: "0 0 8px rgba(255, 255, 255, 0.8)",
+              boxShadow: "0 0 8px hsl(var(--fw-text-bright, 220 13% 91%) / 0.8)",
               borderRadius: "1px",
             }}
           />
@@ -648,14 +647,14 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
             height: `${Math.random() * 4 + 2}px`,
             borderRadius: "50%",
             background: [
-              "#7aa2f7", // Terminal Blue
-              "#bb9af7", // Terminal Magenta
-              "#9ece6a", // Strings/CSS classes
-              "#73daca", // Terminal Green
-              "#7dcfff", // Terminal Cyan
-              "#f7768e", // Keywords/Terminal Red
-              "#e0af68", // Terminal Yellow
-              "#2ac3de", // Language functions
+              "hsl(var(--fw-accent, 218 79% 73%))",
+              "hsl(var(--fw-accent-secondary, 268 75% 76%))",
+              "hsl(var(--fw-success, 97 52% 51%))",
+              "hsl(var(--fw-info, 197 95% 74%))",
+              "hsl(var(--fw-info, 197 95% 74%))",
+              "hsl(var(--fw-danger, 352 86% 71%))",
+              "hsl(var(--fw-warning, 33 81% 64%))",
+              "hsl(var(--fw-info, 197 95% 74%))",
             ][index % 8],
             opacity: 0,
             animation: `floatUp ${8 + Math.random() * 4}s linear infinite`,
@@ -687,12 +686,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
           bottom: "20%",
           left: "50%",
           transform: "translateX(-50%)",
-          color: "#a9b1d6",
+          color: "hsl(var(--fw-text-muted, 227 24% 74%))",
           fontSize: "16px",
           fontWeight: "500",
           textAlign: "center",
           animation: "fadeInOut 2s ease-in-out infinite",
-          textShadow: "0 2px 4px rgba(36, 40, 59, 0.5)",
+          textShadow: "0 2px 4px hsl(var(--fw-surface-deep, 235 21% 11%) / 0.5)",
           fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
           userSelect: "none",
           WebkitUserSelect: "none",
@@ -713,9 +712,9 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
           right: 0,
           bottom: 0,
           background: `
-            radial-gradient(circle at 20% 80%, rgba(122, 162, 247, 0.03) 0%, transparent 50%),
-            radial-gradient(circle at 80% 20%, rgba(187, 154, 247, 0.03) 0%, transparent 50%),
-            radial-gradient(circle at 40% 40%, rgba(158, 206, 106, 0.02) 0%, transparent 50%)
+            radial-gradient(circle at 20% 80%, hsl(var(--fw-accent, 218 79% 73%) / 0.03) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, hsl(var(--fw-accent-secondary, 268 75% 76%) / 0.03) 0%, transparent 50%),
+            radial-gradient(circle at 40% 40%, hsl(var(--fw-success, 97 52% 51%) / 0.02) 0%, transparent 50%)
           `,
           pointerEvents: "none",
           userSelect: "none",

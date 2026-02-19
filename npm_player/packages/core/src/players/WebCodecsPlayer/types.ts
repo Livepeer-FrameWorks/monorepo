@@ -292,6 +292,13 @@ export interface WriteFrameResponseMessage {
   error?: string;
 }
 
+export interface SetRenderModeMessage {
+  type: "setrendermode";
+  idx: number;
+  directTransfer: boolean;
+  uid?: number;
+}
+
 export type MainToWorkerMessage =
   | CreatePipelineMessage
   | ConfigurePipelineMessage
@@ -303,7 +310,8 @@ export type MainToWorkerMessage =
   | SeekWorkerMessage
   | DebuggingMessage
   | FrameStepMessage
-  | WriteFrameResponseMessage;
+  | WriteFrameResponseMessage
+  | SetRenderModeMessage;
 
 // Worker -> Main thread messages
 export interface AddTrackMessage {
@@ -368,6 +376,30 @@ export interface WriteFrameMessage {
   uid?: number;
 }
 
+export interface TransferFrameMessage {
+  type: "transferframe";
+  idx: number;
+  trackType: "video" | "audio";
+  frame: VideoFrame | AudioData;
+  timestamp: number;
+  uid?: number;
+}
+
+export interface TransferYUVMessage {
+  type: "transferyuv";
+  idx: number;
+  timestamp: number;
+  y: Uint8Array;
+  u: Uint8Array;
+  v: Uint8Array;
+  width: number;
+  height: number;
+  format: string;
+  colorPrimaries?: string;
+  transferFunction?: string;
+  uid?: number;
+}
+
 export type WorkerToMainMessage =
   | AddTrackMessage
   | RemoveTrackMessage
@@ -377,7 +409,9 @@ export type WorkerToMainMessage =
   | SendEventMessage
   | StatsMessage
   | AckMessage
-  | WriteFrameMessage;
+  | WriteFrameMessage
+  | TransferFrameMessage
+  | TransferYUVMessage;
 
 // ============================================================================
 // Stats Types
@@ -492,6 +526,8 @@ export interface WebCodecsPlayerEvents {
 // Player Options Extensions
 // ============================================================================
 
+export type RenderMode = "auto" | "webgl" | "native";
+
 export interface WebCodecsPlayerOptions {
   /** Latency profile preset */
   latencyProfile?: LatencyProfileName;
@@ -503,6 +539,15 @@ export interface WebCodecsPlayerOptions {
   verboseDebug?: boolean;
   /** Stats update interval (ms), 0 to disable */
   statsInterval?: number;
+  /**
+   * Video/audio render mode:
+   * - 'auto': WebGL on Firefox/Safari (replaces polyfills), native MediaStreamTrackGenerator on Chrome
+   * - 'webgl': Always use WebGL canvas + AudioWorklet
+   * - 'native': Always use MediaStreamTrackGenerator (browser default)
+   */
+  renderMode?: RenderMode;
+  /** Enable developer mode (extra debugging) */
+  devMode?: boolean;
 }
 
 // ============================================================================
@@ -547,6 +592,8 @@ export interface WebCodecsStats {
     /** Total messages received */
     messagesReceived: number;
   };
+  /** Per-track pipeline statistics (keyed by track index) */
+  pipelines?: Record<number, PipelineStats>;
 }
 
 // ============================================================================

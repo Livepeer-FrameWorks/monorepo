@@ -21,6 +21,7 @@ const (
 	defaultTokenLimit   = 500
 	defaultTokenOverlap = 50
 	maxEmbedBatchSize   = 2048
+	maxBatchTokens      = 250_000 // stay under typical 300K per-request API limits
 	minChunkTokens      = 20
 	bpeMultiplier       = 1.3
 
@@ -167,22 +168,41 @@ func (e *Embedder) EmbedDocument(ctx context.Context, url, title, content string
 }
 
 func (e *Embedder) embedBatched(ctx context.Context, chunks []string) ([][]float32, error) {
-	if len(chunks) <= maxEmbedBatchSize {
-		return e.client.Embed(ctx, chunks)
+	batches := splitBatches(chunks, maxEmbedBatchSize, maxBatchTokens)
+	if len(batches) == 1 {
+		return e.client.Embed(ctx, batches[0])
 	}
 	var all [][]float32
-	for i := 0; i < len(chunks); i += maxEmbedBatchSize {
-		end := i + maxEmbedBatchSize
-		if end > len(chunks) {
-			end = len(chunks)
-		}
-		batch, err := e.client.Embed(ctx, chunks[i:end])
+	for i, batch := range batches {
+		vecs, err := e.client.Embed(ctx, batch)
 		if err != nil {
-			return nil, fmt.Errorf("embed batch %d: %w", i/maxEmbedBatchSize, err)
+			return nil, fmt.Errorf("embed batch %d: %w", i, err)
 		}
-		all = append(all, batch...)
+		all = append(all, vecs...)
 	}
 	return all, nil
+}
+
+// splitBatches groups chunks into batches respecting both a maximum chunk
+// count and a maximum total token budget per batch. This prevents the
+// embedding API from rejecting requests that exceed its per-call token limit.
+func splitBatches(chunks []string, maxChunks, maxTokens int) [][]string {
+	var batches [][]string
+	start := 0
+	tokens := 0
+	for i, chunk := range chunks {
+		t := estimateBPETokens(chunk)
+		if i > start && (i-start >= maxChunks || tokens+t > maxTokens) {
+			batches = append(batches, chunks[start:i])
+			start = i
+			tokens = 0
+		}
+		tokens += t
+	}
+	if start < len(chunks) {
+		batches = append(batches, chunks[start:])
+	}
+	return batches
 }
 
 func (e *Embedder) EmbedQuery(ctx context.Context, query string) ([]float32, error) {

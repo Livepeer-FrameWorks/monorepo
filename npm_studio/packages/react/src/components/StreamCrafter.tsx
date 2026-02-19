@@ -26,8 +26,18 @@ import type {
   MediaSource,
   ReconnectionState,
   EncoderOverrides,
+  FwThemePreset,
+  StudioThemeOverrides,
 } from "@livepeer-frameworks/streamcrafter-core";
-import { getAudioConstraints } from "@livepeer-frameworks/streamcrafter-core";
+import {
+  getAudioConstraints,
+  resolveStudioTheme,
+  studioThemeOverridesToStyle,
+  createStudioTranslator,
+  type StudioLocale,
+  type StudioTranslateFn,
+} from "@livepeer-frameworks/streamcrafter-core";
+import { StudioI18nProvider } from "../context/StudioI18nContext";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -35,6 +45,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "../ui/context-menu";
+import { StreamCrafterProvider } from "../context/StreamCrafterContext";
 
 // ============================================================================
 // Types
@@ -66,12 +77,18 @@ export interface StreamCrafterProps {
     height?: number;
     frameRate?: number;
   };
+  /** Theme preset or custom overrides */
+  theme?: FwThemePreset | StudioThemeOverrides;
+  /** Locale for i18n translations */
+  locale?: StudioLocale;
   /** Custom class name */
   className?: string;
   /** State change callback */
   onStateChange?: (state: IngestState, context?: IngestStateContextV2) => void;
   /** Error callback */
   onError?: (error: string) => void;
+  /** Composable children — replaces the default UI when provided. */
+  children?: React.ReactNode;
 }
 
 // ============================================================================
@@ -231,11 +248,15 @@ const VideoIcon = ({ size = 14, active = false }: { size?: number; active?: bool
 // Quality Profile Options
 // ============================================================================
 
-const QUALITY_PROFILES: { id: QualityProfile; label: string; description: string }[] = [
-  { id: "professional", label: "Professional", description: "1080p @ 8 Mbps" },
-  { id: "broadcast", label: "Broadcast", description: "1080p @ 4.5 Mbps" },
-  { id: "conference", label: "Conference", description: "720p @ 2.5 Mbps" },
-];
+function getQualityProfiles(
+  t: StudioTranslateFn
+): { id: QualityProfile; label: string; description: string }[] {
+  return [
+    { id: "professional", label: t("professional"), description: t("professionalDesc") },
+    { id: "broadcast", label: t("broadcast"), description: t("broadcastDesc") },
+    { id: "conference", label: t("conference"), description: t("conferenceDesc") },
+  ];
+}
 
 // ============================================================================
 // Helper Functions
@@ -245,27 +266,31 @@ function cn(...classes: (string | undefined | false)[]): string {
   return classes.filter(Boolean).join(" ");
 }
 
-function getStatusText(state: IngestState, reconnectionState?: ReconnectionState | null): string {
+function getStatusText(
+  state: IngestState,
+  t: StudioTranslateFn,
+  reconnectionState?: ReconnectionState | null
+): string {
   if (reconnectionState?.isReconnecting) {
-    return `Reconnecting (${reconnectionState.attemptNumber}/5)...`;
+    return t("reconnectingAttempt", { attempt: reconnectionState.attemptNumber, max: 5 });
   }
   switch (state) {
     case "idle":
-      return "Idle";
+      return t("idle");
     case "requesting_permissions":
-      return "Permissions...";
+      return t("requestingPermissions");
     case "capturing":
-      return "Ready";
+      return t("ready");
     case "connecting":
-      return "Connecting...";
+      return t("connecting");
     case "streaming":
-      return "Live";
+      return t("live");
     case "reconnecting":
-      return "Reconnecting...";
+      return t("reconnecting");
     case "error":
-      return "Error";
+      return t("error");
     case "destroyed":
-      return "Destroyed";
+      return t("destroyed");
     default:
       return state;
   }
@@ -308,6 +333,7 @@ interface SourceRowProps {
   disabled: boolean;
   isStreaming: boolean;
   hasVideo: boolean;
+  t: StudioTranslateFn;
   // Compositor-specific props
   isCompositorEnabled?: boolean;
   isVisibleInCompositor?: boolean;
@@ -349,6 +375,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
   disabled,
   isStreaming,
   hasVideo,
+  t,
   isCompositorEnabled = false,
   isVisibleInCompositor = true,
   onVisibilityToggle,
@@ -360,7 +387,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
         type="button"
         className={cn("fw-sc-icon-btn", !isVisibleInCompositor && "fw-sc-icon-btn--muted")}
         onClick={onVisibilityToggle}
-        title={isVisibleInCompositor ? "Hide from composition" : "Show in composition"}
+        title={isVisibleInCompositor ? t("hideFromComposition") : t("showInComposition")}
       >
         <EyeIcon size={14} visible={isVisibleInCompositor} />
       </button>
@@ -373,7 +400,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
       <div className="fw-sc-source-label">
         {source.label}
         {source.primaryVideo && !isCompositorEnabled && (
-          <span className="fw-sc-primary-badge">PRIMARY</span>
+          <span className="fw-sc-primary-badge">{t("primary")}</span>
         )}
       </div>
       <div className="fw-sc-source-type">{source.type}</div>
@@ -386,7 +413,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
           className={cn("fw-sc-icon-btn", source.primaryVideo && "fw-sc-icon-btn--primary")}
           onClick={onSetPrimary}
           disabled={disabled || source.primaryVideo}
-          title={source.primaryVideo ? "Primary video source" : "Set as primary video"}
+          title={source.primaryVideo ? t("primaryVideoSource") : t("setAsPrimary")}
         >
           <VideoIcon size={14} active={source.primaryVideo} />
         </button>
@@ -398,7 +425,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
         type="button"
         className={cn("fw-sc-icon-btn", source.muted && "fw-sc-icon-btn--active")}
         onClick={onMuteToggle}
-        title={source.muted ? "Unmute" : "Mute"}
+        title={source.muted ? t("unmute") : t("mute")}
       >
         <MicIcon size={14} muted={source.muted} />
       </button>
@@ -407,7 +434,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
         className="fw-sc-icon-btn fw-sc-icon-btn--destructive"
         onClick={onRemove}
         disabled={disabled || isStreaming}
-        title={isStreaming ? "Cannot remove source while streaming" : "Remove source"}
+        title={isStreaming ? t("cannotRemoveWhileStreaming") : t("removeSource")}
       >
         <XIcon size={14} />
       </button>
@@ -428,12 +455,23 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   showSettings: initialShowSettings = false,
   devMode = false,
   debug = false,
-  enableCompositor = false,
+  enableCompositor = true,
   compositorConfig,
+  theme,
+  locale = "en",
   className,
   onStateChange,
   onError,
+  children,
 }) => {
+  const t = useMemo(() => createStudioTranslator({ locale }), [locale]);
+  const themeStyle = useMemo(() => {
+    if (!theme) return undefined;
+    if (typeof theme === "object") return studioThemeOverridesToStyle(theme);
+    const resolved = resolveStudioTheme(theme);
+    return resolved ? studioThemeOverridesToStyle(resolved) : undefined;
+  }, [theme]);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const settingsDropdownRef = useRef<HTMLDivElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
@@ -499,7 +537,14 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     };
   }, [showSettings]);
 
-  // Initialize StreamCrafter hook
+  // Initialize StreamCrafter hook — capture the full return for context + destructure for local use
+  const hookReturn = useStreamCrafterV2({
+    whipUrl: resolvedWhipUrl || "",
+    profile: initialProfile,
+    debug,
+    reconnection: { enabled: true, maxAttempts: 5 },
+    audioMixing: true,
+  });
   const {
     state,
     stateContext,
@@ -523,20 +568,13 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     startStreaming,
     stopStreaming,
     getController,
-    // WebCodecs encoder
     useWebCodecs,
     isWebCodecsActive,
     isWebCodecsAvailable,
     encoderStats,
     setUseWebCodecs,
     setEncoderOverrides: setEncoderOverridesHook,
-  } = useStreamCrafterV2({
-    whipUrl: resolvedWhipUrl || "",
-    profile: initialProfile,
-    debug,
-    reconnection: { enabled: true, maxAttempts: 5 },
-    audioMixing: true,
-  });
+  } = hookReturn;
 
   // Audio levels for VU meter
   const { levels, isMonitoring } = useAudioLevels({
@@ -661,6 +699,8 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     [sources]
   );
 
+  const qualityProfiles = useMemo(() => getQualityProfiles(t), [t]);
+
   // Context menu actions
   const copyWhipUrl = useCallback(() => {
     if (resolvedWhipUrl) {
@@ -669,7 +709,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   }, [resolvedWhipUrl]);
 
   const copyStreamInfo = useCallback(() => {
-    const profile = QUALITY_PROFILES.find((p) => p.id === qualityProfile);
+    const profile = qualityProfiles.find((p) => p.id === qualityProfile);
     const info = [
       `Status: ${state}`,
       `Quality: ${profile?.label ?? qualityProfile} (${profile?.description ?? ""})`,
@@ -679,408 +719,449 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
       .filter(Boolean)
       .join("\n");
     navigator.clipboard.writeText(info).catch(console.error);
-  }, [state, qualityProfile, sources.length, resolvedWhipUrl]);
+  }, [state, qualityProfile, qualityProfiles, sources.length, resolvedWhipUrl]);
 
   // Computed state
   const canAddSource = state !== "destroyed" && state !== "error";
   const canStream = isCapturing && !isStreaming && resolvedWhipUrl;
   const hasCamera = sources.some((s) => s.type === "camera");
   const _hasScreen = sources.some((s) => s.type === "screen");
-  const statusText = getStatusText(state, reconnectionState);
+  const statusText = getStatusText(state, t, reconnectionState);
   const statusBadgeClass = getStatusBadgeClass(state, isReconnecting);
 
+  // Composable mode: render children instead of the default UI
+  if (children) {
+    return (
+      <StudioI18nProvider locale={locale}>
+        <StreamCrafterProvider value={hookReturn}>
+          <div
+            className={cn("fw-sc-root", className)}
+            data-theme={typeof theme === "string" && theme !== "default" ? theme : undefined}
+            style={themeStyle}
+          >
+            {children}
+          </div>
+        </StreamCrafterProvider>
+      </StudioI18nProvider>
+    );
+  }
+
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div className={cn("fw-sc-root", devMode && "fw-sc-root--devmode", className)}>
-          {/* Main content wrapper - takes remaining space when panel is open */}
-          <div className={cn("fw-sc-main", devMode ? "flex-1 min-w-0" : "w-full")}>
-            {/* Header */}
-            <div className="fw-sc-header">
-              <span className="fw-sc-header-title">StreamCrafter</span>
-              <div className="fw-sc-header-status">
-                <span className={statusBadgeClass}>{statusText}</span>
-              </div>
-            </div>
-
-            {/* Content area (preview + mixer) - responsive layout */}
-            <div className="fw-sc-content">
-              {/* Preview wrapper for flex sizing */}
-              <div className="fw-sc-preview-wrapper">
-                {/* Video Preview (flush - no padding) */}
-                <div className="fw-sc-preview">
-                  <video ref={videoRef} playsInline muted autoPlay aria-label="Stream preview" />
-
-                  {/* Empty State */}
-                  {!mediaStream && (
-                    <div className="fw-sc-preview-placeholder">
-                      <CameraIcon size={48} />
-                      <span>Add a camera or screen to preview</span>
-                    </div>
-                  )}
-
-                  {/* Status Overlay - Connecting/Reconnecting */}
-                  {(state === "connecting" || state === "reconnecting") && (
-                    <div className="fw-sc-status-overlay">
-                      <div className="fw-sc-status-spinner" />
-                      <span className="fw-sc-status-text">{statusText}</span>
-                    </div>
-                  )}
-
-                  {/* Live Badge */}
-                  {isStreaming && <div className="fw-sc-live-badge">Live</div>}
-
-                  {/* Compositor Controls Overlay (inside preview for positioning) */}
-                  {enableCompositor && (
-                    <CompositorControls
-                      isEnabled={compositor.isEnabled}
-                      isInitialized={compositor.isInitialized}
-                      rendererType={compositor.rendererType}
-                      stats={compositor.stats}
-                      sources={sources}
-                      layers={compositor.activeScene?.layers ?? []}
-                      currentLayout={compositor.currentLayout}
-                      onLayoutApply={compositor.applyLayout}
-                      onCycleSourceOrder={(direction) => compositor.cycleSourceOrder(direction)}
-                    />
-                  )}
-                </div>
-              </div>
-
-              {/* Sources Mixer Section - moves to right on wide screens */}
-              {sources.length > 0 && (
-                <div
-                  className={cn(
-                    "fw-sc-section fw-sc-mixer",
-                    !showSources && "fw-sc-section--collapsed"
-                  )}
-                >
-                  <div
-                    className="fw-sc-section-header"
-                    onClick={() => setShowSources(!showSources)}
-                    title={showSources ? "Collapse Mixer" : "Expand Mixer"}
-                  >
-                    <span>Mixer ({sources.length})</span>
-                    {showSources ? <ChevronsRightIcon size={14} /> : <ChevronsLeftIcon size={14} />}
+    <StudioI18nProvider locale={locale}>
+      <StreamCrafterProvider value={hookReturn}>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div
+              className={cn("fw-sc-root", devMode && "fw-sc-root--devmode", className)}
+              data-theme={typeof theme === "string" && theme !== "default" ? theme : undefined}
+              style={themeStyle}
+            >
+              {/* Main content wrapper - takes remaining space when panel is open */}
+              <div className={cn("fw-sc-main", devMode ? "flex-1 min-w-0" : "w-full")}>
+                {/* Header */}
+                <div className="fw-sc-header">
+                  <span className="fw-sc-header-title">{t("streamCrafter")}</span>
+                  <div className="fw-sc-header-status">
+                    <span className={statusBadgeClass}>{statusText}</span>
                   </div>
-                  {showSources && (
-                    <div className="fw-sc-section-body--flush">
-                      <div className="fw-sc-sources">
-                        {sources.map((source: MediaSource) => {
-                          // Get visibility state for compositor mode
-                          const layer = compositor.activeScene?.layers.find(
-                            (l) => l.sourceId === source.id
-                          );
-                          const isVisibleInCompositor = layer?.visible ?? true;
+                </div>
 
-                          return (
-                            <SourceRow
-                              key={source.id}
-                              source={source}
-                              onMuteToggle={() => toggleSourceMute(source.id, source.muted)}
-                              onVolumeChange={(vol) => setSourceVolume(source.id, vol)}
-                              onSetPrimary={() => setPrimaryVideoSource(source.id)}
-                              onRemove={() => removeSource(source.id)}
-                              disabled={false}
-                              isStreaming={isStreaming}
-                              hasVideo={source.stream.getVideoTracks().length > 0}
-                              isCompositorEnabled={enableCompositor}
-                              isVisibleInCompositor={isVisibleInCompositor}
-                              onVisibilityToggle={() => {
-                                if (compositor.activeSceneId && layer) {
-                                  compositor.setLayerVisibility(
-                                    compositor.activeSceneId,
-                                    layer.id,
-                                    !isVisibleInCompositor
-                                  );
-                                }
-                              }}
-                            />
-                          );
-                        })}
-                      </div>
+                {/* Content area (preview + mixer) - responsive layout */}
+                <div className="fw-sc-content">
+                  {/* Preview wrapper for flex sizing */}
+                  <div className="fw-sc-preview-wrapper">
+                    {/* Video Preview (flush - no padding) */}
+                    <div className="fw-sc-preview">
+                      <video
+                        ref={videoRef}
+                        playsInline
+                        muted
+                        autoPlay
+                        aria-label={t("streamPreview")}
+                      />
+
+                      {/* Empty State */}
+                      {!mediaStream && (
+                        <div className="fw-sc-preview-placeholder">
+                          <CameraIcon size={48} />
+                          <span>{t("addSourcePrompt")}</span>
+                        </div>
+                      )}
+
+                      {/* Status Overlay - Connecting/Reconnecting */}
+                      {(state === "connecting" || state === "reconnecting") && (
+                        <div className="fw-sc-status-overlay">
+                          <div className="fw-sc-status-spinner" />
+                          <span className="fw-sc-status-text">{statusText}</span>
+                        </div>
+                      )}
+
+                      {/* Live Badge */}
+                      {isStreaming && <div className="fw-sc-live-badge">{t("live")}</div>}
+
+                      {/* Compositor Controls Overlay (inside preview for positioning) */}
+                      {enableCompositor && (
+                        <CompositorControls
+                          isEnabled={compositor.isEnabled}
+                          isInitialized={compositor.isInitialized}
+                          rendererType={compositor.rendererType}
+                          stats={compositor.stats}
+                          sources={sources}
+                          layers={compositor.activeScene?.layers ?? []}
+                          currentLayout={compositor.currentLayout}
+                          onLayoutApply={compositor.applyLayout}
+                          onCycleSourceOrder={(direction) => compositor.cycleSourceOrder(direction)}
+                        />
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
+                  </div>
 
-            {/* VU Meter (horizontal bar under content area) */}
-            {isCapturing && <VUMeter level={levels.level} peakLevel={levels.peakLevel} />}
-
-            {/* Error Display */}
-            {(error || endpointError) && (
-              <div className="fw-sc-error">
-                <div className="fw-sc-error-title">Error</div>
-                <div className="fw-sc-error-message">{error || endpointError}</div>
-              </div>
-            )}
-
-            {/* No Endpoint Warning */}
-            {!resolvedWhipUrl && !error && !endpointError && !isResolvingEndpoint && (
-              <div className="fw-sc-error" style={{ borderLeftColor: "hsl(40 80% 65%)" }}>
-                <div className="fw-sc-error-title" style={{ color: "hsl(40 80% 65%)" }}>
-                  Warning
-                </div>
-                <div className="fw-sc-error-message">Configure WHIP endpoint to stream</div>
-              </div>
-            )}
-
-            {/* Resolving Endpoint State */}
-            {isResolvingEndpoint && (
-              <div className="fw-sc-error" style={{ borderLeftColor: "hsl(210 80% 65%)" }}>
-                <div className="fw-sc-error-title" style={{ color: "hsl(210 80% 65%)" }}>
-                  Resolving
-                </div>
-                <div className="fw-sc-error-message">Resolving ingest endpoint...</div>
-              </div>
-            )}
-
-            {/* Action Bar */}
-            <div className="fw-sc-actions">
-              {/* Secondary actions: Camera, Screen, Settings */}
-              <button
-                type="button"
-                className="fw-sc-action-secondary"
-                onClick={handleStartCamera}
-                disabled={!canAddSource || hasCamera}
-                title={hasCamera ? "Camera active" : "Add Camera"}
-              >
-                <CameraIcon size={18} />
-              </button>
-              <button
-                type="button"
-                className="fw-sc-action-secondary"
-                onClick={handleStartScreenShare}
-                disabled={!canAddSource}
-                title="Share Screen"
-              >
-                <MonitorIcon size={18} />
-              </button>
-              {/* Settings button in action bar */}
-              <div style={{ position: "relative" }}>
-                <button
-                  ref={settingsButtonRef}
-                  type="button"
-                  className={cn(
-                    "fw-sc-action-secondary",
-                    showSettings && "fw-sc-action-secondary--active"
-                  )}
-                  onClick={() => setShowSettings(!showSettings)}
-                  title="Settings"
-                  style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
-                >
-                  <span
-                    style={{
-                      display: "inline-flex",
-                      transition: "transform 0.2s",
-                    }}
-                    className="settings-icon-wrapper"
-                  >
-                    <SettingsIcon size={16} />
-                  </span>
-                </button>
-                {/* Settings Popup - positioned above button */}
-                {showSettings && (
-                  <div
-                    ref={settingsDropdownRef}
-                    style={{
-                      position: "absolute",
-                      bottom: "100%",
-                      left: 0,
-                      marginBottom: "8px",
-                      width: "192px",
-                      background: "#1a1b26",
-                      border: "1px solid rgba(90, 96, 127, 0.3)",
-                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
-                      borderRadius: "4px",
-                      overflow: "hidden",
-                      zIndex: 50,
-                    }}
-                  >
-                    {/* Quality Section */}
+                  {/* Sources Mixer Section - moves to right on wide screens */}
+                  {sources.length > 0 && (
                     <div
-                      style={{ padding: "8px", borderBottom: "1px solid rgba(90, 96, 127, 0.3)" }}
+                      className={cn(
+                        "fw-sc-section fw-sc-mixer",
+                        !showSources && "fw-sc-section--collapsed"
+                      )}
                     >
                       <div
+                        className="fw-sc-section-header"
+                        onClick={() => setShowSources(!showSources)}
+                        title={showSources ? t("collapseMixer") : t("expandMixer")}
+                      >
+                        <span>
+                          {t("mixer")} ({sources.length})
+                        </span>
+                        {showSources ? (
+                          <ChevronsRightIcon size={14} />
+                        ) : (
+                          <ChevronsLeftIcon size={14} />
+                        )}
+                      </div>
+                      {showSources && (
+                        <div className="fw-sc-section-body--flush">
+                          <div className="fw-sc-sources">
+                            {sources.map((source: MediaSource) => {
+                              // Get visibility state for compositor mode
+                              const layer = compositor.activeScene?.layers.find(
+                                (l) => l.sourceId === source.id
+                              );
+                              const isVisibleInCompositor = layer?.visible ?? true;
+
+                              return (
+                                <SourceRow
+                                  key={source.id}
+                                  source={source}
+                                  onMuteToggle={() => toggleSourceMute(source.id, source.muted)}
+                                  onVolumeChange={(vol) => setSourceVolume(source.id, vol)}
+                                  onSetPrimary={() => setPrimaryVideoSource(source.id)}
+                                  onRemove={() => removeSource(source.id)}
+                                  disabled={false}
+                                  isStreaming={isStreaming}
+                                  hasVideo={source.stream.getVideoTracks().length > 0}
+                                  t={t}
+                                  isCompositorEnabled={enableCompositor}
+                                  isVisibleInCompositor={isVisibleInCompositor}
+                                  onVisibilityToggle={() => {
+                                    if (compositor.activeSceneId && layer) {
+                                      compositor.setLayerVisibility(
+                                        compositor.activeSceneId,
+                                        layer.id,
+                                        !isVisibleInCompositor
+                                      );
+                                    }
+                                  }}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* VU Meter (horizontal bar under content area) */}
+                {isCapturing && <VUMeter level={levels.level} peakLevel={levels.peakLevel} />}
+
+                {/* Error Display */}
+                {(error || endpointError) && (
+                  <div className="fw-sc-error">
+                    <div className="fw-sc-error-title">{t("error")}</div>
+                    <div className="fw-sc-error-message">{error || endpointError}</div>
+                  </div>
+                )}
+
+                {/* No Endpoint Warning */}
+                {!resolvedWhipUrl && !error && !endpointError && !isResolvingEndpoint && (
+                  <div className="fw-sc-error" style={{ borderLeftColor: "hsl(40 80% 65%)" }}>
+                    <div className="fw-sc-error-title" style={{ color: "hsl(40 80% 65%)" }}>
+                      {t("warning")}
+                    </div>
+                    <div className="fw-sc-error-message">{t("configureWhipEndpoint")}</div>
+                  </div>
+                )}
+
+                {/* Resolving Endpoint State */}
+                {isResolvingEndpoint && (
+                  <div className="fw-sc-error" style={{ borderLeftColor: "hsl(210 80% 65%)" }}>
+                    <div className="fw-sc-error-title" style={{ color: "hsl(210 80% 65%)" }}>
+                      {t("resolvingEndpoint")}
+                    </div>
+                    <div className="fw-sc-error-message">{t("resolvingEndpoint")}</div>
+                  </div>
+                )}
+
+                {/* Action Bar */}
+                <div className="fw-sc-actions">
+                  {/* Secondary actions: Camera, Screen, Settings */}
+                  <button
+                    type="button"
+                    className="fw-sc-action-secondary"
+                    onClick={handleStartCamera}
+                    disabled={!canAddSource || hasCamera}
+                    title={hasCamera ? t("cameraActive") : t("addCamera")}
+                  >
+                    <CameraIcon size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    className="fw-sc-action-secondary"
+                    onClick={handleStartScreenShare}
+                    disabled={!canAddSource}
+                    title={t("shareScreen")}
+                  >
+                    <MonitorIcon size={18} />
+                  </button>
+                  {/* Settings button in action bar */}
+                  <div style={{ position: "relative" }}>
+                    <button
+                      ref={settingsButtonRef}
+                      type="button"
+                      className={cn(
+                        "fw-sc-action-secondary",
+                        showSettings && "fw-sc-action-secondary--active"
+                      )}
+                      onClick={() => setShowSettings(!showSettings)}
+                      title={t("settings")}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
+                    >
+                      <span
                         style={{
-                          fontSize: "10px",
-                          color: "#565f89",
-                          textTransform: "uppercase",
-                          fontWeight: 600,
-                          marginBottom: "4px",
-                          paddingLeft: "4px",
+                          display: "inline-flex",
+                          transition: "transform 0.2s",
+                        }}
+                        className="settings-icon-wrapper"
+                      >
+                        <SettingsIcon size={16} />
+                      </span>
+                    </button>
+                    {/* Settings Popup - positioned above button */}
+                    {showSettings && (
+                      <div
+                        ref={settingsDropdownRef}
+                        style={{
+                          position: "absolute",
+                          bottom: "100%",
+                          left: 0,
+                          marginBottom: "8px",
+                          width: "192px",
+                          background: "#1a1b26",
+                          border: "1px solid rgba(90, 96, 127, 0.3)",
+                          boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
+                          borderRadius: "4px",
+                          overflow: "hidden",
+                          zIndex: 50,
                         }}
                       >
-                        Quality
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                        {QUALITY_PROFILES.map((p) => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => {
-                              if (!isStreaming) {
-                                setQualityProfile(p.id);
-                                if (!devMode) setShowSettings(false);
-                              }
-                            }}
-                            disabled={isStreaming}
+                        {/* Quality Section */}
+                        <div
+                          style={{
+                            padding: "8px",
+                            borderBottom: "1px solid rgba(90, 96, 127, 0.3)",
+                          }}
+                        >
+                          <div
                             style={{
-                              width: "100%",
-                              padding: "6px 8px",
-                              textAlign: "left",
-                              fontSize: "12px",
-                              borderRadius: "4px",
-                              transition: "all 0.15s",
-                              border: "none",
-                              cursor: isStreaming ? "not-allowed" : "pointer",
-                              opacity: isStreaming ? 0.5 : 1,
-                              background:
-                                qualityProfile === p.id
-                                  ? "rgba(122, 162, 247, 0.2)"
-                                  : "transparent",
-                              color: qualityProfile === p.id ? "#7aa2f7" : "#a9b1d6",
+                              fontSize: "10px",
+                              color: "#565f89",
+                              textTransform: "uppercase",
+                              fontWeight: 600,
+                              marginBottom: "4px",
+                              paddingLeft: "4px",
                             }}
                           >
-                            <div style={{ fontWeight: 500 }}>{p.label}</div>
-                            <div style={{ fontSize: "10px", color: "#565f89" }}>
-                              {p.description}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                            {t("quality")}
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                            {qualityProfiles.map((p) => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => {
+                                  if (!isStreaming) {
+                                    setQualityProfile(p.id);
+                                    if (!devMode) setShowSettings(false);
+                                  }
+                                }}
+                                disabled={isStreaming}
+                                style={{
+                                  width: "100%",
+                                  padding: "6px 8px",
+                                  textAlign: "left",
+                                  fontSize: "12px",
+                                  borderRadius: "4px",
+                                  transition: "all 0.15s",
+                                  border: "none",
+                                  cursor: isStreaming ? "not-allowed" : "pointer",
+                                  opacity: isStreaming ? 0.5 : 1,
+                                  background:
+                                    qualityProfile === p.id
+                                      ? "rgba(122, 162, 247, 0.2)"
+                                      : "transparent",
+                                  color: qualityProfile === p.id ? "#7aa2f7" : "#a9b1d6",
+                                }}
+                              >
+                                <div style={{ fontWeight: 500 }}>{p.label}</div>
+                                <div style={{ fontSize: "10px", color: "#565f89" }}>
+                                  {p.description}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
 
-                    {/* Dev Info Section */}
-                    {devMode && (
-                      <div style={{ padding: "8px" }}>
-                        <div
-                          style={{
-                            fontSize: "10px",
-                            color: "#565f89",
-                            textTransform: "uppercase",
-                            fontWeight: 600,
-                            marginBottom: "4px",
-                            paddingLeft: "4px",
-                          }}
-                        >
-                          Debug
-                        </div>
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "4px",
-                            paddingLeft: "4px",
-                            fontSize: "12px",
-                            fontFamily:
-                              "ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace",
-                          }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between" }}>
-                            <span style={{ color: "#565f89" }}>State</span>
-                            <span style={{ color: "#c0caf5" }}>{state}</span>
+                        {/* Dev Info Section */}
+                        {devMode && (
+                          <div style={{ padding: "8px" }}>
+                            <div
+                              style={{
+                                fontSize: "10px",
+                                color: "#565f89",
+                                textTransform: "uppercase",
+                                fontWeight: 600,
+                                marginBottom: "4px",
+                                paddingLeft: "4px",
+                              }}
+                            >
+                              {t("debug")}
+                            </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: "4px",
+                                paddingLeft: "4px",
+                                fontSize: "12px",
+                                fontFamily:
+                                  "ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace",
+                              }}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                <span style={{ color: "#565f89" }}>{t("state")}</span>
+                                <span style={{ color: "#c0caf5" }}>{state}</span>
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                <span style={{ color: "#565f89" }}>{t("audio")}</span>
+                                <span style={{ color: isMonitoring ? "#9ece6a" : "#565f89" }}>
+                                  {isMonitoring ? t("active") : t("inactive")}
+                                </span>
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                <span style={{ color: "#565f89" }}>{t("whip")}</span>
+                                <span style={{ color: resolvedWhipUrl ? "#9ece6a" : "#f7768e" }}>
+                                  {resolvedWhipUrl ? t("ok") : t("notSet")}
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                          <div style={{ display: "flex", justifyContent: "space-between" }}>
-                            <span style={{ color: "#565f89" }}>Audio</span>
-                            <span style={{ color: isMonitoring ? "#9ece6a" : "#565f89" }}>
-                              {isMonitoring ? "Active" : "Inactive"}
-                            </span>
-                          </div>
-                          <div style={{ display: "flex", justifyContent: "space-between" }}>
-                            <span style={{ color: "#565f89" }}>WHIP</span>
-                            <span style={{ color: resolvedWhipUrl ? "#9ece6a" : "#f7768e" }}>
-                              {resolvedWhipUrl ? "OK" : "Not set"}
-                            </span>
-                          </div>
-                        </div>
+                        )}
                       </div>
                     )}
                   </div>
-                )}
+                  {/* Primary action: Go Live / Stop */}
+                  {!isStreaming ? (
+                    <button
+                      type="button"
+                      className="fw-sc-action-primary"
+                      onClick={handleGoLive}
+                      disabled={!canStream}
+                    >
+                      {state === "connecting" ? t("connecting") : t("goLive")}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="fw-sc-action-primary fw-sc-action-stop"
+                      onClick={handleStopStreaming}
+                    >
+                      {t("stopStreaming")}
+                    </button>
+                  )}
+                </div>
               </div>
-              {/* Primary action: Go Live / Stop */}
-              {!isStreaming ? (
-                <button
-                  type="button"
-                  className="fw-sc-action-primary"
-                  onClick={handleGoLive}
-                  disabled={!canStream}
-                >
-                  {state === "connecting" ? "Connecting..." : "Go Live"}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="fw-sc-action-primary fw-sc-action-stop"
-                  onClick={handleStopStreaming}
-                >
-                  Stop Streaming
-                </button>
+
+              {/* Advanced Panel - side panel when open */}
+              {devMode && isAdvancedPanelOpen && (
+                <AdvancedPanel
+                  isOpen={isAdvancedPanelOpen}
+                  onClose={() => setIsAdvancedPanelOpen(false)}
+                  state={state}
+                  qualityProfile={qualityProfile}
+                  whipUrl={resolvedWhipUrl}
+                  sources={sources}
+                  stats={stats}
+                  mediaStream={mediaStream}
+                  masterVolume={masterVolume}
+                  onMasterVolumeChange={handleMasterVolumeChange}
+                  audioLevel={levels.level}
+                  audioMixingEnabled={true}
+                  error={error}
+                  audioProcessing={audioProcessing}
+                  onAudioProcessingChange={handleAudioProcessingChange}
+                  compositorEnabled={compositor.isEnabled}
+                  compositorRendererType={compositor.rendererType}
+                  compositorStats={compositor.stats}
+                  sceneCount={compositor.scenes.length}
+                  layerCount={compositor.activeScene?.layers.length ?? 0}
+                  useWebCodecs={useWebCodecs}
+                  isWebCodecsActive={isWebCodecsActive}
+                  isWebCodecsAvailable={isWebCodecsAvailable}
+                  encoderStats={encoderStats}
+                  onUseWebCodecsChange={setUseWebCodecs}
+                  encoderOverrides={encoderOverrides}
+                  onEncoderOverridesChange={setEncoderOverrides}
+                />
               )}
             </div>
-          </div>
+          </ContextMenuTrigger>
 
-          {/* Advanced Panel - side panel when open */}
-          {devMode && isAdvancedPanelOpen && (
-            <AdvancedPanel
-              isOpen={isAdvancedPanelOpen}
-              onClose={() => setIsAdvancedPanelOpen(false)}
-              state={state}
-              qualityProfile={qualityProfile}
-              whipUrl={resolvedWhipUrl}
-              sources={sources}
-              stats={stats}
-              mediaStream={mediaStream}
-              masterVolume={masterVolume}
-              onMasterVolumeChange={handleMasterVolumeChange}
-              audioLevel={levels.level}
-              audioMixingEnabled={true}
-              error={error}
-              audioProcessing={audioProcessing}
-              onAudioProcessingChange={handleAudioProcessingChange}
-              compositorEnabled={compositor.isEnabled}
-              compositorRendererType={compositor.rendererType}
-              compositorStats={compositor.stats}
-              sceneCount={compositor.scenes.length}
-              layerCount={compositor.activeScene?.layers.length ?? 0}
-              useWebCodecs={useWebCodecs}
-              isWebCodecsActive={isWebCodecsActive}
-              isWebCodecsAvailable={isWebCodecsAvailable}
-              encoderStats={encoderStats}
-              onUseWebCodecsChange={setUseWebCodecs}
-              encoderOverrides={encoderOverrides}
-              onEncoderOverridesChange={setEncoderOverrides}
-            />
-          )}
-        </div>
-      </ContextMenuTrigger>
-
-      {/* Right-Click Context Menu */}
-      <ContextMenuContent>
-        {resolvedWhipUrl && (
-          <ContextMenuItem onClick={copyWhipUrl} className="gap-2">
-            <span>Copy WHIP URL</span>
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onClick={copyStreamInfo} className="gap-2">
-          <span>Copy Stream Info</span>
-        </ContextMenuItem>
-        {devMode && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onClick={() => setIsAdvancedPanelOpen(!isAdvancedPanelOpen)}
-              className="gap-2"
-            >
-              <SettingsIcon size={14} />
-              <span>{isAdvancedPanelOpen ? "Hide Advanced" : "Advanced"}</span>
+          {/* Right-Click Context Menu */}
+          <ContextMenuContent>
+            {resolvedWhipUrl && (
+              <ContextMenuItem onClick={copyWhipUrl} className="gap-2">
+                <span>{t("copyWhipUrl")}</span>
+              </ContextMenuItem>
+            )}
+            <ContextMenuItem onClick={copyStreamInfo} className="gap-2">
+              <span>{t("copyStreamInfo")}</span>
             </ContextMenuItem>
-          </>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
+            {devMode && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  onClick={() => setIsAdvancedPanelOpen(!isAdvancedPanelOpen)}
+                  className="gap-2"
+                >
+                  <SettingsIcon size={14} />
+                  <span>{isAdvancedPanelOpen ? t("hideAdvanced") : t("advanced")}</span>
+                </ContextMenuItem>
+              </>
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
+      </StreamCrafterProvider>
+    </StudioI18nProvider>
   );
 };
 

@@ -100,7 +100,12 @@ export {
 } from "./UrlUtils";
 
 // Codec utilities (MistMetaPlayer feature backport)
-export { translateCodec, isCodecSupported, getBestSupportedTrack } from "./CodecUtils";
+export {
+  translateCodec,
+  isCodecSupported,
+  getBestSupportedTrack,
+  buildDescription,
+} from "./CodecUtils";
 export type { TrackInfo } from "./CodecUtils";
 
 // Subtitle management (MistMetaPlayer feature backport)
@@ -108,8 +113,12 @@ export { SubtitleManager } from "./SubtitleManager";
 export type { SubtitleTrackInfo, SubtitleManagerConfig } from "./SubtitleManager";
 
 // Interaction controller for modern player gestures + keyboard (VOD/Clip features)
-export { InteractionController } from "./InteractionController";
-export type { InteractionControllerConfig, InteractionState } from "./InteractionController";
+export { InteractionController, DEFAULT_KEY_MAP } from "./InteractionController";
+export type {
+  InteractionControllerConfig,
+  InteractionState,
+  PlayerKeyMap,
+} from "./InteractionController";
 
 // Screen Wake Lock for preventing device sleep during video playback
 export { ScreenWakeLockManager } from "./ScreenWakeLockManager";
@@ -137,6 +146,29 @@ export type {
   CanSeekParams,
 } from "./SeekingUtils";
 
+// Theming
+export {
+  applyTheme,
+  applyThemeOverrides,
+  clearTheme,
+  themeOverridesToStyle,
+  resolveTheme,
+  getAvailableThemes,
+  getThemeDisplayName,
+} from "./ThemeManager";
+export type { FwThemePreset, FwThemeOverrides } from "./ThemeManager";
+
+// Internationalization
+export {
+  DEFAULT_TRANSLATIONS,
+  createTranslator,
+  translate,
+  getAvailableLocales,
+  getLocaleDisplayName,
+  getLocalePack,
+} from "./I18n";
+export type { TranslationStrings, FwLocale, I18nConfig, TranslateFn } from "./I18n";
+
 // Time formatting utilities
 export {
   formatTime,
@@ -147,3 +179,18 @@ export {
   parseTime,
 } from "./TimeFormat";
 export type { TimeDisplayParams } from "./TimeFormat";
+
+// Audio gain (Web Audio API volume boost)
+export { AudioGainController } from "./AudioGainController";
+export type { AudioGainConfig } from "./AudioGainController";
+
+// AirPlay (Safari)
+export { AirPlayController } from "./AirPlayController";
+
+// Responsive breakpoints (ResizeObserver)
+export { BreakpointObserver } from "./BreakpointObserver";
+export type { BreakpointConfig } from "./BreakpointObserver";
+
+// Thumbnail VTT sprite sheet parser
+export { parseThumbnailVtt, findCueAtTime, fetchThumbnailVtt } from "./ThumbnailVttParser";
+export type { ThumbnailCue } from "./ThumbnailVttParser";

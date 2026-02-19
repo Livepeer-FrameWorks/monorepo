@@ -502,6 +502,11 @@ const LandingPage = () => {
                           description:
                             "Sub-second latency by default. Real-time streaming without the complexity.",
                         },
+                        {
+                          title: "Designed for white-labelling",
+                          description:
+                            "Use built-in themes you're already familiar with, bring your own CSS, or override any element with your own component library.",
+                        },
                       ]}
                       variant="list"
                       indicator="check"

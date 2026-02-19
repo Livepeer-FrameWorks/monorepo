@@ -67,7 +67,7 @@
   let internalIsOpen = $state(false);
   let activeTab = $state<"config" | "stats">("config");
   let hoveredComboIndex = $state<number | null>(null);
-  let tooltipAbove = $state(false);
+  let tooltipPos = $state<{ top: number; left: number } | null>(null);
   let showDisabledPlayers = $state(false);
   let comboListRef: HTMLDivElement | undefined = $state();
 
@@ -163,14 +163,12 @@
 
   function handleComboHover(index: number, e: MouseEvent) {
     hoveredComboIndex = index;
-    if (comboListRef) {
-      const container = comboListRef;
-      const row = e.currentTarget as HTMLElement;
-      const containerRect = container.getBoundingClientRect();
-      const rowRect = row.getBoundingClientRect();
-      const relativePosition = (rowRect.top - containerRect.top) / containerRect.height;
-      tooltipAbove = relativePosition > 0.6;
-    }
+    const row = e.currentTarget as HTMLElement;
+    const rowRect = row.getBoundingClientRect();
+    tooltipPos = {
+      top: Math.max(8, Math.min(rowRect.top, window.innerHeight - 200)),
+      left: Math.max(8, rowRect.left - 228),
+    };
   }
 
   // Quality monitoring
@@ -387,7 +385,10 @@
                   class="fw-dev-combo"
                   role="listitem"
                   onmouseenter={(e) => handleComboHover(index, e)}
-                  onmouseleave={() => (hoveredComboIndex = null)}
+                  onmouseleave={() => {
+                    hoveredComboIndex = null;
+                    tooltipPos = null;
+                  }}
                 >
                   <button
                     type="button"
@@ -446,12 +447,10 @@
                   </button>
 
                   <!-- Tooltip -->
-                  {#if hoveredComboIndex === index}
+                  {#if hoveredComboIndex === index && tooltipPos}
                     <div
-                      class={cn(
-                        "fw-dev-tooltip",
-                        tooltipAbove ? "fw-dev-tooltip--above" : "fw-dev-tooltip--below"
-                      )}
+                      class="fw-dev-tooltip"
+                      style="top: {tooltipPos.top}px; left: {tooltipPos.left}px;"
                     >
                       <div class="fw-dev-tooltip-header">
                         <div class="fw-dev-tooltip-title">{combo.playerName}</div>

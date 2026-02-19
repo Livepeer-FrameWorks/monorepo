@@ -1,0 +1,199 @@
+---
+title: "StreamCrafter — Compositor"
+description: "Multi-source compositing with scenes, layers, layouts, and transitions."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The compositor enables multi-source layout control — arrange camera and screen share into professional layouts with scenes, layers, and animated transitions.
+
+<Aside type="tip" title="On by Default">
+  The compositor is enabled by default. It works with a single source (fullscreen solo layout) and
+  scales to multi-source layouts automatically. Disable it only if you want raw single-source
+  streaming without compositing.
+</Aside>
+
+## Disabling the Compositor
+
+If you need raw source streaming without compositing overhead:
+
+**React:**
+
+```tsx
+<StreamCrafter whipUrl="..." enableCompositor={false} />
+```
+
+**Svelte:**
+
+```svelte
+<StreamCrafter whipUrl="..." enableCompositor={false} />
+```
+
+**Web Components:**
+
+```html
+<!-- Omit the enable-compositor attribute -->
+<fw-streamcrafter whip-url="..."></fw-streamcrafter>
+```
+
+**Vanilla:**
+
+```ts
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  enableCompositor: false,
+});
+```
+
+## Layout Modes
+
+The compositor ships with 15 built-in layout presets:
+
+| Mode          | Label              | Min Sources | Description                       |
+| ------------- | ------------------ | ----------- | --------------------------------- |
+| `solo`        | Solo               | 1           | Single source fullscreen          |
+| `pip-br`      | PiP (bottom-right) | 2           | Main + small overlay bottom-right |
+| `pip-bl`      | PiP (bottom-left)  | 2           | Main + small overlay bottom-left  |
+| `pip-tr`      | PiP (top-right)    | 2           | Main + small overlay top-right    |
+| `pip-tl`      | PiP (top-left)     | 2           | Main + small overlay top-left     |
+| `split-h`     | Split Horizontal   | 2           | Side-by-side split                |
+| `split-v`     | Split Vertical     | 2           | Top/bottom split                  |
+| `focus-l`     | Focus Left         | 2           | Large left, small right           |
+| `focus-r`     | Focus Right        | 2           | Small left, large right           |
+| `pip-dual-br` | Main + 2 PiP       | 3           | Main with two small overlays      |
+| `split-pip-r` | Split + PiP        | 3           | Side-by-side with small overlay   |
+| `featured`    | Featured           | 3           | Large center, small sides         |
+| `featured-r`  | Featured Right     | 3           | Large right, small left stack     |
+| `grid`        | Grid               | 2+          | Equal-size grid                   |
+| `stack`       | Stack              | 2+          | Vertical stack                    |
+
+### Applying Layouts
+
+**React (via hook):**
+
+```tsx
+const { compositor } = useStreamCrafterV2({ whipUrl: "...", enableCompositor: true });
+
+compositor.applyLayout({ mode: "pip-br", scalingMode: "letterbox", pipScale: 0.25 });
+```
+
+**Vanilla:**
+
+```ts
+studio.controller.applyLayout({
+  mode: "split-h",
+  scalingMode: "crop",
+});
+```
+
+**Web Components (via event):**
+
+```js
+studio.controller.applyLayout({ mode: "grid", scalingMode: "letterbox" });
+```
+
+### Cycling Source Order
+
+When a layout is already active, clicking it again (or calling the same layout) cycles the source order — the first source moves to the back. Hold Shift to cycle backward.
+
+## Scaling Modes
+
+Each layout supports three scaling modes that control how sources fill their allocated space:
+
+| Mode        | Description                                                    |
+| ----------- | -------------------------------------------------------------- |
+| `letterbox` | Fit entire source, add black bars if aspect ratios don't match |
+| `crop`      | Fill the space completely, cropping edges if needed            |
+| `stretch`   | Stretch to fill exactly, ignoring aspect ratio                 |
+
+## Scenes
+
+Scenes are named collections of layers with their own layout configurations. Switch between scenes for different broadcast segments.
+
+```ts
+// Create a scene
+compositor.createScene("interview");
+compositor.createScene("solo-cam");
+
+// Switch to a scene with a transition
+await compositor.transitionTo("interview", {
+  type: "fade",
+  durationMs: 500,
+  easing: "ease-in-out",
+});
+```
+
+### Transition Types
+
+| Type          | Description                     |
+| ------------- | ------------------------------- |
+| `cut`         | Instant switch (0ms)            |
+| `fade`        | Cross-fade between scenes       |
+| `slide-left`  | New scene slides in from right  |
+| `slide-right` | New scene slides in from left   |
+| `slide-up`    | New scene slides in from bottom |
+| `slide-down`  | New scene slides in from top    |
+
+## Layers
+
+Each source in a scene becomes a layer with independent controls:
+
+| Property            | Type      | Description                   |
+| ------------------- | --------- | ----------------------------- |
+| `id`                | `string`  | Layer identifier              |
+| `sourceId`          | `string`  | Linked media source           |
+| `visible`           | `boolean` | Show/hide layer               |
+| `zIndex`            | `number`  | Stack order (higher = on top) |
+| `transform.opacity` | `number`  | Layer opacity (0-1)           |
+
+### Layer Operations
+
+```ts
+// Toggle visibility
+compositor.setLayerVisible(layerId, false);
+
+// Change opacity
+compositor.setLayerTransform(layerId, { opacity: 0.7 });
+
+// Reorder layers (array of layer IDs, front to back)
+compositor.reorderLayers(["layer-1", "layer-2", "layer-3"]);
+
+// Remove a layer
+compositor.removeLayer(layerId);
+```
+
+## Renderer
+
+The compositor automatically selects the best available renderer:
+
+| Renderer   | Requirements | Performance                          |
+| ---------- | ------------ | ------------------------------------ |
+| `webgpu`   | WebGPU API   | Best — GPU-accelerated compositing   |
+| `webgl`    | WebGL 2      | Good — hardware-accelerated fallback |
+| `canvas2d` | Canvas API   | Baseline — software rendering        |
+
+The active renderer type and FPS are shown in the compositor controls overlay.
+
+## UI Components
+
+Each framework provides compositor UI components:
+
+**React:**
+
+```tsx
+import {
+  CompositorControls,
+  SceneSwitcher,
+  LayerList,
+} from "@livepeer-frameworks/streamcrafter-react";
+```
+
+**Web Components:**
+
+```html
+<fw-sc-compositor for="studio"></fw-sc-compositor>
+<fw-sc-scene-switcher for="studio"></fw-sc-scene-switcher>
+<fw-sc-layer-list for="studio"></fw-sc-layer-list>
+```
+
+The compositor overlay shows layout icons and scaling mode buttons. Click a layout icon to apply it; click the active layout to cycle source order.

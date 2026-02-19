@@ -87,7 +87,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", () => ({
       on: mockOn,
     });
   }),
-  detectCapabilities: vi.fn().mockReturnValue({ recommended: "native" }),
+  detectCapabilities: vi.fn().mockReturnValue({ recommended: "webcodecs" }),
   isWebCodecsEncodingPathSupported: vi.fn().mockReturnValue(false),
 }));
 

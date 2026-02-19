@@ -76,6 +76,13 @@ export class FwVolumeControl extends LitElement {
   }
 
   private _updateHasAudio(): void {
+    // Primary: trust MistServer stream metadata (matches ddvtech embed approach)
+    const mistHasAudio = this.pc?.s.streamState?.streamInfo?.hasAudio;
+    if (mistHasAudio !== undefined) {
+      this._hasAudio = mistHasAudio;
+      return;
+    }
+
     const video = this.pc?.s.videoElement;
     if (!video) {
       this._hasAudio = true;
@@ -260,8 +267,12 @@ export class FwVolumeControl extends LitElement {
             }
           }}
           ?disabled=${!this._hasAudio}
-          aria-label=${!this._hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
-          title=${!this._hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
+          aria-label=${!this._hasAudio
+            ? "No audio"
+            : isMuted
+              ? this.pc.t("unmute")
+              : this.pc.t("mute")}
+          title=${!this._hasAudio ? "No audio" : isMuted ? this.pc.t("unmute") : this.pc.t("mute")}
         >
           ${isMuted || !this._hasAudio ? volumeOffIcon(16) : volumeUpIcon(16)}
         </button>
@@ -276,7 +287,7 @@ export class FwVolumeControl extends LitElement {
           <div
             class="slider"
             role="slider"
-            aria-label="Volume"
+            aria-label=${this.pc.t("volume")}
             aria-valuemin="0"
             aria-valuemax="100"
             aria-valuenow=${Math.round(displayVolume * 100)}

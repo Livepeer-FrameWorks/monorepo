@@ -88,8 +88,12 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
             transform: "translateX(-50%)",
             marginBottom: "8px",
             padding: "4px 8px",
-            background: isBoost ? "#e0af68" : isDefault ? "#9ece6a" : "#7aa2f7",
-            color: "#1a1b26",
+            background: isBoost
+              ? "hsl(var(--fw-sc-warning))"
+              : isDefault
+                ? "hsl(var(--fw-sc-success))"
+                : "hsl(var(--fw-sc-accent))",
+            color: "hsl(var(--fw-sc-on-accent))",
             borderRadius: "4px",
             fontSize: "12px",
             fontWeight: 600,
@@ -112,7 +116,7 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
               height: 0,
               borderLeft: "6px solid transparent",
               borderRight: "6px solid transparent",
-              borderTop: `6px solid ${isBoost ? "#e0af68" : isDefault ? "#9ece6a" : "#7aa2f7"}`,
+              borderTop: `6px solid ${isBoost ? "hsl(var(--fw-sc-warning))" : isDefault ? "hsl(var(--fw-sc-success))" : "hsl(var(--fw-sc-accent))"}`,
             }}
           />
         </div>
@@ -128,7 +132,7 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
             top: "0",
             bottom: "0",
             width: "2px",
-            background: isDefault ? "#9ece6a" : "rgba(158, 206, 106, 0.3)",
+            background: isDefault ? "hsl(var(--fw-sc-success))" : "hsl(var(--fw-sc-success) / 0.3)",
             borderRadius: "1px",
             zIndex: 1,
             pointerEvents: "none",
@@ -152,7 +156,7 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
             height: "6px",
             borderRadius: "3px",
             cursor: "pointer",
-            accentColor: isBoost ? "#e0af68" : "#7aa2f7",
+            accentColor: isBoost ? "hsl(var(--fw-sc-warning))" : "hsl(var(--fw-sc-accent))",
           }}
         />
       </div>

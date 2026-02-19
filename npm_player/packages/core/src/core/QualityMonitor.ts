@@ -226,8 +226,13 @@ export class QualityMonitor {
     const video = this.videoElement;
     if (!video) return;
 
-    // Update MistPlayer-style playback score
-    this.updatePlaybackScore();
+    // Paused/ended video has videoDelta=0 which reads as 0% playback score.
+    // Don't let that poison the score or trigger destructive fallback.
+    const isActive = !video.paused && !video.ended && video.readyState >= 3;
+
+    if (isActive) {
+      this.updatePlaybackScore();
+    }
 
     const quality = this.calculateQuality(video);
     this.history.push(quality);
@@ -251,7 +256,7 @@ export class QualityMonitor {
 
     // Track sustained poor quality for automatic fallback
     // Reference: player.js:654-665 - "nextCombo" after sustained poor playback
-    if (this.isPlaybackPoor()) {
+    if (isActive && this.isPlaybackPoor()) {
       this.consecutivePoorSamples++;
 
       // Trigger fallback after sustained poor quality
@@ -271,6 +276,9 @@ export class QualityMonitor {
           consecutivePoorSamples: this.consecutivePoorSamples,
         });
       }
+    } else if (!isActive) {
+      // Don't accumulate poor samples across pause/play boundaries
+      this.consecutivePoorSamples = 0;
     } else {
       // Quality recovered - reset counters
       this.consecutivePoorSamples = 0;

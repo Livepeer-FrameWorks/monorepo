@@ -24,6 +24,7 @@ import {
   getEncoderSettings,
 } from "@livepeer-frameworks/streamcrafter-core";
 import { VolumeSlider } from "./VolumeSlider";
+import { useStudioTranslate } from "../context/StudioI18nContext";
 
 // ============================================================================
 // Types
@@ -147,7 +148,7 @@ const ToggleSwitch: React.FC<ToggleSwitchProps> = ({ checked, onChange, disabled
         cursor: disabled ? "not-allowed" : "pointer",
         borderRadius: "10px",
         border: "2px solid transparent",
-        background: checked ? "#7aa2f7" : "#414868",
+        background: checked ? "hsl(var(--fw-sc-accent))" : "hsl(var(--fw-sc-border))",
         opacity: disabled ? 0.5 : 1,
         transition: "background-color 0.2s",
       }}
@@ -202,12 +203,14 @@ function SettingSelect<T extends string | number>({
       }}
       disabled={disabled}
       style={{
-        background: isOverridden ? "rgba(187, 154, 247, 0.15)" : "rgba(65, 72, 104, 0.3)",
+        background: isOverridden
+          ? "hsl(var(--fw-sc-accent-secondary) / 0.15)"
+          : "hsl(var(--fw-sc-border) / 0.3)",
         border: isOverridden
-          ? "1px solid rgba(187, 154, 247, 0.4)"
-          : "1px solid rgba(65, 72, 104, 0.5)",
+          ? "1px solid hsl(var(--fw-sc-accent-secondary) / 0.4)"
+          : "1px solid hsl(var(--fw-sc-border) / 0.5)",
         borderRadius: "4px",
-        color: isOverridden ? "#bb9af7" : "#c0caf5",
+        color: isOverridden ? "hsl(var(--fw-sc-accent-secondary))" : "hsl(var(--fw-sc-text))",
         padding: "4px 8px",
         fontSize: "12px",
         fontFamily: "inherit",
@@ -284,25 +287,26 @@ const AudioProcessingControls: React.FC<AudioProcessingControlsProps> = ({
   settings,
   onChange,
 }) => {
+  const t = useStudioTranslate();
   const profileDefaults = getAudioConstraints(profile);
 
   const toggles = [
     {
       key: "echoCancellation" as const,
-      label: "Echo Cancellation",
-      description: "Reduce echo from speakers",
+      label: t("echoCancellation"),
+      description: t("echoCancellationDesc"),
       defaultValue: profileDefaults.echoCancellation,
     },
     {
       key: "noiseSuppression" as const,
-      label: "Noise Suppression",
-      description: "Filter background noise",
+      label: t("noiseSuppression"),
+      description: t("noiseSuppressionDesc"),
       defaultValue: profileDefaults.noiseSuppression,
     },
     {
       key: "autoGainControl" as const,
-      label: "Auto Gain Control",
-      description: "Normalize audio levels",
+      label: t("autoGainControl"),
+      description: t("autoGainControlDesc"),
       defaultValue: profileDefaults.autoGainControl,
     },
   ];
@@ -316,13 +320,13 @@ const AudioProcessingControls: React.FC<AudioProcessingControlsProps> = ({
             key={key}
             style={{
               padding: "10px 12px",
-              borderTop: idx > 0 ? "1px solid rgba(65, 72, 104, 0.2)" : undefined,
+              borderTop: idx > 0 ? "1px solid hsl(var(--fw-sc-border) / 0.2)" : undefined,
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ color: "#c0caf5", fontSize: "12px" }}>{label}</span>
+                  <span style={{ color: "hsl(var(--fw-sc-text))", fontSize: "12px" }}>{label}</span>
                   {isModified && (
                     <span
                       style={{
@@ -330,16 +334,22 @@ const AudioProcessingControls: React.FC<AudioProcessingControlsProps> = ({
                         fontWeight: 600,
                         textTransform: "uppercase",
                         letterSpacing: "0.05em",
-                        color: "#e0af68",
-                        background: "rgba(224, 175, 104, 0.2)",
+                        color: "hsl(var(--fw-sc-warning))",
+                        background: "hsl(var(--fw-sc-warning) / 0.2)",
                         padding: "2px 4px",
                       }}
                     >
-                      Modified
+                      {t("modified")}
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: "10px", color: "#565f89", marginTop: "2px" }}>
+                <div
+                  style={{
+                    fontSize: "10px",
+                    color: "hsl(var(--fw-sc-text-faint))",
+                    marginTop: "2px",
+                  }}
+                >
                   {description}
                 </div>
               </div>
@@ -357,11 +367,15 @@ const AudioProcessingControls: React.FC<AudioProcessingControlsProps> = ({
           justifyContent: "space-between",
           alignItems: "center",
           padding: "8px 12px",
-          borderTop: "1px solid rgba(65, 72, 104, 0.2)",
+          borderTop: "1px solid hsl(var(--fw-sc-border) / 0.2)",
         }}
       >
-        <span style={{ color: "#565f89", fontSize: "12px" }}>Sample Rate</span>
-        <span style={{ color: "#c0caf5", fontSize: "12px", fontFamily: "monospace" }}>
+        <span style={{ color: "hsl(var(--fw-sc-text-faint))", fontSize: "12px" }}>
+          {t("sampleRate")}
+        </span>
+        <span
+          style={{ color: "hsl(var(--fw-sc-text))", fontSize: "12px", fontFamily: "monospace" }}
+        >
           {profileDefaults.sampleRate} Hz
         </span>
       </div>
@@ -371,11 +385,15 @@ const AudioProcessingControls: React.FC<AudioProcessingControlsProps> = ({
           justifyContent: "space-between",
           alignItems: "center",
           padding: "8px 12px",
-          borderTop: "1px solid rgba(65, 72, 104, 0.2)",
+          borderTop: "1px solid hsl(var(--fw-sc-border) / 0.2)",
         }}
       >
-        <span style={{ color: "#565f89", fontSize: "12px" }}>Channels</span>
-        <span style={{ color: "#c0caf5", fontSize: "12px", fontFamily: "monospace" }}>
+        <span style={{ color: "hsl(var(--fw-sc-text-faint))", fontSize: "12px" }}>
+          {t("channels")}
+        </span>
+        <span
+          style={{ color: "hsl(var(--fw-sc-text))", fontSize: "12px", fontFamily: "monospace" }}
+        >
           {profileDefaults.channelCount}
         </span>
       </div>
@@ -408,7 +426,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
   compositorStats,
   sceneCount = 0,
   layerCount = 0,
-  useWebCodecs = false,
+  useWebCodecs = true,
   isWebCodecsActive = false,
   encoderStats,
   onUseWebCodecsChange,
@@ -416,6 +434,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
   encoderOverrides,
   onEncoderOverridesChange,
 }) => {
+  const t = useStudioTranslate();
   const [activeTab, setActiveTab] = useState<"audio" | "stats" | "info" | "compositor">("audio");
 
   const profileEncoderSettings = getEncoderSettings(qualityProfile);
@@ -429,9 +448,9 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
 
   // Styles matching DevModePanel exactly
   const panelStyle: React.CSSProperties = {
-    background: "#1a1b26",
-    borderLeft: "1px solid rgba(65, 72, 104, 0.5)",
-    color: "#a9b1d6",
+    background: "hsl(var(--fw-sc-surface-deep))",
+    borderLeft: "1px solid hsl(var(--fw-sc-border) / 0.5)",
+    color: "hsl(var(--fw-sc-text-muted))",
     fontSize: "12px",
     fontFamily: "ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace",
     width: "280px",
@@ -449,16 +468,16 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
     letterSpacing: "0.05em",
     fontWeight: 600,
     transition: "all 0.15s",
-    borderRight: "1px solid rgba(65, 72, 104, 0.3)",
-    background: isActive ? "#1a1b26" : "transparent",
-    color: isActive ? "#c0caf5" : "#565f89",
+    borderRight: "1px solid hsl(var(--fw-sc-border) / 0.3)",
+    background: isActive ? "hsl(var(--fw-sc-surface-deep))" : "transparent",
+    color: isActive ? "hsl(var(--fw-sc-text))" : "hsl(var(--fw-sc-text-faint))",
     cursor: "pointer",
     border: "none",
   });
 
   const sectionHeaderStyle: React.CSSProperties = {
     fontSize: "10px",
-    color: "#565f89",
+    color: "hsl(var(--fw-sc-text-faint))",
     textTransform: "uppercase",
     letterSpacing: "0.05em",
     fontWeight: 600,
@@ -469,7 +488,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
     display: "flex",
     justifyContent: "space-between",
     padding: "8px 12px",
-    borderTop: "1px solid rgba(65, 72, 104, 0.2)",
+    borderTop: "1px solid hsl(var(--fw-sc-border) / 0.2)",
   };
 
   return (
@@ -479,8 +498,8 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
         style={{
           display: "flex",
           alignItems: "center",
-          borderBottom: "1px solid rgba(65, 72, 104, 0.3)",
-          background: "#16161e",
+          borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)",
+          background: "hsl(var(--fw-sc-surface))",
         }}
       >
         <button
@@ -488,21 +507,21 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
           onClick={() => setActiveTab("audio")}
           style={tabStyle(activeTab === "audio")}
         >
-          Audio
+          {t("audio")}
         </button>
         <button
           type="button"
           onClick={() => setActiveTab("stats")}
           style={tabStyle(activeTab === "stats")}
         >
-          Stats
+          {t("stats")}
         </button>
         <button
           type="button"
           onClick={() => setActiveTab("info")}
           style={tabStyle(activeTab === "info")}
         >
-          Info
+          {t("info")}
         </button>
         {compositorEnabled && (
           <button
@@ -510,7 +529,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
             onClick={() => setActiveTab("compositor")}
             style={tabStyle(activeTab === "compositor")}
           >
-            Comp
+            {t("comp")}
           </button>
         )}
         <div style={{ flex: 1 }} />
@@ -518,14 +537,14 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
           type="button"
           onClick={onClose}
           style={{
-            color: "#565f89",
+            color: "hsl(var(--fw-sc-text-faint))",
             background: "transparent",
             border: "none",
             padding: "8px",
             cursor: "pointer",
             transition: "color 0.15s",
           }}
-          aria-label="Close advanced panel"
+          aria-label={t("closeAdvancedPanel")}
         >
           <svg
             width="12"
@@ -544,8 +563,10 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
       {activeTab === "audio" && (
         <div style={{ flex: 1, overflowY: "auto" }}>
           {/* Master Volume */}
-          <div style={{ padding: "12px", borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={sectionHeaderStyle}>Master Volume</div>
+          <div
+            style={{ padding: "12px", borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}
+          >
+            <div style={sectionHeaderStyle}>{t("masterVolume")}</div>
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
               <VolumeSlider value={masterVolume} onChange={onMasterVolumeChange} min={0} max={2} />
               <span
@@ -554,26 +575,35 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                   fontFamily: "monospace",
                   minWidth: "48px",
                   textAlign: "right",
-                  color: masterVolume > 1 ? "#e0af68" : masterVolume === 1 ? "#9ece6a" : "#c0caf5",
+                  color:
+                    masterVolume > 1
+                      ? "hsl(var(--fw-sc-warning))"
+                      : masterVolume === 1
+                        ? "hsl(var(--fw-sc-success))"
+                        : "hsl(var(--fw-sc-text))",
                 }}
               >
                 {Math.round(masterVolume * 100)}%
               </span>
             </div>
             {masterVolume > 1 && (
-              <div style={{ fontSize: "10px", color: "#e0af68", marginTop: "4px" }}>
+              <div
+                style={{ fontSize: "10px", color: "hsl(var(--fw-sc-warning))", marginTop: "4px" }}
+              >
                 +{((masterVolume - 1) * 100).toFixed(0)}% boost
               </div>
             )}
           </div>
 
           {/* Audio Level Meter */}
-          <div style={{ padding: "12px", borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={sectionHeaderStyle}>Output Level</div>
+          <div
+            style={{ padding: "12px", borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}
+          >
+            <div style={sectionHeaderStyle}>{t("outputLevel")}</div>
             <div
               style={{
                 height: "8px",
-                background: "rgba(65, 72, 104, 0.3)",
+                background: "hsl(var(--fw-sc-border) / 0.3)",
                 borderRadius: "4px",
                 overflow: "hidden",
               }}
@@ -584,7 +614,11 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                   transition: "all 75ms",
                   width: `${audioLevel * 100}%`,
                   background:
-                    audioLevel > 0.9 ? "#f7768e" : audioLevel > 0.7 ? "#e0af68" : "#9ece6a",
+                    audioLevel > 0.9
+                      ? "hsl(var(--fw-sc-danger))"
+                      : audioLevel > 0.7
+                        ? "hsl(var(--fw-sc-warning))"
+                        : "hsl(var(--fw-sc-success))",
                 }}
               />
             </div>
@@ -593,7 +627,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                 display: "flex",
                 justifyContent: "space-between",
                 fontSize: "10px",
-                color: "#565f89",
+                color: "hsl(var(--fw-sc-text-faint))",
                 marginTop: "4px",
               }}
             >
@@ -603,43 +637,59 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
           </div>
 
           {/* Audio Mixing Status */}
-          <div style={{ padding: "12px", borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
+          <div
+            style={{ padding: "12px", borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}
+          >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={sectionHeaderStyle}>Audio Mixing</span>
+              <span style={sectionHeaderStyle}>{t("audioMixing")}</span>
               <span
                 style={{
                   fontSize: "12px",
                   fontFamily: "monospace",
                   padding: "2px 6px",
                   background: audioMixingEnabled
-                    ? "rgba(158, 206, 106, 0.2)"
-                    : "rgba(65, 72, 104, 0.3)",
-                  color: audioMixingEnabled ? "#9ece6a" : "#565f89",
+                    ? "hsl(var(--fw-sc-success) / 0.2)"
+                    : "hsl(var(--fw-sc-border) / 0.3)",
+                  color: audioMixingEnabled
+                    ? "hsl(var(--fw-sc-success))"
+                    : "hsl(var(--fw-sc-text-faint))",
                 }}
               >
-                {audioMixingEnabled ? "ON" : "OFF"}
+                {audioMixingEnabled ? t("on") : t("off")}
               </span>
             </div>
             {audioMixingEnabled && (
-              <div style={{ fontSize: "10px", color: "#565f89", marginTop: "4px" }}>
-                Compressor + Limiter active
+              <div
+                style={{
+                  fontSize: "10px",
+                  color: "hsl(var(--fw-sc-text-faint))",
+                  marginTop: "4px",
+                }}
+              >
+                {t("compressorLimiterActive")}
               </div>
             )}
           </div>
 
           {/* Audio Processing Controls */}
-          <div style={{ borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
+          <div style={{ borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}>
             <div
               style={{
                 padding: "8px 12px",
-                background: "#16161e",
+                background: "hsl(var(--fw-sc-surface))",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
               }}
             >
-              <span style={sectionHeaderStyle}>Processing</span>
-              <span style={{ fontSize: "9px", color: "#565f89", fontFamily: "monospace" }}>
+              <span style={sectionHeaderStyle}>{t("processing")}</span>
+              <span
+                style={{
+                  fontSize: "9px",
+                  color: "hsl(var(--fw-sc-text-faint))",
+                  fontFamily: "monospace",
+                }}
+              >
                 profile: {qualityProfile}
               </span>
             </div>
@@ -656,20 +706,22 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
       {activeTab === "stats" && (
         <div style={{ flex: 1, overflowY: "auto" }}>
           {/* Connection State */}
-          <div style={{ padding: "12px", borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={{ ...sectionHeaderStyle, marginBottom: "4px" }}>Connection</div>
+          <div
+            style={{ padding: "12px", borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}
+          >
+            <div style={{ ...sectionHeaderStyle, marginBottom: "4px" }}>{t("connection")}</div>
             <div
               style={{
                 fontSize: "14px",
                 fontWeight: 600,
                 color:
                   state === "streaming"
-                    ? "#9ece6a"
+                    ? "hsl(var(--fw-sc-success))"
                     : state === "connecting"
-                      ? "#7aa2f7"
+                      ? "hsl(var(--fw-sc-accent))"
                       : state === "error"
-                        ? "#f7768e"
-                        : "#c0caf5",
+                        ? "hsl(var(--fw-sc-danger))"
+                        : "hsl(var(--fw-sc-text))",
               }}
             >
               {state.charAt(0).toUpperCase() + state.slice(1)}
@@ -680,46 +732,57 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
           {stats && (
             <div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Bitrate</span>
-                <span style={{ color: "#c0caf5" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("bitrate")}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))" }}>
                   {formatBitrate(stats.video.bitrate + stats.audio.bitrate)}
                 </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Video</span>
-                <span style={{ color: "#7aa2f7" }}>{formatBitrate(stats.video.bitrate)}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("video")}</span>
+                <span style={{ color: "hsl(var(--fw-sc-accent))" }}>
+                  {formatBitrate(stats.video.bitrate)}
+                </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Audio</span>
-                <span style={{ color: "#7aa2f7" }}>{formatBitrate(stats.audio.bitrate)}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("audio")}</span>
+                <span style={{ color: "hsl(var(--fw-sc-accent))" }}>
+                  {formatBitrate(stats.audio.bitrate)}
+                </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Frame Rate</span>
-                <span style={{ color: "#c0caf5" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("frameRate")}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))" }}>
                   {stats.video.framesPerSecond.toFixed(0)} fps
                 </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Frames Encoded</span>
-                <span style={{ color: "#c0caf5" }}>{stats.video.framesEncoded}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("framesEncoded")}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))" }}>{stats.video.framesEncoded}</span>
               </div>
               {(stats.video.packetsLost > 0 || stats.audio.packetsLost > 0) && (
                 <div style={rowStyle}>
-                  <span style={{ color: "#565f89" }}>Packets Lost</span>
-                  <span style={{ color: "#f7768e" }}>
+                  <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("packetsLost")}</span>
+                  <span style={{ color: "hsl(var(--fw-sc-danger))" }}>
                     {stats.video.packetsLost + stats.audio.packetsLost}
                   </span>
                 </div>
               )}
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>RTT</span>
-                <span style={{ color: stats.connection.rtt > 200 ? "#e0af68" : "#c0caf5" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("rtt")}</span>
+                <span
+                  style={{
+                    color:
+                      stats.connection.rtt > 200
+                        ? "hsl(var(--fw-sc-warning))"
+                        : "hsl(var(--fw-sc-text))",
+                  }}
+                >
                   {stats.connection.rtt.toFixed(0)} ms
                 </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>ICE State</span>
-                <span style={{ color: "#c0caf5", textTransform: "capitalize" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("iceState")}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))", textTransform: "capitalize" }}>
                   {stats.connection.iceState}
                 </span>
               </div>
@@ -727,8 +790,14 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
           )}
 
           {!stats && (
-            <div style={{ color: "#565f89", textAlign: "center", padding: "24px" }}>
-              {state === "streaming" ? "Waiting for stats..." : "Start streaming to see stats"}
+            <div
+              style={{
+                color: "hsl(var(--fw-sc-text-faint))",
+                textAlign: "center",
+                padding: "24px",
+              }}
+            >
+              {state === "streaming" ? t("waitingForStats") : t("startStreamingForStats")}
             </div>
           )}
 
@@ -737,14 +806,20 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
             <div
               style={{
                 padding: "12px",
-                borderTop: "1px solid rgba(247, 118, 142, 0.3)",
-                background: "rgba(247, 118, 142, 0.1)",
+                borderTop: "1px solid hsl(var(--fw-sc-danger) / 0.3)",
+                background: "hsl(var(--fw-sc-danger) / 0.1)",
               }}
             >
-              <div style={{ ...sectionHeaderStyle, color: "#f7768e", marginBottom: "4px" }}>
-                Error
+              <div
+                style={{
+                  ...sectionHeaderStyle,
+                  color: "hsl(var(--fw-sc-danger))",
+                  marginBottom: "4px",
+                }}
+              >
+                {t("error")}
               </div>
-              <div style={{ fontSize: "12px", color: "#f7768e" }}>{error}</div>
+              <div style={{ fontSize: "12px", color: "hsl(var(--fw-sc-danger))" }}>{error}</div>
             </div>
           )}
         </div>
@@ -754,28 +829,40 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
       {activeTab === "info" && (
         <div style={{ flex: 1, overflowY: "auto" }}>
           {/* Quality Profile */}
-          <div style={{ padding: "12px", borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={{ ...sectionHeaderStyle, marginBottom: "4px" }}>Quality Profile</div>
-            <div style={{ fontSize: "14px", color: "#c0caf5", textTransform: "capitalize" }}>
+          <div
+            style={{ padding: "12px", borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}
+          >
+            <div style={{ ...sectionHeaderStyle, marginBottom: "4px" }}>{t("qualityProfile")}</div>
+            <div
+              style={{
+                fontSize: "14px",
+                color: "hsl(var(--fw-sc-text))",
+                textTransform: "capitalize",
+              }}
+            >
               {qualityProfile}
             </div>
-            <div style={{ fontSize: "10px", color: "#565f89", marginTop: "4px" }}>
+            <div
+              style={{ fontSize: "10px", color: "hsl(var(--fw-sc-text-faint))", marginTop: "4px" }}
+            >
               {profileEncoderSettings.video.width}x{profileEncoderSettings.video.height} @{" "}
               {formatBitrate(profileEncoderSettings.video.bitrate)}
             </div>
           </div>
 
           {/* WHIP URL */}
-          <div style={{ padding: "12px", borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={{ ...sectionHeaderStyle, marginBottom: "4px" }}>WHIP Endpoint</div>
+          <div
+            style={{ padding: "12px", borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}
+          >
+            <div style={{ ...sectionHeaderStyle, marginBottom: "4px" }}>{t("whipEndpoint")}</div>
             <div
               style={{
                 fontSize: "12px",
-                color: "#7aa2f7",
+                color: "hsl(var(--fw-sc-accent))",
                 wordBreak: "break-all",
               }}
             >
-              {whipUrl || "Not configured"}
+              {whipUrl || t("notConfigured")}
             </div>
             {whipUrl && (
               <button
@@ -783,7 +870,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                 style={{
                   marginTop: "8px",
                   fontSize: "10px",
-                  color: "#565f89",
+                  color: "hsl(var(--fw-sc-text-faint))",
                   background: "transparent",
                   border: "none",
                   cursor: "pointer",
@@ -792,48 +879,48 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                 }}
                 onClick={() => navigator.clipboard.writeText(whipUrl)}
               >
-                Copy URL
+                {t("copyUrl")}
               </button>
             )}
           </div>
 
           {/* Encoder Settings */}
-          <div style={{ borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
+          <div style={{ borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}>
             <div
               style={{
                 padding: "8px 12px",
-                background: "#16161e",
+                background: "hsl(var(--fw-sc-surface))",
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
               }}
             >
-              <span style={sectionHeaderStyle}>Encoder</span>
+              <span style={sectionHeaderStyle}>{t("encoder")}</span>
               {(encoderOverrides?.video || encoderOverrides?.audio) && (
                 <button
                   type="button"
                   onClick={() => onEncoderOverridesChange?.({})}
                   style={{
                     fontSize: "10px",
-                    color: "#bb9af7",
+                    color: "hsl(var(--fw-sc-accent-secondary))",
                     background: "transparent",
                     border: "none",
                     cursor: "pointer",
                     padding: "2px 6px",
                   }}
                 >
-                  Reset to Profile
+                  {t("resetToProfile")}
                 </button>
               )}
             </div>
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Video Codec</span>
-              <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("videoCodec")}</span>
+              <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                 {effectiveEncoderConfig.video.codec}
               </span>
             </div>
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Resolution</span>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("resolution")}</span>
               <SettingSelect
                 value={`${encoderOverrides?.video?.width ?? profileEncoderSettings.video.width}x${encoderOverrides?.video?.height ?? profileEncoderSettings.video.height}`}
                 options={RESOLUTION_OPTIONS}
@@ -857,14 +944,16 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
             </div>
             {videoTrackSettings?.width && videoTrackSettings?.height && (
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Actual Resolution</span>
-                <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>
+                  {t("actualResolution")}
+                </span>
+                <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                   {Math.round(videoTrackSettings.width)}x{Math.round(videoTrackSettings.height)}
                 </span>
               </div>
             )}
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Framerate</span>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("framerate")}</span>
               <SettingSelect
                 value={encoderOverrides?.video?.framerate ?? profileEncoderSettings.video.framerate}
                 options={FRAMERATE_OPTIONS}
@@ -884,14 +973,16 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
             </div>
             {videoTrackSettings?.frameRate && (
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Actual Framerate</span>
-                <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>
+                  {t("actualFramerate")}
+                </span>
+                <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                   {Math.round(videoTrackSettings.frameRate)} fps
                 </span>
               </div>
             )}
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Video Bitrate</span>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("videoBitrate")}</span>
               <SettingSelect
                 value={encoderOverrides?.video?.bitrate ?? profileEncoderSettings.video.bitrate}
                 options={VIDEO_BITRATE_OPTIONS}
@@ -910,13 +1001,13 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
               />
             </div>
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Audio Codec</span>
-              <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("audioCodec")}</span>
+              <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                 {effectiveEncoderConfig.audio.codec}
               </span>
             </div>
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Audio Bitrate</span>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("audioBitrate")}</span>
               <SettingSelect
                 value={encoderOverrides?.audio?.bitrate ?? profileEncoderSettings.audio.bitrate}
                 options={AUDIO_BITRATE_OPTIONS}
@@ -935,16 +1026,24 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
               />
             </div>
             {state === "streaming" && (
-              <div style={{ padding: "8px 12px", fontSize: "10px", color: "#e0af68" }}>
-                Settings locked while streaming
+              <div
+                style={{
+                  padding: "8px 12px",
+                  fontSize: "10px",
+                  color: "hsl(var(--fw-sc-warning))",
+                }}
+              >
+                {t("settingsLockedWhileStreaming")}
               </div>
             )}
           </div>
 
           {/* Sources */}
-          <div style={{ borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={{ padding: "8px 12px", background: "#16161e" }}>
-              <span style={sectionHeaderStyle}>Sources ({sources.length})</span>
+          <div style={{ borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}>
+            <div style={{ padding: "8px 12px", background: "hsl(var(--fw-sc-surface))" }}>
+              <span style={sectionHeaderStyle}>
+                {t("sources")} ({sources.length})
+              </span>
             </div>
             {sources.length > 0 ? (
               <div>
@@ -953,7 +1052,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                     key={source.id}
                     style={{
                       padding: "8px 12px",
-                      borderTop: idx > 0 ? "1px solid rgba(65, 72, 104, 0.2)" : undefined,
+                      borderTop: idx > 0 ? "1px solid hsl(var(--fw-sc-border) / 0.2)" : undefined,
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -965,23 +1064,23 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                           textTransform: "uppercase",
                           background:
                             source.type === "camera"
-                              ? "rgba(122, 162, 247, 0.2)"
+                              ? "hsl(var(--fw-sc-accent) / 0.2)"
                               : source.type === "screen"
-                                ? "rgba(158, 206, 106, 0.2)"
-                                : "rgba(224, 175, 104, 0.2)",
+                                ? "hsl(var(--fw-sc-success) / 0.2)"
+                                : "hsl(var(--fw-sc-warning) / 0.2)",
                           color:
                             source.type === "camera"
-                              ? "#7aa2f7"
+                              ? "hsl(var(--fw-sc-accent))"
                               : source.type === "screen"
-                                ? "#9ece6a"
-                                : "#e0af68",
+                                ? "hsl(var(--fw-sc-success))"
+                                : "hsl(var(--fw-sc-warning))",
                         }}
                       >
                         {source.type}
                       </span>
                       <span
                         style={{
-                          color: "#c0caf5",
+                          color: "hsl(var(--fw-sc-text))",
                           fontSize: "12px",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
@@ -997,12 +1096,16 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                         gap: "12px",
                         marginTop: "4px",
                         fontSize: "10px",
-                        color: "#565f89",
+                        color: "hsl(var(--fw-sc-text-faint))",
                       }}
                     >
                       <span>Vol: {Math.round(source.volume * 100)}%</span>
-                      {source.muted && <span style={{ color: "#f7768e" }}>Muted</span>}
-                      {!source.active && <span style={{ color: "#e0af68" }}>Inactive</span>}
+                      {source.muted && (
+                        <span style={{ color: "hsl(var(--fw-sc-danger))" }}>Muted</span>
+                      )}
+                      {!source.active && (
+                        <span style={{ color: "hsl(var(--fw-sc-warning))" }}>Inactive</span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1011,12 +1114,12 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
               <div
                 style={{
                   padding: "16px 12px",
-                  color: "#565f89",
+                  color: "hsl(var(--fw-sc-text-faint))",
                   textAlign: "center",
                   fontSize: "12px",
                 }}
               >
-                No sources added
+                {t("noSourcesAdded")}
               </div>
             )}
           </div>
@@ -1027,47 +1130,54 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
       {activeTab === "compositor" && compositorEnabled && (
         <div style={{ flex: 1, overflowY: "auto" }}>
           {/* Renderer Info */}
-          <div style={{ padding: "12px", borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={sectionHeaderStyle}>Renderer</div>
+          <div
+            style={{ padding: "12px", borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}
+          >
+            <div style={sectionHeaderStyle}>{t("renderer")}</div>
             <div
               style={{
                 fontSize: "14px",
                 fontWeight: 600,
                 color:
                   compositorRendererType === "webgpu"
-                    ? "#bb9af7"
+                    ? "hsl(var(--fw-sc-accent-secondary))"
                     : compositorRendererType === "webgl"
-                      ? "#7aa2f7"
-                      : "#9ece6a",
+                      ? "hsl(var(--fw-sc-accent))"
+                      : "hsl(var(--fw-sc-success))",
               }}
             >
               {compositorRendererType === "webgpu" && "WebGPU"}
               {compositorRendererType === "webgl" && "WebGL"}
               {compositorRendererType === "canvas2d" && "Canvas2D"}
-              {!compositorRendererType && "Not initialized"}
+              {!compositorRendererType && t("notInitialized")}
             </div>
-            <div style={{ fontSize: "10px", color: "#565f89", marginTop: "4px" }}>
-              Set renderer in config before starting
+            <div
+              style={{ fontSize: "10px", color: "hsl(var(--fw-sc-text-faint))", marginTop: "4px" }}
+            >
+              {t("setRendererHint")}
             </div>
           </div>
 
           {/* Stats */}
           {compositorStats && (
-            <div style={{ borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-              <div style={{ padding: "8px 12px", background: "#16161e" }}>
-                <span style={sectionHeaderStyle}>Performance</span>
+            <div style={{ borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}>
+              <div style={{ padding: "8px 12px", background: "hsl(var(--fw-sc-surface))" }}>
+                <span style={sectionHeaderStyle}>{t("performance")}</span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Frame Rate</span>
-                <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("frameRate")}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                   {compositorStats.fps} fps
                 </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Frame Time</span>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("frameTime")}</span>
                 <span
                   style={{
-                    color: compositorStats.frameTimeMs > 16 ? "#e0af68" : "#c0caf5",
+                    color:
+                      compositorStats.frameTimeMs > 16
+                        ? "hsl(var(--fw-sc-warning))"
+                        : "hsl(var(--fw-sc-text))",
                     fontFamily: "monospace",
                   }}
                 >
@@ -1076,8 +1186,8 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
               </div>
               {compositorStats.gpuMemoryMB !== undefined && (
                 <div style={rowStyle}>
-                  <span style={{ color: "#565f89" }}>GPU Memory</span>
-                  <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+                  <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("gpuMemory")}</span>
+                  <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                     {compositorStats.gpuMemoryMB.toFixed(1)} MB
                   </span>
                 </div>
@@ -1086,27 +1196,31 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
           )}
 
           {/* Scenes & Layers */}
-          <div style={{ borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={{ padding: "8px 12px", background: "#16161e" }}>
-              <span style={sectionHeaderStyle}>Composition</span>
+          <div style={{ borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}>
+            <div style={{ padding: "8px 12px", background: "hsl(var(--fw-sc-surface))" }}>
+              <span style={sectionHeaderStyle}>{t("composition")}</span>
             </div>
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Scenes</span>
-              <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>{sceneCount}</span>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("scenes")}</span>
+              <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
+                {sceneCount}
+              </span>
             </div>
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Layers</span>
-              <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>{layerCount}</span>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("layers")}</span>
+              <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
+                {layerCount}
+              </span>
             </div>
           </div>
 
           {/* Encoder Section */}
-          <div style={{ borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-            <div style={{ padding: "8px 12px", background: "#16161e" }}>
-              <span style={sectionHeaderStyle}>Encoder</span>
+          <div style={{ borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}>
+            <div style={{ padding: "8px 12px", background: "hsl(var(--fw-sc-surface))" }}>
+              <span style={sectionHeaderStyle}>{t("encoder")}</span>
             </div>
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Type</span>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("type")}</span>
               <span
                 style={{
                   fontSize: "12px",
@@ -1114,12 +1228,15 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                   padding: "2px 6px",
                   background:
                     useWebCodecs && isWebCodecsAvailable
-                      ? "rgba(187, 154, 247, 0.2)"
-                      : "rgba(122, 162, 247, 0.2)",
-                  color: useWebCodecs && isWebCodecsAvailable ? "#bb9af7" : "#7aa2f7",
+                      ? "hsl(var(--fw-sc-accent-secondary) / 0.2)"
+                      : "hsl(var(--fw-sc-accent) / 0.2)",
+                  color:
+                    useWebCodecs && isWebCodecsAvailable
+                      ? "hsl(var(--fw-sc-accent-secondary))"
+                      : "hsl(var(--fw-sc-accent))",
                 }}
               >
-                {useWebCodecs && isWebCodecsAvailable ? "WebCodecs" : "Browser"}
+                {useWebCodecs && isWebCodecsAvailable ? t("webCodecs") : t("browser")}
                 {state === "streaming" && (
                   <span style={{ opacity: 0.7, marginLeft: "4px" }}>
                     {isWebCodecsActive ? "(active)" : "(pending)"}
@@ -1128,7 +1245,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
               </span>
             </div>
             <div style={rowStyle}>
-              <span style={{ color: "#565f89" }}>Use WebCodecs</span>
+              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("useWebCodecs")}</span>
               <ToggleSwitch
                 checked={useWebCodecs}
                 onChange={(checked) => onUseWebCodecsChange?.(checked)}
@@ -1136,36 +1253,47 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
               />
             </div>
             {!isWebCodecsAvailable && (
-              <div style={{ padding: "8px 12px", fontSize: "10px", color: "#f7768e" }}>
-                Not available - RTCRtpScriptTransform unsupported
+              <div
+                style={{ padding: "8px 12px", fontSize: "10px", color: "hsl(var(--fw-sc-danger))" }}
+              >
+                {t("webCodecsUnsupported")}
               </div>
             )}
             {isWebCodecsAvailable &&
               state === "streaming" &&
               useWebCodecs !== isWebCodecsActive && (
-                <div style={{ padding: "8px 12px", fontSize: "10px", color: "#e0af68" }}>
-                  Change takes effect on next stream
+                <div
+                  style={{
+                    padding: "8px 12px",
+                    fontSize: "10px",
+                    color: "hsl(var(--fw-sc-warning))",
+                  }}
+                >
+                  {t("changeTakesEffect")}
                 </div>
               )}
           </div>
 
           {/* WebCodecs Encoder Stats */}
           {isWebCodecsActive && encoderStats && (
-            <div style={{ borderBottom: "1px solid rgba(65, 72, 104, 0.3)" }}>
-              <div style={{ padding: "8px 12px", background: "#16161e" }}>
-                <span style={sectionHeaderStyle}>Encoder Stats</span>
+            <div style={{ borderBottom: "1px solid hsl(var(--fw-sc-border) / 0.3)" }}>
+              <div style={{ padding: "8px 12px", background: "hsl(var(--fw-sc-surface))" }}>
+                <span style={sectionHeaderStyle}>{t("encoderStats")}</span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Video Frames</span>
-                <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("videoFrames")}</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                   {encoderStats.video.framesEncoded}
                 </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Video Pending</span>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("videoPending")}</span>
                 <span
                   style={{
-                    color: encoderStats.video.framesPending > 5 ? "#e0af68" : "#c0caf5",
+                    color:
+                      encoderStats.video.framesPending > 5
+                        ? "hsl(var(--fw-sc-warning))"
+                        : "hsl(var(--fw-sc-text))",
                     fontFamily: "monospace",
                   }}
                 >
@@ -1173,20 +1301,20 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                 </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Video Bytes</span>
-                <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>Video Bytes</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                   {(encoderStats.video.bytesEncoded / 1024 / 1024).toFixed(2)} MB
                 </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Audio Samples</span>
-                <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>Audio Samples</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                   {encoderStats.audio.samplesEncoded}
                 </span>
               </div>
               <div style={rowStyle}>
-                <span style={{ color: "#565f89" }}>Audio Bytes</span>
-                <span style={{ color: "#c0caf5", fontFamily: "monospace" }}>
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>Audio Bytes</span>
+                <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
                   {(encoderStats.audio.bytesEncoded / 1024).toFixed(1)} KB
                 </span>
               </div>
@@ -1195,7 +1323,9 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
 
           {/* Info */}
           <div style={{ padding: "12px" }}>
-            <div style={{ fontSize: "10px", color: "#565f89", lineHeight: 1.5 }}>
+            <div
+              style={{ fontSize: "10px", color: "hsl(var(--fw-sc-text-faint))", lineHeight: 1.5 }}
+            >
               {useWebCodecs && isWebCodecsAvailable
                 ? "WebCodecs encoder via RTCRtpScriptTransform provides lower latency and better encoding control."
                 : "Browser's built-in MediaStream encoder. Enable WebCodecs toggle for advanced encoding."}

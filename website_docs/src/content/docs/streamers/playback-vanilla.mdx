@@ -1,0 +1,256 @@
+---
+title: "Player — Vanilla JS"
+description: "Vanilla JavaScript API for video playback with the FrameWorks Player."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Installation
+
+```bash
+npm install @livepeer-frameworks/player-core
+```
+
+```ts
+import "@livepeer-frameworks/player-core/player.css";
+```
+
+## createPlayer()
+
+The primary API for vanilla and headless usage. Returns a property-based facade with queries, mutations, and subscriptions.
+
+```ts
+import { createPlayer } from "@livepeer-frameworks/player-core";
+import "@livepeer-frameworks/player-core/player.css";
+
+const player = createPlayer({
+  target: "#player",
+  contentId: "my-stream",
+  contentType: "live",
+  gatewayUrl: "%GATEWAY_URL%/graphql",
+  theme: "dracula",
+  autoplay: true,
+  muted: true,
+});
+
+// Read state (queries)
+player.state; // "playing"
+player.volume; // 0.75
+player.currentTime; // 12.5
+player.live; // true
+player.paused; // false
+
+// Change state (mutations)
+player.volume = 0.5;
+player.play();
+player.pause();
+player.seek(30);
+player.theme = "tokyo-night";
+
+// React to changes (subscriptions)
+const unsub = player.subscribe.on("volume", (v) => console.log("Volume:", v));
+
+// Cleanup
+player.destroy();
+```
+
+## Queries (Read State)
+
+| Property       | Type                       | Description                            |
+| -------------- | -------------------------- | -------------------------------------- |
+| `state`        | `PlayerState`              | Current lifecycle state                |
+| `streamState`  | `string`                   | Upstream stream status                 |
+| `endpoints`    | `Endpoint[]`               | Resolved playback endpoints            |
+| `metadata`     | `object`                   | Stream metadata from gateway           |
+| `videoElement` | `HTMLVideoElement \| null` | Underlying video element               |
+| `ready`        | `boolean`                  | Player initialized and ready           |
+| `currentTime`  | `number`                   | Current position (seconds)             |
+| `duration`     | `number`                   | Total duration (Infinity for live)     |
+| `volume`       | `number`                   | Volume level (0-1)                     |
+| `muted`        | `boolean`                  | Whether muted                          |
+| `paused`       | `boolean`                  | Whether paused                         |
+| `playing`      | `boolean`                  | Whether actively playing               |
+| `buffering`    | `boolean`                  | Whether buffering                      |
+| `started`      | `boolean`                  | Whether playback started at least once |
+| `playbackRate` | `number`                   | Current speed                          |
+| `loop`         | `boolean`                  | Looping enabled                        |
+| `live`         | `boolean`                  | Whether live stream                    |
+| `nearLive`     | `boolean`                  | Whether near the live edge             |
+| `fullscreen`   | `boolean`                  | Whether in fullscreen                  |
+| `pip`          | `boolean`                  | Whether in picture-in-picture          |
+| `error`        | `PlayerError \| null`      | Current error                          |
+| `quality`      | `Quality \| null`          | Active quality level                   |
+| `abrMode`      | `'auto' \| 'manual'`       | ABR mode                               |
+| `theme`        | `string`                   | Current theme                          |
+| `size`         | `{ width, height }`        | Container dimensions                   |
+| `capabilities` | `Capabilities`             | Runtime feature detection              |
+
+## Mutations (Change State)
+
+| Mutation               | Signature             | Description                  |
+| ---------------------- | --------------------- | ---------------------------- |
+| `volume`               | `set volume(n)`       | Set volume (0-1)             |
+| `muted`                | `set muted(b)`        | Set mute state               |
+| `playbackRate`         | `set playbackRate(n)` | Set playback speed           |
+| `loop`                 | `set loop(b)`         | Enable/disable looping       |
+| `abrMode`              | `set abrMode(m)`      | Switch ABR mode              |
+| `theme`                | `set theme(t)`        | Switch theme preset          |
+| `play()`               | `() => void`          | Start playback               |
+| `pause()`              | `() => void`          | Pause playback               |
+| `seek(t)`              | `(seconds) => void`   | Seek to time                 |
+| `seekBy(d)`            | `(delta) => void`     | Seek relative                |
+| `jumpToLive()`         | `() => void`          | Jump to live edge            |
+| `skipForward(s?)`      | `(seconds?) => void`  | Skip forward (default 10s)   |
+| `skipBack(s?)`         | `(seconds?) => void`  | Skip backward (default 10s)  |
+| `togglePlay()`         | `() => void`          | Toggle play/pause            |
+| `toggleMute()`         | `() => void`          | Toggle mute                  |
+| `toggleFullscreen()`   | `() => void`          | Toggle fullscreen            |
+| `togglePiP()`          | `() => void`          | Toggle picture-in-picture    |
+| `getQualities()`       | `() => Quality[]`     | List available qualities     |
+| `selectQuality(id)`    | `(id) => void`        | Lock to specific quality     |
+| `retry()`              | `() => void`          | Retry current connection     |
+| `retryWithFallback()`  | `() => void`          | Retry with next endpoint     |
+| `reload()`             | `() => void`          | Full reload                  |
+| `clearError()`         | `() => void`          | Dismiss error                |
+| `getStats()`           | `() => PlaybackStats` | Playback statistics snapshot |
+| `setThemeOverrides(o)` | `(overrides) => void` | Apply theme overrides        |
+| `clearTheme()`         | `() => void`          | Reset to default theme       |
+| `destroy()`            | `() => void`          | Tear down the player         |
+
+## Subscriptions — Events
+
+```ts
+const unsub = player.on("stateChange", (state) => {
+  console.log("State:", state);
+});
+unsub();
+```
+
+| Event               | Payload                     | Description                |
+| ------------------- | --------------------------- | -------------------------- |
+| `stateChange`       | `PlayerState`               | State transition           |
+| `timeUpdate`        | `{ currentTime, duration }` | Position changed           |
+| `volumeChange`      | `{ volume, muted }`         | Volume/mute changed        |
+| `qualityChange`     | `Quality`                   | Quality level changed      |
+| `fullscreenChange`  | `boolean`                   | Fullscreen state changed   |
+| `error`             | `PlayerError`               | Playback error             |
+| `streamStateChange` | `string`                    | Upstream status changed    |
+| `endpointsResolved` | `Endpoint[]`                | Gateway returned endpoints |
+| `metadataUpdate`    | `object`                    | Metadata updated           |
+| `tracksChange`      | `Track[]`                   | Available tracks changed   |
+
+## Subscriptions — Reactive State
+
+Per-property subscriptions with immediate invocation via `player.subscribe`:
+
+```ts
+const unsub = player.subscribe.on("volume", (v) => {
+  volumeSlider.value = v;
+});
+
+const unsub2 = player.subscribe.on("playing", (isPlaying) => {
+  playBtn.textContent = isPlaying ? "Pause" : "Play";
+});
+
+// Synchronous read
+const vol = player.subscribe.get("volume");
+```
+
+Available reactive properties: `paused`, `playing`, `currentTime`, `duration`, `volume`, `muted`, `playbackRate`, `loop`, `buffering`, `fullscreen`, `pip`, `tracks`, `streamState`, `error`, `loading`, `ended`, `seeking`.
+
+## FrameWorksPlayer Class
+
+Constructor-based alternative for class-oriented code:
+
+```ts
+import { FrameWorksPlayer } from "@livepeer-frameworks/player-core/vanilla";
+import "@livepeer-frameworks/player-core/player.css";
+
+const player = new FrameWorksPlayer("#player", {
+  contentId: "<YOUR_PLAYBACK_ID>",
+  contentType: "live",
+  gatewayUrl: "%GATEWAY_URL%/graphql",
+  autoplay: true,
+  muted: true,
+  onStateChange: (state) => console.log("State:", state),
+  onReady: (videoElement) => console.log("Ready!"),
+});
+
+player.play();
+player.pause();
+player.seek(30);
+player.setVolume(0.5);
+player.jumpToLive();
+player.destroy();
+```
+
+## Vue Example
+
+```vue
+<template>
+  <div ref="container" style="width: 100%; aspect-ratio: 16/9;" />
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted } from "vue";
+import type { FrameWorksPlayer as FWP } from "@livepeer-frameworks/player-core/vanilla";
+
+const container = ref<HTMLDivElement>();
+let player: FWP | null = null;
+
+onMounted(async () => {
+  const { FrameWorksPlayer } = await import("@livepeer-frameworks/player-core/vanilla");
+  await import("@livepeer-frameworks/player-core/player.css");
+  if (container.value) {
+    player = new FrameWorksPlayer(container.value, {
+      contentId: "<YOUR_PLAYBACK_ID>",
+      contentType: "live",
+      gatewayUrl: "%GATEWAY_URL%/graphql",
+      autoplay: true,
+      muted: true,
+    });
+  }
+});
+
+onUnmounted(() => player?.destroy());
+</script>
+```
+
+## Capabilities
+
+The `capabilities` object reports runtime feature support:
+
+```ts
+if (player.capabilities.pip) player.togglePiP();
+if (player.capabilities.qualitySelection) player.selectQuality("720p");
+```
+
+| Property           | Type      | Description                  |
+| ------------------ | --------- | ---------------------------- |
+| `fullscreen`       | `boolean` | Fullscreen API available     |
+| `pip`              | `boolean` | Picture-in-picture available |
+| `seeking`          | `boolean` | Arbitrary seeking supported  |
+| `playbackRate`     | `boolean` | Speed control supported      |
+| `audio`            | `boolean` | Audio track selection        |
+| `qualitySelection` | `boolean` | Manual quality selection     |
+| `textTracks`       | `boolean` | Subtitle/caption support     |
+
+## Options
+
+| Option         | Type                                | Default     | Description                                                                  |
+| -------------- | ----------------------------------- | ----------- | ---------------------------------------------------------------------------- |
+| `target`       | `string \| HTMLElement`             | —           | Container                                                                    |
+| `contentId`    | `string`                            | —           | Playback ID                                                                  |
+| `contentType`  | `string`                            | `"live"`    | Content type                                                                 |
+| `gatewayUrl`   | `string`                            | —           | Gateway GraphQL endpoint                                                     |
+| `mistUrl`      | `string`                            | —           | Direct MistServer URL                                                        |
+| `endpoints`    | `ContentEndpoints`                  | —           | Pre-resolved endpoints                                                       |
+| `autoplay`     | `boolean`                           | `true`      | Auto-start                                                                   |
+| `muted`        | `boolean`                           | `true`      | Start muted                                                                  |
+| `controls`     | `boolean`                           | `true`      | Show built-in controls                                                       |
+| `theme`        | `string`                            | `"default"` | Theme preset                                                                 |
+| `locale`       | `string`                            | `"en"`      | UI language                                                                  |
+| `playbackMode` | `string`                            | `"auto"`    | Protocol preference                                                          |
+| `forceType`    | `string`                            | —           | Force source type                                                            |
+| `skin`         | `string \| SkinDefinition \| false` | `"default"` | Skin for blueprint rendering (see [Advanced](/streamers/playback-advanced/)) |
+| `debug`        | `boolean`                           | `false`     | Debug logging                                                                |

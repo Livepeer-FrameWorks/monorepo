@@ -212,10 +212,11 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     });
 
     // Hook into state changes to monitor encoder status
+    let encoderCheckTimeout: ReturnType<typeof setTimeout> | null = null;
     const unsubStateForEncoder = controller.on("stateChange", (event) => {
       if (event.state === "streaming") {
         // Check after a delay as fallback (in case event was missed)
-        setTimeout(checkEncoderStatus, 200);
+        encoderCheckTimeout = setTimeout(checkEncoderStatus, 200);
       } else if (event.state === "idle" || event.state === "capturing") {
         setIsWebCodecsActive(false);
         setEncoderStats(null);
@@ -227,6 +228,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     });
 
     return () => {
+      if (encoderCheckTimeout) clearTimeout(encoderCheckTimeout);
       unsubState();
       unsubStats();
       unsubError();

@@ -36,7 +36,7 @@ export class FwDevModePanel extends LitElement {
 
   @state() private _activeTab: "config" | "stats" = "config";
   @state() private _hoveredComboIndex: number | null = null;
-  @state() private _tooltipAbove = false;
+  @state() private _tooltipPos: { top: number; left: number } | null = null;
   @state() private _showDisabledPlayers = false;
 
   @state() private _playbackScore = 1;
@@ -219,18 +219,12 @@ export class FwDevModePanel extends LitElement {
 
   private _handleComboMouseEnter(index: number, event: MouseEvent): void {
     this._hoveredComboIndex = index;
-
-    const container = this.renderRoot.querySelector(".fw-dev-body") as HTMLElement | null;
-    if (!container) {
-      return;
-    }
-
     const row = event.currentTarget as HTMLElement;
-    const containerRect = container.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
-    const relativePosition = (rowRect.top - containerRect.top) / containerRect.height;
-
-    this._tooltipAbove = relativePosition > 0.6;
+    this._tooltipPos = {
+      top: Math.max(8, Math.min(rowRect.top, window.innerHeight - 200)),
+      left: Math.max(8, rowRect.left - 228),
+    };
   }
 
   private _handleModeChange(mode: "auto" | "low-latency" | "quality"): void {
@@ -764,6 +758,7 @@ export class FwDevModePanel extends LitElement {
                         this._handleComboMouseEnter(index, event)}
                       @mouseleave=${() => {
                         this._hoveredComboIndex = null;
+                        this._tooltipPos = null;
                       }}
                     >
                       <button
@@ -804,14 +799,12 @@ export class FwDevModePanel extends LitElement {
                         >
                       </button>
 
-                      ${this._hoveredComboIndex === index
+                      ${this._hoveredComboIndex === index && this._tooltipPos
                         ? html`
                             <div
-                              class=${classMap({
-                                "fw-dev-tooltip": true,
-                                "fw-dev-tooltip--above": this._tooltipAbove,
-                                "fw-dev-tooltip--below": !this._tooltipAbove,
-                              })}
+                              class="fw-dev-tooltip"
+                              style="top: ${this._tooltipPos.top}px; left: ${this._tooltipPos
+                                .left}px;"
                             >
                               <div class="fw-dev-tooltip-header">
                                 <div class="fw-dev-tooltip-title">${combo.playerName}</div>

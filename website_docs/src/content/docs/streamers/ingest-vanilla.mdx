@@ -1,0 +1,199 @@
+---
+title: "StreamCrafter — Vanilla JS"
+description: "Vanilla JavaScript API for browser-based streaming with StreamCrafter."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Installation
+
+```bash
+npm install @livepeer-frameworks/streamcrafter-core
+```
+
+```ts
+import "@livepeer-frameworks/streamcrafter-core/streamcrafter.css";
+```
+
+## createStreamCrafter()
+
+The primary API for vanilla and headless usage. Returns a property-based facade with queries, mutations, and subscriptions.
+
+```ts
+import { createStreamCrafter } from "@livepeer-frameworks/streamcrafter-core";
+import "@livepeer-frameworks/streamcrafter-core/streamcrafter.css";
+
+const studio = createStreamCrafter({
+  target: "#studio-container",
+  whipUrl: "%INGEST_URL%/webrtc/stream-key",
+  profile: "broadcast",
+  debug: true,
+});
+
+// Read state (queries)
+studio.state; // "idle"
+studio.streaming; // false
+studio.sources; // []
+studio.profile; // { name: "broadcast", ... }
+
+// Change state (mutations)
+await studio.startCamera();
+await studio.startScreenShare({ audio: true });
+await studio.goLive();
+
+// React to changes (subscriptions)
+const unsub = studio.reactiveState.on("streaming", (isLive) => {
+  goLiveBtn.textContent = isLive ? "Stop" : "Go Live";
+});
+
+// Cleanup
+studio.destroy();
+```
+
+## Queries (Read State)
+
+All queries are synchronous getters on the instance.
+
+| Property            | Type                  | Description                         |
+| ------------------- | --------------------- | ----------------------------------- |
+| `state`             | `IngestState`         | Current lifecycle state             |
+| `streaming`         | `boolean`             | Whether currently live              |
+| `capturing`         | `boolean`             | Whether media is captured           |
+| `reconnecting`      | `boolean`             | Whether reconnecting                |
+| `sources`           | `MediaSource[]`       | Active media sources                |
+| `primaryVideo`      | `MediaSource \| null` | Primary video source                |
+| `masterVolume`      | `number`              | Master volume (0-1)                 |
+| `profile`           | `QualityProfile`      | Current quality profile             |
+| `compositorEnabled` | `boolean`             | Whether compositor is active        |
+| `webCodecsActive`   | `boolean`             | Whether WebCodecs encoder is active |
+
+## Mutations (Change State)
+
+| Mutation                    | Signature                  | Description               |
+| --------------------------- | -------------------------- | ------------------------- |
+| `startCamera(opts?)`        | `(opts?) => Promise<void>` | Add camera source         |
+| `startScreenShare(opts?)`   | `(opts?) => Promise<void>` | Add screen share source   |
+| `goLive()`                  | `() => Promise<void>`      | Start streaming           |
+| `stop()`                    | `() => Promise<void>`      | Stop streaming            |
+| `removeSource(id)`          | `(id: string) => void`     | Remove a source           |
+| `setSourceVolume(id, vol)`  | `(id, number) => void`     | Set source volume         |
+| `setSourceMuted(id, muted)` | `(id, boolean) => void`    | Mute/unmute source        |
+| `setSourceActive(id)`       | `(id: string) => void`     | Set active source         |
+| `setPrimaryVideo(id)`       | `(id: string) => void`     | Set primary video         |
+| `profile =`                 | `set profile(p)`           | Change quality profile    |
+| `masterVolume =`            | `set masterVolume(v)`      | Set master volume         |
+| `theme =`                   | `set theme(t)`             | Switch theme preset       |
+| `setEncoderOverrides(o)`    | `(overrides) => void`      | Override encoder settings |
+| `destroy()`                 | `() => void`               | Cleanup and tear down     |
+
+## Subscriptions — Events
+
+Event-based subscriptions using `on(event, listener)`. Returns an unsubscribe function.
+
+```ts
+const unsub = studio.on("stateChange", ({ state, context }) => {
+  console.log("New state:", state);
+});
+unsub();
+```
+
+| Event                 | Payload                  | Description                      |
+| --------------------- | ------------------------ | -------------------------------- |
+| `stateChange`         | `{ state, context }`     | Lifecycle state transition       |
+| `sourceAdded`         | `MediaSource`            | New source added                 |
+| `sourceRemoved`       | `{ sourceId }`           | Source removed                   |
+| `sourceUpdated`       | `MediaSource`            | Source properties changed        |
+| `qualityChanged`      | `QualityProfile`         | Quality profile changed          |
+| `statsUpdate`         | `Stats`                  | Streaming statistics update      |
+| `deviceChange`        | `MediaDeviceInfo[]`      | Available devices changed        |
+| `error`               | `{ error, recoverable }` | Error occurred                   |
+| `reconnectionAttempt` | `{ attempt, max }`       | Reconnection attempt started     |
+| `reconnectionSuccess` | `void`                   | Reconnection succeeded           |
+| `reconnectionFailed`  | `{ error }`              | All reconnection attempts failed |
+| `webCodecsActive`     | `boolean`                | WebCodecs encoder state changed  |
+
+## Subscriptions — Reactive State
+
+Per-property reactive subscriptions with immediate invocation. The callback fires immediately with the current value, then on every change.
+
+```ts
+const unsub = studio.reactiveState.on("streaming", (isLive) => {
+  goLiveBtn.textContent = isLive ? "Stop" : "Go Live";
+});
+
+const unsub2 = studio.reactiveState.on("sources", (sources) => {
+  sourceList.innerHTML = sources.map((s) => `<li>${s.label}</li>`).join("");
+});
+
+// Read current value without subscribing
+const isLive = studio.reactiveState.get("streaming");
+```
+
+| Property            | Type                             | Trigger Events                                  |
+| ------------------- | -------------------------------- | ----------------------------------------------- |
+| `state`             | `IngestState`                    | `stateChange`                                   |
+| `stateContext`      | `IngestStateContextV2`           | `stateChange`                                   |
+| `streaming`         | `boolean`                        | `stateChange`                                   |
+| `capturing`         | `boolean`                        | `stateChange`                                   |
+| `reconnecting`      | `boolean`                        | `stateChange`                                   |
+| `sources`           | `MediaSource[]`                  | `sourceAdded`, `sourceRemoved`, `sourceUpdated` |
+| `primaryVideo`      | `MediaSource \| null`            | `sourceUpdated`                                 |
+| `masterVolume`      | `number`                         | `stateChange`                                   |
+| `profile`           | `QualityProfile`                 | `qualityChanged`                                |
+| `error`             | `{ error, recoverable } \| null` | `error`, `stateChange`                          |
+| `compositorEnabled` | `boolean`                        | `stateChange`                                   |
+| `webCodecsActive`   | `boolean`                        | `webCodecsActive`                               |
+
+## Options
+
+| Option             | Type                    | Default             | Description                                  |
+| ------------------ | ----------------------- | ------------------- | -------------------------------------------- |
+| `target`           | `string \| HTMLElement` | —                   | Container element or selector                |
+| `whipUrl`          | `string`                | —                   | Direct WHIP ingest endpoint                  |
+| `gatewayUrl`       | `string`                | —                   | Gateway GraphQL endpoint                     |
+| `streamKey`        | `string`                | —                   | Stream key (with gatewayUrl)                 |
+| `profile`          | `string`                | `"broadcast"`       | Quality preset name                          |
+| `theme`            | `string`                | `"default"`         | Theme preset                                 |
+| `locale`           | `string`                | `"en"`              | UI language                                  |
+| `keyMap`           | `KeyMap`                | —                   | Custom hotkey bindings                       |
+| `reconnection`     | `ReconnectionConfig`    | `{ enabled: true }` | Reconnection settings                        |
+| `debug`            | `boolean`               | `false`             | Debug logging                                |
+| `enableCompositor` | `boolean`               | `true`              | Enable compositor                            |
+| `enableWebCodecs`  | `boolean`               | auto                | WebCodecs encoder (auto-enabled on Chromium) |
+
+## Headless Mode
+
+Omit `target` to run without any UI — useful for building entirely custom interfaces:
+
+```ts
+const studio = createStreamCrafter({
+  whipUrl: "%INGEST_URL%/webrtc/key",
+  profile: "broadcast",
+});
+
+// No UI rendered — control everything programmatically
+await studio.startCamera();
+const stream = studio.controller.getMediaStream();
+myVideoElement.srcObject = stream;
+
+studio.reactiveState.on("state", (s) => updateUI(s));
+await studio.goLive();
+```
+
+## Using the Controller Directly
+
+For advanced use cases, access the underlying `IngestControllerV2`:
+
+```ts
+const ctrl = studio.controller;
+
+// Device enumeration
+const devices = await ctrl.getDevices();
+
+// Compositor
+ctrl.enableCompositor();
+ctrl.applyLayout({ mode: "pip-br", scalingMode: "letterbox", pipScale: 0.25 });
+
+// Stats
+const stats = await ctrl.getStats();
+```

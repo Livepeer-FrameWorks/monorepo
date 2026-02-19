@@ -308,6 +308,10 @@ export interface IPlayer {
   selectQuality?(id: string): void; // use 'auto' to enable ABR
   getCurrentQuality?(): string | null;
 
+  // Optional: audio track selection
+  getAudioTracks?(): Array<{ id: string; label: string; lang?: string; active: boolean }>;
+  selectAudioTrack?(id: string): void;
+
   // Optional: live edge helpers
   isLive?(): boolean;
   jumpToLive?(): void;
@@ -326,6 +330,15 @@ export interface IPlayer {
    * Optional: Retrieve approximate playback latency stats
    */
   getLatency?(): Promise<any>;
+
+  /** Capture a screenshot as a data URL */
+  snapshot?(type?: "png" | "jpeg" | "webp", quality?: number): string | null;
+  /** Set video rotation (degrees: 0, 90, 180, 270) */
+  setRotation?(degrees: number): void;
+  /** Set mirror/flip mode */
+  setMirror?(horizontal: boolean): void;
+  /** Whether this player uses direct rendering (WebGL/Canvas) */
+  readonly isDirectRendering?: boolean;
 }
 
 /**

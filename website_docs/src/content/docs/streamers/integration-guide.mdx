@@ -1,0 +1,206 @@
+---
+title: "Choosing Your Integration"
+description: "Decision guide for choosing the right package and integration approach for your project."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Both the **Player** (playback) and **StreamCrafter** (ingest) offer four integration levels. This guide helps you choose the right one.
+
+## Decision Tree
+
+### What framework are you using?
+
+| Framework          | Player Package                          | Studio Package                                 |
+| ------------------ | --------------------------------------- | ---------------------------------------------- |
+| React 18+          | `@livepeer-frameworks/player-react`     | `@livepeer-frameworks/streamcrafter-react`     |
+| Svelte 5           | `@livepeer-frameworks/player-svelte`    | `@livepeer-frameworks/streamcrafter-svelte`    |
+| Vue, Angular, etc. | `@livepeer-frameworks/player-wc`        | `@livepeer-frameworks/streamcrafter-wc`        |
+| No framework / CDN | `@livepeer-frameworks/player-wc` (IIFE) | `@livepeer-frameworks/streamcrafter-wc` (IIFE) |
+| Custom / headless  | `@livepeer-frameworks/player-core`      | `@livepeer-frameworks/streamcrafter-core`      |
+
+### How much customization do you need?
+
+**Level 1: Drop-in Component**
+
+Use the component as-is. No custom UI work required.
+
+```tsx
+// Player
+<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }} />
+
+// Studio
+<StreamCrafter gatewayUrl="..." streamKey="..." />
+```
+
+Best for: Quick integration, prototyping, default look is acceptable.
+
+---
+
+**Level 2: Composable Components**
+
+Replace the default layout with framework sub-components. Mix our components with your own.
+
+```tsx
+// Player — custom control bar
+<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+  <PlayButton />
+  <ProgressBar />
+  <VolumeSlider />
+  <MyCustomOverlay />
+</Player>
+
+// Studio — custom layout
+<StreamCrafter gatewayUrl="..." streamKey="...">
+  <StudioPreview />
+  <div className="my-sidebar">
+    <StudioMixer />
+    <MyCustomPanel />
+  </div>
+  <StudioActionBar />
+</StreamCrafter>
+```
+
+Best for: Custom layouts, adding your own UI around standard controls, brand-specific styling.
+
+---
+
+**Level 3: Hooks / Stores / Controller**
+
+Build your own UI entirely using the provided state management primitives.
+
+```tsx
+// React hooks
+const { playing, volume, play, pause } = usePlayer({ ... });
+
+// Svelte stores
+const crafter = createStreamCrafterContextV2();
+crafter.startCamera();
+
+// Vanilla reactive state
+player.state.on("volume", (v) => updateSlider(v));
+studio.reactiveState.on("streaming", (live) => updateButton(live));
+
+// WC controller
+document.querySelector("fw-player").controller.play();
+```
+
+Best for: Fully custom UI, unique design requirements, embedding in complex applications.
+
+---
+
+**Level 4: Headless / No UI**
+
+Run the media engine without any visual UI. Full programmatic control.
+
+```ts
+// Vanilla player — no target
+const player = createPlayer({ contentId: "pk_...", gatewayUrl: "..." });
+
+// Vanilla studio — no target
+const studio = createStreamCrafter({ whipUrl: "..." });
+
+// WC — controls disabled
+<fw-player content-id="pk_..." controls="false"></fw-player>
+<fw-streamcrafter whip-url="..." controls="false"></fw-streamcrafter>
+```
+
+Best for: Custom renderers, audio-only, data extraction, automated testing.
+
+## Player vs Studio
+
+|                  | Player                                  | StreamCrafter                                 |
+| ---------------- | --------------------------------------- | --------------------------------------------- |
+| **Direction**    | Playback (viewer)                       | Ingest (broadcaster)                          |
+| **Protocols**    | HLS, DASH, WebRTC (WHEP), WebSocket     | WebRTC (WHIP)                                 |
+| **Sources**      | Remote stream endpoints                 | Local camera, screen, custom MediaStream      |
+| **Key features** | ABR, multi-engine, protocol negotiation | Multi-source mixing, compositor, reconnection |
+| **Use case**     | Watching streams                        | Broadcasting streams                          |
+
+## Package Architecture
+
+```
+@livepeer-frameworks/player-core     ← Headless player engine
+@livepeer-frameworks/player-react    ← React bindings (depends on core)
+@livepeer-frameworks/player-svelte   ← Svelte bindings (depends on core)
+@livepeer-frameworks/player-wc       ← Web Components (depends on core)
+
+@livepeer-frameworks/streamcrafter-core    ← Headless ingest engine
+@livepeer-frameworks/streamcrafter-react   ← React bindings (depends on core)
+@livepeer-frameworks/streamcrafter-svelte  ← Svelte bindings (depends on core)
+@livepeer-frameworks/streamcrafter-wc      ← Web Components (depends on core)
+```
+
+Framework packages re-export core types. You only need to install one package per product.
+
+## Common Patterns
+
+### Themed Player with Custom Controls
+
+```tsx
+<Player contentId="pk_..." contentType="live" theme="tokyo-night" options={{ gatewayUrl: "..." }}>
+  <PlayButton />
+  <ProgressBar />
+  <div className="spacer" />
+  <VolumeSlider />
+  <QualitySelector />
+  <FullscreenButton />
+</Player>
+```
+
+### Studio with External Control Panel
+
+```html
+<fw-streamcrafter id="studio" whip-url="..." controls="false"></fw-streamcrafter>
+
+<aside class="control-panel">
+  <fw-sc-compositor for="studio"></fw-sc-compositor>
+  <fw-sc-layer-list for="studio"></fw-sc-layer-list>
+  <fw-sc-scene-switcher for="studio"></fw-sc-scene-switcher>
+</aside>
+
+<footer>
+  <button onclick="document.getElementById('studio').controller.startStreaming()">Go Live</button>
+</footer>
+```
+
+### Player + Studio on Same Page
+
+```tsx
+function LiveDashboard() {
+  return (
+    <div className="dashboard">
+      <div className="broadcast">
+        <StreamCrafter gatewayUrl="..." streamKey="..." />
+      </div>
+      <div className="preview">
+        <Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }} />
+      </div>
+    </div>
+  );
+}
+```
+
+## CDN Quick Start (Zero Build Step)
+
+```html
+<!DOCTYPE html>
+<html>
+  <body>
+    <!-- Player -->
+    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+    <fw-player
+      content-id="pk_..."
+      content-type="live"
+      gateway-url="..."
+      autoplay
+      muted
+      controls
+    ></fw-player>
+
+    <!-- Studio -->
+    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+    <fw-streamcrafter whip-url="..." initial-profile="broadcast"></fw-streamcrafter>
+  </body>
+</html>
+```

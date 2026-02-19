@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createTranslator } from "@livepeer-frameworks/player-core";
 import { FwSettingsMenu } from "../src/components/fw-settings-menu.js";
+
+const defaultT = createTranslator({ locale: "en" });
 
 function createMockPc() {
   const video = document.createElement("video");
@@ -17,6 +20,7 @@ function createMockPc() {
         { id: "es", label: "Spanish", active: false },
       ],
     },
+    t: defaultT,
     setDevModeOptions: vi.fn(),
     setPlaybackRate: vi.fn(),
     selectQuality: vi.fn(),

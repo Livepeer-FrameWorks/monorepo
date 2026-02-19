@@ -1,0 +1,30 @@
+/*
+ * FrameWorks Player — Light Theme
+ * Import alongside player.css, or set data-theme="light" on the player root.
+ */
+.fw-player-surface[data-theme="light"] {
+  --fw-surface-deep: 0 0% 97%;
+  --fw-surface: 220 10% 94%;
+  --fw-surface-raised: 220 10% 90%;
+  --fw-surface-active: 220 10% 85%;
+
+  --fw-text: 220 20% 15%;
+  --fw-text-bright: 220 20% 5%;
+  --fw-text-muted: 220 10% 45%;
+  --fw-text-faint: 220 10% 70%;
+
+  --fw-accent: 218 80% 50%;
+  --fw-accent-secondary: 195 80% 42%;
+  --fw-success: 140 60% 35%;
+  --fw-danger: 0 70% 50%;
+  --fw-warning: 35 80% 45%;
+  --fw-live: 0 80% 48%;
+
+  --fw-shadow-color: 220 10% 50%;
+  --fw-on-accent: 0 0% 100%;
+  --fw-on-live: 0 0% 100%;
+
+  --fw-controls-bg: hsl(var(--fw-surface-deep) / 0.92);
+  --fw-controls-fg: hsl(var(--fw-text));
+  --fw-seam: hsl(var(--fw-text-faint) / 0.25);
+}

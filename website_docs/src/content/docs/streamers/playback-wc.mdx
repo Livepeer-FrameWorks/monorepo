@@ -1,0 +1,212 @@
+---
+title: "Player — Web Components"
+description: "Web Components integration for video playback with the FrameWorks Player."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Installation
+
+**NPM:**
+
+```bash
+npm install @livepeer-frameworks/player-wc
+```
+
+```ts
+import "@livepeer-frameworks/player-wc/define";
+```
+
+**CDN (no bundler):**
+
+```html
+<!-- unpkg -->
+<script src="https://unpkg.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+<!-- or jsdelivr -->
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+```
+
+Shadow DOM encapsulates all CSS — host page styles won't break controls.
+
+## Drop-in Element
+
+```html
+<fw-player
+  content-type="live"
+  content-id="<YOUR_PLAYBACK_ID>"
+  gateway-url="%GATEWAY_URL%/graphql"
+  autoplay
+  muted
+  controls
+></fw-player>
+```
+
+### Direct MistServer Node
+
+```html
+<fw-player
+  content-type="live"
+  content-id="<YOUR_PLAYBACK_ID>"
+  mist-url="https://edge.example.com"
+  autoplay
+  muted
+  controls
+></fw-player>
+```
+
+### DVR and Clips
+
+```html
+<fw-player content-type="dvr" content-id="pk_..." gateway-url="..." controls></fw-player>
+<fw-player content-type="clip" content-id="pk_..." gateway-url="..." controls></fw-player>
+```
+
+## Headless Mode
+
+Omit the `controls` attribute for a bare video element. Access the controller for programmatic control:
+
+```html
+<fw-player
+  id="player"
+  content-type="live"
+  content-id="pk_..."
+  gateway-url="..."
+  autoplay
+  muted
+></fw-player>
+
+<script>
+  const player = document.getElementById("player");
+
+  // Access the controller
+  player.controller.play();
+  player.controller.pause();
+  player.controller.seek(30);
+  player.controller.volume = 0.5;
+
+  // Listen for state changes
+  player.addEventListener("fw-state-change", (e) => {
+    console.log("State:", e.detail.state);
+  });
+</script>
+```
+
+## Slot-based Composition
+
+Provide custom controls via the `controls` slot:
+
+```html
+<fw-player content-id="pk_..." content-type="live" gateway-url="...">
+  <div slot="controls">
+    <fw-play-button></fw-play-button>
+    <fw-skip-button direction="back"></fw-skip-button>
+    <fw-skip-button direction="forward"></fw-skip-button>
+    <fw-time-display></fw-time-display>
+    <fw-volume-control></fw-volume-control>
+    <fw-fullscreen-button></fw-fullscreen-button>
+  </div>
+</fw-player>
+```
+
+## Standalone Sub-Components
+
+Use sub-components outside the player element with the `for` attribute:
+
+```html
+<fw-player id="my-player" content-id="pk_..." content-type="live" gateway-url="..."></fw-player>
+
+<div class="external-controls">
+  <fw-play-button for="my-player"></fw-play-button>
+  <fw-volume-control for="my-player"></fw-volume-control>
+  <fw-time-display for="my-player"></fw-time-display>
+  <fw-live-badge for="my-player"></fw-live-badge>
+  <fw-fullscreen-button for="my-player"></fw-fullscreen-button>
+</div>
+```
+
+### Sub-Component Reference
+
+| Element                  | Purpose                                               |
+| ------------------------ | ----------------------------------------------------- |
+| `<fw-play-button>`       | Play/pause toggle                                     |
+| `<fw-skip-button>`       | Skip forward/back (`direction="back"` or `"forward"`) |
+| `<fw-volume-control>`    | Volume slider with mute toggle                        |
+| `<fw-time-display>`      | Current time / duration                               |
+| `<fw-live-badge>`        | Live indicator + jump-to-live                         |
+| `<fw-fullscreen-button>` | Fullscreen toggle                                     |
+
+## Attributes Reference
+
+| Attribute       | Type      | Default     | Description                     |
+| --------------- | --------- | ----------- | ------------------------------- |
+| `content-id`    | `string`  | —           | Playback ID                     |
+| `content-type`  | `string`  | `"live"`    | `live`, `dvr`, `clip`, or `vod` |
+| `gateway-url`   | `string`  | —           | Gateway GraphQL endpoint        |
+| `mist-url`      | `string`  | —           | Direct MistServer URL           |
+| `autoplay`      | `boolean` | `false`     | Auto-start playback             |
+| `muted`         | `boolean` | `false`     | Start muted                     |
+| `controls`      | `boolean` | `false`     | Show built-in controls          |
+| `theme`         | `string`  | `"default"` | Theme preset                    |
+| `playback-mode` | `string`  | `"auto"`    | Protocol preference             |
+| `force-type`    | `string`  | —           | Force source type               |
+| `debug`         | `boolean` | `false`     | Debug logging                   |
+
+## Theming
+
+```css
+fw-player {
+  --fw-accent: 200 80% 60%;
+  --fw-surface: 230 15% 12%;
+  --fw-radius: 8px;
+}
+```
+
+Or use a preset:
+
+```html
+<fw-player theme="tokyo-night" ...></fw-player>
+```
+
+## Using with Vue
+
+```vue
+<template>
+  <fw-player
+    :content-id="contentId"
+    content-type="live"
+    :gateway-url="gatewayUrl"
+    autoplay
+    muted
+    controls
+  />
+</template>
+
+<script setup>
+import "@livepeer-frameworks/player-wc/define";
+import { ref } from "vue";
+
+const contentId = ref("pk_...");
+const gatewayUrl = ref("%GATEWAY_URL%/graphql");
+</script>
+```
+
+## Using with Angular
+
+```typescript
+import { CUSTOM_ELEMENTS_SCHEMA, NgModule } from "@angular/core";
+import "@livepeer-frameworks/player-wc/define";
+
+@NgModule({ schemas: [CUSTOM_ELEMENTS_SCHEMA] })
+export class AppModule {}
+```
+
+```html
+<fw-player
+  [attr.content-id]="contentId"
+  content-type="live"
+  [attr.gateway-url]="gatewayUrl"
+  autoplay
+  muted
+  controls
+></fw-player>
+```

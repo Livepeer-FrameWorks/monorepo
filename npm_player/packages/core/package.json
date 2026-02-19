@@ -1,10 +1,9 @@
 {
   "name": "@livepeer-frameworks/player-core",
-  "version": "0.1.5",
+  "version": "0.2.1",
   "type": "module",
   "description": "Core player logic for FrameWorks streaming - framework agnostic",
-  "main": "dist/cjs/index.js",
-  "module": "dist/esm/index.js",
+  "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
   "style": "dist/player.css",
   "files": [
@@ -15,14 +14,12 @@
     ".": {
       "source": "./src/index.ts",
       "types": "./dist/types/index.d.ts",
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js"
+      "default": "./dist/esm/index.js"
     },
     "./vanilla": {
       "source": "./src/vanilla/index.ts",
       "types": "./dist/types/vanilla/index.d.ts",
-      "import": "./dist/esm/vanilla.js",
-      "require": "./dist/cjs/vanilla.js"
+      "default": "./dist/esm/vanilla.js"
     },
     "./player.css": {
       "source": "./src/styles/player.css",
@@ -31,14 +28,16 @@
     "./styles.css": {
       "source": "./src/styles/player.css",
       "default": "./dist/player.css"
-    }
+    },
+    "./themes/light.css": "./dist/themes/light.css",
+    "./themes/neutral-dark.css": "./dist/themes/neutral-dark.css"
   },
   "scripts": {
     "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",
     "build:watch": "NODE_ENV=development rollup -c --watch",
-    "build:css": "mkdir -p ./dist && cp ./src/styles/player.css ./dist/player.css",
-    "build:types": "tsc --noEmit false --emitDeclarationOnly --outDir dist/types",
-    "type-check": "tsc --noEmit",
+    "build:css": "mkdir -p ./dist/themes && cp ./src/styles/player.css ./dist/player.css && cp ./src/styles/themes/*.css ./dist/themes/",
+    "build:types": "tsc -p tsconfig.main.json --noEmit false --emitDeclarationOnly --outDir dist/types",
+    "type-check": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.worklet.json --noEmit",
     "test": "vitest run -c vitest.config.ts",
     "test:watch": "vitest -c vitest.config.ts",
     "test:coverage": "vitest run -c vitest.config.ts --coverage",

@@ -4,12 +4,12 @@ import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
 import { LOGOMARK_DATA_URL } from "../constants/media-assets.js";
 import { playHitmarkerSound } from "./shared/hitmarker-audio.js";
+import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
 import "./fw-dvd-logo.js";
 
 interface ParticleState {
   left: number;
   size: number;
-  color: string;
   duration: number;
   delay: number;
 }
@@ -19,7 +19,6 @@ interface BubbleState {
   left: number;
   size: number;
   opacity: number;
-  color: string;
 }
 
 interface Hitmarker {
@@ -28,32 +27,13 @@ interface Hitmarker {
   y: number;
 }
 
-const BUBBLE_COLORS = [
-  "rgba(122, 162, 247, 0.2)",
-  "rgba(187, 154, 247, 0.2)",
-  "rgba(158, 206, 106, 0.2)",
-  "rgba(115, 218, 202, 0.2)",
-  "rgba(125, 207, 255, 0.2)",
-  "rgba(247, 118, 142, 0.2)",
-  "rgba(224, 175, 104, 0.2)",
-  "rgba(42, 195, 222, 0.2)",
-];
-
-const PARTICLE_COLORS = [
-  "#7aa2f7",
-  "#bb9af7",
-  "#9ece6a",
-  "#73daca",
-  "#7dcfff",
-  "#f7768e",
-  "#e0af68",
-  "#2ac3de",
-];
-
 @customElement("fw-loading-screen")
 export class FwLoadingScreen extends LitElement {
-  @property({ type: String }) message = "Waiting for source...";
+  @property({ type: String }) message?: string;
   @property({ type: String, attribute: "logo-src" }) logoSrc?: string;
+  @property({ attribute: false }) translator?: TranslateFn;
+
+  private _defaultTranslator: TranslateFn = createTranslator({ locale: "en" });
   @query(".loading-container") private _containerEl?: HTMLDivElement;
 
   @state() private _logoSize = 100;
@@ -85,11 +65,11 @@ export class FwLoadingScreen extends LitElement {
         user-select: none;
         background: linear-gradient(
           135deg,
-          hsl(var(--tn-bg-dark, 235 21% 11%)) 0%,
-          hsl(var(--tn-bg, 233 23% 17%)) 25%,
-          hsl(var(--tn-bg-dark, 235 21% 11%)) 50%,
-          hsl(var(--tn-bg, 233 23% 17%)) 75%,
-          hsl(var(--tn-bg-dark, 235 21% 11%)) 100%
+          hsl(var(--fw-surface-deep, 235 21% 11%)) 0%,
+          hsl(var(--fw-surface, 233 23% 17%)) 25%,
+          hsl(var(--fw-surface-deep, 235 21% 11%)) 50%,
+          hsl(var(--fw-surface, 233 23% 17%)) 75%,
+          hsl(var(--fw-surface-deep, 235 21% 11%)) 100%
         );
         background-size: 400% 400%;
         animation: _fw-gradient-shift 16s ease-in-out infinite;
@@ -115,6 +95,56 @@ export class FwLoadingScreen extends LitElement {
         transition: opacity 1s ease-in-out;
       }
 
+      .particle:nth-child(8n + 1) {
+        background: hsl(var(--fw-accent, 218 79% 73%));
+      }
+      .particle:nth-child(8n + 2) {
+        background: hsl(var(--fw-accent-secondary, 178 64% 63%));
+      }
+      .particle:nth-child(8n + 3) {
+        background: hsl(var(--fw-success, 95 53% 55%));
+      }
+      .particle:nth-child(8n + 4) {
+        background: hsl(var(--fw-info, 178 64% 63%));
+      }
+      .particle:nth-child(8n + 5) {
+        background: hsl(var(--fw-danger, 348 74% 64%));
+      }
+      .particle:nth-child(8n + 6) {
+        background: hsl(var(--fw-warning, 35 79% 64%));
+      }
+      .particle:nth-child(8n + 7) {
+        background: hsl(var(--fw-accent, 218 79% 73%) / 0.8);
+      }
+      .particle:nth-child(8n + 8) {
+        background: hsl(var(--fw-accent-secondary, 178 64% 63%) / 0.8);
+      }
+
+      .bubble:nth-child(8n + 1) {
+        background: hsl(var(--fw-accent, 218 79% 73%) / 0.2);
+      }
+      .bubble:nth-child(8n + 2) {
+        background: hsl(var(--fw-accent-secondary, 178 64% 63%) / 0.2);
+      }
+      .bubble:nth-child(8n + 3) {
+        background: hsl(var(--fw-success, 95 53% 55%) / 0.2);
+      }
+      .bubble:nth-child(8n + 4) {
+        background: hsl(var(--fw-info, 178 64% 63%) / 0.2);
+      }
+      .bubble:nth-child(8n + 5) {
+        background: hsl(var(--fw-danger, 348 74% 64%) / 0.2);
+      }
+      .bubble:nth-child(8n + 6) {
+        background: hsl(var(--fw-warning, 35 79% 64%) / 0.2);
+      }
+      .bubble:nth-child(8n + 7) {
+        background: hsl(var(--fw-accent, 218 79% 73%) / 0.15);
+      }
+      .bubble:nth-child(8n + 8) {
+        background: hsl(var(--fw-accent-secondary, 178 64% 63%) / 0.15);
+      }
+
       .center-logo {
         position: absolute;
         top: 50%;
@@ -127,7 +157,7 @@ export class FwLoadingScreen extends LitElement {
       .logo-pulse {
         position: absolute;
         border-radius: 50%;
-        background: rgba(122, 162, 247, 0.15);
+        background: hsl(var(--fw-accent, 218 79% 73%) / 0.15);
         animation: _fw-logo-pulse 3s ease-in-out infinite;
         pointer-events: none;
       }
@@ -156,7 +186,8 @@ export class FwLoadingScreen extends LitElement {
 
       .logo-mark.hovered {
         transform: scale(1.1);
-        filter: drop-shadow(0 6px 12px rgba(36, 40, 59, 0.4)) brightness(1.1);
+        filter: drop-shadow(0 6px 12px hsl(var(--fw-surface-deep, 235 21% 11%) / 0.4))
+          brightness(1.1);
       }
 
       .message {
@@ -165,11 +196,11 @@ export class FwLoadingScreen extends LitElement {
         left: 50%;
         transform: translateX(-50%);
         z-index: 8;
-        color: #a9b1d6;
+        color: hsl(var(--fw-text-muted, 224 16% 53%));
         font-size: 16px;
         font-weight: 500;
         text-align: center;
-        text-shadow: 0 2px 4px rgba(36, 40, 59, 0.5);
+        text-shadow: 0 2px 4px hsl(var(--fw-surface-deep, 235 21% 11%) / 0.5);
         animation: _fw-fade-in-out 2s ease-in-out infinite;
         pointer-events: none;
       }
@@ -179,9 +210,21 @@ export class FwLoadingScreen extends LitElement {
         inset: 0;
         pointer-events: none;
         background:
-          radial-gradient(circle at 20% 80%, rgba(122, 162, 247, 0.03) 0%, transparent 50%),
-          radial-gradient(circle at 80% 20%, rgba(187, 154, 247, 0.03) 0%, transparent 50%),
-          radial-gradient(circle at 40% 40%, rgba(158, 206, 106, 0.02) 0%, transparent 50%);
+          radial-gradient(
+            circle at 20% 80%,
+            hsl(var(--fw-accent, 218 79% 73%) / 0.03) 0%,
+            transparent 50%
+          ),
+          radial-gradient(
+            circle at 80% 20%,
+            hsl(var(--fw-accent-secondary, 178 64% 63%) / 0.03) 0%,
+            transparent 50%
+          ),
+          radial-gradient(
+            circle at 40% 40%,
+            hsl(var(--fw-success, 95 53% 55%) / 0.02) 0%,
+            transparent 50%
+          );
       }
 
       .hitmarker {
@@ -197,8 +240,8 @@ export class FwLoadingScreen extends LitElement {
         position: absolute;
         width: 12px;
         height: 3px;
-        background-color: #fff;
-        box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+        background-color: hsl(var(--fw-text-bright, 0 0% 100%));
+        box-shadow: 0 0 8px hsl(var(--fw-text-bright, 0 0% 100%) / 0.8);
         border-radius: 1px;
       }
 
@@ -331,22 +374,20 @@ export class FwLoadingScreen extends LitElement {
   }
 
   private _createParticles(): ParticleState[] {
-    return Array.from({ length: 12 }, (_, index) => ({
+    return Array.from({ length: 12 }, () => ({
       left: Math.random() * 100,
       size: Math.random() * 4 + 2,
-      color: PARTICLE_COLORS[index % PARTICLE_COLORS.length],
       duration: 8 + Math.random() * 4,
       delay: Math.random() * 8,
     }));
   }
 
   private _createBubbles(): BubbleState[] {
-    return Array.from({ length: 8 }, (_, index) => ({
+    return Array.from({ length: 8 }, () => ({
       top: Math.random() * 80 + 10,
       left: Math.random() * 80 + 10,
       size: Math.random() * 60 + 30,
       opacity: 0,
-      color: BUBBLE_COLORS[index % BUBBLE_COLORS.length],
     }));
   }
 
@@ -449,8 +490,13 @@ export class FwLoadingScreen extends LitElement {
     }, 600);
   };
 
+  private get _t(): TranslateFn {
+    return this.translator ?? this._defaultTranslator;
+  }
+
   protected render() {
     const logoSrc = this.logoSrc || LOGOMARK_DATA_URL;
+    const displayMessage = this.message ?? this._t("waitingForSource");
     return html`
       <div
         class="loading-container fw-player-root"
@@ -477,7 +523,6 @@ export class FwLoadingScreen extends LitElement {
                   left:${particle.left}%;
                   width:${particle.size}px;
                   height:${particle.size}px;
-                  background:${particle.color};
                   animation-duration:${particle.duration}s;
                   animation-delay:${particle.delay}s;
                 "
@@ -496,7 +541,6 @@ export class FwLoadingScreen extends LitElement {
                   left:${bubble.left}%;
                   width:${bubble.size}px;
                   height:${bubble.size}px;
-                  background:${bubble.color};
                   opacity:${bubble.opacity};
                 "
               ></div>
@@ -526,7 +570,7 @@ export class FwLoadingScreen extends LitElement {
 
         <fw-dvd-logo .parentRef=${this._containerEl ?? null} .scale=${0.08}></fw-dvd-logo>
 
-        <div class="message">${this.message}</div>
+        <div class="message">${displayMessage}</div>
         <div class="overlay-texture"></div>
       </div>
     `;

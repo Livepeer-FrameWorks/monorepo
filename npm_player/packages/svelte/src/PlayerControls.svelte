@@ -1,9 +1,13 @@
 <script lang="ts">
+  import { getContext } from "svelte";
+  import type { Readable } from "svelte/store";
   import {
     cn,
     globalPlayerManager,
+    createTranslator,
     type MistStreamInfo,
     type PlaybackMode,
+    type TranslateFn,
     // Seeking utilities from core
     SPEED_PRESETS,
     isMediaStreamSource,
@@ -15,7 +19,10 @@
     isLiveContent,
     // Time formatting from core
     formatTimeDisplay,
+    getAvailableLocales,
+    getLocaleDisplayName,
   } from "@livepeer-frameworks/player-core";
+  import type { FwLocale } from "@livepeer-frameworks/player-core";
   import SeekBar from "./SeekBar.svelte";
   import Slider from "./ui/Slider.svelte";
   import VolumeIcons from "./components/VolumeIcons.svelte";
@@ -30,6 +37,11 @@
     FullscreenExitIcon,
     SeekToLiveIcon,
   } from "./icons";
+
+  // i18n: get translator from context, fall back to default English
+  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
+  const fallbackT = createTranslator({ locale: "en" });
+  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
 
   // Props - aligned with React PlayerControls
   interface Props {
@@ -49,6 +61,8 @@
     isContentLive?: boolean;
     /** Jump to live edge callback */
     onJumpToLive?: () => void;
+    activeLocale?: FwLocale;
+    onLocaleChange?: (locale: FwLocale) => void;
   }
 
   let {
@@ -66,6 +80,8 @@
     onStatsToggle = undefined,
     isContentLive = undefined,
     onJumpToLive = undefined,
+    activeLocale = undefined,
+    onLocaleChange = undefined,
   }: Props = $props();
 
   // Video element discovery
@@ -122,6 +138,46 @@
   let _hasSeekToLive = false; // Track if we've auto-seeked to live
   let qualityValue = $state("auto");
   let captionValue = $state("none");
+
+  // Audio detection: trust MistServer metadata first, then DOM fallback
+  $effect(() => {
+    // Primary: trust MistServer stream metadata (matches ddvtech embed approach)
+    if (mistStreamInfo?.hasAudio !== undefined) {
+      hasAudio = mistStreamInfo.hasAudio;
+      return;
+    }
+
+    if (!video) {
+      hasAudio = true;
+      return;
+    }
+
+    const checkAudio = () => {
+      if (video!.srcObject instanceof MediaStream) {
+        hasAudio = video!.srcObject.getAudioTracks().length > 0;
+        return;
+      }
+      const videoAny = video as any;
+      if (videoAny.audioTracks && videoAny.audioTracks.length !== undefined) {
+        hasAudio = videoAny.audioTracks.length > 0;
+        return;
+      }
+      hasAudio = true;
+    };
+    checkAudio();
+    video.addEventListener("loadedmetadata", checkAudio);
+    // Safari: audioTracks may be populated after loadedmetadata for HLS streams
+    const audioTracks = (video as any).audioTracks;
+    if (audioTracks?.addEventListener) {
+      audioTracks.addEventListener("addtrack", checkAudio);
+    }
+    return () => {
+      video!.removeEventListener("loadedmetadata", checkAudio);
+      if (audioTracks?.removeEventListener) {
+        audioTracks.removeEventListener("addtrack", checkAudio);
+      }
+    };
+  });
 
   // Text tracks from player
   let textTracks = $derived.by(() => {
@@ -507,7 +563,7 @@
 
 <div
   class={cn(
-    "fw-player-surface fw-controls-wrapper",
+    "fw-controls-wrapper",
     isVisible ? "fw-controls-wrapper--visible" : "fw-controls-wrapper--hidden"
   )}
 >
@@ -551,7 +607,7 @@
           <button
             type="button"
             class="fw-btn-flush"
-            aria-label={isPlaying ? "Pause" : "Play"}
+            aria-label={isPlaying ? t("pause") : t("play")}
             onclick={handlePlayPause}
             {disabled}
           >
@@ -565,7 +621,7 @@
             <button
               type="button"
               class="fw-btn-flush hidden sm:flex"
-              aria-label="Skip back 10s"
+              aria-label={t("skipBackward")}
               onclick={handleSkipBack}
               {disabled}
             >
@@ -574,7 +630,7 @@
             <button
               type="button"
               class="fw-btn-flush hidden sm:flex"
-              aria-label="Skip forward 10s"
+              aria-label={t("skipForward")}
               onclick={handleSkipForward}
               {disabled}
             >
@@ -592,7 +648,7 @@
             !hasAudio && "fw-volume-group--disabled"
           )}
           role="group"
-          aria-label="Volume controls"
+          aria-label={t("volume")}
           onmouseenter={() => hasAudio && (isVolumeHovered = true)}
           onmouseleave={() => {
             isVolumeHovered = false;
@@ -611,8 +667,8 @@
           <button
             type="button"
             class="fw-volume-btn"
-            aria-label={!hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
-            title={!hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
+            aria-label={!hasAudio ? t("muted") : isMuted ? t("unmute") : t("mute")}
+            title={!hasAudio ? t("muted") : isMuted ? t("unmute") : t("mute")}
             onclick={handleMute}
             disabled={!hasAudio}
           >
@@ -634,7 +690,7 @@
               oninput={handleVolumeChange}
               orientation="horizontal"
               className="w-full"
-              aria-label="Volume"
+              aria-label={t("volume")}
               disabled={!hasAudio}
             />
           </div>
@@ -656,13 +712,9 @@
                 "fw-live-badge",
                 !hasDvrWindow || isNearLiveState ? "fw-live-badge--active" : "fw-live-badge--behind"
               )}
-              title={!hasDvrWindow
-                ? "Live only"
-                : isNearLiveState
-                  ? "At live edge"
-                  : "Jump to live"}
+              title={t("live")}
             >
-              LIVE
+              {t("live").toUpperCase()}
               {#if !isNearLiveState && hasDvrWindow}
                 <SeekToLiveIcon size={10} />
               {/if}
@@ -678,8 +730,8 @@
             <button
               type="button"
               class={cn("fw-btn-flush", isStatsOpen && "fw-btn-flush--active")}
-              aria-label="Toggle stats"
-              title="Stats"
+              aria-label={t("showStats")}
+              title={t("showStats")}
               onclick={onStatsToggle}
               {disabled}
             >
@@ -691,8 +743,8 @@
           <button
             type="button"
             class={cn("fw-btn-flush group", showSettingsMenu && "fw-btn-flush--active")}
-            aria-label="Settings"
-            title="Settings"
+            aria-label={t("settings")}
+            title={t("settings")}
             onclick={() => (showSettingsMenu = !showSettingsMenu)}
             {disabled}
           >
@@ -700,11 +752,11 @@
           </button>
 
           {#if showSettingsMenu}
-            <div class="fw-player-surface fw-settings-menu">
+            <div class="fw-settings-menu">
               <!-- Playback Mode - only show for live content (not VOD/clips) -->
               {#if onModeChange && isContentLive !== false}
                 <div class="fw-settings-section">
-                  <div class="fw-settings-label">Mode</div>
+                  <div class="fw-settings-label">{t("mode")}</div>
                   <div class="fw-settings-options">
                     {#each ["auto", "low-latency", "quality"] as mode}
                       <button
@@ -718,7 +770,11 @@
                           showSettingsMenu = false;
                         }}
                       >
-                        {mode === "low-latency" ? "Fast" : mode === "quality" ? "Stable" : "Auto"}
+                        {mode === "low-latency"
+                          ? t("fast")
+                          : mode === "quality"
+                            ? t("stable")
+                            : t("auto")}
                       </button>
                     {/each}
                   </div>
@@ -728,7 +784,7 @@
               <!-- Speed (hidden for WebRTC MediaStream) -->
               {#if supportsPlaybackRate}
                 <div class="fw-settings-section">
-                  <div class="fw-settings-label">Speed</div>
+                  <div class="fw-settings-label">{t("speed")}</div>
                   <div class="fw-settings-options fw-settings-options--wrap">
                     {#each SPEED_PRESETS as rate}
                       <button
@@ -750,7 +806,7 @@
               <!-- Quality -->
               {#if qualities.length > 0}
                 <div class="fw-settings-section">
-                  <div class="fw-settings-label">Quality</div>
+                  <div class="fw-settings-label">{t("quality")}</div>
                   <div class="fw-settings-list">
                     <button
                       class={cn(
@@ -759,7 +815,7 @@
                       )}
                       onclick={() => handleQualityChange("auto")}
                     >
-                      Auto
+                      {t("auto")}
                     </button>
                     {#each qualities as q}
                       <button
@@ -779,7 +835,7 @@
               <!-- Captions -->
               {#if textTracks.length > 0}
                 <div class="fw-settings-section">
-                  <div class="fw-settings-label">Captions</div>
+                  <div class="fw-settings-label">{t("captions")}</div>
                   <div class="fw-settings-list">
                     <button
                       class={cn(
@@ -788,17 +844,38 @@
                       )}
                       onclick={() => handleCaptionChange("none")}
                     >
-                      Off
+                      {t("captionsOff")}
                     </button>
-                    {#each textTracks as t}
+                    {#each textTracks as tt}
                       <button
                         class={cn(
                           "fw-settings-list-item",
-                          captionValue === t.id && "fw-settings-list-item--active"
+                          captionValue === tt.id && "fw-settings-list-item--active"
                         )}
-                        onclick={() => handleCaptionChange(t.id)}
+                        onclick={() => handleCaptionChange(tt.id)}
                       >
-                        {t.label || t.id}
+                        {tt.label || tt.id}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Locale -->
+              {#if onLocaleChange}
+                <div class="fw-settings-section">
+                  <div class="fw-settings-label">{t("language")}</div>
+                  <div class="fw-settings-list">
+                    {#each getAvailableLocales() as loc}
+                      <button
+                        type="button"
+                        class={cn(
+                          "fw-settings-list-item",
+                          activeLocale === loc && "fw-settings-list-item--active"
+                        )}
+                        onclick={() => onLocaleChange(loc)}
+                      >
+                        {getLocaleDisplayName(loc)}
                       </button>
                     {/each}
                   </div>
@@ -812,8 +889,8 @@
           <button
             type="button"
             class="fw-btn-flush"
-            aria-label="Toggle fullscreen"
-            title="Fullscreen"
+            aria-label={isFullscreen ? t("exitFullscreen") : t("fullscreen")}
+            title={t("fullscreen")}
             onclick={handleFullscreen}
             {disabled}
           >

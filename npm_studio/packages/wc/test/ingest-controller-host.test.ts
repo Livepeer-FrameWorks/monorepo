@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactiveControllerHost } from "lit";
+
+vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    detectCapabilities: vi.fn().mockReturnValue({ recommended: "webcodecs" }),
+    isWebCodecsEncodingPathSupported: vi.fn().mockReturnValue(false),
+  };
+});
+
 import { IngestControllerHost } from "../src/controllers/ingest-controller-host.js";
 import {
   STREAMCRAFTER_WRAPPER_CONTROLLER_NOT_INITIALIZED_ERROR,

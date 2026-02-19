@@ -1,0 +1,181 @@
+---
+title: "StreamCrafter — React"
+description: "React integration for browser-based streaming with StreamCrafter."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Installation
+
+```bash
+npm install @livepeer-frameworks/streamcrafter-react
+```
+
+Import the CSS once in your app:
+
+```tsx
+import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
+```
+
+## Drop-in Component
+
+The `<StreamCrafter />` component is fully self-contained with video preview, controls, and connection management.
+
+**Gateway Mode (Recommended):**
+
+```tsx
+import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
+import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
+
+function BroadcastPage() {
+  return (
+    <StreamCrafter
+      gatewayUrl="%GATEWAY_URL%/graphql"
+      streamKey="<YOUR_STREAM_KEY>"
+      initialProfile="broadcast"
+      onStateChange={(state) => console.log(state)}
+    />
+  );
+}
+```
+
+**Direct Mode (Dev / BYO WHIP):**
+
+```tsx
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
+```
+
+## Composable Components
+
+Pass `children` to `<StreamCrafter>` to replace the default UI with your own layout using the provided sub-components:
+
+```tsx
+import {
+  StreamCrafter,
+  StudioPreview,
+  StudioMixer,
+  StudioActionBar,
+  StudioSettings,
+  StudioStatusBadge,
+} from "@livepeer-frameworks/streamcrafter-react";
+import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
+
+function CustomStudio() {
+  return (
+    <StreamCrafter gatewayUrl="%GATEWAY_URL%/graphql" streamKey="my-key">
+      <div className="my-layout">
+        <StudioStatusBadge />
+        <StudioPreview />
+        <div className="sidebar">
+          <StudioMixer />
+          <StudioSettings />
+        </div>
+        <StudioActionBar />
+      </div>
+    </StreamCrafter>
+  );
+}
+```
+
+When `children` are provided, the built-in UI is entirely replaced. Sub-components auto-connect to the parent `<StreamCrafter>` via React context.
+
+### Sub-Component Reference
+
+| Component           | Purpose                                                       |
+| ------------------- | ------------------------------------------------------------- |
+| `StudioPreview`     | Video preview with optional compositor overlay and live badge |
+| `StudioMixer`       | Source list with volume sliders, mute, and remove buttons     |
+| `StudioActionBar`   | Camera, Screen Share, Settings, and Go Live buttons           |
+| `StudioSettings`    | Quality profile selector popup                                |
+| `StudioStatusBadge` | State badge (Idle, Capturing, Live, Connecting, etc.)         |
+
+All sub-components accept optional prop overrides for any value they normally read from context.
+
+## Custom UI with Hooks
+
+For complete UI control, use `useStreamCrafterV2` directly:
+
+```tsx
+import { useStreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-react";
+
+function FullyCustomBroadcaster() {
+  const {
+    state,
+    isStreaming,
+    isCapturing,
+    sources,
+    mediaStream,
+    startCamera,
+    startScreenShare,
+    startStreaming,
+    stopStreaming,
+    removeSource,
+    setSourceVolume,
+    setSourceMuted,
+    qualityProfile,
+    setQualityProfile,
+  } = useStreamCrafterV2({
+    whipUrl: "%INGEST_URL%/webrtc/key",
+    profile: "broadcast",
+    reconnection: { enabled: true },
+  });
+
+  return (
+    <div>
+      <video
+        ref={(el) => {
+          if (el) el.srcObject = mediaStream;
+        }}
+        autoPlay
+        muted
+      />
+      <p>State: {state}</p>
+      <p>Sources: {sources.length}</p>
+      <button onClick={() => startCamera()}>Add Camera</button>
+      <button onClick={() => startScreenShare({ audio: true })}>Share Screen</button>
+      <button onClick={() => (isStreaming ? stopStreaming() : startStreaming())}>
+        {isStreaming ? "Stop" : "Go Live"}
+      </button>
+    </div>
+  );
+}
+```
+
+<Aside type="note" title="Gateway in custom UI">
+  `useStreamCrafterV2` accepts `whipUrl` directly. If you need gateway resolution in a custom UI,
+  resolve a WHIP URL first with `IngestClient` from `@livepeer-frameworks/streamcrafter-core`, then
+  pass `whipUrl`.
+</Aside>
+
+### Hook Return Reference
+
+| Property                    | Type                              | Description               |
+| --------------------------- | --------------------------------- | ------------------------- |
+| `state`                     | `IngestState`                     | Current lifecycle state   |
+| `isStreaming`               | `boolean`                         | Whether currently live    |
+| `isCapturing`               | `boolean`                         | Whether media is captured |
+| `isReconnecting`            | `boolean`                         | Whether reconnecting      |
+| `sources`                   | `MediaSource[]`                   | Active media sources      |
+| `mediaStream`               | `MediaStream \| null`             | Combined output stream    |
+| `qualityProfile`            | `QualityProfile`                  | Current quality settings  |
+| `startCamera(opts?)`        | `() => Promise<void>`             | Add camera source         |
+| `startScreenShare(opts?)`   | `() => Promise<void>`             | Add screen share source   |
+| `startStreaming()`          | `() => Promise<void>`             | Go live                   |
+| `stopStreaming()`           | `() => Promise<void>`             | Stop streaming            |
+| `removeSource(id)`          | `(id: string) => void`            | Remove a source           |
+| `setSourceVolume(id, vol)`  | `(id, number) => void`            | Set source volume (0-1)   |
+| `setSourceMuted(id, muted)` | `(id, boolean) => void`           | Mute/unmute source        |
+| `setQualityProfile(name)`   | `(name: string) => Promise<void>` | Change quality profile    |
+| `controller`                | `IngestControllerV2`              | Direct controller access  |
+
+## State Callbacks
+
+```tsx
+<StreamCrafter
+  whipUrl="..."
+  onStateChange={(state, context) => {
+    if (state === "streaming") showLiveBadge();
+    if (state === "error") showError(context?.error);
+  }}
+/>
+```

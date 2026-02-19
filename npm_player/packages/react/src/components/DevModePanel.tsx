@@ -96,7 +96,7 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
   const [activeTab, setActiveTab] = useState<"config" | "stats">("config");
   const [, setCurrentComboIndex] = useState(0);
   const [hoveredComboIndex, setHoveredComboIndex] = useState<number | null>(null);
-  const [tooltipAbove, setTooltipAbove] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
   const [showDisabledPlayers, setShowDisabledPlayers] = useState(false);
   const comboListRef = useRef<HTMLDivElement>(null);
 
@@ -442,17 +442,17 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                       key={`${combo.player}-${combo.sourceType}`}
                       onMouseEnter={(e) => {
                         setHoveredComboIndex(index);
-                        if (comboListRef.current) {
-                          const container = comboListRef.current;
-                          const row = e.currentTarget;
-                          const containerRect = container.getBoundingClientRect();
-                          const rowRect = row.getBoundingClientRect();
-                          const relativePosition =
-                            (rowRect.top - containerRect.top) / containerRect.height;
-                          setTooltipAbove(relativePosition > 0.6);
-                        }
+                        const row = e.currentTarget;
+                        const rowRect = row.getBoundingClientRect();
+                        setTooltipPos({
+                          top: Math.max(8, Math.min(rowRect.top, window.innerHeight - 200)),
+                          left: Math.max(8, rowRect.left - 228),
+                        });
                       }}
-                      onMouseLeave={() => setHoveredComboIndex(null)}
+                      onMouseLeave={() => {
+                        setHoveredComboIndex(null);
+                        setTooltipPos(null);
+                      }}
                       className="fw-dev-combo"
                     >
                       <button
@@ -483,12 +483,10 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                       </button>
 
                       {/* Score breakdown tooltip */}
-                      {hoveredComboIndex === index && (
+                      {hoveredComboIndex === index && tooltipPos && (
                         <div
-                          className={cn(
-                            "fw-dev-tooltip",
-                            tooltipAbove ? "fw-dev-tooltip--above" : "fw-dev-tooltip--below"
-                          )}
+                          className="fw-dev-tooltip"
+                          style={{ top: tooltipPos.top, left: tooltipPos.left }}
                         >
                           {/* Full player/source info */}
                           <div className="fw-dev-tooltip-header">

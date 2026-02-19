@@ -1,5 +1,6 @@
 import React, { useRef, useState, useCallback, useMemo } from "react";
 import { cn } from "@livepeer-frameworks/player-core";
+import { useTranslate } from "../context/i18n";
 
 interface SeekBarProps {
   /** Current playback time in seconds */
@@ -44,6 +45,7 @@ const SeekBar: React.FC<SeekBarProps> = ({
   liveEdge,
   commitOnRelease = false,
 }) => {
+  const t = useTranslate();
   const trackRef = useRef<HTMLDivElement>(null);
   const [isHovering, setIsHovering] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -114,7 +116,7 @@ const SeekBar: React.FC<SeekBarProps> = ({
   // Format relative time for live streams (e.g., "-5:30" = 5:30 behind live edge)
   const formatLiveTime = useCallback((seconds: number, edge: number): string => {
     const behindSeconds = edge - seconds;
-    if (behindSeconds < 1) return "LIVE";
+    if (behindSeconds < 1) return t("live").toUpperCase();
     const total = Math.floor(behindSeconds);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
@@ -231,6 +233,37 @@ const SeekBar: React.FC<SeekBarProps> = ({
     [disabled, duration, isLive, getTimeFromPosition, onSeek, commitOnRelease]
   );
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (disabled || !onSeek) return;
+      const step = e.shiftKey ? 10 : 5;
+      const rangeEnd = isLive ? effectiveLiveEdge : duration;
+      const rangeStart = isLive ? seekableStart : 0;
+
+      switch (e.key) {
+        case "ArrowLeft":
+        case "ArrowDown":
+          e.preventDefault();
+          onSeek(Math.max(rangeStart, currentTime - step));
+          break;
+        case "ArrowRight":
+        case "ArrowUp":
+          e.preventDefault();
+          onSeek(Math.min(rangeEnd, currentTime + step));
+          break;
+        case "Home":
+          e.preventDefault();
+          onSeek(rangeStart);
+          break;
+        case "End":
+          e.preventDefault();
+          onSeek(rangeEnd);
+          break;
+      }
+    },
+    [disabled, onSeek, currentTime, duration, isLive, seekableStart, effectiveLiveEdge]
+  );
+
   const showThumb = isHovering || isDragging;
   const canShowTooltip = isLive ? seekableWindow > 0 : Number.isFinite(duration);
 
@@ -250,8 +283,9 @@ const SeekBar: React.FC<SeekBarProps> = ({
       onMouseMove={handleMouseMove}
       onClick={handleClick}
       onMouseDown={handleMouseDown}
+      onKeyDown={handleKeyDown}
       role="slider"
-      aria-label="Seek"
+      aria-label={t("seekBar")}
       aria-valuemin={isLive ? seekableStart : 0}
       aria-valuemax={isLive ? effectiveLiveEdge : duration || 100}
       aria-valuenow={displayTime}

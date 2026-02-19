@@ -1,0 +1,15 @@
+# Meson cross-file for Emscripten WASM builds (used by dav1d)
+[binaries]
+c = 'emcc'
+cpp = 'em++'
+ar = 'emar'
+strip = 'emstrip'
+
+[built-in options]
+c_args = ['-O3', '-msimd128']
+
+[host_machine]
+system = 'emscripten'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'

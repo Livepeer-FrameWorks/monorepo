@@ -31,6 +31,9 @@ export class DashJsPlayerImpl extends BasePlayer {
   private subsLoaded = false;
   private pendingSubtitleId: string | null = null;
 
+  // Catch unhandled promise rejections from dash.js internals
+  private _rejectionHandler: ((e: PromiseRejectionEvent) => void) | null = null;
+
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
   }
@@ -299,6 +302,20 @@ export class DashJsPlayerImpl extends BasePlayer {
         this.emit("error", error);
       });
 
+      // dash.js has internal unhandled promise rejections (e.g. SegmentBase SIDX
+      // loader crashes on live CMAF streams). Catch these and surface as errors
+      // so PlayerController can fall back to another player/protocol.
+      this._rejectionHandler = (e: PromiseRejectionEvent) => {
+        if (this.destroyed) return;
+        const msg = e.reason?.message || String(e.reason);
+        if (msg.includes("range") || msg.includes("Cannot read properties of null")) {
+          e.preventDefault();
+          console.warn("[DashJS] Caught internal dash.js rejection:", msg);
+          this.emit("error", `DASH internal error: ${msg}`);
+        }
+      };
+      window.addEventListener("unhandledrejection", this._rejectionHandler);
+
       // Log key dashjs events for debugging
       this.dashPlayer.on("manifestLoaded", (e: any) => {
         console.debug("[DashJS] manifestLoaded:", e);
@@ -315,44 +332,34 @@ export class DashJsPlayerImpl extends BasePlayer {
       });
 
       // Configure dashjs v5 streaming settings BEFORE initialization
-      // AGGRESSIVE settings for fastest startup and low latency
       this.dashPlayer.updateSettings({
         streaming: {
-          // AGGRESSIVE: Minimal buffers for fastest startup
           buffer: {
             fastSwitchEnabled: true,
-            stableBufferTime: 4, // Reduced from 16 (aggressive!)
-            bufferTimeAtTopQuality: 8, // Reduced from 30
-            bufferTimeAtTopQualityLongForm: 15, // Reduced from 60
-            bufferToKeep: 10, // Reduced from 30
-            bufferPruningInterval: 10, // Reduced from 30
+            bufferTimeDefault: 4,
+            bufferTimeAtTopQuality: 8,
+            bufferTimeAtTopQualityLongForm: 15,
+            bufferToKeep: 10,
+            bufferPruningInterval: 10,
           },
-          // Gaps/stall handling
           gaps: {
             jumpGaps: true,
             jumpLargeGaps: true,
             smallGapLimit: 1.5,
             threshold: 0.3,
           },
-          // AGGRESSIVE: ABR with high initial bitrate estimate
           abr: {
             autoSwitchBitrate: { video: true, audio: true },
             limitBitrateByPortal: false,
-            useDefaultABRRules: true,
-            initialBitrate: { video: 5_000_000, audio: 128_000 }, // 5Mbps initial (was -1)
+            initialBitrate: { video: 5_000_000, audio: 128_000 },
           },
-          // LIVE CATCHUP - critical for maintaining live edge (was missing!)
           liveCatchup: {
             enabled: true,
-            maxDrift: 1.5, // Seek to live if drift > 1.5s
-            playbackRate: {
-              max: 0.15, // Speed up by max 15%
-              min: -0.15, // Slow down by max 15%
-            },
-            playbackBufferMin: 0.3, // Min buffer before catchup
+            maxDrift: 1.5,
+            playbackRate: { max: 0.15, min: -0.15 },
+            playbackBufferMin: 0.3,
             mode: "liveCatchupModeDefault",
           },
-          // Retry settings - more aggressive
           retryAttempts: {
             MPD: 5,
             MediaSegment: 5,
@@ -371,39 +378,27 @@ export class DashJsPlayerImpl extends BasePlayer {
             XLinkExpansion: 1000,
             other: 1000,
           },
-          // Timeout settings - faster abandonment of slow segments
-          timeoutAttempts: {
-            MPD: 2,
-            MediaSegment: 2, // Abandon after 2 timeout attempts
-            InitializationSegment: 2,
-            BitstreamSwitchingSegment: 2,
-            IndexSegment: 2,
-            XLinkExpansion: 1,
-            other: 1,
-          },
-          // Abandon slow segment downloads more quickly
-          abandonLoadTimeout: 5000, // 5 seconds instead of default 10
-          xhrWithCredentials: false,
+          abandonLoadTimeout: 5000,
           text: { defaultEnabled: false },
-          // AGGRESSIVE: Tighter live delay
           delay: {
-            liveDelay: 2, // Reduced from 4 (2s behind live edge)
+            liveDelay: 2,
             liveDelayFragmentCount: null,
-            useSuggestedPresentationDelay: false, // Ignore manifest suggestions
+            useSuggestedPresentationDelay: false,
           },
         },
         debug: {
-          logLevel: 4, // Always debug for now to see what's happening
+          logLevel: 2,
         },
       });
 
-      // Add fragment loading event listeners to debug the pending issue
-      this.dashPlayer.on("fragmentLoadingStarted", (e: any) => {
-        console.debug("[DashJS] Fragment loading started:", e.request?.url?.split("/").pop());
-      });
-      this.dashPlayer.on("fragmentLoadingCompleted", (e: any) => {
-        console.debug("[DashJS] Fragment loading completed:", e.request?.url?.split("/").pop());
-      });
+      if (this.debugging) {
+        this.dashPlayer.on("fragmentLoadingStarted", (e: any) => {
+          console.debug("[DashJS] Fragment loading started:", e.request?.url?.split("/").pop());
+        });
+        this.dashPlayer.on("fragmentLoadingCompleted", (e: any) => {
+          console.debug("[DashJS] Fragment loading completed:", e.request?.url?.split("/").pop());
+        });
+      }
       this.dashPlayer.on("fragmentLoadingAbandoned", (e: any) => {
         console.warn("[DashJS] Fragment loading ABANDONED:", e.request?.url?.split("/").pop(), e);
       });
@@ -573,6 +568,11 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.subsLoaded = false;
     this.pendingSubtitleId = null;
     this.videoProxy = null;
+
+    if (this._rejectionHandler) {
+      window.removeEventListener("unhandledrejection", this._rejectionHandler);
+      this._rejectionHandler = null;
+    }
 
     if (this.dashPlayer) {
       try {

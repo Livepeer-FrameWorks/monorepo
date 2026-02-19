@@ -1,0 +1,537 @@
+---
+title: "Player — Advanced"
+description: "Custom skins, blueprints, protocol registration, playback modes, ABR, and player internals."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Custom Skins (Whitelabeling)
+
+The vanilla player uses a **skin system** to render its controls. A skin bundles structure descriptors, blueprint factories, icons, design tokens, and CSS. Skins can inherit from other skins, letting you override individual controls without rewriting everything.
+
+### Skin Registry
+
+```ts
+import { registerSkin, resolveSkin, FwSkins, createPlayer } from "@livepeer-frameworks/player-core";
+
+// Register a custom skin
+registerSkin("mybrand", {
+  inherit: "default",
+  blueprints: {
+    // Replace the play button with a custom one
+    play: (ctx) => {
+      const btn = document.createElement("button");
+      btn.className = "my-play-btn";
+      btn.textContent = "Play";
+      ctx.subscribe.on("playing", (isPlaying) => {
+        btn.textContent = isPlaying ? "Pause" : "Play";
+      });
+      btn.onclick = () => ctx.api.togglePlay();
+      return btn;
+    },
+  },
+  tokens: {
+    "--fw-accent": "340 80% 55%",
+    "--fw-surface": "0 0% 8%",
+  },
+  css: {
+    skin: `.my-play-btn { padding: 8px 16px; border-radius: 4px; }`,
+  },
+});
+
+// Use it
+const player = createPlayer({
+  target: "#player",
+  contentId: "pk_...",
+  gatewayUrl: "%GATEWAY_URL%/graphql",
+  skin: "mybrand",
+});
+```
+
+### Inline Skin (No Registration)
+
+Pass a `SkinDefinition` directly:
+
+```ts
+const player = createPlayer({
+  target: "#player",
+  contentId: "pk_...",
+  gatewayUrl: "%GATEWAY_URL%/graphql",
+  skin: {
+    inherit: "default",
+    blueprints: {
+      pip: () => null, // Hide PiP button
+      fullscreen: () => null, // Hide fullscreen button
+    },
+    tokens: {
+      "--fw-accent": "262 80% 60%",
+    },
+  },
+});
+```
+
+### Skin Definition
+
+```ts
+interface SkinDefinition {
+  inherit?: string; // Parent skin name
+  structure?: { main: StructureDescriptor }; // Layout override
+  blueprints?: Record<string, BlueprintFactory>; // UI factory overrides
+  icons?: Record<string, { svg: string; size?: number }>; // Icon overrides
+  tokens?: Record<string, string>; // CSS custom properties
+  css?: { skin?: string }; // Additional CSS
+}
+```
+
+### Headless / No UI
+
+```ts
+// No controls at all (headless)
+const player = createPlayer({ ..., skin: false });
+// or equivalently
+const player = createPlayer({ ..., controls: false });
+
+// Native <video> controls
+const player = createPlayer({ ..., controls: "stock" });
+```
+
+## Blueprint System
+
+Blueprints are factory functions that receive a `BlueprintContext` and return an `HTMLElement` (or `null` to skip). They wire reactivity through `ctx.subscribe.on()`.
+
+### Writing a Blueprint
+
+```ts
+import type { BlueprintFactory } from "@livepeer-frameworks/player-core";
+
+const myVolumeKnob: BlueprintFactory = (ctx) => {
+  const el = document.createElement("div");
+  el.className = "my-volume-knob";
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0";
+  slider.max = "1";
+  slider.step = "0.01";
+
+  // Reactive: subscribe fires immediately with current value, then on change
+  ctx.subscribe.on("volume", (v) => {
+    slider.value = String(v);
+  });
+
+  slider.oninput = () => (ctx.api.volume = parseFloat(slider.value));
+  el.appendChild(slider);
+
+  // Use i18n
+  const label = document.createElement("span");
+  label.textContent = ctx.translate("volume", "Volume");
+  el.appendChild(label);
+
+  return el;
+};
+```
+
+### BlueprintContext
+
+Every blueprint factory receives this context object:
+
+| Property                    | Type                       | Description                                          |
+| --------------------------- | -------------------------- | ---------------------------------------------------- |
+| `video`                     | `HTMLVideoElement \| null` | Underlying video element                             |
+| `subscribe`                 | `ReactiveState`            | Per-property reactive subscriptions                  |
+| `api`                       | `PlayerInstance`           | Full player API (Q/M/S)                              |
+| `fullscreen`                | `object`                   | `{ supported, active, toggle(), request(), exit() }` |
+| `pip`                       | `object`                   | `{ supported, active, toggle() }`                    |
+| `info`                      | `StreamInfo \| null`       | Source/track info from MistServer                    |
+| `options`                   | `CreatePlayerConfig`       | Config passed to `createPlayer`                      |
+| `container`                 | `HTMLElement`              | Player container element                             |
+| `translate(key, fallback?)` | `function`                 | i18n helper                                          |
+| `buildIcon(name, size?)`    | `function`                 | SVG icon builder                                     |
+| `log(msg)`                  | `function`                 | Debug logger (no-op when debug off)                  |
+| `timers`                    | `object`                   | `setTimeout`/`setInterval` (auto-cleaned on destroy) |
+
+### Structure Descriptors
+
+The layout is defined as a JSON tree. Each node's `type` maps to a blueprint factory name:
+
+```ts
+import type { StructureDescriptor } from "@livepeer-frameworks/player-core";
+
+const myStructure: StructureDescriptor = {
+  type: "container",
+  children: [
+    { type: "videocontainer" },
+    { type: "loading" },
+    { type: "error" },
+    {
+      type: "controls",
+      children: [
+        { type: "progress" },
+        {
+          type: "controlbar",
+          children: [
+            { type: "play" },
+            { type: "live" },
+            { type: "currentTime" },
+            { type: "spacer" },
+            { type: "totalTime" },
+            { type: "volume" },
+            { type: "fullscreen" },
+          ],
+        },
+      ],
+    },
+  ],
+};
+```
+
+Default blueprint types: `container`, `videocontainer`, `controls`, `controlbar`, `play`, `progress`, `currentTime`, `totalTime`, `speaker`, `volume`, `fullscreen`, `pip`, `settings`, `loading`, `error`, `seekForward`, `seekBackward`, `live`, `spacer`.
+
+Structure nodes support:
+
+| Field      | Type                     | Description              |
+| ---------- | ------------------------ | ------------------------ |
+| `type`     | `string`                 | Blueprint name to invoke |
+| `classes`  | `string[]`               | Extra CSS classes        |
+| `style`    | `Record<string, string>` | Inline styles            |
+| `children` | `StructureDescriptor[]`  | Child nodes              |
+| `if`       | `(ctx) => boolean`       | Conditional render       |
+| `then`     | `StructureDescriptor`    | Render when `if` true    |
+| `else`     | `StructureDescriptor`    | Render when `if` false   |
+
+## Custom Protocol Players
+
+Register custom playback engines with `registerPlayer()`:
+
+```ts
+import { registerPlayer } from "@livepeer-frameworks/player-core";
+
+registerPlayer("myproto", {
+  name: "My Protocol Player",
+  priority: 5,
+  mimeTypes: ["application/x-myproto"],
+  isBrowserSupported: () => typeof RTCPeerConnection !== "undefined",
+  async build(source, video, container) {
+    // source.url contains the stream URL
+    // video is a pre-created <video> element
+    // Set up your custom playback here
+    video.src = source.url;
+    await video.play();
+  },
+  destroy() {
+    // Clean up custom resources
+  },
+});
+```
+
+Once registered, the scoring algorithm considers your player alongside built-in engines. Matching is based on `mimeTypes` — when a source's MIME type matches, your player competes by `priority` (lower = higher priority).
+
+```ts
+interface SimplePlayerDefinition {
+  name: string;
+  priority?: number; // Default: 10
+  mimeTypes: string[];
+  isBrowserSupported?: () => boolean;
+  build(
+    source: StreamSource,
+    video: HTMLVideoElement,
+    container: HTMLElement
+  ): void | Promise<void>;
+  destroy?(): void;
+}
+```
+
+## Reactive State API
+
+The `player.subscribe` object provides per-property reactive subscriptions. Callbacks fire immediately with the current value, then on every change (with shallow equality deduplication).
+
+```ts
+// Subscribe to a property
+const unsub = player.subscribe.on("currentTime", (t) => {
+  myTimeLabel.textContent = `${t.toFixed(1)}s`;
+});
+
+// Read current value synchronously
+const vol = player.subscribe.get("volume");
+
+// Unsubscribe
+unsub();
+
+// Unsubscribe all listeners for a property
+player.subscribe.off("volume");
+
+// Unsubscribe everything
+player.subscribe.off();
+```
+
+Available properties: `paused`, `playing`, `currentTime`, `duration`, `volume`, `muted`, `playbackRate`, `loop`, `buffering`, `fullscreen`, `pip`, `tracks`, `streamState`, `error`, `loading`, `ended`, `seeking`.
+
+## Playback Modes
+
+`playbackMode` controls the protocol preference order:
+
+| Mode          | Preference                 | Use Case              |
+| ------------- | -------------------------- | --------------------- |
+| `low-latency` | WebRTC → MP4/WS → HLS/DASH | Real-time interaction |
+| `quality`     | MP4/WS → HLS/DASH → WebRTC | Stable, high quality  |
+| `vod`         | HLS/MP4 (penalize WHEP)    | Pre-recorded content  |
+| `auto`        | Balanced score-based       | Default               |
+
+```ts
+const player = createPlayer({
+  ...,
+  playbackMode: "low-latency",
+});
+```
+
+### Force Protocol
+
+Force a specific source type (bypasses scoring):
+
+```ts
+const player = createPlayer({
+  ...,
+  forceType: "whep",
+});
+```
+
+## Adaptive Bitrate (ABR)
+
+The player includes a built-in ABR controller with two modes:
+
+| Mode     | Description                                                               |
+| -------- | ------------------------------------------------------------------------- |
+| `auto`   | Automatic quality selection based on viewport size and network conditions |
+| `manual` | User-selected quality level (disables automatic switching)                |
+
+```ts
+// Check current mode
+player.abrMode; // "auto"
+
+// Switch to manual
+player.abrMode = "manual";
+player.selectQuality("720p");
+
+// Switch back to auto
+player.abrMode = "auto";
+```
+
+### Quality Selection
+
+```ts
+// List available qualities
+const qualities = player.getQualities();
+// [{ id: "1080p", label: "1080p", width: 1920, height: 1080, bitrate: 4000000 }, ...]
+
+// Lock to specific quality
+player.selectQuality("720p");
+```
+
+## Player States
+
+| State              | Description                        |
+| ------------------ | ---------------------------------- |
+| `booting`          | Instance created, initializing     |
+| `gateway_loading`  | Querying gateway for endpoints     |
+| `gateway_ready`    | Endpoints received                 |
+| `gateway_error`    | Gateway query failed               |
+| `no_endpoint`      | No compatible endpoints            |
+| `selecting_player` | Scoring player/source combinations |
+| `connecting`       | Establishing media connection      |
+| `buffering`        | Connected, waiting for data        |
+| `playing`          | Active playback                    |
+| `paused`           | Paused by user                     |
+| `ended`            | Playback ended                     |
+| `error`            | Unrecoverable error                |
+| `destroyed`        | Instance torn down                 |
+
+## Multi-Engine Architecture
+
+The player wraps multiple playback engines and selects the best one for each browser/protocol combination:
+
+| Engine       | Protocols      | Notes                              |
+| ------------ | -------------- | ---------------------------------- |
+| hls.js       | HLS (TS, CMAF) | Primary HLS engine for non-Safari  |
+| Video.js     | HLS, DASH      | Fallback multi-protocol engine     |
+| MewsWsPlayer | WebSocket MP4  | Custom MSE-based ultra-low-latency |
+| Native WHEP  | WebRTC         | Browser-native WebRTC              |
+| WebCodecs    | WebSocket      | Frame-accurate, background-safe    |
+| Native HLS   | HLS            | Safari native playback             |
+
+Protocol selection uses a scoring algorithm ported from MistServer's MistMetaPlayer, evaluating codec support, browser compatibility, and source priority.
+
+## Thumbnails / Poster
+
+```tsx
+// React
+<Player
+  contentId="pk_..."
+  contentType="live"
+  thumbnailUrl="https://your-cdn.com/poster.jpg"
+  options={{ autoplay: false }}
+/>
+```
+
+```ts
+// Vanilla
+const player = createPlayer({
+  ...,
+  poster: "https://your-cdn.com/poster.jpg",
+  autoplay: false,
+});
+```
+
+## Frame Stepping
+
+When paused, use `,` and `.` keyboard shortcuts to step backward/forward one frame:
+
+- **WebCodecs** — true frame stepping via decoded frame buffer
+- **Other engines** — step within the already-buffered range only (no network seek)
+
+## Picture-in-Picture
+
+```ts
+if (player.capabilities.pip) {
+  player.togglePiP();
+  // or
+  await player.requestPiP();
+}
+
+player.on("pipChange", (inPiP) => {
+  console.log("PiP:", inPiP);
+});
+```
+
+## Fullscreen
+
+```ts
+if (player.capabilities.fullscreen) {
+  player.toggleFullscreen();
+  // or
+  await player.requestFullscreen();
+}
+
+player.on("fullscreenChange", (inFullscreen) => {
+  console.log("Fullscreen:", inFullscreen);
+});
+```
+
+## Error Handling
+
+```ts
+player.on("error", (error) => {
+  console.error("Playback error:", error.message);
+
+  // Retry current source
+  player.retry();
+
+  // Or try next endpoint
+  player.retryWithFallback();
+
+  // Or full reload
+  player.reload();
+});
+
+// Dismiss error state
+player.clearError();
+```
+
+## Tracks
+
+### Audio Tracks
+
+```ts
+const audioTracks = player.getAudioTracks();
+player.selectAudioTrack(audioTracks[1].id);
+```
+
+### Text Tracks (Subtitles)
+
+```ts
+const textTracks = player.getTextTracks();
+player.selectTextTrack(textTracks[0].id);
+```
+
+## Playback Statistics
+
+```ts
+const stats = player.getStats();
+```
+
+## Content Types
+
+| Type   | Behavior                                             |
+| ------ | ---------------------------------------------------- |
+| `live` | Live stream — shows live badge, penalizes seeking    |
+| `dvr`  | Live with DVR buffer — enables seeking within buffer |
+| `clip` | Short clip — seekable, may loop                      |
+| `vod`  | Video on demand — full seeking, duration display     |
+
+```tsx
+<Player contentType="dvr" contentId="pk_..." />
+<Player contentType="clip" contentId="pk_..." />
+<Player contentType="vod" contentId="pk_..." />
+```
+
+## Source Resolution Modes
+
+The player resolves playback sources through one of three modes, evaluated in priority order. The first one set wins.
+
+| Priority | Option       | Resolution                                             | When to Use                                                                |
+| -------- | ------------ | ------------------------------------------------------ | -------------------------------------------------------------------------- |
+| 1        | `endpoints`  | None — uses the endpoints as-is                        | You already have resolved edge node URLs from your own orchestration layer |
+| 2        | `mistUrl`    | Fetches `json_{contentId}.js` from MistServer directly | Standalone setups pointing at a known MistServer node                      |
+| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API             | Production deployments with multi-node routing                             |
+
+### `gatewayUrl` (recommended for production)
+
+The Gateway resolves the best edge node for the viewer, returns structured endpoints, and handles failover across clusters.
+
+```ts
+createPlayer({
+  target: "#player",
+  contentId: "pk_abc123",
+  gatewayUrl: "%GATEWAY_URL%/graphql",
+});
+```
+
+### `mistUrl` (direct MistServer)
+
+Connects directly to a MistServer node without Gateway involvement. The player fetches `json_{contentId}.js` to get the full source list and codec metadata, then runs the scoring algorithm locally. MistServer is the authority for available protocols and codecs — the player preserves the raw source types (including `ws/video/raw` for WebCodecs).
+
+```ts
+createPlayer({
+  target: "#player",
+  contentId: "my-stream",
+  mistUrl: "https://mist.example.com:8080",
+});
+```
+
+### `endpoints` (pre-resolved)
+
+Bypasses all resolution. You provide the endpoint structure directly. The player builds a synthetic source list from the `outputs` map.
+
+```ts
+createPlayer({
+  target: "#player",
+  contentId: "my-stream",
+  contentType: "live",
+  endpoints: {
+    primary: {
+      nodeId: "edge-1",
+      baseUrl: "https://edge1.example.com",
+      outputs: {
+        HLS: { url: "https://edge1.example.com/hls/stream/index.m3u8" },
+        WHEP: { url: "https://edge1.example.com/webrtc/stream" },
+      },
+    },
+    fallbacks: [],
+  },
+});
+```
+
+<Aside type="caution" title="endpoints limitations">
+  When using `endpoints`, the player cannot discover MistServer-specific source types like
+  `ws/video/raw`. Only the protocols present in the `outputs` map are available to the scoring
+  algorithm.
+</Aside>

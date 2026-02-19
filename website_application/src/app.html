@@ -1,13 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="utf-8" />
+    <meta name="color-scheme" content="dark light" />
     <link rel="icon" href="%sveltekit.assets%/frameworks-dark-logomark.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     %sveltekit.head%
   </head>
 
   <body data-sveltekit-preload-data="hover">
+    <script>
+      // FOUC prevention: set dark/light class before first paint.
+      // Full palette application happens in the theme store on hydration.
+      (function () {
+        try {
+          var stored = localStorage.getItem("frameworks-theme-prefs");
+          if (!stored) return;
+          var prefs = JSON.parse(stored);
+          var mode = prefs.mode;
+          if (mode !== "dark" && mode !== "light") return;
+          var html = document.documentElement;
+          html.classList.remove("dark", "light");
+          html.classList.add(mode);
+          html.style.setProperty("color-scheme", mode);
+        } catch (e) {}
+      })();
+    </script>
     <div class="contents">%sveltekit.body%</div>
   </body>
 </html>

@@ -78,13 +78,13 @@ export const WRAPPER_PARITY_ACTION_METHODS = [
 ] as const;
 
 export const PLAYER_COMPONENT_PARITY_CONTEXT_MENU_COMMON_LABELS = [
-  "Stats",
-  "Hide Stats",
-  "Settings",
-  "Hide Settings",
-  "Picture-in-Picture",
-  "Enable Loop",
-  "Disable Loop",
+  "showStats",
+  "hideStats",
+  "settings",
+  "hideSettings",
+  "pictureInPicture",
+  "enableLoop",
+  "disableLoop",
 ] as const;
 
 export const PLAYER_COMPONENT_PARITY_CONTEXT_MENU_WC_ROLE_MARKERS = [

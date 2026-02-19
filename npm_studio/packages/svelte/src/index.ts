@@ -6,6 +6,13 @@
 // Components (self-contained, like Player)
 export { default as StreamCrafter } from "./StreamCrafter.svelte";
 
+// Composable sub-components (use inside <StreamCrafter> with children snippet)
+export { default as StudioPreview } from "./components/StudioPreview.svelte";
+export { default as StudioMixer } from "./components/StudioMixer.svelte";
+export { default as StudioActionBar } from "./components/StudioActionBar.svelte";
+export { default as StudioSettings } from "./components/StudioSettings.svelte";
+export { default as StudioStatusBadge } from "./components/StudioStatusBadge.svelte";
+
 // Compositor Components
 export { default as CompositorControls } from "./components/CompositorControls.svelte";
 export { default as SceneSwitcher } from "./components/SceneSwitcher.svelte";
