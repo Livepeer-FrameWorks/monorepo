@@ -75,7 +75,7 @@
     "@livepeer-frameworks/player-svelte": "workspace:^",
     "@livepeer-frameworks/streamcrafter-core": "workspace:^",
     "@livepeer-frameworks/streamcrafter-svelte": "workspace:^",
-    "@sveltejs/kit": "^2.52.0",
+    "@sveltejs/kit": "^2.52.2",
     "@tanstack/svelte-query": "^6.0.18",
     "@types/leaflet": "^1.9.21",
     "axios": "^1.13.5",
