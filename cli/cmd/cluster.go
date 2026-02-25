@@ -26,6 +26,7 @@ func newClusterCmd() *cobra.Command {
 
 	cluster.AddCommand(newClusterDetectCmd())
 	cluster.AddCommand(newClusterDoctorCmd())
+	cluster.AddCommand(newClusterStatusCmd())
 	cluster.AddCommand(newClusterProvisionCmd())
 	cluster.AddCommand(newClusterInitCmd())
 	cluster.AddCommand(newClusterLogsCmd())
@@ -35,6 +36,7 @@ func newClusterCmd() *cobra.Command {
 	cluster.AddCommand(newClusterRestoreCmd())
 	cluster.AddCommand(newClusterDiagnoseCmd())
 	cluster.AddCommand(newClusterSyncGeoIPCmd())
+	cluster.AddCommand(newClusterSetChannelCmd())
 
 	// Future commands
 	// cluster.AddCommand(newClusterPlanCmd())

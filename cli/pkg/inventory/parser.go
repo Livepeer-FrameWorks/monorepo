@@ -237,6 +237,15 @@ func (m *Manifest) AllClusterIDs() []string {
 	return ids
 }
 
+// Save writes a cluster manifest back to disk.
+func Save(path string, manifest *Manifest) error {
+	data, err := yaml.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
 // LoadEdgeManifest reads and parses an edge manifest file (edges.yaml)
 func LoadEdgeManifest(path string) (*EdgeManifest, error) {
 	data, err := os.ReadFile(path)

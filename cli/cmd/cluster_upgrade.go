@@ -11,6 +11,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 
@@ -25,10 +26,11 @@ func newClusterUpgradeCmd() *cobra.Command {
 	var skipValidation bool
 	var yes bool
 	var noRollback bool
+	var all bool
 
 	cmd := &cobra.Command{
-		Use:   "upgrade <service>",
-		Short: "Upgrade a service to a new version",
+		Use:   "upgrade [service]",
+		Short: "Upgrade a service (or all services) to a new version",
 		Long: `Upgrade a service to a new version using GitOps manifests.
 
 The upgrade process:
@@ -40,17 +42,19 @@ The upgrade process:
   6. Validate health (unless --skip-validation)
   7. On health failure, rollback to previous version (unless --no-rollback)
 
-Upgrade is currently all-at-once. Future support for rolling upgrades
-when replica counts are added to cluster manifests.
+Version defaults to the cluster's configured channel (set with
+'frameworks cluster set-channel'). If no channel is set, defaults to stable.
 
 Version can be:
   - Specific version: v0.0.0-rc1, v1.2.3
   - Channel: stable, rc (uses latest from channel)
-  - Default: stable (if not specified)
+  - Default: cluster channel (or stable)
+
+Use --all to upgrade all enabled services in dependency order.
 
 Environment variables:
   FRAMEWORKS_GITOPS_REPO - Override GitOps repository URL or local path`,
-		Example: `  # Upgrade quartermaster to latest stable
+		Example: `  # Upgrade quartermaster using cluster's channel
   frameworks cluster upgrade quartermaster
 
   # Upgrade to specific version
@@ -59,25 +63,52 @@ Environment variables:
   # Dry run to see what would happen
   frameworks cluster upgrade bridge --version rc --dry-run
 
-  # Upgrade without health validation (faster but riskier)
-  frameworks cluster upgrade foghorn --skip-validation
+  # Upgrade all services in dependency order
+  frameworks cluster upgrade --all --yes
 
-  # Skip confirmation prompt
-  frameworks cluster upgrade bridge --yes`,
-		Args: cobra.ExactArgs(1),
+  # Upgrade all services, dry run
+  frameworks cluster upgrade --all --dry-run`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all && len(args) > 0 {
+				return fmt.Errorf("--all and a service name are mutually exclusive")
+			}
+			if !all && len(args) != 1 {
+				return fmt.Errorf("requires exactly 1 service name (or use --all)")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if all {
+				return runUpgradeAll(cmd, manifestPath, version, dryRun, skipValidation, yes, noRollback)
+			}
 			return runUpgrade(cmd, manifestPath, args[0], version, dryRun, skipValidation, yes, noRollback)
 		},
 	}
 
 	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
-	cmd.Flags().StringVar(&version, "version", "stable", "Version to upgrade to (stable, rc, v1.2.3)")
+	cmd.Flags().StringVar(&version, "version", "", "Version to upgrade to (stable, rc, v1.2.3); defaults to cluster channel")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be upgraded without executing")
 	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip health validation after upgrade")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&noRollback, "no-rollback", false, "Skip automatic rollback on health check failure")
+	cmd.Flags().BoolVar(&all, "all", false, "Upgrade all enabled services in dependency order")
 
 	return cmd
+}
+
+// resolveUpgradeVersion defaults to the cluster's channel when no explicit --version is given.
+// Warns if the requested version implies a different channel than the manifest's.
+func resolveUpgradeVersion(cmd *cobra.Command, manifest *inventory.Manifest, version string) string {
+	if version == "" {
+		version = manifest.ResolvedChannel()
+	}
+
+	clusterChannel := manifest.ResolvedChannel()
+	requestedChannel, _ := gitops.ResolveVersion(version)
+	if requestedChannel != clusterChannel {
+		fmt.Fprintf(cmd.OutOrStderr(), "Warning: cluster channel is %q but upgrading from %q channel\n", clusterChannel, requestedChannel)
+	}
+	return version
 }
 
 // runUpgrade executes the upgrade command
@@ -87,6 +118,8 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 	if err != nil {
 		return fmt.Errorf("failed to load manifest: %w", err)
 	}
+
+	version = resolveUpgradeVersion(cmd, manifest, version)
 
 	// Resolve deploy name (services/interfaces) or use serviceName for infrastructure
 	deployName := serviceName
@@ -337,6 +370,108 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[6/6] Upgrade complete!\n")
 	fmt.Fprintf(cmd.OutOrStdout(), "✓ %s upgraded from %s to %s\n", serviceName, previousVersion, svcInfo.Version)
 
+	// Persist the new version back to the cluster manifest
+	saveUpgradedVersion(manifest, serviceName, svcInfo.Version, manifestPath, cmd)
+
+	return nil
+}
+
+// saveUpgradedVersion updates the service version in the manifest and writes it back.
+func saveUpgradedVersion(manifest *inventory.Manifest, serviceName, newVersion, manifestPath string, cmd *cobra.Command) {
+	updated := false
+	if svc, ok := manifest.Services[serviceName]; ok {
+		svc.Version = newVersion
+		manifest.Services[serviceName] = svc
+		updated = true
+	} else if iface, ok := manifest.Interfaces[serviceName]; ok {
+		iface.Version = newVersion
+		manifest.Interfaces[serviceName] = iface
+		updated = true
+	} else if obs, ok := manifest.Observability[serviceName]; ok {
+		obs.Version = newVersion
+		manifest.Observability[serviceName] = obs
+		updated = true
+	}
+	if updated {
+		if err := inventory.Save(manifestPath, manifest); err != nil {
+			fmt.Fprintf(cmd.OutOrStderr(), "Warning: could not save manifest: %v\n", err)
+		}
+	}
+}
+
+// runUpgradeAll upgrades all enabled services in dependency order.
+func runUpgradeAll(cmd *cobra.Command, manifestPath, version string, dryRun, skipValidation, yes, noRollback bool) error {
+	manifest, err := inventory.Load(manifestPath)
+	if err != nil {
+		return fmt.Errorf("failed to load manifest: %w", err)
+	}
+
+	version = resolveUpgradeVersion(cmd, manifest, version)
+
+	// Build dependency-ordered execution plan
+	planner := orchestrator.NewPlanner(manifest)
+	plan, err := planner.Plan(context.Background(), orchestrator.ProvisionOptions{
+		Phase: orchestrator.PhaseAll,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to build execution plan: %w", err)
+	}
+
+	// Collect application/interface/observability tasks (skip infrastructure)
+	var services []string
+	for _, batch := range plan.Batches {
+		for _, task := range batch {
+			if task.Phase == orchestrator.PhaseInfrastructure {
+				continue
+			}
+			services = append(services, task.Name)
+		}
+	}
+
+	if len(services) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No upgradeable services found in manifest.")
+		return nil
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Upgrading %d services (channel: %s, version: %s)\n", len(services), manifest.ResolvedChannel(), version)
+	fmt.Fprintf(cmd.OutOrStdout(), "Order: %s\n\n", strings.Join(services, " -> "))
+
+	if dryRun {
+		for _, svc := range services {
+			fmt.Fprintf(cmd.OutOrStdout(), "  [DRY-RUN] Would upgrade: %s\n", svc)
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "\nDry-run complete. Use without --dry-run to execute.")
+		return nil
+	}
+
+	if !yes {
+		fmt.Fprintf(os.Stderr, "Upgrade %d services to %s? [y/N]: ", len(services), version)
+		reader := bufio.NewReader(os.Stdin)
+		response, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			return fmt.Errorf("failed to read confirmation: %w", readErr)
+		}
+		response = strings.TrimSpace(strings.ToLower(response))
+		if response != "y" && response != "yes" {
+			fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
+			return nil
+		}
+	}
+
+	var succeeded, failed []string
+	for i, svc := range services {
+		fmt.Fprintf(cmd.OutOrStdout(), "\n[%d/%d] Upgrading %s...\n", i+1, len(services), svc)
+		if err := runUpgrade(cmd, manifestPath, svc, version, false, skipValidation, true, noRollback); err != nil {
+			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ %s failed: %v\n", svc, err)
+			failed = append(failed, svc)
+			fmt.Fprintf(cmd.OutOrStderr(), "\nStopping upgrade sequence. Succeeded: %v, Failed: %v, Remaining: %v\n",
+				succeeded, failed, services[i+1:])
+			return fmt.Errorf("upgrade --all stopped: %s failed", svc)
+		}
+		succeeded = append(succeeded, svc)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "\n✓ All %d services upgraded successfully\n", len(succeeded))
 	return nil
 }
 

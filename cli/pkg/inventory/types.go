@@ -5,6 +5,7 @@ type Manifest struct {
 	Version string `yaml:"version"`
 	Type    string `yaml:"type"`              // cluster | edge
 	Profile string `yaml:"profile,omitempty"` // control-plane | regional | analytics-only | edge-gateway
+	Channel string `yaml:"channel,omitempty"` // release channel: "stable" (default), "rc"
 
 	Hosts          map[string]Host          `yaml:"hosts,omitempty"`
 	Clusters       map[string]ClusterConfig `yaml:"clusters,omitempty"`
@@ -186,6 +187,14 @@ type EdgeNode struct {
 	ApplyTune  bool              `yaml:"apply_tune,omitempty"`  // Apply sysctl tuning
 	RegisterQM bool              `yaml:"register_qm,omitempty"` // Register in Quartermaster
 	Mode       string            `yaml:"mode,omitempty"`        // Per-node mode override ("docker"|"native")
+}
+
+// ResolvedChannel returns the effective release channel, defaulting to "stable".
+func (m *Manifest) ResolvedChannel() string {
+	if m.Channel != "" {
+		return m.Channel
+	}
+	return "stable"
 }
 
 // ResolvedMode returns the effective mode for this node, falling back to the
