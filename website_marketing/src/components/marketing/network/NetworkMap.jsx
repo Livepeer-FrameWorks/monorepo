@@ -66,33 +66,60 @@ function formatLoad(current, max) {
   return `${current} / ${max}`;
 }
 
-// Build cluster tooltip with load metrics
-function clusterTooltipHtml(cluster) {
+function popupRow(label, value) {
+  return `<tr><td class="map-popup__label">${escapeHtml(label)}</td><td class="map-popup__value">${value}</td></tr>`;
+}
+
+function popupSection(title, rows) {
+  return `<div class="map-popup__section-title">${escapeHtml(title)}</div><table class="map-popup__table">${rows}</table>`;
+}
+
+function clusterPopupHtml(cluster) {
+  const infoRows =
+    (cluster.region ? popupRow("Region", escapeHtml(cluster.region)) : "") +
+    (cluster.clusterType ? popupRow("Type", escapeHtml(cluster.clusterType)) : "") +
+    popupRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`) +
+    popupRow("Peers", `${cluster.peerCount}`) +
+    popupRow("Status", escapeHtml(cluster.status));
+
   let html =
-    `<b>${escapeHtml(cluster.name)}</b><br>` +
-    (cluster.region ? `Region: ${escapeHtml(cluster.region)}<br>` : "") +
-    (cluster.clusterType ? `Type: ${escapeHtml(cluster.clusterType)}<br>` : "") +
-    `Nodes: ${cluster.healthyNodeCount}/${cluster.nodeCount}<br>` +
-    `Peers: ${cluster.peerCount}<br>` +
-    `Status: ${escapeHtml(cluster.status)}`;
+    `<div class="map-popup"><div class="map-popup__title">${escapeHtml(cluster.name)}</div>` +
+    `<table class="map-popup__table">${infoRows}</table>`;
 
   if (cluster.maxStreams > 0 || cluster.currentStreams > 0) {
-    html +=
-      `<br><br><b>Load</b><br>` +
-      `Streams: ${formatLoad(cluster.currentStreams, cluster.maxStreams)}<br>` +
-      `Viewers: ${formatLoad(cluster.currentViewers, cluster.maxViewers)}<br>` +
-      `Bandwidth: ${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`;
+    const loadRows =
+      popupRow("Streams", formatLoad(cluster.currentStreams, cluster.maxStreams)) +
+      popupRow("Viewers", formatLoad(cluster.currentViewers, cluster.maxViewers)) +
+      popupRow(
+        "Bandwidth",
+        `${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`
+      );
+    html += popupSection("Load", loadRows);
   }
 
   if (cluster.services?.length) {
-    html += `<br>Services: ${cluster.services.map(escapeHtml).join(", ")}`;
+    html += `<div class="map-popup__tags">${cluster.services.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
   }
 
   if (cluster.shortDescription) {
-    html += `<br><br><i>${escapeHtml(cluster.shortDescription)}</i>`;
+    html += `<div class="map-popup__desc">${escapeHtml(cluster.shortDescription)}</div>`;
   }
 
-  return html;
+  return html + "</div>";
+}
+
+function nodePopupHtml(node, services) {
+  const rows =
+    popupRow("Type", escapeHtml(node.nodeType)) +
+    popupRow("Status", escapeHtml(node.status)) +
+    popupRow("Cluster", escapeHtml(node.clusterId));
+  let html =
+    `<div class="map-popup"><div class="map-popup__title">${escapeHtml(node.name)}</div>` +
+    `<table class="map-popup__table">${rows}</table>`;
+  if (services?.length) {
+    html += `<div class="map-popup__tags">${services.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
+  }
+  return html + "</div>";
 }
 
 // Draws all layers onto the Leaflet map
@@ -194,17 +221,13 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
     });
 
     const nodeSvcs = servicesByNode[node.nodeId];
-    let nodeTooltip =
-      `<b>${escapeHtml(node.name)}</b><br>` +
-      `Type: ${escapeHtml(node.nodeType)}<br>` +
-      `Status: ${escapeHtml(node.status)}<br>` +
-      `Cluster: ${escapeHtml(node.clusterId)}`;
-    if (nodeSvcs?.length) {
-      nodeTooltip += `<br>Services: ${nodeSvcs.map(escapeHtml).join(", ")}`;
-    }
 
     L.marker([node.latitude, node.longitude], { icon, interactive: true })
-      .bindTooltip(nodeTooltip, { direction: "top", className: "network-viz__tooltip" })
+      .bindPopup(nodePopupHtml(node, nodeSvcs), {
+        className: "network-viz__popup",
+        maxWidth: 400,
+        minWidth: 200,
+      })
       .addTo(nodeLayer);
   });
 
@@ -226,19 +249,18 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
 
     const icon = L.divIcon({
       className: "network-viz__marker",
-      html: `<div class="network-viz__service-dot" style="--svc-dot-color: ${color};"></div>`,
+      html: `<div class="network-viz__service-dot" style="--svc-color: ${color};"></div>`,
       iconSize: [8, 8],
       iconAnchor: [4, 4],
     });
 
+    const svcRows =
+      popupRow("Health", escapeHtml(svc.healthStatus)) +
+      popupRow(svc.nodeId ? "Node" : "Cluster", escapeHtml(svc.nodeId || svc.clusterId));
     L.marker([lat, lng], { icon, interactive: true })
-      .bindTooltip(
-        `<b>${escapeHtml(svc.serviceId)}</b><br>` +
-          `Health: ${escapeHtml(svc.healthStatus)}<br>` +
-          (svc.nodeId
-            ? `Node: ${escapeHtml(svc.nodeId)}`
-            : `Cluster: ${escapeHtml(svc.clusterId)}`),
-        { direction: "top", className: "network-viz__tooltip" }
+      .bindPopup(
+        `<div class="map-popup"><div class="map-popup__title">${escapeHtml(svc.serviceId)}</div><table class="map-popup__table">${svcRows}</table></div>`,
+        { className: "network-viz__popup", maxWidth: 300, minWidth: 180 }
       )
       .addTo(serviceLayer);
   });
@@ -263,9 +285,10 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       interactive: true,
       zIndexOffset: 1000,
     })
-      .bindTooltip(clusterTooltipHtml(cluster), {
-        direction: "top",
-        className: "network-viz__tooltip",
+      .bindPopup(clusterPopupHtml(cluster), {
+        className: "network-viz__popup",
+        maxWidth: 400,
+        minWidth: 220,
       })
       .addTo(clusterLayer);
   });

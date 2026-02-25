@@ -47,6 +47,11 @@
     id: string;
     coords: [number, number][];
     kind: BucketType;
+    stats?: {
+      count?: number;
+      successRate?: number;
+      avgDistance?: number;
+    };
   }
 
   interface Flow {
@@ -95,6 +100,8 @@
   interface ServiceInstance {
     serviceId: string;
     nodeId?: string | null;
+    clusterId?: string | null;
+    healthStatus?: string | null;
   }
 
   interface Props {
@@ -136,12 +143,18 @@
   let clusterLayer: LayerGroup | null = null;
   let relationshipLayer: LayerGroup | null = null;
   let membershipLayer: LayerGroup | null = null;
+  let serviceLayer: LayerGroup | null = null;
   let pulseTimers: number[] = [];
 
   const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.15)";
   const NODE_STATUS_COLORS: Record<string, string> = {
     active: "rgb(59, 130, 246)",
     offline: "rgb(100, 116, 139)",
+  };
+  const SERVICE_HEALTH_COLORS: Record<string, string> = {
+    healthy: "rgb(34, 197, 94)",
+    unhealthy: "rgb(234, 179, 8)",
+    unknown: "rgb(148, 163, 184)",
   };
 
   // UX state
@@ -203,6 +216,7 @@
     membershipLayer = L.layerGroup().addTo(map);
     relationshipLayer = L.layerGroup().addTo(map);
     layerGroup = L.layerGroup().addTo(map);
+    serviceLayer = L.layerGroup().addTo(map);
     clusterLayer = L.layerGroup().addTo(map);
 
     drawMap(routes, nodes, buckets, flows, clusters, relationships);
@@ -232,6 +246,14 @@
   function formatLoad(current: number | undefined, max: number | undefined): string {
     if (!max) return `${current ?? 0}`;
     return `${current ?? 0} / ${max}`;
+  }
+
+  function popupRow(label: string, value: string): string {
+    return `<tr><td class="map-popup__label">${escapeHtml(label)}</td><td class="map-popup__value">${value}</td></tr>`;
+  }
+
+  function popupSection(title: string, rows: string): string {
+    return `<div class="map-popup__section-title">${escapeHtml(title)}</div><table class="map-popup__table">${rows}</table>`;
   }
 
   function startPulse(from: [number, number], to: [number, number]) {
@@ -302,6 +324,7 @@
     if (membershipLayer) map.removeLayer(membershipLayer);
     if (relationshipLayer) map.removeLayer(relationshipLayer);
     if (layerGroup) map.removeLayer(layerGroup);
+    if (serviceLayer) map.removeLayer(serviceLayer);
     if (clusterLayer) map.removeLayer(clusterLayer);
 
     // Recreate layer groups (order = z-order)
@@ -310,6 +333,7 @@
     membershipLayer = L.layerGroup().addTo(map);
     relationshipLayer = L.layerGroup().addTo(map);
     layerGroup = L.layerGroup().addTo(map);
+    serviceLayer = L.layerGroup().addTo(map);
     clusterLayer = L.layerGroup().addTo(map);
 
     // 0. Draw bucket polygons first (optional)
@@ -333,6 +357,18 @@
         fillOpacity: 0.12 + intensity * 0.35,
         opacity: 0.8,
       });
+      // Bucket popup with stats
+      let bucketRows = popupRow("Type", b.kind === "client" ? "Viewer Bucket" : "Node Bucket");
+      if (b.stats?.count != null) bucketRows += popupRow("Events", `${b.stats.count}`);
+      if (b.stats?.successRate != null)
+        bucketRows += popupRow("Success", `${(b.stats.successRate * 100).toFixed(1)}%`);
+      if (b.stats?.avgDistance != null)
+        bucketRows += popupRow("Avg Distance", `${b.stats.avgDistance.toFixed(0)}km`);
+      poly.bindPopup(
+        `<div class="map-popup"><table class="map-popup__table">${bucketRows}</table></div>`,
+        { className: "dark-popup", maxWidth: 280, minWidth: 160 }
+      );
+
       poly.on("click", () => {
         if (onBucketClick) onBucketClick(b.id);
       });
@@ -401,35 +437,47 @@
       });
 
       const nodeSvcs = servicesByNode[node.id];
-      let nodeTooltip =
-        `<b>${escapeHtml(node.name)}</b><br>` +
-        `Type: ${escapeHtml(node.nodeType || "node")}<br>` +
-        `Status: ${escapeHtml(node.status || "active")}<br>` +
-        (node.clusterId ? `Cluster: ${escapeHtml(node.clusterId)}` : "");
+      let rows =
+        popupRow("Type", escapeHtml(node.nodeType || "node")) +
+        popupRow("Status", escapeHtml(node.status || "active"));
+      if (node.clusterId) rows += popupRow("Cluster", escapeHtml(node.clusterId));
+      let nodePopup =
+        `<div class="map-popup"><div class="map-popup__title">${escapeHtml(node.name)}</div>` +
+        `<table class="map-popup__table">${rows}</table>`;
       if (nodeSvcs?.length) {
-        nodeTooltip += `<br>Services: ${nodeSvcs.map(escapeHtml).join(", ")}`;
+        nodePopup += `<div class="map-popup__tags">${nodeSvcs.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
       }
+      nodePopup += "</div>";
 
       L.marker([node.lat, node.lng], { icon: nodeIcon })
-        .bindTooltip(nodeTooltip, { direction: "top", className: "dark-tooltip" })
+        .bindPopup(nodePopup, { className: "dark-popup", maxWidth: 400, minWidth: 200 })
         .addTo(layerGroup!);
     });
 
     // 2. Draw Routes (Bezier curves or straight lines)
     currentRoutes.forEach((route) => {
       const isSuccess = route.status === "success" || route.status === "SUCCESS";
-      const color = isSuccess ? "rgba(34, 197, 94, 0.4)" : "rgba(239, 68, 68, 0.4)"; // Green vs Red
+      const color = isSuccess ? "rgba(34, 197, 94, 0.4)" : "rgba(239, 68, 68, 0.4)";
       const weight = 1;
 
       // Draw line
-      L.polyline([route.from, route.to], {
+      const line = L.polyline([route.from, route.to], {
         color: color,
         weight: weight,
         opacity: 0.6,
         smoothFactor: 1,
-      }).addTo(layerGroup!);
+      });
 
-      // Draw Client (Origin) dot - smaller
+      let routeRows = popupRow("Status", isSuccess ? "Success" : "Failed");
+      if (route.score != null) routeRows += popupRow("Score", `${route.score}`);
+      if (route.details) routeRows += popupRow("Details", escapeHtml(route.details));
+      line.bindPopup(
+        `<div class="map-popup"><table class="map-popup__table">${routeRows}</table></div>`,
+        { className: "dark-popup", maxWidth: 280, minWidth: 160 }
+      );
+      line.addTo(layerGroup!);
+
+      // Draw Client (Origin) dot
       const clientIcon = L.divIcon({
         className: "custom-client-icon",
         html: `<div style="background-color: ${isSuccess ? "rgb(34, 197, 94)" : "rgb(239, 68, 68)"}; width: 6px; height: 6px; border-radius: 50%;"></div>`,
@@ -437,7 +485,18 @@
         iconAnchor: [3, 3],
       });
 
-      L.marker(route.from, { icon: clientIcon }).addTo(layerGroup!);
+      let clientRows = popupRow("Status", isSuccess ? "Success" : "Failed");
+      if (route.score != null) clientRows += popupRow("Score", `${route.score}`);
+      clientRows += popupRow(
+        "Location",
+        `${route.from[0].toFixed(2)}, ${route.from[1].toFixed(2)}`
+      );
+      L.marker(route.from, { icon: clientIcon })
+        .bindPopup(
+          `<div class="map-popup"><div class="map-popup__title">Viewer</div><table class="map-popup__table">${clientRows}</table></div>`,
+          { className: "dark-popup", maxWidth: 280, minWidth: 160 }
+        )
+        .addTo(layerGroup!);
     });
 
     // 3. Draw relationship lines between clusters
@@ -459,17 +518,22 @@
       });
 
       if (rel.metrics) {
-        const parts: string[] = [];
-        if (rel.metrics.eventCount != null) parts.push(`Events: ${rel.metrics.eventCount}`);
+        let rows = "";
+        if (rel.metrics.eventCount != null)
+          rows += popupRow("Events", rel.metrics.eventCount.toLocaleString());
         if (rel.metrics.avgLatencyMs != null)
-          parts.push(`Latency: ${rel.metrics.avgLatencyMs.toFixed(1)}ms`);
+          rows += popupRow("Latency", `${rel.metrics.avgLatencyMs.toFixed(1)}ms`);
         if (rel.metrics.successRate != null)
-          parts.push(`Success: ${(rel.metrics.successRate * 100).toFixed(1)}%`);
-        if (parts.length > 0) {
-          line.bindTooltip(parts.join("<br>"), {
-            direction: "center",
-            className: "dark-tooltip",
-          });
+          rows += popupRow("Success", `${(rel.metrics.successRate * 100).toFixed(1)}%`);
+        if (rows) {
+          line.bindPopup(
+            `<div class="map-popup"><table class="map-popup__table">${rows}</table></div>`,
+            {
+              className: "dark-popup",
+              maxWidth: 280,
+              minWidth: 160,
+            }
+          );
         }
       }
 
@@ -481,7 +545,42 @@
       }
     });
 
-    // 4. Draw cluster markers
+    // 4. Draw service instance dots
+    serviceInstances.forEach((svc) => {
+      let lat: number, lng: number;
+      const hostNode = nodeMap[svc.nodeId ?? ""];
+      if (hostNode) {
+        lat = hostNode.lat + 0.3;
+        lng = hostNode.lng + 0.3;
+      } else {
+        const cluster = clusterMap[svc.clusterId ?? ""];
+        if (!cluster) return;
+        lat = cluster.lat + 0.3;
+        lng = cluster.lng + 0.3;
+      }
+
+      const health = svc.healthStatus ?? "unknown";
+      const svcColor = SERVICE_HEALTH_COLORS[health] || SERVICE_HEALTH_COLORS.unknown;
+      const svcIcon = L.divIcon({
+        className: "service-dot-marker",
+        html: `<div style="background-color: ${svcColor}; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px ${svcColor}; opacity: 0.8;"></div>`,
+        iconSize: [8, 8],
+        iconAnchor: [4, 4],
+      });
+
+      const svcRows =
+        popupRow("Health", escapeHtml(health)) +
+        popupRow(svc.nodeId ? "Node" : "Cluster", escapeHtml(svc.nodeId ?? svc.clusterId ?? ""));
+      const svcPopup =
+        `<div class="map-popup"><div class="map-popup__title">${escapeHtml(svc.serviceId)}</div>` +
+        `<table class="map-popup__table">${svcRows}</table></div>`;
+
+      L.marker([lat, lng], { icon: svcIcon })
+        .bindPopup(svcPopup, { className: "dark-popup", maxWidth: 300, minWidth: 180 })
+        .addTo(serviceLayer!);
+    });
+
+    // 5. Draw cluster markers
     const statusColors: Record<string, string> = {
       healthy: "rgb(34, 197, 94)",
       operational: "rgb(34, 197, 94)",
@@ -508,33 +607,41 @@
         iconAnchor: [radius, radius],
       });
 
-      // Build enriched tooltip
-      let tooltip =
-        `<b>${escapeHtml(cluster.name)}</b><br>` +
-        (cluster.region ? `Region: ${escapeHtml(cluster.region)}<br>` : "") +
-        (cluster.clusterType ? `Type: ${escapeHtml(cluster.clusterType)}<br>` : "") +
-        `Nodes: ${cluster.healthyNodeCount}/${cluster.nodeCount}<br>` +
-        (cluster.peerCount != null ? `Peers: ${cluster.peerCount}<br>` : "") +
-        `Status: ${escapeHtml(cluster.status)}`;
+      // Build cluster popup with structured table layout
+      let infoRows =
+        (cluster.region ? popupRow("Region", escapeHtml(cluster.region)) : "") +
+        (cluster.clusterType ? popupRow("Type", escapeHtml(cluster.clusterType)) : "") +
+        popupRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`) +
+        (cluster.peerCount != null ? popupRow("Peers", `${cluster.peerCount}`) : "") +
+        popupRow("Status", escapeHtml(cluster.status));
+
+      let popup =
+        `<div class="map-popup"><div class="map-popup__title">${escapeHtml(cluster.name)}</div>` +
+        `<table class="map-popup__table">${infoRows}</table>`;
 
       if ((cluster.maxStreams ?? 0) > 0 || (cluster.currentStreams ?? 0) > 0) {
-        tooltip +=
-          `<br><br><b>Load</b><br>` +
-          `Streams: ${formatLoad(cluster.currentStreams, cluster.maxStreams)}<br>` +
-          `Viewers: ${formatLoad(cluster.currentViewers, cluster.maxViewers)}<br>` +
-          `Bandwidth: ${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`;
+        const loadRows =
+          popupRow("Streams", formatLoad(cluster.currentStreams, cluster.maxStreams)) +
+          popupRow("Viewers", formatLoad(cluster.currentViewers, cluster.maxViewers)) +
+          popupRow(
+            "Bandwidth",
+            `${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`
+          );
+        popup += popupSection("Load", loadRows);
       }
 
       if (cluster.services?.length) {
-        tooltip += `<br>Services: ${cluster.services.map(escapeHtml).join(", ")}`;
+        popup += `<div class="map-popup__tags">${cluster.services.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
       }
 
       if (cluster.shortDescription) {
-        tooltip += `<br><br><i>${escapeHtml(cluster.shortDescription)}</i>`;
+        popup += `<div class="map-popup__desc">${escapeHtml(cluster.shortDescription)}</div>`;
       }
 
+      popup += "</div>";
+
       L.marker([cluster.lat, cluster.lng], { icon, zIndexOffset: 1000 })
-        .bindTooltip(tooltip, { direction: "top", className: "dark-tooltip" })
+        .bindPopup(popup, { className: "dark-popup", maxWidth: 400, minWidth: 220 })
         .addTo(clusterLayer!);
     });
   }
@@ -619,15 +726,6 @@
     z-index: 1;
   }
 
-  /* Allow tooltips to overflow the map bounds while keeping tiles clipped */
-  :global(.map-container .leaflet-container) {
-    overflow: visible !important;
-  }
-
-  :global(.map-container .leaflet-tile-pane) {
-    overflow: hidden;
-  }
-
   .map-controls {
     position: absolute;
     top: 0.75rem;
@@ -704,22 +802,130 @@
     background-color: rgb(15, 23, 42) !important;
   }
 
-  :global(.dark-tooltip) {
+  /* Undo Tailwind Preflight resets that break Leaflet rendering */
+  :global(.leaflet-container img) {
+    max-width: none !important;
+    max-height: none !important;
+  }
+
+  :global(.leaflet-container svg) {
+    max-width: none !important;
+    max-height: none !important;
+  }
+
+  :global(.leaflet-container *) {
+    border-style: none;
+  }
+
+  :global(.dark-popup) {
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.5));
+  }
+
+  :global(.dark-popup .leaflet-popup-content-wrapper) {
     background-color: rgb(30, 41, 59) !important;
     border: 1px solid rgb(51, 65, 85) !important;
     color: rgb(226, 232, 240) !important;
-    border-radius: 4px !important;
-    font-size: 0.75rem;
+    border-radius: 6px !important;
+    font-size: 0.8rem;
     line-height: 1.5;
-    padding: 0.4rem 0.6rem !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
-    max-width: 320px;
-    white-space: normal;
-    word-wrap: break-word;
+    padding: 0 !important;
   }
 
-  :global(.dark-tooltip::before) {
-    border-top-color: rgb(51, 65, 85) !important;
+  :global(.dark-popup .leaflet-popup-content) {
+    margin: 0 !important;
+    width: auto !important;
+  }
+
+  :global(.dark-popup .leaflet-popup-tip) {
+    background-color: rgb(30, 41, 59) !important;
+    border: 1px solid rgb(51, 65, 85) !important;
+    border-top: none !important;
+    border-left: none !important;
+  }
+
+  :global(.dark-popup .leaflet-popup-close-button) {
+    color: rgb(148, 163, 184) !important;
+    font-size: 1.1rem !important;
+    top: 6px !important;
+    right: 8px !important;
+  }
+
+  :global(.dark-popup .leaflet-popup-close-button:hover) {
+    color: rgb(226, 232, 240) !important;
+  }
+
+  :global(.map-popup) {
+    padding: 0.75rem 1rem;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  :global(.map-popup__title) {
+    font-weight: 600;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+    color: rgb(241, 245, 249);
+  }
+
+  :global(.map-popup__table) {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+
+  :global(.map-popup__table tr + tr) {
+    border-top: 1px solid rgba(51, 65, 85, 0.3);
+  }
+
+  :global(.map-popup__label) {
+    color: rgb(148, 163, 184);
+    padding: 0.2rem 0.75rem 0.2rem 0;
+    white-space: nowrap;
+    vertical-align: top;
+  }
+
+  :global(.map-popup__value) {
+    color: rgb(226, 232, 240);
+    padding: 0.2rem 0;
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  :global(.map-popup__section-title) {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgb(100, 116, 139);
+    margin-top: 0.6rem;
+    margin-bottom: 0.25rem;
+  }
+
+  :global(.map-popup__tags) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+  }
+
+  :global(.map-popup__tag) {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.65rem;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 3px;
+    color: rgb(147, 197, 253);
+  }
+
+  :global(.map-popup__desc) {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    font-style: italic;
+    color: rgb(148, 163, 184);
   }
 
   :global(.cluster-marker--glow) {

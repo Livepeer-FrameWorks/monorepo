@@ -111,15 +111,15 @@ Map of cluster definitions for multi-cluster deployments. Each key is the cluste
 
 ```yaml
 clusters:
-  prod-control:
-    name: Production Control Plane
+  prod-platform:
+    name: Production Platform
     type: central
-    roles: [control, support, infra, mesh, interface, observability]
+    roles: [control, data, analytics, support, infra, mesh, interface, observability]
   prod-media:
     name: Production Media Plane
     type: central
     region: us-east
-    roles: [routing, analytics]
+    roles: [media]
 ```
 
 **Fields:**
@@ -129,7 +129,7 @@ clusters:
 - `region` (optional) - Region identifier
 - `roles` (optional) - Service roles that belong to this cluster. Used for automatic cluster resolution when services don't have an explicit `cluster` field.
 
-**Role-based resolution:** When a service doesn't specify `cluster`, the CLI matches the service's role (from the built-in service registry) against each cluster's `roles` list. For example, `foghorn` has role `routing`, so it resolves to whichever cluster lists `routing` in its roles.
+**Role-based resolution:** When a service doesn't specify `cluster`, the CLI matches the service's role (from the built-in service registry) against each cluster's `roles` list. For example, `foghorn` has role `media`, so it resolves to whichever cluster lists `media` in its roles. Available roles: `control`, `data`, `analytics`, `media`, `support`, `infra`, `mesh`, `interface`, `observability`.
 
 Resolution priority:
 

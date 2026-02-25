@@ -78,6 +78,7 @@
   .network-viz__map-wrapper {
     position: relative;
     z-index: 0;
+    overflow: hidden;
   }
 
   .network-viz__map {
@@ -87,11 +88,21 @@
 
   .network-viz .leaflet-container {
     background-color: rgb(15, 23, 42) !important;
-    overflow: visible !important;
   }
 
-  .network-viz .leaflet-tile-pane {
-    overflow: hidden;
+  /* Undo Tailwind Preflight resets that break Leaflet rendering */
+  .network-viz .leaflet-container img {
+    max-width: none !important;
+    max-height: none !important;
+  }
+
+  .network-viz .leaflet-container svg {
+    max-width: none !important;
+    max-height: none !important;
+  }
+
+  .network-viz .leaflet-container * {
+    border-style: none;
   }
 
   .network-viz .leaflet-control-attribution {
@@ -224,23 +235,116 @@
     opacity: 0.8;
   }
 
-  /* --- Dark tooltips (matches RoutingMap.svelte) --- */
-  .network-viz__tooltip {
+  /* --- Dark popups --- */
+  .network-viz__popup {
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.5));
+  }
+
+  .network-viz__popup .leaflet-popup-content-wrapper {
     background-color: rgb(30, 41, 59) !important;
     border: 1px solid rgb(51, 65, 85) !important;
     color: rgb(226, 232, 240) !important;
-    border-radius: 4px !important;
-    font-size: 0.75rem;
+    border-radius: 6px !important;
+    font-size: 0.8rem;
     line-height: 1.5;
-    padding: 0.4rem 0.6rem !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
-    max-width: 320px;
-    white-space: normal;
-    word-wrap: break-word;
+    padding: 0 !important;
   }
 
-  .network-viz__tooltip::before {
-    border-top-color: rgb(51, 65, 85) !important;
+  .network-viz__popup .leaflet-popup-content {
+    margin: 0 !important;
+    width: auto !important;
+  }
+
+  .network-viz__popup .leaflet-popup-tip {
+    background-color: rgb(30, 41, 59) !important;
+    border: 1px solid rgb(51, 65, 85) !important;
+    border-top: none !important;
+    border-left: none !important;
+  }
+
+  .network-viz__popup .leaflet-popup-close-button {
+    color: rgb(148, 163, 184) !important;
+    font-size: 1.1rem !important;
+    top: 6px !important;
+    right: 8px !important;
+  }
+
+  .network-viz__popup .leaflet-popup-close-button:hover {
+    color: rgb(226, 232, 240) !important;
+  }
+
+  .map-popup {
+    padding: 0.75rem 1rem;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .map-popup__title {
+    font-weight: 600;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+    color: rgb(241, 245, 249);
+  }
+
+  .map-popup__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+
+  .map-popup__table tr + tr {
+    border-top: 1px solid rgba(51, 65, 85, 0.3);
+  }
+
+  .map-popup__label {
+    color: rgb(148, 163, 184);
+    padding: 0.2rem 0.75rem 0.2rem 0;
+    white-space: nowrap;
+    vertical-align: top;
+  }
+
+  .map-popup__value {
+    color: rgb(226, 232, 240);
+    padding: 0.2rem 0;
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .map-popup__section-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgb(100, 116, 139);
+    margin-top: 0.6rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .map-popup__tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+  }
+
+  .map-popup__tag {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.65rem;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 3px;
+    color: rgb(147, 197, 253);
+  }
+
+  .map-popup__desc {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    font-style: italic;
+    color: rgb(148, 163, 184);
   }
 
   /* --- Data pulse markers --- */

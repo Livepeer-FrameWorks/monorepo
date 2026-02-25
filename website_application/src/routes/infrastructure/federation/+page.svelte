@@ -107,6 +107,24 @@
     }))
   );
 
+  // Network status for header
+  const STATUS_COLORS: Record<string, string> = {
+    healthy: "rgb(34, 197, 94)",
+    degraded: "rgb(234, 179, 8)",
+    down: "rgb(239, 68, 68)",
+  };
+  let networkStatus = $derived(
+    clusters.every((c) => c.status === "healthy")
+      ? "healthy"
+      : clusters.some((c) => c.status === "down")
+        ? "down"
+        : "degraded"
+  );
+  let networkStatusColor = $derived(STATUS_COLORS[networkStatus] ?? "rgb(148, 163, 184)");
+  let networkStatusLabel = $derived(
+    networkStatus === "healthy" ? "OPERATIONAL" : networkStatus === "degraded" ? "DEGRADED" : "DOWN"
+  );
+
   // Build cluster geo lookup for relationship lines
   let clusterGeoMap = $derived.by(() => {
     const m = new SvelteMap<string, { lat: number; lng: number }>();
@@ -448,6 +466,25 @@
             </p>
           </div>
           <div class="slab-body">
+            <!-- Live Network header -->
+            <div
+              class="flex items-center justify-between px-4 py-2 border-b border-border/30 bg-gradient-to-r from-[hsl(var(--tn-cyan)/0.08)] to-transparent"
+            >
+              <div class="flex items-center gap-2">
+                <span
+                  class="w-2 h-2 rounded-full"
+                  style="background: {networkStatusColor}; box-shadow: 0 0 6px {networkStatusColor};"
+                ></span>
+                <span class="text-sm font-semibold text-foreground">Live Network</span>
+              </div>
+              <span
+                class="text-[0.6rem] font-bold tracking-widest uppercase px-2 py-0.5 border"
+                style="border-color: {networkStatusColor}; color: {networkStatusColor};"
+              >
+                {networkStatusLabel}
+              </span>
+            </div>
+
             <RoutingMap
               routes={[]}
               nodes={mapNodes}
@@ -457,6 +494,17 @@
               height={450}
               zoom={2}
             />
+
+            <!-- Summary footer -->
+            <div
+              class="flex items-center flex-wrap gap-2.5 px-4 py-2 border-t border-border/30 text-xs text-muted-foreground"
+            >
+              <span>{healthyNodes}/{totalNodes} Nodes</span>
+              <span class="w-1 h-1 rounded-full bg-muted-foreground/40"></span>
+              <span>{clusters.length} Clusters</span>
+              <span class="w-1 h-1 rounded-full bg-muted-foreground/40"></span>
+              <span>{peerConnections.filter((p) => p.connected).length} Peered</span>
+            </div>
           </div>
         </div>
 

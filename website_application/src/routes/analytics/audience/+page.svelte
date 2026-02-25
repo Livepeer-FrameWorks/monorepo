@@ -206,7 +206,12 @@
       score: number | null | undefined;
       details: string | null | undefined;
     }[] = [];
-    const bucketPolys: { id: string; coords: [number, number][]; kind: "client" | "node" }[] = [];
+    const bucketPolys: {
+      id: string;
+      coords: [number, number][];
+      kind: "client" | "node";
+      stats?: { count?: number; successRate?: number; avgDistance?: number };
+    }[] = [];
     const bucketSeen: Record<string, boolean> = {};
     const bucketStats: Record<
       string,
@@ -283,6 +288,19 @@
         }
       }
     });
+
+    // Attach accumulated stats to bucket polygons
+    for (const bp of bucketPolys) {
+      const h3Key = bp.id.slice(2); // strip c- or n- prefix
+      const stat = bucketStats[h3Key];
+      if (stat && stat.count > 0) {
+        bp.stats = {
+          count: stat.count,
+          successRate: stat.count > 0 ? stat.success / stat.count : undefined,
+          avgDistance: stat.count > 0 ? stat.distanceSum / stat.count : undefined,
+        };
+      }
+    }
 
     // Only pass nodes that are actually involved in routes or available
     const displayNodes = Object.values(nodeMap);
