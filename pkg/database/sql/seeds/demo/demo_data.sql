@@ -135,12 +135,27 @@ INSERT INTO quartermaster.infrastructure_nodes (
     latitude = EXCLUDED.latitude,
     longitude = EXCLUDED.longitude;
 
--- Control plane node for Docker dev (services link to this via NODE_ID)
+-- Control plane node for Docker dev (bridge, commodore, purser, quartermaster, skipper)
 INSERT INTO quartermaster.infrastructure_nodes (
     node_id, cluster_id, node_name, node_type, status,
     region, external_ip, internal_ip, latitude, longitude, tags, metadata
 ) VALUES (
-    'central-node-1', 'central-primary', 'central-node-1', 'control', 'active',
+    'central-node-1', 'central-control', 'central-node-1', 'control', 'active',
+    'Amsterdam', '127.0.0.1', '127.0.0.1', 52.3676, 4.9041, '{}', '{}'
+) ON CONFLICT (node_id) DO UPDATE SET
+    cluster_id = EXCLUDED.cluster_id,
+    region = EXCLUDED.region,
+    external_ip = EXCLUDED.external_ip,
+    internal_ip = EXCLUDED.internal_ip,
+    latitude = EXCLUDED.latitude,
+    longitude = EXCLUDED.longitude;
+
+-- Media plane node for Docker dev (decklog, signalman, periscope-ingest, periscope-query)
+INSERT INTO quartermaster.infrastructure_nodes (
+    node_id, cluster_id, node_name, node_type, status,
+    region, external_ip, internal_ip, latitude, longitude, tags, metadata
+) VALUES (
+    'central-media-1', 'central-primary', 'central-media-1', 'media', 'active',
     'Amsterdam', '127.0.0.1', '127.0.0.1', 52.3676, 4.9041, '{}', '{}'
 ) ON CONFLICT (node_id) DO UPDATE SET
     region = EXCLUDED.region,

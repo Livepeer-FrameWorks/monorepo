@@ -275,6 +275,7 @@ func (s *CrawlScheduler) persistSitemapMeta(ctx context.Context, sitemapPages ma
 	if s.pageCache == nil {
 		return
 	}
+	seen := make(map[string]struct{})
 	var newEntries []PageCache
 	for sitemapURL, pages := range sitemapPages {
 		for _, p := range pages {
@@ -283,6 +284,10 @@ func (s *CrawlScheduler) persistSitemapMeta(ctx context.Context, sitemapPages ma
 					continue
 				}
 			}
+			if _, dup := seen[p.URL]; dup {
+				continue
+			}
+			seen[p.URL] = struct{}{}
 			newEntries = append(newEntries, PageCache{
 				TenantID:          s.tenantID,
 				SourceRoot:        sitemapURL,
