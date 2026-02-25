@@ -21,6 +21,7 @@ version: v1
 type: cluster
 profile: production
 hosts: {}
+clusters: {}
 wireguard: {}
 infrastructure: {}
 services: {}
@@ -99,6 +100,49 @@ hosts:
 - `ssh_key` (optional) - Path to SSH private key
 - `roles` (optional) - Arbitrary tags used for human grouping
 - `labels` (optional) - Free-form metadata
+
+---
+
+### clusters
+
+Map of cluster definitions for multi-cluster deployments. Each key is the cluster ID that will be registered in Quartermaster.
+
+**Format:**
+
+```yaml
+clusters:
+  prod-control:
+    name: Production Control Plane
+    type: central
+    roles: [control, support, infra, mesh, interface, observability]
+  prod-media:
+    name: Production Media Plane
+    type: central
+    region: us-east
+    roles: [routing, analytics]
+```
+
+**Fields:**
+
+- `name` (required) - Display name for the cluster
+- `type` (required) - Cluster type: `central`, `edge`, etc.
+- `region` (optional) - Region identifier
+- `roles` (optional) - Service roles that belong to this cluster. Used for automatic cluster resolution when services don't have an explicit `cluster` field.
+
+**Role-based resolution:** When a service doesn't specify `cluster`, the CLI matches the service's role (from the built-in service registry) against each cluster's `roles` list. For example, `foghorn` has role `routing`, so it resolves to whichever cluster lists `routing` in its roles.
+
+Resolution priority:
+
+1. Explicit `cluster` field on the service
+2. Role match against cluster `roles`
+3. If only one cluster is defined, use it
+4. Fallback: `{type}-{profile}` (backward-compatible)
+
+<Aside type="tip">
+  If you omit the `clusters` section entirely, the CLI creates a single cluster with ID `{type}-
+  {profile}` (e.g., `cluster-production`). This is the legacy behavior and works for single-cluster
+  deployments.
+</Aside>
 
 ---
 
@@ -288,6 +332,7 @@ services:
 - `image` (optional) - Docker image (docker mode)
 - `binary_url` (optional) - Binary download URL (native mode)
 - `deploy` (optional) - Override deploy slug (container/binary name)
+- `cluster` (optional) - Explicit cluster assignment. Must reference a key in `clusters`. When omitted, the service's role determines its cluster automatically
 - `host` (optional) - Single host
 - `hosts` (optional) - Multiple hosts for replicas
 - `replicas` (optional) - Replica count
@@ -349,5 +394,8 @@ The CLI validates:
 
 - Required fields (`version`, `type`, hosts)
 - Host references used by infrastructure/services/interfaces
+- If `clusters` is present, each entry must have `name` and `type`
+- If a service sets `cluster`, it must reference a defined cluster key
+- Cluster IDs (map keys) must be non-empty strings
 
 Unknown keys are ignored by the parser, but it’s best to keep manifests minimal and aligned with the schema above.

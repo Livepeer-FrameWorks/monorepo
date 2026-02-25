@@ -118,7 +118,11 @@ func runProvision(cmd *cobra.Command, manifestPath, only string, dryRun, force, 
 	for i, batch := range plan.Batches {
 		fmt.Fprintf(cmd.OutOrStdout(), "  Batch %d (parallel):\n", i+1)
 		for _, task := range batch {
-			fmt.Fprintf(cmd.OutOrStdout(), "    - %s (%s) on %s\n", task.Name, task.Type, task.Host)
+			if task.ClusterID != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "    - %s (%s) on %s [cluster: %s]\n", task.Name, task.Type, task.Host, task.ClusterID)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "    - %s (%s) on %s\n", task.Name, task.Type, task.Host)
+			}
 		}
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "\nTotal tasks: %d\n\n", len(plan.AllTasks))
@@ -194,7 +198,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			// Bootstrap Logic: Run after Quartermaster is healthy
 			if task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-				token, serviceToken, qmGRPCAddr, err := runBootstrap(ctx, manifest)
+				result, err := runBootstrap(ctx, manifest)
 				if err != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Bootstrap failed: %v\n", err)
 					fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
@@ -202,13 +206,18 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 					return fmt.Errorf("bootstrap failed: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "    ✓ System Tenant bootstrapped")
-				// Store token and gRPC address for Privateer
-				runtimeData["enrollment_token"] = token
-				if serviceToken != "" {
-					runtimeData["service_token"] = serviceToken
+				// Store tokens and gRPC address for downstream services
+				runtimeData["enrollment_tokens"] = result.EnrollmentTokens
+				// Backward-compatible: first token as flat string
+				for _, token := range result.EnrollmentTokens {
+					runtimeData["enrollment_token"] = token
+					break
 				}
-				if qmGRPCAddr != "" {
-					runtimeData["quartermaster_grpc_addr"] = qmGRPCAddr
+				if result.ServiceToken != "" {
+					runtimeData["service_token"] = result.ServiceToken
+				}
+				if result.QMGRPCAddr != "" {
+					runtimeData["quartermaster_grpc_addr"] = result.QMGRPCAddr
 				}
 			}
 
@@ -232,6 +241,11 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 
 	config.DeployName = task.Type
+
+	// Inject cluster ID from resolved task
+	if task.ClusterID != "" {
+		config.Metadata["cluster_id"] = task.ClusterID
+	}
 
 	// Copy runtime data
 	for k, v := range runtimeData {
@@ -619,8 +633,15 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	return nil
 }
 
-// runBootstrap connects to Quartermaster and generates an infrastructure token
-func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, string, string, error) {
+// bootstrapResult holds the output of the cluster bootstrap process
+type bootstrapResult struct {
+	EnrollmentTokens map[string]string // clusterID -> token
+	ServiceToken     string
+	QMGRPCAddr       string
+}
+
+// runBootstrap connects to Quartermaster and generates infrastructure tokens
+func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrapResult, error) {
 	serviceToken := os.Getenv("SERVICE_TOKEN")
 	if serviceToken == "" {
 		if cfg, _, err := fwcfg.Load(); err == nil {
@@ -630,7 +651,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		}
 	}
 	if serviceToken == "" {
-		return "", "", "", fmt.Errorf("service token required for bootstrapping (set SERVICE_TOKEN or run 'frameworks login')")
+		return nil, fmt.Errorf("service token required for bootstrapping (set SERVICE_TOKEN or run 'frameworks login')")
 	}
 
 	var qmHost string
@@ -648,7 +669,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 
 	host, ok := manifest.GetHost(qmHost)
 	if !ok {
-		return "", "", "", fmt.Errorf("quartermaster host not found in manifest")
+		return nil, fmt.Errorf("quartermaster host not found in manifest")
 	}
 
 	// Use gRPC client instead of HTTP
@@ -663,7 +684,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		ServiceToken: serviceToken,
 	})
 	if err != nil {
-		return "", "", "", fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
+		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
 	defer client.Close()
 
@@ -671,7 +692,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 	var systemTenantID string
 	tenantsResp, err := client.ListTenants(ctx, nil)
 	if err != nil {
-		return "", "", "", fmt.Errorf("failed to get tenants from Quartermaster: %w", err)
+		return nil, fmt.Errorf("failed to get tenants from Quartermaster: %w", err)
 	}
 
 	for _, t := range tenantsResp.Tenants {
@@ -691,7 +712,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		}
 		createTenantResp, errCreate := client.CreateTenant(ctx, createTenantReq)
 		if errCreate != nil {
-			return "", "", "", fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", errCreate)
+			return nil, fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", errCreate)
 		}
 		systemTenantID = createTenantResp.Tenant.Id
 		fmt.Printf("    ✓ Created System Tenant with ID: %s\n", systemTenantID)
@@ -699,14 +720,13 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		fmt.Printf("  ✓ 'FrameWorks' System Tenant already exists: %s\n", systemTenantID)
 	}
 
-	// 2. Ensure Cluster is Registered
-	clusterID := fmt.Sprintf("%s-%s", manifest.Type, manifest.Profile)
+	// 2. Register all clusters
+	clusterIDs := manifest.AllClusterIDs()
 	basePort := 18002
 	if qmSvc.Port != 0 {
 		basePort = qmSvc.Port
 	}
 	baseURL := fmt.Sprintf("http://%s:%d", host.Address, basePort)
-	// Prefer Bridge (Gateway) public URL if present in manifest
 	if bridgeSvc, ok := manifest.Services["bridge"]; ok && bridgeSvc.Enabled {
 		if bridgeSvc.Port != 0 {
 			if bridgeHost, ok := manifest.GetHost(bridgeSvc.Host); ok {
@@ -715,31 +735,55 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		}
 	}
 
-	// Check if cluster exists
-	_, err = client.GetCluster(ctx, clusterID)
-	if err != nil && strings.Contains(err.Error(), "cluster not found") { // Check specific error for not found
-		fmt.Printf("  Registering Cluster '%s'...\n", clusterID)
-		createClusterReq := &pb.CreateClusterRequest{
-			ClusterId:   clusterID,
-			ClusterName: fmt.Sprintf("FrameWorks %s %s Cluster", manifest.Type, manifest.Profile),
-			ClusterType: manifest.Type,
-			BaseUrl:     baseURL,
+	for _, clusterID := range clusterIDs {
+		clusterName := fmt.Sprintf("FrameWorks %s %s Cluster", manifest.Type, manifest.Profile)
+		clusterType := manifest.Type
+		if cc, ok := manifest.Clusters[clusterID]; ok {
+			clusterName = cc.Name
+			clusterType = cc.Type
 		}
-		_, err = client.CreateCluster(ctx, createClusterReq)
-		if err != nil {
-			return "", "", "", fmt.Errorf("failed to register cluster '%s': %w", clusterID, err)
+
+		_, err = client.GetCluster(ctx, clusterID)
+		if err != nil && strings.Contains(err.Error(), "cluster not found") {
+			fmt.Printf("  Registering Cluster '%s'...\n", clusterID)
+			_, err = client.CreateCluster(ctx, &pb.CreateClusterRequest{
+				ClusterId:   clusterID,
+				ClusterName: clusterName,
+				ClusterType: clusterType,
+				BaseUrl:     baseURL,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to register cluster '%s': %w", clusterID, err)
+			}
+			fmt.Printf("    ✓ Registered Cluster: %s\n", clusterID)
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to check cluster '%s': %w", clusterID, err)
+		} else {
+			fmt.Printf("  ✓ Cluster '%s' already registered.\n", clusterID)
 		}
-		fmt.Printf("    ✓ Registered Cluster: %s\n", clusterID)
-	} else if err != nil {
-		return "", "", "", fmt.Errorf("failed to check cluster '%s': %w", clusterID, err)
-	} else {
-		fmt.Printf("  ✓ Cluster '%s' already registered.\n", clusterID)
 	}
 
-	// 3. Register infrastructure nodes from manifest
+	// 3. Register infrastructure nodes
+	// Determine which cluster each host belongs to based on its services
 	fmt.Printf("  Registering infrastructure nodes...\n")
+	hostClusters := make(map[string]string) // hostName -> clusterID
+	for name, svc := range manifest.Services {
+		if !svc.Enabled {
+			continue
+		}
+		clusterID := manifest.ResolveCluster(name)
+		hostName := svc.Host
+		if hostName == "" && len(svc.Hosts) > 0 {
+			hostName = svc.Hosts[0]
+		}
+		if hostName != "" {
+			if _, exists := hostClusters[hostName]; !exists {
+				hostClusters[hostName] = clusterID
+			}
+		}
+	}
+
 	for hostName, hostInfo := range manifest.Hosts {
-		// Determine node type from roles
 		nodeType := "core"
 		for _, role := range hostInfo.Roles {
 			if role == "edge" {
@@ -748,25 +792,29 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 			}
 		}
 
+		nodeCluster := clusterIDs[0]
+		if resolved, ok := hostClusters[hostName]; ok {
+			nodeCluster = resolved
+		}
+
 		externalIP := hostInfo.Address
 		if hostInfo.ExternalIP != "" {
 			externalIP = hostInfo.ExternalIP
 		}
 		_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
 			NodeId:     hostName,
-			ClusterId:  clusterID,
+			ClusterId:  nodeCluster,
 			NodeName:   hostName,
 			NodeType:   nodeType,
 			ExternalIp: &externalIP,
 		})
 		if errCreate != nil {
-			// Ignore duplicate errors (node already exists)
 			if !strings.Contains(errCreate.Error(), "duplicate") && !strings.Contains(errCreate.Error(), "already exists") {
-				return "", "", "", fmt.Errorf("failed to register node %s: %w", hostName, errCreate)
+				return nil, fmt.Errorf("failed to register node %s: %w", hostName, errCreate)
 			}
 			fmt.Printf("    ✓ Node already exists: %s\n", hostName)
 		} else {
-			fmt.Printf("    ✓ Registered node: %s (%s)\n", hostName, nodeType)
+			fmt.Printf("    ✓ Registered node: %s (%s) -> cluster %s\n", hostName, nodeType, nodeCluster)
 		}
 	}
 
@@ -795,18 +843,19 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		if hostInfo.ExternalIP != "" {
 			externalIP = hostInfo.ExternalIP
 		}
+		svcCluster := manifest.ResolveCluster(name)
 		nodeID := fmt.Sprintf("%s-%s", hostName, serviceType)
 		nodeName := fmt.Sprintf("%s-%s", hostName, serviceType)
 		_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
 			NodeId:     nodeID,
-			ClusterId:  clusterID,
+			ClusterId:  svcCluster,
 			NodeName:   nodeName,
 			NodeType:   serviceType,
 			ExternalIp: &externalIP,
 		})
 		if errCreate != nil {
 			if !strings.Contains(errCreate.Error(), "duplicate") && !strings.Contains(errCreate.Error(), "already exists") {
-				return "", "", "", fmt.Errorf("failed to register public node %s: %w", nodeID, errCreate)
+				return nil, fmt.Errorf("failed to register public node %s: %w", nodeID, errCreate)
 			}
 			fmt.Printf("    ✓ Public node already exists: %s\n", nodeID)
 		} else {
@@ -836,18 +885,19 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		if hostInfo.ExternalIP != "" {
 			externalIP = hostInfo.ExternalIP
 		}
+		ifaceCluster := manifest.ResolveCluster(name)
 		nodeID := fmt.Sprintf("%s-%s", hostName, serviceType)
 		nodeName := fmt.Sprintf("%s-%s", hostName, serviceType)
 		_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
 			NodeId:     nodeID,
-			ClusterId:  clusterID,
+			ClusterId:  ifaceCluster,
 			NodeName:   nodeName,
 			NodeType:   serviceType,
 			ExternalIp: &externalIP,
 		})
 		if errCreate != nil {
 			if !strings.Contains(errCreate.Error(), "duplicate") && !strings.Contains(errCreate.Error(), "already exists") {
-				return "", "", "", fmt.Errorf("failed to register public node %s: %w", nodeID, errCreate)
+				return nil, fmt.Errorf("failed to register public node %s: %w", nodeID, errCreate)
 			}
 			fmt.Printf("    ✓ Public node already exists: %s\n", nodeID)
 		} else {
@@ -855,23 +905,30 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		}
 	}
 
-	// 4. Generate Infrastructure Token
-	fmt.Printf("  Generating Infrastructure Enrollment Token...\n")
-	infrastructureTokenReq := &pb.CreateBootstrapTokenRequest{
-		Name:      fmt.Sprintf("Infrastructure Enrollment Token for %s", clusterID),
-		Kind:      "infrastructure_node", // Using the new kind
-		Ttl:       "720h",                // Valid for 30 days
-		TenantId:  &systemTenantID,
-		ClusterId: &clusterID,
+	// 4. Generate per-cluster enrollment tokens
+	enrollmentTokens := make(map[string]string)
+	fmt.Printf("  Generating Infrastructure Enrollment Tokens...\n")
+	for _, clusterID := range clusterIDs {
+		cid := clusterID
+		resp, errToken := client.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
+			Name:      fmt.Sprintf("Infrastructure Enrollment Token for %s", cid),
+			Kind:      "infrastructure_node",
+			Ttl:       "720h",
+			TenantId:  &systemTenantID,
+			ClusterId: &cid,
+		})
+		if errToken != nil {
+			return nil, fmt.Errorf("failed to create bootstrap token for cluster '%s': %w", cid, errToken)
+		}
+		enrollmentTokens[cid] = resp.Token.Token
+		fmt.Printf("    ✓ Generated token for cluster %s: %s\n", cid, resp.Token.Id)
 	}
 
-	resp, errToken := client.CreateBootstrapToken(ctx, infrastructureTokenReq)
-	if errToken != nil {
-		return "", "", "", fmt.Errorf("failed to create infrastructure bootstrap token: %w", errToken)
-	}
-
-	fmt.Printf("    ✓ Generated Infrastructure Token: %s\n", resp.Token.Id)
-	return resp.Token.Token, serviceToken, grpcAddr, nil
+	return &bootstrapResult{
+		EnrollmentTokens: enrollmentTokens,
+		ServiceToken:     serviceToken,
+		QMGRPCAddr:       grpcAddr,
+	}, nil
 }
 
 // publicServiceType maps public-facing services to DNS subdomain names.

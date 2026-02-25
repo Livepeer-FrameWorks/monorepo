@@ -182,24 +182,25 @@ frameworks cluster provision --dry-run
 
 **Bootstrap Flow:**
 
-During provisioning, the CLI automatically bootstraps the system tenant and cluster:
+During provisioning, the CLI automatically bootstraps the system tenant and clusters:
 
 1. **Service Token Required:** Set `SERVICE_TOKEN` or log in with `frameworks login` so the CLI can authenticate to Quartermaster.
 
 2. **System Tenant Creation:** If the "FrameWorks" system tenant doesn't exist, it's created with deployment tier `global`.
 
-3. **Cluster Registration:** A cluster record is created in Quartermaster with:
-   - **Cluster ID:** Auto-generated as `{manifest.Type}-{manifest.Profile}` (e.g., `cluster-production`)
-   - **Cluster Name:** Derived from manifest type/profile
-   - **Cluster Type:** From manifest (`cluster` or `edge`)
-   - **Base URL:** Derived from Bridge if present; otherwise Quartermaster (`http://<host>:<port>`)
+3. **Cluster Registration:**
+   - If the manifest has a `clusters` section, one cluster record is created per entry. Cluster IDs come from the manifest keys (e.g., `prod-control`, `prod-media`).
+   - If there is no `clusters` section, a single cluster is created with ID `{type}-{profile}` (e.g., `cluster-production`).
+   - Each cluster is registered with its `name`, `type`, and base URL derived from Bridge (if present) or Quartermaster.
 
-4. **Infrastructure Bootstrap Token:** An infrastructure bootstrap token is created with:
+4. **Node Registration:** Each host is registered under the cluster(s) its services belong to. The CLI resolves cluster assignment per service using role-based matching (see [Cluster Manifest: clusters](/operators/cluster-manifest#clusters)).
+
+5. **Infrastructure Bootstrap Tokens:** One token is generated per cluster:
    - Kind: `infrastructure_node`
    - TTL: 720 hours (30 days)
    - Usage limit not set (defaults to single-use until used)
 
-**Important:** The auto-generated cluster ID format (`{type}-{profile}`) is needed when using:
+**Important:** When using `clusters`, IDs are explicit from the manifest. When not using `clusters`, the auto-generated format `{type}-{profile}` applies. These IDs are needed when using:
 
 - `admin bootstrap-tokens create --cluster-id`
 - `services discover --cluster-id`
@@ -789,7 +790,7 @@ Clusters (2)
  - FrameWorks Regional EU (id=regional-eu) type=regional url=http://10.1.1.10:18002
 ```
 
-**Note:** Cluster IDs are auto-generated during provisioning with format `{type}-{profile}`.
+**Note:** Cluster IDs are either explicit (from the `clusters` section of your manifest) or auto-generated as `{type}-{profile}` when no `clusters` section is defined.
 
 ---
 

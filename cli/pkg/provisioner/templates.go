@@ -27,6 +27,7 @@ type DockerComposeData struct {
 	Port        int
 	Ports       []string // Additional ports
 	EnvFile     string
+	Environment map[string]string // Inline environment variables
 	HealthCheck *HealthCheckConfig
 	Networks    []string
 	Volumes     []string
@@ -126,6 +127,9 @@ services:
 
     {{if .EnvFile}}env_file:
       - {{.EnvFile}}{{end}}
+
+    {{if .Environment}}environment:{{range $k, $v := .Environment}}
+      {{$k}}: "{{$v}}"{{end}}{{end}}
 
     {{if .HealthCheck}}healthcheck:
       test: [{{range $i, $v := .HealthCheck.Test}}{{if $i}}, {{end}}"{{$v}}"{{end}}]

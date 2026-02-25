@@ -25,7 +25,7 @@ cd cli/ && go build -o frameworks && sudo mv frameworks /usr/local/bin/
 # 2. Review prerequisites
 # See: /operators/prerequisites
 
-# 3. Create cluster manifest
+# 3. Create cluster manifest (define clusters for multi-cluster topologies)
 # See: /operators/cluster-manifest
 
 # 4. Deploy infrastructure
@@ -52,6 +52,13 @@ docker-compose up -d
 ```
 
 See root `README.md` for local endpoints and ports.
+
+<Aside type="tip">
+  For multi-cluster deployments (separate control and media planes, multiple regions), define a
+  `clusters` section in your manifest. The CLI creates all clusters, registers nodes under the
+  correct cluster, and injects `CLUSTER_ID` into each service. See the [Cluster Manifest
+  Reference](/operators/cluster-manifest#clusters) for details.
+</Aside>
 
 ## Deployment Paths
 

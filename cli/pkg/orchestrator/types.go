@@ -21,6 +21,7 @@ type Task struct {
 	Name       string
 	Type       string   // "postgres", "kafka", "quartermaster", etc.
 	Host       string   // Host name from manifest
+	ClusterID  string   // Resolved cluster for this task (empty for infrastructure)
 	DependsOn  []string // Task names this depends on
 	Phase      Phase
 	Idempotent bool // Can be run multiple times safely

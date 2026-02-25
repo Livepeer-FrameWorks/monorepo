@@ -3,6 +3,7 @@ package inventory
 import (
 	"fmt"
 	"os"
+	"sort"
 
 	"frameworks/cli/pkg/servicedefs"
 	"gopkg.in/yaml.v3"
@@ -83,6 +84,19 @@ func (m *Manifest) Validate() error {
 		}
 	}
 
+	// Validate clusters
+	for id, cluster := range m.Clusters {
+		if id == "" {
+			return fmt.Errorf("cluster ID must be non-empty")
+		}
+		if cluster.Name == "" {
+			return fmt.Errorf("cluster '%s': name is required", id)
+		}
+		if cluster.Type == "" {
+			return fmt.Errorf("cluster '%s': type is required", id)
+		}
+	}
+
 	// Validate service host references
 	for name, svc := range m.Services {
 		if _, ok := servicedefs.Lookup(name); !ok {
@@ -93,6 +107,11 @@ func (m *Manifest) Validate() error {
 		}
 		if _, ok := m.Observability[name]; ok {
 			return fmt.Errorf("service '%s' also defined in observability (duplicate name)", name)
+		}
+		if svc.Cluster != "" && len(m.Clusters) > 0 {
+			if _, ok := m.Clusters[svc.Cluster]; !ok {
+				return fmt.Errorf("service '%s' references undefined cluster '%s'", name, svc.Cluster)
+			}
 		}
 		if svc.Host != "" {
 			if _, ok := m.Hosts[svc.Host]; !ok {
@@ -166,6 +185,56 @@ func (m *Manifest) GetAllHosts() []string {
 		hosts = append(hosts, name)
 	}
 	return hosts
+}
+
+// ResolveCluster returns the cluster ID for a service.
+// Priority: explicit service.cluster > role-based match > single cluster > fallback.
+func (m *Manifest) ResolveCluster(serviceName string) string {
+	// Check explicit assignment on the service
+	if svc, ok := m.Services[serviceName]; ok && svc.Cluster != "" {
+		return svc.Cluster
+	}
+	if iface, ok := m.Interfaces[serviceName]; ok && iface.Cluster != "" {
+		return iface.Cluster
+	}
+
+	if len(m.Clusters) == 0 {
+		return fmt.Sprintf("%s-%s", m.Type, m.Profile)
+	}
+
+	// Role-based: match the service's role against cluster roles
+	if svcDef, ok := servicedefs.Lookup(serviceName); ok && svcDef.Role != "" {
+		for clusterID, cluster := range m.Clusters {
+			for _, role := range cluster.Roles {
+				if role == svcDef.Role {
+					return clusterID
+				}
+			}
+		}
+	}
+
+	// Single cluster defined — use it
+	if len(m.Clusters) == 1 {
+		for id := range m.Clusters {
+			return id
+		}
+	}
+
+	return fmt.Sprintf("%s-%s", m.Type, m.Profile)
+}
+
+// AllClusterIDs returns all cluster IDs from the manifest.
+// If no clusters section exists, returns the single auto-generated ID.
+func (m *Manifest) AllClusterIDs() []string {
+	if len(m.Clusters) == 0 {
+		return []string{fmt.Sprintf("%s-%s", m.Type, m.Profile)}
+	}
+	ids := make([]string, 0, len(m.Clusters))
+	for id := range m.Clusters {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // LoadEdgeManifest reads and parses an edge manifest file (edges.yaml)

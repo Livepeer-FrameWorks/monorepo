@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
@@ -134,11 +135,21 @@ func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventor
 		envFile = fmt.Sprintf("/etc/frameworks/%s.env", f.serviceName)
 	}
 
+	// Build inline environment from metadata (CLUSTER_ID, NODE_ID)
+	envVars := make(map[string]string)
+	if clusterID, ok := config.Metadata["cluster_id"].(string); ok && clusterID != "" {
+		envVars["CLUSTER_ID"] = clusterID
+	}
+	if nodeID, ok := config.Metadata["node_id"].(string); ok && nodeID != "" {
+		envVars["NODE_ID"] = nodeID
+	}
+
 	composeData := DockerComposeData{
 		ServiceName: f.serviceName,
 		Image:       svcInfo.FullImage, // image@sha256:digest format
 		Port:        port,
 		EnvFile:     envFile,
+		Environment: envVars,
 		HealthCheck: &HealthCheckConfig{
 			Test:     []string{"CMD", "curl", "-f", fmt.Sprintf("http://localhost:%d%s", port, f.healthPath)},
 			Interval: "30s",
@@ -243,6 +254,26 @@ echo "Binary installed"
 	result, errExec := f.ExecuteScript(ctx, host, installScript)
 	if errExec != nil || result.ExitCode != 0 {
 		return fmt.Errorf("failed to install binary: %w\nStderr: %s", errExec, result.Stderr)
+	}
+
+	// Ensure CLUSTER_ID and NODE_ID are in the env file
+	svcEnvFile := fmt.Sprintf("/etc/frameworks/%s.env", f.serviceName)
+	if config.EnvFile != "" {
+		svcEnvFile = config.EnvFile
+	}
+	var envAppend []string
+	if clusterID, ok := config.Metadata["cluster_id"].(string); ok && clusterID != "" {
+		envAppend = append(envAppend, fmt.Sprintf("CLUSTER_ID=%s", clusterID))
+	}
+	if nodeID, ok := config.Metadata["node_id"].(string); ok && nodeID != "" {
+		envAppend = append(envAppend, fmt.Sprintf("NODE_ID=%s", nodeID))
+	}
+	if len(envAppend) > 0 {
+		appendCmd := fmt.Sprintf("mkdir -p /etc/frameworks && printf '\\n%s\\n' >> %s",
+			strings.Join(envAppend, "\\n"), svcEnvFile)
+		if r, e := f.RunCommand(ctx, host, appendCmd); e != nil || r.ExitCode != 0 {
+			fmt.Printf("    Warning: could not append env vars to %s\n", svcEnvFile)
+		}
 	}
 
 	// Generate systemd unit

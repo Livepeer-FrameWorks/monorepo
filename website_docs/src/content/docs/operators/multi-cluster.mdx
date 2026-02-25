@@ -16,6 +16,8 @@ import { Aside } from "@astrojs/starlight/components";
 
 A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central control plane (Commodore, Quartermaster, Purser) and data plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
 
+While control and data plane services share infrastructure, they are registered under separate cluster IDs for operational visibility. The control plane cluster appears in the inventory and dashboard but does not participate in Foghorn federation.
+
 Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances.
 
 ---
@@ -34,6 +36,17 @@ Cross-cluster coordination is handled exclusively by the **FoghornFederation** g
 ## Cluster Lifecycle
 
 ### Creating a Cluster
+
+**Via CLI provisioning (recommended for full deployments):**
+
+```bash
+# Multi-cluster provisioning from manifest
+frameworks cluster provision --manifest cluster.yaml
+```
+
+When the manifest has a `clusters` section, the CLI creates all clusters, registers nodes to the correct cluster based on role-based resolution, and generates per-cluster enrollment tokens. See [Cluster Manifest: clusters](/operators/cluster-manifest#clusters) for the manifest format.
+
+**Via admin command (ad-hoc cluster creation):**
 
 ```bash
 frameworks admin clusters create \

@@ -7,11 +7,20 @@ type Manifest struct {
 	Profile string `yaml:"profile,omitempty"` // control-plane | regional | analytics-only | edge-gateway
 
 	Hosts          map[string]Host          `yaml:"hosts,omitempty"`
+	Clusters       map[string]ClusterConfig `yaml:"clusters,omitempty"`
 	WireGuard      *WireGuardConfig         `yaml:"wireguard,omitempty"`
 	Infrastructure InfrastructureConfig     `yaml:"infrastructure,omitempty"`
 	Services       map[string]ServiceConfig `yaml:"services,omitempty"`
 	Interfaces     map[string]ServiceConfig `yaml:"interfaces,omitempty"`
 	Observability  map[string]ServiceConfig `yaml:"observability,omitempty"`
+}
+
+// ClusterConfig defines a cluster to register in Quartermaster during provisioning
+type ClusterConfig struct {
+	Name   string   `yaml:"name"`
+	Type   string   `yaml:"type"` // central, edge, etc.
+	Region string   `yaml:"region,omitempty"`
+	Roles  []string `yaml:"roles,omitempty"` // control, routing, analytics, support
 }
 
 // Host represents a target machine
@@ -141,6 +150,7 @@ type ServiceConfig struct {
 	Image     string            `yaml:"image,omitempty"`      // For docker mode
 	BinaryURL string            `yaml:"binary_url,omitempty"` // For native mode
 	Deploy    string            `yaml:"deploy,omitempty"`     // Underlying service slug (container/binary name)
+	Cluster   string            `yaml:"cluster,omitempty"`    // Explicit cluster assignment
 	Host      string            `yaml:"host,omitempty"`       // Single host
 	Hosts     []string          `yaml:"hosts,omitempty"`      // Multiple hosts (for replicas)
 	Port      int               `yaml:"port,omitempty"`
