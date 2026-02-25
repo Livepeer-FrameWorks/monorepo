@@ -11,6 +11,7 @@ import {
   supportsPlaybackRate as coreSupportsPlaybackRate,
   getAvailableLocales,
   getLocaleDisplayName,
+  formatQualityLabel,
 } from "@livepeer-frameworks/player-core";
 import type { PlaybackMode, FwLocale } from "@livepeer-frameworks/player-core";
 import type { PlayerControllerHost } from "../controllers/player-controller-host.js";
@@ -152,7 +153,7 @@ export class FwSettingsMenu extends LitElement {
       .filter(([, track]) => track?.type === "video")
       .map(([id, track]) => ({
         id,
-        label: track.height ? `${track.height}p` : (track.codec ?? id),
+        label: formatQualityLabel(track.width, track.height, track.bps),
         width: track.width,
         height: track.height,
         bitrate: track.bps,

@@ -1,6 +1,7 @@
 import { BasePlayer } from "../core/PlayerInterface";
 import { checkProtocolMismatch, getBrowserInfo, isFileProtocol } from "../core/detector";
 import { translateCodec } from "../core/CodecUtils";
+import { formatQualityLabel } from "../core/TimeFormat";
 import type {
   StreamSource,
   StreamInfo,
@@ -620,7 +621,7 @@ export class DashJsPlayerImpl extends BasePlayer {
       representations.forEach((rep: any, i: number) => {
         out.push({
           id: String(i),
-          label: rep.height ? `${rep.height}p` : `${Math.round((rep.bandwidth || 0) / 1000)}kbps`,
+          label: formatQualityLabel(rep.width, rep.height, rep.bandwidth),
           bitrate: rep.bandwidth, // v5 uses 'bandwidth'
           width: rep.width,
           height: rep.height,

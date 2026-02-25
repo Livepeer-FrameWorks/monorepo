@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/player-svelte",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "description": "Svelte 5 components for FrameWorks streaming player",
   "svelte": "./dist/index.js",
@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@livepeer-frameworks/player-core": "workspace:*",
-    "bits-ui": "^2.15.5"
+    "bits-ui": "^2.16.2"
   },
   "peerDependencies": {
     "svelte": "^5.0.0"
@@ -41,8 +41,8 @@
     "@testing-library/svelte": "^5.3.1",
     "@vitest/coverage-v8": "^4.0.18",
     "jsdom": "^28.1.0",
-    "svelte": "^5.51.2",
-    "svelte-check": "^4.4.0",
+    "svelte": "^5.53.3",
+    "svelte-check": "^4.4.3",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vitest": "^4.0.18"

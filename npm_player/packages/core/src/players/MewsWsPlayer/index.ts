@@ -18,6 +18,7 @@ import { WebSocketManager } from "./WebSocketManager";
 import { SourceBufferManager } from "./SourceBufferManager";
 import { translateCodec } from "../../core/CodecUtils";
 import { getBrowserInfo, isFileProtocol, isIPadWithBrokenHEVC } from "../../core/detector";
+import { formatQualityLabel } from "../../core/TimeFormat";
 import type { MewsMessage, AnalyticsConfig, OnTimeMessage, MewsMessageListener } from "./types";
 
 export class MewsWsPlayerImpl extends BasePlayer {
@@ -76,6 +77,9 @@ export class MewsWsPlayerImpl extends BasePlayer {
   // Seeking state (ported from mews.js:1169-1175)
   private seeking = false;
 
+  // Autoplay option (mews.js:135-136 — checkReady calls play when autoplay is set)
+  private autoplay = false;
+
   // Seekable range from on_time messages (begin/end in ms)
   private seekableBeginMs: number | null = null;
   private seekableEndMs: number | null = null;
@@ -109,10 +113,8 @@ export class MewsWsPlayerImpl extends BasePlayer {
       return false;
     }
 
-    // Safari/macOS has MSE bugs with MEWS (seek/track switch).
-    // Upstream blocks all macOS — we narrow to Safari only so Chromium-based
-    // browsers (Brave, Chrome, Edge) can use MEWS on macOS.
-    if (browser.isSafari) {
+    // macOS MSE breaks MEWS playback (mews.js:23-26)
+    if (navigator.platform.toUpperCase().indexOf("MAC") >= 0) {
       return false;
     }
 
@@ -174,6 +176,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     video.setAttribute("crossorigin", "anonymous"); // mews.js:111
 
     // Apply options (mews.js:95-110)
+    this.autoplay = !!options.autoplay;
     if (options.autoplay) video.autoplay = true;
     if (options.muted) video.muted = true;
     video.controls = options.controls === true;
@@ -289,16 +292,9 @@ export class MewsWsPlayerImpl extends BasePlayer {
     // Request codec data (mews.js:885-902)
     const listener: MewsMessageListener = (msg) => {
       // Got codec data, set up source buffer
-      console.debug(
-        "[MEWS] codec_data received, codecs:",
-        msg.data?.codecs,
-        "MS readyState:",
-        this.mediaSource?.readyState
-      );
       if (this.mediaSource?.readyState === "open") {
         const codecs = msg.data?.codecs || [];
         const initialized = this.sbManager?.initWithCodecs(codecs);
-        console.debug("[MEWS] SB init:", initialized);
 
         if (initialized && !this.isReady) {
           this.isReady = true;
@@ -307,6 +303,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
             resolve();
           }
           this.readyResolvers = [];
+
+          // checkReady (mews.js:128-141): auto-play once WS + MS + SB are all ready
+          if (this.autoplay) {
+            this.play().catch(() => {});
+          }
         }
       }
       this.wsManager?.removeListener("codec_data", listener);
@@ -317,10 +318,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
     // Send request with SHORT codec names (mews.js:901)
     // CRITICAL: MistServer expects short names like "H264", not browser codec strings
-    console.debug(
-      "[MEWS] WS open, sending request_codec_data, supportedCodecs:",
-      this.supportedCodecs
-    );
     this.send({ type: "request_codec_data", supported_codecs: this.supportedCodecs });
   }
 
@@ -352,9 +349,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
     }
 
     // Binary data - MP4 segment (mews.js:802-829)
-    if (this.onTimeCount < 3) {
-      console.debug("[MEWS] binary data:", data.byteLength, "bytes");
-    }
     const bytes = new Uint8Array(data);
     this.sbManager?.append(bytes);
     this.trackBits(data);
@@ -426,21 +420,9 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Handle on_time message - playback time sync.
    * Ported from mews.js:473-621
    */
-  private onTimeCount = 0;
   private handleOnTime(msg: OnTimeMessage): void {
     const data = msg.data;
     if (!data || !this.videoElement) return;
-    if (this.onTimeCount++ < 3) {
-      console.debug(
-        "[MEWS] on_time #" + this.onTimeCount,
-        "current:",
-        data.current,
-        "end:",
-        data.end,
-        "buffered:",
-        this.videoElement.buffered.length
-      );
-    }
 
     const currentMs = data.current;
     const endMs = data.end;
@@ -709,12 +691,10 @@ export class MewsWsPlayerImpl extends BasePlayer {
     if (!v) return;
 
     // If already playing, nothing to do (mews.js:961-964)
-    console.debug("[MEWS] play() called, paused:", v.paused, "isReady:", this.isReady);
     if (!v.paused) return;
 
     // Wait for ready state (codec_data received) with timeout
     if (!this.isReady) {
-      console.debug("[MEWS] play() waiting for isReady...");
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("MEWS: Timeout waiting for codec data"));
@@ -724,7 +704,6 @@ export class MewsWsPlayerImpl extends BasePlayer {
           resolve();
         });
       });
-      console.debug("[MEWS] play() isReady resolved");
     }
 
     // Use listener to wait for on_time before playing (mews.js:973-1017)
@@ -791,9 +770,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
       // Send play command (mews.js:1020-1022)
       const skipToLive = this.streamType === "live" && v.currentTime === 0;
-      const cmd = skipToLive ? { type: "play", seek_time: "live" } : { type: "play" };
-      console.debug("[MEWS] sending play command:", cmd, "streamType:", this.streamType);
-      this.send(cmd);
+      if (skipToLive) {
+        this.send({ type: "play", seek_time: "live" });
+      } else {
+        this.send({ type: "play" });
+      }
     });
   }
 
@@ -899,8 +880,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       for (const track of this.streamInfoRef.meta.tracks) {
         if (track.type === "video" && track.idx !== undefined) {
           const id = String(track.idx);
-          const label =
-            track.width && track.height ? `${track.width}x${track.height}` : `Track ${id}`;
+          const label = formatQualityLabel(track.width, track.height, track.bps);
           qualities.push({ id, label, isAuto: false, active: this.selectedTrack === id });
         }
       }

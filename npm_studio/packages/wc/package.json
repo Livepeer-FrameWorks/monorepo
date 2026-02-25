@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-wc",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "type": "module",
   "description": "Lit Web Components for StreamCrafter - framework-agnostic streaming UI",
   "main": "dist/esm/index.js",
@@ -42,7 +42,7 @@
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^12.3.0",
-    "rollup": "^4.57.1",
+    "rollup": "^4.59.0",
     "rollup-plugin-copy": "^3.5.0",
     "tslib": "^2.8.1",
     "typescript": "^5.9.3",

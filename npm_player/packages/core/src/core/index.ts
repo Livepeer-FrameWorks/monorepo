@@ -177,6 +177,7 @@ export {
   formatTooltipTime,
   formatDuration,
   parseTime,
+  formatQualityLabel,
 } from "./TimeFormat";
 export type { TimeDisplayParams } from "./TimeFormat";
 

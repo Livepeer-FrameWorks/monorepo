@@ -1,6 +1,7 @@
 import { BasePlayer } from "../core/PlayerInterface";
 import { checkProtocolMismatch, getBrowserInfo, isFileProtocol } from "../core/detector";
 import { translateCodec } from "../core/CodecUtils";
+import { formatQualityLabel } from "../core/TimeFormat";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import type {
   StreamSource,
@@ -353,7 +354,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
     levels.forEach((lvl: any, idx: number) => {
       qualities.push({
         id: String(idx),
-        label: lvl.height ? `${lvl.height}p` : `${Math.round((lvl.bitrate || 0) / 1000)}kbps`,
+        label: formatQualityLabel(lvl.width, lvl.height, lvl.bitrate),
         bitrate: lvl.bitrate,
         width: lvl.width,
         height: lvl.height,

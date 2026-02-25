@@ -6,6 +6,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
   IngestControllerV2,
   type IngestControllerConfigV2,
+  type IngestControllerEventsV2,
   type IngestState,
   type IngestStateContextV2,
   type IngestStats,
@@ -383,6 +384,34 @@ export class IngestControllerHost implements ReactiveController {
 
   setEncoderOverrides(overrides: EncoderOverrides) {
     this.controller?.setEncoderOverrides(overrides);
+  }
+
+  // ---- Compatibility Helpers ----
+
+  /** Return current ingest state string. */
+  getState(): IngestState {
+    return this.s.state;
+  }
+
+  /** Return whether the stream is currently live. */
+  isStreaming(): boolean {
+    return this.s.isStreaming;
+  }
+
+  /** Return current source list snapshot. */
+  getSources(): MediaSource[] {
+    return this.s.sources;
+  }
+
+  /** Subscribe to underlying controller events. */
+  on<K extends keyof IngestControllerEventsV2>(
+    event: K,
+    handler: (payload: IngestControllerEventsV2[K]) => void
+  ): () => void;
+  on(event: string, handler: (...args: any[]) => void): () => void;
+  on(event: string, handler: (...args: any[]) => void): () => void {
+    if (!this.controller) return () => {};
+    return this.controller.on(event as any, handler as any);
   }
 
   // ---- Controller Access ----

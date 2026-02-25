@@ -26,6 +26,7 @@ export interface StreamTrack {
   width?: number;
   height?: number;
   fpks?: number; // frames per kilosecond
+  bps?: number; // bitrate (bytes per second, from MistServer metadata)
   // Audio-specific
   channels?: number;
   rate?: number; // sample rate

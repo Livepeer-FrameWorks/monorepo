@@ -203,3 +203,17 @@ export function parseTime(timeStr: string): number {
 
   return NaN;
 }
+
+/**
+ * Format a quality label from resolution and bitrate.
+ * Examples: "1920x1080 8.0 Mbps", "800x600 2.5 Mbps", "1200 kbps"
+ */
+export function formatQualityLabel(width?: number, height?: number, bitrate?: number): string {
+  const res = width && height ? `${width}x${height}` : "";
+  if (!bitrate) return res || "Unknown";
+  const bps =
+    bitrate >= 1_000_000
+      ? `${(bitrate / 1_000_000).toFixed(1)} Mbps`
+      : `${Math.round(bitrate / 1000)} kbps`;
+  return res ? `${res} ${bps}` : bps;
+}
