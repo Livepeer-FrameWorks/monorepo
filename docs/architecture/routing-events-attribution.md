@@ -1,6 +1,6 @@
 # Routing Events: Tenant + Cluster Attribution
 
-- **Last updated:** 2025-12-18
+- **Status:** Living document.
 - **Scope:** Routing decision telemetry (viewer endpoint resolution) emitted by Foghorn and queried via Periscope/Bridge.
 
 ## Summary
@@ -21,8 +21,8 @@ This document explains the **current** attribution model:
 
 Routing decisions are sent as `LoadBalancingData` inside a `MistTrigger` envelope:
 
-- `pkg/proto/ipc.proto` (`message LoadBalancingData`)
-- `pkg/clients/decklog/client.go` (`SendLoadBalancing` wraps into `MistTrigger_LoadBalancingData`)
+- `pkg/proto` (`message LoadBalancingData`)
+- `pkg/clients/decklog` (`SendLoadBalancing` wraps into `MistTrigger_LoadBalancingData`)
 
 Key fields:
 
@@ -41,7 +41,7 @@ Privacy note:
 
 Routing events are stored in:
 
-- `pkg/database/sql/clickhouse/periscope.sql` (`CREATE TABLE routing_decisions`)
+- `pkg/database/sql/clickhouse` (`CREATE TABLE routing_decisions`)
 
 Columns include:
 
@@ -59,22 +59,22 @@ Foghorn emits routing events for **both** viewer-resolve paths.
 
 Generic viewer playback endpoints:
 
-- `api_balancing/cmd/foghorn/main.go` (routes `/play/*path` + `/resolve/*path`)
-- `api_balancing/internal/handlers/handlers.go` (`HandleGenericViewerPlayback`)
+- `api_balancing/cmd/foghorn` (routes `/play/*path` + `/resolve/*path`)
+- `api_balancing/internal/handlers` (`HandleGenericViewerPlayback`)
 
 Emission occurs after successful resolution:
 
-- `api_balancing/internal/handlers/handlers.go` (`emitViewerRoutingEvent`)
+- `api_balancing/internal/handlers` (`emitViewerRoutingEvent`)
 
 ### 2) gRPC `ResolveViewerEndpoint`
 
 gRPC viewer endpoint resolution:
 
-- `api_balancing/internal/grpc/server.go` (`ResolveViewerEndpoint`)
+- `api_balancing/internal/grpc` (`ResolveViewerEndpoint`)
 
 Emission occurs after successful resolution:
 
-- `api_balancing/internal/grpc/server.go` (`(*FoghornGRPCServer).emitRoutingEvent`)
+- `api_balancing/internal/grpc` (`(*FoghornGRPCServer).emitRoutingEvent`)
 
 ## How attribution values are determined
 
@@ -82,31 +82,31 @@ Emission occurs after successful resolution:
 
 Foghorn reads `CLUSTER_ID` from environment and also caches the cluster id returned by Quartermaster during bootstrap:
 
-- `api_balancing/internal/handlers/handlers.go` (`Init` bootstraps service and caches `clusterID`)
+- `api_balancing/internal/handlers` (`Init` bootstraps service and caches `clusterID`)
 
 Quartermaster bootstrap request supports explicit cluster binding:
 
-- `pkg/proto/quartermaster.proto` (`BootstrapServiceRequest.cluster_id`)
-- `api_tenants/internal/grpc/server.go` (`BootstrapService`)
+- `pkg/proto` (`BootstrapServiceRequest.cluster_id`)
+- `api_tenants/internal/grpc` (`BootstrapService`)
   - If multiple active clusters exist, `cluster_id` is required.
 
 ### `tenant_id` (infra owner tenant)
 
 Quartermaster returns the cluster owner tenant id in bootstrap response:
 
-- `pkg/proto/quartermaster.proto` (`BootstrapServiceResponse.owner_tenant_id`)
-- `api_tenants/internal/grpc/server.go` (`BootstrapService` populates it from `infrastructure_clusters.owner_tenant_id`)
+- `pkg/proto` (`BootstrapServiceResponse.owner_tenant_id`)
+- `api_tenants/internal/grpc` (`BootstrapService` populates it from `infrastructure_clusters.owner_tenant_id`)
 
 Foghorn caches this value and uses it as the routing event `tenant_id`:
 
-- `api_balancing/internal/handlers/handlers.go` (`ownerTenantID`)
+- `api_balancing/internal/handlers` (`ownerTenantID`)
 
 ### `stream_tenant_id` (subject tenant)
 
 Foghorn resolves the subject tenant from Commodore during content resolution:
 
-- `api_balancing/internal/control/playback.go` (`ResolveContent` returns `TenantId`)
-- `api_balancing/internal/control/resolver.go` (`ResolveStream` / Commodore resolution)
+- `api_balancing/internal/control` (`ResolveContent` returns `TenantId`)
+- `api_balancing/internal/control` (`ResolveStream` / Commodore resolution)
 
 This tenant is emitted as `LoadBalancingData.stream_tenant_id`.
 
@@ -116,19 +116,19 @@ This tenant is emitted as `LoadBalancingData.stream_tenant_id`.
 
 Decklog publishes routing events as Kafka analytics events with `event_type = "load_balancing"`:
 
-- `api_firehose/internal/grpc/server.go` (`unwrapMistTrigger` + `convertProtobufToKafkaEvent`)
+- `api_firehose/internal/grpc` (`unwrapMistTrigger` + `convertProtobufToKafkaEvent`)
 
 ### Periscope-Ingest → ClickHouse
 
 Periscope-Ingest writes routing events to ClickHouse:
 
-- `api_analytics_ingest/internal/handlers/handlers.go` (`processLoadBalancing`)
+- `api_analytics_ingest/internal/handlers` (`processLoadBalancing`)
 
 ### Periscope-Query → Bridge
 
 Periscope-Query reads routing events and supports optional filters:
 
-- `api_analytics_query/internal/grpc/server.go` (`GetRoutingEvents`)
+- `api_analytics_query/internal/grpc` (`GetRoutingEvents`)
   - provider-scope via `tenant_id` and `related_tenant_ids`
   - optional filters:
     - `stream_tenant_id`
@@ -136,14 +136,14 @@ Periscope-Query reads routing events and supports optional filters:
 
 Bridge GraphQL exposes routing events with the same filters:
 
-- `pkg/graphql/schema.graphql` (`routingEventsConnection(... subjectTenantId, clusterId ...)`)
-- `api_gateway/internal/resolvers/analytics_connections.go` (`DoGetRoutingEventsConnection`)
+- `pkg/graphql` (`routingEventsConnection(... subjectTenantId, clusterId ...)`)
+- `api_gateway/internal/resolvers` (`DoGetRoutingEventsConnection`)
 
 Subscription-based visibility (infra pool model):
 
 - Bridge gathers provider owner tenant IDs from Quartermaster subscriptions and passes them as `related_tenant_ids`:
-  - `api_gateway/internal/resolvers/analytics_connections.go`
-  - `api_gateway/internal/resolvers/analytics.go` (`loadRoutingEvents`)
+  - `api_gateway/internal/resolvers`
+  - `api_gateway/internal/resolvers` (`loadRoutingEvents`)
 
 Typical usage:
 
@@ -153,6 +153,6 @@ Typical usage:
 ## Troubleshooting
 
 - If routing events show `tenant_id = 00000000-0000-0000-0000-000000000000`, Foghorn likely emitted before caching `owner_tenant_id` or without cluster binding; check:
-  - `CLUSTER_ID` is set in env (`config/env/base.env`, `docker-compose.yml`)
+  - `CLUSTER_ID` is set in environment configuration (config env files + dev compose env wiring)
   - Quartermaster bootstrap response includes `owner_tenant_id`
-  - Foghorn logs around bootstrap in `api_balancing/internal/handlers/handlers.go`
+  - Foghorn logs around bootstrap in `api_balancing/internal/handlers`

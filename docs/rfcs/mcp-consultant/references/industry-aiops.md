@@ -1,6 +1,6 @@
 # Industry AIOps: LLM-Powered Observability (2025-2026)
 
-Research synthesized Feb 2026. Sources linked throughout.
+Research synthesized from current sources. Sources linked throughout.
 
 ## Proven Use Cases (Shipping, Measurable ROI)
 

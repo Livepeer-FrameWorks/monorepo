@@ -10,14 +10,14 @@ Draft
 - Edge accepts chat ingest and forwards upstream; origin is authoritative.
 - Requires MistServer DTSC changes + player integration.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - No chat data-track ingest path exists in this repo.
 - Player surfaces metadata tracks but does not render chat.
 
 Evidence:
 
-- `npm_player/packages/core/src/core/PlayerController.ts`
+- `npm_player/packages/core/src/core`
 - MistServer changes would be external to this repo.
 
 ## Problem / Motivation
@@ -72,5 +72,5 @@ We want low-latency, stream-synced chat that can be replayed with video and cons
 
 ## References, Sources & Evidence
 
-- `npm_player/packages/core/src/core/PlayerController.ts`
+- `npm_player/packages/core/src/core`
 - MistServer DTSC/JSON track docs (external)

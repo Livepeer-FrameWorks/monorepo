@@ -54,44 +54,44 @@ npm_studio/
 
 Framework-agnostic engine + types:
 
-- Orchestration: `npm_studio/packages/core/src/core/IngestControllerV2.ts`
-- WHIP/WebRTC client: `npm_studio/packages/core/src/core/WhipClient.ts`
-- Capture helpers: `npm_studio/packages/core/src/core/DeviceManager.ts`, `npm_studio/packages/core/src/core/ScreenCapture.ts`
-- Audio mixing: `npm_studio/packages/core/src/core/AudioMixer.ts`
-- Reconnect loop: `npm_studio/packages/core/src/core/ReconnectionManager.ts`
-- Compositor coordinator: `npm_studio/packages/core/src/core/SceneManager.ts` (+ `npm_studio/packages/core/src/core/renderers/*`)
-- WebCodecs: `npm_studio/packages/core/src/core/EncoderManager.ts` (+ worker)
-- Gateway endpoint resolution: `npm_studio/packages/core/src/core/IngestClient.ts`
+- Orchestration: `npm_studio/packages/core/src/core`
+- WHIP/WebRTC client: `npm_studio/packages/core/src/core`
+- Capture helpers: `npm_studio/packages/core/src/core`, `npm_studio/packages/core/src/core`
+- Audio mixing: `npm_studio/packages/core/src/core`
+- Reconnect loop: `npm_studio/packages/core/src/core`
+- Compositor coordinator: `npm_studio/packages/core/src/core` (+ `npm_studio/packages/core/src/core/renderers/*`)
+- WebCodecs: `npm_studio/packages/core/src/core` (+ worker)
+- Gateway endpoint resolution: `npm_studio/packages/core/src/core`
 - Styling: `npm_studio/packages/core/src/styles/streamcrafter.css`
 
-Worker bundles are emitted into `npm_studio/packages/core/dist/workers/*.js` by Rollup (see `npm_studio/packages/core/rollup.config.js`).
+Worker bundles are emitted into `npm_studio/packages/core/dist/workers` by Rollup (see `npm_studio/packages/core`).
 
 ### `@livepeer-frameworks/streamcrafter-react`
 
 React integration:
 
-- Main hook: `npm_studio/packages/react/src/hooks/useStreamCrafterV2.ts`
-- Drop-in UI: `npm_studio/packages/react/src/components/StreamCrafter.tsx`
+- Main hook: `npm_studio/packages/react/src/hooks`
+- Drop-in UI: `npm_studio/packages/react/src/components`
 - Optional extras:
-  - Compositor controls: `npm_studio/packages/react/src/hooks/useCompositor.ts`
-  - Gateway resolution: `npm_studio/packages/react/src/hooks/useIngestEndpoints.ts`
+  - Compositor controls: `npm_studio/packages/react/src/hooks`
+  - Gateway resolution: `npm_studio/packages/react/src/hooks`
 
 ### `@livepeer-frameworks/streamcrafter-svelte`
 
 Svelte 5 integration:
 
-- Main store: `npm_studio/packages/svelte/src/stores/streamCrafterContextV2.ts`
-- Drop-in UI: `npm_studio/packages/svelte/src/StreamCrafter.svelte`
+- Main store: `npm_studio/packages/svelte/src/stores`
+- Drop-in UI: `npm_studio/packages/svelte/src`
 - Optional extras:
-  - Compositor store: `npm_studio/packages/svelte/src/stores/compositor.ts`
-  - Gateway resolution store: `npm_studio/packages/svelte/src/stores/ingestEndpoints.ts`
+  - Compositor store: `npm_studio/packages/svelte/src/stores`
+  - Gateway resolution store: `npm_studio/packages/svelte/src/stores`
 
 ### `@livepeer-frameworks/streamcrafter-wc`
 
 Lit Web Components integration + UI (Shadow DOM encapsulation):
 
-- Main element: `npm_studio/packages/wc/src/components/fw-streamcrafter.ts`
-- ReactiveController: `npm_studio/packages/wc/src/controllers/ingest-controller-host.ts`
+- Main element: `npm_studio/packages/wc/src/components`
+- ReactiveController: `npm_studio/packages/wc/src/controllers`
 - 6 child components matching React/Svelte UI parity
 - Three build outputs: ESM, CJS, IIFE (CDN)
 
@@ -142,7 +142,7 @@ When connected and streaming, if the WHIP/WebRTC connection fails:
 
 When enabled (`IngestControllerV2.enableCompositor(...)`):
 
-- `SceneManager` creates an output `HTMLCanvasElement`, transfers it to an `OffscreenCanvas`, and spawns `compositor.worker.js`
+- `SceneManager` creates an output `HTMLCanvasElement`, transfers it to an `OffscreenCanvas`, and spawns the compositor worker
 - Each media source’s video track is read using `MediaStreamTrackProcessor` and forwarded to the worker as `VideoFrame`s
 - The worker renders layers using the selected renderer (`webgpu`/`webgl`/`canvas2d`)
 - The final canvas is exposed as a single video track via `canvas.captureStream(frameRate)`
@@ -155,8 +155,8 @@ This is intentionally separated from publishing: compositor output is “just an
 
 When `useWebCodecs` is enabled _and_ `RTCRtpScriptTransform` is supported:
 
-- `EncoderManager` spawns `encoder.worker.js`, reads frames/audio from the output stream, and encodes them with WebCodecs
-- Encoded chunks are forwarded to `rtcTransform.worker.js`
+- `EncoderManager` spawns the encoder worker, reads frames/audio from the output stream, and encodes them with WebCodecs
+- Encoded chunks are forwarded to the RTP transform worker
 - `WhipClient.attachEncoderTransform(...)` attaches `RTCRtpScriptTransform` instances to the RTP senders so the worker can inject the encoded chunks into the outbound WebRTC stream
 
 If `RTCRtpScriptTransform` is missing, StreamCrafter falls back to browser WebRTC encoders even if WebCodecs APIs exist.
@@ -167,15 +167,15 @@ WebCodecs injection also requires codec alignment (`WhipClient.canUseEncodedInse
 
 Core relies on workers for compositor + (optional) WebCodecs + RTP transforms:
 
-- `npm_studio/packages/core/dist/workers/compositor.worker.js`
-- `npm_studio/packages/core/dist/workers/encoder.worker.js`
-- `npm_studio/packages/core/dist/workers/rtcTransform.worker.js`
+- `npm_studio/packages/core/dist/workers`
+- `npm_studio/packages/core/dist/workers`
+- `npm_studio/packages/core/dist/workers`
 
-Workers are loaded using `new URL('../workers/<name>.js', import.meta.url)` first, with fallbacks like:
+Workers are loaded using `new URL('../workers/<name>', import.meta.url)` first, with fallbacks like:
 
-- `/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/<name>.js`
-- `/workers/<name>.js`
-- `./workers/<name>.js`
+- `/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/<name>`
+- `/workers/<name>`
+- `./workers`
 
 If you see runtime errors like “Failed to initialize compositor worker” in a consuming app, you typically need to ensure the worker files are reachable at one of the fallback paths (or adjust bundling to preserve `import.meta.url` worker URLs).
 
@@ -198,9 +198,9 @@ When consumers pass `gatewayUrl` + `streamKey` (instead of a direct `whipUrl`):
 
 ### Local WHIP endpoint (FrameWorks dev stack)
 
-If you’re using the monorepo dev stack, `docker-compose.yml` runs MistServer with HTTP exposed on `http://localhost:8080`.
+If you’re using the monorepo dev stack, the dev compose stack runs MistServer with HTTP exposed on `http://localhost:8080`.
 
-The shared playground (see `npm_player/playground/src/lib/mist-utils.ts`) assumes MistServer WHIP ingest URLs of the form:
+The shared playground (see `npm_player/playground/src/lib`) assumes MistServer WHIP ingest URLs of the form:
 
 - `http://localhost:8080/webrtc/<streamName>` (default stream name is `live`)
 
@@ -235,17 +235,17 @@ pnpm run clean
 
 ## Where to start when changing things
 
-- **State machine / publishing behavior:** `npm_studio/packages/core/src/core/IngestControllerV2.ts`
-- **WHIP handshake / WebRTC issues:** `npm_studio/packages/core/src/core/WhipClient.ts`
-- **Multi-source video composition:** `npm_studio/packages/core/src/core/SceneManager.ts` and `npm_studio/packages/core/src/workers/compositor.worker.ts`
-- **WebCodecs path:** `npm_studio/packages/core/src/core/EncoderManager.ts`, `npm_studio/packages/core/src/workers/encoder.worker.ts`, `npm_studio/packages/core/src/workers/rtcTransform.worker.ts`
-- **React UI:** `npm_studio/packages/react/src/components/StreamCrafter.tsx`
-- **Svelte UI (Svelte 5 runes):** `npm_studio/packages/svelte/src/StreamCrafter.svelte`
+- **State machine / publishing behavior:** `npm_studio/packages/core/src/core`
+- **WHIP handshake / WebRTC issues:** `npm_studio/packages/core/src/core`
+- **Multi-source video composition:** `npm_studio/packages/core/src/core` and `npm_studio/packages/core/src/workers`
+- **WebCodecs path:** `npm_studio/packages/core/src/core`, `npm_studio/packages/core/src/workers`, `npm_studio/packages/core/src/workers`
+- **React UI:** `npm_studio/packages/react/src/components`
+- **Svelte UI (Svelte 5 runes):** `npm_studio/packages/svelte/src`
 
 ## Common debugging checklist
 
 - **Permissions:** `getUserMedia`/`getDisplayMedia` require secure context (HTTPS or localhost) and user gesture
 - **Endpoint:** verify the WHIP URL is correct and accepts cross-origin requests (CORS)
 - **ICE:** if stuck “connecting”, try supplying `iceServers` and inspect `chrome://webrtc-internals`
-- **Workers not found:** check browser console for 404s on `/workers/*.js` or `/node_modules/.../dist/workers/*.js`
+- **Workers not found:** check browser console for 404s on worker asset paths (for example `/workers/*` or `/node_modules/.../dist/workers/*`)
 - **Background throttling:** if encoding stalls in background tabs, check whether `RTCRtpScriptTransform` is supported and whether StreamCrafter attached the encoder transform (`WhipClient.hasEncoderTransform()`)

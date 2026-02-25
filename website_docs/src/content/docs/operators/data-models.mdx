@@ -122,7 +122,7 @@ ClickHouse stores immutable event logs and materialized views for fast querying.
 
 ### State Tables (Current Snapshots)
 
-Current state snapshots, deduplicated by primary key. Check `periscope.sql` for the exact engine semantics (ReplacingMergeTree vs AggregatingMergeTree).
+Current state snapshots, deduplicated by primary key. Check the ClickHouse bootstrap schema for the exact engine semantics (ReplacingMergeTree vs AggregatingMergeTree).
 
 | Table                     | Description                                              |
 | ------------------------- | -------------------------------------------------------- |
@@ -155,7 +155,7 @@ High-cardinality, append-only tables receiving raw data from Kafka. Key tables i
 
 ### Materialized Views (Aggregations)
 
-Background processes that roll up raw data into optimized summaries. See `periscope.sql` for the full list.
+Background processes that roll up raw data into optimized summaries. See the ClickHouse bootstrap schema for the full list.
 
 - **5‑Minute Rollups**: `stream_viewer_5m`, `client_qoe_5m`, `node_performance_5m`, `stream_health_5m`, `tenant_usage_5m`.
 - **Hourly Rollups**: `stream_connection_hourly`, `viewer_hours_hourly`, `viewer_geo_hourly`, `viewer_city_hourly`, `node_metrics_1h`, `processing_hourly`, `api_usage_hourly`, `storage_usage_hourly`.

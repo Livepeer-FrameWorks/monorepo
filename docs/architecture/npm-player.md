@@ -39,10 +39,10 @@ npm_player/
 
 Framework-agnostic engine + transports:
 
-- Orchestration state machine: `npm_player/packages/core/src/core/PlayerController.ts`
-- Player selection (scoring + caching): `npm_player/packages/core/src/core/PlayerManager.ts`, `npm_player/packages/core/src/core/scorer.ts`
-- Gateway endpoint discovery (GraphQL): `npm_player/packages/core/src/core/GatewayClient.ts`
-- MistServer stream state polling (WS/HTTP): `npm_player/packages/core/src/core/StreamStateClient.ts`
+- Orchestration state machine: `npm_player/packages/core/src/core`
+- Player selection (scoring + caching): `npm_player/packages/core/src/core`, `npm_player/packages/core/src/core`
+- Gateway endpoint discovery (GraphQL): `npm_player/packages/core/src/core`
+- MistServer stream state polling (WS/HTTP): `npm_player/packages/core/src/core`
 - Transport implementations: `npm_player/packages/core/src/players/*`
 - Styles: `npm_player/packages/core/src/styles/player.css` → copied to `dist/player.css` on build (`tailwind.css` is an internal utility source, not shipped)
 
@@ -50,23 +50,23 @@ Framework-agnostic engine + transports:
 
 React integration + UI:
 
-- Drop-in component: `npm_player/packages/react/src/components/Player.tsx`
-- Headless hook (wraps core controller): `npm_player/packages/react/src/hooks/usePlayerController.ts`
+- Drop-in component: `npm_player/packages/react/src/components`
+- Headless hook (wraps core controller): `npm_player/packages/react/src/hooks`
 - Optional hooks: endpoints, stream state, quality, telemetry (`npm_player/packages/react/src/hooks/*`)
 
 ### `@livepeer-frameworks/player-svelte`
 
 Svelte 5 integration + UI:
 
-- Drop-in component: `npm_player/packages/svelte/src/Player.svelte`
+- Drop-in component: `npm_player/packages/svelte/src`
 - Stores wrapping the core controller: `npm_player/packages/svelte/src/stores/*`
 
 ### `@livepeer-frameworks/player-wc`
 
 Lit Web Components integration + UI (Shadow DOM encapsulation):
 
-- Drop-in element: `npm_player/packages/wc/src/components/fw-player.ts`
-- ReactiveController (wraps core controller): `npm_player/packages/wc/src/controllers/player-controller-host.ts`
+- Drop-in element: `npm_player/packages/wc/src/components`
+- ReactiveController (wraps core controller): `npm_player/packages/wc/src/controllers`
 - 16 child components matching React/Svelte UI parity
 - Three build outputs: ESM (bundlers), CJS (Node/SSR), IIFE (CDN `<script>` tag)
 
@@ -150,8 +150,8 @@ const player = new FrameWorksPlayer("#target", {
 
 In “Gateway mode” the player calls the public GraphQL query (contentId is the playbackId for live and artifacts; contentType is optional):
 
-- Schema: `pkg/graphql/schema.graphql` (`Query.resolveViewerEndpoint`)
-- Client: `npm_player/packages/core/src/core/GatewayClient.ts`
+- Schema: `pkg/graphql` (`Query.resolveViewerEndpoint`)
+- Client: `npm_player/packages/core/src/core`
 
 The query returns:
 
@@ -176,7 +176,7 @@ The majority of “business logic” lives in `PlayerController` (core). React/S
 
 - **Pre-resolved endpoints** (`ContentEndpoints`): bypasses the Gateway
 - **Gateway config** (`gatewayUrl` + `contentType` + `contentId`): resolves endpoints via GraphQL
-- **Direct MistServer** (`mistUrl` + `contentId`): fetches `json_{contentId}.js` from a specific node
+- **Direct MistServer** (`mistUrl` + `contentId`): fetches Mist JSON metadata from a specific node
 
 ### 2) Resolution + stream model
 
@@ -195,8 +195,8 @@ For live streams, the controller also uses MistServer APIs to poll stream state 
 
 Selection is done by `PlayerManager`:
 
-- registers a set of transport adapters (players) via `ensurePlayersRegistered()` (`npm_player/packages/core/src/core/PlayerRegistry.ts`)
-- computes scores for `(player × source)` combinations via `scorePlayer()` (`npm_player/packages/core/src/core/scorer.ts`)
+- registers a set of transport adapters (players) via `ensurePlayersRegistered()` (`npm_player/packages/core/src/core`)
+- computes scores for `(player × source)` combinations via `scorePlayer()` (`npm_player/packages/core/src/core`)
 - caches results by _content shape_ (source types + codecs), not by object identity, to avoid rerunning scoring every UI render
 
 ### 4) Lifecycle + fallback
@@ -213,14 +213,14 @@ Once a winner is chosen, `PlayerController` initializes the selected `IPlayer` i
 
 The source-of-truth mapping for MistServer `source[].type` → “human name / preferred player / supported” is in:
 
-- `npm_player/packages/core/src/core/PlayerController.ts` (`MIST_SOURCE_TYPES`)
+- `npm_player/packages/core/src/core` (`MIST_SOURCE_TYPES`)
 
 In practice, the player can handle:
 
 ### “Normal” playback
 
-- **HLS** (`html5/application/vnd.apple.mpegurl`) via `hls.js` or Video.js (VHS) (`HlsJsPlayerImpl` / `VideoJsPlayerImpl`)
-- **DASH** (`dash/video/mp4`) via `dash.js` (`DashJsPlayerImpl`)
+- **HLS** (`html5/application/vnd.apple.mpegurl`) via the HLS player adapter or Video.js (VHS) (`HlsJsPlayerImpl` / `VideoJsPlayerImpl`)
+- **DASH** (`dash/video/mp4`) via the DASH player adapter (`DashJsPlayerImpl`)
 - **MP4/WebM progressive** (`html5/video/mp4`, `html5/video/webm`) via native `<video>` (`NativePlayerImpl`)
 
 ### Low latency / realtime
@@ -242,7 +242,7 @@ In practice, the player can handle:
 
 Some transports are intentionally **penalized** (deprioritized) even if supported (for reliability/UX reasons). The current penalties/blacklist are defined in:
 
-- `npm_player/packages/core/src/core/scorer.ts` (`PROTOCOL_BLACKLIST`, `PROTOCOL_PENALTIES`, `MODE_PROTOCOL_BONUSES`)
+- `npm_player/packages/core/src/core` (`PROTOCOL_BLACKLIST`, `PROTOCOL_PENALTIES`, `MODE_PROTOCOL_BONUSES`)
 
 ---
 
@@ -279,22 +279,22 @@ The playground is a Vite app in `npm_player/playground` and is the fastest way t
 ### Add a new transport/player implementation
 
 1. Implement `IPlayer` (core) under `npm_player/packages/core/src/players/`.
-2. Register it in `npm_player/packages/core/src/core/PlayerRegistry.ts`.
-3. Add/adjust scoring rules in `npm_player/packages/core/src/core/scorer.ts` (and confirm it’s not accidentally blacklisted).
+2. Register it in `npm_player/packages/core/src/core`.
+3. Add/adjust scoring rules in `npm_player/packages/core/src/core` (and confirm it’s not accidentally blacklisted).
 4. If it depends on a heavy third-party library, keep it as a peer dependency and use runtime `import()` inside the player implementation.
-5. Add/update the Mist source type mapping in `npm_player/packages/core/src/core/PlayerController.ts` if MistServer will advertise a new `source[].type`.
+5. Add/update the Mist source type mapping in `npm_player/packages/core/src/core` if MistServer will advertise a new `source[].type`.
 
 ### Change what the Gateway returns
 
 If `resolveViewerEndpoint` adds/removes fields, confirm the player’s GraphQL clients still match:
 
-- `npm_player/packages/core/src/core/GatewayClient.ts`
-- `npm_player/packages/react/src/hooks/useViewerEndpoints.ts` (legacy hook used by some UI paths)
+- `npm_player/packages/core/src/core`
+- `npm_player/packages/react/src/hooks` (legacy hook used by some UI paths)
 
 ---
 
 ## Troubleshooting checklist
 
-- “It builds but playback is blank”: check browser console for missing peer deps (`hls.js`, `dashjs`, `video.js`) and CORS errors on the playback URL.
+- “It builds but playback is blank”: check browser console for missing peer deps (HLS/DASH/Video player adapters) and CORS errors on the playback URL.
 - “WebRTC/WHEP fails locally”: many browsers require HTTPS + valid certs for some WebRTC paths; also confirm ICE servers if needed.
 - “Wrong protocol picked”: enable `debug`/`devMode` and inspect the selection breakdown from `PlayerManager` (scores + penalties).

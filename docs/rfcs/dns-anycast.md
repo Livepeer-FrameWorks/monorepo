@@ -9,16 +9,16 @@ Draft
 - Evaluate running our own Anycast DNS to reduce vendor lock-in and enable app-aware routing.
 - This is a high-risk infra decision; keep it research-only until clear need exists.
 
-## Current State (as of 2026-01-13)
+## Current State
 
-- Navigator (`api_dns`) exists in the repo and is intended to manage platform‑managed tenant subdomains, but it is not wired into dev runtime (no service in `docker-compose.yml`).
+- Navigator (`api_dns`) exists in the repo and is intended to manage platform‑managed tenant subdomains, but it is not wired into dev runtime (no service in default dev compose).
 - There is no Anycast/BGP stack in dev or CI.
 - No PowerDNS/Galera/IXP tooling is present in this repo.
 
 Evidence:
 
 - `api_dns/`
-- `docker-compose.yml`
+- dev compose service definitions
 
 ## Problem / Motivation
 
@@ -71,5 +71,5 @@ Managed DNS limits routing flexibility and introduces vendor lock-in. Anycast co
 ## References, Sources & Evidence
 
 - [Evidence] `api_dns/`
-- [Evidence] `docker-compose.yml`
+- [Evidence] dev compose service definitions
 - [Source] External DNS/BGP/Anycast research (TBD)

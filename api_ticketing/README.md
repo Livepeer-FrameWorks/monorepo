@@ -42,5 +42,5 @@ docker-compose up deckhand
 ## Related
 
 - Architecture: `docs/architecture/deckhand.md`
-- GraphQL: Conversation/Message types in `pkg/graphql/schema.graphql`
+- GraphQL: Conversation/Message types in `pkg/graphql`
 - Real-time: `CHANNEL_MESSAGING` in Signalman

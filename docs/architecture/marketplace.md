@@ -94,12 +94,12 @@ No per-stream cluster override exists.
 
 ## Key Files
 
-- `pkg/graphql/schema.graphql` — `MarketplaceCluster`, `ClusterSubscription`, `ClusterVisibility`, `ClusterPricingModel`, `ClusterSubscriptionStatus` types
-- `api_gateway/internal/resolvers/infrastructure.go` — resolver implementations
-- `api_tenants/internal/grpc/server.go` — Quartermaster RPC handlers (`RequestClusterSubscription`, `ApproveClusterSubscription`, etc.)
-- `pkg/proto/quartermaster.proto` — `ListMarketplaceClusters`, `RequestClusterSubscription`, `ApproveClusterSubscription`, `RejectClusterSubscription` RPCs
-- `pkg/database/sql/schema/quartermaster.sql` — `cluster_subscriptions`, `cluster_invites` tables
-- `website_application/src/routes/infrastructure/marketplace/+page.svelte` — marketplace UI
+- `pkg/graphql` — `MarketplaceCluster`, `ClusterSubscription`, `ClusterVisibility`, `ClusterPricingModel`, `ClusterSubscriptionStatus` types
+- `api_gateway/internal/resolvers` — resolver implementations
+- `api_tenants/internal/grpc` — Quartermaster RPC handlers (`RequestClusterSubscription`, `ApproveClusterSubscription`, etc.)
+- `pkg/proto` — `ListMarketplaceClusters`, `RequestClusterSubscription`, `ApproveClusterSubscription`, `RejectClusterSubscription` RPCs
+- `pkg/database/sql/schema` — `cluster_subscriptions`, `cluster_invites` tables
+- `website_application/src/routes/infrastructure/marketplace` — marketplace UI
 
 ## Future Work
 

@@ -10,7 +10,7 @@ Draft
 - Current monitoring remains Prometheus/Grafana; Lookout is additive.
 - Start with a minimal ingestion + incident feed; defer complex workflows.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Monitoring and alerting are handled via Prometheus/Grafana tooling in `infrastructure/`.
 - `api_incidents` is a stub (no implementation).

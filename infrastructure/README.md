@@ -1,6 +1,6 @@
 # FrameWorks Infrastructure (Dev Configs)
 
-Dev-only configuration used by the root `docker-compose.yml`. These files help you run the full stack locally. Production deployment uses the CLI's edge templates.
+Dev-only configuration used by the root dev compose configuration. These files help you run the full stack locally. Production deployment uses the CLI's edge templates.
 
 ## What's Here
 

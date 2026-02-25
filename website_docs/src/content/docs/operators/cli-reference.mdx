@@ -402,7 +402,7 @@ frameworks cluster backup <component> [flags]
 **Output:**
 
 - Files stored in the output directory with timestamps
-- Timestamped filenames: `postgres-20250117-143000.sql`
+- Timestamped filenames: `postgres-YYYYMMDD-HHMMSS` database dump format
 
 **Flags:**
 
@@ -1010,7 +1010,7 @@ frameworks edge tune --write
 
 ### frameworks edge init
 
-Generate edge node configuration files (`.edge.env`, `docker-compose.edge.yml`, `Caddyfile`).
+Generate edge node configuration files (edge env file, edge compose file, Caddy config file).
 
 ```bash
 # With explicit domain
@@ -1034,10 +1034,10 @@ When `--enrollment-token` is provided without `--domain`, the CLI calls `PreRegi
 
 ### frameworks edge enroll
 
-Start the edge stack and verify HTTPS readiness. The bootstrap token must be set in the `.edge.env` file as `EDGE_ENROLLMENT_TOKEN`.
+Start the edge stack and verify HTTPS readiness. The bootstrap token must be set in the edge environment file as `EDGE_ENROLLMENT_TOKEN`.
 
 ```bash
-# Enroll edge node (token read from .edge.env)
+# Enroll edge node (token read from edge environment file)
 frameworks edge enroll
 
 # From a specific directory
@@ -1049,7 +1049,7 @@ frameworks edge enroll --dir /opt/frameworks-edge --ssh admin@edge1.example.com
 
 **Flags:**
 
-- `--dir` - Directory containing `docker-compose.edge.yml` and `.edge.env`
+- `--dir` - Directory containing the edge compose and environment files
 - `--timeout` - Maximum time to wait for HTTPS readiness (default: `2m`)
 - `--ssh` - Run remotely on `user@host` via SSH
 - `--ssh-key` - SSH private key path
@@ -1237,7 +1237,7 @@ frameworks services plan --include commodore,quartermaster --exclude purser
 
 **Output:**
 
-- `svc-<service>.yml` fragments (one per service)
+- Service fragment files (one per service)
 - `.central.env` (merged env file)
 
 **Flags:**
@@ -1380,7 +1380,7 @@ Create a default configuration with local development endpoints.
 frameworks context init
 ```
 
-Creates `~/.frameworks/config.yaml` with a "local" context pointing to `localhost` endpoints.
+Creates the local CLI config with a "local" context pointing to `localhost` endpoints.
 
 ---
 

@@ -12,7 +12,7 @@ Modify the GraphQL API rate limiter to deduct tokens based on query complexity i
 
 ### Current Behavior
 
-The rate limiter in `api_gateway/internal/middleware/ratelimit.go` uses a token bucket algorithm that charges exactly 1 token per request:
+The rate limiter in `api_gateway/internal/middleware` uses a token bucket algorithm that charges exactly 1 token per request:
 
 ```go
 bucket.tokens -= 1.0  // Line 157
@@ -86,11 +86,11 @@ With `COST_DIVISOR=10` and rate limit of 1000 tokens/min:
 
 ### Files to Modify
 
-1. **`api_gateway/internal/middleware/ratelimit.go`**
+1. **`api_gateway/internal/middleware`**
    - Add `DeductCost(tenantID string, cost float64)` method
    - Modify `Allow()` to only check bucket > 0, not deduct
 
-2. **`api_gateway/cmd/bridge/main.go`**
+2. **`api_gateway/cmd/bridge`**
    - In `AroundResponses` hook, call `DeductCost()` with complexity
    - Add `GRAPHQL_COMPLEXITY_COST_DIVISOR` config loading
 
@@ -190,7 +190,7 @@ Keep 1-token-per-request. Rejected because:
 
 **Done:**
 
-- Pagination-aware complexity calculation (`api_gateway/graph/complexity.go`)
+- Pagination-aware complexity calculation (`api_gateway/graph`)
 - `HeavyFieldCost=10` for analytics root queries and rollup summaries
 - Rollup summary fields (`StreamHealthSummary`, `ClientQoeSummary`, `RoutingEfficiency`)
 - `GRAPHQL_COMPLEXITY_LIMIT` raised to 2000 to accommodate the new model
@@ -204,5 +204,5 @@ Keep 1-token-per-request. Rejected because:
 ## References
 
 - [Shopify: Rate Limiting GraphQL APIs](https://shopify.engineering/rate-limiting-graphql-apis-calculating-query-complexity)
-- Current complexity calculation: `api_gateway/graph/complexity.go`
-- Current rate limiter: `api_gateway/internal/middleware/ratelimit.go`
+- Current complexity calculation: `api_gateway/graph`
+- Current rate limiter: `api_gateway/internal/middleware`

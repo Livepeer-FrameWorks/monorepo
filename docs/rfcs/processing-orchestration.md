@@ -10,7 +10,7 @@ Draft
 - Foghorn coordinates job routing and capacity-aware dispatch.
 - Processing jobs become a first-class workflow (queued → dispatched → completed).
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Live processing is configured via Mist/Helmsman and is mostly implicit.
 - `foghorn.processing_jobs` exists but orchestration is minimal.
@@ -18,8 +18,8 @@ Draft
 
 Evidence:
 
-- `pkg/database/sql/schema/foghorn.sql`
-- `api_balancing/internal/handlers/handlers.go`
+- `pkg/database/sql/schema`
+- `api_balancing/internal/handlers`
 - `api_sidecar/`
 
 ## Problem / Motivation
@@ -72,6 +72,6 @@ Processing decisions are implicit and inconsistent across live and VOD. A unifie
 
 ## References, Sources & Evidence
 
-- `pkg/database/sql/schema/foghorn.sql`
+- `pkg/database/sql/schema`
 - `api_balancing/`
 - `api_sidecar/`

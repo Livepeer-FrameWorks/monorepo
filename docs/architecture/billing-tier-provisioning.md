@@ -92,14 +92,14 @@ The cluster with the highest `required_tier_level` is set as primary (most capab
 
 ## Key Files
 
-- `api_billing/internal/grpc/server.go` - `ensureTierClusterAccess`, `InitializePrepaidAccount`, `InitializePostpaidAccount`, `PromoteToPaid`
-- `api_control/internal/grpc/server.go` - `Register` calls `InitializePostpaidAccount`
-- `pkg/proto/purser.proto` - RPC definitions and response messages
-- `pkg/database/sql/schema/purser.sql` - `billing_tiers` (with default flags), `cluster_pricing`
-- `pkg/database/sql/seeds/static/purser_tiers.sql` - Default flag assignments
+- `api_billing/internal/grpc` - `ensureTierClusterAccess`, `InitializePrepaidAccount`, `InitializePostpaidAccount`, `PromoteToPaid`
+- `api_control/internal/grpc` - `Register` calls `InitializePostpaidAccount`
+- `pkg/proto` - RPC definitions and response messages
+- `pkg/database/sql/schema` - `billing_tiers` (with default flags), `cluster_pricing`
+- `pkg/database/sql/seeds/static` - Default flag assignments
 
 ## Gotchas
 
 - Quartermaster's `CreateTenant` still auto-subscribes to `is_default_cluster=true` clusters as a safety net. Purser's cluster subscription uses `ON CONFLICT DO NOTHING` so the overlap is harmless.
-- Paid tier upgrades (Stripe/Mollie checkout) are blocked at the Gateway level (`api_gateway/internal/resolvers/billing.go`). The Purser RPCs themselves remain unrestricted for admin operations.
+- Paid tier upgrades (Stripe/Mollie checkout) are blocked at the Gateway level (`api_gateway/internal/resolvers`). The Purser RPCs themselves remain unrestricted for admin operations.
 - `PromoteToPaid` ignores the caller's `tier_id` and always resolves the default postpaid tier.

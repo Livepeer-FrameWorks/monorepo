@@ -14,15 +14,15 @@ identified in this RFC — have not been addressed. No HA strategy exists beyond
 - Retry/circuit breaker utilities exist but are not wired into clients.
 - This RFC defines high-level HA priorities and proposes follow-up RFCs per domain.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Circuit breaker/retry helpers exist in `pkg/clients` but are unused.
 - Services have mixed statefulness and dependencies; HA behavior is inconsistent.
 
 Evidence:
 
-- `pkg/clients/failsafe.go`
-- `pkg/clients/failsafe_grpc.go`
+- `pkg/clients`
+- `pkg/clients`
 
 ## Problem / Motivation
 
@@ -76,8 +76,8 @@ Scaling requirements are increasing, but there is no unified HA strategy. Some s
 
 ## References, Sources & Evidence
 
-- `pkg/clients/failsafe.go`
-- `pkg/clients/failsafe_grpc.go`
+- `pkg/clients`
+- `pkg/clients`
 - `api_balancing/`
 - `api_gateway/`
 - `api_realtime/`

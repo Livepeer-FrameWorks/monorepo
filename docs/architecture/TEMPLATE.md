@@ -24,8 +24,8 @@
 
 ## Key Files
 
-- `path/to/entry_point.go` - Brief description
-- `path/to/schema.sql` - Brief description
+- `path/to` - Brief description
+- `path/to` - Brief description
 
 ## Gotchas
 

@@ -6,13 +6,13 @@ For operator-level documentation, see `website_docs/.../operators/architecture.m
 
 ## Related Source Files
 
-- Load balancer core: `api_balancing/internal/balancer/balancer.go`
-- State management: `api_balancing/internal/state/stream_state.go`
-- HTTP handlers: `api_balancing/internal/handlers/handlers.go`
-- gRPC server: `api_balancing/internal/grpc/server.go`
-- Playback resolution: `api_balancing/internal/control/playback.go`
-- Geo bucketing: `api_balancing/internal/geo/bucket.go`
-- Weight config: `api_balancing/cmd/foghorn/main.go` (lines 53-56)
+- Load balancer core: `api_balancing/internal/balancer`
+- State management: `api_balancing/internal/state`
+- HTTP handlers: `api_balancing/internal/handlers`
+- gRPC server: `api_balancing/internal/grpc`
+- Playback resolution: `api_balancing/internal/control`
+- Geo bucketing: `api_balancing/internal/geo`
+- Weight config: `api_balancing/cmd/foghorn` (lines 53-56)
 
 ## Request Paths
 
@@ -76,7 +76,7 @@ Foghorn resolves viewer coordinates using the following priority order:
 2. **GeoIP MMDB lookup**: MaxMind database configured via `GEOIP_MMDB_PATH`. Resolves IP → lat/lon.
 3. **Disabled**: If neither source is available, geo scoring is skipped (all nodes get equal geo score).
 
-Related source: `pkg/geoip/geoip.go`, `api_balancing/internal/handlers/handlers.go` (Cloudflare header extraction).
+Related source: `pkg/geoip`, `api_balancing/internal/handlers` (Cloudflare header extraction).
 
 ### Stream Bonus
 
@@ -127,7 +127,7 @@ query ResolveViewerEndpoint($playbackId: String!, $contentType: ContentType) {
 }
 ```
 
-Implementation: `npm_player/packages/core/src/core/GatewayClient.ts`
+Implementation: `npm_player/packages/core/src/core`
 
 ### Response Shape
 
@@ -142,7 +142,7 @@ interface ViewerEndpoint {
 The player:
 
 1. Receives endpoint list from Gateway
-2. Selects best protocol using its own scoring (`npm_player/packages/core/src/core/scorer.ts`)
+2. Selects best protocol using its own scoring (`npm_player/packages/core/src/core`)
 3. Falls back to next node/protocol on failure
 
 ## Cross-Cluster Routing
@@ -206,10 +206,10 @@ See `docs/architecture/stream-replication-topology.md` for the full origin-pull 
 
 ### Related Source Files
 
-- Remote scoring: `api_balancing/internal/balancer/balancer.go` (`ScoreRemoteEdges`, `crossClusterPenalty`)
-- Remote edge cache: `api_balancing/internal/federation/cache.go` (`RemoteEdgeCache`, `EdgeSummaryEntry`, `RemoteEdgeEntry`)
-- Federation client: `api_balancing/internal/federation/client.go` (`QueryStream` RPC)
-- Origin-pull arrangement: `api_balancing/internal/handlers/handlers.go` (`arrangeOriginPull`)
+- Remote scoring: `api_balancing/internal/balancer` (`ScoreRemoteEdges`, `crossClusterPenalty`)
+- Remote edge cache: `api_balancing/internal/federation` (`RemoteEdgeCache`, `EdgeSummaryEntry`, `RemoteEdgeEntry`)
+- Federation client: `api_balancing/internal/federation` (`QueryStream` RPC)
+- Origin-pull arrangement: `api_balancing/internal/handlers` (`arrangeOriginPull`)
 
 ## Routing Events (Analytics)
 
@@ -239,16 +239,16 @@ When `RemoteClusterID` is set and differs from `ClusterID`, the routing decision
 
 ### Adding a new weight
 
-1. Add env var + weight field in `api_balancing/cmd/foghorn/main.go`
+1. Add env var + weight field in `api_balancing/cmd/foghorn`
 2. Pass to `StreamStateManager` in state initialization
-3. Add to score calculation in `balancer.go`
+3. Add to score calculation in the balancer module.
 
 ### Changing eligibility filters
 
-Edit `GetTopNodesWithScores` in `api_balancing/internal/balancer/balancer.go`.
+Edit `GetTopNodesWithScores` in `api_balancing/internal/balancer`.
 
 ### Adding node metadata
 
-1. Add field to `NodeState` struct in `stream_state.go`
-2. Populate from Helmsman heartbeats (in `api_balancing/internal/triggers/processor.go`)
+1. Add field to `NodeState` in the stream-state module.
+2. Populate from Helmsman heartbeats (in `api_balancing/internal/triggers`)
 3. Use in scoring or filtering as needed

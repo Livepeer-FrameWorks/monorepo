@@ -1,6 +1,6 @@
 # OpenClaw Heartbeat Pattern
 
-Research synthesized Feb 2026. Sources linked throughout.
+Research synthesized from current sources. Sources linked throughout.
 
 ## What OpenClaw Is
 
@@ -59,8 +59,8 @@ Checked [system] - [actions taken]. [optional: plan for follow-up].
 
 ## Moltbook Heartbeat (Reference Implementation)
 
-The agent-skill-system RFC includes a Moltbook heartbeat reference at
-`docs/rfcs/agent-skill-system/references/moltbook/heartbeat.md`.
+The agent-skill-system RFC includes a Moltbook heartbeat reference in its
+Moltbook references section.
 
 Moltbook's heartbeat checks: skill updates, DMs, feed, and decides whether to post,
 reply, or flag something for the human. It explicitly notes: "heartbeat is just a backup

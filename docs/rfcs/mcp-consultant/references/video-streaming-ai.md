@@ -1,6 +1,6 @@
 # AI in Video Streaming Operations (2025-2026)
 
-Research synthesized Feb 2026. Sources linked throughout.
+Research synthesized from current sources. Sources linked throughout.
 
 ## Direct Competitors: Conversational AI for Streaming
 

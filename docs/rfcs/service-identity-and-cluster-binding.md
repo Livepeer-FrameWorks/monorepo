@@ -12,15 +12,15 @@ edge auth. See `docs/architecture/edge-auth.md` for the implemented model.
 - Introduce a service JWT (or similar) to make `cluster_id` non-forgeable.
 - Quartermaster issues and validates service identity for registration.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - gRPC/HTTP middleware accepts either a shared `SERVICE_TOKEN` or a user JWT.
 - Services register with Quartermaster using shared token semantics.
 
 Evidence:
 
-- `pkg/middleware/grpc.go`
-- `pkg/auth/middleware.go`
+- `pkg/middleware`
+- `pkg/auth`
 
 ## Problem / Motivation
 
@@ -77,7 +77,7 @@ A shared static token cannot carry trustworthy identity or cluster claims. Multi
 
 ## References, Sources & Evidence
 
-- `pkg/middleware/grpc.go`
-- `pkg/auth/middleware.go`
+- `pkg/middleware`
+- `pkg/auth`
 - `api_tenants/`
-- `pkg/proto/quartermaster.proto`
+- `pkg/proto`

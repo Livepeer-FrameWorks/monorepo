@@ -44,7 +44,7 @@ This document defines the testing philosophy and practices for FrameWorks.
 
 ### Low Priority (integration only)
 
-- **Generated code**: Don't test `.pb.go` or `models_gen.go`
+- **Generated code**: Don't test generated protobuf/model output files
 - **Simple wrappers**: Thin gRPC client methods with no logic
 - **Demo mode generators**: Test fixtures, not production code
 
@@ -148,7 +148,7 @@ Mutation testing validates test quality by asking: "If I introduce a bug, will m
 
 ### File Naming
 
-- `foo.go` → `foo_test.go` (same package)
+- `<source>` → `<source>_test` (same package)
 - Use `_test` package suffix for black-box testing when appropriate
 
 ### Test Naming

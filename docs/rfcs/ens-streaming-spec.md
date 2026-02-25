@@ -10,7 +10,7 @@ Draft
 - Fields: playbackId, gateway URL, HLS URL, WHEP URL.
 - Enable portable streaming identity across gateways.
 
-## Current State (as of 2026-01-26)
+## Current State
 
 - No standard exists for streaming endpoints in ENS text records.
 - Streamers use platform-specific URLs.
@@ -184,5 +184,5 @@ const pc = new RTCPeerConnection();
 - [Reference] ENS Text Records (ENSIP-5): https://docs.ens.domains/ensip/5
 - [Reference] ENS Offchain Resolution (ENSIP-16): https://docs.ens.domains/ensip/16
 - [Source] Foghorn README: `api_balancing/README.md`
-- [Source] Stream data model: `pkg/models/streams.go`
-- [Source] Playback resolution: `api_balancing/internal/control/playback.go`
+- [Source] Stream data model: `pkg/models`
+- [Source] Playback resolution: `api_balancing/internal/control`

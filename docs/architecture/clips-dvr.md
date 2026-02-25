@@ -149,7 +149,7 @@ Foghorn prefers Commodore for canonical context and falls back to these fields w
 
 ## Database Schema
 
-Schemas: `pkg/database/sql/schema/commodore.sql` (clips, dvr_recordings), `pkg/database/sql/schema/foghorn.sql` (artifacts, artifact_nodes), `pkg/database/sql/clickhouse/periscope.sql` (artifact_state_current, artifact_events).
+Schemas: `pkg/database/sql/schema` (clips, dvr_recordings), `pkg/database/sql/schema` (artifacts, artifact_nodes), `pkg/database/sql/clickhouse` (artifact_state_current, artifact_events).
 
 **Storage model**: `artifacts` = cold storage state (S3 is authoritative, 1 row per artifact). `artifact_nodes` = warm storage cache (which nodes have copies, N rows per artifact).
 
@@ -307,16 +307,16 @@ Artifact **write** operations (delete, stop) use a hybrid push+forward model:
 
 Related source files:
 
-- Command routing: `api_control/internal/grpc/server.go` (`resolveFoghornForArtifact`)
-- Forward handler: `api_balancing/internal/federation/server.go` (`ForwardArtifactCommand`)
-- Forward trigger: `api_balancing/internal/grpc/server.go` (`forwardArtifactToFederation`)
+- Command routing: `api_control/internal/grpc` (`resolveFoghornForArtifact`)
+- Forward handler: `api_balancing/internal/federation` (`ForwardArtifactCommand`)
+- Forward trigger: `api_balancing/internal/grpc` (`forwardArtifactToFederation`)
 
 ### Related Source Files
 
-- Federation server handler: `api_balancing/internal/federation/server.go` (`PrepareArtifact`)
-- Proto definitions: `pkg/proto/foghorn_federation.proto`
-- STREAM_SOURCE → artifact resolution: `api_balancing/internal/triggers/processor.go` (`handleStreamSource`)
-- Artifact advertisement: `api_balancing/internal/federation/peer_manager.go` (`ArtifactAdvertisement`)
+- Federation server handler: `api_balancing/internal/federation` (`PrepareArtifact`)
+- Proto definitions: `pkg/proto`
+- STREAM_SOURCE → artifact resolution: `api_balancing/internal/triggers` (`handleStreamSource`)
+- Artifact advertisement: `api_balancing/internal/federation` (`ArtifactAdvertisement`)
 
 ## Resilience
 
@@ -423,42 +423,42 @@ artifact_type = 'vod'
 
 ### Schema & Proto
 
-- `pkg/proto/commodore.proto` - Clip/DVR registry RPCs
-- `pkg/proto/shared.proto` - ClipInfo, DVRInfo, CreateClip/DVR requests (includes user_id)
-- `pkg/proto/periscope.proto` - GetArtifactStates with request_ids batch lookup
-- `pkg/database/sql/schema/commodore.sql` - clips, dvr_recordings tables
-- `pkg/database/sql/schema/foghorn.sql` - artifacts (with user_id), artifact_nodes tables
-- `pkg/database/sql/clickhouse/periscope.sql` - artifact_state_current, artifact_events, storage_events tables
+- `pkg/proto` - Clip/DVR registry RPCs
+- `pkg/proto` - ClipInfo, DVRInfo, CreateClip/DVR requests (includes user_id)
+- `pkg/proto` - GetArtifactStates with request_ids batch lookup
+- `pkg/database/sql/schema` - clips, dvr_recordings tables
+- `pkg/database/sql/schema` - artifacts (with user_id), artifact_nodes tables
+- `pkg/database/sql/clickhouse` - artifact_state_current, artifact_events, storage_events tables
 
 ### Gateway (api_gateway) - GraphQL Orchestration
 
-- `api_gateway/gqlgen.yml` - Field resolver configuration for lifecycle fields
-- `api_gateway/graph/schema.resolvers.go` - Parent resolvers (Commodore) + field resolvers (Periscope)
-- `api_gateway/internal/loaders/artifact_lifecycle.go` - Batch loader for Periscope lifecycle data
-- `api_gateway/internal/resolvers/streams.go` - GetClipsConnection, GetDVRRecordingsConnection
+- `api_gateway` - Field resolver configuration for lifecycle fields
+- `api_gateway/graph` - Parent resolvers (Commodore) + field resolvers (Periscope)
+- `api_gateway/internal/loaders` - Batch loader for Periscope lifecycle data
+- `api_gateway/internal/resolvers` - GetClipsConnection, GetDVRRecordingsConnection
 
 ### Commodore (api_control) - Business Registry
 
-- `api_control/internal/grpc/server.go` - GetClips, ListDVRRequests (query own tables, NOT Foghorn)
+- `api_control/internal/grpc` - GetClips, ListDVRRequests (query own tables, NOT Foghorn)
 
 ### Periscope (api_analytics_query) - Lifecycle State
 
-- `api_analytics_query/internal/grpc/server.go` - GetArtifactStates with request_ids filter
+- `api_analytics_query/internal/grpc` - GetArtifactStates with request_ids filter
 
 ### Foghorn (api_balancing) - Artifact Operations
 
-- `api_balancing/internal/grpc/server.go` - CreateClip, StartDVR (stores user_id)
-- `api_balancing/internal/handlers/handlers.go` - Clip/DVR lifecycle event handlers
-- `api_balancing/internal/control/server.go` - SendClipPull, SendDVRStart, Helmsman communication
+- `api_balancing/internal/grpc` - CreateClip, StartDVR (stores user_id)
+- `api_balancing/internal/handlers` - Clip/DVR lifecycle event handlers
+- `api_balancing/internal/control` - SendClipPull, SendDVRStart, Helmsman communication
 - `api_balancing/internal/jobs/` - Retention, orphan cleanup, purge jobs
 
 ### Signalman (api_realtime) - Real-time Events
 
-- `api_realtime/internal/grpc/server.go` - WebSocket subscriptions for liveClipLifecycle, liveDvrLifecycle
+- `api_realtime/internal/grpc` - WebSocket subscriptions for liveClipLifecycle, liveDvrLifecycle
 
 ### Analytics Ingest (api_analytics_ingest)
 
-- `api_analytics_ingest/internal/handlers/handlers.go` - processClipLifecycle, processDVRLifecycle → ClickHouse
+- `api_analytics_ingest/internal/handlers` - processClipLifecycle, processDVRLifecycle → ClickHouse
 
 ### Frontend (website_application)
 

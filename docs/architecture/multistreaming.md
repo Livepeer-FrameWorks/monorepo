@@ -130,10 +130,10 @@ Internal RPCs (`GetStreamPushTargets`, `ValidateStreamKey`) return unmasked URIs
 
 ## Existing MistServer Integration
 
-| Function         | File                   | Purpose                    |
-| ---------------- | ---------------------- | -------------------------- |
-| `PushStart()`    | `pkg/mist/client.go`   | Start a push to target URI |
-| `PushStop()`     | `pkg/mist/client.go`   | Stop an active push        |
-| `PushList()`     | `pkg/mist/client.go`   | List active pushes         |
-| `PUSH_OUT_START` | `pkg/mist/triggers.go` | Trigger when push connects |
-| `PUSH_END`       | `pkg/mist/triggers.go` | Trigger when push stops    |
+| Function         | File       | Purpose                    |
+| ---------------- | ---------- | -------------------------- |
+| `PushStart()`    | `pkg/mist` | Start a push to target URI |
+| `PushStop()`     | `pkg/mist` | Stop an active push        |
+| `PushList()`     | `pkg/mist` | List active pushes         |
+| `PUSH_OUT_START` | `pkg/mist` | Trigger when push connects |
+| `PUSH_END`       | `pkg/mist` | Trigger when push stops    |

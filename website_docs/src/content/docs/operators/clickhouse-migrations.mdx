@@ -72,7 +72,7 @@ Guidelines for contributors:
 1. **Use `IF NOT EXISTS` guards** - migrations must be idempotent
 2. **Prefer expand-only changes** - add columns/tables, avoid drops
 3. **Use Nullable for new columns** - safe for rollback (old code ignores them)
-4. **Update bootstrap schema** - `periscope.sql` must reflect final state
+4. **Update bootstrap schema** - the ClickHouse bootstrap schema must reflect final state
 5. **One migration per logical change** - easier to track and debug
 
 Example migration file:

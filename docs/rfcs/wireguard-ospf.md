@@ -10,15 +10,15 @@ Draft
 - OSPF over WireGuard could reduce config complexity as node count grows.
 - Evaluate hub-and-spoke or partial mesh with dynamic routing.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Privateer syncs mesh peers from Quartermaster and applies WireGuard configs per node.
 - No dynamic routing layer is present; routing is implicit in peer configs.
 
 Evidence:
 
-- `api_mesh/internal/agent/agent.go`
-- `pkg/proto/quartermaster.proto`
+- `api_mesh/internal/agent`
+- `pkg/proto`
 
 ## Problem / Motivation
 
@@ -69,5 +69,5 @@ Static mesh configuration scales poorly as node count grows and increases operat
 
 ## References, Sources & Evidence
 
-- `api_mesh/internal/agent/agent.go`
-- `pkg/proto/quartermaster.proto`
+- `api_mesh/internal/agent`
+- `pkg/proto`

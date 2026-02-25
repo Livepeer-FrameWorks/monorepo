@@ -61,7 +61,7 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 
 ## Discovery Endpoints
 
-Public metadata served by the API gateway for agent and skill discovery. Source files in `docs/skills/`, routed by `api_gateway/cmd/bridge/main.go`.
+Public metadata served by the API gateway for agent and skill discovery. Source files in `docs/skills/`, routed by `api_gateway/cmd/bridge`.
 
 | Path                                    | Standard     | Purpose                                               |
 | --------------------------------------- | ------------ | ----------------------------------------------------- |
@@ -173,9 +173,9 @@ When a new wallet authenticates:
 
 ### Key Files
 
-- `pkg/database/sql/schema/commodore.sql` - `wallet_identities` table
-- `api_control/internal/grpc/server.go` - `GetOrCreateWalletUser`, `WalletLogin`
-- `pkg/auth/wallet.go` - EIP-191 signature verification + message validation
+- `pkg/database/sql/schema` - `wallet_identities` table
+- `api_control/internal/grpc` - `GetOrCreateWalletUser`, `WalletLogin`
+- `pkg/auth` - EIP-191 signature verification + message validation
 
 ---
 
@@ -183,7 +183,7 @@ When a new wallet authenticates:
 
 Resource-based billing with prepaid credits. API requests are free; costs are for bandwidth/viewer hours, storage, and processing/transcoding.
 
-Schema: `pkg/database/sql/schema/purser.sql` (`prepaid_balances`, `balance_transactions`)
+Schema: `pkg/database/sql/schema` (`prepaid_balances`, `balance_transactions`)
 
 ### Enforcement
 
@@ -199,10 +199,10 @@ Schema: `pkg/database/sql/schema/purser.sql` (`prepaid_balances`, `balance_trans
 
 ### Key Files
 
-- `pkg/database/sql/schema/purser.sql` - Balance tables
-- `api_billing/internal/handlers/jobs.go` - Billing enforcement
-- `api_billing/internal/handlers/hdwallet.go` - HD wallet derivation
-- `api_billing/internal/handlers/crypto.go` - Deposit monitoring
+- `pkg/database/sql/schema` - Balance tables
+- `api_billing/internal/handlers` - Billing enforcement
+- `api_billing/internal/handlers` - HD wallet derivation
+- `api_billing/internal/handlers` - Deposit monitoring
 
 ---
 
@@ -271,10 +271,10 @@ Single private key used on all EVM chains (same address everywhere):
 
 ### Key Files
 
-- `api_billing/internal/handlers/x402.go` - Verification + settlement
-- `api_billing/internal/handlers/networks.go` - Network registry
-- `api_billing/internal/handlers/gaswallet.go` - Balance monitoring
-- `api_gateway/internal/middleware/ratelimit.go` - 402 response + X-PAYMENT handling
+- `api_billing/internal/handlers` - Verification + settlement
+- `api_billing/internal/handlers` - Network registry
+- `api_billing/internal/handlers` - Balance monitoring
+- `api_gateway/internal/middleware` - 402 response + X-PAYMENT handling
 
 ---
 
@@ -366,13 +366,13 @@ Both paths update state in Foghorn's Redis-backed state store. The routing effec
 
 ### Key Files
 
-- `cli/cmd/edge.go` — CLI commands (`provision`, `mode`, `status`, `doctor`, `logs`)
-- `api_sidecar/internal/handlers/handlers.go` — Helmsman HTTP endpoints (`/node/mode`)
-- `api_sidecar/internal/control/client.go` — Upstream mode change via control stream
-- `api_balancing/internal/control/server.go` — Foghorn handler for `ModeChangeRequest`
-- `api_balancing/internal/grpc/server.go` — Foghorn `NodeControlService` (SetNodeOperationalMode, GetNodeHealth)
-- `api_control/internal/grpc/server.go` — Commodore `NodeManagementService` proxy
-- `api_gateway/internal/mcp/tools/infrastructure.go` — MCP tools
+- `cli/cmd` — CLI commands (`provision`, `mode`, `status`, `doctor`, `logs`)
+- `api_sidecar/internal/handlers` — Helmsman HTTP endpoints (`/node/mode`)
+- `api_sidecar/internal/control` — Upstream mode change via control stream
+- `api_balancing/internal/control` — Foghorn handler for `ModeChangeRequest`
+- `api_balancing/internal/grpc` — Foghorn `NodeControlService` (SetNodeOperationalMode, GetNodeHealth)
+- `api_control/internal/grpc` — Commodore `NodeManagementService` proxy
+- `api_gateway/internal/mcp/tools` — MCP tools
 
 ---
 
@@ -391,6 +391,6 @@ Two pieces required for VAT rate determination:
 1. IP geolocation
 2. Wallet network (chain)
 
-Schema: `pkg/database/sql/schema/purser.sql` (`simplified_invoices`)
+Schema: `pkg/database/sql/schema` (`simplified_invoices`)
 
-Configuration: See `docker-compose.yml` and `api_billing/internal/config/config.go` for environment variables.
+Configuration: See the dev compose configuration and environment files under `config/env`.

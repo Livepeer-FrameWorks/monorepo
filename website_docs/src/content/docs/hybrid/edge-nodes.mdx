@@ -80,13 +80,13 @@ frameworks edge init --dir /opt/frameworks-edge \
 
 This creates:
 
-- `.edge.env` - Environment configuration
-- `docker-compose.edge.yml` - MistServer, Helmsman, and Caddy
-- `Caddyfile` - Reverse proxy with automatic HTTPS
+- Edge environment file - Environment configuration
+- Edge compose file - MistServer, Helmsman, and Caddy
+- Caddy config file - Reverse proxy with automatic HTTPS
 
 ## Review the Config
 
-`.edge.env` contains the required settings:
+The edge environment file contains the required settings:
 
 ```bash
 NODE_ID=edge-us-sea-1

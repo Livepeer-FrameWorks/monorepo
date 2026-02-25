@@ -21,7 +21,7 @@ This enables B2B deployments where enterprise customers demand dedicated infrast
 
 ## API
 
-Quartermaster is gRPC-only. See `pkg/proto/quartermaster.proto` for the current surface.
+Quartermaster is gRPC-only. See `pkg/proto` for the current surface.
 
 ## Run (dev)
 

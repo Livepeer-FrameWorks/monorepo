@@ -11,14 +11,14 @@ Draft
 - Default behavior remains tenant-only unless enabled per stream.
 - **Promotional system**: Promo codes, referral program, volume discounts.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Billing is tenant-level only (prepaid balances in Purser).
 - No stream-specific balance tables or APIs in the schema.
 
 Evidence:
 
-- `pkg/database/sql/schema/purser.sql`
+- `pkg/database/sql/schema`
 - `api_billing/`
 
 ## Problem / Motivation
@@ -58,8 +58,8 @@ ENS subdomains provide a human-readable way for viewers to fund streams. See `do
 
 **Integration points:**
 
-- `api_billing/internal/handlers/hdwallet.go` - address derivation
-- `api_billing/internal/handlers/checkout.go` - deposit detection
+- `api_billing/internal/handlers` - address derivation
+- `api_billing/internal/handlers` - deposit detection
 - New `purser.ens_subdomains` table maps subdomain → stream → address
 
 **Revenue share:**
@@ -229,7 +229,7 @@ CREATE TABLE purser.volume_discount_rules (
 
 ## References, Sources & Evidence
 
-- `pkg/database/sql/schema/purser.sql`
+- `pkg/database/sql/schema`
 - `api_billing/`
-- `pkg/graphql/schema.graphql`
+- `pkg/graphql`
 - `docs/rfcs/ens-frameworks-subdomains.md` - ENS subdomain + donation implementation

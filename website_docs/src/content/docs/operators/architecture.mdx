@@ -66,6 +66,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | Helmsman                 | 18007 (HTTP)               | Edge     | MistServer sidecar                                                  |
 | **Support & Interfaces** |                            |          |                                                                     |
 | Deckhand                 | 18015 (HTTP), 19006 (gRPC) | Central  | Support messaging API (Chatwoot adapter)                            |
+| Skipper                  | 18018 (HTTP), 19007 (gRPC) | Central  | AI video consultant API                                             |
 | Web Console              | 18030                      | Central  | Main application interface                                          |
 | Marketing Site           | 18031                      | Central  | Public website                                                      |
 | Forms                    | 18032                      | Central  | Contact form handling                                               |
@@ -123,7 +124,7 @@ _Note: The Android App is currently a stub and represents a planned future inter
 
 ## Deployment Tiers
 
-- **Central**: Commodore, Quartermaster, Purser, Periscope Query, Deckhand, Forms, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse, Listmonk, Chatwoot + Redis.
+- **Central**: Commodore, Quartermaster, Purser, Periscope Query, Deckhand, Skipper, Forms, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse, Listmonk, Chatwoot + Redis.
 - **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Signalman, Kafka, Web Console, Marketing Site.
 - **Central/Regional**: Privateer (WireGuard mesh agent runs on all backend infrastructure nodes).
 - **Edge**: MistServer, Helmsman, Livepeer Gateway.

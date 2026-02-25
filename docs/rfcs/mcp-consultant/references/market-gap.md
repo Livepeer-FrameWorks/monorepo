@@ -1,6 +1,6 @@
 # Market Gap: Cross-Pipeline Video Streaming Diagnosis
 
-Research synthesized Feb 2026.
+Research synthesized from current sources.
 
 ## The Gap Nobody Fills
 

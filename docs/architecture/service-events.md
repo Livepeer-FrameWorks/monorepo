@@ -35,9 +35,9 @@ Deckhand → Decklog → Kafka [service_events] → Signalman → GraphQL Subscr
 
 ## 3. Transport & Envelope
 
-**Protobuf source of truth**: `pkg/proto/ipc.proto` (`ServiceEvent` + typed payloads).
+**Protobuf source of truth**: `pkg/proto` (`ServiceEvent` + typed payloads).
 
-**Kafka JSON envelope**: `pkg/kafka/events.go` (`ServiceEvent` struct).
+**Kafka JSON envelope**: `pkg/kafka` (`ServiceEvent` struct).
 
 Decklog converts protobuf `ServiceEvent` into JSON and publishes to `service_events`.
 
@@ -195,14 +195,14 @@ Event types are string constants emitted by services. The list below reflects cu
 
 ## 9. Source Files (Key)
 
-- `pkg/proto/ipc.proto`
-- `api_firehose/internal/grpc/server.go`
-- `api_gateway/internal/middleware/usage_tracker.go`
-- `api_gateway/internal/resolvers/api_events.go`
-- `api_control/internal/grpc/server.go`
-- `api_tenants/internal/grpc/server.go`
-- `api_ticketing/internal/handlers/webhooks.go`
-- `api_realtime/cmd/signalman/main.go`
-- `api_analytics_ingest/internal/handlers/handlers.go`
-- `api_analytics_query/internal/handlers/billing.go`
-- `api_billing/internal/handlers/jobs.go`
+- `pkg/proto`
+- `api_firehose/internal/grpc`
+- `api_gateway/internal/middleware`
+- `api_gateway/internal/resolvers`
+- `api_control/internal/grpc`
+- `api_tenants/internal/grpc`
+- `api_ticketing/internal/handlers`
+- `api_realtime/cmd/signalman`
+- `api_analytics_ingest/internal/handlers`
+- `api_analytics_query/internal/handlers`
+- `api_billing/internal/handlers`

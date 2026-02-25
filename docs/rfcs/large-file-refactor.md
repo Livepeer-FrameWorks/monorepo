@@ -10,16 +10,16 @@ Draft
 - Define a light policy for when to split files.
 - Apply refactors opportunistically with low risk.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Multiple TypeScript and Go files exceed 1,500+ lines.
 - Large orchestrator files make reviews and navigation harder.
 
 Evidence:
 
-- `npm_player/packages/core/src/core/PlayerController.ts`
-- `api_tenants/internal/grpc/server.go`
-- `api_analytics_query/grpc/server.go`
+- `npm_player/packages/core/src/core`
+- `api_tenants/internal/grpc`
+- `api_analytics_query/internal/grpc`
 
 ## Problem / Motivation
 
@@ -66,6 +66,6 @@ Very large files increase cognitive load, slow reviews, and create merge conflic
 
 ## References, Sources & Evidence
 
-- `npm_player/packages/core/src/core/PlayerController.ts`
-- `api_tenants/internal/grpc/server.go`
-- `api_analytics_query/grpc/server.go`
+- `npm_player/packages/core/src/core`
+- `api_tenants/internal/grpc`
+- `api_analytics_query/internal/grpc`

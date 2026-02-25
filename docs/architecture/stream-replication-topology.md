@@ -69,7 +69,7 @@ Viewer requests stream on Edge A2 (doesn't have it yet)
   → A2 starts serving viewers; state updated: Replicated=true on A2
 ```
 
-**Key path**: `handleGetSource` at `api_balancing/internal/handlers/handlers.go:1314`. This is an HTTP endpoint, not a gRPC trigger. MistServer calls it directly when it needs to pull a stream.
+**Key path**: `handleGetSource` at `api_balancing/internal/handlers`. This is an HTTP endpoint, not a gRPC trigger. MistServer calls it directly when it needs to pull a stream.
 
 **Two source resolution mechanisms**: MistServer has two ways to resolve sources — the HTTP `/?source=` load balancer endpoint (above) and the `STREAM_SOURCE` blocking trigger (below). For live streams, the load balancer handles it. For VOD/artifacts, STREAM_SOURCE handles it. See the "Source Resolution" sections for details.
 
@@ -143,12 +143,12 @@ Foghorn processor.handleStreamSource(trigger):
 
 ## Origin Tracking
 
-| Field                            | Location                      | Meaning                                                                 |
-| -------------------------------- | ----------------------------- | ----------------------------------------------------------------------- |
-| `StreamInstanceState.Inputs`     | `state/stream_state.go:93`    | Number of active ingest inputs. `> 0` = origin                          |
-| `StreamInstanceState.Replicated` | `state/stream_state.go:94`    | `true` = pulling via DTSC (replica), `false` = receiving push (origin)  |
-| `StreamState.NodeID`             | `state/stream_state.go:64`    | Primary node for this stream (usually origin)                           |
-| `EdgeCandidate.IsOrigin`         | `foghorn_federation.proto:61` | Set when `ss.Status == "live" && ss.Inputs > 0` in federation responses |
+| Field                            | Location    | Meaning                                                                 |
+| -------------------------------- | ----------- | ----------------------------------------------------------------------- |
+| `StreamInstanceState.Inputs`     | `state`     | Number of active ingest inputs. `> 0` = origin                          |
+| `StreamInstanceState.Replicated` | `state`     | `true` = pulling via DTSC (replica), `false` = receiving push (origin)  |
+| `StreamState.NodeID`             | `state`     | Primary node for this stream (usually origin)                           |
+| `EdgeCandidate.IsOrigin`         | `pkg/proto` | Set when `ss.Status == "live" && ss.Inputs > 0` in federation responses |
 
 ## Loop Prevention
 
@@ -207,21 +207,21 @@ The topology is **implicit and dynamic** — there is no fixed origin/hub/edge h
 
 ## Key Files
 
-- `api_balancing/internal/handlers/handlers.go:1314` - `handleGetSource`: live stream source selection (HTTP)
-- `api_balancing/internal/handlers/handlers.go:1256` - `resolveRemoteSource`: cross-cluster DTSC URL lookup
-- `api_balancing/internal/handlers/handlers.go:2473` - `arrangeOriginPull`: cross-cluster origin-pull lifecycle
-- `api_sidecar/internal/handlers/handlers.go:558` - `HandleStreamSource`: Helmsman STREAM_SOURCE webhook handler (passthrough to Foghorn)
-- `api_sidecar/internal/config/manager.go:163` - STREAM_SOURCE trigger registration (`sync: true`, no stream filter)
-- `api_balancing/internal/triggers/processor.go:987` - `handleStreamSource`: Foghorn STREAM_SOURCE handler (skips live, resolves VOD/artifacts)
-- `api_balancing/internal/control/server.go:1454` - `BuildDTSCURI`: constructs `dtsc://host:4200/live+stream` URLs
-- `api_balancing/internal/balancer/balancer.go:374` - `rateNodeWithReason`: `isSourceSelection` filtering, `rejectStreamReplicated`
-- `api_balancing/internal/state/stream_state.go:82-97` - `StreamInstanceState`: `Inputs`, `Replicated` fields
-- `api_balancing/internal/federation/peer_manager.go:1169` - `checkReplicationCompletion`: clears ActiveReplication, broadcasts ReplicationEvent
-- `api_balancing/internal/federation/cache.go` - `ActiveReplicationRecord`, `RemoteReplicationEntry` with TTLs
+- `api_balancing/internal/handlers` - `handleGetSource`: live stream source selection (HTTP)
+- `api_balancing/internal/handlers` - `resolveRemoteSource`: cross-cluster DTSC URL lookup
+- `api_balancing/internal/handlers` - `arrangeOriginPull`: cross-cluster origin-pull lifecycle
+- `api_sidecar/internal/handlers` - `HandleStreamSource`: Helmsman STREAM_SOURCE webhook handler (passthrough to Foghorn)
+- `api_sidecar/internal/config` - STREAM_SOURCE trigger registration (`sync: true`, no stream filter)
+- `api_balancing/internal/triggers` - `handleStreamSource`: Foghorn STREAM_SOURCE handler (skips live, resolves VOD/artifacts)
+- `api_balancing/internal/control` - `BuildDTSCURI`: constructs `dtsc://host:4200/live+stream` URLs
+- `api_balancing/internal/balancer` - `rateNodeWithReason`: `isSourceSelection` filtering, `rejectStreamReplicated`
+- `api_balancing/internal/state` - `StreamInstanceState`: `Inputs`, `Replicated` fields
+- `api_balancing/internal/federation` - `checkReplicationCompletion`: clears ActiveReplication, broadcasts ReplicationEvent
+- `api_balancing/internal/federation` - `ActiveReplicationRecord`, `RemoteReplicationEntry` with TTLs
 
 ## Gotchas
 
-- **STREAM_SOURCE is a general MistServer trigger**. It fires when any stream's source setting is loaded — not just VOD. Helmsman forwards it as-is (no filtering). Foghorn's handler skips `live+` streams (`processor.go:1001`) and only resolves VOD/artifacts. For live streams, MistServer falls back to its configured source (the load balancer's HTTP `/?source=` endpoint).
+- **STREAM_SOURCE is a general MistServer trigger**. It fires when any stream's source setting is loaded — not just VOD. Helmsman forwards it as-is (no filtering). Foghorn's stream-source handler skips `live+` streams and only resolves VOD/artifacts. For live streams, MistServer falls back to its configured source (the load balancer's HTTP `/?source=` endpoint).
 - **DTSC port is 4200**. Hardcoded in `BuildDTSCURI`. MistServer's DTSC listener is always on port 4200.
 - **No cascade within a cluster**. If origin goes down, replicas lose their source. There's no automatic promotion of a replica to "relay" for other replicas.
 - **ActiveReplication bridges a timing gap**. Between `NotifyOriginPull` (arrangement) and the stream actually appearing in local state (MistServer pulls and reports metrics), `ActiveReplicationRecord` in Redis (5-min TTL) tells subsequent viewers "a pull is in progress, serve from expected local edge."

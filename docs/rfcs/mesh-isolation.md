@@ -10,15 +10,15 @@ Draft
 - Add optional per-tenant mesh segments for dedicated B2B isolation.
 - Keep shared infrastructure on the shared mesh.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Infrastructure nodes are tied to clusters, not tenants.
 - Privateer applies WireGuard configs per node from Quartermaster, with a single mesh per cluster.
 
 Evidence:
 
-- `pkg/database/sql/schema/quartermaster.sql` (infrastructure_nodes has no `tenant_id`)
-- `api_mesh/internal/agent/agent.go`
+- `pkg/database/sql/schema` (infrastructure_nodes has no `tenant_id`)
+- `api_mesh/internal/agent`
 
 ## Problem / Motivation
 
@@ -70,6 +70,6 @@ B2B customers may require network-level isolation even when sharing a cluster. T
 
 ## References, Sources & Evidence
 
-- `pkg/database/sql/schema/quartermaster.sql`
-- `api_mesh/internal/agent/agent.go`
-- `pkg/proto/quartermaster.proto`
+- `pkg/database/sql/schema`
+- `api_mesh/internal/agent`
+- `pkg/proto`

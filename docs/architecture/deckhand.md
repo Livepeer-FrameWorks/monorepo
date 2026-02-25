@@ -101,9 +101,9 @@ When an agent replies in Chatwoot:
 
 ## Data Model
 
-Proto: `pkg/proto/deckhand.proto`. GraphQL types: `pkg/graphql/schema.graphql` (Conversation, Message, ConversationStatus).
+Proto: `pkg/proto`. GraphQL types: `pkg/graphql` (Conversation, Message, ConversationStatus).
 
-Configuration: See `docker-compose.yml` and `api_ticketing/internal/config/config.go`.
+Configuration: See the dev compose configuration and environment files under `config/env`.
 
 ## Signalman Integration
 

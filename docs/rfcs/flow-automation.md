@@ -11,7 +11,7 @@ Draft
 - Enables auto-clip, alerts, webhooks without custom integration code
 - Integrates with AI detection for intelligent triggers (scene detection, object recognition)
 
-## Current State (as of 2026-02-02)
+## Current State
 
 - No workflow automation system exists
 - Tenants must build custom integrations to react to events

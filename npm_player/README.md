@@ -273,11 +273,11 @@ Full `CreatePlayerConfig` accepted by `createPlayer()`:
 
 The player resolves playback sources through one of three modes. They are mutually exclusive — the first one set wins.
 
-| Priority | Option       | Resolution                                             | When to Use                                                                       |
-| -------- | ------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| 1        | `endpoints`  | None — uses the endpoints as-is                        | You already have resolved edge node URLs (e.g. from your own orchestration layer) |
-| 2        | `mistUrl`    | Fetches `json_{contentId}.js` from MistServer directly | Standalone / playground setups pointing at a known MistServer node                |
-| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API             | Production deployments with multi-node routing                                    |
+| Priority | Option       | Resolution                                          | When to Use                                                                       |
+| -------- | ------------ | --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 1        | `endpoints`  | None — uses the endpoints as-is                     | You already have resolved edge node URLs (e.g. from your own orchestration layer) |
+| 2        | `mistUrl`    | Fetches Mist JSON metadata directly from MistServer | Standalone / playground setups pointing at a known MistServer node                |
+| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API          | Production deployments with multi-node routing                                    |
 
 **`gatewayUrl` (recommended for production)**
 
@@ -293,7 +293,7 @@ createPlayer({
 
 **`mistUrl` (direct MistServer)**
 
-Connects directly to a MistServer node without Gateway involvement. The player fetches `json_{contentId}.js` to get the full source list and codec metadata, then runs the scoring algorithm locally. MistServer is the authority for available protocols and codecs — the player preserves the raw source types (including `ws/video/raw` for WebCodecs).
+Connects directly to a MistServer node without Gateway involvement. The player fetches Mist JSON metadata to get the full source list and codec metadata, then runs the scoring algorithm locally. MistServer is the authority for available protocols and codecs — the player preserves the raw source types (including `ws/video/raw` for WebCodecs).
 
 ```ts
 createPlayer({

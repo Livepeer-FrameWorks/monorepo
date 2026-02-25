@@ -10,7 +10,7 @@ Draft | Proposed | Approved | Implemented | Superseded
 -
 -
 
-## Current State (as of <YYYY-MM-DD>)
+## Current State
 
 What exists in code/runtime/pipeline today. Include gaps or mismatches.
 

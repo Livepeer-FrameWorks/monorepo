@@ -10,8 +10,8 @@ import { Aside } from "@astrojs/starlight/components";
 The cluster manifest is the blueprint for your FrameWorks deployment. It's a YAML file that tells the CLI how to provision infrastructure, services, and interfaces.
 
 <Aside type="tip">
-  FrameWorks uses a GitOps-friendly approach. We recommend committing your `cluster.yaml` to a
-  private repository to track changes over time.
+  FrameWorks uses a GitOps-friendly approach. We recommend committing your cluster manifest private
+  repository to track changes over time.
 </Aside>
 
 ## File Structure
@@ -50,7 +50,7 @@ Cluster manifest type (required).
 **Values:**
 
 - `cluster` - Full multi-service deployment.
-- `edge` - Single edge node deployment (use `edges.yaml` for multi-node edge fleets; see below).
+- `edge` - Single edge node deployment (use the dedicated edge manifest format for multi-node edge fleets; see below).
 
 **Example:**
 
@@ -178,7 +178,7 @@ wireguard:
 
 Database and messaging infrastructure.
 
-> **Version Reference:** See `config/infrastructure.yaml` in the monorepo for tested/recommended versions.
+> **Version Reference:** See `config` in the monorepo for tested/recommended versions.
 
 ### postgres
 
@@ -344,9 +344,9 @@ services:
 
 ---
 
-## Edge Manifest (edges.yaml)
+## Edge Manifest
 
-For multi-node edge fleets, use a dedicated **edge manifest** (`edges.yaml`).
+For multi-node edge fleets, use a dedicated **edge manifest**.
 
 **Format:**
 

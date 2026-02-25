@@ -24,8 +24,8 @@ connections for local development.
 `GRPC_USE_TLS` is **not used**. TLS is determined by cert availability (server)
 and FQDN detection (client).
 
-**Implementation:** `api_balancing/internal/control/server.go:729-780` (server),
-`api_sidecar/internal/control/client.go:440-460` (client)
+**Implementation:** `api_balancing/internal/control` (server),
+`api_sidecar/internal/control` (client)
 
 ## Identity: Two-Phase Edge Enrollment
 
@@ -43,7 +43,7 @@ with:
 If Quartermaster finds a matching fingerprint, it returns the canonical `node_id`
 and `tenant_id`. The edge is registered immediately.
 
-**Implementation:** `api_balancing/internal/control/server.go:269-332`
+**Implementation:** `api_balancing/internal/control`
 
 ### Phase 2: Token-Based Enrollment (New Nodes)
 
@@ -62,7 +62,7 @@ Token payload:
 Tokens are created via the admin CLI (`skipper edge token create`) or the web UI.
 They are consumed atomically on use unless `usage_limit > 1`.
 
-**Implementation:** `api_balancing/internal/control/server.go:334-418`
+**Implementation:** `api_balancing/internal/control`
 
 ### Pre-Flight Registration (PreRegisterEdge)
 
@@ -77,7 +77,7 @@ to validate the enrollment token and receive node assignment data:
 
 The CLI uses this to stage certs and config before starting Caddy/Helmsman.
 
-**Implementation:** `api_balancing/internal/control/server.go:3047-3134`
+**Implementation:** `api_balancing/internal/control`
 
 ## Authorization: SERVICE_TOKEN Interceptor
 
@@ -101,18 +101,18 @@ validates enrollment tokens per-message.
 `FoghornFederation.PeerChannel` is **not** exempt — it uses SERVICE_TOKEN for
 cluster-to-cluster communication.
 
-**Implementation:** `api_balancing/internal/control/server.go:786-817` (exemptions),
-`pkg/middleware/grpc.go:42-100` (interceptor)
+**Implementation:** `api_balancing/internal/control` (exemptions),
+`pkg/middleware` (interceptor)
 
 ## Key Files
 
-| File                                       | Purpose                                                                 |
-| ------------------------------------------ | ----------------------------------------------------------------------- |
-| `api_balancing/internal/control/server.go` | TLS setup, Connect handler, PreRegisterEdge, auth exemptions            |
-| `api_sidecar/internal/control/client.go`   | Client-side TLS (FQDN auto-detect)                                      |
-| `pkg/middleware/grpc.go`                   | SERVICE_TOKEN interceptor                                               |
-| `pkg/proto/foghorn.proto`                  | `PreRegisterEdgeRequest`, `EdgeFingerprint` definitions                 |
-| `pkg/proto/quartermaster.proto`            | `BootstrapEdgeNode`, `ValidateBootstrapToken`, `ResolveNodeFingerprint` |
+| File                             | Purpose                                                                 |
+| -------------------------------- | ----------------------------------------------------------------------- |
+| `api_balancing/internal/control` | TLS setup, Connect handler, PreRegisterEdge, auth exemptions            |
+| `api_sidecar/internal/control`   | Client-side TLS (FQDN auto-detect)                                      |
+| `pkg/middleware`                 | SERVICE_TOKEN interceptor                                               |
+| `pkg/proto`                      | `PreRegisterEdgeRequest`, `EdgeFingerprint` definitions                 |
+| `pkg/proto`                      | `BootstrapEdgeNode`, `ValidateBootstrapToken`, `ResolveNodeFingerprint` |
 
 ## Forward: mTLS
 

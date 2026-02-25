@@ -11,7 +11,7 @@ Implemented (Phase 1) | Phase 2 in design
 - Phase 3 (deferred): Productization and expansion (**3A** heartbeat/investigations, **3B** metering/billing/tier gating, **3C** extra surfaces like docs-embedded chat + API/SDK polish).
 - Research: `./references/` contains industry analysis backing these decisions.
 
-## Current State (as of 2026-02-05)
+## Current State
 
 - MCP server exists with diagnostic tools, knowledge resources, support history, and expert prompts.
 - Customers with MCP-capable clients (Claude Desktop, Cursor, etc.) can diagnose streaming issues via their own LLM.
@@ -458,9 +458,9 @@ Most heartbeats should be silent (`HEARTBEAT_OK`).
 - pgvector extension in PostgreSQL
 - Soft dependency: Lookout (incidents) — Skipper works without it, integrates when available
 - Existing:
-  - `pkg/clients/periscope/grpc_client.go` - QoE data access
-  - `pkg/clients/deckhand/grpc_client.go` - Support history
-  - `pkg/config/env.go` - Config pattern for LLM provider selection
+  - `pkg/clients/periscope` - QoE data access
+  - `pkg/clients/deckhand` - Support history
+  - `pkg/config` - Config pattern for LLM provider selection
 
 ## Alternatives Considered
 

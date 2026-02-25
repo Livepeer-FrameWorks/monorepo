@@ -1,6 +1,6 @@
 # QoE Prediction & Automated Remediation (2025-2026)
 
-Research synthesized Feb 2026. Sources linked throughout.
+Research synthesized from current sources. Sources linked throughout.
 
 ## QoE Prediction: State of the Art
 

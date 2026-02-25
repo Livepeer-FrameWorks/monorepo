@@ -10,7 +10,7 @@ Draft
 - Results stored as JSONL in object storage with expiring download URLs
 - Not subject to normal rate limits; concurrency-limited per tenant
 
-## Current State (as of 2026-02-02)
+## Current State
 
 - All GraphQL queries are synchronous with pagination via Relay connections
 - Large exports require many paginated requests, hitting rate limits

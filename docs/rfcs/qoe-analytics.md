@@ -10,16 +10,16 @@ Draft
 - Add client telemetry (npm_player) and/or Mist playback events to fill gaps.
 - Introduce new ClickHouse tables for playback events and session summaries.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Periscope ingests server-side connection and stream health metrics.
 - No client-side playback telemetry pipeline is wired.
 
 Evidence:
 
-- `pkg/database/sql/clickhouse/periscope.sql`
+- `pkg/database/sql/clickhouse`
 - `api_analytics_ingest/`
-- `npm_player/packages/core/src/core/TelemetryReporter.ts`
+- `npm_player/packages/core/src/core`
 
 ## Problem / Motivation
 
@@ -71,6 +71,6 @@ We cannot quantify viewer experience (TTFF, rebuffering, startup failures) with 
 
 ## References, Sources & Evidence
 
-- `pkg/database/sql/clickhouse/periscope.sql`
+- `pkg/database/sql/clickhouse`
 - `api_analytics_ingest/`
-- `npm_player/packages/core/src/core/TelemetryReporter.ts`
+- `npm_player/packages/core/src/core`

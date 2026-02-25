@@ -178,7 +178,7 @@ PeerHeartbeat messages (10s interval) carry `foghorn_lat`, `foghorn_lon`, and `f
 
 ### Auto-Enrichment
 
-`emitFederationEvent()` in both `handlers.go` and `peer_manager.go` automatically sets `local_lat`, `local_lon` from self-geo and `remote_lat`, `remote_lon` from peer geo cache before emitting. All call sites (peering, replication, artifact, redirect events) get geo enrichment without per-site changes.
+`emitFederationEvent()` in federation handlers automatically sets `local_lat`, `local_lon` from self-geo and `remote_lat`, `remote_lon` from peer geo cache before emitting. All call sites (peering, replication, artifact, redirect events) get geo enrichment without per-site changes.
 
 ### ClickHouse Columns
 
@@ -186,12 +186,12 @@ Federation events carry `local_lat`, `local_lon`, `remote_lat`, `remote_lon` (al
 
 ## Key Files
 
-- `pkg/proto/foghorn_federation.proto` - Service definition (9 RPCs, 9 PeerMessage types)
-- `api_balancing/internal/federation/server.go` - FederationServer: all RPC handlers
-- `api_balancing/internal/federation/client.go` - FederationClient: pool wrapper for outbound RPCs
-- `api_balancing/internal/federation/peer_manager.go` - PeerManager: lifecycle, discovery, telemetry, leader election
-- `api_balancing/internal/federation/cache.go` - RemoteEdgeCache: Redis CRUD with TTLs and Lua-scripted lease ops
-- `api_balancing/cmd/foghorn/main.go` - Wiring: FederationServer, FederationClient, PeerManager, RemoteEdgeCache
+- `pkg/proto` - Service definition (9 RPCs, 9 PeerMessage types)
+- `api_balancing/internal/federation` - FederationServer: all RPC handlers
+- `api_balancing/internal/federation` - FederationClient: pool wrapper for outbound RPCs
+- `api_balancing/internal/federation` - PeerManager: lifecycle, discovery, telemetry, leader election
+- `api_balancing/internal/federation` - RemoteEdgeCache: Redis CRUD with TTLs and Lua-scripted lease ops
+- `api_balancing/cmd/foghorn` - Wiring: FederationServer, FederationClient, PeerManager, RemoteEdgeCache
 
 ## Gotchas
 

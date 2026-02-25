@@ -4,7 +4,7 @@
 
 Partially implemented. Transport TLS works on the Foghorn↔Helmsman path via FQDN
 auto-detect and Navigator-backed wildcard cert in
-`api_balancing/internal/control/server.go`. The proposed platform-wide config pattern
+`api_balancing/internal/control`. The proposed platform-wide config pattern
 (`GRPC_USE_TLS` toggle in `pkg/config` with shared helpers) was not adopted — TLS setup
 is ad-hoc per service. mTLS is not implemented. See `docs/architecture/edge-auth.md`.
 
@@ -14,7 +14,7 @@ is ad-hoc per service. mTLS is not implemented. See `docs/architecture/edge-auth
 - Add an opt-in TLS/mTLS layer for gRPC with per-service rollout.
 - Keep insecure mode as default until multi-cluster or compliance requires TLS.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Many gRPC clients explicitly use `insecure.NewCredentials()`.
 - Foghorn control server has an env-gated TLS toggle, but most clients remain insecure.
@@ -22,9 +22,9 @@ is ad-hoc per service. mTLS is not implemented. See `docs/architecture/edge-auth
 
 Evidence:
 
-- `pkg/clients/*/grpc_client.go`
-- `api_balancing/internal/control/server.go`
-- `api_sidecar/internal/config/env.go`
+- `pkg/clients` gRPC client implementations
+- `api_balancing/internal/control`
+- `api_sidecar/internal/config`
 
 ## Problem / Motivation
 
@@ -85,6 +85,6 @@ Introduce a common gRPC TLS config pattern in `pkg/config` and enforce it in all
 
 ## References, Sources & Evidence
 
-- `pkg/clients/*/grpc_client.go`
-- `api_balancing/internal/control/server.go`
-- `api_sidecar/internal/config/env.go`
+- `pkg/clients` gRPC client implementations
+- `api_balancing/internal/control`
+- `api_sidecar/internal/config`

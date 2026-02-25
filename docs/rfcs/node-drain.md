@@ -10,7 +10,7 @@ Draft
 - Foghorn stops routing new traffic to drained roles while letting existing sessions complete.
 - Optional DNS integration removes drained nodes from pooled records.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - No explicit drain state or drain APIs found in repo.
 - Routing decisions appear to rely on current node state/health without a maintenance flag.
@@ -74,8 +74,8 @@ Operators need to perform maintenance without disrupting active sessions. Withou
 
 ## References, Sources & Evidence
 
-- `pkg/database/sql/schema/quartermaster.sql`
-- `pkg/proto/quartermaster.proto`
+- `pkg/database/sql/schema`
+- `pkg/proto`
 - `api_balancing/`
 - `api_sidecar/`
 - `api_dns/`

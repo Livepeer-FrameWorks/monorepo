@@ -162,9 +162,9 @@ FrameWorks requires several external services. See [External Services](/operator
 Once prerequisites are complete:
 
 1. **Create Cluster Manifest:** See [Cluster Manifest Reference](/operators/cluster-manifest)
-2. **Deploy Infrastructure:** `frameworks cluster provision --manifest cluster.yaml --only infrastructure`
-3. **Initialize Databases:** `frameworks cluster init all --manifest cluster.yaml`
-4. **Deploy Applications:** `frameworks cluster provision --manifest cluster.yaml --only applications`
-5. **Verify Health:** `frameworks cluster doctor --manifest cluster.yaml`
+2. **Deploy Infrastructure:** `frameworks cluster provision --manifest <manifest> --only infrastructure`
+3. **Initialize Databases:** `frameworks cluster init all --manifest <manifest>`
+4. **Deploy Applications:** `frameworks cluster provision --manifest <manifest> --only applications`
+5. **Verify Health:** `frameworks cluster doctor --manifest <manifest>`
 
 See [CLI Reference](/operators/cli-reference) for complete command documentation.

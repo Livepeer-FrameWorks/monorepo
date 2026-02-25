@@ -50,20 +50,20 @@ GROUP BY serving_cluster, content_cluster, tenant_id
 
 ## Key Files
 
-| File                                                 | Purpose                                                                              |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `api_balancing/internal/triggers/processor.go`       | Sets `origin_cluster_id` in streamContext and triggers                               |
-| `api_analytics_ingest/internal/handlers/handlers.go` | Extracts `cluster_id` + `origin_cluster_id` from MistTrigger into ClickHouse         |
-| `api_analytics_query/internal/handlers/billing.go`   | Per-cluster billing summaries (`generateTenantUsageSummary`)                         |
-| `pkg/database/sql/clickhouse/periscope.sql`          | Schema with cluster columns and MVs                                                  |
-| `api_control/internal/grpc/server.go`                | `ResolveIdentifier` enriches with cluster context via `resolveClusterRouteForTenant` |
-| `pkg/proto/ipc.proto`                                | `origin_cluster_id` field on `MistTrigger`                                           |
-| `docs/architecture/billing-tier-provisioning.md`     | Account-level tier provisioning (complementary)                                      |
+| File                                             | Purpose                                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `api_balancing/internal/triggers`                | Sets `origin_cluster_id` in streamContext and triggers                               |
+| `api_analytics_ingest/internal/handlers`         | Extracts `cluster_id` + `origin_cluster_id` from MistTrigger into ClickHouse         |
+| `api_analytics_query/internal/handlers`          | Per-cluster billing summaries (`generateTenantUsageSummary`)                         |
+| `pkg/database/sql/clickhouse`                    | Schema with cluster columns and MVs                                                  |
+| `api_control/internal/grpc`                      | `ResolveIdentifier` enriches with cluster context via `resolveClusterRouteForTenant` |
+| `pkg/proto`                                      | `origin_cluster_id` field on `MistTrigger`                                           |
+| `docs/architecture/billing-tier-provisioning.md` | Account-level tier provisioning (complementary)                                      |
 
 ## Gotchas
 
 - Legacy rows with empty `cluster_id` are attributed to the tenant's primary
-  cluster (`billing.go:229-232`).
+  cluster by analytics-query billing fallback logic.
 - Origin enrichment was coupled to Foghorn connectivity — `resolveFoghornForTenant`
   dialed Foghorn as a side-effect. Now decoupled via `resolveClusterRouteForTenant`
   which only contacts Quartermaster.

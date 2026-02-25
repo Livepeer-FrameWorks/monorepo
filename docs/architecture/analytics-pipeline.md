@@ -33,7 +33,7 @@ It is written as a “how the system works” reference (vs an audit checklist).
 
 ## 1) Emission: MistServer → Helmsman
 
-Helmsman is the boundary where raw MistServer signals become typed protobuf messages (`pkg/proto/ipc.proto`) that the rest of the platform can reason about.
+Helmsman is the boundary where raw MistServer signals become typed protobuf messages (`pkg/proto`) that the rest of the platform can reason about.
 
 ### A) MistServer Webhooks (event-driven)
 
@@ -77,11 +77,11 @@ Client IP → GeoIP lookup → (country, city, raw lat/lon)
 
 **Implementation:**
 
-- GeoIP lookup: `pkg/geoip/geoip.go` (MMDB database)
-- H3 bucketing: `api_balancing/internal/geo/bucket.go`
+- GeoIP lookup: `pkg/geoip` (MMDB database)
+- H3 bucketing: `api_balancing/internal/geo`
 - Resolution 5 = ~253 km² hexagons (~8.5 km edge length)
 
-**Proto contract** (`pkg/proto/ipc.proto`):
+**Proto contract** (`pkg/proto`):
 
 ```protobuf
 message GeoBucket {
@@ -94,8 +94,8 @@ The centroid coordinates (not raw lat/lon) are written to ClickHouse. This provi
 
 Events enriched with geo data:
 
-- `USER_NEW` / `USER_END` (viewer connect/disconnect): `api_balancing/internal/triggers/processor.go`
-- Routing decisions: `api_balancing/internal/handlers/handlers.go`, `api_balancing/internal/grpc/server.go`
+- `USER_NEW` / `USER_END` (viewer connect/disconnect): `api_balancing/internal/triggers`
+- Routing decisions: `api_balancing/internal/handlers`, `api_balancing/internal/grpc`
 
 ### Tenant attribution (critical)
 
@@ -158,11 +158,11 @@ Periscope Ingest routes on Kafka `event_type` (the canonical strings emitted by 
 
 _Note: `api_request_batch` also arrives via `service_events` and is written to `api_requests` (with audit rows in `api_events`)._
 
-If you need to add a new event type, the switch lives in `api_analytics_ingest/internal/handlers/handlers.go` (`HandleAnalyticsEvent`).
+If you need to add a new event type, the switch lives in `api_analytics_ingest/internal/handlers` (`HandleAnalyticsEvent`).
 
 ### Core tables written by ingest
 
-The exact schema is in `pkg/database/sql/clickhouse/periscope.sql`, but conceptually:
+The exact schema is in `pkg/database/sql/clickhouse`, but conceptually:
 
 - `viewer_connection_events`: Viewer connect/disconnect session events (billing source of truth).
 - `stream_event_log`: Stream lifecycle + notable stream events (start/end/errors, etc.).
@@ -181,7 +181,7 @@ The exact schema is in `pkg/database/sql/clickhouse/periscope.sql`, but conceptu
 
 If an insert fails (schema mismatch, non-null constraint violation, etc.), committing Kafka offsets past that message can permanently drop data.
 
-The shared Kafka consumer behavior lives in `pkg/kafka/consumer.go`.
+The shared Kafka consumer behavior lives in `pkg/kafka`.
 
 ## 5) Storage: ClickHouse (Periscope schema)
 
@@ -220,7 +220,7 @@ Most list endpoints use cursor-based (keyset) pagination for time-series tables.
 
 ### Frequently used endpoints (and backing tables)
 
-These live in `api_analytics_query/internal/grpc/server.go`:
+These live in `api_analytics_query/internal/grpc`:
 
 - `GetStreamStatus` / `GetStreamsStatus`: reads `stream_state_current` for near-realtime stream state + quality fields.
 - `GetStreamAnalyticsSummary`: MV-backed range aggregates (e.g., `stream_viewer_5m`, `stream_analytics_daily`, `stream_health_5m`, `client_qoe_5m`, `quality_tier_daily`).
@@ -232,9 +232,9 @@ These live in `api_analytics_query/internal/grpc/server.go`:
 
 Bridge exposes Periscope Query (and other services) via GraphQL:
 
-- GraphQL schema: `pkg/graphql/schema.graphql`
-- gqlgen mapping: `api_gateway/gqlgen.yml`
-- Resolver implementations: `api_gateway/graph/schema.resolvers.go`
+- GraphQL schema: `pkg/graphql`
+- gqlgen mapping: `api_gateway`
+- Resolver implementations: `api_gateway/graph`
 
 ### Live + historical shape
 
@@ -246,7 +246,7 @@ Bridge exposes Periscope Query (and other services) via GraphQL:
 
 Bridge can serve demo/mock analytics data. When adding new analytics fields, also update:
 
-- `api_gateway/internal/demo/generators.go`
+- `api_gateway/internal/demo`
 
 Otherwise demo mode will return `null`/zero for new fields even if prod mode works.
 

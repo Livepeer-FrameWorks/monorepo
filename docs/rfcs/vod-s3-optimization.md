@@ -10,7 +10,7 @@ Draft
 - VOD uploads are accepted as-is without preprocessing.
 - Move to S3 pull playback and a pre-processing pipeline.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Helmsman downloads full VOD assets to local disk via presigned URLs before Mist can serve.
 - Foghorn generates presigned URLs for VOD uploads; assets are marked ready after upload.
@@ -18,9 +18,9 @@ Draft
 
 Evidence:
 
-- `api_sidecar/internal/handlers/storage_manager.go`
-- `api_balancing/internal/grpc/server.go`
-- `api_balancing/internal/storage/s3_client.go`
+- `api_sidecar/internal/handlers`
+- `api_balancing/internal/grpc`
+- `api_balancing/internal/storage`
 
 ## Problem / Motivation
 
@@ -71,6 +71,6 @@ Large VOD assets cause long time-to-first-frame because playback waits for full 
 
 ## References, Sources & Evidence
 
-- `api_sidecar/internal/handlers/storage_manager.go`
-- `api_balancing/internal/grpc/server.go`
-- `api_balancing/internal/storage/s3_client.go`
+- `api_sidecar/internal/handlers`
+- `api_balancing/internal/grpc`
+- `api_balancing/internal/storage`

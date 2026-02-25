@@ -14,17 +14,17 @@ roles, region-aware replication policy, per-stream controls like `max_replicas` 
 - Define an explicit replication topology model (origin, hubs, edges) to improve stability and observability.
 - Add policy inputs (regions, max replicas) and loop prevention.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Foghorn tracks per-node stream state including `replicated` and uses it to exclude replicated nodes from source selection.
 - Replication topology is implicit; no explicit graph or policy model.
 
 Evidence:
 
-- `api_balancing/internal/balancer/balancer.go`
-- `api_balancing/internal/state/stream_state.go`
-- `api_sidecar/internal/handlers/poller.go`
-- `pkg/proto/ipc.proto`
+- `api_balancing/internal/balancer`
+- `api_balancing/internal/state`
+- `api_sidecar/internal/handlers`
+- `pkg/proto`
 
 ## Problem / Motivation
 
@@ -83,7 +83,7 @@ Add policy fields per stream/tenant:
 
 ## References, Sources & Evidence
 
-- `api_balancing/internal/balancer/balancer.go`
-- `api_balancing/internal/state/stream_state.go`
-- `api_sidecar/internal/handlers/poller.go`
-- `pkg/proto/ipc.proto`
+- `api_balancing/internal/balancer`
+- `api_balancing/internal/state`
+- `api_sidecar/internal/handlers`
+- `pkg/proto`

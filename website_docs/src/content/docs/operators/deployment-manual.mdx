@@ -265,6 +265,7 @@ kafka-topics.sh --bootstrap-server $BROKER --create \
 | Purser          | 18003 | 19003 | purser          |
 | Periscope Query | 18004 | 19004 | periscope-query |
 | Deckhand        | 18015 | 19006 | deckhand        |
+| Skipper         | 18018 | 19007 | skipper         |
 | Steward (Forms) | 18032 | -     | steward         |
 
 **Support Services (External):**
@@ -288,6 +289,7 @@ make build-bin-commodore
 make build-bin-purser
 make build-bin-periscope-query
 make build-bin-deckhand
+make build-bin-skipper
 make build-bin-steward
 
 install -d /opt/frameworks/bin

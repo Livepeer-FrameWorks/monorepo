@@ -26,7 +26,7 @@ Payment Provider    API Gateway (public)         Internal Service (mesh only)
 
 ### Gateway Webhook Router
 
-Location: `api_gateway/internal/webhooks/router.go`
+Location: `api_gateway/internal/webhooks`
 
 ```go
 // WebhookRouter routes webhooks to internal services via gRPC
@@ -50,7 +50,7 @@ Examples:
 
 ### Proto Definition
 
-Location: `pkg/proto/shared.proto`
+Location: `pkg/proto`
 
 ```protobuf
 message WebhookRequest {
@@ -70,7 +70,7 @@ message WebhookResponse {
 
 ### Service Implementation
 
-Location: `api_billing/internal/grpc/server.go`
+Location: `api_billing/internal/grpc`
 
 ```go
 func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookRequest) (*pb.WebhookResponse, error) {
@@ -116,6 +116,6 @@ Events handled:
 
 ## Idempotency
 
-Webhook events are deduplicated via `purser.webhook_events` (keyed on `provider` + `event_id`). Schema: `pkg/database/sql/schema/purser.sql`.
+Webhook events are deduplicated via `purser.webhook_events` (keyed on `provider` + `event_id`). Schema: `pkg/database/sql/schema`.
 
 **Security**: Webhook routes skip JWT auth (providers can't authenticate). Signature verification happens in the target service, not Gateway. Gateway enforces per-IP rate limits and rejects payloads >1MB.

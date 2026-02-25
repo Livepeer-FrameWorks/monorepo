@@ -10,12 +10,12 @@ Draft
 - Subdomains map to HD-derived wallet addresses for donations.
 - Donations credit stream balances (ties to stream-balances RFC).
 
-## Current State (as of 2026-01-26)
+## Current State
 
 **Existing infrastructure:**
 
-- HD wallet derivation: `api_billing/internal/handlers/hdwallet.go`
-- Crypto deposit detection: `api_billing/internal/handlers/checkout.go`
+- HD wallet derivation: `api_billing/internal/handlers`
+- Crypto deposit detection: `api_billing/internal/handlers`
 - Stream balances RFC: `docs/rfcs/stream-balances.md` (Draft)
 
 **Missing:**
@@ -26,7 +26,7 @@ Draft
 
 Evidence:
 
-- [Source] HD wallet implementation: `api_billing/internal/handlers/hdwallet.go`
+- [Source] HD wallet implementation: `api_billing/internal/handlers`
 - [Source] Stream balances RFC: `docs/rfcs/stream-balances.md`
 - [Reference] ENS Offchain Resolution (ENSIP-16): https://docs.ens.domains/ensip/16
 
@@ -140,8 +140,8 @@ CREATE TABLE purser.ens_subdomains (
 
 This reuses existing infrastructure:
 
-- `api_billing/internal/handlers/hdwallet.go` - address derivation
-- `api_billing/internal/handlers/checkout.go` - deposit detection
+- `api_billing/internal/handlers` - address derivation
+- `api_billing/internal/handlers` - deposit detection
 - Stream balances (per stream-balances RFC)
 
 ### Text Record Population
@@ -210,8 +210,8 @@ The stream-balances RFC defines per-stream balances. ENS donations integrate as 
 
 ## References, Sources & Evidence
 
-- [Source] HD wallet: `api_billing/internal/handlers/hdwallet.go`
-- [Source] Crypto deposits: `api_billing/internal/handlers/checkout.go`
+- [Source] HD wallet: `api_billing/internal/handlers`
+- [Source] Crypto deposits: `api_billing/internal/handlers`
 - [Source] Stream balances RFC: `docs/rfcs/stream-balances.md`
 - [Reference] CCIP-Read (EIP-3668): https://eips.ethereum.org/EIPS/eip-3668
 - [Reference] ENS Offchain Resolution (ENSIP-16): https://docs.ens.domains/ensip/16

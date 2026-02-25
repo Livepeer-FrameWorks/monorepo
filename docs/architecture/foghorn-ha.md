@@ -209,14 +209,14 @@ Use this matrix when validating relay behavior locally with `docker-compose`.
 
 Deterministic automated coverage:
 
-- `api_balancing/internal/control/relay_test.go`
+- `api_balancing/internal/control`
   - `TestSendWithRelay_LocalSuccess`
   - `TestSendWithRelay_LocalFailRelay`
   - `TestSendWithRelay_LocalSendErrorDoesNotRelay`
-- `api_balancing/internal/grpc/relay_server_test.go`
+- `api_balancing/internal/grpc`
   - `TestForwardCommand_AllCommandTypes`
   - `TestForwardCommand_NodeNotConnected`
-- `api_balancing/internal/grpc/server_forward_federation_test.go`
+- `api_balancing/internal/grpc`
   - `TestForwardArtifact_NoPeerHandles`
   - `TestForwardArtifact_PeerError_ContinuesToNext`
 
@@ -230,13 +230,13 @@ Manual smoke check with compose topology:
 
 ## Key Files
 
-- `api_balancing/internal/state/stream_state.go` - StreamStateManager: in-memory state + Redis write-through
-- `api_balancing/cmd/foghorn/main.go` - Wiring: Redis connection, CLUSTER_ID, FOGHORN_INSTANCE_ID
-- `api_balancing/internal/control/server.go` - CommandRelay, Send*/SendLocal* wrappers, connection lifecycle hooks
-- `api_balancing/internal/grpc/relay_server.go` - FoghornRelay gRPC handler (dispatches to SendLocal\*)
-- `api_balancing/internal/federation/cache.go` - RemoteEdgeCache: federation Redis state, leader lease
-- `pkg/proto/foghorn_relay.proto` - FoghornRelay service definition
-- `docker-compose.yml` - foghorn + foghorn-2 + foghorn-redis topology
+- `api_balancing/internal/state` - StreamStateManager: in-memory state + Redis write-through
+- `api_balancing/cmd/foghorn` - Wiring: Redis connection, CLUSTER_ID, FOGHORN_INSTANCE_ID
+- `api_balancing/internal/control` - CommandRelay, Send*/SendLocal* wrappers, connection lifecycle hooks
+- `api_balancing/internal/grpc` - FoghornRelay gRPC handler (dispatches to SendLocal\*)
+- `api_balancing/internal/federation` - RemoteEdgeCache: federation Redis state, leader lease
+- `pkg/proto` - FoghornRelay service definition
+- dev compose configuration - foghorn + foghorn-2 + foghorn-redis topology
 
 ## Redis Topology
 

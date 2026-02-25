@@ -10,23 +10,23 @@ Proposed
 - 2-hour expiry window is excessive for the threat model
 - No post-upload validation before marking assets ready
 
-## Current State (as of 2026-02-02)
+## Current State
 
 User-facing VOD upload flow: GraphQL → Commodore → Foghorn → S3 presign.
 
 Issues identified:
 
 1. **No size enforcement**: User declares `sizeBytes` in GraphQL input, Foghorn calculates parts, but nothing enforces the declared size. Users can upload arbitrarily large files.
-2. **2-hour presign expiry**: `s3_client.go:437` defaults to 2 hours. Industry standard is 5-15 minutes.
+2. **2-hour presign expiry**: the S3 storage client defaults to 2 hours. Industry standard is 5-15 minutes.
 3. **No Content-Type conditions**: `PresignUploadPart` call only sets bucket/key/uploadId/partNumber.
-4. **No post-upload validation**: `CompleteVodUpload` marks assets ready immediately. TODO at `grpc/server.go:1644-1645` for ffprobe validation is unimplemented.
+4. **No post-upload validation**: `CompleteVodUpload` marks assets ready immediately. TODO at `grpc` for ffprobe validation is unimplemented.
 
 Evidence:
 
-- `api_gateway/internal/resolvers/vod.go:48` - sizeBytes passed without enforcement
-- `api_balancing/internal/storage/s3_client.go:437` - 2-hour expiry
-- `api_balancing/internal/storage/s3_client.go:442-447` - no conditions in presign
-- `api_balancing/internal/grpc/server.go:1644-1645` - TODO for validation
+- `api_gateway/internal/resolvers` - sizeBytes passed without enforcement
+- `api_balancing/internal/storage` - 2-hour expiry
+- `api_balancing/internal/storage` - no conditions in presign
+- `api_balancing/internal/grpc` - TODO for validation
 
 ## Problem / Motivation
 
@@ -52,7 +52,7 @@ Evidence:
 
 ### 1. Reduce presign expiry (low effort)
 
-Change default from 2 hours to 30 minutes in `s3_client.go:437`. Still sufficient for large multipart uploads.
+Change default from 2 hours to 30 minutes in the S3 storage client. Still sufficient for large multipart uploads.
 
 ### 2. Post-upload size validation (medium effort)
 
@@ -81,8 +81,8 @@ Add S3 bucket policies:
 
 ## Impact / Dependencies
 
-- `api_balancing/internal/storage/s3_client.go` - expiry change, add HeadObject
-- `api_balancing/internal/grpc/server.go` - validation in CompleteVodUpload
+- `api_balancing/internal/storage` - expiry change, add HeadObject
+- `api_balancing/internal/grpc` - validation in CompleteVodUpload
 - New: ffprobe integration (could use existing processing infrastructure)
 - Bucket policies via Terraform/infrastructure
 
@@ -111,6 +111,6 @@ Add S3 bucket policies:
 
 ## References, Sources & Evidence
 
-- [Evidence] `api_balancing/internal/storage/s3_client.go:437` - 2-hour expiry
-- [Evidence] `api_balancing/internal/grpc/server.go:1644-1645` - TODO for validation
+- [Evidence] `api_balancing/internal/storage` - 2-hour expiry
+- [Evidence] `api_balancing/internal/grpc` - TODO for validation
 - [Reference] AWS presigned URL best practices: short expiry, post-upload validation

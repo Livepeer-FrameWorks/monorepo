@@ -10,7 +10,7 @@ Draft
 - Keep MVP small: rooms, participants, stage roles, and realtime updates.
 - **Phase 2**: Viewer engagement economy (channel points, hype trains, leaderboards, flair).
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - `api_rooms` is a stub only; no implementation exists.
 - No GraphQL or gRPC surface for rooms.
@@ -103,5 +103,5 @@ After MVP stabilizes, add viewer engagement features:
 
 - `api_rooms/README.md`
 - `api_realtime/`
-- `pkg/graphql/schema.graphql`
+- `pkg/graphql`
 - [Reference] Industry patterns for viewer loyalty programs and gamification

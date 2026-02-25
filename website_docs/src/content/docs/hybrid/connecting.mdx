@@ -129,10 +129,10 @@ Both work. Direct ingest means lower latency to your node; network ingest means 
 
 ## Capacity and Capabilities
 
-Your node advertises what it can do. Set these in `.edge.env`, and pass them through to the helmsman container (add them to `helmsman.environment` or add `env_file: .edge.env` in `docker-compose.edge.yml`):
+Your node advertises what it can do. Set these in your edge environment file, and pass them through to the helmsman container (add them to `helmsman.environment` or use `env_file` in your edge compose file):
 
 ```bash
-# In .edge.env
+# In your edge environment file
 HELMSMAN_CAP_INGEST=true    # Can receive RTMP/SRT streams
 HELMSMAN_CAP_EDGE=true      # Can serve viewers
 HELMSMAN_CAP_STORAGE=true   # Can store recordings

@@ -10,15 +10,15 @@ Draft
 - Use presigned URLs so edge nodes never hold S3 credentials.
 - Enable durable, shareable artifacts across edge nodes.
 
-## Current State (as of 2026-01-13)
+## Current State
 
 - Helmsman uses presigned URLs for clip/DVR uploads and downloads.
-- Storage is still effectively local-first; there is no shared `pkg/storage` abstraction.
+- Storage is still effectively local-first; there is no shared storage abstraction package yet.
 
 Evidence:
 
-- `api_sidecar/internal/handlers/storage_manager.go`
-- `api_balancing/internal/storage/s3_client.go`
+- `api_sidecar/internal/handlers`
+- `api_balancing/internal/storage`
 
 ## Problem / Motivation
 
@@ -70,5 +70,5 @@ Local-only storage is ephemeral and limits durability and sharing. We need a con
 
 ## References, Sources & Evidence
 
-- `api_sidecar/internal/handlers/storage_manager.go`
-- `api_balancing/internal/storage/s3_client.go`
+- `api_sidecar/internal/handlers`
+- `api_balancing/internal/storage`

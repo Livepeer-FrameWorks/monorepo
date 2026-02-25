@@ -51,7 +51,7 @@ In `quartermaster`, add:
 
 ### 3) ClickHouse: acquisition events + network rollups
 
-Add tables in `periscope.sql`:
+Add tables in the ClickHouse bootstrap schema:
 
 - `tenant_acquisition_events` for raw acquisition events
 - `network usage` is queried by aggregating existing daily rollups (tenant_viewer_daily, processing_daily, api_usage_daily)

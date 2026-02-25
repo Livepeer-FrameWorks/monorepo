@@ -252,7 +252,7 @@ These point to the current canonical implementation. Other apps may extend or ov
 | Design tokens      | `website_application/src/styles/tokens.css`                       |
 | Layout primitives  | `website_application/src/styles/layout.css`                       |
 | Slab classes       | `website_application/src/styles/layout.css` (SLAB SYSTEM section) |
-| GridSeam component | `website_application/src/lib/components/layout/GridSeam.svelte`   |
+| GridSeam component | `website_application/src/lib/components/layout`                   |
 | Marketing tokens   | `website_marketing/src/index.css`                                 |
 | Marketing layout   | `website_marketing/src/styles/marketing/layout.css`               |
 
