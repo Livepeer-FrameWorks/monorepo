@@ -59,14 +59,14 @@ INSERT INTO periscope.node_state_current (
     latitude, longitude, location,
     metadata, updated_at
 ) VALUES
-(   -- Local dev node
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'edge-node-1',
+(   -- Local dev node (Leiden edge)
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'edge-node-1',
     15.2, 2100000000, 16000000000,
     45000000000, 500000000000,
     0, 0,
     0, 1,
-    52.3676, 4.9041, 'Amsterdam',
-    '{"region":"local","node_name":"edge-node-1"}',
+    52.1601, 4.4970, 'Leiden',
+    '{"region":"eu-west","node_name":"edge-node-1"}',
     now()
 );
 
@@ -81,17 +81,7 @@ INSERT INTO periscope.node_state_current (
     metadata, updated_at
 ) VALUES
 (
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'edge-leiden',
-    0, 0, 16000000000,
-    0, 500000000000,
-    0, 0,
-    0, 0,
-    52.1601, 4.4970, 'Leiden',
-    '{"region":"eu-west","node_name":"edge-leiden"}',
-    now() - INTERVAL 1 DAY
-),
-(
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'edge-ashburn',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'edge-ashburn',
     0, 0, 16000000000,
     0, 500000000000,
     0, 0,
@@ -101,7 +91,7 @@ INSERT INTO periscope.node_state_current (
     now() - INTERVAL 1 DAY
 ),
 (
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'edge-singapore',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'edge-singapore',
     0, 0, 16000000000,
     0, 500000000000,
     0, 0,
@@ -125,7 +115,7 @@ INSERT INTO periscope.stream_event_log (
 (
     generateUUIDv4(), now() - INTERVAL 3 HOUR,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001', '5eedfeed-11fe-ca57-feed-11feca570001',
-    'demo_live_stream_001', 'edge-leiden',
+    'demo_live_stream_001', 'edge-node-1',
     'stream_start', 'online', 'FULL',
     2, '1080p60', 1920, 1080, 60.0, 'H264', 4500,
     0, 1, 2, 0,
@@ -135,7 +125,7 @@ INSERT INTO periscope.stream_event_log (
 (
     generateUUIDv4(), now() - INTERVAL 2 HOUR,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001', '5eedfeed-11fe-ca57-feed-11feca570001',
-    'demo_live_stream_001', 'edge-leiden',
+    'demo_live_stream_001', 'edge-node-1',
     'stream_buffer', 'online', 'RECOVER',
     2, '1080p60', 1920, 1080, 60.0, 'H264', 4500,
     18, 1, 2, 7520,
@@ -145,7 +135,7 @@ INSERT INTO periscope.stream_event_log (
 (
     generateUUIDv4(), now() - INTERVAL 90 MINUTE,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001', '5eedfeed-11fe-ca57-feed-11feca570001',
-    'demo_live_stream_001', 'edge-leiden',
+    'demo_live_stream_001', 'edge-node-1',
     'track_list_update', 'online', 'FULL',
     2, '1080p60', 1920, 1080, 60.0, 'H264', 4500,
     24, 1, 2, 14500,
@@ -155,7 +145,7 @@ INSERT INTO periscope.stream_event_log (
 (
     generateUUIDv4(), now() - INTERVAL 30 MINUTE,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001', '5eedfeed-11fe-ca57-feed-11feca570001',
-    'demo_live_stream_001', 'edge-leiden',
+    'demo_live_stream_001', 'edge-node-1',
     'stream_end', 'offline', 'EMPTY',
     2, '1080p60', 1920, 1080, 60.0, 'H264', 4500,
     0, 0, 0, 293550,
@@ -181,7 +171,7 @@ SELECT
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
-    'edge-leiden' as node_id,
+    'edge-node-1' as node_id,
 
     toUInt32(4500 + 500 * sin(number/120) + rand()%200) as bitrate,
     if(rand()%100 > 98, 55 + rand()%5, 60.0) as fps,
@@ -235,7 +225,7 @@ SELECT
     concat('session-', toString(number)) as session_id,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as connection_addr,
     arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + rand()%3) as connector,
-    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
     '/live/demo_live_stream_001/index.m3u8' as request_url,
     arrayElement(['US', 'US', 'US', 'US', 'NL', 'NL', 'GB', 'GB', 'DE', 'JP', 'JP', 'SG'], 1 + number%12) as country_code,
     multiIf(
@@ -262,8 +252,8 @@ SELECT
         number%12 < 11, 139.69 + (rand()%100 - 50)/1000.0,
         103.82 + (rand()%100 - 50)/1000.0
     ) as longitude,
-    NULL as client_bucket_h3,
-    NULL as client_bucket_res,
+    geoToH3(longitude, latitude, 5) as client_bucket_h3,
+    5 as client_bucket_res,
     NULL as node_bucket_h3,
     NULL as node_bucket_res,
     'connect' as event_type,
@@ -287,7 +277,7 @@ SELECT
     concat('session-', toString(number)) as session_id,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as connection_addr,
     arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + rand()%3) as connector,
-    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
     '/live/demo_live_stream_001/index.m3u8' as request_url,
     arrayElement(['US', 'US', 'US', 'US', 'NL', 'NL', 'GB', 'GB', 'DE', 'JP', 'JP', 'SG'], 1 + number%12) as country_code,
     multiIf(
@@ -314,8 +304,8 @@ SELECT
         number%12 < 11, 139.69 + (rand()%100 - 50)/1000.0,
         103.82 + (rand()%100 - 50)/1000.0
     ) as longitude,
-    NULL as client_bucket_h3,
-    NULL as client_bucket_res,
+    geoToH3(longitude, latitude, 5) as client_bucket_h3,
+    5 as client_bucket_res,
     NULL as node_bucket_h3,
     NULL as node_bucket_res,
     'disconnect' as event_type,
@@ -342,7 +332,7 @@ SELECT
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
-    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as selected_node,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as selected_node,
     'success' as status,
     'geo-proximity' as details,
     800 + rand() % 200 as score,
@@ -350,13 +340,13 @@ SELECT
     arrayElement(['US', 'NL', 'SG'], 1 + rand()%3) as client_country,
     arrayElement([40.71, 52.36, 1.35], 1 + rand()%3) + (rand()%100 - 50)/500.0 as client_latitude,
     arrayElement([-74.00, 4.90, 103.82], 1 + rand()%3) + (rand()%100 - 50)/500.0 as client_longitude,
-    NULL as client_bucket_h3,
-    NULL as client_bucket_res,
+    geoToH3(client_longitude, client_latitude, 5) as client_bucket_h3,
+    5 as client_bucket_res,
     arrayElement([52.16, 39.04, 1.35], 1 + rand()%3) as node_latitude,
     arrayElement([4.49, -77.49, 103.82], 1 + rand()%3) as node_longitude,
-    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_name,
-    NULL as node_bucket_h3,
-    NULL as node_bucket_res,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_name,
+    geoToH3(node_longitude, node_latitude, 5) as node_bucket_h3,
+    5 as node_bucket_res,
     NULL as selected_node_id,
     toFloat64(350 + rand()%500) as routing_distance_km,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as stream_tenant_id,
@@ -373,7 +363,9 @@ INSERT INTO periscope.routing_decisions (
     timestamp, tenant_id, stream_id, internal_name,
     selected_node, status, details, score,
     client_ip, client_country, client_latitude, client_longitude,
+    client_bucket_h3, client_bucket_res,
     node_latitude, node_longitude, node_name,
+    node_bucket_h3, node_bucket_res,
     routing_distance_km, stream_tenant_id,
     cluster_id, remote_cluster_id,
     latency_ms, candidates_count, event_type, source
@@ -394,9 +386,13 @@ SELECT
     arrayElement(['US', 'JP', 'DE', 'GB'], 1 + rand()%4) as client_country,
     arrayElement([40.71, 35.68, 52.52, 51.50], 1 + rand()%4) as client_latitude,
     arrayElement([-74.00, 139.69, 13.40, -0.12], 1 + rand()%4) as client_longitude,
+    geoToH3(client_longitude, client_latitude, 5) as client_bucket_h3,
+    5 as client_bucket_res,
     arrayElement([39.04, 1.35], 1 + number%2) as node_latitude,
     arrayElement([-77.49, 103.82], 1 + number%2) as node_longitude,
     arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2) as node_name,
+    geoToH3(node_longitude, node_latitude, 5) as node_bucket_h3,
+    5 as node_bucket_res,
     toFloat64(5000 + rand()%8000) as routing_distance_km,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as stream_tenant_id,
     'central-primary' as cluster_id,
@@ -434,7 +430,7 @@ FROM (
         'demo_live_stream_001' as stream_name,
         toNullable('5eedfeed-11fe-ca57-feed-11feca570001') as stream_id,
         toNullable(arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2)) as source_node,
-        toNullable('edge-leiden') as dest_node,
+        toNullable('edge-node-1') as dest_node,
         toNullable(concat('dtsc://', arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2), ':4200/demo_live_stream_001')) as dtsc_url,
         toNullable(toFloat32(0)) as latency_ms,
         toNullable(toFloat32(0)) as time_to_live_ms,
@@ -461,7 +457,7 @@ FROM (
         'demo_live_stream_001',
         toNullable('5eedfeed-11fe-ca57-feed-11feca570001'),
         toNullable(arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2)),
-        toNullable('edge-leiden'),
+        toNullable('edge-node-1'),
         toNullable(concat('dtsc://', arrayElement(['edge-ashburn', 'edge-singapore'], 1 + number%2), ':4200/demo_live_stream_001')),
         toNullable(toFloat32(0)), toNullable(toFloat32(0)), toNullable(''),
         toNullable(toUInt32(0)), toNullable(toUInt32(0)), toNullable(toUInt32(0)),
@@ -568,7 +564,7 @@ INSERT INTO periscope.track_list_events (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
-    'edge-leiden',
+    'edge-node-1',
     '[{"trackName":"video_1","trackType":"video","codec":"H264","width":1920,"height":1080,"fps":60,"bitrateKbps":4500},{"trackName":"audio_1","trackType":"audio","codec":"AAC"}]',
     2, 1, 1,
     1920, 1080, 60.0, 'H264', 4500,
@@ -580,7 +576,7 @@ INSERT INTO periscope.track_list_events (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
-    'edge-leiden',
+    'edge-node-1',
     '[{"trackName":"video_1","trackType":"video","codec":"H264","width":2560,"height":1440,"fps":60,"bitrateKbps":6500},{"trackName":"audio_1","trackType":"audio","codec":"AAC"}]',
     2, 1, 1,
     2560, 1440, 60.0, 'H264', 6500,
@@ -592,7 +588,7 @@ INSERT INTO periscope.track_list_events (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
-    'edge-leiden',
+    'edge-node-1',
     '[{"trackName":"video_1","trackType":"video","codec":"H264","width":3840,"height":2160,"fps":60,"bitrateKbps":12000},{"trackName":"audio_1","trackType":"audio","codec":"AAC"}]',
     2, 1, 1,
     3840, 2160, 60.0, 'H264', 12000,
@@ -616,7 +612,7 @@ SELECT
     toDateTime(now() - INTERVAL number MINUTE) as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     'central-primary' as cluster_id,
-    'edge-leiden' as node_id,
+    'edge-node-1' as node_id,
     toFloat32(30 + 20 * sin(number/120) + rand()%10) as cpu_usage,
     16000000000 as ram_max,
     4000000000 + (number * 50000) % 8000000000 as ram_current,
@@ -653,7 +649,7 @@ INSERT INTO periscope.artifact_events (
     NULL,
     'clip_demo_001',
     'done', 'clip', 1700000000, 1700003600,
-    'edge-leiden', 100, 'clip complete',
+    'edge-node-1', 100, 'clip complete',
     '/var/data/clips/clip_demo_001.mp4', 's3://demo/clips/clip_demo_001.mp4', 240000000,
     toUnixTimestamp(now() + INTERVAL 7 DAY)
 ),
@@ -665,7 +661,7 @@ INSERT INTO periscope.artifact_events (
     NULL,
     'dvr_demo_001',
     'done', 'dvr', 1700001000, 1700004600,
-    'edge-leiden', 100, 'dvr complete',
+    'edge-node-1', 100, 'dvr complete',
     '/var/data/dvr/dvr_demo_001.m3u8', 's3://demo/dvr/dvr_demo_001.m3u8', 480000000,
     toUnixTimestamp(now() + INTERVAL 14 DAY)
 ),
@@ -677,7 +673,7 @@ INSERT INTO periscope.artifact_events (
     'vod_demo_001.mp4',
     'vod_demo_001',
     'done', 'vod', NULL, NULL,
-    'edge-leiden', 100, 'vod uploaded',
+    'edge-node-1', 100, 'vod uploaded',
     '/var/data/vod/vod_demo_001.mp4', 's3://demo/vod/vod_demo_001.mp4', 800000000,
     toUnixTimestamp(now() + INTERVAL 30 DAY)
 );
@@ -703,7 +699,7 @@ INSERT INTO periscope.artifact_state_current (
     1700000000, 1700003600,
     1, NULL,
     '/var/data/clips/clip_demo_001.mp4', 's3://demo/clips/clip_demo_001.mp4', 240000000,
-    'edge-leiden',
+    'edge-node-1',
     now(), now() + INTERVAL 7 DAY
 ),
 (
@@ -717,7 +713,7 @@ INSERT INTO periscope.artifact_state_current (
     1700001000, 1700004600,
     12, '/var/data/dvr/dvr_demo_001.m3u8',
     '/var/data/dvr/dvr_demo_001.m3u8', 's3://demo/dvr/dvr_demo_001.m3u8', 480000000,
-    'edge-leiden',
+    'edge-node-1',
     now(), now() + INTERVAL 14 DAY
 ),
 (
@@ -731,7 +727,7 @@ INSERT INTO periscope.artifact_state_current (
     NULL, NULL,
     NULL, NULL,
     '/var/data/vod/vod_demo_001.mp4', 's3://demo/vod/vod_demo_001.mp4', 800000000,
-    'edge-leiden',
+    'edge-node-1',
     now(), now() + INTERVAL 30 DAY
 );
 
@@ -747,7 +743,7 @@ INSERT INTO periscope.storage_snapshots (
 (
     now(),
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
-    'edge-leiden',
+    'edge-node-1',
     'hot',
     160000000000,
     320,
@@ -759,7 +755,7 @@ INSERT INTO periscope.storage_snapshots (
 (
     now(),
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
-    'edge-leiden',
+    'edge-node-1',
     'cold',
     120000000000,
     280,
@@ -785,7 +781,7 @@ INSERT INTO periscope.storage_events (
     240000000,
     's3://demo/clips/clip_demo_001.mp4',
     '/var/data/clips/clip_demo_001.mp4',
-    'edge-leiden',
+    'edge-node-1',
     5000, 0, NULL
 ),
 (
@@ -798,7 +794,7 @@ INSERT INTO periscope.storage_events (
     800000000,
     's3://demo/vod/vod_demo_001.mp4',
     '/var/data/vod/vod_demo_001.mp4',
-    'edge-leiden',
+    'edge-node-1',
     8000, 0, NULL
 );
 
@@ -815,7 +811,7 @@ INSERT INTO periscope.processing_events (
 SELECT
     toDateTime(now() - INTERVAL (number * 5) MINUTE) as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
-    'edge-leiden' as node_id,
+    'edge-node-1' as node_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
     'transcode' as process_type,
@@ -847,7 +843,7 @@ SELECT
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
     concat('session-', toString(number % 200)) as session_id,
-    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
     arrayElement(['HLS', 'WebRTC', 'DASH'], 1 + rand()%3) as protocol,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as host,
     toFloat32(0.5 + rand()%100 / 100.0) as connection_time,

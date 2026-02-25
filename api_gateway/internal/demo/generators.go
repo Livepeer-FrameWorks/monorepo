@@ -3448,9 +3448,9 @@ func GenerateMySubscriptions() []*pb.InfrastructureCluster {
 	return []*pb.InfrastructureCluster{
 		{
 			Id:                   "cluster_demo_platform",
-			ClusterId:            "central-primary",
-			ClusterName:          "Central Primary Cluster",
-			ClusterType:          "origin",
+			ClusterId:            "demo-media",
+			ClusterName:          "Demo Media Cluster",
+			ClusterType:          "regional",
 			DeploymentModel:      "managed",
 			BaseUrl:              "https://api.demo.frameworks.dev",
 			MaxConcurrentStreams: 100,
@@ -4696,15 +4696,15 @@ func GenerateFederationSummary() *pb.FederationSummary {
 
 // GenerateNetworkStatus returns demo public network topology (no tenant data).
 func GenerateNetworkStatus() *model.NetworkStatus {
-	controlDesc := "Control plane: API gateway, orchestration, billing"
-	mediaDesc := "Media plane: stream routing, analytics, real-time delivery"
+	platformDesc := "Platform cluster: all control, data, and foghorn services"
+	mediaDesc := "Media cluster: edge nodes, stream routing, viewer delivery"
 	usEastDesc := "Low-latency edge for US East Coast"
 	apacDesc := "Asia-Pacific edge for APAC viewers"
 
 	return &model.NetworkStatus{
 		Clusters: []*model.NetworkClusterStatus{
-			{ClusterID: "central-control", Name: "Central Control Plane", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 0, Status: "healthy", ClusterType: "central", ShortDescription: &controlDesc, MaxStreams: 0, CurrentStreams: 0, MaxViewers: 0, CurrentViewers: 0, MaxBandwidthMbps: 0, CurrentBandwidthMbps: 0, Services: []string{"commodore", "gateway", "purser", "skipper"}},
-			{ClusterID: "central-primary", Name: "Central Media Plane", Region: "US-Central", Latitude: 41.9000, Longitude: -87.6500, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 2, Status: "healthy", ClusterType: "central", ShortDescription: &mediaDesc, MaxStreams: 500, CurrentStreams: 12, MaxViewers: 10000, CurrentViewers: 340, MaxBandwidthMbps: 10000, CurrentBandwidthMbps: 1200, Services: []string{"decklog", "foghorn", "periscope_ingest", "signalman"}},
+			{ClusterID: "central-primary", Name: "Central Platform", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 2, Status: "healthy", ClusterType: "central", ShortDescription: &platformDesc, MaxStreams: 0, CurrentStreams: 0, MaxViewers: 0, CurrentViewers: 0, MaxBandwidthMbps: 0, CurrentBandwidthMbps: 0, Services: []string{"commodore", "decklog", "foghorn", "gateway", "periscope_ingest", "purser", "signalman", "skipper"}},
+			{ClusterID: "demo-media", Name: "Demo Media Cluster", Region: "US-Central", Latitude: 41.9000, Longitude: -87.6500, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 0, Status: "healthy", ClusterType: "regional", ShortDescription: &mediaDesc, MaxStreams: 500, CurrentStreams: 12, MaxViewers: 10000, CurrentViewers: 340, MaxBandwidthMbps: 10000, CurrentBandwidthMbps: 1200, Services: []string{"helmsman"}},
 			{ClusterID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "healthy", ClusterType: "shared-community", ShortDescription: &usEastDesc, MaxStreams: 200, CurrentStreams: 5, MaxViewers: 5000, CurrentViewers: 180, MaxBandwidthMbps: 5000, CurrentBandwidthMbps: 600, Services: []string{"foghorn", "helmsman"}},
 			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "healthy", ClusterType: "shared-community", ShortDescription: &apacDesc, MaxStreams: 100, CurrentStreams: 3, MaxViewers: 3000, CurrentViewers: 95, MaxBandwidthMbps: 3000, CurrentBandwidthMbps: 280, Services: []string{"foghorn", "helmsman"}},
 		},
@@ -4713,13 +4713,13 @@ func GenerateNetworkStatus() *model.NetworkStatus {
 			{SourceCluster: "central-primary", TargetCluster: "apac-edge", Connected: true},
 		},
 		Nodes: []*model.NetworkNode{
-			// Control plane nodes
-			{NodeID: "central-ctrl-1", Name: "Control 1", NodeType: "control", Latitude: 41.8781, Longitude: -87.6298, Status: "active", ClusterID: "central-control"},
-			{NodeID: "central-ctrl-2", Name: "Control 2", NodeType: "control", Latitude: 41.8750, Longitude: -87.6350, Status: "active", ClusterID: "central-control"},
-			// Media plane nodes
-			{NodeID: "central-media-1", Name: "Media 1", NodeType: "media", Latitude: 41.9000, Longitude: -87.6500, Status: "active", ClusterID: "central-primary"},
-			{NodeID: "central-edge-1", Name: "Edge 1", NodeType: "edge", Latitude: 41.8900, Longitude: -87.6400, Status: "active", ClusterID: "central-primary"},
-			{NodeID: "central-edge-2", Name: "Edge 2", NodeType: "edge", Latitude: 41.8850, Longitude: -87.6200, Status: "active", ClusterID: "central-primary"},
+			// Platform nodes (all services on central-primary)
+			{NodeID: "central-node-1", Name: "Platform Node 1", NodeType: "core", Latitude: 41.8781, Longitude: -87.6298, Status: "active", ClusterID: "central-primary"},
+			{NodeID: "central-node-2", Name: "Platform Node 2", NodeType: "core", Latitude: 41.8750, Longitude: -87.6350, Status: "active", ClusterID: "central-primary"},
+			// Media cluster edge nodes (demo-media)
+			{NodeID: "edge-node-1", Name: "Edge Leiden", NodeType: "edge", Latitude: 52.1601, Longitude: 4.4970, Status: "active", ClusterID: "demo-media"},
+			{NodeID: "edge-ashburn", Name: "Edge Ashburn", NodeType: "edge", Latitude: 39.0438, Longitude: -77.4874, Status: "offline", ClusterID: "demo-media"},
+			{NodeID: "edge-singapore", Name: "Edge Singapore", NodeType: "edge", Latitude: 1.3521, Longitude: 103.8198, Status: "offline", ClusterID: "demo-media"},
 			// US East edge nodes
 			{NodeID: "useast-edge-1", Name: "Edge 1", NodeType: "edge", Latitude: 40.7128, Longitude: -74.0060, Status: "active", ClusterID: "us-east-edge"},
 			{NodeID: "useast-edge-2", Name: "Edge 2", NodeType: "edge", Latitude: 40.7200, Longitude: -73.9900, Status: "active", ClusterID: "us-east-edge"},
@@ -4729,16 +4729,17 @@ func GenerateNetworkStatus() *model.NetworkStatus {
 			{NodeID: "apac-edge-2", Name: "Edge 2", NodeType: "edge", Latitude: 35.6900, Longitude: 139.6700, Status: "active", ClusterID: "apac-edge"},
 		},
 		ServiceInstances: []*model.NetworkServiceInstance{
-			// Control plane services
-			{InstanceID: "gateway-central-01", ServiceID: "gateway", ClusterID: "central-control", NodeID: stringPtr("central-ctrl-1"), Status: "running", HealthStatus: "healthy"},
-			{InstanceID: "commodore-central-01", ServiceID: "commodore", ClusterID: "central-control", NodeID: stringPtr("central-ctrl-1"), Status: "running", HealthStatus: "healthy"},
-			{InstanceID: "purser-central-01", ServiceID: "purser", ClusterID: "central-control", NodeID: stringPtr("central-ctrl-2"), Status: "running", HealthStatus: "healthy"},
-			{InstanceID: "skipper-central-01", ServiceID: "skipper", ClusterID: "central-control", NodeID: stringPtr("central-ctrl-2"), Status: "running", HealthStatus: "healthy"},
-			// Media plane services
-			{InstanceID: "foghorn-central-01", ServiceID: "foghorn", ClusterID: "central-primary", NodeID: stringPtr("central-media-1"), Status: "running", HealthStatus: "healthy"},
-			{InstanceID: "signalman-central-01", ServiceID: "signalman", ClusterID: "central-primary", NodeID: stringPtr("central-media-1"), Status: "running", HealthStatus: "healthy"},
-			{InstanceID: "decklog-central-01", ServiceID: "decklog", ClusterID: "central-primary", NodeID: stringPtr("central-media-1"), Status: "running", HealthStatus: "healthy"},
-			{InstanceID: "periscope-central-01", ServiceID: "periscope_ingest", ClusterID: "central-primary", NodeID: stringPtr("central-media-1"), Status: "running", HealthStatus: "healthy"},
+			// All platform services on central-primary
+			{InstanceID: "gateway-central-01", ServiceID: "gateway", ClusterID: "central-primary", NodeID: stringPtr("central-node-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "commodore-central-01", ServiceID: "commodore", ClusterID: "central-primary", NodeID: stringPtr("central-node-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "purser-central-01", ServiceID: "purser", ClusterID: "central-primary", NodeID: stringPtr("central-node-2"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "skipper-central-01", ServiceID: "skipper", ClusterID: "central-primary", NodeID: stringPtr("central-node-2"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "signalman-central-01", ServiceID: "signalman", ClusterID: "central-primary", NodeID: stringPtr("central-node-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "decklog-central-01", ServiceID: "decklog", ClusterID: "central-primary", NodeID: stringPtr("central-node-2"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "periscope-central-01", ServiceID: "periscope_ingest", ClusterID: "central-primary", NodeID: stringPtr("central-node-2"), Status: "running", HealthStatus: "healthy"},
+			// Foghorn HA pair on platform cluster (serves demo-media via cluster_assignments)
+			{InstanceID: "foghorn-1", ServiceID: "foghorn", ClusterID: "central-primary", NodeID: stringPtr("central-node-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "foghorn-2", ServiceID: "foghorn", ClusterID: "central-primary", NodeID: stringPtr("central-node-2"), Status: "running", HealthStatus: "healthy"},
 			// Edge services
 			{InstanceID: "foghorn-useast-01", ServiceID: "foghorn", ClusterID: "us-east-edge", NodeID: stringPtr("useast-gw-1"), Status: "running", HealthStatus: "healthy"},
 			{InstanceID: "helmsman-useast-01", ServiceID: "helmsman", ClusterID: "us-east-edge", NodeID: stringPtr("useast-edge-1"), Status: "running", HealthStatus: "healthy"},
@@ -4747,7 +4748,7 @@ func GenerateNetworkStatus() *model.NetworkStatus {
 			{InstanceID: "helmsman-apac-01", ServiceID: "helmsman", ClusterID: "apac-edge", NodeID: stringPtr("apac-edge-2"), Status: "running", HealthStatus: "healthy"},
 		},
 		TotalNodes:   10,
-		HealthyNodes: 10,
+		HealthyNodes: 8,
 		UpdatedAt:    time.Now(),
 	}
 }

@@ -1,6 +1,6 @@
 -- Demo seed for Quartermaster and Purser
 
--- Control plane cluster (gateway, commodore, purser, skipper, quartermaster)
+-- Platform cluster (control + data plane: gateway, commodore, purser, skipper, quartermaster, decklog, signalman, periscope)
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
@@ -8,17 +8,17 @@ INSERT INTO quartermaster.infrastructure_clusters (
     visibility, short_description
 )
 VALUES (
-    'central-control', 'Central Control Plane', 'central', 'control.demo.frameworks.network',
+    'central-primary', 'Central Platform', 'central', 'platform.demo.frameworks.network',
     0, 0, 0,
     FALSE, TRUE,
-    'public', 'Control plane services: API, billing, orchestration'
+    'public', 'Platform services: API, billing, analytics, events'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
     is_platform_official = TRUE,
     visibility = 'public',
     short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 
--- Media plane cluster (foghorn, signalman, decklog, periscope, helmsman)
+-- Media cluster (edge nodes enroll here, served by foghorn via cluster_assignments)
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
@@ -26,10 +26,10 @@ INSERT INTO quartermaster.infrastructure_clusters (
     visibility, short_description
 )
 VALUES (
-    'central-primary', 'Central Media Plane', 'central', 'demo.frameworks.network',
+    'demo-media', 'Demo Media Cluster', 'regional', 'demo.frameworks.network',
     10000, 1000000, 100000,
     TRUE, TRUE,
-    'public', 'Media plane: stream routing, analytics, real-time delivery'
+    'public', 'Media cluster: edge nodes, stream routing, viewer delivery'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
     is_default_cluster = TRUE,
@@ -42,20 +42,20 @@ INSERT INTO quartermaster.services (service_id, name, plane, description, defaul
 VALUES ('api_tenants', 'Quartermaster', 'control', 'Tenant and cluster management service', 9008, '/health', 'frameworks/quartermaster', 'api_tenants', 'http')
 ON CONFLICT (service_id) DO NOTHING;
 
--- Assign quartermaster to the control cluster
+-- Assign quartermaster to the platform cluster
 INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas, config_blob)
-VALUES ('central-control', 'api_tenants', 'running', 1, '{"database_url": "postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks"}')
+VALUES ('central-primary', 'api_tenants', 'running', 1, '{"database_url": "postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks"}')
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
 
 -- Demo tenant
 INSERT INTO quartermaster.tenants (id, name, subdomain, deployment_tier, primary_cluster_id, official_cluster_id)
-VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'central-primary', 'central-primary')
+VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'central-primary', 'demo-media')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO quartermaster.tenant_cluster_assignments (tenant_id, cluster_id, deployment_tier, is_primary)
 VALUES
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'pro', TRUE),
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-control', 'pro', FALSE)
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'pro', FALSE)
 ON CONFLICT (tenant_id, cluster_id) DO NOTHING;
 
 -- Demo user
@@ -120,13 +120,17 @@ UPDATE quartermaster.infrastructure_clusters
 SET owner_tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001'
 WHERE cluster_id = 'central-primary';
 
--- Pre-provision a demo infrastructure node that matches HELMSMAN_NODE_ID in docker-compose
--- region matches MistServer config location; IPs are localhost for local dev
+UPDATE quartermaster.infrastructure_clusters
+SET owner_tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001'
+WHERE cluster_id = 'demo-media';
+
+-- Pre-provision a demo edge node that matches HELMSMAN_NODE_ID in docker-compose
+-- Belongs to the media cluster; region matches MistServer config location
 INSERT INTO quartermaster.infrastructure_nodes (
     node_id, cluster_id, node_name, node_type, status,
     region, external_ip, internal_ip, latitude, longitude, tags, metadata
 ) VALUES (
-    'edge-node-1', 'central-primary', 'edge-node-1', 'edge', 'active',
+    'edge-node-1', 'demo-media', 'edge-node-1', 'edge', 'active',
     'Leiden', '127.0.0.1', '127.0.0.1', 52.1601, 4.4970, '{}', '{}'
 ) ON CONFLICT (node_id) DO UPDATE SET
     region = EXCLUDED.region,
@@ -135,12 +139,12 @@ INSERT INTO quartermaster.infrastructure_nodes (
     latitude = EXCLUDED.latitude,
     longitude = EXCLUDED.longitude;
 
--- Control plane node for Docker dev (bridge, commodore, purser, quartermaster, skipper)
+-- Platform node for Docker dev (all control + data plane services)
 INSERT INTO quartermaster.infrastructure_nodes (
     node_id, cluster_id, node_name, node_type, status,
     region, external_ip, internal_ip, latitude, longitude, tags, metadata
 ) VALUES (
-    'central-node-1', 'central-control', 'central-node-1', 'control', 'active',
+    'central-node-1', 'central-primary', 'central-node-1', 'core', 'active',
     'Amsterdam', '127.0.0.1', '127.0.0.1', 52.3676, 4.9041, '{}', '{}'
 ) ON CONFLICT (node_id) DO UPDATE SET
     cluster_id = EXCLUDED.cluster_id,
@@ -150,29 +154,15 @@ INSERT INTO quartermaster.infrastructure_nodes (
     latitude = EXCLUDED.latitude,
     longitude = EXCLUDED.longitude;
 
--- Media plane node for Docker dev (decklog, signalman, periscope-ingest, periscope-query)
-INSERT INTO quartermaster.infrastructure_nodes (
-    node_id, cluster_id, node_name, node_type, status,
-    region, external_ip, internal_ip, latitude, longitude, tags, metadata
-) VALUES (
-    'central-media-1', 'central-primary', 'central-media-1', 'media', 'active',
-    'Amsterdam', '127.0.0.1', '127.0.0.1', 52.3676, 4.9041, '{}', '{}'
-) ON CONFLICT (node_id) DO UPDATE SET
-    region = EXCLUDED.region,
-    external_ip = EXCLUDED.external_ip,
-    internal_ip = EXCLUDED.internal_ip,
-    latitude = EXCLUDED.latitude,
-    longitude = EXCLUDED.longitude;
-
--- Regional nodes (offline) for routing map visuals and historical data
+-- Regional edge nodes (offline) for routing map visuals and historical data
 -- These nodes are not running in docker-compose but provide geographic diversity
 INSERT INTO quartermaster.infrastructure_nodes (
     node_id, cluster_id, node_name, node_type, status,
     region, external_ip, internal_ip, latitude, longitude, tags, metadata
 ) VALUES
-    ('edge-ashburn', 'central-primary', 'edge-ashburn', 'edge', 'offline',
+    ('edge-ashburn', 'demo-media', 'edge-ashburn', 'edge', 'offline',
      'Ashburn', NULL, NULL, 39.0438, -77.4874, '{"region":"us-east"}', '{}'),
-    ('edge-singapore', 'central-primary', 'edge-singapore', 'edge', 'offline',
+    ('edge-singapore', 'demo-media', 'edge-singapore', 'edge', 'offline',
      'Singapore', NULL, NULL, 1.3521, 103.8198, '{"region":"apac"}', '{}')
 ON CONFLICT (node_id) DO NOTHING;
 
@@ -221,9 +211,10 @@ INSERT INTO purser.prepaid_balances (
 -- Demo cluster subscription tracking (paid cluster flow uses this table)
 INSERT INTO purser.cluster_subscriptions (
     tenant_id, cluster_id, status, created_at, updated_at
-) VALUES (
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'active', NOW(), NOW()
-) ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+) VALUES
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'active', NOW(), NOW()),
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'active', NOW(), NOW())
+ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     status = EXCLUDED.status,
     updated_at = NOW();
 
@@ -240,12 +231,13 @@ INSERT INTO purser.cluster_pricing (
     pricing_model = 'free_unmetered',
     allow_free_tier = TRUE;
 
--- Grant access (subscription) to the central cluster for the demo tenant
+-- Grant access to both clusters for the demo tenant
 INSERT INTO quartermaster.tenant_cluster_access (
     tenant_id, cluster_id, access_level, is_active
-) VALUES (
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'owner', TRUE
-) ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+) VALUES
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'owner', TRUE),
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'owner', TRUE)
+ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     access_level = EXCLUDED.access_level,
     is_active = TRUE;
 
@@ -287,7 +279,7 @@ INSERT INTO quartermaster.bootstrap_tokens (
     'edge_node',
     'Demo Edge Node Bootstrap',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
-    'central-primary',                        -- Central cluster
+    'demo-media',                               -- Edge enrollment targets the media cluster
     NULL,                                     -- Allow docker bridge IPs in local dev
     '{"purpose": "demo", "environment": "development"}',
     10,    -- Max 10 uses
@@ -1139,7 +1131,7 @@ ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPD
 INSERT INTO quartermaster.services (service_id, name, plane, description, default_port, health_check_path, docker_image, type, protocol) VALUES
     ('gateway', 'Bridge', 'control', 'GraphQL API gateway', 18001, '/health', 'frameworks/bridge', 'gateway', 'http'),
     ('commodore', 'Commodore', 'control', 'Stream control plane', 18003, '/health', 'frameworks/commodore', 'commodore', 'http'),
-    ('foghorn', 'Foghorn', 'data', 'Stream balancing and edge control service', 18019, '/health', 'frameworks/foghorn', 'foghorn', 'grpc'),
+    ('foghorn', 'Foghorn', 'media', 'Stream balancing and edge control service', 18019, '/health', 'frameworks/foghorn', 'foghorn', 'grpc'),
     ('periscope_query', 'Periscope', 'data', 'Analytics query service', 18004, '/health', 'frameworks/periscope', 'periscope_query', 'http'),
     ('purser', 'Purser', 'control', 'Billing and metering service', 18008, '/health', 'frameworks/purser', 'purser', 'http'),
     ('skipper', 'Skipper', 'control', 'AI assistant service', 18010, '/health', 'frameworks/skipper', 'skipper', 'http'),
@@ -1148,19 +1140,58 @@ INSERT INTO quartermaster.services (service_id, name, plane, description, defaul
     ('periscope_ingest', 'Periscope Ingest', 'data', 'Analytics ingest service', 18005, '/health', 'frameworks/periscope-ingest', 'periscope_ingest', 'http')
 ON CONFLICT (service_id) DO NOTHING;
 
--- Assign control-plane services to the control cluster
+-- Assign control + data plane services to the platform cluster
 INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
-    ('central-control', 'gateway', 'running', 1),
-    ('central-control', 'commodore', 'running', 1),
-    ('central-control', 'purser', 'running', 1),
-    ('central-control', 'skipper', 'running', 1)
-ON CONFLICT (cluster_id, service_id) DO NOTHING;
-
--- Assign data/media-plane services to the media cluster
-INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
-    ('central-primary', 'foghorn', 'running', 2),
+    ('central-primary', 'gateway', 'running', 1),
+    ('central-primary', 'commodore', 'running', 1),
+    ('central-primary', 'purser', 'running', 1),
+    ('central-primary', 'skipper', 'running', 1),
     ('central-primary', 'signalman', 'running', 1),
     ('central-primary', 'decklog', 'running', 1),
     ('central-primary', 'periscope_query', 'running', 1),
     ('central-primary', 'periscope_ingest', 'running', 1)
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
+
+-- Foghorn runs on the platform cluster but serves media clusters via foghorn_cluster_assignments
+INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
+    ('central-primary', 'foghorn', 'running', 2)
+ON CONFLICT (cluster_id, service_id) DO NOTHING;
+
+-- ============================================================================
+-- FOGHORN: Pre-seeded service instances for HA pair
+-- ============================================================================
+-- Both foghorn instances register on the platform cluster. At runtime,
+-- BootstrapService matches by (service_id, cluster_id, protocol, port, advertise_host)
+-- and UPDATEs the pre-seeded row (preserving instance_id and UUID).
+-- LoadServedClusters queries by FOGHORN_INSTANCE_ID → finds cluster assignments.
+
+INSERT INTO quartermaster.service_instances (
+    id, instance_id, cluster_id, node_id, service_id,
+    protocol, advertise_host, port, status, health_status,
+    started_at, created_at, updated_at
+) VALUES
+-- foghorn-1 (gRPC control plane, port 18019)
+(
+    '5eedf0e1-0001-da7a-f0e1-0001da7a0001',
+    'foghorn-1', 'central-primary', NULL, 'foghorn',
+    'grpc', 'foghorn', 18019, 'running', 'unknown',
+    NOW(), NOW(), NOW()
+),
+-- foghorn-2 (HA peer, port 18029)
+(
+    '5eedf0e1-0002-da7a-f0e1-0002da7a0002',
+    'foghorn-2', 'central-primary', NULL, 'foghorn',
+    'grpc', 'foghorn', 18029, 'running', 'unknown',
+    NOW(), NOW(), NOW()
+)
+ON CONFLICT (instance_id) DO UPDATE SET
+    status = 'running',
+    updated_at = NOW();
+
+-- Assign both foghorn instances to serve both clusters
+INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id) VALUES
+    ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'central-primary'),
+    ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'demo-media'),
+    ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'central-primary'),
+    ('5eedf0e1-0002-da7a-f0e1-0002da7a0002', 'demo-media')
+ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true;
