@@ -198,6 +198,70 @@ func TestAnthropicProviderToolResultMessage(t *testing.T) {
 	}
 }
 
+func TestAnthropicMessagesFromMergesToolResults(t *testing.T) {
+	t.Parallel()
+	msgs := []Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "let me check", ToolCalls: []ToolCall{
+			{ID: "toolu_a", Name: "search", Arguments: `{"q":"x"}`},
+			{ID: "toolu_b", Name: "lookup", Arguments: `{"id":"1"}`},
+		}},
+		{Role: "tool", Content: "result A", ToolCallID: "toolu_a"},
+		{Role: "tool", Content: "result B", ToolCallID: "toolu_b"},
+	}
+
+	out, system := anthropicMessagesFrom(msgs)
+	if system != "sys" {
+		t.Fatalf("expected system 'sys', got %q", system)
+	}
+	// user, assistant, user (merged tool results) = 3 messages
+	if len(out) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(out))
+	}
+
+	toolResultMsg := out[2]
+	if toolResultMsg.Role != "user" {
+		t.Fatalf("expected role 'user', got %q", toolResultMsg.Role)
+	}
+	if len(toolResultMsg.Content) != 2 {
+		t.Fatalf("expected 2 tool_result blocks, got %d", len(toolResultMsg.Content))
+	}
+	for _, c := range toolResultMsg.Content {
+		if c.Type != "tool_result" {
+			t.Fatalf("expected type 'tool_result', got %q", c.Type)
+		}
+	}
+	if toolResultMsg.Content[0].ToolUseID != "toolu_a" {
+		t.Fatalf("expected toolu_a, got %s", toolResultMsg.Content[0].ToolUseID)
+	}
+	if toolResultMsg.Content[1].ToolUseID != "toolu_b" {
+		t.Fatalf("expected toolu_b, got %s", toolResultMsg.Content[1].ToolUseID)
+	}
+}
+
+func TestAnthropicMessagesFromSingleToolResult(t *testing.T) {
+	t.Parallel()
+	msgs := []Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "", ToolCalls: []ToolCall{
+			{ID: "toolu_x", Name: "search", Arguments: `{}`},
+		}},
+		{Role: "tool", Content: "found it", ToolCallID: "toolu_x"},
+	}
+
+	out, _ := anthropicMessagesFrom(msgs)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(out))
+	}
+	if len(out[2].Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(out[2].Content))
+	}
+	if out[2].Content[0].Type != "tool_result" {
+		t.Fatalf("expected tool_result, got %s", out[2].Content[0].Type)
+	}
+}
+
 func TestAnthropicProviderWithToolsInRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req anthropicRequest

@@ -178,34 +178,38 @@ Set `SKIPPER_WEB_UI=false` to run in headless API-only mode.
 
 ### Retrieval
 
-**Pre-retrieval** (every message, fast path — no query rewriting or HyDE):
+**Pre-retrieval** (every message, fast path):
 
 ```
-User message → embed query → hybrid search → cross-encoder rerank → dedup → inject context
+User message → hybrid search → cross-encoder rerank → deduplicate → inject context
 ```
+
+- **Hybrid search** = BM25 full-text search + embed query → semantic/vector search, then merge via Reciprocal Rank Fusion (RRF).
+- **Cross-encoder rerank** = reads each (query, candidate chunk) pair to score relevance. Falls back to a weighted heuristic (0.7 × vector similarity + 0.3 × keyword overlap) when no reranker is configured.
+
+No query rewriting or HyDE on this path — keeps latency low since it runs every message.
 
 **search_knowledge tool** (explicit, can afford more latency):
 
 ```
-User query → query rewrite (utility LLM)
-           → rewritten query → HyDE (utility LLM → embed hypothetical answer) → vector search
-                             → rewritten query → full-text search
-           → hybrid search results → cross-encoder rerank → dedup → return
-```
+User query → query rewrite (utility LLM) → rewritten query
 
-**search_web tool** (explicit):
+Hybrid search with HyDE:
+  rewritten query → HyDE (utility LLM) → embed → semantic/vector search
+  rewritten query → full-text search (BM25)
 
+  merge (RRF) → cross-encoder rerank → deduplicate → return
 ```
-User query → query rewrite (utility LLM) → web search provider → return
-```
-
-**Hybrid search** combines pgvector cosine distance with PostgreSQL `ts_rank` full-text scoring. **Reranking** uses a cross-encoder model when configured (`RERANKER_PROVIDER`), falling back to a weighted heuristic (0.7 × vector similarity + 0.3 × keyword overlap). Cross-encoder reranking scores (query, chunk) pairs together, understanding semantic equivalence that keyword overlap cannot (e.g. "rebuffering issues" ↔ "playback stalling"). **Deduplication** caps any single source URL at 2 chunks in the final result set.
 
 **Query rewriting** (requires `UTILITY_LLM_*` config) transforms conversational queries into search-optimized queries before embedding ("my stream keeps dying" → "stream disconnection troubleshooting"). Applied to `search_knowledge` and `search_web` tool calls but skipped for pre-retrieval to keep latency low.
 
 **HyDE** — Hypothetical Document Embeddings (`SKIPPER_ENABLE_HYDE=true`) generates a hypothetical answer via the utility LLM, then embeds that answer instead of the question. The resulting vector is closer in embedding space to real documentation chunks. Only used for `search_knowledge`; skipped for pre-retrieval (latency) and web search (search engines handle questions natively).
 
+**Deduplication** caps any single source URL at 2 chunks in the final result set.
+
 The LLM can also explicitly call `search_knowledge` with a `tenant_scope` parameter (`tenant`, `global`, or `all`) to target specific knowledge partitions. The tool over-fetches 3× the requested limit, reranks, then deduplicates to the final count.
+
+Responses include citations and a confidence score based on whether the answer was matched in the knowledge base, from a web search, or from inference.
 
 ## Standalone Mode (Planned)
 

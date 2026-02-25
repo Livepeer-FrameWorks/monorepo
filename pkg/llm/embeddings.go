@@ -34,7 +34,7 @@ func NewEmbeddingClient(cfg Config) (EmbeddingClient, error) {
 	}
 
 	return &EmbeddingProvider{
-		client:   &http.Client{Timeout: 30 * time.Second},
+		client:   &http.Client{Timeout: 120 * time.Second},
 		apiKey:   cfg.APIKey,
 		apiURL:   apiURL,
 		model:    cfg.Model,
@@ -102,17 +102,32 @@ func (p *EmbeddingProvider) embedOllama(ctx context.Context, inputs []string) ([
 	return vectors, nil
 }
 
-func (p *EmbeddingProvider) postEmbeddings(ctx context.Context, endpoint string, payload []byte, openAI bool, expected int) ([][]float32, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+// ProbeEmbeddingDimensions makes a single embedding call and returns the
+// vector length. Use this at startup to discover the model's output dimensions
+// without hardcoding a model-to-dimension mapping.
+func ProbeEmbeddingDimensions(ctx context.Context, client EmbeddingClient) (int, error) {
+	vecs, err := client.Embed(ctx, []string{"dimension probe"})
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return 0, fmt.Errorf("probe embedding dimensions: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if len(vecs) == 0 || len(vecs[0]) == 0 {
+		return 0, errors.New("probe returned empty embedding")
 	}
+	return len(vecs[0]), nil
+}
 
-	resp, err := p.client.Do(req)
+func (p *EmbeddingProvider) postEmbeddings(ctx context.Context, endpoint string, payload []byte, openAI bool, expected int) ([][]float32, error) {
+	resp, err := doWithRetry(ctx, p.client, func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, fmt.Errorf("create request: %w", reqErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if p.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+p.apiKey)
+		}
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

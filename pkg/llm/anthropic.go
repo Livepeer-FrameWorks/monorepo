@@ -271,6 +271,13 @@ func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {
 				ToolUseID: message.ToolCallID,
 				Content:   message.Content,
 			}
+			// Anthropic requires all tool_result blocks for a tool_use set
+			// to appear in a single user message. Merge consecutive tool
+			// results instead of creating separate user messages.
+			if n := len(out); n > 0 && out[n-1].Role == "user" && allToolResults(out[n-1].Content) {
+				out[n-1].Content = append(out[n-1].Content, content)
+				continue
+			}
 		}
 		out = append(out, anthropicMessage{
 			Role:    role,
@@ -278,4 +285,16 @@ func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {
 		})
 	}
 	return out, strings.Join(systemParts, "\n")
+}
+
+func allToolResults(contents []anthropicContent) bool {
+	if len(contents) == 0 {
+		return false
+	}
+	for _, c := range contents {
+		if c.Type != "tool_result" {
+			return false
+		}
+	}
+	return true
 }
