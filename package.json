@@ -26,15 +26,15 @@
   "devDependencies": {
     "@codecov/sveltekit-plugin": "^1.9.1",
     "@codecov/vite-plugin": "^1.9.1",
-    "@typescript-eslint/eslint-plugin": "^8.55.0",
-    "@typescript-eslint/parser": "^8.55.0",
-    "@typescript-eslint/type-utils": "^8.55.0",
-    "@typescript-eslint/utils": "^8.55.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "@typescript-eslint/type-utils": "^8.56.1",
+    "@typescript-eslint/utils": "^8.56.1",
     "globals": "^17.3.0",
-    "knip": "^5.83.1",
+    "knip": "^5.85.0",
     "lefthook": "^2.1.1",
     "prettier": "^3.8.1",
-    "prettier-plugin-svelte": "^3.4.1"
+    "prettier-plugin-svelte": "^3.5.0"
   },
   "pnpm": {
     "patchedDependencies": {

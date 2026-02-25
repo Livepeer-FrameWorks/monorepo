@@ -189,7 +189,34 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       .addTo(nodeLayer);
   });
 
-  // 3. Cluster markers (on top)
+  // 3. Service instances (placed near their host node)
+  (data.serviceInstances || []).forEach((svc) => {
+    const node = nodeMap[svc.nodeId];
+    if (!node || (!node.latitude && !node.longitude)) return;
+
+    const color = SERVICE_HEALTH_COLORS[svc.healthStatus] || SERVICE_HEALTH_COLORS.unknown;
+
+    const icon = L.divIcon({
+      className: "network-viz__marker",
+      html: `<div class="network-viz__service-dot" style="--svc-dot-color: ${color};"></div>`,
+      iconSize: [8, 8],
+      iconAnchor: [4, 4],
+    });
+
+    L.marker([node.latitude + 0.3, node.longitude + 0.3], {
+      icon,
+      interactive: true,
+    })
+      .bindTooltip(
+        `<b>${escapeHtml(svc.serviceId)}</b><br>` +
+          `Health: ${escapeHtml(svc.healthStatus)}<br>` +
+          `Node: ${escapeHtml(svc.nodeId)}`,
+        { direction: "top", className: "network-viz__tooltip" }
+      )
+      .addTo(serviceLayer);
+  });
+
+  // 4. Cluster markers (on top)
   data.clusters.forEach((cluster) => {
     const color = CLUSTER_STATUS_COLORS[cluster.status] || CLUSTER_STATUS_COLORS.unknown;
     const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
