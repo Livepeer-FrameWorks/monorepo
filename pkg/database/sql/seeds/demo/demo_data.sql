@@ -5,17 +5,18 @@
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-    is_default_cluster,
+    is_default_cluster, is_platform_official,
     visibility, short_description
 )
 VALUES (
     'central-primary', 'Central Primary Cluster', 'central', 'demo.frameworks.network',
     10000, 1000000, 100000,
-    TRUE,
+    TRUE, TRUE,
     'public', 'FrameWorks shared infrastructure for all users'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
     is_default_cluster = TRUE,
+    is_platform_official = TRUE,
     visibility = 'public',
     short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 
@@ -115,14 +116,26 @@ INSERT INTO quartermaster.infrastructure_nodes (
     latitude = EXCLUDED.latitude,
     longitude = EXCLUDED.longitude;
 
+-- Control plane node for Docker dev (services link to this via NODE_ID)
+INSERT INTO quartermaster.infrastructure_nodes (
+    node_id, cluster_id, node_name, node_type, status,
+    region, external_ip, internal_ip, latitude, longitude, tags, metadata
+) VALUES (
+    'central-node-1', 'central-primary', 'central-node-1', 'control', 'active',
+    'Amsterdam', '127.0.0.1', '127.0.0.1', 52.3676, 4.9041, '{}', '{}'
+) ON CONFLICT (node_id) DO UPDATE SET
+    region = EXCLUDED.region,
+    external_ip = EXCLUDED.external_ip,
+    internal_ip = EXCLUDED.internal_ip,
+    latitude = EXCLUDED.latitude,
+    longitude = EXCLUDED.longitude;
+
 -- Regional nodes (offline) for routing map visuals and historical data
 -- These nodes are not running in docker-compose but provide geographic diversity
 INSERT INTO quartermaster.infrastructure_nodes (
     node_id, cluster_id, node_name, node_type, status,
     region, external_ip, internal_ip, latitude, longitude, tags, metadata
 ) VALUES
-    ('edge-leiden', 'central-primary', 'edge-leiden', 'edge', 'offline',
-     'Leiden', NULL, NULL, 52.1601, 4.4970, '{"region":"eu-west"}', '{}'),
     ('edge-ashburn', 'central-primary', 'edge-ashburn', 'edge', 'offline',
      'Ashburn', NULL, NULL, 39.0438, -77.4874, '{"region":"us-east"}', '{}'),
     ('edge-singapore', 'central-primary', 'edge-singapore', 'edge', 'offline',
@@ -183,15 +196,14 @@ INSERT INTO purser.cluster_subscriptions (
 -- Cluster pricing for the platform cluster (free tier, no metering)
 INSERT INTO purser.cluster_pricing (
     cluster_id, pricing_model,
-    is_platform_official, allow_free_tier, required_tier_level,
+    allow_free_tier, required_tier_level,
     default_quotas
 ) VALUES (
     'central-primary', 'free_unmetered',
-    TRUE, TRUE, 0,  -- Platform cluster, available to free tier
+    TRUE, 0,  -- Available to free tier
     '{"max_streams": 5, "max_viewers": 500, "max_bandwidth_mbps": 100, "retention_days": 7}'
 ) ON CONFLICT (cluster_id) DO UPDATE SET
     pricing_model = 'free_unmetered',
-    is_platform_official = TRUE,
     allow_free_tier = TRUE;
 
 -- Grant access (subscription) to the central cluster for the demo tenant
@@ -230,13 +242,14 @@ INSERT INTO quartermaster.node_fingerprints (
 -- Demo bootstrap token for node provisioning testing
 -- This token was used to provision edge-node-1
 INSERT INTO quartermaster.bootstrap_tokens (
-    id, token, kind, name,
+    id, token_hash, token_prefix, kind, name,
     tenant_id, cluster_id, expected_ip,
     metadata, usage_limit, usage_count,
     expires_at, used_at, created_by, created_at
 ) VALUES (
     '5eedb007-5eed-da7a-b007-5eedda7a0001',
-    'demo_bootstrap_token_for_local_development_testing_only',
+    '758457699e76c8a3398ad27d0c9535949df07f07ebe5fcdf413846019123f5e6', -- sha256("demo_bootstrap_token_for_local_development_testing_only")
+    'demo_bootstr...',
     'edge_node',
     'Demo Edge Node Bootstrap',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
@@ -249,7 +262,7 @@ INSERT INTO quartermaster.bootstrap_tokens (
     NOW() - INTERVAL '1 day',                 -- Used yesterday
     '5eedface-5e1f-da7a-face-5e1fda7a0001',  -- Created by demo user
     NOW() - INTERVAL '2 days'
-) ON CONFLICT (token) DO UPDATE SET
+) ON CONFLICT (token_hash) DO UPDATE SET
     expires_at = NOW() + INTERVAL '30 days';
 
 -- ============================================================================
@@ -709,6 +722,59 @@ ON CONFLICT (vod_hash) DO UPDATE SET
     updated_at = NOW();
 
 -- ============================================================================
+-- COMMODORE: Demo Push Targets (Multistreaming Destinations)
+-- ============================================================================
+-- Push targets for the demo stream. When the stream goes live,
+-- Foghorn activates these via Helmsman on the origin node.
+
+INSERT INTO commodore.push_targets (
+    id, tenant_id, stream_id, platform, name, target_uri,
+    is_enabled, status, created_at, updated_at
+) VALUES
+-- Twitch target (enabled, idle)
+(
+    '5eedb17e-da7a-b17e-da7a-a115da7a0001',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
+    '5eedfeed-11fe-ca57-feed-11feca570001',  -- Demo stream
+    'twitch',
+    'My Twitch Channel',
+    'rtmp://live.twitch.tv/app/live_demo_twitch_key_1234567890',
+    TRUE,
+    'idle',
+    NOW() - INTERVAL '7 days',
+    NOW() - INTERVAL '7 days'
+),
+-- YouTube target (enabled, idle)
+(
+    '5eedb17e-da7a-b17e-da7a-a115da7a0002',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'youtube',
+    'YouTube Live',
+    'rtmp://a.rtmp.youtube.com/live2/demo-xxxx-xxxx-xxxx-xxxx',
+    TRUE,
+    'idle',
+    NOW() - INTERVAL '5 days',
+    NOW() - INTERVAL '5 days'
+),
+-- Kick target (disabled)
+(
+    '5eedb17e-da7a-b17e-da7a-a115da7a0003',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'kick',
+    'Kick Stream',
+    'rtmps://fa723fc1b171.global-contribute.live-video.net/app/demo_kick_key_abcdef',
+    FALSE,
+    'idle',
+    NOW() - INTERVAL '3 days',
+    NOW() - INTERVAL '3 days'
+)
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    updated_at = NOW();
+
+-- ============================================================================
 -- FOGHORN: Demo Artifacts (Unified Clip/DVR Lifecycle Table)
 -- ============================================================================
 -- Demo artifacts for development and testing
@@ -1031,32 +1097,32 @@ ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPD
     granularity = EXCLUDED.granularity;
 
 -- ============================================================================
--- FOGHORN SERVICE REGISTRATION (Multi-cluster routing prerequisite)
+-- SERVICE CATALOG (seeded with exact type IDs matching self-registration)
 -- ============================================================================
--- Without this, GetClusterRouting cannot resolve foghorn_grpc_addr for the cluster.
--- In production, BootstrapService creates these entries when Foghorn starts.
+-- In production, ensureServiceExists creates these on first bootstrap.
+-- Seed them so the map and GetClusterRouting work before first boot.
 
-INSERT INTO quartermaster.services (service_id, name, plane, description, default_port, health_check_path, docker_image, type, protocol)
-VALUES ('api_balancing', 'Foghorn', 'data', 'Stream balancing and edge control service', 18019, '/health', 'frameworks/foghorn', 'foghorn', 'grpc')
+INSERT INTO quartermaster.services (service_id, name, plane, description, default_port, health_check_path, docker_image, type, protocol) VALUES
+    ('gateway', 'Bridge', 'control', 'GraphQL API gateway', 18001, '/health', 'frameworks/bridge', 'gateway', 'http'),
+    ('commodore', 'Commodore', 'control', 'Stream control plane', 18003, '/health', 'frameworks/commodore', 'commodore', 'http'),
+    ('foghorn', 'Foghorn', 'data', 'Stream balancing and edge control service', 18019, '/health', 'frameworks/foghorn', 'foghorn', 'grpc'),
+    ('periscope_query', 'Periscope', 'data', 'Analytics query service', 18004, '/health', 'frameworks/periscope', 'periscope_query', 'http'),
+    ('purser', 'Purser', 'control', 'Billing and metering service', 18008, '/health', 'frameworks/purser', 'purser', 'http'),
+    ('skipper', 'Skipper', 'control', 'AI assistant service', 18010, '/health', 'frameworks/skipper', 'skipper', 'http'),
+    ('signalman', 'Signalman', 'data', 'Real-time signaling service', 18009, '/health', 'frameworks/signalman', 'signalman', 'grpc'),
+    ('decklog', 'Decklog', 'data', 'Service event firehose', 18006, '/health', 'frameworks/decklog', 'decklog', 'grpc'),
+    ('periscope_ingest', 'Periscope Ingest', 'data', 'Analytics ingest service', 18005, '/health', 'frameworks/periscope-ingest', 'periscope_ingest', 'http')
 ON CONFLICT (service_id) DO NOTHING;
 
-INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas)
-VALUES ('central-primary', 'api_balancing', 'running', 2)
+-- Assign all services to the central cluster
+INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
+    ('central-primary', 'gateway', 'running', 1),
+    ('central-primary', 'commodore', 'running', 1),
+    ('central-primary', 'foghorn', 'running', 2),
+    ('central-primary', 'periscope_query', 'running', 1),
+    ('central-primary', 'purser', 'running', 1),
+    ('central-primary', 'skipper', 'running', 1),
+    ('central-primary', 'signalman', 'running', 1),
+    ('central-primary', 'decklog', 'running', 1),
+    ('central-primary', 'periscope_ingest', 'running', 1)
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
-
--- Simulates a running Foghorn registered via BootstrapService
-INSERT INTO quartermaster.service_instances (
-    instance_id, cluster_id, service_id, protocol, advertise_host, port,
-    status, health_status, started_at, created_at, updated_at
-) VALUES (
-    'foghorn-demo-01', 'central-primary', 'api_balancing', 'grpc', 'foghorn', 18019,
-    'running', 'unknown', NOW(), NOW(), NOW()
-) ON CONFLICT (instance_id) DO UPDATE SET
-    status = 'running', updated_at = NOW();
-
--- Foghorn cluster assignment (many-to-many via junction table)
-INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
-SELECT si.id, 'central-primary'
-FROM quartermaster.service_instances si
-WHERE si.instance_id = 'foghorn-demo-01'
-ON CONFLICT (foghorn_instance_id, cluster_id) DO NOTHING;

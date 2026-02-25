@@ -177,10 +177,13 @@ func (c *Client) PushStart(streamName, targetURI string) error {
 		return fmt.Errorf("push_start failed: %w", err)
 	}
 
-	c.Logger.WithFields(logging.Fields{
+	fields := logging.Fields{
 		"stream": streamName,
-		"target": targetURI,
-	}).Info("Started MistServer push")
+	}
+	if u, parseErr := url.Parse(targetURI); parseErr == nil && u.Host != "" {
+		fields["target_host"] = u.Host
+	}
+	c.Logger.WithFields(fields).Info("Started MistServer push")
 
 	return nil
 }

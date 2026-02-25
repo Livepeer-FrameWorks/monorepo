@@ -12,11 +12,36 @@ query GetNetworkOverview($timeRange: TimeRangeInput!) {
       healthyNodeCount
       peerCount
       status
+      clusterType
+      shortDescription
+      maxStreams
+      currentStreams
+      maxViewers
+      currentViewers
+      maxBandwidthMbps
+      currentBandwidthMbps
     }
     peerConnections {
       sourceCluster
       targetCluster
       connected
+    }
+    nodes {
+      nodeId
+      name
+      nodeType
+      latitude
+      longitude
+      status
+      clusterId
+    }
+    serviceInstances {
+      instanceId
+      serviceId
+      clusterId
+      nodeId
+      status
+      healthStatus
     }
     totalNodes
     healthyNodes

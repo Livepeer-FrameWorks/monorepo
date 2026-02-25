@@ -779,6 +779,25 @@ message StreamsStatusResponse {
 }
 
 // ============================================================================
+// Network Live Stats (platform-wide, no tenant filter)
+// ============================================================================
+
+message NetworkClusterLiveStats {
+  string cluster_id = 1;
+  int32 active_streams = 2;
+  int32 current_viewers = 3;
+  uint64 upload_bytes_per_sec = 4;
+  uint64 download_bytes_per_sec = 5;
+  int32 active_nodes = 6;
+}
+
+message GetNetworkLiveStatsRequest {}
+
+message GetNetworkLiveStatsResponse {
+  repeated NetworkClusterLiveStats clusters = 1;
+}
+
+// ============================================================================
 // Services
 // ============================================================================
 
@@ -826,6 +845,7 @@ service FederationAnalyticsService {
 
 service PlatformAnalyticsService {
   rpc GetPlatformOverview(GetPlatformOverviewRequest) returns (GetPlatformOverviewResponse);
+  rpc GetNetworkLiveStats(GetNetworkLiveStatsRequest) returns (GetNetworkLiveStatsResponse);
 }
 
 service ClipAnalyticsService {

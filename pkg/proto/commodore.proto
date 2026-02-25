@@ -158,6 +158,11 @@ message ValidateStreamKeyResponse {
   optional string official_cluster_id = 12; // Billing-tier cluster providing geographic coverage
   repeated quartermaster.TenantClusterPeer cluster_peers = 13; // Tenant's full cluster context for demand-driven peering
   string playback_id = 14; // Public playback key (for StreamAdvertisement reverse index)
+
+  // ===== MULTISTREAM PUSH TARGETS =====
+  // Enabled push targets for this stream (loaded during validation).
+  // Foghorn sends these to Helmsman as ActivatePushTargets when the stream goes live.
+  repeated PushTargetInternal push_targets = 15;
 }
 
 // ============================================================================
@@ -889,6 +894,93 @@ message ListStreamKeysResponse {
 message DeactivateStreamKeyRequest {
   string stream_id = 1;
   string key_id = 2;
+}
+
+// ============================================================================
+// PUSH TARGET SERVICE (Gateway → Commodore for multistream management)
+// ============================================================================
+
+service PushTargetService {
+  rpc CreatePushTarget(CreatePushTargetRequest) returns (PushTarget);
+  rpc ListPushTargets(ListPushTargetsRequest) returns (ListPushTargetsResponse);
+  rpc UpdatePushTarget(UpdatePushTargetRequest) returns (PushTarget);
+  rpc DeletePushTarget(DeletePushTargetRequest) returns (DeletePushTargetResponse);
+  // Internal: called by Foghorn to get enabled targets when a stream goes live
+  rpc GetStreamPushTargets(GetStreamPushTargetsRequest) returns (GetStreamPushTargetsResponse);
+  // Internal: called by Foghorn to update target status on PUSH_OUT_START / PUSH_END
+  rpc UpdatePushTargetStatus(UpdatePushTargetStatusRequest) returns (PushTarget);
+}
+
+message PushTarget {
+  string id = 1;
+  string stream_id = 2;
+  string platform = 3;                     // 'twitch', 'youtube', 'facebook', 'kick', 'x', 'custom'
+  string name = 4;
+  string target_uri = 5;                   // Masked in read responses (rtmp://...live_****xxxx)
+  bool is_enabled = 6;
+  string status = 7;                       // idle, pushing, failed
+  string last_error = 8;
+  optional google.protobuf.Timestamp last_pushed_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message CreatePushTargetRequest {
+  string stream_id = 1;
+  string platform = 2;
+  string name = 3;
+  string target_uri = 4;                   // Full URI with stream key (rtmp://live.twitch.tv/app/{key})
+}
+
+message ListPushTargetsRequest {
+  string stream_id = 1;
+}
+
+message ListPushTargetsResponse {
+  repeated PushTarget push_targets = 1;
+}
+
+message UpdatePushTargetRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string target_uri = 3;
+  optional bool is_enabled = 4;
+}
+
+message DeletePushTargetRequest {
+  string id = 1;
+}
+
+message DeletePushTargetResponse {
+  string message = 1;
+  string id = 2;
+  google.protobuf.Timestamp deleted_at = 3;
+}
+
+// Internal: Foghorn fetches enabled push targets when stream goes live
+message GetStreamPushTargetsRequest {
+  string stream_id = 1;
+  string tenant_id = 2;
+}
+
+message GetStreamPushTargetsResponse {
+  repeated PushTargetInternal push_targets = 1;
+}
+
+// Internal: unmasked target URI for Helmsman to use
+message PushTargetInternal {
+  string id = 1;
+  string platform = 2;
+  string name = 3;
+  string target_uri = 4;                   // Unmasked - contains full stream key
+}
+
+// Internal: Foghorn updates status on push lifecycle events
+message UpdatePushTargetStatusRequest {
+  string id = 1;
+  string tenant_id = 2;
+  string status = 3;                       // idle, pushing, failed
+  optional string last_error = 4;
 }
 
 // ============================================================================

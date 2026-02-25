@@ -1,0 +1,12 @@
+fragment PushTargetFields on PushTarget {
+  id
+  streamId
+  platform
+  name
+  targetUri
+  isEnabled
+  status
+  lastError
+  lastPushedAt
+  createdAt
+}

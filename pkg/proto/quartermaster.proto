@@ -492,22 +492,20 @@ message InfrastructureCluster {
   int32 max_concurrent_streams = 11;    // json:"max_concurrent_streams"
   int32 max_concurrent_viewers = 12;    // json:"max_concurrent_viewers"
   int32 max_bandwidth_mbps = 13;        // json:"max_bandwidth_mbps"
-  int32 current_stream_count = 14;      // json:"current_stream_count"
-  int32 current_viewer_count = 15;      // json:"current_viewer_count"
-  int32 current_bandwidth_mbps = 16;    // json:"current_bandwidth_mbps"
-  string health_status = 17;            // json:"health_status"
-  bool is_active = 18;                  // json:"is_active"
-  google.protobuf.Timestamp created_at = 19; // json:"created_at"
-  google.protobuf.Timestamp updated_at = 20; // json:"updated_at"
-  bool is_default_cluster = 21;         // json:"is_default_cluster"
+  string health_status = 14;            // json:"health_status"
+  bool is_active = 15;                  // json:"is_active"
+  google.protobuf.Timestamp created_at = 16; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 17; // json:"updated_at"
+  bool is_default_cluster = 18;         // json:"is_default_cluster"
+  bool is_platform_official = 19;       // json:"is_platform_official" Platform-operated cluster
 
   // ===== MARKETPLACE FIELDS =====
   // Note: Pricing config lives in Purser - these fields populated by Gateway
-  ClusterVisibility visibility = 30;    // Marketplace visibility
-  ClusterPricingModel pricing_model = 31; // Pricing model (from Purser)
-  int32 monthly_price_cents = 32;       // Monthly price in cents (from Purser)
-  bool requires_approval = 35;          // Subscription requires owner approval
-  optional string short_description = 36; // Marketplace listing description
+  ClusterVisibility visibility = 20;    // Marketplace visibility
+  ClusterPricingModel pricing_model = 21; // Pricing model (from Purser)
+  int32 monthly_price_cents = 22;       // Monthly price in cents (from Purser)
+  bool requires_approval = 23;          // Subscription requires owner approval
+  optional string short_description = 24; // Marketplace listing description
 }
 
 message ClusterResponse {
@@ -521,6 +519,7 @@ message ListClustersRequest {
   string cluster_type = 4;
   string deployment_model = 5;
   optional string owner_tenant_id = 6;
+  optional bool is_platform_official = 7;
 }
 
 message ListClustersResponse {
@@ -544,6 +543,7 @@ message CreateClusterRequest {
   optional string owner_tenant_id = 20; // json:"owner_tenant_id,omitempty" - UUID of owning tenant
   string deployment_model = 21;         // json:"deployment_model" - 'shared' or 'managed' (default: 'managed')
   int32 foghorn_count = 22;             // Claim N idle Foghorn instances from pool (0 = skip)
+  optional bool is_platform_official = 23; // Platform-operated cluster
 }
 
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
@@ -557,14 +557,11 @@ message UpdateClusterRequest {
   optional int32 max_concurrent_streams = 7;  // json:"max_concurrent_streams,omitempty"
   optional int32 max_concurrent_viewers = 8;  // json:"max_concurrent_viewers,omitempty"
   optional int32 max_bandwidth_mbps = 9;      // json:"max_bandwidth_mbps,omitempty"
-  optional int32 current_stream_count = 10;   // json:"current_stream_count,omitempty"
-  optional int32 current_viewer_count = 11;   // json:"current_viewer_count,omitempty"
-  optional int32 current_bandwidth_mbps = 12; // json:"current_bandwidth_mbps,omitempty"
-  optional string health_status = 13;   // json:"health_status,omitempty"
-  optional bool is_active = 14;         // json:"is_active,omitempty"
-  // Cluster ownership for dedicated B2B clusters
-  optional string owner_tenant_id = 20; // json:"owner_tenant_id,omitempty" - Set/clear ownership (empty string clears)
-  optional string deployment_model = 21; // json:"deployment_model,omitempty" - Change isolation level
+  optional string health_status = 10;   // json:"health_status,omitempty"
+  optional bool is_active = 11;         // json:"is_active,omitempty"
+  optional string owner_tenant_id = 12; // json:"owner_tenant_id,omitempty" - Set/clear ownership (empty string clears)
+  optional string deployment_model = 13; // json:"deployment_model,omitempty" - Change isolation level
+  optional bool is_platform_official = 14; // json:"is_platform_official,omitempty" - Platform-operated cluster
 }
 
 message ListClustersForTenantRequest {
@@ -693,6 +690,7 @@ message ClusterMetadata {
   optional double current_utilization = 9;  // Percentage
   bool is_subscribed = 10;            // Requesting tenant subscribed?
   string subscription_status = 11;    // none, pending, active, cancelled
+  bool is_platform_official = 12;     // Platform-operated cluster
 }
 
 // Private cluster creation (self-hosted edge)

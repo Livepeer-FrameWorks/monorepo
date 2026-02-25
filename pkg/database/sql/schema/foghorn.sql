@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     stream_id UUID,                         -- Public stream ID (for DVR local path reconstruction)
     tenant_id UUID NOT NULL,                -- Tenant owning the artifact (required)
     user_id UUID,                           -- User who created the artifact (for Decklog events)
+    origin_cluster_id VARCHAR(100),         -- Which cluster originally created the artifact (NULL = local)
 
     -- ===== LIFECYCLE STATE =====
     status VARCHAR(50) DEFAULT 'requested', -- requested, processing, ready, failed, deleted
@@ -86,10 +87,6 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- Cross-cluster artifact storage: tracks which cluster originally created the artifact.
--- NULL or matching local cluster = local artifact; different cluster = remote (adopted) artifact.
-ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
-
 -- ============================================================================
 -- ARTIFACT INDEXES
 -- ============================================================================
@@ -107,10 +104,6 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_artifact_internal ON foghorn.ar
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_tenant ON foghorn.artifacts(tenant_id) WHERE tenant_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_user ON foghorn.artifacts(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_retention ON foghorn.artifacts(retention_until) WHERE retention_until IS NOT NULL;
-
--- Enforce tenant attribution: tenant_id is required for all artifacts.
--- This will fail loudly if any NULL tenant_id rows exist.
-ALTER TABLE foghorn.artifacts ALTER COLUMN tenant_id SET NOT NULL;
 
 -- ============================================================================
 -- WARM STORAGE DISTRIBUTION (NODE CACHES)

@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS navigator.certificates (
     tenant_id UUID, -- Optional: NULL for platform certificates, set for tenant subdomains (platform-managed)
     domain TEXT NOT NULL,
     cert_pem TEXT NOT NULL,
-    key_pem TEXT NOT NULL, -- Encrypted at rest (future) or restricted access
+    key_pem TEXT NOT NULL, -- AES-256-GCM encrypted via pkg/crypto.FieldEncryptor (enc:v1: prefix)
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS navigator.acme_accounts (
     tenant_id UUID, -- Optional: NULL for platform accounts, set for tenant-specific ACME accounts
     email TEXT NOT NULL,
     registration_json TEXT NOT NULL, -- Serialized ACME registration
-    private_key_pem TEXT NOT NULL,
+    private_key_pem TEXT NOT NULL, -- AES-256-GCM encrypted via pkg/crypto.FieldEncryptor (enc:v1: prefix)
     created_at TIMESTAMPTZ DEFAULT NOW(),
     -- Unique constraint: same email per tenant (or platform-wide if tenant_id is NULL)
     CONSTRAINT idx_acme_accounts_tenant_email UNIQUE (tenant_id, email)

@@ -23,9 +23,6 @@ query GetInfrastructureOverview {
         maxConcurrentStreams
         maxConcurrentViewers
         maxBandwidthMbps
-        currentStreamCount
-        currentViewerCount
-        currentBandwidthMbps
         healthStatus
         isActive
         isDefaultCluster

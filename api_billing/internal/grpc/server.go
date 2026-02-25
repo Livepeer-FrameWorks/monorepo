@@ -13,6 +13,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/api_billing/internal/handlers"
@@ -226,6 +227,10 @@ type PurserServer struct {
 	x402handler         *handlers.X402Handler
 	decklogClient       *decklogclient.BatchedClient
 	thresholdEnforcer   *handlers.ThresholdEnforcer
+
+	officialClustersMu    sync.RWMutex
+	officialClusterIDs    map[string]bool
+	officialClustersStale time.Time
 }
 
 // NewPurserServer creates a new Purser gRPC server
@@ -2472,7 +2477,7 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 		SELECT id, cluster_id, pricing_model,
 		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
 		       base_price, currency, metered_rates,
-		       required_tier_level, is_platform_official, allow_free_tier,
+		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
 		FROM purser.cluster_pricing
 		WHERE cluster_id = $1
@@ -2480,19 +2485,22 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 		&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
 		&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
 		&basePrice, &currency, &meteredRatesJSON,
-		&pricing.RequiredTierLevel, &pricing.IsPlatformOfficial, &pricing.AllowFreeTier,
+		&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
 		&defaultQuotasJSON, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Return default pricing for clusters without explicit config
-		return &pb.ClusterPricing{
-			ClusterId:          clusterID,
-			PricingModel:       "tier_inherit",
-			Currency:           "EUR",
-			RequiredTierLevel:  0,
-			IsPlatformOfficial: false,
-			AllowFreeTier:      false,
-		}, nil
+		defaultPricing := &pb.ClusterPricing{
+			ClusterId:         clusterID,
+			PricingModel:      "tier_inherit",
+			Currency:          "EUR",
+			RequiredTierLevel: 0,
+			AllowFreeTier:     false,
+		}
+		if officialIDs, qmErr := s.getOfficialClusterIDs(ctx); qmErr == nil && officialIDs != nil {
+			defaultPricing.IsPlatformOfficial = officialIDs[clusterID]
+		}
+		return defaultPricing, nil
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -2527,6 +2535,11 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 
 	pricing.CreatedAt = timestamppb.New(createdAt)
 	pricing.UpdatedAt = timestamppb.New(updatedAt)
+
+	// Enrich is_platform_official from Quartermaster (cached)
+	if officialIDs, qmErr := s.getOfficialClusterIDs(ctx); qmErr == nil && officialIDs != nil {
+		pricing.IsPlatformOfficial = officialIDs[clusterID]
+	}
 
 	return &pricing, nil
 }
@@ -2568,7 +2581,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 		SELECT id, cluster_id, pricing_model,
 		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
 		       base_price, currency, metered_rates,
-		       required_tier_level, is_platform_official, allow_free_tier,
+		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
 		FROM purser.cluster_pricing
 		WHERE cluster_id IN (%s)
@@ -2594,7 +2607,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 			&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
 			&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
 			&basePrice, &currency, &meteredRatesJSON,
-			&pricing.RequiredTierLevel, &pricing.IsPlatformOfficial, &pricing.AllowFreeTier,
+			&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
 			&defaultQuotasJSON, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
@@ -2650,6 +2663,13 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 			denial := "Pricing not configured. Contact support."
 			pricing.DenialReason = &denial
 			result[clusterID] = pricing
+		}
+	}
+
+	// Enrich is_platform_official from Quartermaster (cached)
+	if officialIDs, qmErr := s.getOfficialClusterIDs(ctx); qmErr == nil && officialIDs != nil {
+		for _, p := range result {
+			p.IsPlatformOfficial = officialIDs[p.ClusterId]
 		}
 	}
 
@@ -2783,7 +2803,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 		SELECT id, cluster_id, pricing_model,
 		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
 		       base_price, currency, metered_rates,
-		       required_tier_level, is_platform_official, allow_free_tier,
+		       required_tier_level, allow_free_tier,
 		       default_quotas, created_at, updated_at
 		FROM purser.cluster_pricing
 	`
@@ -2861,7 +2881,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 			&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
 			&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
 			&basePrice, &currency, &meteredRatesJSON,
-			&pricing.RequiredTierLevel, &pricing.IsPlatformOfficial, &pricing.AllowFreeTier,
+			&pricing.RequiredTierLevel, &pricing.AllowFreeTier,
 			&defaultQuotasJSON, &createdAt, &updatedAt,
 		); err != nil {
 			continue
@@ -2897,6 +2917,13 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 		pricing.UpdatedAt = timestamppb.New(updatedAt)
 
 		pricings = append(pricings, &pricing)
+	}
+
+	// Enrich is_platform_official from Quartermaster (cached)
+	if officialIDs, qmErr := s.getOfficialClusterIDs(ctx); qmErr == nil && officialIDs != nil {
+		for _, p := range pricings {
+			p.IsPlatformOfficial = officialIDs[p.ClusterId]
+		}
 	}
 
 	resp := &pb.ListClusterPricingsResponse{Pricings: pricings}
@@ -3249,7 +3276,7 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 
 	query := fmt.Sprintf(`
 		SELECT cluster_id, pricing_model, base_price, currency,
-		       required_tier_level, is_platform_official, created_at
+		       required_tier_level, created_at
 		FROM purser.cluster_pricing
 		%s %s LIMIT $%d`,
 		where, orderBy, argIdx)
@@ -3270,7 +3297,7 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 
 		if err := rows.Scan(
 			&p.ClusterId, &p.PricingModel, &basePrice, &currency,
-			&p.RequiredTierLevel, &p.IsPlatformOfficial, &createdAt,
+			&p.RequiredTierLevel, &createdAt,
 		); err != nil {
 			s.logger.WithError(err).Warn("Failed to scan cluster pricing row")
 			continue
@@ -3287,6 +3314,13 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 		p.CreatedAt = timestamppb.New(createdAt)
 
 		pricings = append(pricings, &p)
+	}
+
+	// Enrich is_platform_official from Quartermaster (cached)
+	if officialIDs, qmErr := s.getOfficialClusterIDs(ctx); qmErr == nil && officialIDs != nil {
+		for _, p := range pricings {
+			p.IsPlatformOfficial = officialIDs[p.ClusterId]
+		}
 	}
 
 	// Determine pagination info
@@ -3547,23 +3581,65 @@ func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *pb.Ini
 }
 
 // InitializePrepaidAccount creates subscription + prepaid balance for wallet provisioning.
+// getOfficialClusterIDs returns the set of platform-official cluster IDs,
+// cached for 5 minutes since this flag changes very rarely.
+func (s *PurserServer) getOfficialClusterIDs(ctx context.Context) (map[string]bool, error) {
+	s.officialClustersMu.RLock()
+	if s.officialClusterIDs != nil && time.Now().Before(s.officialClustersStale) {
+		ids := s.officialClusterIDs
+		s.officialClustersMu.RUnlock()
+		return ids, nil
+	}
+	s.officialClustersMu.RUnlock()
+
+	if s.quartermasterClient == nil {
+		return nil, nil
+	}
+
+	resp, err := s.quartermasterClient.ListOfficialClusters(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list official clusters: %w", err)
+	}
+
+	ids := make(map[string]bool, len(resp.GetClusters()))
+	for _, c := range resp.GetClusters() {
+		ids[c.ClusterId] = true
+	}
+
+	s.officialClustersMu.Lock()
+	s.officialClusterIDs = ids
+	s.officialClustersStale = time.Now().Add(5 * time.Minute)
+	s.officialClustersMu.Unlock()
+
+	return ids, nil
+}
+
 // Called by Commodore during GetOrCreateWalletUser to avoid cross-service DB inserts.
 // This is atomic - creates both subscription (billing_model=prepaid) and balance in one transaction.
 // ensureTierClusterAccess subscribes the tenant to all platform clusters
 // eligible at the given tier level and sets the best one as primary.
 func (s *PurserServer) ensureTierClusterAccess(ctx context.Context, tenantID string, tierLevel int32) (eligibleClusterIDs []string, primaryClusterID string, err error) {
-	if s.quartermasterClient == nil {
+	officialIDs, err := s.getOfficialClusterIDs(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(officialIDs) == 0 {
 		return nil, "", nil
+	}
+
+	idSlice := make([]string, 0, len(officialIDs))
+	for id := range officialIDs {
+		idSlice = append(idSlice, id)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT cluster_id, required_tier_level
 		FROM purser.cluster_pricing
-		WHERE is_platform_official = true
-		  AND required_tier_level <= $1
-		  AND (allow_free_tier = true OR $1 > 0)
+		WHERE cluster_id = ANY($1)
+		  AND required_tier_level <= $2
+		  AND (allow_free_tier = true OR $2 > 0)
 		ORDER BY required_tier_level DESC
-	`, tierLevel)
+	`, pq.Array(idSlice), tierLevel)
 	if err != nil {
 		return nil, "", fmt.Errorf("query eligible clusters: %w", err)
 	}

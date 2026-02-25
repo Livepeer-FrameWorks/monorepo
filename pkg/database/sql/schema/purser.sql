@@ -208,10 +208,15 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
     tier_level INTEGER DEFAULT 0,
     is_enterprise BOOLEAN DEFAULT false,
 
+    -- ===== STRIPE INTEGRATION =====
+    stripe_price_id_monthly VARCHAR(255),
+    stripe_price_id_yearly VARCHAR(255),
+    stripe_product_id VARCHAR(255),
+
     -- ===== DEFAULT TIER FLAGS =====
     is_default_prepaid BOOLEAN DEFAULT false,
     is_default_postpaid BOOLEAN DEFAULT false,
-    
+
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -257,6 +262,19 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     billing_address JSONB,                -- Structured: {line1, line2, city, postalCode, country}
     tax_id VARCHAR(100),                  -- VAT number (EU format: XX123456789)
     tax_rate DECIMAL(5,4) DEFAULT 0.0000,
+
+    -- ===== STRIPE INTEGRATION =====
+    stripe_customer_id VARCHAR(255),
+    stripe_subscription_id VARCHAR(255),
+    stripe_subscription_status VARCHAR(50),
+    stripe_current_period_end TIMESTAMPTZ,
+    dunning_attempts INT DEFAULT 0,
+
+    -- ===== MOLLIE INTEGRATION =====
+    mollie_subscription_id VARCHAR(50),
+
+    -- ===== X402 PROTOCOL =====
+    x402_address_index INTEGER,
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
@@ -473,7 +491,7 @@ CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
     -- Minimum tier level required to see/subscribe to this cluster
     -- 0=no subscription required, 1=free, 2=supporter, 3=developer, 4=production, 5=enterprise
     required_tier_level INT DEFAULT 0,
-    is_platform_official BOOLEAN DEFAULT FALSE,  -- Platform-operated cluster
+    -- is_platform_official moved to Quartermaster (infrastructure_clusters.is_platform_official)
     allow_free_tier BOOLEAN DEFAULT FALSE,       -- If platform_official, allow free tier access
 
     -- ===== DEFAULT QUOTAS (for free_unmetered or as caps) =====
@@ -487,39 +505,13 @@ CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
 );
 
 CREATE INDEX IF NOT EXISTS idx_purser_cluster_pricing_model ON purser.cluster_pricing(pricing_model);
-CREATE INDEX IF NOT EXISTS idx_purser_cluster_pricing_platform ON purser.cluster_pricing(is_platform_official);
 CREATE INDEX IF NOT EXISTS idx_purser_cluster_pricing_tier_level ON purser.cluster_pricing(required_tier_level);
-
--- ============================================================================
--- STRIPE SUBSCRIPTION TRACKING
--- ============================================================================
--- Columns added to tenant_subscriptions for Stripe integration.
--- These track Stripe customer, subscription, and billing cycle state.
--- ============================================================================
-
-ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(255);
-ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS stripe_subscription_id VARCHAR(255);
-ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS stripe_subscription_status VARCHAR(50);
-ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS stripe_current_period_end TIMESTAMPTZ;
-ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS dunning_attempts INT DEFAULT 0;
-
--- Stripe price IDs on billing tiers for checkout session creation
-ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS stripe_price_id_monthly VARCHAR(255);
-ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS stripe_price_id_yearly VARCHAR(255);
-ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS stripe_product_id VARCHAR(255);
-
--- Default tier flags: which tier is auto-assigned per billing model
-ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS is_default_prepaid BOOLEAN DEFAULT false;
-ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS is_default_postpaid BOOLEAN DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_stripe_customer ON purser.tenant_subscriptions(stripe_customer_id);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_stripe_subscription ON purser.tenant_subscriptions(stripe_subscription_id);
 
 -- ============================================================================
--- MOLLIE SUBSCRIPTION TRACKING
--- ============================================================================
--- Mollie uses mandates (SEPA Direct Debit, credit card) for recurring payments.
--- First payment (e.g., iDEAL) creates a mandate, then subscriptions auto-charge.
+-- MOLLIE PAYMENT INFRASTRUCTURE
 -- ============================================================================
 
 -- Mollie customer mapping (one Mollie customer per tenant)
@@ -542,9 +534,6 @@ CREATE TABLE IF NOT EXISTS purser.mollie_mandates (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- Mollie subscription ID on tenant_subscriptions
-ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS mollie_subscription_id VARCHAR(50);
 
 CREATE INDEX IF NOT EXISTS idx_purser_mollie_customers_tenant ON purser.mollie_customers(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_purser_mollie_mandates_tenant ON purser.mollie_mandates(tenant_id);
@@ -604,8 +593,6 @@ CREATE INDEX IF NOT EXISTS idx_purser_webhook_events_provider ON purser.webhook_
 -- Only USDC/EURC supported (EIP-3009 tokens). ETH/LPT use deposit flow.
 -- ============================================================================
 
--- Per-tenant x402 address index (reuse same address across payments)
-ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS x402_address_index INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_subscriptions_x402_address_index
     ON purser.tenant_subscriptions(x402_address_index)
     WHERE x402_address_index IS NOT NULL;

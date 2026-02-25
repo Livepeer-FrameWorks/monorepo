@@ -11,6 +11,7 @@ const (
 	TypeStream             = "Stream"
 	TypeClip               = "Clip"
 	TypeVodAsset           = "VodAsset"
+	TypePushTarget         = "PushTarget"
 	TypeCluster            = "Cluster"
 	TypeInfrastructureNode = "InfrastructureNode"
 

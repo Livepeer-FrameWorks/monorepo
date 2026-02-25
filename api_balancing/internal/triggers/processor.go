@@ -867,6 +867,16 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		}()
 	}
 
+	// Activate multistream push targets if any are configured
+	if len(streamValidation.GetPushTargets()) > 0 {
+		go p.activatePushTargets(
+			trigger.GetNodeId(),
+			streamValidation.InternalName,
+			streamValidation.GetTenantId(),
+			streamValidation.GetPushTargets(),
+		)
+	}
+
 	// Set playback_id on stream state for federation advertisement
 	if streamValidation.PlaybackId != "" {
 		state.DefaultManager().SetStreamPlaybackID(streamValidation.InternalName, streamValidation.PlaybackId)
@@ -905,6 +915,13 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"playback_id": playbackID,
 			"error":       err,
 		}).Warn("Failed to resolve playback ID")
+	}
+
+	if target.InternalName == "" {
+		p.logger.WithFields(logging.Fields{
+			"playback_id": playbackID,
+		}).Debug("PLAY_REWRITE: stream not found")
+		return "", false, nil
 	}
 
 	// Check stream owner's billing status from cache (set during PUSH_REWRITE).
@@ -1157,6 +1174,24 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 		}).Error("Failed to send push end trigger to Decklog")
 	}
 
+	// Update multistream push target status based on push result
+	targetURI := pushEnd.GetTargetUriAfter()
+	if targetURI == "" {
+		targetURI = pushEnd.GetTargetUriBefore()
+	}
+	if targetURI != "" {
+		status := "idle"
+		var lastErr *string
+		if pushEnd.GetPushStatus() != "" && pushEnd.GetPushStatus() != "0" {
+			status = "failed"
+			logMsg := pushEnd.GetLogMessages()
+			if logMsg != "" {
+				lastErr = &logMsg
+			}
+		}
+		go p.updatePushTargetStatus(pushEnd.GetStreamName(), targetURI, status, lastErr)
+	}
+
 	return "", false, nil
 }
 
@@ -1187,6 +1222,10 @@ func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, e
 			"error":         err,
 		}).Error("Failed to send push out start trigger to Decklog")
 	}
+
+	// Update multistream push target status to "pushing"
+	go p.updatePushTargetStatus(pushOutStart.GetStreamName(), pushOutStart.GetPushTarget(), "pushing", nil)
+
 	return pushOutStart.GetPushTarget(), false, nil
 }
 
@@ -1380,6 +1419,9 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 
 	// Stop DVR on its storage node if active
 	control.StopDVRByInternalName(internalName, p.logger)
+
+	// Deactivate multistream push targets on the origin node
+	go p.deactivatePushTargets(nodeID, streamEnd.GetStreamName())
 
 	return "", false, nil
 }
@@ -2299,4 +2341,119 @@ func (p *Processor) getNodeConfig(nodeID string) *NodeConfig {
 	}
 
 	return config
+}
+
+// pushTargetInfo stores metadata for a tracked multistream push target.
+type pushTargetInfo struct {
+	TargetID string
+	TenantID string
+}
+
+// activePushTargetsMu protects activePushTargetMap.
+var (
+	activePushTargetsMu sync.Mutex
+	activePushTargetMap = map[string]map[string]pushTargetInfo{} // streamName -> targetURI -> info
+)
+
+// trackPushTargets stores push target metadata so PUSH_OUT_START/PUSH_END
+// can map target URIs back to push target IDs for status updates.
+func trackPushTargets(streamName, tenantID string, targets []*pb.PushTargetInternal) {
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	m := make(map[string]pushTargetInfo, len(targets))
+	for _, t := range targets {
+		m[t.GetTargetUri()] = pushTargetInfo{TargetID: t.GetId(), TenantID: tenantID}
+	}
+	activePushTargetMap[streamName] = m
+}
+
+// untrackPushTargets removes push target tracking for a stream.
+func untrackPushTargets(streamName string) {
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	delete(activePushTargetMap, streamName)
+}
+
+// lookupPushTarget finds the push target info for a stream+URI pair.
+func lookupPushTarget(streamName, targetURI string) (pushTargetInfo, bool) {
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	if m, ok := activePushTargetMap[streamName]; ok {
+		if info, found := m[targetURI]; found {
+			return info, true
+		}
+	}
+	return pushTargetInfo{}, false
+}
+
+// activatePushTargets sends push targets (from ValidateStreamKeyResponse) to the
+// origin node's Helmsman for activation. Called asynchronously from handlePushRewrite.
+func (p *Processor) activatePushTargets(nodeID, internalName, tenantID string, targets []*pb.PushTargetInternal) {
+	specs := make([]*pb.PushTargetSpec, 0, len(targets))
+	for _, t := range targets {
+		specs = append(specs, &pb.PushTargetSpec{
+			TargetId:  t.GetId(),
+			TargetUri: t.GetTargetUri(),
+			Name:      t.GetName(),
+		})
+	}
+
+	streamName := fmt.Sprintf("live+%s", internalName)
+
+	// Track targets so PUSH_OUT_START/PUSH_END can update status
+	trackPushTargets(streamName, tenantID, targets)
+
+	if err := control.SendActivatePushTargets(nodeID, &pb.ActivatePushTargets{
+		StreamName: streamName,
+		Targets:    specs,
+	}); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"node_id":      nodeID,
+			"stream_name":  streamName,
+			"target_count": len(specs),
+			"error":        err,
+		}).Error("Failed to send ActivatePushTargets to Helmsman")
+		return
+	}
+
+	p.logger.WithFields(logging.Fields{
+		"node_id":      nodeID,
+		"stream_name":  streamName,
+		"target_count": len(specs),
+	}).Info("Activated multistream push targets")
+}
+
+// deactivatePushTargets tells Helmsman to stop all pushes for a stream.
+func (p *Processor) deactivatePushTargets(nodeID, streamName string) {
+	untrackPushTargets(streamName)
+
+	if err := control.SendDeactivatePushTargets(nodeID, &pb.DeactivatePushTargets{
+		StreamName: streamName,
+	}); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"node_id":     nodeID,
+			"stream_name": streamName,
+			"error":       err,
+		}).Warn("Failed to send DeactivatePushTargets to Helmsman")
+	}
+}
+
+// updatePushTargetStatus updates push target status in Commodore when a
+// push starts or ends. Called from handlePushOutStart and handlePushEnd.
+func (p *Processor) updatePushTargetStatus(streamName, targetURI, status string, lastError *string) {
+	info, found := lookupPushTarget(streamName, targetURI)
+	if !found {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.commodoreClient.UpdatePushTargetStatus(ctx, info.TargetID, info.TenantID, status, lastError); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"target_id":   info.TargetID,
+			"stream_name": streamName,
+			"status":      status,
+			"error":       err,
+		}).Warn("Failed to update push target status in Commodore")
+	}
 }

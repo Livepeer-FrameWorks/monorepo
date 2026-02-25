@@ -1,0 +1,6 @@
+# Delete a multistream push target
+mutation DeletePushTarget($id: ID!) {
+  deletePushTarget(id: $id) {
+    ...DeleteSuccessFields @mask_disable
+  }
+}

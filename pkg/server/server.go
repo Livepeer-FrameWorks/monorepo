@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -93,11 +94,22 @@ func SetupServiceRouter(
 
 	router := gin.New()
 
+	// Parse CORS allowed origins from environment
+	var allowedOrigins []string
+	if originsStr := config.GetEnv("ALLOWED_ORIGINS", ""); originsStr != "" {
+		for _, o := range strings.Split(originsStr, ",") {
+			if trimmed := strings.TrimSpace(o); trimmed != "" {
+				allowedOrigins = append(allowedOrigins, trimmed)
+			}
+		}
+	}
+	devMode := config.GetEnv("GIN_MODE", "debug") != "release"
+
 	// Add common middleware
 	router.Use(middleware.RequestIDMiddleware())
 	router.Use(middleware.LoggingMiddleware(logger))
 	router.Use(middleware.RecoveryMiddleware(logger))
-	router.Use(middleware.CORSMiddleware())
+	router.Use(middleware.CORSMiddleware(allowedOrigins, devMode))
 
 	// Add metrics middleware
 	router.Use(metricsCollector.MetricsMiddleware())

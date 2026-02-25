@@ -28,6 +28,8 @@ message ForwardCommandRequest {
     helmsmancontrol.DefrostRequest defrost = 17;
     helmsmancontrol.DtshSyncRequest dtsh_sync = 18;
     helmsmancontrol.StopSessionsRequest stop_sessions = 19;
+    helmsmancontrol.ActivatePushTargets activate_push_targets = 20;
+    helmsmancontrol.DeactivatePushTargets deactivate_push_targets = 21;
   }
 }
 

@@ -476,6 +476,11 @@ func (c *GRPCClient) GetPlatformOverview(ctx context.Context, tenantID string, t
 	})
 }
 
+// GetNetworkLiveStats returns platform-wide per-cluster live stats (no tenant filter).
+func (c *GRPCClient) GetNetworkLiveStats(ctx context.Context) (*pb.GetNetworkLiveStatsResponse, error) {
+	return c.platform.GetNetworkLiveStats(ctx, &pb.GetNetworkLiveStatsRequest{})
+}
+
 // ============================================================================
 // Clip Analytics
 // ============================================================================

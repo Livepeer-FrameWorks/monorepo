@@ -1,0 +1,9 @@
+# Fetch push targets for a stream (multistream/restreaming destinations)
+query GetPushTargets($streamId: ID!) {
+  stream(id: $streamId) {
+    id
+    pushTargets {
+      ...PushTargetFields @mask_disable
+    }
+  }
+}

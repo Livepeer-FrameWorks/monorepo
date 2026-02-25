@@ -198,6 +198,14 @@ func (c *GRPCClient) ListClustersByOwner(ctx context.Context, ownerTenantID stri
 	})
 }
 
+// ListOfficialClusters lists all platform-official clusters.
+func (c *GRPCClient) ListOfficialClusters(ctx context.Context) (*pb.ListClustersResponse, error) {
+	t := true
+	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{
+		IsPlatformOfficial: &t,
+	})
+}
+
 // CreateCluster creates a new cluster
 func (c *GRPCClient) CreateCluster(ctx context.Context, req *pb.CreateClusterRequest) (*pb.ClusterResponse, error) {
 	return c.cluster.CreateCluster(ctx, req)

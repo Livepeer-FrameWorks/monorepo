@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"frameworks/pkg/ctxkeys"
@@ -36,39 +37,75 @@ func LoggingMiddleware(logger logging.Logger) gin.HandlerFunc {
 	}
 }
 
-// CORSMiddleware handles CORS headers
-func CORSMiddleware() gin.HandlerFunc {
+// CORSMiddleware handles CORS headers with origin validation.
+// In dev mode (devMode=true), all origins are allowed.
+// In production, only origins in allowedOrigins are reflected.
+// Wildcard entries like "*.example.com" match any subdomain.
+func CORSMiddleware(allowedOrigins []string, devMode bool) gin.HandlerFunc {
+	exactOrigins := make(map[string]bool, len(allowedOrigins))
+	var wildcardSuffixes []string
+	for _, o := range allowedOrigins {
+		trimmed := strings.TrimRight(strings.TrimSpace(o), "/")
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "*.") {
+			// "*.example.com" → match origins ending in ".example.com"
+			wildcardSuffixes = append(wildcardSuffixes, trimmed[1:]) // store ".example.com"
+		} else {
+			exactOrigins[trimmed] = true
+		}
+	}
+
+	isAllowed := func(origin string) bool {
+		if devMode {
+			return true
+		}
+		if exactOrigins[origin] {
+			return true
+		}
+		// Extract scheme + host for wildcard matching
+		// e.g. "https://app.us.example.com" → check if "://app.us.example.com" has suffix ".example.com"
+		for _, suffix := range wildcardSuffixes {
+			if idx := strings.Index(origin, "://"); idx >= 0 {
+				host := origin[idx+3:]
+				if strings.HasSuffix(host, suffix) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
 	return func(c *gin.Context) {
-		// Vary for caches/proxies
 		c.Header("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
 
-		// Allow the requesting origin (or * if none specified)
 		origin := c.GetHeader("Origin")
-		if origin != "" {
+		allowed := origin != "" && isAllowed(origin)
+
+		if allowed {
 			c.Header("Access-Control-Allow-Origin", origin)
-		} else {
-			c.Header("Access-Control-Allow-Origin", "*")
-		}
+			c.Header("Access-Control-Allow-Credentials", "true")
 
-		// Allow credentials (cookies/auth headers)
-		c.Header("Access-Control-Allow-Credentials", "true")
+			if m := c.GetHeader("Access-Control-Request-Method"); m != "" {
+				c.Header("Access-Control-Allow-Methods", m)
+			} else {
+				c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			}
 
-		// Methods: reflect requested method or provide sane defaults
-		if m := c.GetHeader("Access-Control-Request-Method"); m != "" {
-			c.Header("Access-Control-Allow-Methods", m)
-		} else {
-			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		}
-
-		// Headers: reflect requested headers to avoid blocking custom ones (e.g., X-Tenant-Id)
-		if h := c.GetHeader("Access-Control-Request-Headers"); h != "" {
-			c.Header("Access-Control-Allow-Headers", h)
-		} else {
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-Id, X-Request-Id")
+			if h := c.GetHeader("Access-Control-Request-Headers"); h != "" {
+				c.Header("Access-Control-Allow-Headers", h)
+			} else {
+				c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-Id, X-Request-Id")
+			}
 		}
 
 		if c.Request.Method == http.MethodOptions {
-			c.AbortWithStatus(http.StatusNoContent)
+			if allowed {
+				c.AbortWithStatus(http.StatusNoContent)
+			} else {
+				c.AbortWithStatus(http.StatusForbidden)
+			}
 			return
 		}
 

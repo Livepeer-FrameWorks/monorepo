@@ -388,6 +388,13 @@ type Query {
   networkStatus: NetworkStatus
 
   """
+  Cluster-aware streaming configuration for the authenticated tenant.
+  Returns preferred and official cluster domains for building protocol-specific URLs.
+  Null when not authenticated or cluster routing unavailable — frontend falls back to env vars.
+  """
+  streamingConfig: StreamingConfig
+
+  """
   List clusters available in the marketplace.
   """
   marketplaceClusters(first: Int = 50, after: String): [MarketplaceCluster!]!
@@ -1467,6 +1474,34 @@ type Mutation {
     """
     keyId: ID!
   ): DeleteStreamKeyResult!
+
+  # ==================== Multistream Push Targets ====================
+
+  """
+  Add a multistream push target to a stream.
+  When the stream goes live, it will automatically push to all enabled targets.
+  """
+  createPushTarget(
+    "The stream ID (Stream.id, Relay global ID)."
+    streamId: ID!
+    "Push target configuration."
+    input: CreatePushTargetInput!
+  ): PushTarget!
+
+  """
+  Update a multistream push target.
+  """
+  updatePushTarget(
+    "The push target ID."
+    id: ID!
+    "Fields to update."
+    input: UpdatePushTargetInput!
+  ): PushTarget!
+
+  """
+  Delete a multistream push target.
+  """
+  deletePushTarget("The push target ID." id: ID!): DeleteSuccess!
 
   # ==================== Wallet Authentication ====================
 
@@ -2691,7 +2726,7 @@ enum StreamEventSource {
 type StreamEvent implements Node {
   id: ID!
   eventId: ID!
-  streamId: ID!
+  streamId: ID
   stream: Stream
   nodeId: String
   type: StreamEventType!
@@ -2896,6 +2931,9 @@ type Stream implements Node {
   Lazily loaded from ClickHouse analytics.
   """
   metrics: StreamMetrics
+
+  "Configured multistream push targets for this stream."
+  pushTargets: [PushTarget!]!
 }
 
 """
@@ -4590,12 +4628,6 @@ type Cluster implements Node {
   maxConcurrentViewers: Int!
   "Maximum allowed bandwidth in Mbps."
   maxBandwidthMbps: Int!
-  "Current number of active streams."
-  currentStreamCount: Int!
-  "Current number of connected viewers."
-  currentViewerCount: Int!
-  "Current bandwidth usage in Mbps."
-  currentBandwidthMbps: Int!
   "Cluster health status (healthy, degraded, critical)."
   healthStatus: String!
   "Whether the cluster is operational."
@@ -5118,6 +5150,14 @@ type NetworkClusterStatus {
   healthyNodeCount: Int!
   peerCount: Int!
   status: String!
+  clusterType: String!
+  shortDescription: String
+  maxStreams: Int!
+  currentStreams: Int!
+  maxViewers: Int!
+  currentViewers: Int!
+  maxBandwidthMbps: Int!
+  currentBandwidthMbps: Int!
 }
 
 type NetworkPeerConnection {
@@ -5126,12 +5166,50 @@ type NetworkPeerConnection {
   connected: Boolean!
 }
 
+# Individual infrastructure node (public, no IPs or keys)
+type NetworkNode {
+  nodeId: String!
+  name: String!
+  nodeType: String!
+  latitude: Float!
+  longitude: Float!
+  status: String!
+  clusterId: String!
+}
+
+# Running service instance (public, no internal endpoints)
+type NetworkServiceInstance {
+  instanceId: String!
+  serviceId: String!
+  clusterId: String!
+  nodeId: String
+  status: String!
+  healthStatus: String!
+}
+
 type NetworkStatus {
   clusters: [NetworkClusterStatus!]!
   peerConnections: [NetworkPeerConnection!]!
+  nodes: [NetworkNode!]!
+  serviceInstances: [NetworkServiceInstance!]!
   totalNodes: Int!
   healthyNodes: Int!
   updatedAt: Time!
+}
+
+# Cluster-aware streaming domains for building protocol-specific URLs.
+# Preferred = tenant's assigned cluster; Official = billing-tier cluster (GeoDNS coverage).
+type StreamingConfig {
+  preferredClusterLabel: String
+  ingestDomain: String
+  edgeDomain: String
+  playDomain: String
+  officialClusterLabel: String
+  officialIngestDomain: String
+  officialEdgeDomain: String
+  officialPlayDomain: String
+  srtPort: Int
+  rtmpPort: Int
 }
 
 # Connection event for viewer connections/disconnections
@@ -5462,6 +5540,45 @@ type StreamKey {
   isActive: Boolean!
   lastUsedAt: Time
   createdAt: Time!
+}
+
+# Multistream push target (external restreaming destination)
+type PushTarget {
+  id: ID!
+  streamId: ID!
+  "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
+  platform: String
+  "User-friendly label for this target."
+  name: String!
+  "Target URI (masked in responses — stream key portion is redacted)."
+  targetUri: String!
+  "Whether this target is enabled for automatic push on stream start."
+  isEnabled: Boolean!
+  "Current push status: idle, pushing, or failed."
+  status: String!
+  "Last error message if push failed."
+  lastError: String
+  "When this target last successfully pushed."
+  lastPushedAt: Time
+  createdAt: Time!
+}
+
+input CreatePushTargetInput {
+  "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
+  platform: String
+  "User-friendly label for this target."
+  name: String!
+  "Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx)."
+  targetUri: String!
+}
+
+input UpdatePushTargetInput {
+  "Updated label."
+  name: String
+  "Updated target URI."
+  targetUri: String
+  "Enable or disable this target."
+  isEnabled: Boolean
 }
 
 # ============================================================================

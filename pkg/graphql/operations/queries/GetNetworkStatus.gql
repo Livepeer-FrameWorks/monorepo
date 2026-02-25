@@ -1,5 +1,5 @@
-# Public network status for marketing site status page (no auth required)
-# Returns cluster topology, node counts, peer connections — no tenant data
+# Public network status for marketing site and webapp (no auth required)
+# Returns full infrastructure topology: clusters, nodes, services, peer connections
 query GetNetworkStatus {
   networkStatus {
     clusters {
@@ -12,11 +12,36 @@ query GetNetworkStatus {
       healthyNodeCount
       peerCount
       status
+      clusterType
+      shortDescription
+      maxStreams
+      currentStreams
+      maxViewers
+      currentViewers
+      maxBandwidthMbps
+      currentBandwidthMbps
     }
     peerConnections {
       sourceCluster
       targetCluster
       connected
+    }
+    nodes {
+      nodeId
+      name
+      nodeType
+      latitude
+      longitude
+      status
+      clusterId
+    }
+    serviceInstances {
+      instanceId
+      serviceId
+      clusterId
+      nodeId
+      status
+      healthStatus
     }
     totalNodes
     healthyNodes

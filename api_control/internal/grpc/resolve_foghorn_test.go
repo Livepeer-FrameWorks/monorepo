@@ -9,6 +9,7 @@ import (
 	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -461,5 +462,60 @@ func TestResolveIngestEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testin
 	}
 	if st.Message() != "quartermaster not available for cluster routing" {
 		t.Fatalf("unexpected message: %q", st.Message())
+	}
+}
+
+func TestResolveIngestEndpoint_UnauthenticatedRequiresStreamKey(t *testing.T) {
+	server := &CommodoreServer{
+		logger: logrus.New(),
+	}
+
+	_, err := server.ResolveIngestEndpoint(context.Background(), &pb.IngestEndpointRequest{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", st.Code())
+	}
+	if st.Message() != "stream_key required" {
+		t.Fatalf("unexpected message: %q", st.Message())
+	}
+}
+
+func TestResolveFoghornForStreamKeyQueriesByStreamKey(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &CommodoreServer{
+		db:            db,
+		logger:        logrus.New(),
+		routeCache:    make(map[string]*clusterRoute),
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id\\s+FROM commodore.streams WHERE stream_key = \\$1").
+		WithArgs("sk_test").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id"}).AddRow("tenant-1", nil))
+
+	_, _, err = server.resolveFoghornForStreamKey(context.Background(), "sk_test")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %v", st.Code())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }

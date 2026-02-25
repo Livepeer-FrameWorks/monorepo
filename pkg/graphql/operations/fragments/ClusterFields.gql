@@ -12,9 +12,6 @@ fragment ClusterFields on Cluster {
   maxConcurrentStreams
   maxConcurrentViewers
   maxBandwidthMbps
-  currentStreamCount
-  currentViewerCount
-  currentBandwidthMbps
   healthStatus
   isActive
   isDefaultCluster

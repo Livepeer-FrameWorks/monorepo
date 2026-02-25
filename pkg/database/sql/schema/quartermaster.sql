@@ -129,15 +129,11 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     max_concurrent_streams INTEGER DEFAULT 1000,
     max_concurrent_viewers INTEGER DEFAULT 100000,
     max_bandwidth_mbps INTEGER DEFAULT 10000,
-    
-    -- ===== CURRENT USAGE =====
-    current_stream_count INTEGER DEFAULT 0,
-    current_viewer_count INTEGER DEFAULT 0,
-    current_bandwidth_mbps INTEGER DEFAULT 0,
-    
+
     -- ===== STATUS & HEALTH =====
     is_active BOOLEAN DEFAULT TRUE,
     is_default_cluster BOOLEAN DEFAULT FALSE,
+    is_platform_official BOOLEAN DEFAULT FALSE,
     health_status VARCHAR(50) DEFAULT 'healthy',
     last_seen TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -199,7 +195,8 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     tags JSONB DEFAULT '{}',
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT uq_qm_infrastructure_nodes_node_cluster UNIQUE (node_id, cluster_id)
 );
 
 -- ============================================================================
@@ -287,7 +284,11 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     last_health_check TIMESTAMP,
 
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+
+    CONSTRAINT fk_qm_service_instances_node_cluster
+        FOREIGN KEY (node_id, cluster_id)
+        REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id)
 );
 
 -- ============================================================================
@@ -314,18 +315,12 @@ CREATE INDEX IF NOT EXISTS idx_qm_fca_foghorn ON quartermaster.foghorn_cluster_a
 -- ============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_clusters_cluster_type ON quartermaster.infrastructure_clusters(cluster_type);
+CREATE INDEX IF NOT EXISTS idx_qm_clusters_platform_official ON quartermaster.infrastructure_clusters(is_platform_official) WHERE is_platform_official = true;
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_clusters_owner_tenant ON quartermaster.infrastructure_clusters(owner_tenant_id);
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_cluster_id ON quartermaster.infrastructure_nodes(cluster_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_node_cluster_unique ON quartermaster.infrastructure_nodes(node_id, cluster_id);
 CREATE INDEX IF NOT EXISTS idx_qm_services_plane ON quartermaster.services(plane);
 CREATE INDEX IF NOT EXISTS idx_qm_cluster_services_cluster_id ON quartermaster.cluster_services(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_qm_service_instances_cluster_id ON quartermaster.service_instances(cluster_id);
-ALTER TABLE quartermaster.service_instances
-    DROP CONSTRAINT IF EXISTS fk_qm_service_instances_node_cluster;
-ALTER TABLE quartermaster.service_instances
-    ADD CONSTRAINT fk_qm_service_instances_node_cluster
-    FOREIGN KEY (node_id, cluster_id)
-    REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id) NOT VALID;
 
 -- ============================================================================
 -- TENANT-CLUSTER MAPPING & ACCESS CONTROL
@@ -397,15 +392,18 @@ CREATE INDEX IF NOT EXISTS idx_qm_tenant_cluster_access_active ON quartermaster.
 -- UTILITY FUNCTIONS
 -- ============================================================================
 
--- Generate random alphanumeric strings for keys and tokens
+-- Generate random alphanumeric strings for keys and tokens (uses pgcrypto for CSPRNG)
 CREATE OR REPLACE FUNCTION quartermaster.generate_random_string(length INTEGER) RETURNS TEXT AS $$
 DECLARE
     chars TEXT := 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    chars_len INTEGER := 62;
+    rand_bytes BYTEA;
     result TEXT := '';
     i INTEGER := 0;
 BEGIN
-    FOR i IN 1..length LOOP
-        result := result || substr(chars, floor(random() * length(chars) + 1)::INTEGER, 1);
+    rand_bytes := gen_random_bytes(length);
+    FOR i IN 0..length-1 LOOP
+        result := result || substr(chars, (get_byte(rand_bytes, i) % chars_len) + 1, 1);
     END LOOP;
     RETURN result;
 END;
@@ -436,7 +434,8 @@ CREATE INDEX IF NOT EXISTS idx_qm_fingerprints_macs ON quartermaster.node_finger
 
 CREATE TABLE IF NOT EXISTS quartermaster.bootstrap_tokens (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    token VARCHAR(128) UNIQUE NOT NULL,
+    token_hash VARCHAR(64) UNIQUE NOT NULL,  -- SHA-256 hex digest
+    token_prefix VARCHAR(20) NOT NULL DEFAULT '',  -- Display prefix (e.g. "bt_a1b2c3...")
     -- Scope and intended usage
     kind VARCHAR(32) NOT NULL, -- 'edge_node' | 'service' | 'infrastructure_node'
     name TEXT NOT NULL DEFAULT 'Bootstrap Token',
@@ -454,7 +453,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.bootstrap_tokens (
     CONSTRAINT chk_kind CHECK (kind IN ('edge_node','service','infrastructure_node'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_token ON quartermaster.bootstrap_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_hash ON quartermaster.bootstrap_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_kind ON quartermaster.bootstrap_tokens(kind);
 
 -- ============================================================================

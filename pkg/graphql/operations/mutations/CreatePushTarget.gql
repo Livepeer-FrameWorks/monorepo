@@ -1,0 +1,6 @@
+# Create a new multistream push target for a stream
+mutation CreatePushTarget($streamId: ID!, $input: CreatePushTargetInput!) {
+  createPushTarget(streamId: $streamId, input: $input) {
+    ...PushTargetFields @mask_disable
+  }
+}

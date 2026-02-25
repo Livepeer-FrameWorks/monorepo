@@ -1,0 +1,14 @@
+query GetStreamingConfig {
+  streamingConfig {
+    preferredClusterLabel
+    ingestDomain
+    edgeDomain
+    playDomain
+    officialClusterLabel
+    officialIngestDomain
+    officialEdgeDomain
+    officialPlayDomain
+    srtPort
+    rtmpPort
+  }
+}

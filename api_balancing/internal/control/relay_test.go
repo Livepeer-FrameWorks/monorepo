@@ -648,16 +648,18 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", p))
 
 	sendByField := map[string]func() error{
-		"config_seed":   func() error { return SendConfigSeed("node-1", &pb.ConfigSeed{NodeId: "node-1"}) },
-		"clip_pull":     func() error { return SendClipPull("node-1", &pb.ClipPullRequest{}) },
-		"dvr_start":     func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) },
-		"dvr_stop":      func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) },
-		"clip_delete":   func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) },
-		"dvr_delete":    func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) },
-		"vod_delete":    func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) },
-		"defrost":       func() error { return SendDefrostRequest("node-1", &pb.DefrostRequest{}) },
-		"dtsh_sync":     func() error { return SendDtshSyncRequest("node-1", &pb.DtshSyncRequest{}) },
-		"stop_sessions": func() error { return SendStopSessions("node-1", &pb.StopSessionsRequest{}) },
+		"config_seed":             func() error { return SendConfigSeed("node-1", &pb.ConfigSeed{NodeId: "node-1"}) },
+		"clip_pull":               func() error { return SendClipPull("node-1", &pb.ClipPullRequest{}) },
+		"dvr_start":               func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) },
+		"dvr_stop":                func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) },
+		"clip_delete":             func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) },
+		"dvr_delete":              func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) },
+		"vod_delete":              func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) },
+		"defrost":                 func() error { return SendDefrostRequest("node-1", &pb.DefrostRequest{}) },
+		"dtsh_sync":               func() error { return SendDtshSyncRequest("node-1", &pb.DtshSyncRequest{}) },
+		"stop_sessions":           func() error { return SendStopSessions("node-1", &pb.StopSessionsRequest{}) },
+		"activate_push_targets":   func() error { return SendActivatePushTargets("node-1", &pb.ActivatePushTargets{}) },
+		"deactivate_push_targets": func() error { return SendDeactivatePushTargets("node-1", &pb.DeactivatePushTargets{}) },
 	}
 
 	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()

@@ -71,13 +71,9 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_messages (
     tools_used JSONB,
     token_count_input INT,
     token_count_output INT,
+    confidence_blocks JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-
-DO $$ BEGIN
-    ALTER TABLE skipper.skipper_messages ADD COLUMN confidence_blocks JSONB;
-EXCEPTION WHEN duplicate_column THEN NULL;
-END $$;
 
 -- ============================================================================
 -- USAGE METERING
@@ -125,20 +121,28 @@ CREATE INDEX IF NOT EXISTS skipper_crawl_jobs_tenant_idx
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS skipper.skipper_page_cache (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID NOT NULL,
-    source_root     TEXT NOT NULL,
-    page_url        TEXT NOT NULL,
-    content_hash    TEXT,
-    etag            TEXT,
-    last_modified   TEXT,
-    raw_size        BIGINT,
-    last_fetched_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL,
+    source_root             TEXT NOT NULL,
+    page_url                TEXT NOT NULL,
+    content_hash            TEXT,
+    etag                    TEXT,
+    last_modified           TEXT,
+    raw_size                BIGINT,
+    last_fetched_at         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    sitemap_priority        REAL DEFAULT 0.5,
+    sitemap_changefreq      TEXT,
+    consecutive_unchanged   INT NOT NULL DEFAULT 0,
+    consecutive_failures    INT NOT NULL DEFAULT 0,
+    source_type             TEXT NOT NULL DEFAULT 'sitemap',
     UNIQUE (tenant_id, page_url)
 );
 
 CREATE INDEX IF NOT EXISTS skipper_page_cache_source_idx
     ON skipper.skipper_page_cache (tenant_id, source_root);
+
+CREATE INDEX IF NOT EXISTS skipper_page_cache_staleness_idx
+    ON skipper.skipper_page_cache (tenant_id, last_fetched_at ASC);
 
 -- ============================================================================
 -- INVESTIGATION REPORTS
@@ -152,50 +156,12 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_reports (
     metrics_reviewed JSONB,
     root_cause TEXT,
     recommendations JSONB,
+    read_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS skipper_reports_tenant_created_idx
     ON skipper.skipper_reports (tenant_id, created_at DESC);
-
--- ============================================================================
--- SCHEMA UPGRADES (idempotent ALTER for existing databases)
--- ============================================================================
-
-DO $$ BEGIN
-    ALTER TABLE skipper.skipper_knowledge ADD COLUMN source_type TEXT;
-EXCEPTION WHEN duplicate_column THEN NULL;
-END $$;
-
-DO $$ BEGIN
-    ALTER TABLE skipper.skipper_page_cache ADD COLUMN raw_size BIGINT;
-EXCEPTION WHEN duplicate_column THEN NULL;
-END $$;
-
-DO $$ BEGIN
-    ALTER TABLE skipper.skipper_knowledge ADD COLUMN source_root TEXT;
-EXCEPTION WHEN duplicate_column THEN NULL;
-END $$;
-
-DO $$ BEGIN
-    ALTER TABLE skipper.skipper_conversations ADD COLUMN summary TEXT;
-EXCEPTION WHEN duplicate_column THEN NULL;
-END $$;
-
-DO $$ BEGIN
-    ALTER TABLE skipper.skipper_knowledge
-        ADD COLUMN tsv tsvector
-        GENERATED ALWAYS AS (to_tsvector('english', chunk_text)) STORED;
-EXCEPTION WHEN duplicate_column THEN NULL;
-END $$;
-
-CREATE INDEX IF NOT EXISTS skipper_knowledge_tsv_idx
-    ON skipper.skipper_knowledge USING GIN (tsv);
-
-DO $$ BEGIN
-    ALTER TABLE skipper.skipper_reports ADD COLUMN read_at TIMESTAMP WITH TIME ZONE;
-EXCEPTION WHEN duplicate_column THEN NULL;
-END $$;
 
 -- ============================================================================
 -- DIAGNOSTIC BASELINES (Welford running averages)

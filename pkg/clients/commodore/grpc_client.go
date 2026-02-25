@@ -19,19 +19,20 @@ import (
 
 // GRPCClient is the gRPC client for Commodore
 type GRPCClient struct {
-	conn      *grpc.ClientConn
-	internal  pb.InternalServiceClient
-	stream    pb.StreamServiceClient
-	streamKey pb.StreamKeyServiceClient
-	user      pb.UserServiceClient
-	developer pb.DeveloperServiceClient
-	clip      pb.ClipServiceClient
-	dvr       pb.DVRServiceClient
-	viewer    pb.ViewerServiceClient
-	vod       pb.VodServiceClient
-	nodeMgmt  pb.NodeManagementServiceClient
-	logger    logging.Logger
-	cache     *cache.Cache
+	conn       *grpc.ClientConn
+	internal   pb.InternalServiceClient
+	stream     pb.StreamServiceClient
+	streamKey  pb.StreamKeyServiceClient
+	user       pb.UserServiceClient
+	developer  pb.DeveloperServiceClient
+	clip       pb.ClipServiceClient
+	dvr        pb.DVRServiceClient
+	viewer     pb.ViewerServiceClient
+	vod        pb.VodServiceClient
+	nodeMgmt   pb.NodeManagementServiceClient
+	pushTarget pb.PushTargetServiceClient
+	logger     logging.Logger
+	cache      *cache.Cache
 }
 
 // GRPCConfig represents the configuration for the gRPC client
@@ -110,19 +111,20 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	return &GRPCClient{
-		conn:      conn,
-		internal:  pb.NewInternalServiceClient(conn),
-		stream:    pb.NewStreamServiceClient(conn),
-		streamKey: pb.NewStreamKeyServiceClient(conn),
-		user:      pb.NewUserServiceClient(conn),
-		developer: pb.NewDeveloperServiceClient(conn),
-		clip:      pb.NewClipServiceClient(conn),
-		dvr:       pb.NewDVRServiceClient(conn),
-		viewer:    pb.NewViewerServiceClient(conn),
-		vod:       pb.NewVodServiceClient(conn),
-		nodeMgmt:  pb.NewNodeManagementServiceClient(conn),
-		logger:    config.Logger,
-		cache:     config.Cache,
+		conn:       conn,
+		internal:   pb.NewInternalServiceClient(conn),
+		stream:     pb.NewStreamServiceClient(conn),
+		streamKey:  pb.NewStreamKeyServiceClient(conn),
+		user:       pb.NewUserServiceClient(conn),
+		developer:  pb.NewDeveloperServiceClient(conn),
+		clip:       pb.NewClipServiceClient(conn),
+		dvr:        pb.NewDVRServiceClient(conn),
+		viewer:     pb.NewViewerServiceClient(conn),
+		vod:        pb.NewVodServiceClient(conn),
+		nodeMgmt:   pb.NewNodeManagementServiceClient(conn),
+		pushTarget: pb.NewPushTargetServiceClient(conn),
+		logger:     config.Logger,
+		cache:      config.Cache,
 	}, nil
 }
 
@@ -905,4 +907,54 @@ func (c *GRPCClient) SetNodeMode(ctx context.Context, req *pb.SetNodeModeRequest
 // GetNodeHealth returns real-time health for a node via Foghorn.
 func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, error) {
 	return c.nodeMgmt.GetNodeHealth(ctx, req)
+}
+
+// ============================================================================
+// PUSH TARGET SERVICE (Multistreaming)
+// ============================================================================
+
+// GetStreamPushTargets fetches enabled push targets for a stream (internal, used by Foghorn).
+func (c *GRPCClient) GetStreamPushTargets(ctx context.Context, streamID, tenantID string) ([]*pb.PushTargetInternal, error) {
+	resp, err := c.pushTarget.GetStreamPushTargets(ctx, &pb.GetStreamPushTargetsRequest{
+		StreamId: streamID,
+		TenantId: tenantID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetPushTargets(), nil
+}
+
+// UpdatePushTargetStatus updates the status of a push target (internal, used by Foghorn).
+func (c *GRPCClient) UpdatePushTargetStatus(ctx context.Context, id, tenantID, status string, lastError *string) error {
+	req := &pb.UpdatePushTargetStatusRequest{
+		Id:       id,
+		TenantId: tenantID,
+		Status:   status,
+	}
+	if lastError != nil {
+		req.LastError = lastError
+	}
+	_, err := c.pushTarget.UpdatePushTargetStatus(ctx, req)
+	return err
+}
+
+// CreatePushTarget creates a new push target (Gateway → Commodore).
+func (c *GRPCClient) CreatePushTarget(ctx context.Context, req *pb.CreatePushTargetRequest) (*pb.PushTarget, error) {
+	return c.pushTarget.CreatePushTarget(ctx, req)
+}
+
+// ListPushTargets lists push targets for a stream (Gateway → Commodore).
+func (c *GRPCClient) ListPushTargets(ctx context.Context, streamID string) (*pb.ListPushTargetsResponse, error) {
+	return c.pushTarget.ListPushTargets(ctx, &pb.ListPushTargetsRequest{StreamId: streamID})
+}
+
+// UpdatePushTarget updates a push target (Gateway → Commodore).
+func (c *GRPCClient) UpdatePushTarget(ctx context.Context, req *pb.UpdatePushTargetRequest) (*pb.PushTarget, error) {
+	return c.pushTarget.UpdatePushTarget(ctx, req)
+}
+
+// DeletePushTarget deletes a push target (Gateway → Commodore).
+func (c *GRPCClient) DeletePushTarget(ctx context.Context, id string) (*pb.DeletePushTargetResponse, error) {
+	return c.pushTarget.DeletePushTarget(ctx, &pb.DeletePushTargetRequest{Id: id})
 }

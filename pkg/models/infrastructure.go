@@ -23,19 +23,17 @@ type InfrastructureCluster struct {
 	// Infrastructure endpoints
 	KafkaBrokers []string `json:"kafka_brokers,omitempty" db:"kafka_brokers"`
 
-	// Capacity limits and current usage
+	// Capacity limits
 	MaxConcurrentStreams int `json:"max_concurrent_streams" db:"max_concurrent_streams"`
 	MaxConcurrentViewers int `json:"max_concurrent_viewers" db:"max_concurrent_viewers"`
 	MaxBandwidthMbps     int `json:"max_bandwidth_mbps" db:"max_bandwidth_mbps"`
-	CurrentStreamCount   int `json:"current_stream_count" db:"current_stream_count"`
-	CurrentViewerCount   int `json:"current_viewer_count" db:"current_viewer_count"`
-	CurrentBandwidthMbps int `json:"current_bandwidth_mbps" db:"current_bandwidth_mbps"`
 
 	// Health
-	IsActive         bool       `json:"is_active" db:"is_active"`
-	IsDefaultCluster bool       `json:"is_default_cluster" db:"is_default_cluster"`
-	HealthStatus     string     `json:"health_status" db:"health_status"`
-	LastSeen         *time.Time `json:"last_seen,omitempty" db:"last_seen"`
+	IsActive           bool       `json:"is_active" db:"is_active"`
+	IsDefaultCluster   bool       `json:"is_default_cluster" db:"is_default_cluster"`
+	IsPlatformOfficial bool       `json:"is_platform_official" db:"is_platform_official"`
+	HealthStatus       string     `json:"health_status" db:"health_status"`
+	LastSeen           *time.Time `json:"last_seen,omitempty" db:"last_seen"`
 
 	// Marketplace fields
 	Visibility        string                 `json:"visibility" db:"visibility"`                   // public, unlisted, private

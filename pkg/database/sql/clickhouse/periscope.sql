@@ -769,8 +769,6 @@ PARTITION BY toYYYYMM(hour)
 ORDER BY (hour, tenant_id, cluster_id, remote_cluster_id, status)
 TTL hour + INTERVAL 365 DAY;
 
-ALTER TABLE routing_decisions ADD COLUMN IF NOT EXISTS remote_cluster_id LowCardinality(String) DEFAULT '';
-
 CREATE MATERIALIZED VIEW IF NOT EXISTS routing_cluster_hourly_mv TO routing_cluster_hourly AS
 SELECT
     toStartOfHour(timestamp) AS hour,
@@ -822,9 +820,6 @@ CREATE TABLE IF NOT EXISTS federation_events (
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, local_cluster, event_type, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
-
-ALTER TABLE federation_events ADD COLUMN IF NOT EXISTS blocked_cluster Nullable(String);
-ALTER TABLE federation_events ADD COLUMN IF NOT EXISTS existing_replication_cluster Nullable(String);
 
 -- Hourly rollup for federation summary dashboards
 CREATE TABLE IF NOT EXISTS federation_hourly (

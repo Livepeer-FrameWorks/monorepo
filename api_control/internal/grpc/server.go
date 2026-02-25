@@ -25,6 +25,7 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
+	fieldcrypt "frameworks/pkg/crypto"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
@@ -97,6 +98,7 @@ type CommodoreServer struct {
 	pb.UnimplementedViewerServiceServer
 	pb.UnimplementedVodServiceServer
 	pb.UnimplementedNodeManagementServiceServer
+	pb.UnimplementedPushTargetServiceServer
 	db                   *sql.DB
 	logger               logging.Logger
 	foghornPool          *foghornclient.FoghornPool
@@ -109,6 +111,7 @@ type CommodoreServer struct {
 	turnstileValidator   *turnstile.Validator
 	turnstileFailOpen    bool
 	passwordResetSecret  []byte
+	fieldEncryptor       *fieldcrypt.FieldEncryptor
 	routeCache           map[string]*clusterRoute
 	routeCacheMu         sync.RWMutex
 	routeCacheTTL        time.Duration
@@ -349,6 +352,14 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 	if cfg.TurnstileSecretKey != "" {
 		tv = turnstile.NewValidator(cfg.TurnstileSecretKey)
 	}
+
+	// Derive field encryption key from JWT secret for encrypting sensitive fields
+	// (e.g., push target URIs that contain third-party stream keys)
+	fe, err := fieldcrypt.DeriveFieldEncryptor(cfg.JWTSecret, "push-target-uri")
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to derive field encryption key")
+	}
+
 	return &CommodoreServer{
 		db:                   cfg.DB,
 		logger:               cfg.Logger,
@@ -362,6 +373,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		turnstileValidator:   tv,
 		turnstileFailOpen:    cfg.TurnstileFailOpen,
 		passwordResetSecret:  cfg.PasswordResetSecret,
+		fieldEncryptor:       fe,
 		routeCache:           make(map[string]*clusterRoute),
 		routeCacheTTL:        5 * time.Minute,
 	}
@@ -502,6 +514,93 @@ func resolveAddrFromRoute(route *clusterRoute, clusterID string) string {
 	return ""
 }
 
+// resolveFoghornForContent resolves a Foghorn client using the content_id (playback_id
+// or internal_name). Used by public endpoints where no tenant context is available.
+// Looks up the stream to find its active_ingest_cluster_id for a direct pool hit,
+// falling back to tenant-based routing with the stream's tenant_id.
+// Returns codes.NotFound (non-CB-tripping) when the content doesn't exist.
+func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentID string) (*foghornclient.GRPCClient, *clusterRoute, error) {
+	if contentID == "" {
+		return nil, nil, status.Error(codes.InvalidArgument, "content_id required")
+	}
+
+	var tenantID, activeClusterID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, active_ingest_cluster_id
+		FROM commodore.streams WHERE playback_id = $1
+	`, contentID).Scan(&tenantID, &activeClusterID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		// Try internal_name lookup (content_id may be "live+<name>")
+		name := strings.TrimPrefix(contentID, "live+")
+		err = s.db.QueryRowContext(ctx, `
+			SELECT tenant_id, active_ingest_cluster_id
+			FROM commodore.streams WHERE internal_name = $1
+		`, name).Scan(&tenantID, &activeClusterID)
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, status.Errorf(codes.NotFound, "content %q not found", contentID)
+	}
+	if err != nil {
+		return nil, nil, status.Errorf(codes.Internal, "database error resolving content: %v", err)
+	}
+
+	// Direct pool hit via active_ingest_cluster_id (set by ValidateStreamKey at ingest time)
+	if activeClusterID.Valid && activeClusterID.String != "" {
+		if client, ok := s.foghornPool.Get(foghornPoolKey(activeClusterID.String, "")); ok {
+			return client, &clusterRoute{clusterID: activeClusterID.String}, nil
+		}
+	}
+
+	// Fall back to tenant-based routing (populates pool for next time)
+	if !tenantID.Valid || tenantID.String == "" {
+		return nil, nil, status.Error(codes.NotFound, "content has no tenant association")
+	}
+	client, route, err := s.resolveFoghornForTenant(ctx, tenantID.String)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, route, nil
+}
+
+// resolveFoghornForStreamKey resolves a Foghorn client using the ingest stream key.
+// Used by unauthenticated resolveIngestEndpoint where no tenant context is available.
+func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, streamKey string) (*foghornclient.GRPCClient, *clusterRoute, error) {
+	if streamKey == "" {
+		return nil, nil, status.Error(codes.InvalidArgument, "stream_key required")
+	}
+
+	var tenantID, activeClusterID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, active_ingest_cluster_id
+		FROM commodore.streams WHERE stream_key = $1
+	`, streamKey).Scan(&tenantID, &activeClusterID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, status.Error(codes.NotFound, "stream key not found")
+	}
+	if err != nil {
+		return nil, nil, status.Errorf(codes.Internal, "database error resolving stream key: %v", err)
+	}
+
+	// Direct pool hit via active_ingest_cluster_id (set by ValidateStreamKey at ingest time)
+	if activeClusterID.Valid && activeClusterID.String != "" {
+		if client, ok := s.foghornPool.Get(foghornPoolKey(activeClusterID.String, "")); ok {
+			return client, &clusterRoute{clusterID: activeClusterID.String}, nil
+		}
+	}
+
+	// Fall back to tenant-based routing (populates pool for next time)
+	if !tenantID.Valid || tenantID.String == "" {
+		return nil, nil, status.Error(codes.NotFound, "stream key has no tenant association")
+	}
+	client, route, err := s.resolveFoghornForTenant(ctx, tenantID.String)
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, route, nil
+}
+
 func clusterInPeers(peers []*pb.TenantClusterPeer, clusterID string) bool {
 	for _, p := range peers {
 		if p.ClusterId == clusterID {
@@ -616,6 +715,29 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 			resp.OfficialClusterId = &route.officialClusterID
 		}
 		resp.ClusterPeers = route.clusterPeers
+	}
+
+	// Load enabled push targets for multistreaming
+	pushRows, pushErr := s.db.QueryContext(ctx, `
+		SELECT id, platform, name, target_uri
+		FROM commodore.push_targets
+		WHERE stream_id = $1 AND tenant_id = $2 AND is_enabled = true
+	`, streamID, tenantID)
+	if pushErr != nil {
+		s.logger.WithError(pushErr).WithField("stream_id", streamID).Warn("Failed to load push targets")
+	} else {
+		defer pushRows.Close()
+		for pushRows.Next() {
+			var t pb.PushTargetInternal
+			if scanErr := pushRows.Scan(&t.Id, &t.Platform, &t.Name, &t.TargetUri); scanErr != nil {
+				s.logger.WithError(scanErr).Warn("Failed to scan push target")
+				continue
+			}
+			if decrypted, decErr := s.fieldEncryptor.Decrypt(t.TargetUri); decErr == nil {
+				t.TargetUri = decrypted
+			}
+			resp.PushTargets = append(resp.PushTargets, &t)
+		}
 	}
 
 	// Track which cluster this stream is ingesting on (Foghorn reports its own cluster_id)
@@ -885,7 +1007,10 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 	}
 
 	// Generate clip hash
-	clipHash := generateClipHash()
+	clipHash, err := generateClipHash()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate clip hash: %v", err)
+	}
 	clipID := uuid.New().String()
 	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
 	if err != nil {
@@ -950,7 +1075,10 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 	}
 
 	// Generate DVR hash
-	dvrHash := generateDVRHash()
+	dvrHash, err := generateDVRHash()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate DVR hash: %v", err)
+	}
 	dvrID := uuid.New().String()
 	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
 	if err != nil {
@@ -1129,7 +1257,10 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 	}
 
 	// Generate VOD hash
-	vodHash := generateVodHash()
+	vodHash, err := generateVodHash()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate VOD hash: %v", err)
+	}
 	vodID := uuid.New().String()
 	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
 	if err != nil {
@@ -2001,7 +2132,10 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 	}
 
 	// Generate refresh token and store in DB
-	refreshToken := generateRandomString(40)
+	refreshToken, err := generateRandomString(40)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
+	}
 	refreshHash := hashToken(refreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour) // 30 days
 
@@ -2119,7 +2253,10 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 	}
 
 	// Generate verification token
-	verificationToken := generateSecureToken(32)
+	verificationToken, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate verification token: %v", err)
+	}
 	tokenHash := hashToken(verificationToken) // Store hash, send raw in email
 	tokenExpiry := time.Now().Add(24 * time.Hour)
 
@@ -2338,7 +2475,10 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	}
 
 	// Generate new refresh token
-	newRefreshToken := generateRandomString(40)
+	newRefreshToken, err := generateRandomString(40)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
+	}
 	newRefreshHash := hashToken(newRefreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
 
@@ -2474,7 +2614,10 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 	}
 
 	// Generate new verification token
-	verificationToken := generateSecureToken(32)
+	verificationToken, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate verification token: %v", err)
+	}
 	tokenHash := hashToken(verificationToken)
 	tokenExpiry := time.Now().Add(24 * time.Hour)
 
@@ -2535,7 +2678,10 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *pb.ForgotPass
 	}
 
 	// Generate reset token and hash for storage (uses HMAC if PASSWORD_RESET_SECRET is configured)
-	resetToken := generateSecureToken(32)
+	resetToken, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate reset token: %v", err)
+	}
 	resetTokenHash := s.hashTokenWithSecret(resetToken)
 	expiresAt := time.Now().Add(1 * time.Hour)
 
@@ -3672,7 +3818,10 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *pb.RefreshS
 	}
 
 	// Generate new stream key
-	newStreamKey := generateStreamKey()
+	newStreamKey, err := generateStreamKey()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate stream key: %v", err)
+	}
 
 	// Update the stream
 	result, err := s.db.ExecContext(ctx, `
@@ -3739,7 +3888,10 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *pb.CreateStr
 
 	// Generate new key
 	keyID := uuid.New().String()
-	keyValue := generateStreamKey()
+	keyValue, err := generateStreamKey()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate stream key: %v", err)
+	}
 	keyName := req.GetKeyName()
 	if keyName == "" {
 		keyName = "Key " + time.Now().Format("2006-01-02 15:04")
@@ -3943,6 +4095,391 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *pb.Deact
 }
 
 // ============================================================================
+// PUSH TARGET SERVICE (Gateway → Commodore for multistream management)
+// ============================================================================
+
+// validPushSchemes are the allowed URI schemes for push targets.
+var validPushSchemes = map[string]bool{"rtmp": true, "rtmps": true, "srt": true}
+
+// maskTargetURI masks the stream key portion of a push target URI for API responses.
+// Example: rtmp://live.twitch.tv/app/live_abc123def → rtmp://live.twitch.tv/app/live_****def
+func maskTargetURI(uri string) string {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return "****"
+	}
+
+	// Never expose credentials, query params, or fragments
+	// (SRT streamid/passphrase often live in query/fragment parts).
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+
+	path := parsed.Path
+	if len(path) > 1 {
+		parts := strings.Split(path, "/")
+		if last := parts[len(parts)-1]; len(last) > 6 {
+			parts[len(parts)-1] = last[:4] + "xxxx" + last[len(last)-3:]
+		} else if len(last) > 0 {
+			parts[len(parts)-1] = "xxxx"
+		}
+		parsed.Path = strings.Join(parts, "/")
+	}
+	return parsed.String()
+}
+
+// validatePushTargetURI checks that the URI is a valid push target.
+func validatePushTargetURI(uri string) error {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return fmt.Errorf("invalid URI: %w", err)
+	}
+	if !validPushSchemes[parsed.Scheme] {
+		return fmt.Errorf("unsupported scheme %q: must be rtmp, rtmps, or srt", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("URI must include a host")
+	}
+	return nil
+}
+
+func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *pb.CreatePushTargetRequest) (*pb.PushTarget, error) {
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	streamID := req.GetStreamId()
+	if streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id required")
+	}
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "name required")
+	}
+	if req.GetTargetUri() == "" {
+		return nil, status.Error(codes.InvalidArgument, "target_uri required")
+	}
+	if validationErr := validatePushTargetURI(req.GetTargetUri()); validationErr != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid target_uri: %v", validationErr)
+	}
+
+	// Verify stream ownership
+	var exists bool
+	err = s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
+	`, streamID, userID, tenantID).Scan(&exists)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !exists {
+		return nil, status.Error(codes.NotFound, "stream not found")
+	}
+
+	id := uuid.New().String()
+	platform := req.GetPlatform()
+	if platform == "" {
+		platform = "custom"
+	}
+	now := time.Now()
+
+	encryptedURI, err := s.fieldEncryptor.Encrypt(req.GetTargetUri())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to encrypt target_uri: %v", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO commodore.push_targets (id, tenant_id, stream_id, platform, name, target_uri, is_enabled, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, true, 'idle', $7, $7)
+	`, id, tenantID, streamID, platform, req.GetName(), encryptedURI, now)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create push target: %v", err)
+	}
+
+	return &pb.PushTarget{
+		Id:        id,
+		StreamId:  streamID,
+		Platform:  platform,
+		Name:      req.GetName(),
+		TargetUri: maskTargetURI(req.GetTargetUri()),
+		IsEnabled: true,
+		Status:    "idle",
+		CreatedAt: timestamppb.New(now),
+		UpdatedAt: timestamppb.New(now),
+	}, nil
+}
+
+func (s *CommodoreServer) ListPushTargets(ctx context.Context, req *pb.ListPushTargetsRequest) (*pb.ListPushTargetsResponse, error) {
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	streamID := req.GetStreamId()
+	if streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id required")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, stream_id, platform, name, target_uri, is_enabled, status, last_error, last_pushed_at, created_at, updated_at
+		FROM commodore.push_targets
+		WHERE stream_id = $1 AND tenant_id = $2
+		ORDER BY created_at ASC
+	`, streamID, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var targets []*pb.PushTarget
+	for rows.Next() {
+		var (
+			t            pb.PushTarget
+			targetURI    string
+			lastError    sql.NullString
+			lastPushedAt sql.NullTime
+			createdAt    time.Time
+			updatedAt    time.Time
+		)
+		if err := rows.Scan(&t.Id, &t.StreamId, &t.Platform, &t.Name, &targetURI, &t.IsEnabled, &t.Status, &lastError, &lastPushedAt, &createdAt, &updatedAt); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		}
+		decrypted, err := s.fieldEncryptor.Decrypt(targetURI)
+		if err != nil {
+			s.logger.WithError(err).WithField("push_target_id", t.Id).Warn("Failed to decrypt target_uri")
+			decrypted = targetURI
+		}
+		t.TargetUri = maskTargetURI(decrypted)
+		if lastError.Valid {
+			t.LastError = lastError.String
+		}
+		if lastPushedAt.Valid {
+			t.LastPushedAt = timestamppb.New(lastPushedAt.Time)
+		}
+		t.CreatedAt = timestamppb.New(createdAt)
+		t.UpdatedAt = timestamppb.New(updatedAt)
+		targets = append(targets, &t)
+	}
+
+	return &pb.ListPushTargetsResponse{PushTargets: targets}, nil
+}
+
+func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *pb.UpdatePushTargetRequest) (*pb.PushTarget, error) {
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	id := req.GetId()
+	if id == "" {
+		return nil, status.Error(codes.InvalidArgument, "id required")
+	}
+
+	// Build dynamic UPDATE
+	setClauses := []string{"updated_at = NOW()"}
+	args := []interface{}{id, tenantID}
+	argIdx := 3
+
+	if req.Name != nil {
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argIdx))
+		args = append(args, req.GetName())
+		argIdx++
+	}
+	if req.TargetUri != nil {
+		if validationErr := validatePushTargetURI(req.GetTargetUri()); validationErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid target_uri: %v", validationErr)
+		}
+		encURI, encErr := s.fieldEncryptor.Encrypt(req.GetTargetUri())
+		if encErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to encrypt target_uri: %v", encErr)
+		}
+		setClauses = append(setClauses, fmt.Sprintf("target_uri = $%d", argIdx))
+		args = append(args, encURI)
+		argIdx++
+	}
+	if req.IsEnabled != nil {
+		setClauses = append(setClauses, fmt.Sprintf("is_enabled = $%d", argIdx))
+		args = append(args, req.GetIsEnabled())
+	}
+
+	var (
+		t            pb.PushTarget
+		targetURI    string
+		lastError    sql.NullString
+		lastPushedAt sql.NullTime
+		createdAt    time.Time
+		updatedAt    time.Time
+	)
+
+	query := fmt.Sprintf(`
+		UPDATE commodore.push_targets SET %s
+		WHERE id = $1 AND tenant_id = $2
+		RETURNING id, stream_id, platform, name, target_uri, is_enabled, status, last_error, last_pushed_at, created_at, updated_at
+	`, strings.Join(setClauses, ", "))
+
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
+		&t.Id, &t.StreamId, &t.Platform, &t.Name, &targetURI, &t.IsEnabled, &t.Status, &lastError, &lastPushedAt, &createdAt, &updatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "push target not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	decryptedURI, decErr := s.fieldEncryptor.Decrypt(targetURI)
+	if decErr != nil {
+		s.logger.WithError(decErr).WithField("push_target_id", t.Id).Warn("Failed to decrypt target_uri")
+		decryptedURI = targetURI
+	}
+	t.TargetUri = maskTargetURI(decryptedURI)
+	if lastError.Valid {
+		t.LastError = lastError.String
+	}
+	if lastPushedAt.Valid {
+		t.LastPushedAt = timestamppb.New(lastPushedAt.Time)
+	}
+	t.CreatedAt = timestamppb.New(createdAt)
+	t.UpdatedAt = timestamppb.New(updatedAt)
+
+	return &t, nil
+}
+
+func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *pb.DeletePushTargetRequest) (*pb.DeletePushTargetResponse, error) {
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	id := req.GetId()
+	if id == "" {
+		return nil, status.Error(codes.InvalidArgument, "id required")
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM commodore.push_targets WHERE id = $1 AND tenant_id = $2
+	`, id, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return nil, status.Error(codes.NotFound, "push target not found")
+	}
+
+	return &pb.DeletePushTargetResponse{
+		Message:   "Push target deleted",
+		Id:        id,
+		DeletedAt: timestamppb.Now(),
+	}, nil
+}
+
+// GetStreamPushTargets is an internal RPC called by Foghorn when a stream goes live.
+// Returns unmasked target URIs for Helmsman to push to.
+func (s *CommodoreServer) GetStreamPushTargets(ctx context.Context, req *pb.GetStreamPushTargetsRequest) (*pb.GetStreamPushTargetsResponse, error) {
+	streamID := req.GetStreamId()
+	tenantID := req.GetTenantId()
+	if streamID == "" || tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id and tenant_id required")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, platform, name, target_uri
+		FROM commodore.push_targets
+		WHERE stream_id = $1 AND tenant_id = $2 AND is_enabled = true
+	`, streamID, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var targets []*pb.PushTargetInternal
+	for rows.Next() {
+		var t pb.PushTargetInternal
+		if err := rows.Scan(&t.Id, &t.Platform, &t.Name, &t.TargetUri); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		}
+		decrypted, decErr := s.fieldEncryptor.Decrypt(t.TargetUri)
+		if decErr != nil {
+			s.logger.WithError(decErr).WithField("push_target_id", t.Id).Warn("Failed to decrypt target_uri")
+		} else {
+			t.TargetUri = decrypted
+		}
+		targets = append(targets, &t)
+	}
+
+	return &pb.GetStreamPushTargetsResponse{PushTargets: targets}, nil
+}
+
+// UpdatePushTargetStatus is an internal RPC called by Foghorn to update push target status
+// based on PUSH_OUT_START / PUSH_END trigger events.
+func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *pb.UpdatePushTargetStatusRequest) (*pb.PushTarget, error) {
+	id := req.GetId()
+	tenantID := req.GetTenantId()
+	if id == "" || tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "id and tenant_id required")
+	}
+
+	setClauses := []string{"status = $3", "updated_at = NOW()"}
+	args := []interface{}{id, tenantID, req.GetStatus()}
+	argIdx := 4
+
+	if req.LastError != nil {
+		setClauses = append(setClauses, fmt.Sprintf("last_error = $%d", argIdx))
+		args = append(args, req.GetLastError())
+	} else if req.GetStatus() != "failed" {
+		setClauses = append(setClauses, "last_error = NULL")
+	}
+
+	if req.GetStatus() == "pushing" {
+		setClauses = append(setClauses, "last_pushed_at = NOW()")
+	}
+
+	var (
+		t            pb.PushTarget
+		targetURI    string
+		lastError    sql.NullString
+		lastPushedAt sql.NullTime
+		createdAt    time.Time
+		updatedAt    time.Time
+	)
+
+	query := fmt.Sprintf(`
+		UPDATE commodore.push_targets SET %s
+		WHERE id = $1 AND tenant_id = $2
+		RETURNING id, stream_id, platform, name, target_uri, is_enabled, status, last_error, last_pushed_at, created_at, updated_at
+	`, strings.Join(setClauses, ", "))
+
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+		&t.Id, &t.StreamId, &t.Platform, &t.Name, &targetURI, &t.IsEnabled, &t.Status, &lastError, &lastPushedAt, &createdAt, &updatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "push target not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	decryptedURI, decErr := s.fieldEncryptor.Decrypt(targetURI)
+	if decErr != nil {
+		s.logger.WithError(decErr).WithField("push_target_id", t.Id).Warn("Failed to decrypt target_uri")
+		decryptedURI = targetURI
+	}
+	t.TargetUri = maskTargetURI(decryptedURI)
+	if lastError.Valid {
+		t.LastError = lastError.String
+	}
+	if lastPushedAt.Valid {
+		t.LastPushedAt = timestamppb.New(lastPushedAt.Time)
+	}
+	t.CreatedAt = timestamppb.New(createdAt)
+	t.UpdatedAt = timestamppb.New(updatedAt)
+
+	return &t, nil
+}
+
+// ============================================================================
 // DEVELOPER SERVICE (Gateway → Commodore for API token management)
 // ============================================================================
 
@@ -3954,7 +4491,11 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *pb.CreateAPIT
 	}
 
 	tokenID := uuid.New().String()
-	tokenValue := "fw_" + generateSecureToken(32)
+	tokenSuffix, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate API token: %v", err)
+	}
+	tokenValue := "fw_" + tokenSuffix
 	tokenHash := hashToken(tokenValue)
 	tokenName := req.GetTokenName()
 	if tokenName == "" {
@@ -4401,20 +4942,36 @@ func (s *CommodoreServer) isTenantSuspended(ctx context.Context, tenantID string
 	return billingStatus.IsSuspended, nil
 }
 
-func generateDVRHash() string {
-	return time.Now().Format("20060102150405") + generateSecureToken(8)
+func generateDVRHash() (string, error) {
+	token, err := generateSecureToken(8)
+	if err != nil {
+		return "", err
+	}
+	return time.Now().Format("20060102150405") + token, nil
 }
 
-func generateClipHash() string {
-	return time.Now().Format("20060102150405") + generateSecureToken(8)
+func generateClipHash() (string, error) {
+	token, err := generateSecureToken(8)
+	if err != nil {
+		return "", err
+	}
+	return time.Now().Format("20060102150405") + token, nil
 }
 
-func generateVodHash() string {
-	return time.Now().Format("20060102150405") + generateSecureToken(8)
+func generateVodHash() (string, error) {
+	token, err := generateSecureToken(8)
+	if err != nil {
+		return "", err
+	}
+	return time.Now().Format("20060102150405") + token, nil
 }
 
-func generateStreamKey() string {
-	return "sk_" + generateSecureToken(16)
+func generateStreamKey() (string, error) {
+	token, err := generateSecureToken(16)
+	if err != nil {
+		return "", err
+	}
+	return "sk_" + token, nil
 }
 
 const artifactInternalNameLength = 32
@@ -4422,26 +4979,25 @@ const artifactPlaybackIDLength = 16
 
 const alphaNumCharset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-func generateRandomString(length int) string {
+func generateRandomString(length int) (string, error) {
 	if length <= 0 {
-		return ""
+		return "", nil
 	}
 	b := make([]byte, length)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to hex if crypto/rand fails
-		return generateSecureToken((length + 1) / 2)[:length]
+		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
 	}
 	for i := range b {
 		b[i] = alphaNumCharset[int(b[i])%len(alphaNumCharset)]
 	}
-	return string(b)
+	return string(b), nil
 }
 
-func generateArtifactInternalName() string {
+func generateArtifactInternalName() (string, error) {
 	return generateRandomString(artifactInternalNameLength)
 }
 
-func generateArtifactPlaybackID() string {
+func generateArtifactPlaybackID() (string, error) {
 	return generateRandomString(artifactPlaybackIDLength)
 }
 
@@ -4467,7 +5023,10 @@ func (s *CommodoreServer) identifierExists(ctx context.Context, identifier strin
 func (s *CommodoreServer) generateUniqueArtifactIdentifiers(ctx context.Context) (string, string, error) {
 	const maxAttempts = 10
 	for i := 0; i < maxAttempts; i++ {
-		internalName := generateArtifactInternalName()
+		internalName, err := generateArtifactInternalName()
+		if err != nil {
+			return "", "", fmt.Errorf("failed to generate internal name: %w", err)
+		}
 		exists, err := s.identifierExists(ctx, internalName)
 		if err != nil {
 			return "", "", err
@@ -4476,7 +5035,10 @@ func (s *CommodoreServer) generateUniqueArtifactIdentifiers(ctx context.Context)
 			continue
 		}
 
-		playbackID := generateArtifactPlaybackID()
+		playbackID, err := generateArtifactPlaybackID()
+		if err != nil {
+			return "", "", fmt.Errorf("failed to generate playback ID: %w", err)
+		}
 		exists, err = s.identifierExists(ctx, playbackID)
 		if err != nil {
 			return "", "", err
@@ -4490,10 +5052,12 @@ func (s *CommodoreServer) generateUniqueArtifactIdentifiers(ctx context.Context)
 	return "", "", fmt.Errorf("failed to generate unique artifact identifiers")
 }
 
-func generateSecureToken(n int) string {
+func generateSecureToken(n int) (string, error) {
 	b := make([]byte, n)
-	rand.Read(b) //nolint:errcheck // crypto/rand.Read rarely fails
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func getDefaultPermissions(role string) []string {
@@ -4576,7 +5140,10 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	}
 
 	// Generate clip hash (Commodore is authoritative)
-	clipHash := generateClipHash()
+	clipHash, err := generateClipHash()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate clip hash: %v", err)
+	}
 	clipID := uuid.New().String()
 	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
 	if err != nil {
@@ -5177,7 +5744,14 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 // and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+
+	var foghornClient *foghornclient.GRPCClient
+	var err error
+	if tenantID == "" {
+		foghornClient, _, err = s.resolveFoghornForContent(ctx, req.ContentId)
+	} else {
+		foghornClient, _, err = s.resolveFoghornForTenant(ctx, tenantID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -5250,7 +5824,14 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 // and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *pb.IngestEndpointRequest) (*pb.IngestEndpointResponse, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+
+	var foghornClient *foghornclient.GRPCClient
+	var err error
+	if tenantID == "" {
+		foghornClient, _, err = s.resolveFoghornForStreamKey(ctx, req.StreamKey)
+	} else {
+		foghornClient, _, err = s.resolveFoghornForTenant(ctx, tenantID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -5402,6 +5983,7 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	pb.RegisterViewerServiceServer(server, commodoreServer)
 	pb.RegisterVodServiceServer(server, commodoreServer)
 	pb.RegisterNodeManagementServiceServer(server, commodoreServer)
+	pb.RegisterPushTargetServiceServer(server, commodoreServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
@@ -5554,7 +6136,10 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	}
 
 	// Generate VOD hash (Commodore is authoritative)
-	vodHash := generateVodHash()
+	vodHash, err := generateVodHash()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate VOD hash: %v", err)
+	}
 	vodID := uuid.New().String()
 	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
 	if err != nil {

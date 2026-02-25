@@ -20,6 +20,7 @@
 | Service events backbone         | `docs/architecture/service-events.md`      |
 | Viewer routing algorithm        | `docs/architecture/viewer-routing.md`      |
 | Agent/wallet/x402/MCP           | `docs/architecture/agent-access.md`        |
+| Multistreaming / push targets   | `docs/architecture/multistreaming.md`      |
 | UI design system                | `docs/standards/design-system.md`          |
 | Metrics naming/units            | `docs/standards/metrics.md`                |
 | Deployment & ops                | `website_docs/src/content/docs/operators/` |

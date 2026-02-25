@@ -156,10 +156,6 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     active_ingest_cluster_id VARCHAR(100),
     active_ingest_cluster_updated_at TIMESTAMP,
 
-    -- NOTE: Operational state (status, start_time, end_time) removed
-    -- Stream status now comes from Periscope Data Plane via ClickHouse analytics
-    -- See: Control/Data Plane separation migration
-
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -194,18 +190,57 @@ CREATE INDEX IF NOT EXISTS idx_commodore_streams_tenant_user_created_internal
 CREATE INDEX IF NOT EXISTS idx_commodore_stream_keys_stream_id ON commodore.stream_keys(stream_id);
 
 -- ============================================================================
+-- MULTISTREAM PUSH TARGETS
+-- ============================================================================
+-- External RTMP/SRT destinations for simultaneous restreaming.
+-- When a stream goes live, Foghorn activates enabled push targets on the
+-- origin node via Helmsman → MistServer push API.
+-- TODO: Encrypt target_uri at rest (contains third-party platform stream keys)
+-- ============================================================================
+
+-- Push targets for multistreaming to external platforms
+CREATE TABLE IF NOT EXISTS commodore.push_targets (
+    -- ===== IDENTITY =====
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    stream_id UUID NOT NULL REFERENCES commodore.streams(id) ON DELETE CASCADE,
+
+    -- ===== TARGET CONFIG =====
+    platform VARCHAR(50),                         -- 'twitch', 'youtube', 'facebook', 'kick', 'x', 'custom'
+    name VARCHAR(255) NOT NULL,                   -- User-friendly label ("My Twitch")
+    target_uri VARCHAR(512) NOT NULL,             -- rtmp://live.twitch.tv/app/{stream_key}
+    is_enabled BOOLEAN DEFAULT TRUE,
+
+    -- ===== RUNTIME STATE =====
+    -- Updated by Foghorn when PUSH_OUT_START / PUSH_END triggers fire
+    status VARCHAR(50) DEFAULT 'idle',            -- idle | pushing | failed
+    last_error TEXT,
+    last_pushed_at TIMESTAMP,
+
+    -- ===== LIFECYCLE =====
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_push_targets_tenant ON commodore.push_targets(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_commodore_push_targets_stream ON commodore.push_targets(tenant_id, stream_id);
+
+-- ============================================================================
 -- UTILITY FUNCTIONS
 -- ============================================================================
 
--- Generate random alphanumeric strings for keys and tokens
+-- Generate random alphanumeric strings for keys and tokens (uses pgcrypto for CSPRNG)
 CREATE OR REPLACE FUNCTION commodore.generate_random_string(length INTEGER) RETURNS TEXT AS $$
 DECLARE
     chars TEXT := 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    chars_len INTEGER := 62;
+    rand_bytes BYTEA;
     result TEXT := '';
     i INTEGER := 0;
 BEGIN
-    FOR i IN 1..length LOOP
-        result := result || substr(chars, floor(random() * length(chars) + 1)::INTEGER, 1);
+    rand_bytes := gen_random_bytes(length);
+    FOR i IN 0..length-1 LOOP
+        result := result || substr(chars, (get_byte(rand_bytes, i) % chars_len) + 1, 1);
     END LOOP;
     RETURN result;
 END;
@@ -267,6 +302,9 @@ CREATE TABLE IF NOT EXISTS commodore.clips (
     clip_mode VARCHAR(20) DEFAULT 'absolute', -- absolute, relative, duration, clip_now
     requested_params JSONB,                 -- Original request for audit
 
+    -- ===== CLUSTER ORIGIN =====
+    origin_cluster_id VARCHAR(100),
+
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -294,6 +332,9 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
 
     -- ===== METADATA =====
     internal_name VARCHAR(255) NOT NULL,    -- Stream name for MistServer
+
+    -- ===== CLUSTER ORIGIN =====
+    origin_cluster_id VARCHAR(100),
 
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
@@ -370,6 +411,9 @@ CREATE TABLE IF NOT EXISTS commodore.vod_assets (
     -- ===== SIZE =====
     size_bytes BIGINT,                      -- Expected file size
 
+    -- ===== CLUSTER ORIGIN =====
+    origin_cluster_id VARCHAR(100),
+
     -- ===== LIFECYCLE =====
     retention_until TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -382,18 +426,6 @@ CREATE INDEX IF NOT EXISTS idx_commodore_vod_hash ON commodore.vod_assets(vod_ha
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_internal ON commodore.vod_assets(artifact_internal_name);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_playback ON commodore.vod_assets(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_created ON commodore.vod_assets(created_at);
-
--- ============================================================================
--- CROSS-CLUSTER ARTIFACT STORAGE
--- origin_cluster_id tracks which cluster created the artifact.
--- Used by Foghorn federation to resolve remote artifacts via PrepareArtifact.
--- ============================================================================
-
-ALTER TABLE commodore.clips ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
-ALTER TABLE commodore.dvr_recordings ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
-ALTER TABLE commodore.vod_assets ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
-
-ALTER TABLE commodore.streams ADD COLUMN IF NOT EXISTS active_ingest_cluster_updated_at TIMESTAMP;
 
 -- Generate VOD hash (includes tenant + user + filename + timestamp for uniqueness)
 CREATE OR REPLACE FUNCTION commodore.generate_vod_hash(

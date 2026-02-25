@@ -1199,6 +1199,7 @@ var FederationAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	PlatformAnalyticsService_GetPlatformOverview_FullMethodName = "/periscope.PlatformAnalyticsService/GetPlatformOverview"
+	PlatformAnalyticsService_GetNetworkLiveStats_FullMethodName = "/periscope.PlatformAnalyticsService/GetNetworkLiveStats"
 )
 
 // PlatformAnalyticsServiceClient is the client API for PlatformAnalyticsService service.
@@ -1206,6 +1207,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PlatformAnalyticsServiceClient interface {
 	GetPlatformOverview(ctx context.Context, in *GetPlatformOverviewRequest, opts ...grpc.CallOption) (*GetPlatformOverviewResponse, error)
+	GetNetworkLiveStats(ctx context.Context, in *GetNetworkLiveStatsRequest, opts ...grpc.CallOption) (*GetNetworkLiveStatsResponse, error)
 }
 
 type platformAnalyticsServiceClient struct {
@@ -1226,11 +1228,22 @@ func (c *platformAnalyticsServiceClient) GetPlatformOverview(ctx context.Context
 	return out, nil
 }
 
+func (c *platformAnalyticsServiceClient) GetNetworkLiveStats(ctx context.Context, in *GetNetworkLiveStatsRequest, opts ...grpc.CallOption) (*GetNetworkLiveStatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNetworkLiveStatsResponse)
+	err := c.cc.Invoke(ctx, PlatformAnalyticsService_GetNetworkLiveStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PlatformAnalyticsServiceServer is the server API for PlatformAnalyticsService service.
 // All implementations must embed UnimplementedPlatformAnalyticsServiceServer
 // for forward compatibility.
 type PlatformAnalyticsServiceServer interface {
 	GetPlatformOverview(context.Context, *GetPlatformOverviewRequest) (*GetPlatformOverviewResponse, error)
+	GetNetworkLiveStats(context.Context, *GetNetworkLiveStatsRequest) (*GetNetworkLiveStatsResponse, error)
 	mustEmbedUnimplementedPlatformAnalyticsServiceServer()
 }
 
@@ -1243,6 +1256,9 @@ type UnimplementedPlatformAnalyticsServiceServer struct{}
 
 func (UnimplementedPlatformAnalyticsServiceServer) GetPlatformOverview(context.Context, *GetPlatformOverviewRequest) (*GetPlatformOverviewResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPlatformOverview not implemented")
+}
+func (UnimplementedPlatformAnalyticsServiceServer) GetNetworkLiveStats(context.Context, *GetNetworkLiveStatsRequest) (*GetNetworkLiveStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNetworkLiveStats not implemented")
 }
 func (UnimplementedPlatformAnalyticsServiceServer) mustEmbedUnimplementedPlatformAnalyticsServiceServer() {
 }
@@ -1284,6 +1300,24 @@ func _PlatformAnalyticsService_GetPlatformOverview_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PlatformAnalyticsService_GetNetworkLiveStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNetworkLiveStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlatformAnalyticsServiceServer).GetNetworkLiveStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlatformAnalyticsService_GetNetworkLiveStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlatformAnalyticsServiceServer).GetNetworkLiveStats(ctx, req.(*GetNetworkLiveStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PlatformAnalyticsService_ServiceDesc is the grpc.ServiceDesc for PlatformAnalyticsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1294,6 +1328,10 @@ var PlatformAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPlatformOverview",
 			Handler:    _PlatformAnalyticsService_GetPlatformOverview_Handler,
+		},
+		{
+			MethodName: "GetNetworkLiveStats",
+			Handler:    _PlatformAnalyticsService_GetNetworkLiveStats_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

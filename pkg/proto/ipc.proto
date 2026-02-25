@@ -178,6 +178,10 @@ message ControlMessage {
     StopSessionsRequest stop_sessions_request = 70;
     // Node mode change request (Helmsman -> Foghorn, from local agent/CLI)
     ModeChangeRequest mode_change_request = 71;
+    // Multistream push target lifecycle (Foghorn <-> Helmsman)
+    ActivatePushTargets activate_push_targets = 80;
+    DeactivatePushTargets deactivate_push_targets = 81;
+    PushTargetStatusReport push_target_status = 82;
   }
 }
 
@@ -195,6 +199,36 @@ message StopSessionsRequest {
   repeated string stream_names = 1; // Internal stream names to stop
   string tenant_id = 2;             // For logging/audit
   string reason = 3;                // e.g., "insufficient_balance", "suspended"
+}
+
+// ActivatePushTargets tells Helmsman to start pushing a stream to external targets.
+// Sent by Foghorn when a stream goes live (after PUSH_REWRITE validation).
+message ActivatePushTargets {
+  string stream_name = 1;                  // MistServer stream name (e.g., "live+abc123")
+  repeated PushTargetSpec targets = 2;
+}
+
+// PushTargetSpec is a single push destination for Helmsman to activate.
+message PushTargetSpec {
+  string target_id = 1;                    // Commodore push_targets.id (for status reporting)
+  string target_uri = 2;                   // Full RTMP/SRT URI
+  string name = 3;                         // User-friendly label (for logging)
+}
+
+// DeactivatePushTargets tells Helmsman to stop all pushes for a stream.
+// Sent by Foghorn when a stream ends (STREAM_END trigger).
+message DeactivatePushTargets {
+  string stream_name = 1;                  // MistServer stream name
+}
+
+// PushTargetStatusReport is sent by Helmsman to Foghorn to report push lifecycle events.
+// Foghorn uses this to update status in Commodore.
+message PushTargetStatusReport {
+  string target_id = 1;                    // Commodore push_targets.id
+  string stream_name = 2;
+  string status = 3;                       // pushing, idle, failed
+  string error = 4;                        // Error message if failed
+  int64 mist_push_id = 5;                 // MistServer's internal push ID (for PushStop)
 }
 
 message ArtifactDeleted {

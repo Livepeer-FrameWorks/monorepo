@@ -2186,6 +2186,302 @@ var StreamKeyService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	PushTargetService_CreatePushTarget_FullMethodName       = "/commodore.PushTargetService/CreatePushTarget"
+	PushTargetService_ListPushTargets_FullMethodName        = "/commodore.PushTargetService/ListPushTargets"
+	PushTargetService_UpdatePushTarget_FullMethodName       = "/commodore.PushTargetService/UpdatePushTarget"
+	PushTargetService_DeletePushTarget_FullMethodName       = "/commodore.PushTargetService/DeletePushTarget"
+	PushTargetService_GetStreamPushTargets_FullMethodName   = "/commodore.PushTargetService/GetStreamPushTargets"
+	PushTargetService_UpdatePushTargetStatus_FullMethodName = "/commodore.PushTargetService/UpdatePushTargetStatus"
+)
+
+// PushTargetServiceClient is the client API for PushTargetService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type PushTargetServiceClient interface {
+	CreatePushTarget(ctx context.Context, in *CreatePushTargetRequest, opts ...grpc.CallOption) (*PushTarget, error)
+	ListPushTargets(ctx context.Context, in *ListPushTargetsRequest, opts ...grpc.CallOption) (*ListPushTargetsResponse, error)
+	UpdatePushTarget(ctx context.Context, in *UpdatePushTargetRequest, opts ...grpc.CallOption) (*PushTarget, error)
+	DeletePushTarget(ctx context.Context, in *DeletePushTargetRequest, opts ...grpc.CallOption) (*DeletePushTargetResponse, error)
+	// Internal: called by Foghorn to get enabled targets when a stream goes live
+	GetStreamPushTargets(ctx context.Context, in *GetStreamPushTargetsRequest, opts ...grpc.CallOption) (*GetStreamPushTargetsResponse, error)
+	// Internal: called by Foghorn to update target status on PUSH_OUT_START / PUSH_END
+	UpdatePushTargetStatus(ctx context.Context, in *UpdatePushTargetStatusRequest, opts ...grpc.CallOption) (*PushTarget, error)
+}
+
+type pushTargetServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPushTargetServiceClient(cc grpc.ClientConnInterface) PushTargetServiceClient {
+	return &pushTargetServiceClient{cc}
+}
+
+func (c *pushTargetServiceClient) CreatePushTarget(ctx context.Context, in *CreatePushTargetRequest, opts ...grpc.CallOption) (*PushTarget, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PushTarget)
+	err := c.cc.Invoke(ctx, PushTargetService_CreatePushTarget_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pushTargetServiceClient) ListPushTargets(ctx context.Context, in *ListPushTargetsRequest, opts ...grpc.CallOption) (*ListPushTargetsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPushTargetsResponse)
+	err := c.cc.Invoke(ctx, PushTargetService_ListPushTargets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pushTargetServiceClient) UpdatePushTarget(ctx context.Context, in *UpdatePushTargetRequest, opts ...grpc.CallOption) (*PushTarget, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PushTarget)
+	err := c.cc.Invoke(ctx, PushTargetService_UpdatePushTarget_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pushTargetServiceClient) DeletePushTarget(ctx context.Context, in *DeletePushTargetRequest, opts ...grpc.CallOption) (*DeletePushTargetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeletePushTargetResponse)
+	err := c.cc.Invoke(ctx, PushTargetService_DeletePushTarget_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pushTargetServiceClient) GetStreamPushTargets(ctx context.Context, in *GetStreamPushTargetsRequest, opts ...grpc.CallOption) (*GetStreamPushTargetsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStreamPushTargetsResponse)
+	err := c.cc.Invoke(ctx, PushTargetService_GetStreamPushTargets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pushTargetServiceClient) UpdatePushTargetStatus(ctx context.Context, in *UpdatePushTargetStatusRequest, opts ...grpc.CallOption) (*PushTarget, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PushTarget)
+	err := c.cc.Invoke(ctx, PushTargetService_UpdatePushTargetStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PushTargetServiceServer is the server API for PushTargetService service.
+// All implementations must embed UnimplementedPushTargetServiceServer
+// for forward compatibility.
+type PushTargetServiceServer interface {
+	CreatePushTarget(context.Context, *CreatePushTargetRequest) (*PushTarget, error)
+	ListPushTargets(context.Context, *ListPushTargetsRequest) (*ListPushTargetsResponse, error)
+	UpdatePushTarget(context.Context, *UpdatePushTargetRequest) (*PushTarget, error)
+	DeletePushTarget(context.Context, *DeletePushTargetRequest) (*DeletePushTargetResponse, error)
+	// Internal: called by Foghorn to get enabled targets when a stream goes live
+	GetStreamPushTargets(context.Context, *GetStreamPushTargetsRequest) (*GetStreamPushTargetsResponse, error)
+	// Internal: called by Foghorn to update target status on PUSH_OUT_START / PUSH_END
+	UpdatePushTargetStatus(context.Context, *UpdatePushTargetStatusRequest) (*PushTarget, error)
+	mustEmbedUnimplementedPushTargetServiceServer()
+}
+
+// UnimplementedPushTargetServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPushTargetServiceServer struct{}
+
+func (UnimplementedPushTargetServiceServer) CreatePushTarget(context.Context, *CreatePushTargetRequest) (*PushTarget, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreatePushTarget not implemented")
+}
+func (UnimplementedPushTargetServiceServer) ListPushTargets(context.Context, *ListPushTargetsRequest) (*ListPushTargetsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPushTargets not implemented")
+}
+func (UnimplementedPushTargetServiceServer) UpdatePushTarget(context.Context, *UpdatePushTargetRequest) (*PushTarget, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdatePushTarget not implemented")
+}
+func (UnimplementedPushTargetServiceServer) DeletePushTarget(context.Context, *DeletePushTargetRequest) (*DeletePushTargetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeletePushTarget not implemented")
+}
+func (UnimplementedPushTargetServiceServer) GetStreamPushTargets(context.Context, *GetStreamPushTargetsRequest) (*GetStreamPushTargetsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStreamPushTargets not implemented")
+}
+func (UnimplementedPushTargetServiceServer) UpdatePushTargetStatus(context.Context, *UpdatePushTargetStatusRequest) (*PushTarget, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdatePushTargetStatus not implemented")
+}
+func (UnimplementedPushTargetServiceServer) mustEmbedUnimplementedPushTargetServiceServer() {}
+func (UnimplementedPushTargetServiceServer) testEmbeddedByValue()                           {}
+
+// UnsafePushTargetServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PushTargetServiceServer will
+// result in compilation errors.
+type UnsafePushTargetServiceServer interface {
+	mustEmbedUnimplementedPushTargetServiceServer()
+}
+
+func RegisterPushTargetServiceServer(s grpc.ServiceRegistrar, srv PushTargetServiceServer) {
+	// If the following call panics, it indicates UnimplementedPushTargetServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PushTargetService_ServiceDesc, srv)
+}
+
+func _PushTargetService_CreatePushTarget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePushTargetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PushTargetServiceServer).CreatePushTarget(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PushTargetService_CreatePushTarget_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PushTargetServiceServer).CreatePushTarget(ctx, req.(*CreatePushTargetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PushTargetService_ListPushTargets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPushTargetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PushTargetServiceServer).ListPushTargets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PushTargetService_ListPushTargets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PushTargetServiceServer).ListPushTargets(ctx, req.(*ListPushTargetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PushTargetService_UpdatePushTarget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdatePushTargetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PushTargetServiceServer).UpdatePushTarget(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PushTargetService_UpdatePushTarget_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PushTargetServiceServer).UpdatePushTarget(ctx, req.(*UpdatePushTargetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PushTargetService_DeletePushTarget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeletePushTargetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PushTargetServiceServer).DeletePushTarget(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PushTargetService_DeletePushTarget_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PushTargetServiceServer).DeletePushTarget(ctx, req.(*DeletePushTargetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PushTargetService_GetStreamPushTargets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStreamPushTargetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PushTargetServiceServer).GetStreamPushTargets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PushTargetService_GetStreamPushTargets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PushTargetServiceServer).GetStreamPushTargets(ctx, req.(*GetStreamPushTargetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PushTargetService_UpdatePushTargetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdatePushTargetStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PushTargetServiceServer).UpdatePushTargetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PushTargetService_UpdatePushTargetStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PushTargetServiceServer).UpdatePushTargetStatus(ctx, req.(*UpdatePushTargetStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PushTargetService_ServiceDesc is the grpc.ServiceDesc for PushTargetService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PushTargetService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "commodore.PushTargetService",
+	HandlerType: (*PushTargetServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreatePushTarget",
+			Handler:    _PushTargetService_CreatePushTarget_Handler,
+		},
+		{
+			MethodName: "ListPushTargets",
+			Handler:    _PushTargetService_ListPushTargets_Handler,
+		},
+		{
+			MethodName: "UpdatePushTarget",
+			Handler:    _PushTargetService_UpdatePushTarget_Handler,
+		},
+		{
+			MethodName: "DeletePushTarget",
+			Handler:    _PushTargetService_DeletePushTarget_Handler,
+		},
+		{
+			MethodName: "GetStreamPushTargets",
+			Handler:    _PushTargetService_GetStreamPushTargets_Handler,
+		},
+		{
+			MethodName: "UpdatePushTargetStatus",
+			Handler:    _PushTargetService_UpdatePushTargetStatus_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "commodore.proto",
+}
+
+const (
 	DeveloperService_CreateAPIToken_FullMethodName = "/commodore.DeveloperService/CreateAPIToken"
 	DeveloperService_ListAPITokens_FullMethodName  = "/commodore.DeveloperService/ListAPITokens"
 	DeveloperService_RevokeAPIToken_FullMethodName = "/commodore.DeveloperService/RevokeAPIToken"

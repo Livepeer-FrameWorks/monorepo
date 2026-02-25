@@ -1,0 +1,6 @@
+# Update a multistream push target
+mutation UpdatePushTarget($id: ID!, $input: UpdatePushTargetInput!) {
+  updatePushTarget(id: $id, input: $input) {
+    ...PushTargetFields @mask_disable
+  }
+}

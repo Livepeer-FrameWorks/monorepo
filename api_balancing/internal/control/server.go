@@ -2969,6 +2969,66 @@ func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
 	}))
 }
 
+// SendLocalActivatePushTargets sends an ActivatePushTargets message to a local Helmsman.
+func SendLocalActivatePushTargets(nodeID string, req *pb.ActivatePushTargets) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_ActivatePushTargets{ActivatePushTargets: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
+// SendActivatePushTargets sends ActivatePushTargets to the given node, relaying via HA if needed.
+func SendActivatePushTargets(nodeID string, req *pb.ActivatePushTargets) error {
+	err := SendLocalActivatePushTargets(nodeID, req)
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_ActivatePushTargets{ActivatePushTargets: req},
+	}))
+}
+
+// SendLocalDeactivatePushTargets sends a DeactivatePushTargets message to a local Helmsman.
+func SendLocalDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_DeactivatePushTargets{DeactivatePushTargets: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
+// SendDeactivatePushTargets sends DeactivatePushTargets to the given node, relaying via HA if needed.
+func SendDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets) error {
+	err := SendLocalDeactivatePushTargets(nodeID, req)
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: req},
+	}))
+}
+
 // TriggerDtshSync is called when .dtsh appeared after the main asset was already synced
 // It generates presigned URLs and sends DtshSyncRequest to the node
 func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {

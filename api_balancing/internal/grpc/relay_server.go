@@ -78,6 +78,10 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 		err = control.SendLocalDtshSyncRequest(req.TargetNodeId, cmd.DtshSync)
 	case *pb.ForwardCommandRequest_StopSessions:
 		err = control.SendLocalStopSessions(req.TargetNodeId, cmd.StopSessions)
+	case *pb.ForwardCommandRequest_ActivatePushTargets:
+		err = control.SendLocalActivatePushTargets(req.TargetNodeId, cmd.ActivatePushTargets)
+	case *pb.ForwardCommandRequest_DeactivatePushTargets:
+		err = control.SendLocalDeactivatePushTargets(req.TargetNodeId, cmd.DeactivatePushTargets)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown command type")
 	}
