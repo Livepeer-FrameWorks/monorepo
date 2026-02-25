@@ -2730,9 +2730,87 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 	return resp, nil
 }
 
-// ============================================================================
-// ClipAnalyticsService Implementation
-// ============================================================================
+// GetNetworkLiveStats returns platform-wide live stats per cluster (no tenant filter).
+func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetworkLiveStatsRequest) (*pb.GetNetworkLiveStatsResponse, error) {
+	type clusterStats struct {
+		activeStreams int32
+		viewers       int32
+		uploadBPS     uint64
+		downloadBPS   uint64
+		activeNodes   int32
+	}
+	statsMap := make(map[string]*clusterStats)
+
+	// Per-cluster node stats
+	nodeQuery := `
+		SELECT
+			cluster_id,
+			COALESCE(sum(active_streams), 0),
+			COALESCE(sum(up_speed), 0),
+			COALESCE(sum(down_speed), 0),
+			countIf(is_healthy = 1)
+		FROM periscope.node_state_current FINAL
+		GROUP BY cluster_id
+	`
+	rows, err := s.clickhouse.QueryContext(ctx, nodeQuery)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to query node stats: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		var cs clusterStats
+		if scanErr := rows.Scan(&id, &cs.activeStreams, &cs.uploadBPS, &cs.downloadBPS, &cs.activeNodes); scanErr != nil {
+			s.logger.WithError(scanErr).Warn("GetNetworkLiveStats: scan node row")
+			continue
+		}
+		statsMap[id] = &cs
+	}
+
+	// Per-cluster viewer counts from live streams (join stream→node for cluster_id)
+	viewerQuery := `
+		SELECT
+			n.cluster_id,
+			COALESCE(sum(s.current_viewers), 0)
+		FROM periscope.stream_state_current AS s FINAL
+		INNER JOIN periscope.node_state_current AS n FINAL ON s.node_id = n.node_id
+		WHERE s.status = 'live'
+		GROUP BY n.cluster_id
+	`
+	vRows, err := s.clickhouse.QueryContext(ctx, viewerQuery)
+	if err != nil {
+		s.logger.WithError(err).Warn("GetNetworkLiveStats: viewer query failed")
+	} else {
+		defer vRows.Close()
+		for vRows.Next() {
+			var id string
+			var viewers int32
+			if err := vRows.Scan(&id, &viewers); err != nil {
+				continue
+			}
+			if cs, ok := statsMap[id]; ok {
+				cs.viewers = viewers
+			} else {
+				statsMap[id] = &clusterStats{viewers: viewers}
+			}
+		}
+	}
+
+	resp := &pb.GetNetworkLiveStatsResponse{}
+	for id, cs := range statsMap {
+		resp.Clusters = append(resp.Clusters, &pb.NetworkClusterLiveStats{
+			ClusterId:           id,
+			ActiveStreams:       cs.activeStreams,
+			CurrentViewers:      cs.viewers,
+			UploadBytesPerSec:   cs.uploadBPS,
+			DownloadBytesPerSec: cs.downloadBPS,
+			ActiveNodes:         cs.activeNodes,
+		})
+	}
+
+	return resp, nil
+}
 
 func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEventsRequest) (*pb.GetClipEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())

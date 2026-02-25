@@ -50,7 +50,10 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       USAGE_HASH_SECRET: ${USAGE_HASH_SECRET}
       CLUSTER_ID: ${CLUSTER_ID}
+      STREAMING_RTMP_PORT: ${STREAMING_RTMP_PORT}
+      STREAMING_SRT_PORT: ${STREAMING_SRT_PORT}
       SKIPPER_SPOKE_URL: http://skipper:18018/mcp/spoke
+      NODE_ID: central-node-1
     ports:
       - "18000:18000"
     depends_on:
@@ -157,6 +160,9 @@ services:
       - ./infrastructure/demo-recordings:/var/lib/mistserver/recordings
     restart: unless-stopped
     command: ["MistController", "-c", "/etc/mistserver.conf"]
+    depends_on:
+      helmsman:
+        condition: service_started
     networks:
       - frameworks
     ulimits:
@@ -220,6 +226,7 @@ services:
       CLUSTER_ID: ${CLUSTER_ID}
       REDIS_URL: ${FOGHORN_REDIS_URL}
       FOGHORN_INSTANCE_ID: foghorn-1
+      NODE_ID: edge-node-1
     ports:
       - "18008:18008"
       - "18019:18019"
@@ -480,6 +487,12 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
+      GEOIP_MMDB_PATH: ${GEOIP_MMDB_PATH}
+      GEOIP_CACHE_TTL: ${GEOIP_CACHE_TTL}
+      GEOIP_CACHE_SWR: ${GEOIP_CACHE_SWR}
+      GEOIP_CACHE_NEG_TTL: ${GEOIP_CACHE_NEG_TTL}
+      GEOIP_CACHE_MAX: ${GEOIP_CACHE_MAX}
+      NODE_ID: central-node-1
     depends_on:
       postgres:
         condition: service_healthy
@@ -525,6 +538,7 @@ services:
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
+      NODE_ID: central-node-1
     ports:
       - "18006:18006"
       - "18026:18026"
@@ -580,6 +594,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
+      NODE_ID: central-node-1
     ports:
       - "18009:18009"
       - "19005:19005"
@@ -622,6 +637,7 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
       CLUSTER_ID: ${CLUSTER_ID}
+      NODE_ID: central-node-1
     ports:
       - "18001:18001" # HTTP (auth, webhooks, health)
       - "19001:19001" # gRPC (internal)
@@ -679,8 +695,6 @@ services:
         condition: service_started
       foghorn:
         condition: service_started
-      mistserver:
-        condition: service_started
       decklog:
         condition: service_started
     ports:
@@ -730,6 +744,7 @@ services:
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
+      NODE_ID: central-node-1
     depends_on:
       postgres:
         condition: service_healthy
@@ -785,6 +800,7 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLUSTER_ID: ${CLUSTER_ID}
+      NODE_ID: central-node-1
     depends_on:
       postgres:
         condition: service_healthy
@@ -846,6 +862,7 @@ services:
       PURSER_HOST: ${PURSER_HOST}
       CLUSTER_ID: ${CLUSTER_ID}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      NODE_ID: central-node-1
       API_PUBLIC_URL: ${API_PUBLIC_URL}
       WEBAPP_PUBLIC_URL: ${WEBAPP_PUBLIC_URL}
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL}
@@ -929,6 +946,7 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_API_URL: ${EMBEDDING_API_URL:-}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-0}
       SKIPPER_ENABLE_RENDERING: ${SKIPPER_ENABLE_RENDERING:-false}
       SKIPPER_WEB_UI: ${SKIPPER_WEB_UI:-true}
       SKIPPER_API_KEY: ${SKIPPER_API_KEY:-}
@@ -941,8 +959,11 @@ services:
       SITEMAPS: ${SITEMAPS:-}
       SKIPPER_SITEMAPS_DIR: /etc/skipper/sitemaps
       CRAWL_INTERVAL: ${CRAWL_INTERVAL:-168h}
+      SKIPPER_SSRF_ALLOWED_HOSTS: ${SKIPPER_SSRF_ALLOWED_HOSTS:-localhost,nginx}
+      NODE_ID: central-node-1
     volumes:
       - ./config/skipper/sitemaps:/etc/skipper/sitemaps:ro
+      - ./config/skipper/faq:/etc/skipper/faq:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -1291,8 +1312,6 @@ services:
     entrypoint: ["sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk"]
     environment:
       LISTMONK_app__address: "0.0.0.0:9000"
-      LISTMONK_app__admin_username: ${LISTMONK_USERNAME:-admin}
-      LISTMONK_app__admin_password: ${LISTMONK_PASSWORD:-admin}
       LISTMONK_db__host: postgres
       LISTMONK_db__port: 5432
       LISTMONK_db__user: listmonk

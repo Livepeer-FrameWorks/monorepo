@@ -138,6 +138,25 @@ func TestPublicOrJWTAuthAllowlistIgnoresInvalidToken(t *testing.T) {
 	}
 }
 
+func TestPublicOrJWTAuthRejectsMixedAllowlistedQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	body := []byte(`{"query":"query { resolveViewerEndpoint(contentId:\"abc\") { streamName } me { id } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
 func TestPublicOrJWTAuthUsesJWTForProtectedQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

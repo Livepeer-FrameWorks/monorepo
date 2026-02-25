@@ -42,6 +42,9 @@ const (
 	apiEventClusterSubscriptionRequested = "api_cluster_subscription_requested"
 	apiEventClusterSubscriptionApproved  = "api_cluster_subscription_approved"
 	apiEventClusterSubscriptionRejected  = "api_cluster_subscription_rejected"
+	apiEventPushTargetCreated            = "api_push_target_created"
+	apiEventPushTargetUpdated            = "api_push_target_updated"
+	apiEventPushTargetDeleted            = "api_push_target_deleted"
 )
 
 func tenantIDFromContext(ctx context.Context) string {

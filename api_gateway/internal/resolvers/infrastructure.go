@@ -12,6 +12,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/pagination"
@@ -2501,4 +2502,58 @@ func (r *Resolver) DoGetMyClusterInvitesConnection(ctx context.Context, first *i
 	}
 
 	return buildClusterInvitesConnectionFromResponse(resp), nil
+}
+
+// DoGetStreamingConfig returns cluster-aware streaming domains for the
+// authenticated tenant. Returns nil (not error) when unavailable so the
+// frontend falls back to VITE_* env vars.
+func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingConfig, error) {
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateStreamingConfig(), nil
+	}
+
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, nil
+	}
+
+	resp, err := r.Clients.Quartermaster.GetClusterRouting(ctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
+	if err != nil {
+		r.Logger.WithError(err).Debug("streamingConfig: cluster routing unavailable, returning nil")
+		return nil, nil
+	}
+
+	slug := resp.GetClusterSlug()
+	baseURL := resp.GetBaseUrl()
+	if slug == "" || baseURL == "" {
+		return nil, nil
+	}
+
+	srtPort := config.GetEnvInt("STREAMING_SRT_PORT", 8889)
+	rtmpPort := config.GetEnvInt("STREAMING_RTMP_PORT", 1935)
+
+	cfg := &model.StreamingConfig{
+		IngestDomain: strPtr(fmt.Sprintf("edge-ingest.%s.%s", slug, baseURL)),
+		EdgeDomain:   strPtr(fmt.Sprintf("edge-egress.%s.%s", slug, baseURL)),
+		PlayDomain:   strPtr(fmt.Sprintf("foghorn.%s.%s", slug, baseURL)),
+		SrtPort:      &srtPort,
+		RtmpPort:     &rtmpPort,
+	}
+
+	if name := resp.GetClusterName(); name != "" {
+		cfg.PreferredClusterLabel = strPtr(name)
+	}
+
+	offSlug := resp.GetOfficialClusterSlug()
+	offBase := resp.GetOfficialBaseUrl()
+	if offSlug != "" && offBase != "" {
+		cfg.OfficialIngestDomain = strPtr(fmt.Sprintf("edge-ingest.%s.%s", offSlug, offBase))
+		cfg.OfficialEdgeDomain = strPtr(fmt.Sprintf("edge-egress.%s.%s", offSlug, offBase))
+		cfg.OfficialPlayDomain = strPtr(fmt.Sprintf("foghorn.%s.%s", offSlug, offBase))
+		if name := resp.GetOfficialClusterName(); name != "" {
+			cfg.OfficialClusterLabel = strPtr(name)
+		}
+	}
+
+	return cfg, nil
 }

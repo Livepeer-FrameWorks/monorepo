@@ -32,23 +32,23 @@ func TestValidateBootstrapTokenConsumeRaceRejected(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at
 		FROM quartermaster.bootstrap_tokens
-		WHERE token = $1
+		WHERE token_hash = $1
 	`)).
-		WithArgs("bt_edge").
+		WithArgs(hashBootstrapToken("bt_edge")).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "tenant_id", "cluster_id", "expected_ip", "expires_at", "usage_limit", "usage_count", "used_at"}).
 			AddRow("edge_node", "tenant-1", "cluster-1", nil, expiresAt, nil, int32(0), nil))
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 			UPDATE quartermaster.bootstrap_tokens
 			SET usage_count = usage_count + 1, used_at = NOW()
-			WHERE token = $1
+			WHERE token_hash = $1
 			  AND expires_at > NOW()
 			  AND (
 				(usage_limit IS NULL AND used_at IS NULL) OR
 				(usage_limit IS NOT NULL AND usage_count < usage_limit)
 			  )
 		`)).
-		WithArgs("bt_edge").
+		WithArgs(hashBootstrapToken("bt_edge")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	resp, err := srv.ValidateBootstrapToken(context.Background(), &pb.ValidateBootstrapTokenRequest{
@@ -93,7 +93,7 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 	tokenQuery := regexp.QuoteMeta(`
 		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
 		FROM quartermaster.bootstrap_tokens
-		WHERE token = $1 AND kind = 'edge_node'
+		WHERE token_hash = $1 AND kind = 'edge_node'
 		  AND (
 		    (usage_limit IS NULL AND used_at IS NULL) OR
 		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
@@ -104,7 +104,7 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 	t.Run("rejects token bound to unserved cluster", func(t *testing.T) {
 		mock.ExpectBegin()
 		mock.ExpectQuery(tokenQuery).
-			WithArgs("tok-1").
+			WithArgs(hashBootstrapToken("tok-1")).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
 				AddRow("id-1", "tenant-1", "cluster-X", nil, int32(0), expiresAt, nil))
 		mock.ExpectRollback()
@@ -127,15 +127,15 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 	t.Run("accepts token bound to served cluster", func(t *testing.T) {
 		mock.ExpectBegin()
 		mock.ExpectQuery(tokenQuery).
-			WithArgs("tok-2").
+			WithArgs(hashBootstrapToken("tok-2")).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
 				AddRow("id-2", "tenant-1", "cluster-b", nil, int32(0), expiresAt, nil))
 		// Node lookup (not found → insert)
 		mock.ExpectQuery(regexp.QuoteMeta(`SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id`)).
 			WillReturnError(sql.ErrNoRows)
-		// Node insert
+		// Node insert (includes latitude, longitude from geoip)
 		mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.infrastructure_nodes`)).
-			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "cluster-b", sqlmock.AnyArg(), nil).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "cluster-b", sqlmock.AnyArg(), nil, nil, nil).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		// Token update
 		mock.ExpectExec(regexp.QuoteMeta(`UPDATE quartermaster.bootstrap_tokens`)).

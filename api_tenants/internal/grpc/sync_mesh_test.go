@@ -16,7 +16,7 @@ func TestSyncMeshUpdatesHeartbeatWithoutKeyOrPort(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery(`SELECT wireguard_ip::text, external_ip::text, internal_ip::text, cluster_id\s+FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = \$1`).
 		WithArgs("node-1").

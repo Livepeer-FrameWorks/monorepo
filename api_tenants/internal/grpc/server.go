@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/dns"
+	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/pagination"
@@ -53,17 +55,19 @@ type QuartermasterServer struct {
 	navigatorClient *navigator.Client
 	decklogClient   *decklogclient.BatchedClient
 	purserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC, not DB)
+	geoipReader     *geoip.Reader
 	metrics         *ServerMetrics
 }
 
 // NewQuartermasterServer creates a new Quartermaster gRPC server
-func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *navigator.Client, decklogClient *decklogclient.BatchedClient, purserClient *purserclient.GRPCClient, metrics *ServerMetrics) *QuartermasterServer {
+func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *navigator.Client, decklogClient *decklogclient.BatchedClient, purserClient *purserclient.GRPCClient, geoipReader *geoip.Reader, metrics *ServerMetrics) *QuartermasterServer {
 	return &QuartermasterServer{
 		db:              db,
 		logger:          logger,
 		navigatorClient: navigatorClient,
 		decklogClient:   decklogClient,
 		purserClient:    purserClient,
+		geoipReader:     geoipReader,
 		metrics:         metrics,
 	}
 }
@@ -285,26 +289,17 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 			c.cluster_id, c.cluster_name, c.cluster_type, c.base_url,
 			c.kafka_brokers, c.database_url, c.periscope_url,
 			COALESCE(tca.kafka_topic_prefix, t.kafka_topic_prefix, '') as topic_prefix,
-			c.max_concurrent_streams, c.current_stream_count, c.health_status
+			c.max_concurrent_streams, c.health_status
 		FROM quartermaster.infrastructure_clusters c
 		JOIN quartermaster.tenants t ON t.id = $2
 		LEFT JOIN quartermaster.tenant_cluster_assignments tca ON tca.tenant_id = t.id AND tca.cluster_id = c.cluster_id
 		WHERE c.cluster_id = $1
 		  AND c.is_active = true
-		  AND (
-		    c.max_concurrent_streams = 0 OR
-		    c.current_stream_count < c.max_concurrent_streams
-		  )
-		  AND (
-		    $3 = 0 OR
-		    c.max_bandwidth_mbps = 0 OR
-		    c.current_bandwidth_mbps + $3 <= c.max_bandwidth_mbps
-		  )
-	`, primaryClusterID, tenantID, estimatedMbps).Scan(
+	`, primaryClusterID, tenantID).Scan(
 		&resp.ClusterId, &resp.ClusterName, &resp.ClusterType, &resp.BaseUrl,
 		pq.Array(&kafkaBrokers), &databaseURL, &periscopeURL,
 		&topicPrefix,
-		&resp.MaxStreams, &resp.CurrentStreams, &resp.HealthStatus,
+		&resp.MaxStreams, &resp.HealthStatus,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -604,9 +599,9 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		err := exec.QueryRowContext(ctx, `
 			SELECT kind, COALESCE(cluster_id, ''), expires_at
 			FROM quartermaster.bootstrap_tokens
-			WHERE token = $1 AND used_at IS NULL
+			WHERE token_hash = $1 AND used_at IS NULL
 			FOR UPDATE
-		`, token).Scan(&kind, &tokenBoundClusterID, &expiresAt)
+		`, hashBootstrapToken(token)).Scan(&kind, &tokenBoundClusterID, &expiresAt)
 		if errors.Is(err, sql.ErrNoRows) || kind != "service" || time.Now().After(expiresAt) {
 			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
 		}
@@ -727,21 +722,41 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	healthEndpoint := req.HealthEndpoint
 	port := req.GetPort()
 
-	// 5. Idempotent registration: check for existing instance on same (service_id, cluster_id, protocol, port[, node_id])
+	// 5a. Auto-associate with node by IP when no explicit node_id provided
+	resolvedNodeID := req.NodeId
+	if resolvedNodeID == nil && advHost != "" && net.ParseIP(advHost) != nil {
+		var matchedNodeID string
+		_ = exec.QueryRowContext(ctx, `
+			SELECT node_id FROM quartermaster.infrastructure_nodes
+			WHERE cluster_id = $1
+			  AND (wireguard_ip = $2::inet OR internal_ip = $2::inet OR external_ip = $2::inet)
+			LIMIT 1
+		`, clusterID, advHost).Scan(&matchedNodeID)
+		if matchedNodeID != "" {
+			resolvedNodeID = &matchedNodeID
+			s.logger.WithFields(logging.Fields{
+				"service_type": serviceType,
+				"node_id":      matchedNodeID,
+				"advHost":      advHost,
+			}).Debug("Auto-associated service with node via IP match")
+		}
+	}
+
+	// 5b. Idempotent registration: check for existing instance
 	var existingID, existingInstanceID string
-	if req.NodeId != nil {
+	if resolvedNodeID != nil {
 		_ = exec.QueryRowContext(ctx, `
 			SELECT id::text, instance_id FROM quartermaster.service_instances
 			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
 			  AND (node_id = $5 OR node_id IS NULL)
 			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
-		`, serviceID, clusterID, proto, port, *req.NodeId).Scan(&existingID, &existingInstanceID)
+		`, serviceID, clusterID, proto, port, *resolvedNodeID).Scan(&existingID, &existingInstanceID)
 	} else {
 		_ = exec.QueryRowContext(ctx, `
 			SELECT id::text, instance_id FROM quartermaster.service_instances
-			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
+			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4 AND advertise_host = $5
 			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
-		`, serviceID, clusterID, proto, port).Scan(&existingID, &existingInstanceID)
+		`, serviceID, clusterID, proto, port, advHost).Scan(&existingID, &existingInstanceID)
 	}
 
 	if existingID != "" {
@@ -759,7 +774,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			    last_health_check = NULL,
 			    updated_at = NOW()
 			WHERE id = $5::uuid
-		`, advHost, healthEndpoint, req.GetVersion(), req.NodeId, existingID)
+		`, advHost, healthEndpoint, req.GetVersion(), resolvedNodeID, existingID)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to update service instance")
 			return nil, status.Errorf(codes.Internal, "failed to update service instance: %v", err)
@@ -771,7 +786,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			INSERT INTO quartermaster.service_instances
 				(instance_id, cluster_id, node_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, status, health_status, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', 'unknown', NOW(), NOW())
-		`, instanceID, clusterID, req.NodeId, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port)
+		`, instanceID, clusterID, resolvedNodeID, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to create service instance")
 			return nil, status.Errorf(codes.Internal, "failed to create service instance: %v", err)
@@ -788,8 +803,8 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		result, err := exec.ExecContext(ctx, `
 			UPDATE quartermaster.bootstrap_tokens
 			SET used_at = NOW(), usage_count = usage_count + 1
-			WHERE token = $1 AND used_at IS NULL
-		`, token)
+			WHERE token_hash = $1 AND used_at IS NULL
+		`, hashBootstrapToken(token))
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to consume bootstrap token: %v", err)
 		}
@@ -852,9 +867,9 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	if ownerTenantID.Valid && ownerTenantID.String != "" {
 		resp.OwnerTenantId = &ownerTenantID.String
 	}
-	if req.NodeId != nil {
-		resp.NodeId = req.NodeId
-		if node, nodeErr := s.queryNode(ctx, *req.NodeId); nodeErr == nil {
+	if resolvedNodeID != nil {
+		resp.NodeId = resolvedNodeID
+		if node, nodeErr := s.queryNode(ctx, *resolvedNodeID); nodeErr == nil {
 			resp.Node = node
 		}
 	}
@@ -1352,7 +1367,11 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 
 	// Generate cluster ID from name
 	clusterID := strings.ToLower(strings.ReplaceAll(clusterName, " ", "-"))
-	clusterID = fmt.Sprintf("%s-%s", clusterID, generateSecureToken(4))
+	suffix, err := generateSecureToken(4)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate cluster ID suffix: %v", err)
+	}
+	clusterID = fmt.Sprintf("%s-%s", clusterID, suffix)
 
 	id := uuid.New().String()
 	now := time.Now()
@@ -1423,14 +1442,17 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 
 	// Create bootstrap token
 	tokenID := uuid.New().String()
-	token := generateSecureToken(32)
+	token, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
 	expiresAt := now.Add(30 * 24 * time.Hour)
 
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.bootstrap_tokens (
-			id, token, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
-		) VALUES ($1, $2, 'edge_node', $3, $4, $5, $6, $4, NOW())
-	`, tokenID, token, fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt)
+			id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+		) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
+	`, tokenID, hashBootstrapToken(token), tokenPrefix(token), fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create bootstrap token: %v", err)
 	}
@@ -1511,15 +1533,18 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 	}
 
 	tokenID := uuid.New().String()
-	token := generateSecureToken(32)
+	token, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
 	now := time.Now()
 	expiresAt := now.Add(ttl)
 
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.bootstrap_tokens (
-			id, token, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
-		) VALUES ($1, $2, 'edge_node', $3, $4, $5, $6, $4, NOW())
-	`, tokenID, token, tokenName, tenantID, clusterID, expiresAt)
+			id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+		) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
+	`, tokenID, hashBootstrapToken(token), tokenPrefix(token), tokenName, tenantID, clusterID, expiresAt)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
 	}
@@ -2364,6 +2389,13 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 		countArgs = append(countArgs, req.GetDeploymentModel())
 		argIdx++
 	}
+	if req.IsPlatformOfficial != nil {
+		where += fmt.Sprintf(" AND c.is_platform_official = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND c.is_platform_official = $%d", argIdx)
+		args = append(args, *req.IsPlatformOfficial)
+		countArgs = append(countArgs, *req.IsPlatformOfficial)
+		argIdx++
+	}
 
 	// Get total count
 	var total int32
@@ -2384,8 +2416,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
 		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
-		       c.current_stream_count, c.current_viewer_count, c.current_bandwidth_mbps,
-		       c.health_status, c.is_active, c.is_default_cluster, c.created_at, c.updated_at
+		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c
 		%s %s
 		%s
@@ -2490,16 +2521,22 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 	id := uuid.New().String()
 	now := time.Now()
 
+	isPlatformOfficial := false
+	if req.IsPlatformOfficial != nil {
+		isPlatformOfficial = *req.IsPlatformOfficial
+	}
+
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_clusters (id, cluster_id, cluster_name, cluster_type, deployment_model,
 		                                                   owner_tenant_id, base_url, database_url, periscope_url, kafka_brokers,
 		                                                   max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-		                                                   health_status, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $14)
+		                                                   health_status, is_active, is_platform_official, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $15)
 	`, id, clusterID, req.GetClusterName(), req.GetClusterType(), deploymentModel,
 		ownerTenantID, req.GetBaseUrl(),
 		req.DatabaseUrl, req.PeriscopeUrl, pq.Array(req.GetKafkaBrokers()),
-		req.GetMaxConcurrentStreams(), req.GetMaxConcurrentViewers(), req.GetMaxBandwidthMbps(), now)
+		req.GetMaxConcurrentStreams(), req.GetMaxConcurrentViewers(), req.GetMaxBandwidthMbps(),
+		isPlatformOfficial, now)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
@@ -2587,16 +2624,6 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 		args = append(args, *req.IsActive)
 		argIdx++
 	}
-	if req.CurrentStreamCount != nil {
-		updates = append(updates, fmt.Sprintf("current_stream_count = $%d", argIdx))
-		args = append(args, *req.CurrentStreamCount)
-		argIdx++
-	}
-	if req.CurrentViewerCount != nil {
-		updates = append(updates, fmt.Sprintf("current_viewer_count = $%d", argIdx))
-		args = append(args, *req.CurrentViewerCount)
-		argIdx++
-	}
 	// Handle owner_tenant_id (empty string clears ownership)
 	if req.OwnerTenantId != nil {
 		if *req.OwnerTenantId != "" {
@@ -2619,6 +2646,11 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 	if req.DeploymentModel != nil {
 		updates = append(updates, fmt.Sprintf("deployment_model = $%d", argIdx))
 		args = append(args, *req.DeploymentModel)
+		argIdx++
+	}
+	if req.IsPlatformOfficial != nil {
+		updates = append(updates, fmt.Sprintf("is_platform_official = $%d", argIdx))
+		args = append(args, *req.IsPlatformOfficial)
 		argIdx++
 	}
 
@@ -3024,8 +3056,7 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
 		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
-		       c.current_stream_count, c.current_viewer_count, c.current_bandwidth_mbps,
-		       c.health_status, c.is_active, c.is_default_cluster, c.created_at, c.updated_at
+		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c
 		%s
 		%s
@@ -3181,11 +3212,11 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 		`
 		baseArgs = append(baseArgs, tenantID)
 	} else {
-		// Unauthenticated: Default cluster only
+		// Unauthenticated / service-to-service: all platform-official clusters
 		baseWhere = `
 			WHERE n.cluster_id IN (
 				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
-				WHERE c.is_default_cluster = true
+				WHERE c.is_platform_official = true AND c.is_active = true
 			)
 		`
 	}
@@ -3334,7 +3365,7 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 		baseWhere = `
 			WHERE n.cluster_id IN (
 				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
-				WHERE c.is_default_cluster = true
+				WHERE c.is_platform_official = true AND c.is_active = true
 			)
 		`
 	}
@@ -3689,13 +3720,13 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
 		FROM quartermaster.bootstrap_tokens
-		WHERE token = $1 AND kind = 'edge_node'
+		WHERE token_hash = $1 AND kind = 'edge_node'
 		  AND (
 		    (usage_limit IS NULL AND used_at IS NULL) OR
 		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
 		  )
 		FOR UPDATE
-	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
+	`, hashBootstrapToken(token)).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
@@ -3792,10 +3823,19 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	if ips := req.GetIps(); len(ips) > 0 {
 		extIP = ips[0]
 	}
+
+	var lat, lng interface{}
+	if extIP != nil && s.geoipReader != nil {
+		if geo := s.geoipReader.Lookup(extIP.(string)); geo != nil {
+			lat = geo.Latitude
+			lng = geo.Longitude
+		}
+	}
+
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, tags, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'edge', $5::inet, '{}', '{}', NOW(), NOW())
-	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, extIP)
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'edge', $5::inet, $6, $7, '{}', '{}', NOW(), NOW())
+	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, extIP, lat, lng)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
@@ -3911,13 +3951,13 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
 		FROM quartermaster.bootstrap_tokens
-		WHERE token = $1 AND kind = 'infrastructure_node'
+		WHERE token_hash = $1 AND kind = 'infrastructure_node'
 		  AND (
 		    (usage_limit IS NULL AND used_at IS NULL) OR
 		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
 		  )
 		FOR UPDATE
-	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
+	`, hashBootstrapToken(token)).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
@@ -4000,10 +4040,18 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		intIP = *req.InternalIp
 	}
 
+	var lat, lng interface{}
+	if extIP != nil && s.geoipReader != nil {
+		if geo := s.geoipReader.Lookup(extIP.(string)); geo != nil {
+			lat = geo.Latitude
+			lng = geo.Longitude
+		}
+	}
+
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, tags, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, '{}', '{}', NOW(), NOW())
-	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, req.GetNodeType(), extIP, intIP)
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, latitude, longitude, tags, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8, $9, '{}', '{}', NOW(), NOW())
+	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, req.GetNodeType(), extIP, intIP, lat, lng)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
 	}
@@ -4076,7 +4124,11 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 	}
 
 	tokenID := uuid.New().String()
-	tokenValue := "bt_" + generateSecureToken(32)
+	tokenValue, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
+	tokenValue = "bt_" + tokenValue
 
 	// Parse TTL
 	ttl := req.GetTtl()
@@ -4090,9 +4142,9 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 	expiresAt := time.Now().Add(duration)
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.bootstrap_tokens (id, name, token, kind, tenant_id, cluster_id, expected_ip, usage_limit, usage_count, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, NOW())
-	`, tokenID, name, tokenValue, kind, req.TenantId, req.ClusterId, req.ExpectedIp, req.UsageLimit, expiresAt)
+		INSERT INTO quartermaster.bootstrap_tokens (id, name, token_hash, token_prefix, kind, tenant_id, cluster_id, expected_ip, usage_limit, usage_count, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, NOW())
+	`, tokenID, name, hashBootstrapToken(tokenValue), tokenPrefix(tokenValue), kind, req.TenantId, req.ClusterId, req.ExpectedIp, req.UsageLimit, expiresAt)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
@@ -4156,7 +4208,7 @@ func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *pb.L
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, name, token, kind, tenant_id, cluster_id, expected_ip, usage_limit, usage_count, expires_at, used_at, created_by, created_at
+		SELECT id, name, token_prefix, kind, tenant_id, cluster_id, expected_ip, usage_limit, usage_count, expires_at, used_at, created_by, created_at
 		FROM quartermaster.bootstrap_tokens
 		%s
 		ORDER BY created_at %s, id %s
@@ -4275,8 +4327,8 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	err := s.db.QueryRowContext(ctx, `
 		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at
 		FROM quartermaster.bootstrap_tokens
-		WHERE token = $1
-	`, token).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt)
+		WHERE token_hash = $1
+	`, hashBootstrapToken(token)).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateBootstrapTokenResponse{Valid: false, Reason: "not_found"}, nil
@@ -4311,13 +4363,13 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 		result, updateErr := s.db.ExecContext(ctx, `
 			UPDATE quartermaster.bootstrap_tokens
 			SET usage_count = usage_count + 1, used_at = NOW()
-			WHERE token = $1
+			WHERE token_hash = $1
 			  AND expires_at > NOW()
 			  AND (
 				(usage_limit IS NULL AND used_at IS NULL) OR
 				(usage_limit IS NOT NULL AND usage_count < usage_limit)
 			  )
-		`, token)
+		`, hashBootstrapToken(token))
 		if updateErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to consume bootstrap token: %v", updateErr)
 		}
@@ -5062,9 +5114,8 @@ func scanCluster(rows *sql.Rows) (*pb.InfrastructureCluster, error) {
 		&cluster.Id, &cluster.ClusterId, &cluster.ClusterName, &cluster.ClusterType,
 		&ownerTenantID, &cluster.DeploymentModel, &cluster.BaseUrl, &databaseURL, &periscopeURL,
 		pq.Array(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
-		&cluster.MaxBandwidthMbps, &cluster.CurrentStreamCount, &cluster.CurrentViewerCount,
-		&cluster.CurrentBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
-		&createdAt, &updatedAt,
+		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
+		&cluster.IsPlatformOfficial, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -5154,8 +5205,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		SELECT id, cluster_id, cluster_name, cluster_type, owner_tenant_id, deployment_model,
 		       base_url, database_url, periscope_url, kafka_brokers,
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-		       current_stream_count, current_viewer_count, current_bandwidth_mbps,
-		       health_status, is_active, is_default_cluster, created_at, updated_at,
+		       health_status, is_active, is_default_cluster, is_platform_official, created_at, updated_at,
 		       visibility, requires_approval, short_description
 		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1
@@ -5174,9 +5224,8 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		&cluster.Id, &cluster.ClusterId, &cluster.ClusterName, &cluster.ClusterType,
 		&ownerTenantID, &cluster.DeploymentModel, &cluster.BaseUrl, &databaseURL, &periscopeURL,
 		pq.Array(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
-		&cluster.MaxBandwidthMbps, &cluster.CurrentStreamCount, &cluster.CurrentViewerCount,
-		&cluster.CurrentBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
-		&createdAt, &updatedAt,
+		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
+		&cluster.IsPlatformOfficial, &createdAt, &updatedAt,
 		&visibility, &requiresApproval, &shortDescription,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -5329,10 +5378,24 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 	return &node, nil
 }
 
-func generateSecureToken(n int) string {
+func generateSecureToken(n int) (string, error) {
 	b := make([]byte, n)
-	rand.Read(b) //nolint:errcheck // crypto/rand.Read rarely fails
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("crypto/rand: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func hashBootstrapToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
+}
+
+func tokenPrefix(token string) string {
+	if len(token) <= 12 {
+		return token
+	}
+	return token[:12] + "..."
 }
 
 // ============================================================================
@@ -5413,7 +5476,6 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 		query = fmt.Sprintf(`
 			SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
 			       c.max_concurrent_streams, c.max_concurrent_viewers,
-			       c.current_stream_count, c.max_concurrent_streams,
 			       t.name as owner_name,
 			       '' as subscription_status,
 			       false as is_subscribed,
@@ -5428,7 +5490,6 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 		query = fmt.Sprintf(`
 			SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
 			       c.max_concurrent_streams, c.max_concurrent_viewers,
-			       c.current_stream_count, c.max_concurrent_streams,
 			       t.name as owner_name,
 			       COALESCE(a.subscription_status, '') as subscription_status,
 			       CASE WHEN a.id IS NOT NULL AND a.is_active THEN true ELSE false END as is_subscribed,
@@ -5460,13 +5521,11 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 		var entry pb.MarketplaceClusterEntry
 		var visibility string
 		var ownerName, shortDesc, subscriptionStatus sql.NullString
-		var currentStreams, maxStreams int32
 		var createdAt time.Time
 
 		if err := rows.Scan(
 			&entry.ClusterId, &entry.ClusterName, &shortDesc, &visibility, &entry.RequiresApproval,
 			&entry.MaxConcurrentStreams, &entry.MaxConcurrentViewers,
-			&currentStreams, &maxStreams,
 			&ownerName, &subscriptionStatus, &entry.IsSubscribed,
 			&createdAt,
 		); err != nil {
@@ -5484,11 +5543,6 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 			entry.SubscriptionStatus = subscriptionStatusStringToProto(subscriptionStatus.String)
 		}
 
-		// Calculate utilization percentage
-		if maxStreams > 0 {
-			utilization := float64(currentStreams) / float64(maxStreams) * 100
-			entry.CurrentUtilization = &utilization
-		}
 		entry.CreatedAt = timestamppb.New(createdAt)
 
 		entries = append(entries, entryWithCursor{entry: &entry, createdAt: createdAt, clusterID: entry.ClusterId})
@@ -5543,7 +5597,6 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 		row = s.db.QueryRowContext(ctx, `
 			SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
 			       c.max_concurrent_streams, c.max_concurrent_viewers,
-			       c.current_stream_count, c.max_concurrent_streams,
 			       t.name as owner_name,
 			       '' as subscription_status,
 			       false as is_subscribed,
@@ -5556,7 +5609,6 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 		row = s.db.QueryRowContext(ctx, `
 			SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
 			       c.max_concurrent_streams, c.max_concurrent_viewers,
-			       c.current_stream_count, c.max_concurrent_streams,
 			       t.name as owner_name,
 			       COALESCE(a.subscription_status, '') as subscription_status,
 			       CASE WHEN a.id IS NOT NULL AND a.is_active THEN true ELSE false END as is_subscribed,
@@ -5576,13 +5628,11 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 	var entry pb.MarketplaceClusterEntry
 	var visibility string
 	var ownerName, shortDesc, subscriptionStatus sql.NullString
-	var currentStreams, maxStreams int32
 	var createdAt time.Time
 
 	err := row.Scan(
 		&entry.ClusterId, &entry.ClusterName, &shortDesc, &visibility, &entry.RequiresApproval,
 		&entry.MaxConcurrentStreams, &entry.MaxConcurrentViewers,
-		&currentStreams, &maxStreams,
 		&ownerName, &subscriptionStatus, &entry.IsSubscribed,
 		&createdAt,
 	)
@@ -5602,10 +5652,6 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 	}
 	if subscriptionStatus.Valid && subscriptionStatus.String != "" {
 		entry.SubscriptionStatus = subscriptionStatusStringToProto(subscriptionStatus.String)
-	}
-	if maxStreams > 0 {
-		utilization := float64(currentStreams) / float64(maxStreams) * 100
-		entry.CurrentUtilization = &utilization
 	}
 	entry.CreatedAt = timestamppb.New(createdAt)
 
@@ -5713,9 +5759,9 @@ func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *
 		SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility,
 		       c.requires_approval, t.name AS owner_name,
 		       c.max_concurrent_streams, c.max_concurrent_viewers,
-		       c.current_stream_count,
 		       COALESCE(a.id IS NOT NULL, false) AS is_subscribed,
-		       COALESCE(a.subscription_status, 'none') AS subscription_status
+		       COALESCE(a.subscription_status, 'none') AS subscription_status,
+		       c.is_platform_official
 		FROM quartermaster.infrastructure_clusters c
 		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
 		LEFT JOIN quartermaster.tenant_cluster_access a
@@ -5733,14 +5779,15 @@ func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *
 		var meta pb.ClusterMetadata
 		var shortDescription, ownerName sql.NullString
 		var visibility, subscriptionStatus string
-		var maxStreams, maxViewers, currentStreams int32
+		var maxStreams, maxViewers int32
 		var isSubscribed bool
 
 		if err := rows.Scan(
 			&meta.ClusterId, &meta.ClusterName, &shortDescription, &visibility,
 			&meta.RequiresApproval, &ownerName,
-			&maxStreams, &maxViewers, &currentStreams,
+			&maxStreams, &maxViewers,
 			&isSubscribed, &subscriptionStatus,
+			&meta.IsPlatformOfficial,
 		); err != nil {
 			s.logger.WithError(err).Warn("Failed to scan cluster metadata row")
 			continue
@@ -5755,10 +5802,6 @@ func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *
 		}
 		meta.MaxConcurrentStreams = maxStreams
 		meta.MaxConcurrentViewers = maxViewers
-		if maxStreams > 0 {
-			utilization := float64(currentStreams) / float64(maxStreams) * 100
-			meta.CurrentUtilization = &utilization
-		}
 		meta.IsSubscribed = isSubscribed
 		meta.SubscriptionStatus = subscriptionStatus
 
@@ -5806,7 +5849,11 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 
 	// Generate cluster ID from name (sanitized)
 	clusterID := strings.ToLower(strings.ReplaceAll(clusterName, " ", "-"))
-	clusterID = fmt.Sprintf("%s-%s", clusterID, generateSecureToken(4))
+	suffix, err := generateSecureToken(4)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate cluster ID suffix: %v", err)
+	}
+	clusterID = fmt.Sprintf("%s-%s", clusterID, suffix)
 
 	id := uuid.New().String()
 	now := time.Now()
@@ -5847,14 +5894,17 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 
 	// Create a bootstrap token for edge node registration
 	tokenID := uuid.New().String()
-	token := generateSecureToken(32)
+	token, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
 	expiresAt := now.Add(30 * 24 * time.Hour) // 30 days
 
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.bootstrap_tokens (
-			id, token, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
-		) VALUES ($1, $2, 'edge_node', $3, $4, $5, $6, $4, NOW())
-	`, tokenID, token, fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt)
+			id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+		) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
+	`, tokenID, hashBootstrapToken(token), tokenPrefix(token), fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":  tenantID,
@@ -5939,7 +5989,10 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 	}
 
 	id := uuid.New().String()
-	token := generateSecureToken(32)
+	token, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
 	now := time.Now()
 
 	accessLevel := req.GetAccessLevel()
@@ -6917,6 +6970,7 @@ type GRPCServerConfig struct {
 	NavigatorClient *navigator.Client
 	DecklogClient   *decklogclient.BatchedClient
 	PurserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC)
+	GeoIPReader     *geoip.Reader
 	Metrics         *ServerMetrics
 }
 
@@ -6951,7 +7005,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	}
 
 	server := grpc.NewServer(opts...)
-	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.Metrics)
+	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
 
 	// Register all services
 	pb.RegisterTenantServiceServer(server, qmServer)

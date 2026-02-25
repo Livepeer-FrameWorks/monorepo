@@ -3263,9 +3263,6 @@ func GenerateClustersConnection() *model.ClustersConnection {
 			MaxConcurrentStreams: 100,
 			MaxConcurrentViewers: 10000,
 			MaxBandwidthMbps:     10000,
-			CurrentStreamCount:   2,
-			CurrentViewerCount:   150,
-			CurrentBandwidthMbps: 450,
 			HealthStatus:         "healthy",
 			IsActive:             true,
 			CreatedAt:            timestamppb.New(now.Add(-60 * 24 * time.Hour)),
@@ -3281,9 +3278,6 @@ func GenerateClustersConnection() *model.ClustersConnection {
 			MaxConcurrentStreams: 50,
 			MaxConcurrentViewers: 5000,
 			MaxBandwidthMbps:     5000,
-			CurrentStreamCount:   1,
-			CurrentViewerCount:   75,
-			CurrentBandwidthMbps: 180,
 			HealthStatus:         "healthy",
 			IsActive:             true,
 			CreatedAt:            timestamppb.New(now.Add(-45 * 24 * time.Hour)),
@@ -3462,9 +3456,6 @@ func GenerateMySubscriptions() []*pb.InfrastructureCluster {
 			MaxConcurrentStreams: 100,
 			MaxConcurrentViewers: 10000,
 			MaxBandwidthMbps:     10000,
-			CurrentStreamCount:   5,
-			CurrentViewerCount:   150,
-			CurrentBandwidthMbps: 500,
 			HealthStatus:         "healthy",
 			IsActive:             true,
 			IsDefaultCluster:     true,
@@ -4705,20 +4696,116 @@ func GenerateFederationSummary() *pb.FederationSummary {
 
 // GenerateNetworkStatus returns demo public network topology (no tenant data).
 func GenerateNetworkStatus() *model.NetworkStatus {
+	centralDesc := "Primary control plane and shared compute"
+	usEastDesc := "Low-latency edge for US East Coast"
+	apacDesc := "Asia-Pacific edge for APAC viewers"
+
 	return &model.NetworkStatus{
 		Clusters: []*model.NetworkClusterStatus{
-			{ClusterID: "central-primary", Name: "Central Primary", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 4, HealthyNodeCount: 4, PeerCount: 2, Status: "operational"},
-			{ClusterID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "operational"},
-			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "operational"},
+			{ClusterID: "central-primary", Name: "Central Primary", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 4, HealthyNodeCount: 4, PeerCount: 2, Status: "healthy", ClusterType: "central", ShortDescription: &centralDesc, MaxStreams: 500, CurrentStreams: 12, MaxViewers: 10000, CurrentViewers: 340, MaxBandwidthMbps: 10000, CurrentBandwidthMbps: 1200},
+			{ClusterID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "healthy", ClusterType: "shared-community", ShortDescription: &usEastDesc, MaxStreams: 200, CurrentStreams: 5, MaxViewers: 5000, CurrentViewers: 180, MaxBandwidthMbps: 5000, CurrentBandwidthMbps: 600},
+			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "healthy", ClusterType: "shared-community", ShortDescription: &apacDesc, MaxStreams: 100, CurrentStreams: 3, MaxViewers: 3000, CurrentViewers: 95, MaxBandwidthMbps: 3000, CurrentBandwidthMbps: 280},
 		},
 		PeerConnections: []*model.NetworkPeerConnection{
 			{SourceCluster: "central-primary", TargetCluster: "us-east-edge", Connected: true},
 			{SourceCluster: "central-primary", TargetCluster: "apac-edge", Connected: true},
 		},
+		Nodes: []*model.NetworkNode{
+			{NodeID: "central-gw-1", Name: "Gateway 1", NodeType: "gateway", Latitude: 41.8781, Longitude: -87.6298, Status: "active", ClusterID: "central-primary"},
+			{NodeID: "central-edge-1", Name: "Edge 1", NodeType: "edge", Latitude: 41.8900, Longitude: -87.6400, Status: "active", ClusterID: "central-primary"},
+			{NodeID: "central-edge-2", Name: "Edge 2", NodeType: "edge", Latitude: 41.8650, Longitude: -87.6200, Status: "active", ClusterID: "central-primary"},
+			{NodeID: "central-api-1", Name: "API 1", NodeType: "api", Latitude: 41.8781, Longitude: -87.6100, Status: "active", ClusterID: "central-primary"},
+			{NodeID: "useast-edge-1", Name: "Edge 1", NodeType: "edge", Latitude: 40.7128, Longitude: -74.0060, Status: "active", ClusterID: "us-east-edge"},
+			{NodeID: "useast-edge-2", Name: "Edge 2", NodeType: "edge", Latitude: 40.7200, Longitude: -73.9900, Status: "active", ClusterID: "us-east-edge"},
+			{NodeID: "useast-gw-1", Name: "Gateway 1", NodeType: "gateway", Latitude: 40.7050, Longitude: -74.0100, Status: "active", ClusterID: "us-east-edge"},
+			{NodeID: "apac-edge-1", Name: "Edge 1", NodeType: "edge", Latitude: 35.6762, Longitude: 139.6503, Status: "active", ClusterID: "apac-edge"},
+			{NodeID: "apac-edge-2", Name: "Edge 2", NodeType: "edge", Latitude: 35.6900, Longitude: 139.6700, Status: "active", ClusterID: "apac-edge"},
+		},
+		ServiceInstances: []*model.NetworkServiceInstance{
+			{InstanceID: "foghorn-central-01", ServiceID: "foghorn", ClusterID: "central-primary", NodeID: stringPtr("central-gw-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "periscope-central-01", ServiceID: "periscope_ingest", ClusterID: "central-primary", NodeID: stringPtr("central-api-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "helmsman-central-01", ServiceID: "helmsman", ClusterID: "central-primary", NodeID: stringPtr("central-edge-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "helmsman-central-02", ServiceID: "helmsman", ClusterID: "central-primary", NodeID: stringPtr("central-edge-2"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "foghorn-useast-01", ServiceID: "foghorn", ClusterID: "us-east-edge", NodeID: stringPtr("useast-gw-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "helmsman-useast-01", ServiceID: "helmsman", ClusterID: "us-east-edge", NodeID: stringPtr("useast-edge-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "helmsman-useast-02", ServiceID: "helmsman", ClusterID: "us-east-edge", NodeID: stringPtr("useast-edge-2"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "foghorn-apac-01", ServiceID: "foghorn", ClusterID: "apac-edge", NodeID: stringPtr("apac-edge-1"), Status: "running", HealthStatus: "healthy"},
+			{InstanceID: "helmsman-apac-01", ServiceID: "helmsman", ClusterID: "apac-edge", NodeID: stringPtr("apac-edge-2"), Status: "running", HealthStatus: "healthy"},
+		},
 		TotalNodes:   9,
 		HealthyNodes: 9,
 		UpdatedAt:    time.Now(),
 	}
+}
+
+// GenerateStreamingConfig returns demo cluster-aware streaming domains.
+func GenerateStreamingConfig() *model.StreamingConfig {
+	srtPort := 8889
+	rtmpPort := 1935
+	return &model.StreamingConfig{
+		PreferredClusterLabel: stringPtr("Central Primary"),
+		IngestDomain:          stringPtr("edge-ingest.central.demo.frameworks.live"),
+		EdgeDomain:            stringPtr("edge-egress.central.demo.frameworks.live"),
+		PlayDomain:            stringPtr("foghorn.central.demo.frameworks.live"),
+		OfficialClusterLabel:  stringPtr("US East Edge"),
+		OfficialIngestDomain:  stringPtr("edge-ingest.us-east.demo.frameworks.live"),
+		OfficialEdgeDomain:    stringPtr("edge-egress.us-east.demo.frameworks.live"),
+		OfficialPlayDomain:    stringPtr("foghorn.us-east.demo.frameworks.live"),
+		SrtPort:               &srtPort,
+		RtmpPort:              &rtmpPort,
+	}
+}
+
+// GeneratePushTargets creates demo push targets for a stream
+func GeneratePushTargets(streamID string) []*pb.PushTarget {
+	now := time.Now()
+
+	targets := []*pb.PushTarget{
+		{
+			Id:        "00000000-0000-0000-0000-00000000a001",
+			StreamId:  streamID,
+			Platform:  "twitch",
+			Name:      "My Twitch Channel",
+			TargetUri: "rtmp://live.twitch.tv/app/live_****xxxx",
+			IsEnabled: true,
+			Status:    "idle",
+			CreatedAt: timestamppb.New(now.Add(-48 * time.Hour)),
+			UpdatedAt: timestamppb.New(now.Add(-48 * time.Hour)),
+		},
+		{
+			Id:        "00000000-0000-0000-0000-00000000a002",
+			StreamId:  streamID,
+			Platform:  "youtube",
+			Name:      "YouTube Live",
+			TargetUri: "rtmp://a.rtmp.youtube.com/live2/****-****-****-****",
+			IsEnabled: true,
+			Status:    "idle",
+			CreatedAt: timestamppb.New(now.Add(-24 * time.Hour)),
+			UpdatedAt: timestamppb.New(now.Add(-24 * time.Hour)),
+		},
+		{
+			Id:        "00000000-0000-0000-0000-00000000a003",
+			StreamId:  streamID,
+			Platform:  "kick",
+			Name:      "Kick Stream",
+			TargetUri: "rtmps://fa723fc1b171.global-contribute.live-video.net/app/****xxxx",
+			IsEnabled: false,
+			Status:    "idle",
+			CreatedAt: timestamppb.New(now.Add(-12 * time.Hour)),
+			UpdatedAt: timestamppb.New(now.Add(-12 * time.Hour)),
+		},
+	}
+
+	// For the live demo stream, show active push status
+	if streamID == "00000000-0000-0000-0000-000000000001" {
+		targets[0].Status = "pushing"
+		lastPushed := now.Add(-30 * time.Minute)
+		targets[0].LastPushedAt = timestamppb.New(lastPushed)
+		targets[1].Status = "pushing"
+		targets[1].LastPushedAt = timestamppb.New(lastPushed)
+	}
+
+	return targets
 }
 
 func int32Ptr(v int32) *int32                                  { return &v }

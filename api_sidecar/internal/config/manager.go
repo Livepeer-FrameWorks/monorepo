@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -142,8 +143,8 @@ func (m *Manager) reconcile() {
 	// Location (from seed)
 	if seed.GetLatitude() != 0 || seed.GetLongitude() != 0 || seed.GetLocationName() != "" {
 		desiredConfig["location"] = map[string]interface{}{
-			"lat":  seed.GetLatitude(),
-			"lon":  seed.GetLongitude(),
+			"lat":  math.Round(seed.GetLatitude()*1e4) / 1e4,
+			"lon":  math.Round(seed.GetLongitude()*1e4) / 1e4,
 			"name": seed.GetLocationName(),
 		}
 	}
@@ -152,6 +153,9 @@ func (m *Manager) reconcile() {
 	if prom := os.Getenv("MIST_PASSWORD"); prom != "" {
 		desiredConfig["prometheus"] = prom
 	}
+
+	// Trusted proxies: localhost (IPv4 + IPv6) + "nginx" Docker service name
+	desiredConfig["trustedproxy"] = []string{"127.0.0.1", "::1", "localhost", "nginx"}
 
 	// Triggers (pointed at Helmsman webhooks)
 	webhookBase := os.Getenv("HELMSMAN_WEBHOOK_URL")
@@ -407,6 +411,20 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 	if _, ok := existingProtos["WSRaw"]; !ok {
 		entry := map[string]interface{}{"connector": "WSRaw"}
 		need = append(need, entry)
+	}
+
+	// Remove unwanted protocols (TSRIST is push-system-only, generates warnings)
+	unwanted := []string{"TSRIST"}
+	var toDelete []map[string]interface{}
+	for _, name := range unwanted {
+		if _, ok := existingProtos[name]; ok {
+			toDelete = append(toDelete, map[string]interface{}{"connector": name})
+		}
+	}
+	if len(toDelete) > 0 {
+		if err := m.mistClient.DeleteProtocols(toDelete); err != nil {
+			m.logger.WithError(err).Warn("Failed to remove unwanted protocols")
+		}
 	}
 
 	// Add missing protocols

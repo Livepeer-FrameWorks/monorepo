@@ -15,6 +15,7 @@ import (
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
+	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
@@ -140,6 +141,11 @@ func main() {
 			logger.WithError(err).Fatal("Failed to listen on gRPC port")
 		}
 
+		geoipReader := geoip.GetSharedReader()
+		if geoipReader != nil {
+			logger.WithField("provider", geoipReader.GetProvider()).Info("GeoIP reader loaded")
+		}
+
 		grpcServer := qmgrpc.NewGRPCServer(qmgrpc.GRPCServerConfig{
 			DB:              db,
 			Logger:          logger,
@@ -148,6 +154,7 @@ func main() {
 			NavigatorClient: navigatorClient,
 			DecklogClient:   decklogClient,
 			PurserClient:    purserClient,
+			GeoIPReader:     geoipReader,
 			Metrics:         serverMetrics,
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
@@ -195,6 +202,9 @@ func main() {
 				}
 				return nil
 			}(),
+		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			req.NodeId = &nodeID
 		}
 		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("quartermaster")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (quartermaster) failed")

@@ -22,14 +22,14 @@ func TestBootstrapEdgeNode_IdempotentWhenExistingClusterMatches(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
 		FROM quartermaster.bootstrap_tokens
-		WHERE token = $1 AND kind = 'edge_node'
+		WHERE token_hash = $1 AND kind = 'edge_node'
 		  AND (
 		    (usage_limit IS NULL AND used_at IS NULL) OR
 		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
 		  )
 		FOR UPDATE
 	`)).
-		WithArgs("tok-idempotent").
+		WithArgs(hashBootstrapToken("tok-idempotent")).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
 			AddRow("token-id", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil))
 
@@ -65,14 +65,14 @@ func TestBootstrapEdgeNode_RejectsWhenExistingNodeInOtherCluster(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
 		FROM quartermaster.bootstrap_tokens
-		WHERE token = $1 AND kind = 'edge_node'
+		WHERE token_hash = $1 AND kind = 'edge_node'
 		  AND (
 		    (usage_limit IS NULL AND used_at IS NULL) OR
 		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
 		  )
 		FOR UPDATE
 	`)).
-		WithArgs("tok-conflict").
+		WithArgs(hashBootstrapToken("tok-conflict")).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
 			AddRow("token-id", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil))
 
@@ -105,14 +105,14 @@ func TestBootstrapEdgeNode_UsesFallbackActiveCluster(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
 		FROM quartermaster.bootstrap_tokens
-		WHERE token = $1 AND kind = 'edge_node'
+		WHERE token_hash = $1 AND kind = 'edge_node'
 		  AND (
 		    (usage_limit IS NULL AND used_at IS NULL) OR
 		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
 		  )
 		FOR UPDATE
 	`)).
-		WithArgs("tok-fallback").
+		WithArgs(hashBootstrapToken("tok-fallback")).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
 			AddRow("token-id", "tenant-1", "", nil, int32(0), expiresAt, nil))
 
@@ -126,10 +126,10 @@ func TestBootstrapEdgeNode_UsesFallbackActiveCluster(t *testing.T) {
 		WithArgs("edge-fallback").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(regexp.QuoteMeta(`
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, tags, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'edge', $5::inet, '{}', '{}', NOW(), NOW())
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'edge', $5::inet, $6, $7, '{}', '{}', NOW(), NOW())
 	`)).
-		WithArgs(sqlmock.AnyArg(), "edge-fallback", "cluster-fallback", "edge-fallback.example.com", nil).
+		WithArgs(sqlmock.AnyArg(), "edge-fallback", "cluster-fallback", "edge-fallback.example.com", nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE quartermaster.bootstrap_tokens

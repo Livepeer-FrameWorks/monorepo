@@ -182,9 +182,8 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Start server with graceful shutdown — local-only (no auth on mode endpoints)
+	// Start server with graceful shutdown
 	serverConfig := server.DefaultConfig("helmsman", "18007")
-	serverConfig.BindAddr = "127.0.0.1"
 	if err := server.Start(serverConfig, r, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}

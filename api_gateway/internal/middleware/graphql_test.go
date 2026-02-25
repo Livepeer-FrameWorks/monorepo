@@ -59,7 +59,7 @@ func TestGraphQLContextMiddleware_GinToGoContextBridge(t *testing.T) {
 				c.Next()
 			})
 			// GraphQL middleware bridges to Go context
-			r.Use(GraphQLContextMiddleware())
+			r.Use(GraphQLContextMiddleware("test-service-token"))
 			// Handler verifies Go context has the values
 			r.GET("/test", func(c *gin.Context) {
 				ctx := c.Request.Context()
@@ -130,7 +130,7 @@ func TestGraphQLContextMiddlewareMissingTenantSkipsUserContext(t *testing.T) {
 		c.Set(string(ctxkeys.KeyUserID), "user-123")
 		c.Next()
 	})
-	r.Use(GraphQLContextMiddleware())
+	r.Use(GraphQLContextMiddleware("test-service-token"))
 	r.GET("/test", func(c *gin.Context) {
 		ctx := c.Request.Context()
 		if ctx.Value(ctxkeys.KeyUser) != nil {
@@ -145,5 +145,66 @@ func TestGraphQLContextMiddlewareMissingTenantSkipsUserContext(t *testing.T) {
 
 	if userContextPresent {
 		t.Fatal("expected user context to be absent when tenant ID is missing")
+	}
+}
+
+func TestGraphQLContextMiddleware_ServiceTokenValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		authHeader     string
+		wantHasService bool
+	}{
+		{
+			name:           "valid service token is accepted",
+			authHeader:     "Service test-service-token",
+			wantHasService: true,
+		},
+		{
+			name:           "invalid service token is rejected",
+			authHeader:     "Service wrong-token",
+			wantHasService: false,
+		},
+		{
+			name:           "empty service token value is rejected",
+			authHeader:     "Service ",
+			wantHasService: false,
+		},
+		{
+			name:           "bearer token does not set service token",
+			authHeader:     "Bearer some-jwt",
+			wantHasService: false,
+		},
+		{
+			name:           "no auth header",
+			authHeader:     "",
+			wantHasService: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotHasService bool
+
+			r := gin.New()
+			r.Use(GraphQLContextMiddleware("test-service-token"))
+			r.GET("/test", func(c *gin.Context) {
+				ctx := c.Request.Context()
+				gotHasService = HasServiceToken(ctx)
+				c.String(200, "ok")
+			})
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequestWithContext(context.Background(), "GET", "/test", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+			r.ServeHTTP(w, req)
+
+			if gotHasService != tt.wantHasService {
+				t.Errorf("HasServiceToken() = %v, want %v", gotHasService, tt.wantHasService)
+			}
+		})
 	}
 }

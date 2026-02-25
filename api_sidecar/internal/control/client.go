@@ -225,7 +225,17 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 			continue
 		}
 
+		// Register response channel BEFORE send — same pattern as RequestFreezePermission.
+		// The buffered channel catches Foghorn's reply even if it arrives before the select.
+		responseCh := make(chan *pb.MistTriggerResponse, 1)
+		pendingMutex <- struct{}{}
+		pendingMistTriggers[mistTrigger.RequestId] = responseCh
+		<-pendingMutex
+
 		if err := sendMistTriggerOnce(triggerType, mistTrigger); err != nil {
+			pendingMutex <- struct{}{}
+			delete(pendingMistTriggers, mistTrigger.RequestId)
+			<-pendingMutex
 			BlockingTriggerRetries.WithLabelValues(triggerType, "send_error").Inc()
 			lastErr = err
 			continue
@@ -233,9 +243,12 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			pendingMutex <- struct{}{}
+			delete(pendingMistTriggers, mistTrigger.RequestId)
+			<-pendingMutex
 			break
 		}
-		result, err := waitForMistTriggerResponseWithDisconnect(mistTrigger.RequestId, remaining)
+		result, err := awaitMistTriggerResponse(responseCh, mistTrigger.RequestId, remaining)
 		if err == nil {
 			return result, nil
 		}
@@ -283,16 +296,10 @@ func sendMistTriggerOnce(triggerType string, mistTrigger *pb.MistTrigger) error 
 	return nil
 }
 
-// waitForMistTriggerResponse waits for a MistTriggerResponse with matching requestID
-func waitForMistTriggerResponseWithDisconnect(requestID string, timeout time.Duration) (*MistTriggerResult, error) {
-	// Create response channel
-	responseChan := make(chan *pb.MistTriggerResponse, 1)
-
-	// Acquire mutex
-	pendingMutex <- struct{}{}
-	pendingMistTriggers[requestID] = responseChan
-	<-pendingMutex // Release mutex
-
+// awaitMistTriggerResponse waits on a pre-registered response channel.
+// The channel must be created and inserted into pendingMistTriggers BEFORE
+// the trigger is sent — otherwise a fast Foghorn reply races the registration.
+func awaitMistTriggerResponse(responseCh chan *pb.MistTriggerResponse, requestID string, timeout time.Duration) (*MistTriggerResult, error) {
 	disconnectNotifyMu.Lock()
 	disconnectCh := disconnectNotify
 	disconnectNotifyMu.Unlock()
@@ -307,7 +314,7 @@ func waitForMistTriggerResponseWithDisconnect(requestID string, timeout time.Dur
 
 	// Wait for response, disconnect, or timeout
 	select {
-	case response := <-responseChan:
+	case response := <-responseCh:
 		pendingMutex <- struct{}{}
 		delete(pendingMistTriggers, requestID)
 		<-pendingMutex
@@ -571,7 +578,6 @@ func runClient(addr string, logger logging.Logger) error {
 			case *pb.ControlMessage_VodDelete:
 				go handleVodDelete(logger, x.VodDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_MistTriggerResponse:
-				// Handle response from Foghorn for blocking triggers
 				go handleMistTriggerResponse(x.MistTriggerResponse)
 			case *pb.ControlMessage_Error:
 				if errMsg := x.Error; errMsg != nil {
@@ -624,6 +630,10 @@ func runClient(addr string, logger logging.Logger) error {
 			case *pb.ControlMessage_StopSessionsRequest:
 				// Handle stop sessions request from Foghorn (billing suspension)
 				go handleStopSessions(logger, x.StopSessionsRequest)
+			case *pb.ControlMessage_ActivatePushTargets:
+				go handleActivatePushTargets(logger, x.ActivatePushTargets)
+			case *pb.ControlMessage_DeactivatePushTargets:
+				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets)
 			}
 		}
 	}()
@@ -1491,6 +1501,112 @@ func handleStopSessions(logger logging.Logger, req *pb.StopSessionsRequest) {
 		"tenant_id":    req.TenantId,
 		"stream_names": req.StreamNames,
 	}).Info("Successfully stopped sessions for suspended tenant")
+}
+
+// activePushes tracks MistServer push IDs for multistream targets.
+// Key: stream_name, Value: map of target_id -> mist push ID.
+var (
+	activePushesMu sync.Mutex
+	activePushes   = map[string]map[string]int{}
+)
+
+func handleActivatePushTargets(logger logging.Logger, req *pb.ActivatePushTargets) {
+	if req == nil || len(req.Targets) == 0 {
+		return
+	}
+
+	cfg := currentConfig
+	if cfg == nil {
+		logger.Warn("config not initialized; cannot activate push targets")
+		return
+	}
+
+	mistClient := mist.NewClient(logger)
+	if cfg.MistServerURL != "" {
+		mistClient.BaseURL = cfg.MistServerURL
+	}
+
+	logger.WithFields(logging.Fields{
+		"stream_name":  req.StreamName,
+		"target_count": len(req.Targets),
+	}).Info("Activating multistream push targets")
+
+	activePushesMu.Lock()
+	if activePushes[req.StreamName] == nil {
+		activePushes[req.StreamName] = map[string]int{}
+	}
+	activePushesMu.Unlock()
+
+	for _, target := range req.Targets {
+		err := mistClient.PushStart(req.StreamName, target.TargetUri)
+		if err != nil {
+			logger.WithFields(logging.Fields{
+				"stream_name": req.StreamName,
+				"target_id":   target.TargetId,
+				"target_name": target.Name,
+				"error":       err,
+			}).Error("Failed to start push to target")
+			continue
+		}
+
+		logger.WithFields(logging.Fields{
+			"stream_name": req.StreamName,
+			"target_id":   target.TargetId,
+			"target_name": target.Name,
+		}).Info("Started push to multistream target")
+	}
+}
+
+func handleDeactivatePushTargets(logger logging.Logger, req *pb.DeactivatePushTargets) {
+	if req == nil || req.StreamName == "" {
+		return
+	}
+
+	cfg := currentConfig
+	if cfg == nil {
+		return
+	}
+
+	mistClient := mist.NewClient(logger)
+	if cfg.MistServerURL != "" {
+		mistClient.BaseURL = cfg.MistServerURL
+	}
+
+	// List active pushes and stop any matching this stream
+	pushes, err := mistClient.PushList()
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"stream_name": req.StreamName,
+			"error":       err,
+		}).Warn("Failed to list pushes for deactivation")
+		return
+	}
+
+	stopped := 0
+	for _, push := range pushes {
+		if push.StreamName == req.StreamName {
+			if stopErr := mistClient.PushStop(push.ID); stopErr != nil {
+				logger.WithFields(logging.Fields{
+					"stream_name": req.StreamName,
+					"push_id":     push.ID,
+					"error":       stopErr,
+				}).Warn("Failed to stop push")
+			} else {
+				stopped++
+			}
+		}
+	}
+
+	activePushesMu.Lock()
+	delete(activePushes, req.StreamName)
+	activePushesMu.Unlock()
+
+	if stopped > 0 {
+		logger.WithFields(logging.Fields{
+			"stream_name":   req.StreamName,
+			"stopped_count": stopped,
+		}).Info("Deactivated multistream push targets")
+	}
 }
 
 // parseRequestedMode converts a string mode to protobuf enum for Register message.

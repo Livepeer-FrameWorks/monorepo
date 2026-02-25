@@ -101,7 +101,12 @@ func TestSendMistTriggerOnceSendError(t *testing.T) {
 }
 
 func TestWaitForMistTriggerResponseTimeout(t *testing.T) {
-	result, err := waitForMistTriggerResponseWithDisconnect("timeout-test", 20*time.Millisecond)
+	ch := make(chan *pb.MistTriggerResponse, 1)
+	pendingMutex <- struct{}{}
+	pendingMistTriggers["timeout-test"] = ch
+	<-pendingMutex
+
+	result, err := awaitMistTriggerResponse(ch, "timeout-test", 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -120,6 +125,11 @@ func TestWaitForMistTriggerResponseTimeout(t *testing.T) {
 func TestWaitForMistTriggerResponseDisconnect(t *testing.T) {
 	resetControlState(t)
 
+	ch := make(chan *pb.MistTriggerResponse, 1)
+	pendingMutex <- struct{}{}
+	pendingMistTriggers["disconnect-test"] = ch
+	<-pendingMutex
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -127,7 +137,7 @@ func TestWaitForMistTriggerResponseDisconnect(t *testing.T) {
 		notifyDisconnect()
 	}()
 
-	result, err := waitForMistTriggerResponseWithDisconnect("disconnect-test", 100*time.Millisecond)
+	result, err := awaitMistTriggerResponse(ch, "disconnect-test", 100*time.Millisecond)
 	if err == nil || !errors.Is(err, errStreamDisconnected) {
 		t.Fatalf("expected disconnect error, got %v", err)
 	}

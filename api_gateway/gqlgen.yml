@@ -477,6 +477,21 @@ models:
   Stream:
     model:
       - frameworks/pkg/proto.Stream
+    fields:
+      pushTargets:
+        resolver: true
+  PushTarget:
+    model:
+      - frameworks/pkg/proto.PushTarget
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      createdAt:
+        resolver: true
+      lastPushedAt:
+        resolver: true
   StreamMetrics:
     model:
       - frameworks/pkg/proto.StreamStatusResponse

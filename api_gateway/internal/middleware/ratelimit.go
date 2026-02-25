@@ -421,6 +421,10 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 		limit, burst = getLimits(tenantIDStr)
 	}
 
+	if isPublic {
+		return AccessDecision{Allowed: true, Headers: headers}
+	}
+
 	allowed, remaining, resetSeconds := rl.Allow(tenantIDStr, limit, burst)
 	headers["X-RateLimit-Limit"] = strconv.Itoa(limit)
 	headers["X-RateLimit-Remaining"] = strconv.Itoa(remaining)

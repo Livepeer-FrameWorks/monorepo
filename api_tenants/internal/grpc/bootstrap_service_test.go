@@ -21,12 +21,12 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 	}
 	defer db.Close()
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
 	expiresAt := time.Now().Add(30 * time.Minute)
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT kind, COALESCE\\(cluster_id, ''\\), expires_at").
-		WithArgs("token-1").
+		WithArgs(hashBootstrapToken("token-1")).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "cluster_id", "expires_at"}).AddRow("service", "cluster-1", expiresAt))
 	// ensureServiceExists mini-transaction
 	mock.ExpectBegin()
@@ -35,9 +35,13 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
 	mock.ExpectCommit()
-	// back to main flow
+	// IP reverse lookup (no match)
+	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
+		WithArgs("cluster-1", "10.0.0.1").
+		WillReturnError(sql.ErrNoRows)
+	// back to main flow (idempotent check includes advertise_host)
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
-		WithArgs("bridge", "cluster-1", "http", int32(18000)).
+		WithArgs("bridge", "cluster-1", "http", int32(18000), "10.0.0.1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
 	mock.ExpectExec("UPDATE quartermaster.service_instances").
 		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, "uuid-1").
@@ -46,7 +50,7 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 		WithArgs("cluster-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("UPDATE quartermaster.bootstrap_tokens").
-		WithArgs("token-1").
+		WithArgs(hashBootstrapToken("token-1")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
@@ -80,12 +84,12 @@ func TestBootstrapServiceRollbackDoesNotConsumeTokenOnValidationFailure(t *testi
 	}
 	defer db.Close()
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
 	expiresAt := time.Now().Add(30 * time.Minute)
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT kind, COALESCE\\(cluster_id, ''\\), expires_at").
-		WithArgs("token-1").
+		WithArgs(hashBootstrapToken("token-1")).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "cluster_id", "expires_at"}).AddRow("service", "cluster-a", expiresAt))
 	mock.ExpectRollback()
 
@@ -111,12 +115,12 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 	}
 	defer db.Close()
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
 	expiresAt := time.Now().Add(30 * time.Minute)
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT kind, COALESCE\\(cluster_id, ''\\), expires_at").
-		WithArgs("token-1").
+		WithArgs(hashBootstrapToken("token-1")).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "cluster_id", "expires_at"}).AddRow("service", "cluster-1", expiresAt))
 	// ensureServiceExists mini-transaction
 	mock.ExpectBegin()
@@ -125,9 +129,13 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
 	mock.ExpectCommit()
-	// back to main flow
+	// IP reverse lookup (no match)
+	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
+		WithArgs("cluster-1", "10.0.0.1").
+		WillReturnError(sql.ErrNoRows)
+	// back to main flow (idempotent check includes advertise_host)
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
-		WithArgs("bridge", "cluster-1", "http", int32(18000)).
+		WithArgs("bridge", "cluster-1", "http", int32(18000), "10.0.0.1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
 	mock.ExpectExec("UPDATE quartermaster.service_instances").
 		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, "uuid-1").
@@ -136,7 +144,7 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 		WithArgs("cluster-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("UPDATE quartermaster.bootstrap_tokens").
-		WithArgs("token-1").
+		WithArgs(hashBootstrapToken("token-1")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
@@ -163,7 +171,7 @@ func TestBootstrapServiceRejectsMissingNodeReference(t *testing.T) {
 	}
 	defer db.Close()
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-1").
@@ -194,7 +202,7 @@ func TestBootstrapServiceRejectsNodeFromDifferentCluster(t *testing.T) {
 	}
 	defer db.Close()
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-a").
@@ -225,7 +233,7 @@ func TestBootstrapServiceFormatsIPv6AdvertiseAddr(t *testing.T) {
 	}
 	defer db.Close()
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-1").
@@ -237,9 +245,13 @@ func TestBootstrapServiceFormatsIPv6AdvertiseAddr(t *testing.T) {
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
 	mock.ExpectCommit()
-	// back to main flow
+	// IP reverse lookup (no match)
+	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
+		WithArgs("cluster-1", "2001:db8::10").
+		WillReturnError(sql.ErrNoRows)
+	// back to main flow (idempotent check includes advertise_host)
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
-		WithArgs("bridge", "cluster-1", "http", int32(443)).
+		WithArgs("bridge", "cluster-1", "http", int32(443), "2001:db8::10").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("INSERT INTO quartermaster.service_instances").
 		WithArgs(sqlmock.AnyArg(), "cluster-1", nil, "bridge", "http", "2001:db8::10", (*string)(nil), "", int32(443)).
@@ -275,7 +287,7 @@ func TestBootstrapServiceReRegistrationClearsStoppedAt(t *testing.T) {
 	}
 	defer db.Close()
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
@@ -286,9 +298,13 @@ func TestBootstrapServiceReRegistrationClearsStoppedAt(t *testing.T) {
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
 	mock.ExpectCommit()
-	// back to main flow
+	// IP reverse lookup (no match)
+	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
+		WithArgs("cluster-1", "10.0.0.1").
+		WillReturnError(sql.ErrNoRows)
+	// back to main flow (idempotent check now includes advertise_host)
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
-		WithArgs("bridge", "cluster-1", "http", int32(18000)).
+		WithArgs("bridge", "cluster-1", "http", int32(18000), "10.0.0.1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
 	mock.ExpectExec("(?s)UPDATE quartermaster.service_instances.*stopped_at = NULL").
 		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, "uuid-1").
@@ -316,6 +332,58 @@ func TestBootstrapServiceReRegistrationClearsStoppedAt(t *testing.T) {
 	}
 }
 
+func TestBootstrapServiceSkipsIPLookupForHostname(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	// ensureServiceExists mini-transaction
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("quartermaster").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
+		WithArgs("quartermaster").
+		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("quartermaster"))
+	mock.ExpectCommit()
+	// NO IP reverse lookup — "quartermaster" is a hostname, not an IP
+	// back to main flow (idempotent check includes advertise_host)
+	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
+		WithArgs("quartermaster", "cluster-1", "http", int32(18002), "quartermaster").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO quartermaster.service_instances").
+		WithArgs(sqlmock.AnyArg(), "cluster-1", nil, "quartermaster", "http", "quartermaster", "/health", "v1.0.0", int32(18002)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
+		WithArgs("cluster-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(`UPDATE quartermaster.service_instances\s+SET status = 'stopped', stopped_at = NOW\(\)`).
+		WithArgs("quartermaster", "cluster-1", sqlmock.AnyArg(), "quartermaster", "http", int32(18002)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:           "quartermaster",
+		Port:           18002,
+		AdvertiseHost:  strPtr("quartermaster"),
+		Protocol:       "http",
+		HealthEndpoint: strPtr("/health"),
+		Version:        "v1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("expected success with hostname advertise_host, got error: %v", err)
+	}
+	if resp.GetAdvertiseAddr() != "quartermaster:18002" {
+		t.Fatalf("expected hostname:port advertise addr, got %q", resp.GetAdvertiseAddr())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
 func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -323,7 +391,7 @@ func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
 	}
 	defer db.Close()
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil)
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
@@ -334,9 +402,13 @@ func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
 		WithArgs("foghorn").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("foghorn"))
 	mock.ExpectCommit()
-	// back to main flow
+	// IP reverse lookup (no match)
+	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
+		WithArgs("cluster-1", "10.0.0.2").
+		WillReturnError(sql.ErrNoRows)
+	// back to main flow (idempotent check now includes advertise_host)
 	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
-		WithArgs("foghorn", "cluster-1", "http", int32(9000)).
+		WithArgs("foghorn", "cluster-1", "http", int32(9000), "10.0.0.2").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-2", "inst-foghorn-1234"))
 	mock.ExpectExec("UPDATE quartermaster.service_instances").
 		WithArgs("10.0.0.2", sqlmock.AnyArg(), "v2.0.0", nil, "uuid-2").

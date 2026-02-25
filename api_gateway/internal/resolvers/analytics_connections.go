@@ -3566,8 +3566,20 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	// Fetch foghorn pool for peer connection derivation
 	poolStatus, _ := r.Clients.Quartermaster.GetFoghornPoolStatus(ctx)
 
-	// Fetch all nodes (for geo + counts)
+	// Fetch all nodes (for geo + counts + individual exposure)
 	nodesResp, _ := r.Clients.Quartermaster.ListNodes(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
+
+	// Fetch all service instances
+	instancesResp, _ := r.Clients.Quartermaster.ListServiceInstances(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
+
+	// Fetch live stats from Periscope (ClickHouse)
+	liveStatsResp, _ := r.Clients.Periscope.GetNetworkLiveStats(ctx)
+	liveStatsByCluster := make(map[string]*pb.NetworkClusterLiveStats)
+	if liveStatsResp != nil {
+		for _, ls := range liveStatsResp.Clusters {
+			liveStatsByCluster[ls.ClusterId] = ls
+		}
+	}
 
 	// Group nodes by cluster: count and average geo
 	type clusterGeo struct {
@@ -3577,6 +3589,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		geoCount  int
 	}
 	nodesByCluster := make(map[string]*clusterGeo)
+	var networkNodes []*model.NetworkNode
 	if nodesResp != nil {
 		for _, n := range nodesResp.Nodes {
 			cg, ok := nodesByCluster[n.ClusterId]
@@ -3585,11 +3598,42 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 				nodesByCluster[n.ClusterId] = cg
 			}
 			cg.nodeCount++
+			var lat, lon float64
 			if n.Latitude != nil && n.Longitude != nil {
-				cg.latSum += *n.Latitude
-				cg.lonSum += *n.Longitude
+				lat = *n.Latitude
+				lon = *n.Longitude
+				cg.latSum += lat
+				cg.lonSum += lon
 				cg.geoCount++
 			}
+			nodeStatus := "offline"
+			if n.LastHeartbeat != nil {
+				nodeStatus = "active"
+			}
+			networkNodes = append(networkNodes, &model.NetworkNode{
+				NodeID:    n.NodeId,
+				Name:      n.NodeName,
+				NodeType:  n.NodeType,
+				Latitude:  lat,
+				Longitude: lon,
+				Status:    nodeStatus,
+				ClusterID: n.ClusterId,
+			})
+		}
+	}
+
+	// Map service instances to public model
+	var serviceInstances []*model.NetworkServiceInstance
+	if instancesResp != nil {
+		for _, si := range instancesResp.Instances {
+			serviceInstances = append(serviceInstances, &model.NetworkServiceInstance{
+				InstanceID:   si.InstanceId,
+				ServiceID:    si.ServiceId,
+				ClusterID:    si.ClusterId,
+				NodeID:       si.NodeId,
+				Status:       si.Status,
+				HealthStatus: si.HealthStatus,
+			})
 		}
 	}
 
@@ -3624,7 +3668,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		hn := 0
 		if cg, ok := nodesByCluster[c.ClusterId]; ok {
 			nc = cg.nodeCount
-			hn = cg.nodeCount // healthy determined by presence
+			hn = cg.nodeCount
 			if cg.geoCount > 0 {
 				lat = cg.latSum / float64(cg.geoCount)
 				lon = cg.lonSum / float64(cg.geoCount)
@@ -3633,7 +3677,6 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 
 		peerCount := 0
 		if foghornClusters[c.ClusterId] {
-			// peers = other clusters that also have foghorn instances
 			for otherID := range foghornClusters {
 				if otherID != c.ClusterId {
 					peerCount++
@@ -3641,16 +3684,36 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			}
 		}
 
+		var shortDesc *string
+		if c.ShortDescription != nil && *c.ShortDescription != "" {
+			shortDesc = c.ShortDescription
+		}
+
+		var currentStreams, currentViewers, currentBwMbps int
+		if ls, ok := liveStatsByCluster[c.ClusterId]; ok {
+			currentStreams = int(ls.ActiveStreams)
+			currentViewers = int(ls.CurrentViewers)
+			currentBwMbps = int((ls.UploadBytesPerSec + ls.DownloadBytesPerSec) * 8 / 1_000_000)
+		}
+
 		clusters = append(clusters, &model.NetworkClusterStatus{
-			ClusterID:        c.ClusterId,
-			Name:             c.ClusterName,
-			Region:           c.ClusterType,
-			Latitude:         lat,
-			Longitude:        lon,
-			NodeCount:        nc,
-			HealthyNodeCount: hn,
-			PeerCount:        peerCount,
-			Status:           c.HealthStatus,
+			ClusterID:            c.ClusterId,
+			Name:                 c.ClusterName,
+			Region:               c.ClusterType,
+			Latitude:             lat,
+			Longitude:            lon,
+			NodeCount:            nc,
+			HealthyNodeCount:     hn,
+			PeerCount:            peerCount,
+			Status:               c.HealthStatus,
+			ClusterType:          c.ClusterType,
+			ShortDescription:     shortDesc,
+			MaxStreams:           int(c.MaxConcurrentStreams),
+			CurrentStreams:       currentStreams,
+			MaxViewers:           int(c.MaxConcurrentViewers),
+			CurrentViewers:       currentViewers,
+			MaxBandwidthMbps:     int(c.MaxBandwidthMbps),
+			CurrentBandwidthMbps: currentBwMbps,
 		})
 		totalNodes += nc
 		healthyNodes += hn
@@ -3673,10 +3736,12 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 
 	return &model.NetworkStatus{
-		Clusters:        clusters,
-		PeerConnections: peerConnections,
-		TotalNodes:      totalNodes,
-		HealthyNodes:    healthyNodes,
-		UpdatedAt:       time.Now(),
+		Clusters:         clusters,
+		PeerConnections:  peerConnections,
+		Nodes:            networkNodes,
+		ServiceInstances: serviceInstances,
+		TotalNodes:       totalNodes,
+		HealthyNodes:     healthyNodes,
+		UpdatedAt:        time.Now(),
 	}, nil
 }

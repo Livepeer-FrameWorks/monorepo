@@ -80,7 +80,7 @@ func main() {
 	usageHashSecret := config.GetEnv("USAGE_HASH_SECRET", "")
 	middleware.InitHasher(usageHashSecret)
 	if usageHashSecret == "" {
-		logger.Warn("USAGE_HASH_SECRET not set; using legacy FNV-1a hashing for usage identifiers")
+		logger.Warn("USAGE_HASH_SECRET not set; using ephemeral random secret (hashes will not survive restarts)")
 	}
 
 	// Initialize usage tracker for API request analytics
@@ -95,6 +95,25 @@ func main() {
 	if len(invalidProxies) > 0 {
 		logger.WithField("invalid_entries", strings.Join(invalidProxies, ", ")).
 			Warn("Ignoring invalid trusted proxy entries")
+	}
+
+	// Parse CORS allowed origins for WebSocket CheckOrigin
+	wsDevMode := config.GetEnv("GIN_MODE", "debug") != "release"
+	wsAllowedOrigins := make(map[string]bool)
+	var wsWildcardSuffixes []string
+	if originsStr := config.GetEnv("ALLOWED_ORIGINS", ""); originsStr != "" {
+		for _, o := range strings.Split(originsStr, ",") {
+			trimmed := strings.TrimSpace(o)
+			if trimmed == "" {
+				continue
+			}
+			trimmed = strings.TrimRight(trimmed, "/")
+			if strings.HasPrefix(trimmed, "*.") {
+				wsWildcardSuffixes = append(wsWildcardSuffixes, trimmed[1:])
+			} else {
+				wsAllowedOrigins[trimmed] = true
+			}
+		}
 	}
 
 	// Setup monitoring
@@ -233,8 +252,21 @@ func main() {
 		KeepAlivePingInterval: 10 * time.Second,
 		Upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
-				// Allow all origins in development - in production, restrict to specific domains
-				return true
+				if wsDevMode {
+					return true
+				}
+				origin := r.Header.Get("Origin")
+				if wsAllowedOrigins[origin] {
+					return true
+				}
+				for _, suffix := range wsWildcardSuffixes {
+					if idx := strings.Index(origin, "://"); idx >= 0 {
+						if strings.HasSuffix(origin[idx+3:], suffix) {
+							return true
+						}
+					}
+				}
+				return false
 			},
 		},
 		InitFunc: func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
@@ -484,7 +516,7 @@ func main() {
 	// so rate limiting must not run before that auth has a chance to set tenant context.
 	graphqlHTTP := graphqlGroup.Group("/")
 	graphqlHTTP.Use(middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore))
-	graphqlHTTP.Use(middleware.GraphQLContextMiddleware())
+	graphqlHTTP.Use(middleware.GraphQLContextMiddleware(serviceToken))
 	graphqlHTTP.Use(middleware.GraphQLAttachLoaders(serviceClients))
 	graphqlHTTP.Use(middleware.UsageTrackerMiddleware(usageTracker))
 

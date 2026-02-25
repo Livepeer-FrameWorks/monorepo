@@ -733,6 +733,15 @@ type CreatePrivateClusterInput struct {
 	ShortDescription *string `json:"shortDescription,omitempty"`
 }
 
+type CreatePushTargetInput struct {
+	// Platform identifier (twitch, youtube, facebook, kick, x, custom).
+	Platform *string `json:"platform,omitempty"`
+	// User-friendly label for this target.
+	Name string `json:"name"`
+	// Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx).
+	TargetURI string `json:"targetUri"`
+}
+
 // Input for creating a new live stream.
 type CreateStreamInput struct {
 	// Human-readable name for the stream.
@@ -1003,15 +1012,33 @@ type MySubscriptionsConnection struct {
 }
 
 type NetworkClusterStatus struct {
-	ClusterID        string  `json:"clusterId"`
-	Name             string  `json:"name"`
-	Region           string  `json:"region"`
-	Latitude         float64 `json:"latitude"`
-	Longitude        float64 `json:"longitude"`
-	NodeCount        int     `json:"nodeCount"`
-	HealthyNodeCount int     `json:"healthyNodeCount"`
-	PeerCount        int     `json:"peerCount"`
-	Status           string  `json:"status"`
+	ClusterID            string  `json:"clusterId"`
+	Name                 string  `json:"name"`
+	Region               string  `json:"region"`
+	Latitude             float64 `json:"latitude"`
+	Longitude            float64 `json:"longitude"`
+	NodeCount            int     `json:"nodeCount"`
+	HealthyNodeCount     int     `json:"healthyNodeCount"`
+	PeerCount            int     `json:"peerCount"`
+	Status               string  `json:"status"`
+	ClusterType          string  `json:"clusterType"`
+	ShortDescription     *string `json:"shortDescription,omitempty"`
+	MaxStreams           int     `json:"maxStreams"`
+	CurrentStreams       int     `json:"currentStreams"`
+	MaxViewers           int     `json:"maxViewers"`
+	CurrentViewers       int     `json:"currentViewers"`
+	MaxBandwidthMbps     int     `json:"maxBandwidthMbps"`
+	CurrentBandwidthMbps int     `json:"currentBandwidthMbps"`
+}
+
+type NetworkNode struct {
+	NodeID    string  `json:"nodeId"`
+	Name      string  `json:"name"`
+	NodeType  string  `json:"nodeType"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Status    string  `json:"status"`
+	ClusterID string  `json:"clusterId"`
 }
 
 type NetworkPeerConnection struct {
@@ -1020,12 +1047,23 @@ type NetworkPeerConnection struct {
 	Connected     bool   `json:"connected"`
 }
 
+type NetworkServiceInstance struct {
+	InstanceID   string  `json:"instanceId"`
+	ServiceID    string  `json:"serviceId"`
+	ClusterID    string  `json:"clusterId"`
+	NodeID       *string `json:"nodeId,omitempty"`
+	Status       string  `json:"status"`
+	HealthStatus string  `json:"healthStatus"`
+}
+
 type NetworkStatus struct {
-	Clusters        []*NetworkClusterStatus  `json:"clusters"`
-	PeerConnections []*NetworkPeerConnection `json:"peerConnections"`
-	TotalNodes      int                      `json:"totalNodes"`
-	HealthyNodes    int                      `json:"healthyNodes"`
-	UpdatedAt       time.Time                `json:"updatedAt"`
+	Clusters         []*NetworkClusterStatus   `json:"clusters"`
+	PeerConnections  []*NetworkPeerConnection  `json:"peerConnections"`
+	Nodes            []*NetworkNode            `json:"nodes"`
+	ServiceInstances []*NetworkServiceInstance `json:"serviceInstances"`
+	TotalNodes       int                       `json:"totalNodes"`
+	HealthyNodes     int                       `json:"healthyNodes"`
+	UpdatedAt        time.Time                 `json:"updatedAt"`
 }
 
 type NodeEdge struct {
@@ -1389,6 +1427,19 @@ type StreamValidation struct {
 	Error     *string          `json:"error,omitempty"`
 }
 
+type StreamingConfig struct {
+	PreferredClusterLabel *string `json:"preferredClusterLabel,omitempty"`
+	IngestDomain          *string `json:"ingestDomain,omitempty"`
+	EdgeDomain            *string `json:"edgeDomain,omitempty"`
+	PlayDomain            *string `json:"playDomain,omitempty"`
+	OfficialClusterLabel  *string `json:"officialClusterLabel,omitempty"`
+	OfficialIngestDomain  *string `json:"officialIngestDomain,omitempty"`
+	OfficialEdgeDomain    *string `json:"officialEdgeDomain,omitempty"`
+	OfficialPlayDomain    *string `json:"officialPlayDomain,omitempty"`
+	SrtPort               *int    `json:"srtPort,omitempty"`
+	RtmpPort              *int    `json:"rtmpPort,omitempty"`
+}
+
 type StreamsConnection struct {
 	Edges      []*StreamEdge   `json:"edges"`
 	Nodes      []*proto.Stream `json:"nodes"`
@@ -1484,6 +1535,15 @@ type UpdateClusterMarketplaceInput struct {
 	RequiresApproval *bool `json:"requiresApproval,omitempty"`
 	// Short marketplace description.
 	ShortDescription *string `json:"shortDescription,omitempty"`
+}
+
+type UpdatePushTargetInput struct {
+	// Updated label.
+	Name *string `json:"name,omitempty"`
+	// Updated target URI.
+	TargetURI *string `json:"targetUri,omitempty"`
+	// Enable or disable this target.
+	IsEnabled *bool `json:"isEnabled,omitempty"`
 }
 
 // Input for updating an existing stream.

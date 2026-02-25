@@ -40,19 +40,19 @@ func TestBootstrapEdgeNode_UsesDerivedNodeIDFromHostname(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	srv := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil)
+	srv := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 	expiresAt := time.Now().Add(1 * time.Hour)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, tenant_id::text, COALESCE\(cluster_id, ''\), usage_limit, usage_count, expires_at, expected_ip::text\s+FROM quartermaster\.bootstrap_tokens\s+WHERE token = \$1 AND kind = 'edge_node'`).
-		WithArgs("tok-1").
+	mock.ExpectQuery(`SELECT id, tenant_id::text, COALESCE\(cluster_id, ''\), usage_limit, usage_count, expires_at, expected_ip::text\s+FROM quartermaster\.bootstrap_tokens\s+WHERE token_hash = \$1 AND kind = 'edge_node'`).
+		WithArgs(hashBootstrapToken("tok-1")).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
 			AddRow("token-id", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil))
 	mock.ExpectQuery(`SELECT cluster_id FROM quartermaster\.infrastructure_nodes WHERE node_id = \$1`).
 		WithArgs("edge-abcd1234").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectExec(`INSERT INTO quartermaster\.infrastructure_nodes \(id, node_id, cluster_id, node_name, node_type, external_ip, tags, metadata, created_at, updated_at\)`).
-		WithArgs(sqlmock.AnyArg(), "edge-abcd1234", "cluster-1", "edge-abcd1234.example.com", nil).
+	mock.ExpectExec(`INSERT INTO quartermaster\.infrastructure_nodes \(id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, created_at, updated_at\)`).
+		WithArgs(sqlmock.AnyArg(), "edge-abcd1234", "cluster-1", "edge-abcd1234.example.com", nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`UPDATE quartermaster\.bootstrap_tokens\s+SET usage_count = usage_count \+ 1, used_at = NOW\(\)\s+WHERE id = \$1`).
 		WithArgs("token-id").

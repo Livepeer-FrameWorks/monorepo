@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,30 +34,7 @@ func PublicGraphQLAllowlist() gin.HandlerFunc {
 			return
 		}
 
-		q := strings.ToLower(req.Query)
-		if strings.Contains(q, "mutation") {
-			c.JSON(http.StatusForbidden, gin.H{"error": "mutations not allowed"})
-			c.Abort()
-			return
-		}
-
-		op := strings.ToLower(req.OperationName)
-		allowed := false
-		for _, a := range allowlistedOperations {
-			if op == a {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			for _, a := range allowlistedOperations {
-				if strings.Contains(q, a) {
-					allowed = true
-					break
-				}
-			}
-		}
-		if allowed {
+		if isAllowlistedOperation(req.Query, req.OperationName) {
 			c.Next()
 			return
 		}

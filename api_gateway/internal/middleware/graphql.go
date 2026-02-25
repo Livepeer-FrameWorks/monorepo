@@ -26,20 +26,22 @@ type UserContext struct {
 
 // GraphQLContextMiddleware transfers user info from Gin context to request context
 // for GraphQL resolvers. Auth is already handled by PublicOrJWTAuth middleware.
-func GraphQLContextMiddleware() gin.HandlerFunc {
+func GraphQLContextMiddleware(expectedServiceToken string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 
 		// Inject Gin context for resolvers that need direct access (e.g. for ClientIP)
 		ctx = context.WithValue(ctx, ctxkeys.KeyGinContext, c)
 
-		// Check for service token in Authorization header
+		// Validate service token from Authorization header
 		if ctxkeys.GetServiceToken(ctx) == "" {
 			authHeader := c.GetHeader("Authorization")
 			if authHeader != "" {
 				parts := strings.Split(authHeader, " ")
 				if len(parts) == 2 && parts[0] == "Service" {
-					ctx = context.WithValue(ctx, ctxkeys.KeyServiceToken, parts[1])
+					if auth.ValidateServiceToken(parts[1], expectedServiceToken) == nil {
+						ctx = context.WithValue(ctx, ctxkeys.KeyServiceToken, parts[1])
+					}
 				}
 			}
 		}

@@ -2208,6 +2208,25 @@ func (r *mutationResolver) DeleteStreamKey(ctx context.Context, streamID string,
 	return r.DoDeleteStreamKey(ctx, rawID, keyID)
 }
 
+// CreatePushTarget is the resolver for the createPushTarget field.
+func (r *mutationResolver) CreatePushTarget(ctx context.Context, streamID string, input model.CreatePushTargetInput) (*proto.PushTarget, error) {
+	rawID, err := resolvers.NormalizeStreamID(streamID)
+	if err != nil {
+		return nil, err
+	}
+	return r.DoCreatePushTarget(ctx, rawID, input)
+}
+
+// UpdatePushTarget is the resolver for the updatePushTarget field.
+func (r *mutationResolver) UpdatePushTarget(ctx context.Context, id string, input model.UpdatePushTargetInput) (*proto.PushTarget, error) {
+	return r.DoUpdatePushTarget(ctx, id, input)
+}
+
+// DeletePushTarget is the resolver for the deletePushTarget field.
+func (r *mutationResolver) DeletePushTarget(ctx context.Context, id string) (*model.DeleteSuccess, error) {
+	return r.DoDeletePushTarget(ctx, id)
+}
+
 // WalletLogin is the resolver for the walletLogin field.
 func (r *mutationResolver) WalletLogin(ctx context.Context, input model.WalletLoginInput) (model.WalletLoginResult, error) {
 	return r.DoWalletLogin(ctx, input)
@@ -2709,6 +2728,34 @@ func (r *processingUsageSummaryResolver) NativeAvSegmentCount(ctx context.Contex
 // NativeAvUniqueStreams is the resolver for the nativeAvUniqueStreams field.
 func (r *processingUsageSummaryResolver) NativeAvUniqueStreams(ctx context.Context, obj *proto.ProcessingUsageSummary) (int, error) {
 	return int(obj.NativeAvUniqueStreams), nil
+}
+
+// ID is the resolver for the id field.
+func (r *pushTargetResolver) ID(ctx context.Context, obj *proto.PushTarget) (string, error) {
+	return globalid.Encode(globalid.TypePushTarget, obj.Id), nil
+}
+
+// StreamID is the resolver for the streamId field.
+func (r *pushTargetResolver) StreamID(ctx context.Context, obj *proto.PushTarget) (string, error) {
+	return globalid.Encode(globalid.TypeStream, obj.StreamId), nil
+}
+
+// LastPushedAt is the resolver for the lastPushedAt field.
+func (r *pushTargetResolver) LastPushedAt(ctx context.Context, obj *proto.PushTarget) (*time.Time, error) {
+	if obj.LastPushedAt == nil {
+		return nil, nil
+	}
+	t := obj.LastPushedAt.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *pushTargetResolver) CreatedAt(ctx context.Context, obj *proto.PushTarget) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
 }
 
 // ID is the resolver for the id field.
@@ -3578,6 +3625,11 @@ func (r *queryResolver) NetworkStatus(ctx context.Context) (*model.NetworkStatus
 	return r.DoGetNetworkStatus(ctx)
 }
 
+// StreamingConfig is the resolver for the streamingConfig field.
+func (r *queryResolver) StreamingConfig(ctx context.Context) (*model.StreamingConfig, error) {
+	return r.DoGetStreamingConfig(ctx)
+}
+
 // MarketplaceClusters is the resolver for the marketplaceClusters field.
 func (r *queryResolver) MarketplaceClusters(ctx context.Context, first *int, after *string) ([]*proto.MarketplaceClusterEntry, error) {
 	return r.DoListMarketplaceClusters(ctx, first, after)
@@ -4265,6 +4317,11 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *proto.Stream) (*proto
 	return loaders.StreamMetrics.Load(ctx, tenantID, obj.StreamId)
 }
 
+// PushTargets is the resolver for the pushTargets field.
+func (r *streamResolver) PushTargets(ctx context.Context, obj *proto.Stream) ([]*proto.PushTarget, error) {
+	return r.DoGetStreamPushTargets(ctx, obj.StreamId)
+}
+
 // ID is the resolver for the id field.
 func (r *streamAnalyticsDailyResolver) ID(ctx context.Context, obj *proto.StreamAnalyticsDaily) (string, error) {
 	dayPart := encodeProtoTimestampPart(obj.Day)
@@ -4436,8 +4493,8 @@ func (r *streamEventResolver) ID(ctx context.Context, obj *model.StreamEvent) (s
 }
 
 // StreamID is the resolver for the streamId field.
-func (r *streamEventResolver) StreamID(ctx context.Context, obj *model.StreamEvent) (string, error) {
-	return encodeStreamID(obj.StreamId)
+func (r *streamEventResolver) StreamID(ctx context.Context, obj *model.StreamEvent) (*string, error) {
+	return encodeStreamIDOptional(obj.StreamId)
 }
 
 // Stream is the resolver for the stream field.
@@ -6025,6 +6082,9 @@ func (r *Resolver) ProcessingUsageSummary() generated.ProcessingUsageSummaryReso
 	return &processingUsageSummaryResolver{r}
 }
 
+// PushTarget returns generated.PushTargetResolver implementation.
+func (r *Resolver) PushTarget() generated.PushTargetResolver { return &pushTargetResolver{r} }
+
 // QualityTierDaily returns generated.QualityTierDailyResolver implementation.
 func (r *Resolver) QualityTierDaily() generated.QualityTierDailyResolver {
 	return &qualityTierDailyResolver{r}
@@ -6273,6 +6333,7 @@ type playbackMetadataResolver struct{ *Resolver }
 type processingUsageResolver struct{ *Resolver }
 type processingUsageRecordResolver struct{ *Resolver }
 type processingUsageSummaryResolver struct{ *Resolver }
+type pushTargetResolver struct{ *Resolver }
 type qualityTierDailyResolver struct{ *Resolver }
 type qualityTierSummaryResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }

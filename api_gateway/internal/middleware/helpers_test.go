@@ -120,6 +120,11 @@ func TestIsAllowlistedQuery(t *testing.T) {
 		{name: "resolveIngestEndpoint allowed", body: `{"query":"query { resolveIngestEndpoint }"}`, expected: true},
 		{name: "not allowlisted", body: `{"query":"query { other }"}`, expected: false},
 		{name: "operationName match", body: `{"query":"query ServiceInstancesHealth { serviceInstancesHealth { status } }","operationName":"ServiceInstancesHealth"}`, expected: true},
+		{name: "mixed selection blocked", body: `{"query":"query { resolveViewerEndpoint(contentId:\"x\"){streamName} me { id } }"}`, expected: false},
+		{name: "allowlisted operation with __typename", body: `{"query":"query { __typename resolveIngestEndpoint(streamKey:\"x\"){hostname} }"}`, expected: true},
+		{name: "multiple operations require operationName", body: `{"query":"query A { resolveViewerEndpoint(contentId:\"x\"){streamName} } query B { networkStatus { totalNodes } }"}`, expected: false},
+		{name: "multiple operations with allowlisted operationName", body: `{"query":"query A { resolveViewerEndpoint(contentId:\"x\"){streamName} } query B { me { id } }","operationName":"A"}`, expected: true},
+		{name: "fragment with non-allowlisted field blocked", body: `{"query":"query { ...Q } fragment Q on Query { resolveViewerEndpoint(contentId:\"x\"){streamName} me { id } }"}`, expected: false},
 		{name: "invalid JSON rejected", body: "not json", expected: false},
 		{name: "networkStatus allowed", body: `{"query":"query { networkStatus { clusters } }","operationName":"NetworkStatus"}`, expected: true},
 	}
