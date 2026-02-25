@@ -358,23 +358,25 @@ describe("detector", () => {
       expect(result.incompatibleCodecs).toEqual([]);
     });
 
-    it("HEVC video is incompatible", () => {
+    it("HEVC video is incompatible but stream is partially compatible", () => {
       const result = checkWebRTCCodecCompatibility([
         { type: "video", codec: "HEVC" },
         { type: "audio", codec: "OPUS" },
       ]);
       expect(result.videoCompatible).toBe(false);
-      expect(result.compatible).toBe(false);
+      expect(result.audioCompatible).toBe(true);
+      expect(result.compatible).toBe(true);
       expect(result.incompatibleCodecs).toContain("video:HEVC");
     });
 
-    it("AAC audio is incompatible with WebRTC", () => {
+    it("AAC audio is incompatible but stream is partially compatible", () => {
       const result = checkWebRTCCodecCompatibility([
         { type: "video", codec: "H264" },
         { type: "audio", codec: "AAC" },
       ]);
+      expect(result.videoCompatible).toBe(true);
       expect(result.audioCompatible).toBe(false);
-      expect(result.compatible).toBe(false);
+      expect(result.compatible).toBe(true);
     });
 
     it("audio-only stream (no video) is compatible if audio codec is ok", () => {

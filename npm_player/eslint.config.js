@@ -1,5 +1,3 @@
-import reactPlugin from "eslint-plugin-react";
-import reactHooksPlugin from "eslint-plugin-react-hooks";
 import sveltePlugin from "eslint-plugin-svelte";
 import svelteParser from "svelte-eslint-parser";
 import {
@@ -54,19 +52,10 @@ export default tseslint.config(
     },
     plugins: {
       "@typescript-eslint": tseslint.plugin,
-      react: reactPlugin,
-      "react-hooks": reactHooksPlugin,
-    },
-    settings: {
-      react: {
-        version: "detect",
-      },
     },
     rules: {
       ...tseslint.configs.recommended[0]?.rules,
       ...sharedTsRules,
-      "react/react-in-jsx-scope": "off",
-      "react/prop-types": "off",
     },
   },
 

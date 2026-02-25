@@ -3825,8 +3825,8 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	}
 
 	var lat, lng interface{}
-	if extIP != nil && s.geoipReader != nil {
-		if geo := s.geoipReader.Lookup(extIP.(string)); geo != nil {
+	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
+		if geo := s.geoipReader.Lookup(ipStr); geo != nil {
 			lat = geo.Latitude
 			lng = geo.Longitude
 		}
@@ -4041,8 +4041,8 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	}
 
 	var lat, lng interface{}
-	if extIP != nil && s.geoipReader != nil {
-		if geo := s.geoipReader.Lookup(extIP.(string)); geo != nil {
+	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
+		if geo := s.geoipReader.Lookup(ipStr); geo != nil {
 			lat = geo.Latitude
 			lng = geo.Longitude
 		}

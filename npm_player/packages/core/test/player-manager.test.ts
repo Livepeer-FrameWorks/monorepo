@@ -148,7 +148,7 @@ describe("PlayerManager", () => {
       }
     });
 
-    it("marks unsupported MIME as incompatible", () => {
+    it("skips unsupported MIME types entirely", () => {
       const mgr = new PlayerManager();
       mgr.registerPlayer(makePlayer({ shortname: "hls" }));
 
@@ -157,8 +157,7 @@ describe("PlayerManager", () => {
       ]);
 
       const combos = mgr.getAllCombinations(info);
-      expect(combos[0].compatible).toBe(false);
-      expect(combos[0].incompatibleReason).toContain("MIME type");
+      expect(combos).toHaveLength(0);
     });
 
     it("marks codec-incompatible combinations", () => {
@@ -221,7 +220,7 @@ describe("PlayerManager", () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it("handles missing required tracks", () => {
+    it("marks missing tracks as partially compatible with penalty", () => {
       const player = makePlayer({ shortname: "hls" });
       // Returns only audio (missing video)
       (player.isBrowserSupported as ReturnType<typeof vi.fn>).mockReturnValue(["audio"]);
@@ -231,8 +230,8 @@ describe("PlayerManager", () => {
 
       const info = makeStreamInfo();
       const combos = mgr.getAllCombinations(info);
-      expect(combos[0].compatible).toBe(false);
-      expect(combos[0].incompatibleReason).toContain("Missing required tracks");
+      expect(combos[0].compatible).toBe(true);
+      expect(combos[0].missingTracks).toContain("video");
     });
   });
 

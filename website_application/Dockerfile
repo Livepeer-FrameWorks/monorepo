@@ -57,13 +57,19 @@ COPY npm_player/package.json npm_player/
 COPY npm_player/packages/core/package.json npm_player/packages/core/
 COPY npm_player/packages/svelte/package.json npm_player/packages/svelte/
 COPY npm_player/packages/react/package.json npm_player/packages/react/
+COPY npm_player/packages/wc/package.json npm_player/packages/wc/
+COPY npm_player/playground/package.json npm_player/playground/
 
 # npm_studio workspace packages
 COPY npm_studio/package.json npm_studio/
 COPY npm_studio/packages/core/package.json npm_studio/packages/core/
 COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
 COPY npm_studio/packages/react/package.json npm_studio/packages/react/
+COPY npm_studio/packages/wc/package.json npm_studio/packages/wc/
 
+# remaining workspace members (pnpm requires all manifests for graph resolution)
+COPY website_marketing/package.json website_marketing/
+COPY website_docs/package.json website_docs/
 COPY website_application/package.json website_application/
 
 # install deps for the dashboard workspace
