@@ -105,7 +105,7 @@ describe("FwSettingsMenu", () => {
     );
 
     expect(qualityItems).toContain("Auto");
-    expect(qualityItems).toContain("1080p");
-    expect(qualityItems).toContain("720p");
+    expect(qualityItems).toContain("1920x1080 5.0 Mbps");
+    expect(qualityItems).toContain("1280x720 2.8 Mbps");
   });
 });

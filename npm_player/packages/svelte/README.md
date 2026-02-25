@@ -16,14 +16,15 @@ npm i @livepeer-frameworks/player-svelte
 
 ```svelte
 <script lang="ts">
-  import { Player } from '@livepeer-frameworks/player-svelte';
+  import { Player } from "@livepeer-frameworks/player-svelte";
 </script>
 
 <div style="width: 100%; height: 500px;">
   <Player
     contentType="live"
-    contentId="pk_..." // playbackId
-    options={{ gatewayUrl: 'https://your-bridge/graphql' }}
+    contentId="pk_..."
+    // playbackId
+    options={{ gatewayUrl: "https://your-bridge/graphql" }}
   />
 </div>
 ```
