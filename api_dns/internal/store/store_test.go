@@ -27,7 +27,7 @@ func TestStoreGetCertificateTenantScoping(t *testing.T) {
 			WithArgs("platform.example.com").
 			WillReturnRows(rows)
 
-		store := NewStore(db)
+		store := NewStore(db, nil)
 		cert, err := store.GetCertificate(context.Background(), "", "platform.example.com")
 		if err != nil {
 			t.Fatalf("GetCertificate: %v", err)
@@ -58,7 +58,7 @@ func TestStoreGetCertificateTenantScoping(t *testing.T) {
 			WithArgs("tenant-123", "tenant.example.com").
 			WillReturnRows(rows)
 
-		store := NewStore(db)
+		store := NewStore(db, nil)
 		cert, err := store.GetCertificate(context.Background(), "tenant-123", "tenant.example.com")
 		if err != nil {
 			t.Fatalf("GetCertificate: %v", err)
@@ -92,7 +92,7 @@ func TestListExpiringCertificates(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	store := NewStore(db)
+	store := NewStore(db, nil)
 	certs, err := store.ListExpiringCertificates(context.Background(), 24*time.Hour)
 	if err != nil {
 		t.Fatalf("ListExpiringCertificates: %v", err)
@@ -125,7 +125,7 @@ func TestListExpiringCertificatesEmpty(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	store := NewStore(db)
+	store := NewStore(db, nil)
 	certs, err := store.ListExpiringCertificates(context.Background(), 24*time.Hour)
 	if err != nil {
 		t.Fatalf("ListExpiringCertificates: %v", err)
@@ -153,7 +153,7 @@ func TestListCertificatesForTenantPlatform(t *testing.T) {
 	mock.ExpectQuery(`FROM navigator\.certificates\s+WHERE tenant_id IS NULL\s+ORDER BY domain`).
 		WillReturnRows(rows)
 
-	store := NewStore(db)
+	store := NewStore(db, nil)
 	certs, err := store.ListCertificatesForTenant(context.Background(), "")
 	if err != nil {
 		t.Fatalf("ListCertificatesForTenant: %v", err)
@@ -185,7 +185,7 @@ func TestListCertificatesForTenantSpecific(t *testing.T) {
 		WithArgs("t1").
 		WillReturnRows(rows)
 
-	store := NewStore(db)
+	store := NewStore(db, nil)
 	certs, err := store.ListCertificatesForTenant(context.Background(), "t1")
 	if err != nil {
 		t.Fatalf("ListCertificatesForTenant: %v", err)
@@ -213,7 +213,7 @@ func TestGetACMEAccountNotFound(t *testing.T) {
 		WithArgs("admin@example.com").
 		WillReturnError(sql.ErrNoRows)
 
-	store := NewStore(db)
+	store := NewStore(db, nil)
 	_, err = store.GetACMEAccount(context.Background(), "", "admin@example.com")
 	if err == nil {
 		t.Fatal("expected error")
@@ -245,7 +245,7 @@ func TestSaveACMEAccount(t *testing.T) {
 		WithArgs("t1", acc.Email, acc.Registration, acc.PrivateKeyPEM).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("acme-1", sql.NullString{String: "t1", Valid: true}, now))
 
-	store := NewStore(db)
+	store := NewStore(db, nil)
 	if err := store.SaveACMEAccount(context.Background(), "t1", acc); err != nil {
 		t.Fatalf("SaveACMEAccount: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestStoreSaveCertificateUpsert(t *testing.T) {
 		WithArgs("tenant-123", cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("cert-1", sql.NullString{String: "tenant-123", Valid: true}, now))
 
-	store := NewStore(db)
+	store := NewStore(db, nil)
 	if err := store.SaveCertificate(context.Background(), "tenant-123", cert); err != nil {
 		t.Fatalf("SaveCertificate: %v", err)
 	}

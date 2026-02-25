@@ -13,6 +13,7 @@ import (
 	"frameworks/api_dns/internal/worker"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
+	fieldcrypt "frameworks/pkg/crypto"
 	"frameworks/pkg/database"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
@@ -67,8 +68,20 @@ func main() {
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
+	// Initialize field encryption for private keys at rest
+	var keyEncryptor *fieldcrypt.FieldEncryptor
+	if encKey := config.GetEnv("FIELD_ENCRYPTION_KEY", ""); encKey != "" {
+		var encErr error
+		keyEncryptor, encErr = fieldcrypt.DeriveFieldEncryptor([]byte(encKey), "navigator-private-keys")
+		if encErr != nil {
+			logger.WithError(encErr).Fatal("Failed to derive field encryption key")
+		}
+	} else {
+		logger.Warn("FIELD_ENCRYPTION_KEY not set; private keys will be stored unencrypted")
+	}
+
 	// Initialize Store
-	certStore := store.NewStore(db)
+	certStore := store.NewStore(db, keyEncryptor)
 
 	// === Configuration Loading ===
 	// Cloudflare config

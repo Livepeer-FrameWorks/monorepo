@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
+
+	fieldcrypt "frameworks/pkg/crypto"
 )
 
 var ErrNotFound = errors.New("record not found")
@@ -30,11 +33,26 @@ type ACMEAccount struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	enc *fieldcrypt.FieldEncryptor // nil = no encryption (backward-compatible)
 }
 
-func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+func NewStore(db *sql.DB, enc *fieldcrypt.FieldEncryptor) *Store {
+	return &Store{db: db, enc: enc}
+}
+
+func (s *Store) encryptField(plaintext string) (string, error) {
+	if s.enc == nil {
+		return plaintext, nil
+	}
+	return s.enc.Encrypt(plaintext)
+}
+
+func (s *Store) decryptField(stored string) (string, error) {
+	if s.enc == nil {
+		return stored, nil
+	}
+	return s.enc.Decrypt(stored)
 }
 
 // GetCertificate retrieves a valid certificate for a domain within a tenant context.
@@ -70,12 +88,19 @@ func (s *Store) GetCertificate(ctx context.Context, tenantID, domain string) (*C
 	if err != nil {
 		return nil, err
 	}
+	if cert.KeyPEM, err = s.decryptField(cert.KeyPEM); err != nil {
+		return nil, fmt.Errorf("decrypt certificate key: %w", err)
+	}
 	return &cert, nil
 }
 
 // SaveCertificate saves or updates a certificate for a tenant.
 // If tenantID is empty, saves as a platform-wide certificate.
 func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Certificate) error {
+	encryptedKey, err := s.encryptField(cert.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("encrypt certificate key: %w", err)
+	}
 	query := `
 		INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at)
 		VALUES (NULLIF($1, '')::uuid, $2, $3, $4, $5, NOW())
@@ -87,7 +112,7 @@ func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Cert
 		RETURNING id, tenant_id, created_at
 	`
 	return s.db.QueryRowContext(ctx, query,
-		tenantID, cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt,
+		tenantID, cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt,
 	).Scan(&cert.ID, &cert.TenantID, &cert.CreatedAt)
 }
 
@@ -123,12 +148,19 @@ func (s *Store) GetACMEAccount(ctx context.Context, tenantID, email string) (*AC
 	if err != nil {
 		return nil, err
 	}
+	if acc.PrivateKeyPEM, err = s.decryptField(acc.PrivateKeyPEM); err != nil {
+		return nil, fmt.Errorf("decrypt ACME private key: %w", err)
+	}
 	return &acc, nil
 }
 
 // SaveACMEAccount saves a new ACME account for a tenant.
 // If tenantID is empty, saves as a platform-wide account.
 func (s *Store) SaveACMEAccount(ctx context.Context, tenantID string, acc *ACMEAccount) error {
+	encryptedKey, err := s.encryptField(acc.PrivateKeyPEM)
+	if err != nil {
+		return fmt.Errorf("encrypt ACME private key: %w", err)
+	}
 	query := `
 		INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem)
 		VALUES (NULLIF($1, '')::uuid, $2, $3, $4)
@@ -138,7 +170,7 @@ func (s *Store) SaveACMEAccount(ctx context.Context, tenantID string, acc *ACMEA
 		RETURNING id, tenant_id, created_at
 	`
 	return s.db.QueryRowContext(ctx, query,
-		tenantID, acc.Email, acc.Registration, acc.PrivateKeyPEM,
+		tenantID, acc.Email, acc.Registration, encryptedKey,
 	).Scan(&acc.ID, &acc.TenantID, &acc.CreatedAt)
 }
 
@@ -163,6 +195,9 @@ func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Dur
 		var c Certificate
 		if err := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if c.KeyPEM, err = s.decryptField(c.KeyPEM); err != nil {
+			return nil, fmt.Errorf("decrypt certificate key for %s: %w", c.Domain, err)
 		}
 		certs = append(certs, c)
 	}
@@ -202,6 +237,9 @@ func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) 
 		var c Certificate
 		if err := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if c.KeyPEM, err = s.decryptField(c.KeyPEM); err != nil {
+			return nil, fmt.Errorf("decrypt certificate key for %s: %w", c.Domain, err)
 		}
 		certs = append(certs, c)
 	}

@@ -5,7 +5,6 @@ import "testing"
 func resetHasherState() {
 	hashSecretMu.Lock()
 	hashSecret = nil
-	useHMAC = false
 	hashSecretMu.Unlock()
 }
 
@@ -13,6 +12,7 @@ func TestHashIdentifierEmptyString(t *testing.T) {
 	resetHasherState()
 	t.Cleanup(resetHasherState)
 
+	InitHasher("test-secret")
 	if got := hashIdentifier(""); got != 0 {
 		t.Fatalf("hashIdentifier(\"\") = %d, want 0", got)
 	}
@@ -25,6 +25,7 @@ func TestHashIdentifierDeterministic(t *testing.T) {
 	resetHasherState()
 	t.Cleanup(resetHasherState)
 
+	InitHasher("test-secret")
 	first := HashIdentifier("viewer-123")
 	second := HashIdentifier("viewer-123")
 	if first != second {
@@ -36,6 +37,7 @@ func TestHashIdentifierDifferentInputs(t *testing.T) {
 	resetHasherState()
 	t.Cleanup(resetHasherState)
 
+	InitHasher("test-secret")
 	one := HashIdentifier("viewer-123")
 	two := HashIdentifier("viewer-124")
 	if one == two {
@@ -43,12 +45,13 @@ func TestHashIdentifierDifferentInputs(t *testing.T) {
 	}
 }
 
-func TestHashIdentifierFNV64ModeNonZero(t *testing.T) {
+func TestHashIdentifierEphemeralSecretNonZero(t *testing.T) {
 	resetHasherState()
 	t.Cleanup(resetHasherState)
 
+	InitHasher("")
 	if got := HashIdentifier("viewer-123"); got == 0 {
-		t.Fatalf("expected non-zero hash in FNV64 mode")
+		t.Fatalf("expected non-zero hash with ephemeral secret")
 	}
 }
 
@@ -62,18 +65,20 @@ func TestHashIdentifierHMACModeNonZero(t *testing.T) {
 	}
 }
 
-func TestHashIdentifierFNV64DiffersFromHMAC(t *testing.T) {
+func TestHashIdentifierEphemeralDiffersFromExplicit(t *testing.T) {
 	resetHasherState()
 	t.Cleanup(resetHasherState)
 
-	fnvHash := HashIdentifier("viewer-123")
-	InitHasher("secret-key")
-	hmacHash := HashIdentifier("viewer-123")
+	InitHasher("")
+	ephemeralHash := HashIdentifier("viewer-123")
 
-	if fnvHash == 0 || hmacHash == 0 {
-		t.Fatalf("expected non-zero hashes, got fnv=%d hmac=%d", fnvHash, hmacHash)
+	InitHasher("secret-key")
+	explicitHash := HashIdentifier("viewer-123")
+
+	if ephemeralHash == 0 || explicitHash == 0 {
+		t.Fatalf("expected non-zero hashes, got ephemeral=%d explicit=%d", ephemeralHash, explicitHash)
 	}
-	if fnvHash == hmacHash {
-		t.Fatalf("expected different hashes between FNV64 and HMAC modes")
+	if ephemeralHash == explicitHash {
+		t.Fatalf("expected different hashes between ephemeral and explicit secrets")
 	}
 }
