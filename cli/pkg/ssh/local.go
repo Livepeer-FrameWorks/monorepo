@@ -133,9 +133,9 @@ func (l *LocalRunner) Upload(ctx context.Context, opts UploadOptions) error {
 
 	// Change ownership if specified (requires sudo)
 	if opts.Owner != "" {
-		chownCmd := fmt.Sprintf("sudo chown %s %s", opts.Owner, opts.RemotePath)
+		chownCmd := fmt.Sprintf("sudo chown %s %s", ShellQuote(opts.Owner), ShellQuote(opts.RemotePath))
 		if opts.Group != "" {
-			chownCmd = fmt.Sprintf("sudo chown %s:%s %s", opts.Owner, opts.Group, opts.RemotePath)
+			chownCmd = fmt.Sprintf("sudo chown %s:%s %s", ShellQuote(opts.Owner), ShellQuote(opts.Group), ShellQuote(opts.RemotePath))
 		}
 		if _, err := l.Run(ctx, chownCmd); err != nil {
 			return fmt.Errorf("failed to change ownership: %w", err)

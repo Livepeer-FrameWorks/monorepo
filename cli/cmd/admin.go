@@ -839,9 +839,6 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 	var maxStreams int
 	var maxViewers int
 	var maxBandwidth int
-	var currentStreams int
-	var currentViewers int
-	var currentBandwidth int
 	var healthStatus string
 	var isActive bool
 	var ownerTenantID string
@@ -897,15 +894,6 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 		if v := optionalInt32Flag(cmd, "max-bandwidth-mbps", maxBandwidth); v != nil {
 			req.MaxBandwidthMbps = v
 		}
-		if v := optionalInt32Flag(cmd, "current-stream-count", currentStreams); v != nil {
-			req.CurrentStreamCount = v
-		}
-		if v := optionalInt32Flag(cmd, "current-viewer-count", currentViewers); v != nil {
-			req.CurrentViewerCount = v
-		}
-		if v := optionalInt32Flag(cmd, "current-bandwidth-mbps", currentBandwidth); v != nil {
-			req.CurrentBandwidthMbps = v
-		}
 		if v := optionalStringFlag(cmd, "health-status", healthStatus); v != nil {
 			req.HealthStatus = v
 		}
@@ -940,9 +928,6 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxStreams, "max-concurrent-streams", 0, "max concurrent streams")
 	cmd.Flags().IntVar(&maxViewers, "max-concurrent-viewers", 0, "max concurrent viewers")
 	cmd.Flags().IntVar(&maxBandwidth, "max-bandwidth-mbps", 0, "max bandwidth (Mbps)")
-	cmd.Flags().IntVar(&currentStreams, "current-stream-count", 0, "current stream count")
-	cmd.Flags().IntVar(&currentViewers, "current-viewer-count", 0, "current viewer count")
-	cmd.Flags().IntVar(&currentBandwidth, "current-bandwidth-mbps", 0, "current bandwidth (Mbps)")
 	cmd.Flags().StringVar(&healthStatus, "health-status", "", "health status")
 	cmd.Flags().BoolVar(&isActive, "is-active", false, "set cluster active flag")
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (UUID, empty clears)")

@@ -75,8 +75,7 @@ func (c *ClickHouseChecker) Check(address string, port int) *CheckResult {
 
 	// Check number of tables
 	var tableCount int
-	query := fmt.Sprintf("SELECT COUNT(*) FROM system.tables WHERE database = '%s'", c.Database)
-	if err := db.QueryRowContext(ctx, query).Scan(&tableCount); err == nil {
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM system.tables WHERE database = ?", c.Database).Scan(&tableCount); err == nil {
 		result.Metadata["tables"] = fmt.Sprintf("%d", tableCount)
 	}
 

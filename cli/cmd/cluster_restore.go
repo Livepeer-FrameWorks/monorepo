@@ -146,7 +146,7 @@ cd /opt/frameworks/postgres
 docker compose up -d
 sleep 5
 cat %s | docker compose exec -T postgres psql -U postgres
-`, backupPath)
+`, ssh.ShellQuote(backupPath))
 
 	result, err := runner.Run(ctx, restoreCmd)
 	if err != nil {
@@ -220,7 +220,7 @@ for db in %s/*; do
     docker compose exec -T clickhouse-server clickhouse-client --database=$dbname --query="INSERT INTO $tablename FORMAT TSV" < $table
   done
 done
-`, backupPath)
+`, ssh.ShellQuote(backupPath))
 
 	result, err := runner.Run(ctx, restoreCmd)
 	if err != nil {
@@ -280,7 +280,7 @@ func restoreVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory
 	// Restore volumes
 	restoreCmd := fmt.Sprintf(`
 docker run --rm -v /var/lib/docker/volumes:/volumes -v $(dirname %s):/backup alpine tar xzf /backup/$(basename %s) -C /volumes
-`, backupPath, backupPath)
+`, ssh.ShellQuote(backupPath), ssh.ShellQuote(backupPath))
 
 	result, errRun := runner.Run(ctx, restoreCmd)
 	if errRun != nil {
@@ -319,7 +319,7 @@ func restoreConfig(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	}
 
 	// Restore config files
-	restoreCmd := fmt.Sprintf("tar xzf %s -C /", backupPath)
+	restoreCmd := fmt.Sprintf("tar xzf %s -C /", ssh.ShellQuote(backupPath))
 
 	result, err := runner.Run(ctx, restoreCmd)
 	if err != nil {

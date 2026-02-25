@@ -18,6 +18,7 @@ import (
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/mistdiag"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
 	"frameworks/pkg/clients/foghorn"
@@ -49,6 +50,7 @@ func newEdgeCmd() *cobra.Command {
 	edge.AddCommand(newEdgeCertCmd())
 	edge.AddCommand(newEdgeLogsCmd())
 	edge.AddCommand(newEdgeDoctorCmd())
+	edge.AddCommand(newEdgeDiagnoseCmd())
 	edge.AddCommand(newEdgeModeCmd())
 	return edge
 }
@@ -1527,11 +1529,45 @@ func newEdgeDoctorCmd() *cobra.Command {
 				}
 			}
 		}
+		// Stream health quick-check via MistServer analyzers
+		fmt.Fprintln(cmd.OutOrStdout(), "\nStream Health:")
+		func() {
+			diagCtx, diagCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer diagCancel()
+			deployMode := detectEdgeMode(dir, ".edge.env", "", "")
+			localRunner := fwssh.NewLocalRunner("")
+			ar := mistdiag.NewAnalyzerRunner(localRunner, deployMode)
+
+			streams, err := mistdiag.DiscoverStreams(diagCtx, localRunner, deployMode)
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), " - Could not query MistServer: %v\n", err)
+				return
+			}
+			if len(streams) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), " - No active streams (skipped)")
+				return
+			}
+			for _, s := range streams {
+				result, err := ar.Validate(diagCtx, "HLS", s.HLSURL, 5)
+				if err != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), " ⚠ %-24s error: %v\n", s.Name+":", err)
+					continue
+				}
+				if result.OK {
+					fmt.Fprintf(cmd.OutOrStdout(), " ✓ %-24s HLS OK\n", s.Name+":")
+				} else {
+					msg := result.Summary()
+					fmt.Fprintf(cmd.OutOrStdout(), " ✗ %-24s HLS FAIL (%s)\n", s.Name+":", msg)
+				}
+			}
+		}()
+
 		// Hints minimal
 		fmt.Fprintln(cmd.OutOrStdout(), "\nHints:")
 		fmt.Fprintln(cmd.OutOrStdout(), " - Ensure DNS A/AAAA records point to this host before enrollment.")
 		fmt.Fprintln(cmd.OutOrStdout(), " - If HTTPS fails, confirm ports 80/443 are reachable and Caddy is running.")
 		fmt.Fprintln(cmd.OutOrStdout(), " - Use 'frameworks edge tune --write' to apply recommended sysctl/limits.")
+		fmt.Fprintln(cmd.OutOrStdout(), " - Use 'frameworks edge diagnose media' for detailed stream analysis.")
 		return nil
 	}}
 	cmd.Flags().StringVar(&domain, "domain", "", "edge domain to validate (DNS and HTTPS)")

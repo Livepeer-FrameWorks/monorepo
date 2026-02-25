@@ -179,7 +179,7 @@ func backupPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory
 
 	// Create backup command (works for both Docker and native)
 	var backupCmd = fmt.Sprintf("mkdir -p %s && docker compose -f /opt/frameworks/postgres/docker-compose.yml exec -T postgres pg_dumpall -U postgres > %s",
-		outputDir, backupFile)
+		ssh.ShellQuote(outputDir), ssh.ShellQuote(backupFile))
 
 	result, err := runner.Run(ctx, backupCmd)
 	if err != nil {
@@ -246,7 +246,7 @@ docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhou
     done
   fi
 done
-`, backupDir, backupDir, backupDir)
+`, ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir))
 
 	result, err := runner.Run(ctx, backupCmd)
 	if err != nil {
@@ -259,7 +259,7 @@ done
 
 	// Create tarball for easier checksum and transfer
 	tarFile := backupDir + ".tar.gz"
-	tarCmd := fmt.Sprintf("tar -czf %s -C %s . && rm -rf %s", tarFile, backupDir, backupDir)
+	tarCmd := fmt.Sprintf("tar -czf %s -C %s . && rm -rf %s", ssh.ShellQuote(tarFile), ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir))
 	if tarResult, err := runner.Run(ctx, tarCmd); err == nil && tarResult.ExitCode == 0 {
 		// Calculate checksum
 		checksumCmd := fmt.Sprintf("sha256sum %s | awk '{print $1}'", tarFile)
@@ -311,7 +311,7 @@ func backupVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		backupCmd := fmt.Sprintf(`
 mkdir -p %s
 docker run --rm -v /var/lib/docker/volumes:/volumes -v %s:/backup alpine tar czf /backup/volumes-%s-%s.tar.gz -C /volumes $(docker volume ls --filter name=frameworks -q | tr '\n' ' ') 2>/dev/null || echo "no volumes found"
-`, outputDir, outputDir, hostName, timestamp)
+`, ssh.ShellQuote(outputDir), ssh.ShellQuote(outputDir), hostName, timestamp)
 
 		result, err := runner.Run(ctx, backupCmd)
 		if err != nil {
@@ -389,7 +389,7 @@ cd / && tar czf %s \
   $(find /opt/frameworks -maxdepth 2 -name 'docker-compose.yml' 2>/dev/null) \
   $(find /opt/frameworks -maxdepth 2 -name '.env' 2>/dev/null) \
   2>/dev/null || true
-`, outputDir, backupFile)
+`, ssh.ShellQuote(outputDir), ssh.ShellQuote(backupFile))
 
 		result, err := runner.Run(ctx, backupCmd)
 		if err != nil {

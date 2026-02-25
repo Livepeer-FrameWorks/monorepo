@@ -486,7 +486,7 @@ func (c *Client) Upload(ctx context.Context, opts UploadOptions) error {
 
 	// Create remote directory if needed
 	remoteDir := filepath.Dir(opts.RemotePath)
-	if _, errRun := c.Run(ctx, fmt.Sprintf("mkdir -p %s", remoteDir)); errRun != nil {
+	if _, errRun := c.Run(ctx, fmt.Sprintf("mkdir -p %s", ShellQuote(remoteDir))); errRun != nil {
 		return fmt.Errorf("failed to create remote directory: %w", errRun)
 	}
 
@@ -503,7 +503,7 @@ func (c *Client) Upload(ctx context.Context, opts UploadOptions) error {
 		return fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
 
-	if err := session.Start(fmt.Sprintf("scp -t %s", opts.RemotePath)); err != nil {
+	if err := session.Start(fmt.Sprintf("scp -t %s", ShellQuote(opts.RemotePath))); err != nil {
 		return fmt.Errorf("failed to start scp: %w", err)
 	}
 
@@ -527,9 +527,9 @@ func (c *Client) Upload(ctx context.Context, opts UploadOptions) error {
 
 	// Change ownership if specified
 	if opts.Owner != "" {
-		chownCmd := fmt.Sprintf("chown %s %s", opts.Owner, opts.RemotePath)
+		chownCmd := fmt.Sprintf("chown %s %s", ShellQuote(opts.Owner), ShellQuote(opts.RemotePath))
 		if opts.Group != "" {
-			chownCmd = fmt.Sprintf("chown %s:%s %s", opts.Owner, opts.Group, opts.RemotePath)
+			chownCmd = fmt.Sprintf("chown %s:%s %s", ShellQuote(opts.Owner), ShellQuote(opts.Group), ShellQuote(opts.RemotePath))
 		}
 		if _, err := c.Run(ctx, chownCmd); err != nil {
 			return fmt.Errorf("failed to change ownership: %w", err)
