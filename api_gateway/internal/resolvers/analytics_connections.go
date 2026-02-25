@@ -3565,16 +3565,28 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 
 	// Fetch foghorn pool for peer connection derivation
-	poolStatus, _ := r.Clients.Quartermaster.GetFoghornPoolStatus(ctx)
+	poolStatus, err := r.Clients.Quartermaster.GetFoghornPoolStatus(ctx)
+	if err != nil {
+		r.Logger.WithError(err).Warn("networkStatus: failed to get foghorn pool status")
+	}
 
 	// Fetch all nodes (for geo + counts + individual exposure)
-	nodesResp, _ := r.Clients.Quartermaster.ListNodes(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
+	nodesResp, err := r.Clients.Quartermaster.ListNodes(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
+	if err != nil {
+		r.Logger.WithError(err).Warn("networkStatus: failed to list nodes")
+	}
 
 	// Fetch all service instances
-	instancesResp, _ := r.Clients.Quartermaster.ListServiceInstances(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
+	instancesResp, err := r.Clients.Quartermaster.ListServiceInstances(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
+	if err != nil {
+		r.Logger.WithError(err).Warn("networkStatus: failed to list service instances")
+	}
 
 	// Fetch live stats from Periscope (ClickHouse)
-	liveStatsResp, _ := r.Clients.Periscope.GetNetworkLiveStats(ctx)
+	liveStatsResp, err := r.Clients.Periscope.GetNetworkLiveStats(ctx)
+	if err != nil {
+		r.Logger.WithError(err).Warn("networkStatus: failed to get live stats from Periscope")
+	}
 	liveStatsByCluster := make(map[string]*pb.NetworkClusterLiveStats)
 	if liveStatsResp != nil {
 		for _, ls := range liveStatsResp.Clusters {
