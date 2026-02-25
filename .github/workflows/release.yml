@@ -343,7 +343,7 @@ jobs:
       matrix:
         service:
           - { name: bridge, context: api_gateway, cmd_path: ./cmd/bridge, cgo: false }
-          - { name: quartermaster, context: api_tenants, cmd_path: ./cmd/quartermaster, cgo: false }
+          - { name: quartermaster, context: api_tenants, cmd_path: ./cmd/quartermaster, cgo: true }
           - { name: commodore, context: api_control, cmd_path: ./cmd/commodore, cgo: false }
           - { name: purser, context: api_billing, cmd_path: ./cmd/purser, cgo: false }
           - { name: foghorn, context: api_balancing, cmd_path: ./cmd/foghorn, cgo: true }

@@ -53,6 +53,8 @@ jobs:
       - name: Install gqlgen
         run: go install github.com/99designs/gqlgen@v0.17.86
       - run: make build
+        env:
+          CGO_ENABLED: "1"
 
   go-test:
     name: Go test + coverage
@@ -74,8 +76,12 @@ jobs:
         run: go install github.com/99designs/gqlgen@v0.17.86
       - name: Run tests with JUnit output
         run: make test-junit
+        env:
+          CGO_ENABLED: "1"
       - name: Generate coverage
         run: make coverage
+        env:
+          CGO_ENABLED: "1"
       - name: Upload Go test results to Codecov
         if: ${{ !cancelled() }}
         timeout-minutes: 5
