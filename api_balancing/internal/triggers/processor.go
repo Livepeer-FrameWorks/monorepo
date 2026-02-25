@@ -84,8 +84,10 @@ type Processor struct {
 	streamCacheLastAt  time.Time
 	streamCacheLastErr string
 
-	nodeUUIDCache *cache.Cache // Cache node_id (logical) -> UUID
-	peerNotifier  PeerNotifier // demand-driven peer discovery (nil when federation disabled)
+	nodeUUIDCache     *cache.Cache // Cache node_id (logical) -> UUID
+	nodeClusterCache  *cache.Cache // Cache node_id (logical) -> cluster_id
+	clusterOwnerCache *cache.Cache // Cache cluster_id -> owner_tenant_id
+	peerNotifier      PeerNotifier // demand-driven peer discovery (nil when federation disabled)
 }
 
 // NewProcessor creates a new MistServer trigger processor
@@ -112,6 +114,20 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 	})
 
 	p.nodeUUIDCache = cache.New(cache.Options{
+		TTL:                  1 * time.Hour,
+		StaleWhileRevalidate: 15 * time.Minute,
+		NegativeTTL:          0,
+		MaxEntries:           50000,
+	}, cache.MetricsHooks{})
+
+	p.nodeClusterCache = cache.New(cache.Options{
+		TTL:                  1 * time.Hour,
+		StaleWhileRevalidate: 15 * time.Minute,
+		NegativeTTL:          0,
+		MaxEntries:           50000,
+	}, cache.MetricsHooks{})
+
+	p.clusterOwnerCache = cache.New(cache.Options{
 		TTL:                  1 * time.Hour,
 		StaleWhileRevalidate: 15 * time.Minute,
 		NegativeTTL:          0,
@@ -1872,12 +1888,19 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 		nu.NodeUuid = &uuid
 	}
 
-	// Attribute infra events to the cluster owner tenant (not a stream tenant).
-	if (trigger.TenantId == nil || *trigger.TenantId == "") && p.ownerTenantID != "" {
-		trigger.TenantId = &p.ownerTenantID
+	// Resolve owner tenant dynamically from the node's cluster (Foghorn manages many clusters).
+	ownerTID := ""
+	if cID := p.resolveNodeClusterID(nu.GetNodeId()); cID != "" {
+		ownerTID = p.resolveClusterOwnerTenantID(cID)
 	}
-	if (nu.TenantId == nil || *nu.TenantId == "") && p.ownerTenantID != "" {
-		nu.TenantId = &p.ownerTenantID
+	if ownerTID == "" {
+		ownerTID = p.ownerTenantID
+	}
+	if (trigger.TenantId == nil || *trigger.TenantId == "") && ownerTID != "" {
+		trigger.TenantId = &ownerTID
+	}
+	if (nu.TenantId == nil || *nu.TenantId == "") && ownerTID != "" {
+		nu.TenantId = &ownerTID
 	}
 
 	// Forward complete node lifecycle event to Decklog using protobuf directly
@@ -1948,6 +1971,76 @@ func (p *Processor) resolveNodeUUID(nodeID string) string {
 	}
 	if uuid, ok := val.(string); ok {
 		return uuid
+	}
+	return ""
+}
+
+// resolveNodeClusterID resolves a node's logical name to its cluster_id.
+// Uses a local cache to avoid repeated Quartermaster lookups.
+func (p *Processor) resolveNodeClusterID(nodeID string) string {
+	if nodeID == "" || p.nodeClusterCache == nil || p.quartermasterClient == nil {
+		return ""
+	}
+
+	val, ok, _ := p.nodeClusterCache.Get(context.Background(), nodeID, func(ctx context.Context, key string) (interface{}, bool, error) {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		node, err := p.quartermasterClient.GetNodeByLogicalName(ctx, key)
+		if err != nil {
+			p.logger.WithFields(logging.Fields{
+				"node_id": key,
+				"error":   err,
+			}).Debug("Failed to resolve node cluster from Quartermaster")
+			return nil, false, err
+		}
+
+		if node == nil || node.GetClusterId() == "" {
+			return nil, false, fmt.Errorf("node or cluster not found")
+		}
+
+		return node.GetClusterId(), true, nil
+	})
+	if !ok {
+		return ""
+	}
+	if clusterID, ok := val.(string); ok {
+		return clusterID
+	}
+	return ""
+}
+
+// resolveClusterOwnerTenantID resolves a cluster_id to its owner_tenant_id.
+// Uses a local cache to avoid repeated Quartermaster lookups.
+func (p *Processor) resolveClusterOwnerTenantID(clusterID string) string {
+	if clusterID == "" || p.clusterOwnerCache == nil || p.quartermasterClient == nil {
+		return ""
+	}
+
+	val, ok, _ := p.clusterOwnerCache.Get(context.Background(), clusterID, func(ctx context.Context, key string) (interface{}, bool, error) {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		resp, err := p.quartermasterClient.GetCluster(ctx, key)
+		if err != nil {
+			p.logger.WithFields(logging.Fields{
+				"cluster_id": key,
+				"error":      err,
+			}).Debug("Failed to resolve cluster owner from Quartermaster")
+			return nil, false, err
+		}
+
+		if resp == nil || resp.GetCluster() == nil || resp.GetCluster().GetOwnerTenantId() == "" {
+			return nil, false, fmt.Errorf("cluster or owner not found")
+		}
+
+		return resp.GetCluster().GetOwnerTenantId(), true, nil
+	})
+	if !ok {
+		return ""
+	}
+	if ownerID, ok := val.(string); ok {
+		return ownerID
 	}
 	return ""
 }
