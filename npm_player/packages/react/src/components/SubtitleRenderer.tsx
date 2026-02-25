@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import type { SubtitleCue, MetaTrackEvent } from "../types";
 
 export interface SubtitleRendererProps {
-  /** Current video playback time in seconds */
+  /** Current video playback time in milliseconds */
   currentTime: number;
   /** Whether subtitles are enabled */
   enabled?: boolean;
@@ -98,7 +98,7 @@ function parseSubtitleCue(data: unknown): SubtitleCue | null {
  * ```tsx
  * // Static subtitles
  * <SubtitleRenderer
- *   currentTime={videoElement.currentTime}
+ *   currentTime={videoElement.currentTime * 1000}
  *   enabled={showSubtitles}
  *   cues={subtitleCues}
  * />
@@ -107,7 +107,7 @@ function parseSubtitleCue(data: unknown): SubtitleCue | null {
  * const { subscribe } = useMetaTrack({ mistBaseUrl, streamName });
  *
  * <SubtitleRenderer
- *   currentTime={videoElement.currentTime}
+ *   currentTime={videoElement.currentTime * 1000}
  *   enabled={showSubtitles}
  *   subscribeToMetaTrack={subscribe}
  *   metaTrackId="subtitle-track"
@@ -170,7 +170,7 @@ export const SubtitleRenderer: React.FC<SubtitleRendererProps> = ({
     }
 
     // Find cue that matches current time
-    const currentTimeMs = currentTime * 1000; // Convert to ms if needed
+    const currentTimeMs = currentTime;
     const activeCue = allCues.find((cue) => {
       const start = cue.startTime;
       const end = cue.endTime;
@@ -188,7 +188,7 @@ export const SubtitleRenderer: React.FC<SubtitleRendererProps> = ({
 
   // Clean up expired cues
   useEffect(() => {
-    const currentTimeMs = currentTime * 1000;
+    const currentTimeMs = currentTime;
 
     setLiveCues((prev) => {
       // Remove cues that are more than 30 seconds old

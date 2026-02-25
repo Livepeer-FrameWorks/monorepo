@@ -73,18 +73,23 @@ export class MetaTrackManager {
   private static readonly CONNECTION_DEBOUNCE_MS = 100;
 
   // Reconnection settings
-  private static readonly MAX_RECONNECT_ATTEMPTS = 5;
+  private static readonly MAX_RECONNECT_ATTEMPTS = Infinity;
   private static readonly INITIAL_RECONNECT_DELAY = 1000;
   private static readonly MAX_RECONNECT_DELAY = 30000;
   private static readonly MESSAGE_BUFFER_SIZE = 100;
 
   // Buffer management (MistMetaPlayer feature backport)
   private currentPlaybackTime = 0;
+  private paused = false;
   private bufferAhead: number;
   private maxMessageAge: number;
   private fastForwardInterval: number;
   private lastFastForwardTime = 0;
   private timedEventBuffer: Map<string, MetaTrackEvent[]> = new Map(); // trackId -> events sorted by time
+
+  // Far-ahead state machine (upstream player.js:781-790)
+  private isFarAhead = false;
+  private farAheadTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: MetaTrackManagerConfig) {
     this.config = config;
@@ -201,6 +206,11 @@ export class MetaTrackManager {
 
     // Clear all timers
     this.timers.destroy();
+    if (this.farAheadTimer) {
+      clearTimeout(this.farAheadTimer);
+      this.farAheadTimer = null;
+    }
+    this.isFarAhead = false;
 
     if (this.ws) {
       this.ws.close();
@@ -292,6 +302,13 @@ export class MetaTrackManager {
    */
   getPlaybackTime(): number {
     return this.currentPlaybackTime;
+  }
+
+  /**
+   * Update paused state (for far-ahead recovery check)
+   */
+  setPaused(isPaused: boolean): void {
+    this.paused = isPaused;
   }
 
   /**
@@ -555,6 +572,19 @@ export class MetaTrackManager {
   }
 
   /**
+   * Set playback speed on the metadata WebSocket.
+   * MistServer adjusts metadata delivery rate to match.
+   * Upstream player.js:888 sends this on ratechange.
+   */
+  sendSetSpeed(rate: number): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const playRate = rate === 1 ? "auto" : rate;
+      this.ws.send(JSON.stringify({ type: "set_speed", play_rate: playRate }));
+      this.log(`Set speed: ${playRate}`);
+    }
+  }
+
+  /**
    * Handle incoming WebSocket message
    * MistServer format:
    * - Metadata: {time:<ms>, track:<index>, data:{...}}
@@ -572,16 +602,9 @@ export class MetaTrackManager {
         // Check if we're subscribed to this track (or "all")
         const trackId = String(parsed.track);
         if (this.subscriptions.has(trackId) || this.subscriptions.has("all")) {
-          // Subtitles and chapters should be buffered for timed playback
-          // Other events (scores, generic events) dispatch immediately
-          if (event.type === "subtitle" || event.type === "chapter") {
-            this.addToTimedBuffer(event);
-            // Also process immediately in case we're already past this time
-            this.processTimedEvents();
-          } else {
-            // Dispatch immediately for non-timed events
-            this.dispatchEvent(event);
-          }
+          // Buffer all timed metadata events for time-synced playback (upstream parity)
+          this.addToTimedBuffer(event);
+          this.processTimedEvents();
         }
         return;
       }
@@ -590,24 +613,42 @@ export class MetaTrackManager {
       if ("type" in parsed) {
         switch (parsed.type) {
           case "on_time":
-            // Server time update - can be used for buffer management
+            // Upstream player.js:781-790 — hold/resume/fast_forward choreography
             if (parsed.data?.current) {
               const serverTimeMs = parsed.data.current;
               const playerTimeMs = this.currentPlaybackTime * 1000;
               const aheadMs = serverTimeMs - playerTimeMs;
 
-              // If server is too far ahead, pause and wait
-              if (aheadMs > this.bufferAhead * 6 * 1000) {
-                this.log(`Server ${aheadMs}ms ahead, sending hold`);
+              if (!this.isFarAhead && aheadMs > this.bufferAhead * 6 * 1000) {
+                this.isFarAhead = true;
                 this.sendHold();
+                this.log(`Server ${aheadMs}ms ahead, pausing metadata. Resuming in 5s`);
+                this.farAheadTimer = setTimeout(() => {
+                  this.farAheadTimer = null;
+                  this.isFarAhead = false;
+                  if (!this.paused) {
+                    this.sendPlay();
+                  }
+                  this.sendFastForward(this.currentPlaybackTime + this.bufferAhead);
+                }, 5000);
               }
             }
             break;
 
           case "seek":
-            // Seek completed - clear buffers
+            // Seek completed - clear buffers and cancel any far-ahead timer
             this.log("Server confirmed seek, clearing buffers");
             this.timedEventBuffer.clear();
+            if (this.farAheadTimer) {
+              clearTimeout(this.farAheadTimer);
+              this.farAheadTimer = null;
+            }
+            this.isFarAhead = false;
+            break;
+
+          case "live":
+            // Status/heartbeat message in some MistServer builds.
+            // Not actionable for timed metadata flow.
             break;
 
           default:

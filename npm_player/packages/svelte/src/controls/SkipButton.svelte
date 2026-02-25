@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getContext } from "svelte";
+  import { readable } from "svelte/store";
   import type { Readable } from "svelte/store";
   import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
   import { SkipBackIcon, SkipForwardIcon } from "../icons";
@@ -11,9 +12,10 @@
 
   let { direction, seconds = 10 }: Props = $props();
   let pc: any = getContext("fw-player-controller");
-  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
-  const fallbackT = createTranslator({ locale: "en" });
-  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorStore: Readable<TranslateFn> =
+    getContext<Readable<TranslateFn> | undefined>("fw-translator") ??
+    readable(createTranslator({ locale: "en" }));
+  let t: TranslateFn = $derived($translatorStore);
 
   let label = $derived(direction === "back" ? t("skipBackward") : t("skipForward"));
 </script>
@@ -23,7 +25,8 @@
   class="fw-btn-flush"
   aria-label={label}
   title={label}
-  onclick={() => pc?.seek((pc?.currentTime ?? 0) + (direction === "back" ? -seconds : seconds))}
+  onclick={() =>
+    pc?.seek((pc?.currentTime ?? 0) + (direction === "back" ? -seconds * 1000 : seconds * 1000))}
 >
   {#if direction === "back"}
     <SkipBackIcon size={16} />

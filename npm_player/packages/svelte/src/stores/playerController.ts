@@ -35,9 +35,9 @@ export interface PlayerControllerState {
   metadata: ContentMetadata | null;
   /** Video element (null if not ready) */
   videoElement: HTMLVideoElement | null;
-  /** Current time */
+  /** Current time in milliseconds */
   currentTime: number;
-  /** Duration */
+  /** Duration in milliseconds */
   duration: number;
   /** Is playing */
   isPlaying: boolean;
@@ -102,9 +102,9 @@ export interface PlayerControllerStore extends Readable<PlayerControllerState> {
   pause: () => void;
   /** Toggle play/pause */
   togglePlay: () => void;
-  /** Seek to time */
+  /** Seek to time (milliseconds) */
   seek: (time: number) => void;
-  /** Seek by delta */
+  /** Seek by delta (milliseconds) */
   seekBy: (delta: number) => void;
   /** Jump to live edge (for live streams) */
   jumpToLive: () => void;
@@ -164,7 +164,7 @@ const initialState: PlayerControllerState = {
   isPlaying: false,
   isPaused: true,
   isBuffering: false,
-  isMuted: true,
+  isMuted: false,
   volume: 1,
   error: null,
   errorDetails: null,

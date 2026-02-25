@@ -717,7 +717,9 @@ export class FwDevModePanel extends LitElement {
             : html`
                 ${allCombinations.map((combo, index) => {
                   const isCodecIncompatible = combo.codecIncompatible === true;
-                  if (!combo.compatible && !isCodecIncompatible && !this._showDisabledPlayers) {
+                  const isPartial = ((combo as any).missingTracks?.length ?? 0) > 0;
+                  const isWarn = isCodecIncompatible || isPartial;
+                  if (!combo.compatible && !isWarn && !this._showDisabledPlayers) {
                     return nothing;
                   }
 
@@ -726,9 +728,9 @@ export class FwDevModePanel extends LitElement {
                     SOURCE_TYPE_LABELS[combo.sourceType] || combo.sourceType.split("/").pop();
 
                   const scoreClass =
-                    !combo.compatible && !isCodecIncompatible
+                    !combo.compatible && !isWarn
                       ? "fw-dev-combo-score--disabled"
-                      : isCodecIncompatible
+                      : isWarn
                         ? "fw-dev-combo-score--low"
                         : combo.score >= 2
                           ? "fw-dev-combo-score--high"
@@ -738,16 +740,16 @@ export class FwDevModePanel extends LitElement {
 
                   const rankClass = isActive
                     ? "fw-dev-combo-rank--active"
-                    : !combo.compatible && !isCodecIncompatible
+                    : !combo.compatible && !isWarn
                       ? "fw-dev-combo-rank--disabled"
-                      : isCodecIncompatible
+                      : isWarn
                         ? "fw-dev-combo-rank--warn"
                         : "";
 
                   const typeClass =
-                    !combo.compatible && !isCodecIncompatible
+                    !combo.compatible && !isWarn
                       ? "fw-dev-combo-type--disabled"
-                      : isCodecIncompatible
+                      : isWarn
                         ? "fw-dev-combo-type--warn"
                         : "";
 
@@ -766,8 +768,8 @@ export class FwDevModePanel extends LitElement {
                         class=${classMap({
                           "fw-dev-combo-btn": true,
                           "fw-dev-combo-btn--active": isActive,
-                          "fw-dev-combo-btn--disabled": !combo.compatible && !isCodecIncompatible,
-                          "fw-dev-combo-btn--codec-warn": isCodecIncompatible,
+                          "fw-dev-combo-btn--disabled": !combo.compatible && !isWarn,
+                          "fw-dev-combo-btn--codec-warn": isWarn,
                         })}
                         @click=${() => this._handleSelectCombo(index)}
                       >
@@ -776,9 +778,9 @@ export class FwDevModePanel extends LitElement {
                             "fw-dev-combo-rank": true,
                             [rankClass]: rankClass.length > 0,
                           })}
-                          >${combo.compatible
+                          >${combo.compatible && !isPartial
                             ? index + 1
-                            : isCodecIncompatible
+                            : isWarn
                               ? "\u26A0"
                               : "\u2014"}</span
                         >
@@ -822,6 +824,14 @@ export class FwDevModePanel extends LitElement {
                                   : nothing}
                               </div>
 
+                              ${combo.note
+                                ? html`<div class="fw-dev-tooltip-note">${combo.note}</div>`
+                                : nothing}
+                              ${isPartial
+                                ? html`<div class="fw-dev-tooltip-note">
+                                    No compatible ${(combo as any).missingTracks.join(", ")} codec
+                                  </div>`
+                                : nothing}
                               ${combo.compatible && combo.scoreBreakdown
                                 ? html`
                                     <div class="fw-dev-tooltip-score">

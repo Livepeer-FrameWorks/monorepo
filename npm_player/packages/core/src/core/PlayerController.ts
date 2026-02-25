@@ -18,6 +18,7 @@ import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
 import { QualityMonitor, type PlayerProtocol } from "./QualityMonitor";
 import { MetaTrackManager } from "./MetaTrackManager";
+import { attemptAutoplay, type AutoplayResult } from "./AutoplayRecovery";
 import {
   calculateSeekableRange,
   calculateLiveThresholds,
@@ -136,6 +137,10 @@ export interface PlayerControllerEvents {
   holdSpeedEnd: void;
   /** Captions/subtitles toggled */
   captionsChange: { enabled: boolean };
+  /** Mute state changed (e.g. autoplay muted fallback) */
+  muteChange: { muted: boolean };
+  /** Autoplay attempt resolved */
+  autoplayResult: { status: AutoplayResult };
 
   // ============================================================================
   // Seeking & Live State Events (Centralized from wrappers)
@@ -581,6 +586,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _errorShownAt: number = 0;
   private _errorCleared: boolean = false;
   private _isTransitioning: boolean = false;
+  private _qualityFallbackInProgress: boolean = false;
+  private _qualityFallbackLastAt: number = 0;
   private _errorCount: number = 0;
   private _lastErrorTime: number = 0;
   private _retrySuppressUntil: number = 0;
@@ -616,9 +623,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _seekableStart: number = 0;
   private _liveEdge: number = 0;
   private _canSeek: boolean = false;
+  private _seekingLoggedOnce: boolean = false;
+  private _pendingPlayIntent: boolean = false;
   private _isNearLive: boolean = true;
   private _latencyTier: LatencyTier = "medium";
-  private _liveThresholds: LiveThresholds = { exitLive: 15, enterLive: 5 };
+  private _liveThresholds: LiveThresholds = { exitLive: 15000, enterLive: 5000 };
   private _buffered: TimeRanges | null = null;
   private _hasAudio: boolean = true;
   private _lastVolume: number = 1;
@@ -629,6 +638,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private static readonly AUTO_CLEAR_ERROR_DELAY_MS = 2000;
   private static readonly HARD_FAILURE_ERROR_THRESHOLD = 5;
   private static readonly HARD_FAILURE_ERROR_WINDOW_MS = 60000;
+  private static readonly QUALITY_FALLBACK_COOLDOWN_MS = 15000;
   private static readonly FATAL_ERROR_KEYWORDS = [
     "fatal",
     "network error",
@@ -731,8 +741,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       await this.initializePlayer();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      this.setState("error", { error: message });
-      this.emit("error", { error: message });
+      // Don't emit error for offline streams — the idle screen handles that UX.
+      // Emitting here creates stale _displayedError that resurfaces when stream comes online.
+      const isOffline = /offline|not found|stream not found/i.test(message);
+      if (!isOffline) {
+        this.setState("error", { error: message });
+        this.emit("error", { error: message });
+      }
 
       // Even if initial resolution failed (e.g., stream offline), start polling
       // so we can detect when the stream comes online and re-initialize
@@ -761,6 +776,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.currentPlayer = null;
     this.lastEmittedState = null;
     this._isHovering = false;
+    this._hasPlaybackStarted = false;
+    this._isBuffering = false;
+    this._stallStartTime = 0;
+    this._seekableStart = 0;
+    this._liveEdge = 0;
+    this._canSeek = false;
+    this._isNearLive = true;
+    this._qualityFallbackInProgress = false;
   }
 
   /**
@@ -1037,12 +1060,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   // Seeking & Live State Getters (Centralized from wrappers)
   // ============================================================================
 
-  /** Get start of seekable range (seconds) */
+  /** Get start of seekable range (ms) */
   getSeekableStart(): number {
     return this._seekableStart;
   }
 
-  /** Get live edge / end of seekable range (seconds) */
+  /** Get live edge / end of seekable range (ms) */
   getLiveEdge(): number {
     return this._liveEdge;
   }
@@ -1177,7 +1200,15 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * - Never show idle after playback has started (unless explicit error)
    */
   shouldShowIdleScreen(): boolean {
-    // Never show idle after playback has started
+    // For live streams, always show idle/offline UI when stream state says offline,
+    // even if playback started earlier in this controller lifetime.
+    if (!this.needsColdStart()) {
+      if (this.streamState?.isOnline === false || this.streamState?.status === "OFFLINE") {
+        return true;
+      }
+    }
+
+    // For non-offline states, keep idle hidden once playback started.
     if (this._hasPlaybackStarted) return false;
 
     if (this.needsColdStart()) {
@@ -1330,7 +1361,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
     if (this.videoElement) {
       await this.videoElement.play();
+      return;
     }
+    // No player or video element yet — queue for onReady
+    this._pendingPlayIntent = true;
   }
 
   /** Pause playback */
@@ -1342,16 +1376,19 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.videoElement?.pause();
   }
 
-  /** Seek to time */
-  seek(time: number): void {
+  /** Seek to time in milliseconds */
+  seek(timeMs: number): void {
+    this.qualityMonitor?.resetForSeek();
+    const targetMs = this.clampSeekTarget(timeMs);
+
     // Use player-specific seek if available (for WebCodecs, MEWS, etc.)
     if (this.currentPlayer?.seek) {
-      this.currentPlayer.seek(time);
+      this.currentPlayer.seek(targetMs);
       return;
     }
-    // Fallback to direct video element seek
+    // Fallback to direct video element seek (convert ms → seconds at browser boundary)
     if (this.videoElement) {
-      this.videoElement.currentTime = time;
+      this.videoElement.currentTime = targetMs / 1000;
     }
   }
 
@@ -1414,30 +1451,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     } else if (this.videoElement) {
       this.videoElement.playbackRate = rate;
     }
+    this.metaTrackManager?.sendSetSpeed(rate);
     this.emit("speedChange", { rate });
   }
 
   /** Jump to live edge (for live streams) */
   jumpToLive(): void {
+    this.qualityMonitor?.resetForSeek();
     // Try player-specific implementation first (WebCodecs uses server time)
     if (this.currentPlayer?.jumpToLive) {
       this.currentPlayer.jumpToLive();
-      const el = this.videoElement;
-      if (el && !isMediaStreamSource(el)) {
-        const target = this._liveEdge;
-        if (Number.isFinite(target) && target > 0) {
-          // Fallback: if player-specific jump doesn't move, seek to computed live edge
-          setTimeout(() => {
-            if (!this.videoElement) return;
-            const current = this.getEffectiveCurrentTime();
-            if (target - current > 1) {
-              try {
-                this.videoElement.currentTime = target;
-              } catch {}
-            }
-          }, 200);
-        }
-      }
       this._isNearLive = true;
       this.emitSeekingState();
       return;
@@ -1455,18 +1478,18 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Try browser's seekable range first (most reliable for HLS/DASH/MEWS)
     if (el.seekable && el.seekable.length > 0) {
-      const liveEdge = el.seekable.end(el.seekable.length - 1);
-      if (Number.isFinite(liveEdge) && liveEdge > 0) {
-        el.currentTime = liveEdge;
+      const liveEdgeSec = el.seekable.end(el.seekable.length - 1);
+      if (Number.isFinite(liveEdgeSec) && liveEdgeSec > 0) {
+        el.currentTime = liveEdgeSec;
         this._isNearLive = true;
         this.emitSeekingState();
         return;
       }
     }
 
-    // Try our computed live edge (from MistServer metadata)
+    // Try our computed live edge in ms (from MistServer metadata)
     if (this._liveEdge > 0 && Number.isFinite(this._liveEdge)) {
-      el.currentTime = this._liveEdge;
+      el.currentTime = this._liveEdge / 1000;
       this._isNearLive = true;
       this.emitSeekingState();
       return;
@@ -1608,20 +1631,24 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     return tracks;
   }
 
+  /** Get current playback position in ms (prefers player override, falls back to video element) */
   private getEffectiveCurrentTime(): number {
     if (this.currentPlayer && typeof this.currentPlayer.getCurrentTime === "function") {
       const t = this.currentPlayer.getCurrentTime();
       if (Number.isFinite(t)) return t;
     }
-    return this.videoElement?.currentTime ?? 0;
+    return (this.videoElement?.currentTime ?? 0) * 1000;
   }
 
+  /** Get content duration in ms (prefers player override, falls back to video element) */
   private getEffectiveDuration(): number {
     if (this.currentPlayer && typeof this.currentPlayer.getDuration === "function") {
       const d = this.currentPlayer.getDuration();
       if (Number.isFinite(d) || d === Infinity) return d;
     }
-    return this.videoElement?.duration ?? NaN;
+    const raw = this.videoElement?.duration ?? NaN;
+    if (!Number.isFinite(raw)) return raw; // preserve NaN/Infinity
+    return raw * 1000;
   }
 
   private getPlayerSeekableRange(): { start: number; end: number } | null {
@@ -1639,7 +1666,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     return null;
   }
 
-  private getFrameStepSecondsFromTracks(): number | undefined {
+  private getFrameStepMsFromTracks(): number | undefined {
     const tracks = this.streamInfo?.meta?.tracks;
     if (!tracks || tracks.length === 0) return undefined;
     const videoTracks = tracks.filter(
@@ -1648,26 +1675,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (videoTracks.length === 0) return undefined;
     const fpks = Math.max(...videoTracks.map((t) => t.fpks as number));
     if (!Number.isFinite(fpks) || fpks <= 0) return undefined;
-    // fpks = frames per kilosecond => frame duration in seconds = 1000 / fpks
-    return 1000 / fpks;
-  }
-
-  private deriveBufferWindowMsFromTracks(
-    tracks?: Record<string, { firstms?: number; lastms?: number }>
-  ): number | undefined {
-    if (!tracks) return undefined;
-    const trackList = Object.values(tracks);
-    if (trackList.length === 0) return undefined;
-    const firstmsValues = trackList
-      .map((t) => t.firstms)
-      .filter((v): v is number => v !== undefined);
-    const lastmsValues = trackList.map((t) => t.lastms).filter((v): v is number => v !== undefined);
-    if (firstmsValues.length === 0 || lastmsValues.length === 0) return undefined;
-    const firstms = Math.max(...firstmsValues);
-    const lastms = Math.min(...lastmsValues);
-    const window = lastms - firstms;
-    if (!Number.isFinite(window) || window <= 0) return undefined;
-    return window;
+    // fpks = frames per kilosecond => frame duration in ms = 1000000 / fpks
+    return 1000000 / fpks;
   }
 
   /** Get current time */
@@ -1697,19 +1706,19 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Check if muted */
   isMuted(): boolean {
-    return this.videoElement?.muted ?? true;
+    return this.videoElement?.muted ?? false;
   }
 
-  /** Skip backward by specified seconds (default 10) */
-  skipBack(seconds: number = 10): void {
-    this.seekBy(-seconds);
-    this.emit("skipBackward", { seconds });
+  /** Skip backward by specified ms (default 10000ms = 10s) */
+  skipBack(ms: number = 10000): void {
+    this.seekBy(-ms);
+    this.emit("skipBackward", { seconds: ms / 1000 });
   }
 
-  /** Skip forward by specified seconds (default 10) */
-  skipForward(seconds: number = 10): void {
-    this.seekBy(seconds);
-    this.emit("skipForward", { seconds });
+  /** Skip forward by specified ms (default 10000ms = 10s) */
+  skipForward(ms: number = 10000): void {
+    this.seekBy(ms);
+    this.emit("skipForward", { seconds: ms / 1000 });
   }
 
   /** Toggle play/pause */
@@ -1738,20 +1747,29 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
   }
 
-  /** Seek relative to current position */
-  seekBy(delta: number): void {
+  /** Seek relative to current position (delta in ms) */
+  seekBy(deltaMs: number): void {
     const currentTime = this.getEffectiveCurrentTime();
-    const duration = this.getEffectiveDuration();
-    const newTime = currentTime + delta;
-    const maxTime = isFinite(duration) ? duration : currentTime + Math.abs(delta);
-    this.seek(Math.max(0, Math.min(maxTime, newTime)));
+    this.seek(currentTime + deltaMs);
   }
 
   /** Seek to percentage (0-1) of duration */
   seekPercent(percent: number): void {
+    const clampedPercent = Math.max(0, Math.min(1, percent));
+    if (
+      this._canSeek &&
+      Number.isFinite(this._seekableStart) &&
+      Number.isFinite(this._liveEdge) &&
+      this._liveEdge > this._seekableStart
+    ) {
+      const span = this._liveEdge - this._seekableStart;
+      this.seek(this._seekableStart + clampedPercent * span);
+      return;
+    }
+
     const duration = this.getEffectiveDuration();
     if (isFinite(duration)) {
-      this.seek(duration * Math.max(0, Math.min(1, percent)));
+      this.seek(duration * clampedPercent);
     }
   }
 
@@ -1827,25 +1845,45 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         ? "ultra-low"
         : "medium";
 
-    // Update live thresholds (with buffer window scaling)
-    const bufferWindowMs =
-      mistStreamInfo?.meta?.buffer_window ??
-      this.deriveBufferWindowMsFromTracks(
-        mistStreamInfo?.meta?.tracks as
-          | Record<string, { firstms?: number; lastms?: number }>
-          | undefined
-      );
+    // Authoritative seek range from MistServer track data (computed once, reused below)
+    const mistRange = this.getMistTrackSeekRange();
+    const rawBufferWindow = mistStreamInfo?.meta?.buffer_window;
+    const bufferWindowMs: number | undefined =
+      typeof rawBufferWindow === "number" && rawBufferWindow > 0
+        ? rawBufferWindow
+        : mistRange
+          ? mistRange.end - mistRange.start
+          : undefined;
     this._liveThresholds = calculateLiveThresholds(sourceType, this._isWebRTC, bufferWindowMs);
 
     // Calculate seekable range using centralized logic (allow player overrides)
     const playerRange = this.getPlayerSeekableRange();
+
+    // Log seeking inputs on first calculation and when values change
+    if (isLive && !this._seekingLoggedOnce) {
+      this._seekingLoggedOnce = true;
+      this.log(
+        `[Seeking] initial state: isLive=${isLive} sourceType=${sourceType} ` +
+          `bufferWindowMs=${bufferWindowMs} ` +
+          `playerRange=${JSON.stringify(playerRange)} ` +
+          `video.seekable.length=${el.seekable?.length ?? 0} ` +
+          `hasMistStreamInfo=${!!mistStreamInfo} ` +
+          `trackCount=${mistStreamInfo?.meta?.tracks ? Object.keys(mistStreamInfo.meta.tracks).length : 0}`
+      );
+    }
     const allowMediaStreamDvr =
       isMediaStreamSource(el) &&
       bufferWindowMs !== undefined &&
       bufferWindowMs > 0 &&
       sourceType !== "whep" &&
       sourceType !== "webrtc";
-    const { seekableStart, liveEdge } = playerRange
+    // Pass shifted buffered start so the fallback formula uses the same coordinate
+    // space as liveEdge (both include lastms shift from NativePlayer)
+    const bufferedRanges = this.currentPlayer?.getBufferedRanges?.() ?? null;
+    const bufferedStartMs =
+      bufferedRanges && bufferedRanges.length > 0 ? bufferedRanges.start(0) * 1000 : undefined;
+
+    const initialSeekRange = playerRange
       ? { seekableStart: playerRange.start, liveEdge: playerRange.end }
       : calculateSeekableRange({
           isLive,
@@ -1854,23 +1892,71 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           currentTime,
           duration,
           allowMediaStreamDvr,
+          bufferedStartMs,
         });
+    let seekableStart = initialSeekRange.seekableStart;
+    const liveEdge = initialSeekRange.liveEdge;
+
+    // Mist buffer_window is authoritative for DVR size. If player APIs report an
+    // ever-growing range (common with some live playlists), clamp to a sliding window.
+    if (
+      isLive &&
+      bufferWindowMs !== undefined &&
+      bufferWindowMs > 0 &&
+      Number.isFinite(seekableStart) &&
+      Number.isFinite(liveEdge) &&
+      liveEdge > seekableStart
+    ) {
+      const reportedWindow = liveEdge - seekableStart;
+      const allowedWindow = bufferWindowMs * 1.25;
+      if (reportedWindow > allowedWindow) {
+        seekableStart = Math.max(0, liveEdge - bufferWindowMs);
+      }
+    }
+
+    // Push authoritative seek window to the player for anchor-based coordinates.
+    // mistRange already incorporates buffer_window for a stable DVR width.
+    if (this.currentPlayer?.setSeekableRangeHint) {
+      if (isLive && mistRange && mistRange.end > mistRange.start) {
+        this.currentPlayer.setSeekableRangeHint(mistRange);
+      } else if (
+        isLive &&
+        Number.isFinite(seekableStart) &&
+        Number.isFinite(liveEdge) &&
+        liveEdge > seekableStart
+      ) {
+        this.currentPlayer.setSeekableRangeHint({ start: seekableStart, end: liveEdge });
+      } else {
+        this.currentPlayer.setSeekableRangeHint(null);
+      }
+    }
 
     // Update can seek - pass player's canSeek if available (e.g., WebCodecs uses server commands)
     const playerCanSeek =
       this.currentPlayer && typeof (this.currentPlayer as any).canSeek === "function"
         ? () => (this.currentPlayer as any).canSeek()
         : undefined;
+    const prevCanSeek = this._canSeek;
     this._canSeek = canSeekStream({
       video: el,
       isLive,
       duration,
       bufferWindowMs,
       playerCanSeek,
+      playerSeekableRange: playerRange,
     });
 
+    if (this._canSeek !== prevCanSeek) {
+      this.log(
+        `[Seeking] canSeek changed: ${prevCanSeek} -> ${this._canSeek} ` +
+          `bufferWindowMs=${bufferWindowMs} seekableRange=[${seekableStart.toFixed(1)}, ${liveEdge.toFixed(1)}] ` +
+          `playerCanSeek=${playerCanSeek ? playerCanSeek() : "n/a"}`
+      );
+    }
+
     // Update buffered ranges
-    this._buffered = el.buffered.length > 0 ? el.buffered : null;
+    const correctedBuffered = this.getBufferedRanges();
+    this._buffered = correctedBuffered && correctedBuffered.length > 0 ? correctedBuffered : null;
 
     // Check if values changed
     const seekableChanged = this._seekableStart !== seekableStart || this._liveEdge !== liveEdge;
@@ -1885,9 +1971,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       Number.isFinite(seekableStart) &&
       liveEdge > seekableStart;
     const isLiveOnly = isLive && !hasDvrWindow;
+    const frameStepMs = this.getFrameStepMsFromTracks();
     this.interactionController?.updateConfig({
       isLive: isLiveOnly,
-      frameStepSeconds: this.getFrameStepSecondsFromTracks(),
+      frameStepSeconds: frameStepMs !== undefined ? frameStepMs / 1000 : undefined,
     });
 
     // Update isNearLive using hysteresis
@@ -2050,6 +2137,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // Suppress errors during retry window to prevent popup flash-back
     if (Date.now() < this._retrySuppressUntil) {
       this.log(`Ignoring error during retry suppression window: ${error}`);
+      return;
+    }
+
+    // When live stream is offline, prefer idle/offline UI over blocking error overlays.
+    if (
+      this.isEffectivelyLive() &&
+      this.streamState?.isOnline === false &&
+      /offline|not found|stream not found/i.test(error)
+    ) {
+      this.log(`Suppressing offline error while stream is offline: ${error}`);
       return;
     }
 
@@ -2339,15 +2436,15 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   getMetadataPayload(): PlayerControllerEvents["metadataUpdate"] {
     const video = this.videoElement;
-    const bufferedAhead =
+    const bufferedAheadMs =
       video && video.buffered.length > 0
-        ? video.buffered.end(video.buffered.length - 1) - video.currentTime
+        ? (video.buffered.end(video.buffered.length - 1) - video.currentTime) * 1000
         : 0;
 
     return {
-      currentTime: video?.currentTime ?? 0,
-      duration: video?.duration ?? NaN,
-      bufferedAhead: Math.max(0, bufferedAhead),
+      currentTime: this.getEffectiveCurrentTime(),
+      duration: this.getEffectiveDuration(),
+      bufferedAhead: Math.max(0, bufferedAheadMs),
       qualityScore: this._playbackQuality?.score,
       playerInfo: this._currentPlayerInfo ?? undefined,
       sourceInfo: this._currentSourceInfo ?? undefined,
@@ -2355,7 +2452,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       isBuffering: this._isBuffering,
       isPaused: video?.paused ?? true,
       volume: video?.volume ?? 1,
-      muted: video?.muted ?? true,
+      muted: video?.muted ?? false,
     };
   }
 
@@ -2612,6 +2709,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         if (mistTracks.length > 0) {
           this.streamInfo.meta.tracks = mistTracks;
           this.log(`[stateChange] Updated ${mistTracks.length} tracks from MistServer`);
+
+          // Recalculate seeking state with new track data — video events may not
+          // fire if the video is stalled, so we must trigger this explicitly
+          this.updateSeekingState();
         }
       }
 
@@ -2623,6 +2724,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       // Auto-play when stream transitions from offline to online
       // This handles the case where user is watching IdleScreen and stream comes online
       if (wasOnline === false && isNowOnline === true && this.isEffectivelyLive()) {
+        // Clear any stale UI error from the offline phase, including errors that
+        // were emitted directly (outside setPassiveError) and only exist in wrapper state.
+        this.clearError();
+        this.emit("errorCleared", undefined as never);
         this.log("Stream came online, triggering auto-play");
         if (this.videoElement) {
           // Player already initialized - just play
@@ -2759,6 +2864,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           channels: t.channels as number | undefined,
           rate: t.rate as number | undefined,
           size: t.size as number | undefined,
+          firstms: t.firstms as number | undefined,
+          lastms: t.lastms as number | undefined,
         });
       }
     }
@@ -2833,7 +2940,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     const playerOptions: CorePlayerOptions = {
       autoplay: autoplay !== false,
-      muted: muted !== false,
+      muted: muted === true,
       controls: controls !== false,
       poster: poster,
       debug: this.config.debug,
@@ -2854,10 +2961,37 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         } catch {}
         this.videoElement = el;
         this.currentPlayer = this.playerManager.getCurrentPlayer();
+        this._seekingLoggedOnce = false;
         this.setupVideoEventListeners(el);
         // Initialize sub-controllers after video is ready
         this.initializeSubControllers();
         this.emit("ready", { videoElement: el });
+
+        // Drain queued play intent from pre-boot play() calls
+        if (this._pendingPlayIntent) {
+          this._pendingPlayIntent = false;
+          el.play().catch(() => {});
+        }
+
+        // Centralized autoplay recovery (upstream parity: unmuted → muted → give up)
+        if (autoplay !== false && el.paused) {
+          attemptAutoplay(el, {
+            onMutedFallback: () => {
+              this.log("[initializePlayer] Autoplay succeeded with muted fallback");
+              this.emit("muteChange", { muted: true });
+            },
+            onFailed: () => {
+              this.log("[initializePlayer] Autoplay failed entirely — awaiting user interaction");
+            },
+          }).then((result: AutoplayResult) => {
+            this.mistReporter?.setAutoplayStatus(result);
+            this.emit("autoplayResult", { status: result });
+          });
+        } else if (autoplay !== false) {
+          // Already playing (browser autoplay attribute worked)
+          this.mistReporter?.setAutoplayStatus("success");
+          this.emit("autoplayResult", { status: "success" as AutoplayResult });
+        }
       },
       onTimeUpdate: (_t) => {
         if (this.isDestroyed) return;
@@ -2948,37 +3082,36 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       // Clear stall timer on canplay
       this._stallStartTime = 0;
       this.setState("playing");
+      this.metaTrackManager?.setPaused(false);
       // Attempt to clear error on canplay
       this.attemptClearError();
     };
     const onPause = () => {
       if (this.shouldSuppressVideoEvents()) return;
       this.setState("paused");
+      this.metaTrackManager?.setPaused(true);
     };
     const onEnded = () => this.setState("ended");
     const onTimeUpdate = () => {
+      this.updateSeekingState();
       this.emit("timeUpdate", {
         currentTime: this.getEffectiveCurrentTime(),
         duration: this.getEffectiveDuration(),
       });
-      // Update seeking state (seekable range, isNearLive, etc.)
-      this.updateSeekingState();
-      // Attempt to clear error when playback is progressing
       if (this.getEffectiveCurrentTime() > 0) {
         this.attemptClearError();
       }
     };
     const onDurationChange = () => {
+      this.updateSeekingState();
       this.emit("timeUpdate", {
         currentTime: this.getEffectiveCurrentTime(),
         duration: this.getEffectiveDuration(),
       });
-      // Update seeking state on duration change
-      this.updateSeekingState();
     };
     const onProgress = () => {
-      // Update buffered ranges
-      this._buffered = el.buffered;
+      // Use player-specific override when available (upstream parity)
+      this._buffered = this.getBufferedRanges();
       // Recalculate seeking state when buffer updates
       this.updateSeekingState();
     };
@@ -3114,7 +3247,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (!this.videoElement) return;
 
     // Map player shortname to QualityMonitor protocol for threshold selection
-    const shortname = this._currentPlayerInfo?.shortname ?? "unknown";
+    const shortname =
+      this._currentPlayerInfo?.shortname ?? this.currentPlayer?.capability?.shortname ?? "unknown";
     const protocolMap: Record<string, PlayerProtocol> = {
       hlsjs: "hls",
       videojs: "hls",
@@ -3131,10 +3265,60 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       sampleInterval: 1000,
       protocol,
       onFallbackRequest: ({ score }) => {
-        if (this.isDestroyed || this._isTransitioning) return;
-        const pct = Math.round(score * 100);
-        this.log(`[QualityMonitor] Poor playback (${pct}%)`);
-        this.setPassiveError(`Poor playback quality (${pct}%)`);
+        if (this.isDestroyed || this._isTransitioning || this._qualityFallbackInProgress) return;
+        const activeShortname =
+          this.currentPlayer?.capability?.shortname ??
+          this._currentPlayerInfo?.shortname ??
+          "unknown";
+        // WebCodecs live path has its own catchup/seek logic; aggressive combo fallback here
+        // causes teardown/re-init loops and makes near-live behavior worse.
+        if (activeShortname === "webcodecs" && this.isEffectivelyLive()) {
+          this.log(
+            "[QualityMonitor] Poor playback while live WebCodecs active — skipping auto-fallback"
+          );
+          return;
+        }
+
+        const normalizedScore = Math.max(0, Math.min(2, score));
+        const pct = Math.round(normalizedScore * 100);
+        const now = Date.now();
+        if (now - this._qualityFallbackLastAt < PlayerController.QUALITY_FALLBACK_COOLDOWN_MS) {
+          this.log(`[QualityMonitor] Poor playback (${pct}%) — cooldown active, skipping fallback`);
+          return;
+        }
+
+        this.log(`[QualityMonitor] Poor playback (${pct}%) — attempting fallback`);
+        if (this.playerManager.canAttemptFallback()) {
+          this._qualityFallbackLastAt = now;
+          this._qualityFallbackInProgress = true;
+          this._isTransitioning = true;
+          // Hide stale overlay while transition is in progress.
+          this.clearError();
+          this.emit("errorCleared", undefined as never);
+          this.playerManager
+            .tryPlaybackFallback()
+            .catch(() => {
+              // Fallback failed - show passive warning instead of blocking modal.
+              this._errorText = `Poor playback quality (${pct}%)`;
+              this._isPassiveError = true;
+              this._errorShownAt = Date.now();
+              this._errorCleared = false;
+              this._playbackResumedSinceError = false;
+              this.emit("error", { error: this._errorText });
+            })
+            .finally(() => {
+              this._isTransitioning = false;
+              this._qualityFallbackInProgress = false;
+            });
+        } else {
+          // Quality dip without fallback — force passive (toast), never blocking modal.
+          this._errorText = `Poor playback quality (${pct}%)`;
+          this._isPassiveError = true;
+          this._errorShownAt = Date.now();
+          this._errorCleared = false;
+          this._playbackResumedSinceError = false;
+          this.emit("error", { error: this._errorText });
+        }
       },
     });
     this.qualityMonitor.start(this.videoElement);
@@ -3181,7 +3365,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       videoElement: this.videoElement,
       isLive: isLiveOnly,
       isPaused: () => this.currentPlayer?.isPaused?.() ?? this.videoElement?.paused ?? true,
-      frameStepSeconds: this.getFrameStepSecondsFromTracks(),
+      frameStepSeconds: (() => {
+        const ms = this.getFrameStepMsFromTracks();
+        return ms !== undefined ? ms / 1000 : undefined;
+      })(),
       onFrameStep: (direction, seconds) => {
         const player = this.currentPlayer ?? this.playerManager.getCurrentPlayer();
         const playerName =
@@ -3200,23 +3387,30 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         return false;
       },
       onPlayPause: () => this.togglePlay(),
-      onSeek: (delta) => {
+      onSeek: (deltaSec) => {
         // End any speed hold before seeking
         if (this._isHoldingSpeed) {
           this._isHoldingSpeed = false;
           this.emit("holdSpeedEnd", undefined as never);
         }
-        this.seekBy(delta);
-        // Emit skip events
-        if (delta > 0) {
-          this.emit("skipForward", { seconds: delta });
+        // InteractionController passes seconds; seekBy expects ms
+        this.seekBy(deltaSec * 1000);
+        // Emit skip events (seconds for external consumers)
+        if (deltaSec > 0) {
+          this.emit("skipForward", { seconds: deltaSec });
         } else {
-          this.emit("skipBackward", { seconds: Math.abs(delta) });
+          this.emit("skipBackward", { seconds: Math.abs(deltaSec) });
         }
       },
       onVolumeChange: (delta) => {
         if (this.videoElement) {
-          const newVolume = Math.max(0, Math.min(1, this.videoElement.volume + delta));
+          // Snap to nonlinear volume levels (upstream parity)
+          const levels = [0, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0];
+          const current = this.videoElement.volume;
+          let idx = levels.findIndex((l) => l >= current - 0.01);
+          if (idx === -1) idx = levels.length - 1;
+          idx = Math.max(0, Math.min(levels.length - 1, idx + (delta > 0 ? 1 : -1)));
+          const newVolume = levels[idx];
           this.videoElement.volume = newVolume;
           this.emit("volumeChange", { volume: newVolume, muted: this.videoElement.muted });
         }
@@ -3294,18 +3488,27 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       debug: this.config.debug,
     });
 
+    // Set initial playback time before connecting so the first seek goes to the
+    // correct position (includes lastms offset for NativePlayer live streams)
+    const initialTimeSec = this.getEffectiveCurrentTime() / 1000;
+    if (initialTimeSec > 0) {
+      this.metaTrackManager.setPlaybackTime(initialTimeSec);
+    }
+
     this.metaTrackManager.connect();
 
     // Wire video timeupdate to MetaTrackManager
+    // Use player's effective time (includes lastms offset for NativePlayer) so the
+    // metadata WebSocket seeks to the correct absolute stream position, not browser-relative 0.
     if (this.videoElement) {
       const handleTimeUpdate = () => {
-        if (this.videoElement && this.metaTrackManager) {
-          this.metaTrackManager.setPlaybackTime(this.videoElement.currentTime);
+        if (this.metaTrackManager) {
+          this.metaTrackManager.setPlaybackTime(this.getEffectiveCurrentTime() / 1000);
         }
       };
       const handleSeeking = () => {
-        if (this.videoElement && this.metaTrackManager) {
-          this.metaTrackManager.onSeek(this.videoElement.currentTime);
+        if (this.metaTrackManager) {
+          this.metaTrackManager.onSeek(this.getEffectiveCurrentTime() / 1000);
         }
       };
 
@@ -3353,6 +3556,56 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (this.config.debug) {
       console.log(`[PlayerController] ${message}`);
     }
+  }
+
+  private clampSeekTarget(timeMs: number): number {
+    if (!Number.isFinite(timeMs)) {
+      return this.getEffectiveCurrentTime();
+    }
+
+    // Use _seekableStart/_liveEdge — they match the active player's coordinate space
+    // (absolute ms for anchor-based players, browser-local ms for HLS.js/VideoJS).
+    const rangeStart = this._seekableStart;
+    const rangeEnd = this._liveEdge;
+    if (
+      this._canSeek &&
+      Number.isFinite(rangeStart) &&
+      Number.isFinite(rangeEnd) &&
+      rangeEnd > rangeStart
+    ) {
+      return Math.max(rangeStart, Math.min(rangeEnd, timeMs));
+    }
+
+    const duration = this.getEffectiveDuration();
+    if (Number.isFinite(duration)) {
+      return Math.max(0, Math.min(duration, timeMs));
+    }
+
+    return Math.max(0, timeMs);
+  }
+
+  private getMistTrackSeekRange(): { start: number; end: number } | null {
+    const meta = this.streamState?.streamInfo?.meta;
+    const tracks = meta?.tracks as
+      | Record<string, { type?: string; firstms?: number; lastms?: number }>
+      | undefined;
+    if (!tracks) return null;
+
+    const nonMeta = Object.values(tracks).filter(
+      (t) => t.type !== "meta" && Number.isFinite(t.lastms) && (t.lastms ?? 0) > 0
+    );
+    if (nonMeta.length === 0) return null;
+
+    const starts = nonMeta.map((t) => t.firstms).filter((v): v is number => Number.isFinite(v));
+    const ends = nonMeta.map((t) => t.lastms).filter((v): v is number => Number.isFinite(v));
+    if (starts.length === 0 || ends.length === 0) return null;
+
+    const end = Math.max(...ends);
+    // buffer_window gives a stable DVR width; raw firstms fluctuates between prune cycles
+    const bw = meta?.buffer_window;
+    const start = typeof bw === "number" && bw > 0 ? end - bw : Math.min(...starts);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    return { start, end };
   }
 }
 

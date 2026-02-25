@@ -33,7 +33,7 @@ export class FwPlayer extends LitElement {
   @property({ attribute: "mist-url" }) mistUrl?: string;
   @property({ attribute: "auth-token" }) authToken?: string;
   @property({ type: Boolean }) autoplay = true;
-  @property({ type: Boolean }) muted = true;
+  @property({ type: Boolean }) muted = false;
   // React/Svelte use `stockControls` for native controls. Keep `controls` as a
   // compatibility no-op so WC parity does not hide custom controls/seekbar.
   @property({ type: Boolean }) controls = false;
@@ -765,7 +765,7 @@ export class FwPlayer extends LitElement {
                       >
                         ${this.pc.t("retry")}
                       </button>
-                      ${this.pc.canAttemptFallback()
+                      ${this.devMode && this.pc.canAttemptFallback()
                         ? html`
                             <button
                               type="button"
@@ -780,17 +780,21 @@ export class FwPlayer extends LitElement {
                             </button>
                           `
                         : nothing}
-                      <button
-                        type="button"
-                        class="fw-error-btn fw-error-btn--secondary"
-                        aria-label=${this.pc.t("reloadPlayer")}
-                        @click=${() => {
-                          this.pc.clearError();
-                          this.pc.reload();
-                        }}
-                      >
-                        ${this.pc.t("reloadPlayer")}
-                      </button>
+                      ${this.devMode
+                        ? html`
+                            <button
+                              type="button"
+                              class="fw-error-btn fw-error-btn--secondary"
+                              aria-label=${this.pc.t("reloadPlayer")}
+                              @click=${() => {
+                                this.pc.clearError();
+                                this.pc.reload();
+                              }}
+                            >
+                              ${this.pc.t("reloadPlayer")}
+                            </button>
+                          `
+                        : nothing}
                     </div>
                   </div>
                 </div>

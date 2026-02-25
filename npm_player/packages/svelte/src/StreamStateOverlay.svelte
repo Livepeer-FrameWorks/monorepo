@@ -11,6 +11,7 @@
 -->
 <script lang="ts">
   import { getContext } from "svelte";
+  import { readable } from "svelte/store";
   import type { Readable } from "svelte/store";
   import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
   import type { StreamStatus } from "@livepeer-frameworks/player-core";
@@ -39,9 +40,10 @@
     class: className = "",
   }: Props = $props();
 
-  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
-  const fallbackT = createTranslator({ locale: "en" });
-  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorStore: Readable<TranslateFn> =
+    getContext<Readable<TranslateFn> | undefined>("fw-translator") ??
+    readable(createTranslator({ locale: "en" }));
+  let t: TranslateFn = $derived($translatorStore);
 
   // Computed states
   let showRetry = $derived(status === "ERROR" || status === "INVALID" || status === "OFFLINE");
@@ -136,7 +138,7 @@
         {#if showProgress && percentage !== undefined}
           <div style="margin-top: 0.75rem;">
             <div class="progress-bar">
-              <div class="progress-fill" style="width: {Math.min(100, percentage)};"></div>
+              <div class="progress-fill" style="width: {Math.min(100, percentage)}%;"></div>
             </div>
             <p
               style="margin-top: 0.375rem; font-size: 0.75rem; font-family: monospace; color: hsl(var(--tn-fg-dark, 233 23% 60%));"

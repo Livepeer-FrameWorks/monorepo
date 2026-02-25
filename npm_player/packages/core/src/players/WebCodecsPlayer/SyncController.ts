@@ -35,6 +35,13 @@ interface SeekState {
   startedAt: number;
 }
 
+interface BufferEvalContext {
+  playRateCurr?: number | "auto" | "fast-forward";
+  serverCurrentMs?: number;
+  serverEndMs?: number;
+  serverJitterMs?: number;
+}
+
 /**
  * SyncController - Manages playback synchronization
  */
@@ -47,9 +54,10 @@ export class SyncController {
   private mainSpeed = 1;
   private tweakSpeed = 1;
   private targetTweakSpeed = 1;
+  private serverPlayRateCurr: number | "auto" | "fast-forward" = "auto";
   private rateTransitionTimer: ReturnType<typeof setInterval> | null = null;
-  private static readonly RATE_STEP = 0.01;
-  private static readonly RATE_STEP_INTERVAL_MS = 200;
+  /** Hysteresis bucket: prevents oscillation at threshold boundaries */
+  private _speedBucket: "low" | "normal" | "high" = "normal";
 
   // Buffer state
   private lastBufferCheck = 0;
@@ -73,6 +81,14 @@ export class SyncController {
   private liveCatchupCooldown = 2000;
   private liveCatchupThresholdMs = 5000;
   private liveCatchupRequestMs = 5000;
+  private requestingMoreBuffer = false;
+  private requestingMoreBufferAt = 0;
+  private requestingMoreBufferBufferAt = 0;
+  private requestingMoreBufferDesiredAt = 0;
+  private requestingMoreBufferServerCurrentAt: number | null = null;
+  private requestingMoreBufferGotSetSpeed = false;
+  private requestingMoreBufferSawFastForward = false;
+  private keepAwayExtraMs = 0;
 
   // Time tracking
   private serverTime = 0;
@@ -105,6 +121,12 @@ export class SyncController {
       onFastForwardRequest?: (ms: number) => void;
       /** Provide audio clock for A/V sync (returns seconds from AudioContext.currentTime) */
       audioClockProvider?: () => number;
+      /** Live catch-up tuning (upstream parity: configurable thresholds) */
+      liveCatchup?: {
+        cooldownMs?: number;
+        thresholdMs?: number;
+        requestMs?: number;
+      };
     } = {}
   ) {
     this.profile = options.profile ?? getLatencyProfile("low");
@@ -112,6 +134,11 @@ export class SyncController {
     this.onSpeedChange = options.onSpeedChange;
     this.onFastForwardRequest = options.onFastForwardRequest;
     this.audioClockProvider = options.audioClockProvider ?? null;
+    if (options.liveCatchup) {
+      this.liveCatchupCooldown = options.liveCatchup.cooldownMs ?? this.liveCatchupCooldown;
+      this.liveCatchupThresholdMs = options.liveCatchup.thresholdMs ?? this.liveCatchupThresholdMs;
+      this.liveCatchupRequestMs = options.liveCatchup.requestMs ?? this.liveCatchupRequestMs;
+    }
 
     this.jitterTracker = new MultiTrackJitterTracker({
       initialJitter: 120,
@@ -260,23 +287,15 @@ export class SyncController {
 
   /**
    * Calculate desired buffer size based on profile + jitter + server delay.
-   * Enhanced with dynamic buffer multiplier based on stutter count and jitter variance.
    */
   getDesiredBuffer(): number {
-    const isChrome =
-      typeof navigator !== "undefined" &&
-      /Chrome/.test(navigator.userAgent) &&
-      !/Edge|Edg/.test(navigator.userAgent);
-    const baseBuffer = isChrome ? 1000 : 100;
-
     const serverDelay = this.getServerDelay();
     const jitter = this.jitterTracker.getMax() * this.profile.jitterMultiplier;
-
-    const liveBuffer = Math.max(baseBuffer + serverDelay, serverDelay * 2) + jitter;
-    const base = this.isLive ? liveBuffer : liveBuffer + 2000;
-
-    // Apply dynamic multiplier
-    return base * this.bufferMultiplier;
+    // Upstream rawws.js parity:
+    // desiredBuffer = keepAway + serverDelay + jitter
+    // keepAway is profile-driven (live defaults to 100ms in low profile, VOD higher).
+    const base = this.profile.keepAway + this.keepAwayExtraMs + serverDelay + jitter;
+    return Math.round(base);
   }
 
   /**
@@ -286,7 +305,7 @@ export class SyncController {
    * @param currentBufferMs - Current buffer level in milliseconds
    * @returns Updated sync state
    */
-  evaluateBuffer(currentBufferMs: number): SyncState {
+  evaluateBuffer(currentBufferMs: number, context?: BufferEvalContext): SyncState {
     const now = performance.now();
 
     // Rate limit buffer checks
@@ -295,19 +314,61 @@ export class SyncController {
     }
     this.lastBufferCheck = now;
 
-    // Dynamic buffer multiplier based on stutter count and jitter variance
-    this.updateBufferMultiplier();
-
     const desired = this.getDesiredBuffer();
     const ratio = currentBufferMs / desired;
     const jitterMs = this.jitterTracker.getMax();
-    const _jitterVariance = this.getJitterVariance();
+    const playRateCurr = context?.playRateCurr ?? this.serverPlayRateCurr;
+    const serverCurrentMs = context?.serverCurrentMs;
+    const serverEndMs = context?.serverEndMs;
+    const serverJitterMs = context?.serverJitterMs ?? jitterMs;
 
-    // Proactive live catchup logic
+    if (this.requestingMoreBuffer) {
+      // Upstream rawws.js parity:
+      // 1) wait for set_speed response after fast_forward request
+      // 2) if no set_speed, next on_time proves no extra data => slow down
+      if (!this.requestingMoreBufferGotSetSpeed) {
+        if (playRateCurr !== "fast-forward") {
+          this.keepAwayExtraMs = Math.min(this.keepAwayExtraMs + 100, 500);
+          this.beginSmoothTransition(this.profile.minSpeedDown, "slowdown");
+          this.resetBufferRequestState();
+        }
+        return this.getState(currentBufferMs);
+      }
+
+      // set_speed received with play_rate_prev == "fast-forward":
+      // evaluate how much extra buffer actually arrived by next on_time.
+      if (
+        this.requestingMoreBufferSawFastForward &&
+        serverCurrentMs !== undefined &&
+        this.requestingMoreBufferServerCurrentAt !== null
+      ) {
+        const increase =
+          serverCurrentMs -
+          this.requestingMoreBufferServerCurrentAt -
+          (now - this.requestingMoreBufferAt);
+        if (
+          this.requestingMoreBufferBufferAt + increase <
+          this.requestingMoreBufferDesiredAt * this.profile.speedDownThreshold
+        ) {
+          this.keepAwayExtraMs = Math.min(this.keepAwayExtraMs + 100, 500);
+          this.beginSmoothTransition(this.profile.minSpeedDown, "slowdown");
+        }
+      }
+
+      this.resetBufferRequestState();
+      return this.getState(currentBufferMs);
+    }
+
+    // Proactive live catchup — only from normal bucket to avoid fighting the bucket system
     if (
+      this._speedBucket === "normal" &&
       this.isLive &&
-      currentBufferMs < this.liveCatchupThresholdMs &&
-      currentBufferMs > Math.max(jitterMs * 1.1, jitterMs + 250) &&
+      playRateCurr !== "fast-forward" &&
+      serverCurrentMs !== undefined &&
+      serverEndMs !== undefined &&
+      serverEndMs > serverCurrentMs &&
+      serverEndMs - serverCurrentMs < this.liveCatchupThresholdMs &&
+      serverEndMs - serverCurrentMs > Math.max(serverJitterMs * 1.1, serverJitterMs + 250) &&
       currentBufferMs - desired < 1000 &&
       now - this.lastLiveCatchup > this.liveCatchupCooldown
     ) {
@@ -316,22 +377,65 @@ export class SyncController {
       this.emit("livecatchup", { fastForwardMs: this.liveCatchupRequestMs });
     }
 
-    // Determine if speed adjustment needed
-    if (ratio > this.profile.speedUpThreshold && this.isLive) {
-      this.beginSmoothTransition(this.profile.maxSpeedUp, "catchup");
-    } else if (ratio < this.profile.speedDownThreshold) {
-      this.beginSmoothTransition(this.profile.minSpeedDown, "slowdown");
+    // Determine speed bucket with hysteresis to prevent oscillation.
+    // Entering a bucket requires crossing the outer threshold; leaving requires
+    // the buffer recovering to 1.0× desired (wider dead-band than entry).
+    let newBucket = this._speedBucket;
+    if (this._speedBucket === "normal") {
+      if (ratio < this.profile.speedDownThreshold) newBucket = "low";
+      else if (ratio > this.profile.speedUpThreshold) newBucket = "high";
+    } else if (this._speedBucket === "low") {
+      if (ratio >= 1.0) newBucket = "normal";
+      else if (ratio > this.profile.speedUpThreshold) newBucket = "high";
+    } else if (this._speedBucket === "high") {
+      if (ratio <= 1.0) newBucket = "normal";
+      else if (ratio < this.profile.speedDownThreshold) newBucket = "low";
+    }
 
-      if (ratio < 0.3 && this.isLive) {
-        this.requestFastForward(desired - currentBufferMs);
-        this.emit("underrun", undefined);
-      }
-
-      this.emit("bufferlow", { current: currentBufferMs, desired });
-    } else {
-      // Buffer in acceptable range — smooth return to normal speed
-      if (this.tweakSpeed !== 1 || this.targetTweakSpeed !== 1) {
-        this.beginSmoothTransition(1, "normal");
+    if (newBucket !== this._speedBucket) {
+      this._speedBucket = newBucket;
+      switch (newBucket) {
+        case "low":
+          // Try fast-forward first (upstream rawws.js parity), fall back to slowdown
+          if (
+            this.isLive &&
+            playRateCurr !== "fast-forward" &&
+            !this.requestingMoreBuffer &&
+            this.tweakSpeed >= 1 &&
+            serverCurrentMs !== undefined &&
+            serverEndMs !== undefined &&
+            serverCurrentMs < serverEndMs
+          ) {
+            this.requestingMoreBuffer = true;
+            this.requestingMoreBufferAt = now;
+            this.requestingMoreBufferBufferAt = currentBufferMs;
+            this.requestingMoreBufferDesiredAt = desired;
+            this.requestingMoreBufferServerCurrentAt = serverCurrentMs ?? null;
+            this.requestingMoreBufferGotSetSpeed = false;
+            this.requestingMoreBufferSawFastForward = false;
+            this.requestFastForward(Math.max(desired, desired - currentBufferMs));
+          } else {
+            this.setTweakSpeed(this.profile.minSpeedDown, "slowdown");
+          }
+          if (ratio < 0.3 && this.isLive) {
+            this.emit("underrun", undefined);
+          }
+          this.emit("bufferlow", { current: currentBufferMs, desired });
+          break;
+        case "high":
+          if (this.isLive && playRateCurr !== "fast-forward") {
+            this.setTweakSpeed(this.profile.maxSpeedUp, "catchup");
+          }
+          break;
+        case "normal":
+          if (this.tweakSpeed !== 1) {
+            this.setTweakSpeed(1, "normal");
+          }
+          // Decay keepAwayExtraMs when buffer is healthy
+          if (this.keepAwayExtraMs > 0) {
+            this.keepAwayExtraMs = Math.max(0, this.keepAwayExtraMs - 50);
+          }
+          break;
       }
     }
 
@@ -343,19 +447,8 @@ export class SyncController {
    * Stutters > 3 → double buffer. Low jitter & smooth → decrease.
    */
   private updateBufferMultiplier(): void {
-    const jitterVariance = this.getJitterVariance();
-
-    if (this.stutterCount > 3) {
-      // Many stutters — increase buffer
-      this.bufferMultiplier = Math.min(this.bufferMultiplier * 2, 4);
-      this.stutterCount = 0; // Reset after adjustment
-    } else if (jitterVariance < 20 && this.stutterCount === 0 && this.bufferMultiplier > 1) {
-      // Smooth conditions — slowly decrease buffer
-      this.bufferMultiplier = Math.max(1, this.bufferMultiplier - 0.1);
-    } else if (jitterVariance > 100) {
-      // High jitter — increase buffer
-      this.bufferMultiplier = Math.min(this.bufferMultiplier + 0.2, 4);
-    }
+    // Keep desired buffer deterministic (upstream-style).
+    this.bufferMultiplier = 1;
   }
 
   /**
@@ -403,46 +496,39 @@ export class SyncController {
   }
 
   /**
-   * Begin a smooth rate transition to the target tweak speed.
-   * Steps by 0.01 every 200ms to prevent audible pitch artifacts.
+   * Update server-reported delivery/play rate state from set_speed/on_time.
+   * Upstream rawws.js updates jitter tracking from play_rate_curr.
+   */
+  setServerPlayRate(
+    rate: number | "auto" | "fast-forward" | undefined,
+    prevRate?: number | "auto" | "fast-forward",
+    opts?: { fromSetSpeed?: boolean }
+  ): void {
+    if (rate !== undefined) {
+      this.serverPlayRateCurr = rate;
+      this.jitterTracker.setSpeed(rate);
+    }
+
+    if (this.requestingMoreBuffer && opts?.fromSetSpeed) {
+      this.requestingMoreBufferGotSetSpeed = true;
+      if (prevRate === "fast-forward") {
+        this.requestingMoreBufferSawFastForward = true;
+      } else {
+        // Upstream rawws.js: set_speed without play_rate_prev === "fast-forward"
+        // means there is no extra-buffer phase to evaluate.
+        this.resetBufferRequestState();
+      }
+    }
+  }
+
+  /**
+   * Apply a discrete tweak speed change (upstream-style).
    */
   private beginSmoothTransition(
     targetSpeed: number,
     reason: "catchup" | "slowdown" | "normal"
   ): void {
-    this.targetTweakSpeed = targetSpeed;
-
-    // Already at target
-    if (Math.abs(this.tweakSpeed - targetSpeed) < SyncController.RATE_STEP) {
-      this.tweakSpeed = targetSpeed;
-      if (this.rateTransitionTimer) {
-        clearInterval(this.rateTransitionTimer);
-        this.rateTransitionTimer = null;
-      }
-      this.notifySpeedChange();
-      return;
-    }
-
-    // Start stepping if not already
-    if (!this.rateTransitionTimer) {
-      this.rateTransitionTimer = setInterval(() => {
-        const diff = this.targetTweakSpeed - this.tweakSpeed;
-
-        if (Math.abs(diff) < SyncController.RATE_STEP) {
-          this.tweakSpeed = this.targetTweakSpeed;
-          clearInterval(this.rateTransitionTimer!);
-          this.rateTransitionTimer = null;
-        } else if (diff > 0) {
-          this.tweakSpeed += SyncController.RATE_STEP;
-        } else {
-          this.tweakSpeed -= SyncController.RATE_STEP;
-        }
-
-        this.notifySpeedChange();
-      }, SyncController.RATE_STEP_INTERVAL_MS);
-
-      this.emit("speedchange", { speed: this.getCombinedSpeed(), reason });
-    }
+    this.setTweakSpeed(targetSpeed, reason);
   }
 
   /**
@@ -564,12 +650,16 @@ export class SyncController {
     this.mainSpeed = 1;
     this.tweakSpeed = 1;
     this.targetTweakSpeed = 1;
+    this.serverPlayRateCurr = "auto";
     this.serverDelays = [];
     this.serverTime = 0;
     this.localTimeAtServerUpdate = 0;
     this.lastLiveCatchup = 0;
+    this.keepAwayExtraMs = 0;
+    this._speedBucket = "normal";
     this.stutterCount = 0;
     this.bufferMultiplier = 1;
+    this.resetBufferRequestState();
     this.jitterSamples = [];
     this.lastAvDrift = 0;
     this.jitterTracker.reset();
@@ -589,6 +679,16 @@ export class SyncController {
       targetTime: 0,
       startedAt: 0,
     };
+  }
+
+  private resetBufferRequestState(): void {
+    this.requestingMoreBuffer = false;
+    this.requestingMoreBufferAt = 0;
+    this.requestingMoreBufferBufferAt = 0;
+    this.requestingMoreBufferDesiredAt = 0;
+    this.requestingMoreBufferServerCurrentAt = null;
+    this.requestingMoreBufferGotSetSpeed = false;
+    this.requestingMoreBufferSawFastForward = false;
   }
 
   // ============================================================================

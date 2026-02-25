@@ -51,6 +51,12 @@ export interface PlayerManagerOptions {
   maxFallbackAttempts?: number;
   /** Playback mode for protocol selection */
   playbackMode?: PlaybackMode;
+  /** Upstream-parity: preferred ordering for player/source selection */
+  forcePriority?: {
+    source?: string[];
+    player?: string[];
+    first?: "source" | "player";
+  };
 }
 
 export interface PlayerManagerEvents {
@@ -83,6 +89,10 @@ export interface PlayerCombination {
   incompatibleReason?: string;
   /** True when player supports MIME but codec is incompatible */
   codecIncompatible?: boolean;
+  /** Track types the stream has but this combo can't play */
+  missingTracks?: string[];
+  /** Browser support / known limitations note for this player+protocol combo */
+  note?: string;
   scoreBreakdown?: {
     trackScore: number;
     trackTypes: string[];
@@ -136,7 +146,7 @@ export class PlayerManager {
     this.options = {
       debug: false,
       autoFallback: true,
-      maxFallbackAttempts: 3,
+      maxFallbackAttempts: Infinity,
       ...options,
     };
 
@@ -326,6 +336,22 @@ export class PlayerManager {
       filtered = filtered.filter((c) => c.sourceIndex === mergedOptions.forceSource);
     }
 
+    // Apply forcePriority sort if configured
+    const fp = this.options.forcePriority;
+    if (fp) {
+      filtered.sort((a, b) => {
+        const sourceOrder = fp.source || [];
+        const playerOrder = fp.player || [];
+        const aSrc = sourceOrder.indexOf(a.sourceType);
+        const bSrc = sourceOrder.indexOf(b.sourceType);
+        const aPlr = playerOrder.indexOf(a.player);
+        const bPlr = playerOrder.indexOf(b.player);
+        const srcCmp = (aSrc === -1 ? Infinity : aSrc) - (bSrc === -1 ? Infinity : bSrc);
+        const plrCmp = (aPlr === -1 ? Infinity : aPlr) - (bPlr === -1 ? Infinity : bPlr);
+        return fp.first === "player" ? plrCmp || srcCmp : srcCmp || plrCmp;
+      });
+    }
+
     if (filtered.length === 0) {
       this.log("No suitable player found");
       return false;
@@ -401,21 +427,8 @@ export class PlayerManager {
           continue;
         }
 
-        // Check MIME support
-        const mimeSupported = player.isMimeSupported(source.type);
-        if (!mimeSupported) {
-          combinations.push({
-            player: player.capability.shortname,
-            playerName: player.capability.name,
-            source,
-            sourceIndex,
-            sourceType: source.type,
-            score: 0,
-            compatible: false,
-            incompatibleReason: `MIME type "${source.type}" not supported`,
-          });
-          continue;
-        }
+        // Skip sources the player can't handle at all
+        if (!player.isMimeSupported(source.type)) continue;
 
         // Check browser/codec compatibility
         const tracktypes = player.isBrowserSupported(source.type, source, streamInfo);
@@ -457,46 +470,9 @@ export class PlayerManager {
           continue;
         }
 
-        if (Array.isArray(tracktypes) && requiredTracks.length > 0) {
-          const missing = requiredTracks.filter((t) => !tracktypes.includes(t));
-          if (missing.length > 0) {
-            const priorityScore = 1 - player.capability.priority / Math.max(maxPriority, 1);
-            const sourceScore = 1 - sourceListIndex / Math.max(totalSources - 1, 1);
-            const playerScore = scorePlayer(
-              tracktypes,
-              player.capability.priority,
-              sourceListIndex,
-              {
-                maxPriority,
-                totalSources,
-                playerShortname: player.capability.shortname,
-                mimeType: source.type,
-                playbackMode: effectiveMode,
-              }
-            );
-
-            combinations.push({
-              player: player.capability.shortname,
-              playerName: player.capability.name,
-              source,
-              sourceIndex,
-              sourceType: source.type,
-              score: playerScore.total,
-              compatible: false,
-              incompatibleReason: `Missing required tracks: ${missing.join(", ")}`,
-              scoreBreakdown: {
-                trackScore: 0,
-                trackTypes: tracktypes,
-                priorityScore,
-                sourceScore,
-                weights: { tracks: 0.5, priority: 0.1, source: 0.05 },
-              },
-            });
-            continue;
-          }
-        }
-
-        // Compatible - calculate full score
+        // Compatible - calculate full score (partial track support is valid, just lower scored)
+        const supportedTypes = Array.isArray(tracktypes) ? tracktypes : ["video", "audio"];
+        const missing = requiredTracks.filter((t) => !supportedTypes.includes(t));
         const trackScore = Array.isArray(tracktypes)
           ? tracktypes.reduce(
               (sum, t) => sum + ({ video: 2.0, audio: 1.0, subtitle: 0.5 }[t] || 0),
@@ -514,17 +490,22 @@ export class PlayerManager {
           playbackMode: effectiveMode,
         });
 
+        // Partial combos (missing entire track types) get a hard penalty
+        // to ensure they always rank below full combos
+        const partialPenalty = missing.length > 0 ? 1.0 : 0;
+
         combinations.push({
           player: player.capability.shortname,
           playerName: player.capability.name,
           source,
           sourceIndex,
           sourceType: source.type,
-          score: playerScore.total,
+          score: playerScore.total - partialPenalty,
           compatible: true,
+          ...(missing.length > 0 && { missingTracks: missing }),
           scoreBreakdown: {
             trackScore,
-            trackTypes: Array.isArray(tracktypes) ? tracktypes : ["video", "audio"],
+            trackTypes: supportedTypes,
             priorityScore,
             sourceScore,
             reliabilityScore: playerScore.breakdown?.reliabilityScore ?? 0,
@@ -575,6 +556,16 @@ export class PlayerManager {
           weights: { tracks: 0.5, priority: 0.1, source: 0.05 },
         },
       });
+    }
+
+    // Populate notes from registry (avoids duplicating notes in each push above)
+    // Populate notes from player capabilities (merged from registry at load time)
+    for (const combo of combinations) {
+      const player = this.players.get(combo.player);
+      const notes = player?.capability.notes;
+      if (notes) {
+        combo.note = notes[combo.sourceType] ?? notes[combo.sourceType.replace(/^wss\//, "ws/")];
+      }
     }
 
     // Sort: compatible first by score descending, then incompatible alphabetically
@@ -796,6 +787,10 @@ export class PlayerManager {
     }
 
     this.log(`Calling ${selection.player}.initialize()...`);
+    // Set currentPlayer before initialize() so onReady can access it
+    // (onReady fires during initialize, before it resolves)
+    const previousPlayer = this.currentPlayer;
+    this.currentPlayer = player;
     try {
       const videoElement = await player.initialize(
         container,
@@ -804,11 +799,11 @@ export class PlayerManager {
         streamInfo
       );
       this.log(`${selection.player}.initialize() completed successfully`);
-      this.currentPlayer = player;
       this.errorClassifier.reset();
       this.emit("playerInitialized", { player, videoElement });
       return videoElement;
     } catch (error: unknown) {
+      this.currentPlayer = previousPlayer;
       return this.handleInitError(
         error,
         selection,
@@ -934,6 +929,11 @@ export class PlayerManager {
       const previousPlayer = this.currentPlayer?.capability.shortname || "unknown";
       const previousProtocol = this.cachedSelection?.source.type || "unknown";
 
+      // Capture playhead for VOD streams before destroying the player
+      const isLive = this.lastStreamInfo.type === "live";
+      const savedTimeMs =
+        !isLive && this.currentPlayer?.getCurrentTime ? this.currentPlayer.getCurrentTime() : null;
+
       if (this.currentPlayer) {
         if (this.cachedSelection) {
           this.excludedCombos.add(
@@ -960,6 +960,12 @@ export class PlayerManager {
         const current = this.getCurrentPlayer();
         const newPlayer = current?.capability.shortname || "unknown";
         const newProtocol = this.cachedSelection?.source.type || "unknown";
+
+        // Restore VOD playhead after successful re-init
+        if (savedTimeMs !== null && savedTimeMs > 0 && current?.seek) {
+          this.log(`Restoring VOD playhead to ${savedTimeMs}ms after fallback`);
+          current.seek(savedTimeMs);
+        }
 
         this.errorClassifier.notifyProtocolSwap(
           previousPlayer,

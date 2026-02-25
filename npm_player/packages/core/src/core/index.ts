@@ -128,7 +128,7 @@ export type { ScreenWakeLockConfig } from "./ScreenWakeLockManager";
 export {
   LATENCY_TIERS,
   SPEED_PRESETS,
-  DEFAULT_BUFFER_WINDOW_SEC,
+  DEFAULT_BUFFER_WINDOW_MS,
   getLatencyTier,
   isMediaStreamSource,
   supportsPlaybackRate,

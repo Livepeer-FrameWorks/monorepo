@@ -41,6 +41,13 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
         "html5/application/vnd.apple.mpegurl;version=7",
         "whep",
       ],
+      notes: {
+        "html5/application/vnd.apple.mpegurl":
+          "No extra JS needed. Native on Safari/iOS. Chromium 142+: experimental.",
+        whep: "Sub-second latency via WHEP. No seeking. B-frames may cause stutters.",
+        "html5/video/mp4": "Progressive, <5s latency. Broadest device support of any protocol.",
+        "html5/video/webm": "Progressive, <5s latency. Best on Chromium. Firefox: VP8/VP9 only.",
+      },
     },
     load: () => import("../players/NativePlayer").then((m) => new m.NativePlayerImpl()),
   },
@@ -50,6 +57,10 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
       shortname: "webcodecs",
       priority: 0,
       mimes: ["ws/video/raw", "wss/video/raw", "ws/video/h264", "wss/video/h264"],
+      notes: {
+        "ws/video/raw": "Ultra-low latency (<100ms). Raw frames decoded via WebCodecs API.",
+        "ws/video/h264": "Ultra-low latency (<100ms). H.264 decoded via WebCodecs API.",
+      },
     },
     load: () => import("../players/WebCodecsPlayer").then((m) => new m.WebCodecsPlayerImpl()),
   },
@@ -59,6 +70,10 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
       shortname: "mist-webrtc",
       priority: 2,
       mimes: ["webrtc", "mist/webrtc"],
+      notes: {
+        webrtc:
+          "Sub-second latency. MistServer-native signaling (not WHEP-interoperable). No seeking.",
+      },
     },
     load: () => import("../players/MistWebRTCPlayer").then((m) => new m.MistWebRTCPlayerImpl()),
   },
@@ -71,6 +86,10 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
         "html5/application/vnd.apple.mpegurl",
         "html5/application/vnd.apple.mpegurl;version=7",
       ],
+      notes: {
+        "html5/application/vnd.apple.mpegurl":
+          "HLS via VHS engine. Adaptive bitrate. Heavier bundle but battle-tested.",
+      },
     },
     load: () => import("../players/VideoJsPlayer").then((m) => new m.VideoJsPlayerImpl()),
   },
@@ -83,6 +102,10 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
         "html5/application/vnd.apple.mpegurl",
         "html5/application/vnd.apple.mpegurl;version=7",
       ],
+      notes: {
+        "html5/application/vnd.apple.mpegurl":
+          "Lightweight HLS via MSE. Good adaptive bitrate. Not used on Safari (native HLS instead).",
+      },
     },
     load: () => import("../players/HlsJsPlayer").then((m) => new m.HlsJsPlayerImpl()),
   },
@@ -92,6 +115,9 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
       shortname: "dashjs",
       priority: 100,
       mimes: ["dash/video/mp4"],
+      notes: {
+        "dash/video/mp4": "Adaptive bitrate via DASH. 2-15s latency. No Apple/iOS support.",
+      },
     },
     load: () => import("../players/DashJsPlayer").then((m) => new m.DashJsPlayerImpl()),
   },
@@ -101,6 +127,9 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
       shortname: "mist-legacy",
       priority: 99,
       mimes: ["mist/legacy"],
+      notes: {
+        "mist/legacy": "MistServer embedded player. Fallback when no other player works.",
+      },
     },
     load: () => import("../players/MistPlayer").then((m) => new m.MistPlayerImpl()),
   },
@@ -110,6 +139,10 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
       shortname: "mews",
       priority: 2,
       mimes: ["ws/video/mp4", "wss/video/mp4", "ws/video/webm", "wss/video/webm"],
+      notes: {
+        "ws/video/mp4":
+          "WebSocket MP4, <3s latency. Server-side bitrate adjustment. No Safari/iOS.",
+      },
     },
     load: () => import("../players/MewsWsPlayer").then((m) => new m.MewsWsPlayerImpl()),
   },
@@ -118,6 +151,13 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
 // ============================================================================
 // Loading State
 // ============================================================================
+
+/** Merge registry-defined notes into a loaded player's capability */
+function mergeRegistryNotes(player: IPlayer, entry: LazyPlayerEntry): void {
+  if (entry.capability.notes && !player.capability.notes) {
+    (player.capability as any).notes = entry.capability.notes;
+  }
+}
 
 /** Track which players have been loaded per manager */
 const loadedPlayersMap = new WeakMap<PlayerManager, Set<string>>();
@@ -146,7 +186,13 @@ async function loadMatchingPlayers(manager: PlayerManager, sourceMimes: string[]
 
   if (toLoad.length === 0) return;
 
-  const players = await Promise.all(toLoad.map((e) => e.load()));
+  const players = await Promise.all(
+    toLoad.map(async (entry) => {
+      const player = await entry.load();
+      mergeRegistryNotes(player, entry);
+      return player;
+    })
+  );
   for (const player of players) {
     loaded.add(player.capability.shortname);
     const alreadyRegistered = manager
@@ -169,6 +215,7 @@ async function loadPlayerByShortname(manager: PlayerManager, shortname: string):
   if (!entry) return;
 
   const player = await entry.load();
+  mergeRegistryNotes(player, entry);
   loaded.add(player.capability.shortname);
   const alreadyRegistered = manager
     .getRegisteredPlayers()

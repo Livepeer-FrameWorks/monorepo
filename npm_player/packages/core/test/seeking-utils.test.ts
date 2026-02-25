@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   getLatencyTier,
   calculateLiveThresholds,
   calculateIsNearLive,
+  calculateSeekableRange,
   isLiveContent,
   LATENCY_TIERS,
 } from "../src/core/SeekingUtils";
@@ -91,34 +92,84 @@ describe("calculateLiveThresholds", () => {
 });
 
 describe("calculateIsNearLive", () => {
-  const thresholds = { exitLive: 10, enterLive: 3 };
+  const thresholds = { exitLive: 10000, enterLive: 3000 };
 
   it("returns true for invalid liveEdge", () => {
-    expect(calculateIsNearLive(50, 0, thresholds, false)).toBe(true);
-    expect(calculateIsNearLive(50, -1, thresholds, false)).toBe(true);
-    expect(calculateIsNearLive(50, Infinity, thresholds, false)).toBe(true);
+    expect(calculateIsNearLive(50000, 0, thresholds, false)).toBe(true);
+    expect(calculateIsNearLive(50000, -1, thresholds, false)).toBe(true);
+    expect(calculateIsNearLive(50000, Infinity, thresholds, false)).toBe(true);
   });
 
   it("stays in LIVE state when within exit threshold", () => {
-    expect(calculateIsNearLive(55, 60, thresholds, true)).toBe(true);
-    expect(calculateIsNearLive(52, 60, thresholds, true)).toBe(true);
+    expect(calculateIsNearLive(55000, 60000, thresholds, true)).toBe(true);
+    expect(calculateIsNearLive(52000, 60000, thresholds, true)).toBe(true);
   });
 
   it("exits LIVE state when significantly behind", () => {
-    expect(calculateIsNearLive(40, 60, thresholds, true)).toBe(false);
+    expect(calculateIsNearLive(40000, 60000, thresholds, true)).toBe(false);
   });
 
   it("enters LIVE state when close to edge", () => {
-    expect(calculateIsNearLive(59, 60, thresholds, false)).toBe(true);
+    expect(calculateIsNearLive(59000, 60000, thresholds, false)).toBe(true);
   });
 
   it("stays behind when not close enough", () => {
-    expect(calculateIsNearLive(50, 60, thresholds, false)).toBe(false);
+    expect(calculateIsNearLive(50000, 60000, thresholds, false)).toBe(false);
   });
 
   it("maintains state in hysteresis zone", () => {
-    expect(calculateIsNearLive(53, 60, thresholds, true)).toBe(true);
-    expect(calculateIsNearLive(53, 60, thresholds, false)).toBe(false);
+    expect(calculateIsNearLive(53000, 60000, thresholds, true)).toBe(true);
+    expect(calculateIsNearLive(53000, 60000, thresholds, false)).toBe(false);
+  });
+});
+
+describe("calculateSeekableRange", () => {
+  const originalMediaStream = (globalThis as any).MediaStream;
+
+  beforeAll(() => {
+    if (!(globalThis as any).MediaStream) {
+      (globalThis as any).MediaStream = class MediaStreamMock {};
+    }
+  });
+
+  afterAll(() => {
+    (globalThis as any).MediaStream = originalMediaStream;
+  });
+
+  const makeVideo = (startSec: number, endSec: number) =>
+    ({
+      seekable: {
+        length: 1,
+        start: () => startSec,
+        end: () => endSec,
+      },
+      srcObject: null,
+    }) as unknown as HTMLVideoElement;
+
+  it("returns video.seekable range directly (clamping is done by PlayerController)", () => {
+    const range = calculateSeekableRange({
+      isLive: true,
+      video: makeVideo(0, 600),
+      mistStreamInfo: { meta: { buffer_window: 60_000 } } as any,
+      currentTime: 0,
+      duration: Infinity,
+    });
+
+    expect(range.seekableStart).toBe(0);
+    expect(range.liveEdge).toBe(600_000);
+  });
+
+  it("preserves live seekable windows that already match Mist buffer_window", () => {
+    const range = calculateSeekableRange({
+      isLive: true,
+      video: makeVideo(540, 600),
+      mistStreamInfo: { meta: { buffer_window: 60_000 } } as any,
+      currentTime: 0,
+      duration: Infinity,
+    });
+
+    expect(range.seekableStart).toBe(540_000);
+    expect(range.liveEdge).toBe(600_000);
   });
 });
 

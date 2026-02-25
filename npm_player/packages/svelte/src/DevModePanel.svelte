@@ -375,7 +375,9 @@
           {:else}
             {#each allCombinations as combo, index}
               {@const isCodecIncompat = (combo as any).codecIncompatible === true}
-              {@const shouldShow = combo.compatible || isCodecIncompat || showDisabledPlayers}
+              {@const isPartial = ((combo as any).missingTracks?.length ?? 0) > 0}
+              {@const isWarn = isCodecIncompat || isPartial}
+              {@const shouldShow = combo.compatible || isWarn || showDisabledPlayers}
               {@const isActive = activeComboIndex === index}
               {@const typeLabel =
                 SOURCE_TYPE_LABELS[combo.sourceType] || combo.sourceType.split("/").pop()}
@@ -396,8 +398,8 @@
                     class={cn(
                       "fw-dev-combo-btn",
                       isActive && "fw-dev-combo-btn--active",
-                      !combo.compatible && !isCodecIncompat && "fw-dev-combo-btn--disabled",
-                      isCodecIncompat && "fw-dev-combo-btn--codec-warn"
+                      !combo.compatible && !isWarn && "fw-dev-combo-btn--disabled",
+                      isWarn && "fw-dev-combo-btn--codec-warn"
                     )}
                   >
                     <!-- Rank -->
@@ -406,14 +408,14 @@
                         "fw-dev-combo-rank",
                         isActive
                           ? "fw-dev-combo-rank--active"
-                          : !combo.compatible && !isCodecIncompat
+                          : !combo.compatible && !isWarn
                             ? "fw-dev-combo-rank--disabled"
-                            : isCodecIncompat
+                            : isWarn
                               ? "fw-dev-combo-rank--warn"
                               : ""
                       )}
                     >
-                      {combo.compatible ? index + 1 : isCodecIncompat ? "⚠" : "—"}
+                      {combo.compatible && !isPartial ? index + 1 : isWarn ? "⚠" : "—"}
                     </span>
                     <!-- Player + Protocol -->
                     <span class="fw-dev-combo-name">
@@ -422,8 +424,8 @@
                       <span
                         class={cn(
                           "fw-dev-combo-type",
-                          isCodecIncompat && "fw-dev-combo-type--warn",
-                          !combo.compatible && !isCodecIncompat && "fw-dev-combo-type--disabled"
+                          isWarn && "fw-dev-combo-type--warn",
+                          !combo.compatible && !isWarn && "fw-dev-combo-type--disabled"
                         )}>{typeLabel}</span
                       >
                     </span>
@@ -431,9 +433,9 @@
                     <span
                       class={cn(
                         "fw-dev-combo-score",
-                        !combo.compatible && !isCodecIncompat
+                        !combo.compatible && !isWarn
                           ? "fw-dev-combo-score--disabled"
-                          : isCodecIncompat
+                          : isWarn
                             ? "fw-dev-combo-score--low"
                             : combo.score >= 2
                               ? "fw-dev-combo-score--high"
@@ -463,6 +465,14 @@
                           </div>
                         {/if}
                       </div>
+                      {#if combo.note}
+                        <div class="fw-dev-tooltip-note">{combo.note}</div>
+                      {/if}
+                      {#if isPartial}
+                        <div class="fw-dev-tooltip-note">
+                          No compatible {(combo as any).missingTracks.join(", ")} codec
+                        </div>
+                      {/if}
                       {#if combo.compatible && combo.scoreBreakdown}
                         <div class="fw-dev-tooltip-score">Score: {combo.score.toFixed(2)}</div>
                         <div class="fw-dev-tooltip-row">

@@ -30,7 +30,7 @@
  * player.volume = 0.5;
  * player.muted = true;
  * player.play();
- * player.seek(30);
+ * player.seek(30000);
  *
  * // Subscriptions
  * const unsub = player.on('stateChange', ({ state }) => { ... });
@@ -145,9 +145,9 @@ export interface PlayerInstance {
   /** Whether the player is ready */
   readonly ready: boolean;
 
-  /** Current playback time in seconds */
+  /** Current playback time in milliseconds */
   readonly currentTime: number;
-  /** Duration in seconds */
+  /** Duration in milliseconds */
   readonly duration: number;
 
   /** Volume (0–1, read/write) */
@@ -203,11 +203,15 @@ export interface PlayerInstance {
 
   play(): Promise<void>;
   pause(): void;
-  seek(time: number): void;
-  seekBy(delta: number): void;
+  /** Seek to absolute time (milliseconds). */
+  seek(timeMs: number): void;
+  /** Seek relative to current time (milliseconds). */
+  seekBy(deltaMs: number): void;
   jumpToLive(): void;
-  skipForward(seconds?: number): void;
-  skipBack(seconds?: number): void;
+  /** Skip forward (milliseconds, default: 10000). */
+  skipForward(ms?: number): void;
+  /** Skip backward (milliseconds, default: 10000). */
+  skipBack(ms?: number): void;
 
   togglePlay(): void;
   toggleMute(): void;
@@ -331,7 +335,7 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
     mistUrl: config.mistUrl,
     authToken: config.authToken,
     autoplay: config.autoplay ?? true,
-    muted: config.muted ?? true,
+    muted: config.muted ?? false,
     controls: config.controls ?? true,
     poster: config.poster,
     debug: config.debug,
@@ -633,11 +637,11 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
     // --- Mutations (methods) ---
     play: () => ctrl.play(),
     pause: () => ctrl.pause(),
-    seek: (t) => ctrl.seek(t),
-    seekBy: (d) => ctrl.seekBy(d),
+    seek: (timeMs) => ctrl.seek(timeMs),
+    seekBy: (deltaMs) => ctrl.seekBy(deltaMs),
     jumpToLive: () => ctrl.jumpToLive(),
-    skipForward: (s) => ctrl.skipForward(s),
-    skipBack: (s) => ctrl.skipBack(s),
+    skipForward: (ms) => ctrl.skipForward(ms),
+    skipBack: (ms) => ctrl.skipBack(ms),
 
     togglePlay: () => ctrl.togglePlay(),
     toggleMute: () => ctrl.toggleMute(),

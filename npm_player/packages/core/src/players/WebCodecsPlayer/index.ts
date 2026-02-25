@@ -26,6 +26,7 @@ import type {
   CodecDataMessage,
   InfoMessage,
   OnTimeMessage,
+  SetSpeedMessage,
   RawChunk,
   WebCodecsPlayerOptions,
   WebCodecsStats,
@@ -170,6 +171,12 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private _duration = Infinity;
   private _currentTime = 0;
   private _bufferMs = 0;
+  private _seekableBeginS: number | null = null;
+  private _seekableEndS: number | null = null;
+  /** Date.now() when last on_time was received — for moving live edge (OG rawws.js:1477) */
+  private _onTimeReceivedAt: number = 0;
+  private _activeSeekId: number | undefined = undefined;
+  private _seekSafetyTimeout: ReturnType<typeof setTimeout> | null = null;
   private _avDrift = 0;
   private _frameCallbackId: number | null = null;
   private _statsInterval: ReturnType<typeof setInterval> | null = null;
@@ -404,6 +411,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this._duration = Infinity;
     this._currentTime = 0;
     this._bufferMs = 0;
+    this._seekableBeginS = null;
+    this._seekableEndS = null;
+    this._onTimeReceivedAt = 0;
     this._avDrift = 0;
     this._framesDropped = 0;
     this._framesDecoded = 0;
@@ -456,8 +466,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.debugging = wcOptions.debug ?? wcOptions.devMode ?? false;
     this.verboseDebugging = wcOptions.verboseDebug ?? false;
 
-    // Determine stream type
-    this.streamType = (source as any).type === "live" ? "live" : "vod";
+    // Determine stream type from server API (streamInfo.type), not MIME (source.type)
+    this.streamType = streamInfo?.type === "live" ? "live" : "vod";
 
     // Select latency profile
     const profileName =
@@ -691,12 +701,14 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       this.canvasRenderer = new CanvasRenderer(this.renderCanvas);
     }
 
-    // Set up AudioWorklet renderer
-    this.audioRenderer = new AudioWorkletRenderer();
-    this.audioRenderer.onUnderrun = () => {
-      this.log("Audio underrun", "warn");
-    };
-    // Start is deferred until first audio frame arrives (needs user gesture context)
+    // AudioWorklet renderer — only for browsers where audio routes through it.
+    // Firefox/Safari route audio through polyfill → video.srcObject instead.
+    if (hasNativeMediaStreamTrackGenerator() && !isSafari()) {
+      this.audioRenderer = new AudioWorkletRenderer();
+      this.audioRenderer.onUnderrun = () => {
+        this.log("Audio underrun", "warn");
+      };
+    }
   }
 
   /**
@@ -878,6 +890,11 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       this.videoElement = null;
     }
 
+    if (this._seekSafetyTimeout) {
+      clearTimeout(this._seekSafetyTimeout);
+      this._seekSafetyTimeout = null;
+    }
+    this._activeSeekId = undefined;
     this.syncController = null;
     this.useDirectRendering = false;
     // NOTE: Don't clear tracks/tracksByIndex/queues here!
@@ -1060,12 +1077,36 @@ export class WebCodecsPlayerImpl extends BasePlayer {
           if (this._pendingStepPause) {
             this.finishStepPause();
           }
+          if (
+            typeof msg.time === "number" &&
+            Number.isFinite(msg.time) &&
+            !this.syncController?.isSeeking()
+          ) {
+            this._currentTime = msg.time;
+            this.emit("timeupdate", this._currentTime * 1000);
+          } else if (this.videoElement) {
+            this.emit("timeupdate", this.videoElement.currentTime * 1000);
+          }
+        } else if (msg.kind === "seeked") {
+          // Worker confirmed decoder reached seek target frame.
+          // OG webcodecsworker.js:492 emits 'seeked' when target frame is decoded;
+          // rawws.js:1055 forwards it to the video event bus.
+          if (
+            this._activeSeekId !== undefined &&
+            this.syncController?.isSeekActive(this._activeSeekId)
+          ) {
+            this.syncController.completeSeek(this._activeSeekId);
+            this._activeSeekId = undefined;
+            if (this._seekSafetyTimeout) {
+              clearTimeout(this._seekSafetyTimeout);
+              this._seekSafetyTimeout = null;
+            }
+          }
           if (typeof msg.time === "number" && Number.isFinite(msg.time)) {
             this._currentTime = msg.time;
-            this.emit("timeupdate", this._currentTime);
-          } else if (this.videoElement) {
-            this.emit("timeupdate", this.videoElement.currentTime);
+            this.emit("timeupdate", this._currentTime * 1000);
           }
+          this.emit("seeked", undefined);
         } else if (msg.kind === "error") {
           this.emit("error", new Error(msg.message ?? "Unknown error"));
         }
@@ -1152,6 +1193,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.wsController.on("codecdata", (msg) => this.handleCodecData(msg));
     this.wsController.on("info", (msg) => this.handleInfo(msg));
     this.wsController.on("ontime", (msg) => this.handleOnTime(msg));
+    this.wsController.on("setspeed", (msg) => this.handleSetSpeed(msg));
     this.wsController.on("tracks", (tracks) => this.handleTracksChange(tracks));
     this.wsController.on("chunk", (chunk) => this.handleChunk(chunk));
     this.wsController.on("pause", (msg) => this.handleServerPause(msg));
@@ -1254,12 +1296,21 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   }
 
   private handleOnTime(msg: OnTimeMessage): void {
-    // Update sync controller with server time
-    this.syncController?.updateServerTime(msg.current);
+    // MistServer on_time values are in milliseconds — convert to seconds
+    // for internal state (matching video element / rVFC conventions)
+    const currentSec = msg.current / 1000;
 
-    // Update current time if no frame callback available
-    if (this._frameCallbackId === null) {
-      this._currentTime = msg.current;
+    // Track when on_time was received (for moving live edge in jumpToLive)
+    this._onTimeReceivedAt = Date.now();
+
+    // Update sync controller with server time (seconds)
+    this.syncController?.updateServerTime(currentSec);
+    this.syncController?.setServerPlayRate(msg.play_rate_curr);
+
+    // Update current time if no frame callback available and not seeking
+    // (seek completion now comes from worker 'seeked' event, not on_time)
+    if (this._frameCallbackId === null && !this.syncController?.isSeeking()) {
+      this._currentTime = currentSec;
     }
 
     // Record server delay
@@ -1270,13 +1321,35 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
     // Update duration from server (VOD streams have finite duration)
     if (msg.total !== undefined && isFinite(msg.total) && msg.total > 0) {
-      this._duration = msg.total;
+      this._duration = msg.total / 1000;
     }
 
-    // Update buffer level
-    const syncState = this.syncController?.getState();
-    if (syncState) {
-      this._bufferMs = syncState.buffer.current;
+    // Update seekable range from server (live DVR window)
+    if (msg.begin !== undefined) {
+      this._seekableBeginS = msg.begin / 1000;
+    }
+    if (msg.end !== undefined) {
+      this._seekableEndS = msg.end / 1000;
+    }
+
+    // Buffer management: compute buffer from worker frame timing and evaluate.
+    // OG rawws.js:460-464: buffer = decoded_point - playback_point (microseconds→ms)
+    if (
+      this.syncController &&
+      this._lastWorkerStats?.frameTiming &&
+      !this.syncController.isSeeking()
+    ) {
+      const ft = this._lastWorkerStats.frameTiming;
+      if (ft.out && ft.decoded) {
+        const bufferMs = Math.round(ft.decoded * 1e-3 - ft.out * 1e-3);
+        const syncState = this.syncController.evaluateBuffer(bufferMs, {
+          playRateCurr: msg.play_rate_curr,
+          serverCurrentMs: msg.current,
+          serverEndMs: msg.end,
+          serverJitterMs: msg.jitter,
+        });
+        this._bufferMs = syncState.buffer.current;
+      }
     }
 
     // Create pipelines for tracks mentioned in on_time.tracks (like reference player)
@@ -1300,6 +1373,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         }
       }
     }
+  }
+
+  /**
+   * Handle set_speed updates from server.
+   * Upstream rawws.js uses this signal to maintain rate/jitter state.
+   */
+  private handleSetSpeed(msg: SetSpeedMessage): void {
+    this.syncController?.setServerPlayRate(msg.play_rate_curr, msg.play_rate_prev, {
+      fromSetSpeed: true,
+    });
   }
 
   private async handleTracksChange(tracks: TrackInfo[]): Promise<void> {
@@ -1461,9 +1544,25 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
   /**
    * Handle server-initiated pause (e.g., server-side buffer underrun).
-   * Per rawws.js:661-662, we pause frame timing so the worker stops outputting frames.
+   * OG util.js:1696-1710: if reason is "at_dead_point", seek to midpoint of available buffer.
+   * Otherwise, per rawws.js:661-662, pause frame timing so the worker stops outputting frames.
    */
-  private handleServerPause(msg: { paused: boolean }): void {
+  private handleServerPause(msg: {
+    paused: boolean;
+    reason?: string;
+    begin?: number;
+    end?: number;
+  }): void {
+    if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
+      const seekTo = (msg.begin + msg.end) / 2;
+      if (!isNaN(seekTo) && seekTo > 0) {
+        this.log("At dead point: seeking to midpoint of available buffer");
+        this.wsController?.seek(seekTo);
+        return;
+      }
+      this.log("At dead point: seek target invalid — pausing");
+    }
+
     if (msg.paused) {
       this.log("Server requested pause");
       this.sendToWorker({
@@ -1945,42 +2044,47 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     });
   }
 
-  seek(time: number): void {
+  seek(timeMs: number): void {
     if (!this.wsController || !this.syncController) return;
 
-    const timeMs = time * 1000;
     const seekId = this.syncController.startSeek(timeMs);
+    this._activeSeekId = seekId;
 
     // Optimistically update current time for immediate UI feedback
-    this._currentTime = time;
-    this.emit("timeupdate", this._currentTime);
+    this._currentTime = timeMs / 1000;
+    this.emit("timeupdate", timeMs);
 
-    // Flush worker queues
+    // Flush worker queues and set seek target for frame skipping.
+    // The worker self-terminates the seek when a frame at/after the target is decoded.
+    // No "frametiming reset" here — that would clear the seeking flag prematurely.
     this.sendToWorker({
       type: "seek",
       seekTime: timeMs,
       uid: this.workerUidCounter++,
+    }).catch(() => {
+      this.syncController?.cancelSeek();
+      this._activeSeekId = undefined;
     });
 
-    // Send seek to server
+    // Send seek to server (wsController.seek already takes ms)
     const desiredBuffer = this.syncController.getDesiredBuffer();
     this.wsController.seek(timeMs, desiredBuffer);
 
     // Sync metadata socket
     this.metadataWs?.notifySeek();
 
-    // Mark seek complete after first frame (handled by worker)
-    // In practice, we'd wait for first frame callback
-    setTimeout(() => {
-      if (this.syncController?.isSeekActive(seekId)) {
-        this.syncController.completeSeek(seekId);
-        this.sendToWorker({
-          type: "frametiming",
-          action: "reset",
-          uid: this.workerUidCounter++,
-        });
+    // Safety timeout: if worker 'seeked' event doesn't arrive within 3s, force-complete
+    if (this._seekSafetyTimeout) clearTimeout(this._seekSafetyTimeout);
+    this._seekSafetyTimeout = setTimeout(() => {
+      this._seekSafetyTimeout = null;
+      if (
+        this._activeSeekId !== undefined &&
+        this.syncController?.isSeekActive(this._activeSeekId)
+      ) {
+        this.syncController.completeSeek(this._activeSeekId);
+        this._activeSeekId = undefined;
       }
-    }, 100);
+    }, 3000);
   }
 
   setPlaybackRate(rate: number): void {
@@ -1996,23 +2100,22 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   }
 
   jumpToLive(): void {
-    if (this.streamType === "live" && this.wsController) {
-      // For WebCodecs live, request fresh data from live edge
-      // Send fast_forward to request 5 seconds of new data
-      // Reference: rawws.js live catchup sends fast_forward
-      const desiredBuffer = this.syncController?.getDesiredBuffer() ?? 2000;
-      this.wsController.send({
-        type: "fast_forward",
-        ff_add: 5000, // Request 5 seconds ahead
-      });
-
-      // Also request buffer from current time to rebuild
-      const serverTime = this.syncController?.getEstimatedServerTime() ?? 0;
-      if (serverTime > 0) {
-        this.wsController.seek(serverTime * 1000, desiredBuffer);
+    if (this.streamType === "live") {
+      // OG rawws.js:1476: duration = (info.end + now - received) * 1e-3
+      // OG skins.js:3271: api.currentTime = api.duration
+      // The live edge moves forward by elapsed time since last on_time.
+      let liveEdgeMs: number;
+      if (this._seekableEndS !== null && this._onTimeReceivedAt > 0) {
+        const elapsedSec = (Date.now() - this._onTimeReceivedAt) / 1000;
+        liveEdgeMs = (this._seekableEndS + elapsedSec) * 1000;
+      } else if (this._seekableEndS !== null) {
+        liveEdgeMs = this._seekableEndS * 1000;
+      } else {
+        liveEdgeMs = this.getDuration();
       }
-
-      this.log("Jump to live: requested fresh data from server");
+      if (!Number.isFinite(liveEdgeMs) || liveEdgeMs <= 0) return;
+      this.seek(liveEdgeMs);
+      this.log(`Jump to live: seek to ${liveEdgeMs.toFixed(0)}ms`);
     }
   }
 
@@ -2027,6 +2130,13 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     return this.wsController !== null && !this.isDestroyed;
   }
 
+  getSeekableRange(): { start: number; end: number } | null {
+    if (this._seekableBeginS !== null && this._seekableEndS !== null) {
+      return { start: this._seekableBeginS * 1000, end: this._seekableEndS * 1000 };
+    }
+    return null;
+  }
+
   // ============================================================================
   // Media Properties (Phase 2A)
   // ============================================================================
@@ -2039,19 +2149,25 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   }
 
   getDuration(): number {
-    return this._duration;
+    // OG rawws.js:1476: live duration = (on_time.end + elapsed_since_received) * 1e-3
+    if (this.streamType === "live" && this._seekableEndS !== null && this._onTimeReceivedAt > 0) {
+      const elapsedSec = (Date.now() - this._onTimeReceivedAt) / 1000;
+      return (this._seekableEndS + elapsedSec) * 1000;
+    }
+    if (!Number.isFinite(this._duration)) return this._duration; // preserve Infinity
+    return this._duration * 1000;
   }
 
   /**
-   * Get current playback time (seconds)
+   * Get current playback time in ms
    * Uses requestVideoFrameCallback for accurate timing when available
    */
   get currentTime(): number {
-    return this._currentTime;
+    return this._currentTime * 1000;
   }
 
   getCurrentTime(): number {
-    return this._currentTime;
+    return this._currentTime * 1000;
   }
 
   /**
@@ -2062,6 +2178,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     if (this._bufferMs <= 0) {
       return createTimeRanges([]);
     }
+    // Return TimeRanges in seconds (browser API convention)
     const start = this._currentTime;
     const end = start + this._bufferMs / 1000;
     return createTimeRanges([[start, end]]);
@@ -2184,7 +2301,10 @@ export class WebCodecsPlayerImpl extends BasePlayer {
    * Updates current time
    */
   private onVideoFrame(metadata: VideoFrameCallbackMetadata): void {
-    // Update current time from actual frame presentation
+    // Don't overwrite optimistic seek position with stale pre-seek frames
+    if (this.syncController?.isSeeking()) return;
+
+    // Update current time from actual frame presentation (mediaTime is in seconds)
     this._currentTime = metadata.mediaTime;
 
     // Update buffer level from sync controller
@@ -2193,8 +2313,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       this._bufferMs = syncState.buffer.current;
     }
 
-    // Emit timeupdate event
-    this.emit("timeupdate", this._currentTime);
+    // Emit timeupdate event in ms
+    this.emit("timeupdate", this._currentTime * 1000);
 
     // Update frame stats
     this._framesDecoded = metadata.presentedFrames;

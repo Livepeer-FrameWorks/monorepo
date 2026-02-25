@@ -404,19 +404,20 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
             ) : (
               <div>
                 {allCombinations.map((combo, index) => {
-                  // Codec-incompatible items always show (with warning), MIME-incompatible hide in "disabled"
                   const isCodecIncompat = (combo as any).codecIncompatible === true;
+                  const isPartial = (combo as any).missingTracks?.length > 0;
                   if (!combo.compatible && !isCodecIncompat && !showDisabledPlayers) return null;
 
                   const isActive = activeComboIndex === index;
                   const typeLabel =
                     SOURCE_TYPE_LABELS[combo.sourceType] || combo.sourceType.split("/").pop();
 
+                  const isWarn = isCodecIncompat || isPartial;
+
                   // Determine score class
                   const getScoreClass = () => {
-                    if (!combo.compatible && !isCodecIncompat)
-                      return "fw-dev-combo-score--disabled";
-                    if (isCodecIncompat) return "fw-dev-combo-score--low";
+                    if (!combo.compatible && !isWarn) return "fw-dev-combo-score--disabled";
+                    if (isWarn) return "fw-dev-combo-score--low";
                     if (combo.score >= 2) return "fw-dev-combo-score--high";
                     if (combo.score >= 1.5) return "fw-dev-combo-score--mid";
                     return "fw-dev-combo-score--low";
@@ -425,21 +426,21 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                   // Determine rank class
                   const getRankClass = () => {
                     if (isActive) return "fw-dev-combo-rank--active";
-                    if (!combo.compatible && !isCodecIncompat) return "fw-dev-combo-rank--disabled";
-                    if (isCodecIncompat) return "fw-dev-combo-rank--warn";
+                    if (!combo.compatible && !isWarn) return "fw-dev-combo-rank--disabled";
+                    if (isWarn) return "fw-dev-combo-rank--warn";
                     return "";
                   };
 
                   // Determine type class
                   const getTypeClass = () => {
-                    if (!combo.compatible && !isCodecIncompat) return "fw-dev-combo-type--disabled";
-                    if (isCodecIncompat) return "fw-dev-combo-type--warn";
+                    if (!combo.compatible && !isWarn) return "fw-dev-combo-type--disabled";
+                    if (isWarn) return "fw-dev-combo-type--warn";
                     return "";
                   };
 
                   return (
                     <div
-                      key={`${combo.player}-${combo.sourceType}`}
+                      key={`${combo.player}-${combo.sourceType}-${combo.source.url || combo.sourceIndex}`}
                       onMouseEnter={(e) => {
                         setHoveredComboIndex(index);
                         const row = e.currentTarget;
@@ -461,13 +462,17 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                         className={cn(
                           "fw-dev-combo-btn",
                           isActive && "fw-dev-combo-btn--active",
-                          !combo.compatible && !isCodecIncompat && "fw-dev-combo-btn--disabled",
-                          isCodecIncompat && "fw-dev-combo-btn--codec-warn"
+                          !combo.compatible && !isWarn && "fw-dev-combo-btn--disabled",
+                          isWarn && "fw-dev-combo-btn--codec-warn"
                         )}
                       >
                         {/* Rank */}
                         <span className={cn("fw-dev-combo-rank", getRankClass())}>
-                          {combo.compatible ? index + 1 : isCodecIncompat ? "⚠" : "—"}
+                          {combo.compatible && !isPartial
+                            ? index + 1
+                            : isWarn
+                              ? "\u26A0"
+                              : "\u2014"}
                         </span>
                         {/* Player + Protocol */}
                         <span className="fw-dev-combo-name">
@@ -502,6 +507,12 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                                 </div>
                               )}
                           </div>
+                          {combo.note && <div className="fw-dev-tooltip-note">{combo.note}</div>}
+                          {(combo as any).missingTracks?.length > 0 && (
+                            <div className="fw-dev-tooltip-note">
+                              No compatible {(combo as any).missingTracks.join(", ")} codec
+                            </div>
+                          )}
                           {combo.compatible && combo.scoreBreakdown ? (
                             <>
                               <div className="fw-dev-tooltip-score">

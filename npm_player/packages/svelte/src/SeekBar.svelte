@@ -6,9 +6,9 @@
   import { cn } from "@livepeer-frameworks/player-core";
 
   interface Props {
-    /** Current playback time in seconds */
+    /** Current playback time in milliseconds */
     currentTime: number;
-    /** Total duration in seconds */
+    /** Total duration in milliseconds */
     duration: number;
     /** Buffered time ranges from video element */
     buffered?: TimeRanges;
@@ -20,9 +20,9 @@
     class?: string;
     /** Whether this is a live stream */
     isLive?: boolean;
-    /** For live: start of seekable DVR window (seconds) */
+    /** For live: start of seekable DVR window (ms) */
     seekableStart?: number;
-    /** For live: current live edge position (seconds) */
+    /** For live: current live edge position (ms) */
     liveEdge?: number;
     /** Defer seeking until drag release */
     commitOnRelease?: boolean;
@@ -80,8 +80,9 @@
 
     const segments: Array<{ startPercent: number; endPercent: number }> = [];
     for (let i = 0; i < buffered.length; i++) {
-      const start = buffered.start(i);
-      const end = buffered.end(i);
+      // buffered TimeRanges are in seconds (browser API), convert to ms
+      const start = buffered.start(i) * 1000;
+      const end = buffered.end(i) * 1000;
 
       const relativeStart = start - rangeStart;
       const relativeEnd = end - rangeStart;
@@ -95,9 +96,9 @@
   });
 
   // Format time as MM:SS or HH:MM:SS
-  function formatTime(seconds: number): string {
-    if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
-    const total = Math.floor(seconds);
+  function formatTime(ms: number): string {
+    if (!Number.isFinite(ms) || ms < 0) return "0:00";
+    const total = Math.floor(ms / 1000);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
@@ -108,10 +109,10 @@
   }
 
   // Format relative time for live streams
-  function formatLiveTime(seconds: number, edge: number): string {
-    const behindSeconds = edge - seconds;
-    if (behindSeconds < 1) return "LIVE";
-    const total = Math.floor(behindSeconds);
+  function formatLiveTime(ms: number, edgeMs: number): string {
+    const behindMs = edgeMs - ms;
+    if (behindMs < 1000) return "LIVE";
+    const total = Math.floor(behindMs / 1000);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
@@ -218,7 +219,7 @@
   // Handle keyboard navigation for accessibility
   function handleKeyDown(e: KeyboardEvent) {
     if (disabled) return;
-    const step = e.shiftKey ? 10 : 5; // 5s default, 10s with shift
+    const step = e.shiftKey ? 10000 : 5000;
     const rangeEnd = isLive ? effectiveLiveEdge : duration;
     const rangeStart = isLive ? seekableStart : 0;
 

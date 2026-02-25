@@ -169,13 +169,16 @@ export class FwPlayerControls extends LitElement {
   };
 
   private _deriveBufferWindowMs(
-    tracks?: Record<string, { firstms?: number; lastms?: number }>
+    tracks?: Record<string, { type?: string; firstms?: number; lastms?: number }>
   ): number | undefined {
     if (!tracks) {
       return undefined;
     }
 
-    const trackValues = Object.values(tracks);
+    // Filter out meta tracks and tracks with lastms <= 0 (same as PlayerController)
+    const trackValues = Object.values(tracks).filter(
+      (t) => t.type !== "meta" && (t.lastms === undefined || t.lastms > 0)
+    );
     if (trackValues.length === 0) {
       return undefined;
     }
@@ -191,8 +194,8 @@ export class FwPlayerControls extends LitElement {
       return undefined;
     }
 
-    const firstms = Math.max(...firstmsValues);
-    const lastms = Math.min(...lastmsValues);
+    const firstms = Math.min(...firstmsValues);
+    const lastms = Math.max(...lastmsValues);
     const window = lastms - firstms;
 
     if (!Number.isFinite(window) || window <= 0) {
@@ -213,7 +216,7 @@ export class FwPlayerControls extends LitElement {
       mistStreamInfo?.meta?.buffer_window ??
       this._deriveBufferWindowMs(
         mistStreamInfo?.meta?.tracks as
-          | Record<string, { firstms?: number; lastms?: number }>
+          | Record<string, { type?: string; firstms?: number; lastms?: number }>
           | undefined
       );
 
@@ -386,7 +389,7 @@ export class FwPlayerControls extends LitElement {
                         class="fw-btn-flush hidden sm:flex"
                         ?disabled=${disabled}
                         aria-label=${this.pc.t("skipBackward")}
-                        @click=${() => this.pc.seekBy(-10)}
+                        @click=${() => this.pc.seekBy(-10000)}
                       >
                         ${skipBackIcon(16)}
                       </button>
@@ -395,7 +398,7 @@ export class FwPlayerControls extends LitElement {
                         class="fw-btn-flush hidden sm:flex"
                         ?disabled=${disabled}
                         aria-label=${this.pc.t("skipForward")}
-                        @click=${() => this.pc.seekBy(10)}
+                        @click=${() => this.pc.seekBy(10000)}
                       >
                         ${skipForwardIcon(16)}
                       </button>

@@ -798,15 +798,16 @@
     position: absolute;
     left: 0;
     right: 0;
-    height: 4px;
+    height: 3px;
     border-radius: 9999px;
     background: hsl(var(--fw-text-faint) / 0.4);
     transition: height 0.15s ease;
   }
 
   .fw-seek-wrapper:hover .fw-seek-track,
+  .fw-seek-root:hover .fw-seek-track,
   .fw-seek-track--active {
-    height: 6px;
+    height: 8px;
   }
 
   .fw-seek-buffered {
@@ -814,7 +815,9 @@
     height: 100%;
     border-radius: 9999px;
     background: hsl(var(--fw-text) / 0.3);
-    transition: all 0.2s ease;
+    transition:
+      left 0.2s ease,
+      width 0.2s ease;
   }
 
   .fw-seek-progress {
@@ -822,7 +825,29 @@
     height: 100%;
     border-radius: 9999px;
     background: hsl(var(--fw-accent));
-    transition: width 0.1s linear;
+    will-change: width;
+  }
+
+  .fw-seek-hover-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: hsl(var(--fw-text) / 0.5);
+    transform: translateX(-50%);
+    pointer-events: none;
+    border-radius: 1px;
+  }
+
+  .fw-seek-live-edge {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    right: 0;
+    width: 3px;
+    background: hsl(var(--fw-accent));
+    border-radius: 1px;
+    opacity: 0.7;
   }
 
   .fw-seek-thumb {
@@ -842,6 +867,7 @@
   }
 
   .fw-seek-wrapper:hover .fw-seek-thumb,
+  .fw-seek-root:hover .fw-seek-thumb,
   .fw-seek-thumb--active {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
@@ -1856,6 +1882,16 @@
   .fw-dev-tooltip-tracks {
     color: hsl(var(--fw-text-muted));
     margin-top: 0.25rem;
+  }
+
+  .fw-dev-tooltip-note {
+    color: hsl(var(--fw-text-muted));
+    font-style: italic;
+    font-size: 0.75rem;
+    margin: 0.25rem 0;
+    line-height: 1.3;
+    white-space: normal;
+    overflow-wrap: break-word;
   }
 
   .fw-dev-tooltip-value {

@@ -11,7 +11,7 @@
  * - Latency tier: Protocol-based classification affecting live detection thresholds
  */
 
-import type { MistStreamInfo, MistTrackInfo } from "../types";
+import type { MistStreamInfo } from "../types";
 
 // ============================================================================
 // Types
@@ -20,16 +20,16 @@ import type { MistStreamInfo, MistTrackInfo } from "../types";
 export type LatencyTier = "ultra-low" | "low" | "medium" | "high";
 
 export interface LiveThresholds {
-  /** Seconds behind live edge to exit "LIVE" state (become clickable) */
+  /** Milliseconds behind live edge to exit "LIVE" state (become clickable) */
   exitLive: number;
-  /** Seconds behind live edge to enter "LIVE" state (become non-clickable) */
+  /** Milliseconds behind live edge to enter "LIVE" state (become non-clickable) */
   enterLive: number;
 }
 
 export interface SeekableRange {
-  /** Start of seekable range in seconds */
+  /** Start of seekable range in milliseconds */
   seekableStart: number;
-  /** End of seekable range (live edge) in seconds */
+  /** End of seekable range (live edge) in milliseconds */
   liveEdge: number;
 }
 
@@ -41,6 +41,10 @@ export interface SeekableRangeParams {
   duration: number;
   /** Allow Mist track metadata for MediaStream sources (e.g., WebCodecs DVR) */
   allowMediaStreamDvr?: boolean;
+  /** Absolute timestamp correction in ms (from player's firstms-based proxy) */
+  timeCorrectionMs?: number;
+  /** Buffered range start in ms, in player coordinate space (for buffer window fallback) */
+  bufferedStartMs?: number;
 }
 
 export interface CanSeekParams {
@@ -49,6 +53,8 @@ export interface CanSeekParams {
   duration: number;
   bufferWindowMs?: number;
   playerCanSeek?: () => boolean;
+  /** Player-reported seekable range — if valid, seeking is supported regardless of bufferWindowMs */
+  playerSeekableRange?: { start: number; end: number } | null;
 }
 
 // ============================================================================
@@ -59,20 +65,20 @@ export interface CanSeekParams {
  * Latency tier thresholds for "near live" detection.
  * Different protocols have vastly different latency expectations.
  *
- * exitLive: How far behind (seconds) before we show "behind live" indicator
- * enterLive: How close to live (seconds) before we show "LIVE" badge again
+ * exitLive: How far behind (ms) before we show "behind live" indicator
+ * enterLive: How close to live (ms) before we show "LIVE" badge again
  *
  * The gap between exitLive and enterLive creates hysteresis to prevent flicker.
  */
 export const LATENCY_TIERS: Record<LatencyTier, LiveThresholds> = {
   // WebRTC/WHEP: sub-second latency
-  "ultra-low": { exitLive: 2, enterLive: 0.5 },
+  "ultra-low": { exitLive: 2000, enterLive: 500 },
   // MEWS (WebSocket MP4): 2-5s latency
-  low: { exitLive: 5, enterLive: 1.5 },
+  low: { exitLive: 5000, enterLive: 1500 },
   // HLS/DASH: 10-30s latency (segment-based)
-  medium: { exitLive: 15, enterLive: 5 },
+  medium: { exitLive: 15000, enterLive: 5000 },
   // Fallback for unknown protocols
-  high: { exitLive: 30, enterLive: 10 },
+  high: { exitLive: 30000, enterLive: 10000 },
 };
 
 /**
@@ -81,10 +87,10 @@ export const LATENCY_TIERS: Record<LatencyTier, LiveThresholds> = {
 export const SPEED_PRESETS = [0.5, 1, 1.5, 2] as const;
 
 /**
- * Default fallback buffer window when no other info available (in seconds).
+ * Default fallback buffer window when no other info available (in ms).
  * Aligned with MistServer reference player's 60-second default.
  */
-export const DEFAULT_BUFFER_WINDOW_SEC = 60;
+export const DEFAULT_BUFFER_WINDOW_MS = 60000;
 
 // ============================================================================
 // Pure Functions
@@ -160,60 +166,66 @@ export function supportsPlaybackRate(video: HTMLVideoElement | null): boolean {
  * @returns Seekable range with start and live edge
  */
 export function calculateSeekableRange(params: SeekableRangeParams): SeekableRange {
-  const {
-    isLive,
-    video,
-    mistStreamInfo,
-    currentTime,
-    duration,
-    allowMediaStreamDvr = false,
-  } = params;
+  const { isLive, video, mistStreamInfo, currentTime, duration } = params;
 
-  // VOD: full duration is seekable
+  // video.seekable is authoritative — the browser/HLS.js/VHS already parsed the manifest.
+  // Covers live sliding window, DVR, and VOD without needing separate computation.
+  if (video?.seekable && video.seekable.length > 0) {
+    const seekStart = video.seekable.start(0) * 1000;
+    const seekEnd = video.seekable.end(video.seekable.length - 1) * 1000;
+    if (seekEnd > seekStart) {
+      return { seekableStart: seekStart, liveEdge: seekEnd };
+    }
+  }
+
   if (!isLive) {
     return { seekableStart: 0, liveEdge: duration };
   }
 
-  const isMediaStream = isMediaStreamSource(video);
+  // Fallback for live without seekable ranges (progressive, WebRTC, pre-playback)
+  let liveEdge = Number.isFinite(duration) ? duration : currentTime;
 
-  // PRIORITY 1: Browser's video.seekable (most reliable - reflects actual browser state)
-  if (video?.seekable && video.seekable.length > 0) {
-    const start = video.seekable.start(0);
-    const end = video.seekable.end(video.seekable.length - 1);
-    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
-      return { seekableStart: start, liveEdge: end };
+  // Upstream skins.js getBufferWindow():
+  // 1. MistVideo.info.meta.buffer_window
+  // 2. (api.duration - api.buffered.start(0)) * 1e3
+  // 3. 60e3
+  let bufferWindowMs: number | undefined = mistStreamInfo?.meta?.buffer_window;
+
+  if (!bufferWindowMs || bufferWindowMs <= 0) {
+    // Upstream: (api.duration - api.buffered.start(0)) * 1e3
+    // Both api.duration and api.buffered include the lastms shift, so lastms cancels.
+    // Use shifted buffered start when available (from player.getBufferedRanges()) to
+    // keep both values in the same coordinate space.
+    let bufferedStartSec: number | undefined;
+    if (params.bufferedStartMs !== undefined) {
+      bufferedStartSec = params.bufferedStartMs / 1000;
+    } else if (video?.buffered && video.buffered.length > 0) {
+      bufferedStartSec = video.buffered.start(0);
     }
-  }
-
-  // PRIORITY 2: Track firstms/lastms from MistServer (accurate when available)
-  // Skip for MediaStream unless explicitly allowed (e.g., WebCodecs DVR via server)
-  if ((allowMediaStreamDvr || !isMediaStream) && mistStreamInfo?.meta?.tracks) {
-    const tracks = Object.values(mistStreamInfo.meta.tracks) as MistTrackInfo[];
-    if (tracks.length > 0) {
-      const firstmsValues = tracks
-        .map((t) => t.firstms)
-        .filter((v): v is number => v !== undefined);
-      const lastmsValues = tracks.map((t) => t.lastms).filter((v): v is number => v !== undefined);
-
-      if (firstmsValues.length > 0 && lastmsValues.length > 0) {
-        const firstms = Math.max(...firstmsValues);
-        const lastms = Math.min(...lastmsValues);
-        return { seekableStart: firstms / 1000, liveEdge: lastms / 1000 };
+    if (bufferedStartSec !== undefined) {
+      const liveEdgeSec = liveEdge / 1000;
+      const windowSec = liveEdgeSec - bufferedStartSec;
+      if (Number.isFinite(windowSec) && windowSec > 0) {
+        bufferWindowMs = windowSec * 1000;
       }
     }
   }
 
-  // PRIORITY 3: buffer_window from MistServer signaling
-  const bufferWindowMs = mistStreamInfo?.meta?.buffer_window;
-  if (bufferWindowMs && bufferWindowMs > 0 && currentTime > 0) {
-    const bufferWindowSec = bufferWindowMs / 1000;
-    return {
-      seekableStart: Math.max(0, currentTime - bufferWindowSec),
-      liveEdge: currentTime,
-    };
+  if (!bufferWindowMs || bufferWindowMs <= 0) {
+    bufferWindowMs = DEFAULT_BUFFER_WINDOW_MS;
   }
 
-  // No seekable range (live only)
+  // Upstream: range = [duration - bufferWindow, duration]
+  if (liveEdge > 0) {
+    return { seekableStart: Math.max(0, liveEdge - bufferWindowMs), liveEdge };
+  }
+
+  // At startup (currentTime === 0), use buffer_window from metadata if available
+  // so DVR seekability is visible before playback starts
+  if (bufferWindowMs > 0 && mistStreamInfo?.meta?.buffer_window) {
+    return { seekableStart: 0, liveEdge: bufferWindowMs };
+  }
+
   return { seekableStart: currentTime, liveEdge: currentTime };
 }
 
@@ -224,11 +236,16 @@ export function calculateSeekableRange(params: SeekableRangeParams): SeekableRan
  * @returns true if seeking is available
  */
 export function canSeekStream(params: CanSeekParams): boolean {
-  const { video, isLive, duration, bufferWindowMs, playerCanSeek } = params;
+  const { video, isLive, duration, bufferWindowMs, playerCanSeek, playerSeekableRange } = params;
 
   // Player API says no
   if (playerCanSeek && !playerCanSeek()) {
     return false;
+  }
+
+  // Player reports a valid seekable range — trust it
+  if (playerSeekableRange && playerSeekableRange.end > playerSeekableRange.start) {
+    return true;
   }
 
   // Player API says yes - trust it for VOD, but require buffer for live
@@ -285,13 +302,11 @@ export function calculateLiveThresholds(
   const tier = sourceType ? getLatencyTier(sourceType) : isWebRTC ? "ultra-low" : "medium";
   const tierThresholds = LATENCY_TIERS[tier];
 
-  // For medium/high tiers, scale thresholds based on buffer_window
+  // For medium/high tiers, scale thresholds based on buffer_window (all in ms)
   if ((tier === "medium" || tier === "high") && bufferWindowMs && bufferWindowMs > 0) {
-    const bufferWindowSec = bufferWindowMs / 1000;
-    // Scale thresholds proportionally to buffer, with reasonable bounds
     return {
-      exitLive: Math.max(tierThresholds.exitLive, Math.min(30, bufferWindowSec / 3)),
-      enterLive: Math.max(tierThresholds.enterLive, Math.min(10, bufferWindowSec / 10)),
+      exitLive: Math.max(tierThresholds.exitLive, Math.min(30000, bufferWindowMs / 3)),
+      enterLive: Math.max(tierThresholds.enterLive, Math.min(10000, bufferWindowMs / 10)),
     };
   }
 
@@ -305,33 +320,33 @@ export function calculateLiveThresholds(
  * - To EXIT "LIVE" state: must be > exitLive + margin behind
  * - To ENTER "LIVE" state: must be < enterLive - margin behind
  *
- * @param currentTime - Current playback position in seconds
- * @param liveEdge - Live edge position in seconds
- * @param thresholds - Enter/exit thresholds
+ * @param currentTimeMs - Current playback position in milliseconds
+ * @param liveEdgeMs - Live edge position in milliseconds
+ * @param thresholds - Enter/exit thresholds in milliseconds
  * @param currentState - Current isNearLive state
  * @returns New isNearLive state
  */
 export function calculateIsNearLive(
-  currentTime: number,
-  liveEdge: number,
+  currentTimeMs: number,
+  liveEdgeMs: number,
   thresholds: LiveThresholds,
   currentState: boolean
 ): boolean {
   // Invalid state - assume live
-  if (!Number.isFinite(liveEdge) || liveEdge <= 0) {
+  if (!Number.isFinite(liveEdgeMs) || liveEdgeMs <= 0) {
     return true;
   }
 
-  const behindSeconds = liveEdge - currentTime;
+  const behindMs = liveEdgeMs - currentTimeMs;
 
-  // Hysteresis margins for extra stability
-  const exitMargin = 0.5;
-  const enterMargin = 0.2;
+  // Hysteresis margins for extra stability (in ms)
+  const exitMargin = 500;
+  const enterMargin = 200;
 
-  if (currentState && behindSeconds > thresholds.exitLive + exitMargin) {
+  if (currentState && behindMs > thresholds.exitLive + exitMargin) {
     // Currently "LIVE" - switch to "behind" when significantly behind
     return false;
-  } else if (!currentState && behindSeconds < thresholds.enterLive - enterMargin) {
+  } else if (!currentState && behindMs < thresholds.enterLive - enterMargin) {
     // Currently "behind" - switch to "LIVE" when close to live edge
     return true;
   }

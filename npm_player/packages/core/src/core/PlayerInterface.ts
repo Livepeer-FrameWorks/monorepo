@@ -5,6 +5,8 @@
  * consistent behavior and enable the PlayerManager selection system
  */
 
+import { appendUrlParams, parseUrlParams, stripUrlParams } from "./UrlUtils";
+
 export interface StreamSource {
   url: string;
   type: string;
@@ -28,12 +30,17 @@ export interface StreamTrack {
   channels?: number;
   rate?: number; // sample rate
   size?: number; // bits per sample
+  // Timing (from MistServer metadata — defines seekable window for live)
+  firstms?: number;
+  lastms?: number;
 }
 
 export interface StreamInfo {
   source: StreamSource[];
   meta: {
     tracks: StreamTrack[];
+    /** MistServer SHM buffer window size in milliseconds */
+    buffer_window?: number;
   };
   type?: "live" | "vod";
 }
@@ -78,6 +85,8 @@ export interface PlayerCapability {
   priority: number;
   /** MIME types this player can handle */
   mimes: string[];
+  /** Per-mime notes on browser support / known limitations (shown in dev panel) */
+  notes?: Record<string, string>;
 }
 
 export interface PlayerEvents {
@@ -86,10 +95,11 @@ export interface PlayerEvents {
   play: void;
   pause: void;
   ended: void;
+  seeked: void;
   timeupdate: number;
   /** Request to reload the player (e.g., Firefox segment error recovery) */
   reloadrequested: { reason: string };
-  /** Seekable range changed */
+  /** Seekable range changed (values in ms) */
   seekablechange: { start: number; end: number; bufferWindow: number };
 }
 
@@ -272,12 +282,16 @@ export interface IPlayer {
   /**
    * Get current playback state
    */
+  /** Get current playback position in milliseconds */
   getCurrentTime?(): number;
+  /** Get content duration in milliseconds */
   getDuration?(): number;
   isPaused?(): boolean;
   isMuted?(): boolean;
-  /** Optional: provide an override seekable range (seconds) */
+  /** Optional: provide an override seekable range (milliseconds) */
   getSeekableRange?(): { start: number; end: number } | null;
+  /** Optional: push authoritative seekable range hints from controller logic (milliseconds) */
+  setSeekableRangeHint?(range: { start: number; end: number } | null): void;
   /** Optional: provide buffered ranges override */
   getBufferedRanges?(): TimeRanges | null;
 
@@ -286,6 +300,7 @@ export interface IPlayer {
    */
   play?(): Promise<void>;
   pause?(): void;
+  /** Seek to position in milliseconds */
   seek?(time: number): void;
   setVolume?(volume: number): void;
   setMuted?(muted: boolean): void;
@@ -349,6 +364,21 @@ export abstract class BasePlayer implements IPlayer {
 
   protected listeners: Map<string, Set<Function>> = new Map();
   protected videoElement: HTMLVideoElement | null = null;
+
+  // Anchor-based coordinate system: MistServer absolute ms via StreamStateClient.
+  // Browser video.currentTime is used only for smooth interpolation between updates.
+  protected _anchorStreamEndMs = 0;
+  protected _anchorRaw = 0;
+  protected _dvrWidthMs = 0;
+  protected _hasAnchor = false;
+
+  // Live seeking via startunix URL rewriting (MistServer DVR)
+  protected liveSeekEnabled = false;
+  protected liveSeekBaseUrl: string | null = null;
+  protected liveSeekOffsetSec = 0;
+  protected pendingLiveSeekOffset: number | null = null;
+  protected liveSeekTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly LIVE_SEEK_DEBOUNCE_MS = 300;
 
   abstract isMimeSupported(mimetype: string): boolean;
   abstract isBrowserSupported(
@@ -415,13 +445,14 @@ export abstract class BasePlayer implements IPlayer {
     video.addEventListener("canplay", () => options.onCanPlay?.());
 
     video.addEventListener("durationchange", () => {
-      options.onDurationChange?.(video.duration);
+      const durationMs = Number.isFinite(video.duration) ? video.duration * 1000 : video.duration;
+      options.onDurationChange?.(durationMs);
     });
 
     video.addEventListener("timeupdate", () => {
-      const currentTime = video.currentTime;
-      options.onTimeUpdate?.(currentTime);
-      this.emit("timeupdate", currentTime);
+      const currentTimeMs = video.currentTime * 1000;
+      options.onTimeUpdate?.(currentTimeMs);
+      this.emit("timeupdate", currentTimeMs);
     });
 
     video.addEventListener("error", () => {
@@ -438,21 +469,69 @@ export abstract class BasePlayer implements IPlayer {
     }
   }
 
-  // Default implementations for optional methods
+  // Coordinate getters — anchor-based when live seek is active, browser-local fallback
   getCurrentTime(): number {
-    return this.videoElement?.currentTime || 0;
+    if (this.liveSeekEnabled && this._hasAnchor && this.videoElement) {
+      const rawAdvance = this.videoElement.currentTime - this._anchorRaw;
+      const offset = this.pendingLiveSeekOffset ?? this.liveSeekOffsetSec;
+      return this._anchorStreamEndMs + offset * 1000 + rawAdvance * 1000;
+    }
+    return (this.videoElement?.currentTime ?? 0) * 1000;
   }
 
   getDuration(): number {
-    return this.videoElement?.duration || 0;
+    if (this.liveSeekEnabled && this._hasAnchor && this.videoElement) {
+      const rawAdvance = this.videoElement.currentTime - this._anchorRaw;
+      return this._anchorStreamEndMs + rawAdvance * 1000;
+    }
+    const d = this.videoElement?.duration;
+    if (d === undefined || d === null) return 0;
+    if (!Number.isFinite(d)) return d;
+    return d * 1000;
   }
 
   getSeekableRange(): { start: number; end: number } | null {
-    return null;
+    if (!this.liveSeekEnabled || !this._hasAnchor || this._dvrWidthMs <= 0) return null;
+    const durationMs = this.getDuration();
+    if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+    return { start: Math.max(0, durationMs - this._dvrWidthMs), end: durationMs };
+  }
+
+  setSeekableRangeHint(range: { start: number; end: number } | null): void {
+    if (!range || !Number.isFinite(range.end) || range.end <= 0) return;
+    if (!this.liveSeekEnabled) return;
+    this._anchorStreamEndMs = range.end;
+    this._anchorRaw = this.videoElement?.currentTime ?? 0;
+    this._dvrWidthMs = Math.max(0, range.end - range.start);
+    this._hasAnchor = true;
   }
 
   getBufferedRanges(): TimeRanges | null {
-    return this.videoElement?.buffered ?? null;
+    const video = this.videoElement;
+    if (!video) return null;
+    const buffered = video.buffered;
+    if (!this.liveSeekEnabled || !this._hasAnchor || !buffered || buffered.length === 0)
+      return buffered;
+
+    const offset = this.pendingLiveSeekOffset ?? this.liveSeekOffsetSec;
+    const baseSec = this._anchorStreamEndMs / 1000 + offset - this._anchorRaw;
+    const shifted: [number, number][] = [];
+    for (let i = 0; i < buffered.length; i++) {
+      const s = buffered.start(i) + baseSec;
+      const e = buffered.end(i) + baseSec;
+      if (Number.isFinite(s) && Number.isFinite(e)) shifted.push([s, e]);
+    }
+    return {
+      length: shifted.length,
+      start(index: number) {
+        if (index < 0 || index >= shifted.length) throw new DOMException("Index out of bounds");
+        return shifted[index][0];
+      },
+      end(index: number) {
+        if (index < 0 || index >= shifted.length) throw new DOMException("Index out of bounds");
+        return shifted[index][1];
+      },
+    };
   }
 
   isPaused(): boolean {
@@ -473,10 +552,46 @@ export abstract class BasePlayer implements IPlayer {
     this.videoElement?.pause();
   }
 
-  seek(time: number): void {
-    if (this.videoElement) {
-      this.videoElement.currentTime = time;
+  seek(timeMs: number): void {
+    if (this.liveSeekEnabled) {
+      if (this._hasAnchor) {
+        const durationMs = this.getDuration();
+        const offsetFromLiveSec = (timeMs - durationMs) / 1000;
+
+        // In-buffer seek: try browser seekable range first
+        const video = this.videoElement;
+        if (video?.seekable && video.seekable.length > 0) {
+          const rawEnd = video.seekable.end(video.seekable.length - 1);
+          const browserTarget = rawEnd + offsetFromLiveSec;
+          const rawStart = video.seekable.start(0);
+          if (browserTarget >= rawStart - 0.5) {
+            const clamped = Math.max(rawStart, Math.min(rawEnd, browserTarget));
+            this.seekInBuffer(clamped);
+            this.liveSeekOffsetSec = Math.min(0, offsetFromLiveSec);
+            this._anchorRaw = clamped;
+            return;
+          }
+        }
+
+        // Out-of-buffer: startunix URL rewrite
+        let offset = offsetFromLiveSec;
+        if (offset > 0) offset = 0;
+        this.scheduleLiveSeekOffset(offset, false);
+        return;
+      }
+
+      // Pre-anchor fallback: best-effort offset from getDuration()
+      const durationMs = this.getDuration();
+      const durationSec =
+        Number.isFinite(durationMs) && durationMs > 0 ? durationMs / 1000 : timeMs / 1000;
+      let offset = timeMs / 1000 - durationSec;
+      if (offset > 0) offset = 0;
+      this.scheduleLiveSeekOffset(offset, false);
+      return;
     }
+
+    // Non-live: direct seek
+    this.seekInBuffer(timeMs / 1000);
   }
 
   setVolume(volume: number): void {
@@ -528,20 +643,35 @@ export abstract class BasePlayer implements IPlayer {
     }
   }
 
-  // Default live helpers
+  // Live helpers
   isLive(): boolean {
+    if (this.liveSeekEnabled) return true;
     const v = this.videoElement;
-    if (!v) return false;
-    return !isFinite(v.duration) || v.duration === Infinity;
+    return v ? !isFinite(v.duration) : false;
   }
 
   jumpToLive(): void {
+    if (this.liveSeekEnabled) {
+      const v = this.videoElement;
+      if (v?.seekable && v.seekable.length > 0) {
+        const rawEnd = v.seekable.end(v.seekable.length - 1);
+        this.seekInBuffer(rawEnd);
+        this.liveSeekOffsetSec = 0;
+        this._anchorRaw = rawEnd;
+        this.pendingLiveSeekOffset = null;
+        if (this.liveSeekTimer) {
+          clearTimeout(this.liveSeekTimer);
+          this.liveSeekTimer = null;
+        }
+        return;
+      }
+      this.scheduleLiveSeekOffset(0, true);
+      return;
+    }
     const v = this.videoElement;
-    if (!v) return;
-    const seekable = v.seekable;
-    if (seekable && seekable.length > 0) {
+    if (v?.seekable && v.seekable.length > 0) {
       try {
-        v.currentTime = seekable.end(seekable.length - 1);
+        v.currentTime = v.seekable.end(v.seekable.length - 1);
       } catch {}
     }
   }
@@ -580,5 +710,88 @@ export abstract class BasePlayer implements IPlayer {
 
   async getLatency(): Promise<any> {
     return undefined;
+  }
+
+  // Protected hooks — subclasses override for player-specific behavior
+  protected seekInBuffer(timeSec: number): void {
+    if (this.videoElement) this.videoElement.currentTime = timeSec;
+  }
+
+  protected reloadSource(url: string): void {
+    if (!this.videoElement) return;
+    const wasPlaying = !this.videoElement.paused;
+    this.videoElement.src = url;
+    this.videoElement.load();
+    this._anchorRaw = 0;
+    if (wasPlaying) this.videoElement.play().catch(() => {});
+  }
+
+  protected initLiveSeek(sourceUrl: string): void {
+    this.liveSeekEnabled = true;
+    this.liveSeekOffsetSec = 0;
+    this.liveSeekBaseUrl = this.stripStartUnixParam(sourceUrl);
+  }
+
+  protected cleanupLiveSeek(): void {
+    if (this.liveSeekTimer) {
+      clearTimeout(this.liveSeekTimer);
+      this.liveSeekTimer = null;
+    }
+    this.pendingLiveSeekOffset = null;
+    this._hasAnchor = false;
+    this._anchorStreamEndMs = 0;
+    this._anchorRaw = 0;
+    this._dvrWidthMs = 0;
+    this.liveSeekOffsetSec = 0;
+    this.liveSeekBaseUrl = null;
+    this.liveSeekEnabled = false;
+  }
+
+  // startunix URL rewriting infrastructure (MistServer DVR)
+  private stripStartUnixParam(url: string): string {
+    const params = parseUrlParams(url);
+    delete params.startunix;
+    return appendUrlParams(stripUrlParams(url), params);
+  }
+
+  private buildLiveSeekUrl(offsetSec: number): string {
+    const base = this.liveSeekBaseUrl || "";
+    if (!base) return "";
+    if (!offsetSec || offsetSec >= 0) return this.stripStartUnixParam(base);
+    const params = parseUrlParams(base);
+    params.startunix = String(offsetSec);
+    return appendUrlParams(stripUrlParams(base), params);
+  }
+
+  private scheduleLiveSeekOffset(offsetSec: number, immediate: boolean): void {
+    const clamped = Math.min(0, offsetSec);
+    if (immediate) {
+      if (this.liveSeekTimer) {
+        clearTimeout(this.liveSeekTimer);
+        this.liveSeekTimer = null;
+      }
+      this.pendingLiveSeekOffset = null;
+      this.applyLiveSeekOffset(clamped);
+      return;
+    }
+    this.pendingLiveSeekOffset = clamped;
+    if (this.liveSeekTimer) clearTimeout(this.liveSeekTimer);
+    this.liveSeekTimer = setTimeout(() => {
+      this.liveSeekTimer = null;
+      if (this.pendingLiveSeekOffset !== null) {
+        const pending = this.pendingLiveSeekOffset;
+        this.pendingLiveSeekOffset = null;
+        this.applyLiveSeekOffset(pending);
+      }
+    }, BasePlayer.LIVE_SEEK_DEBOUNCE_MS);
+  }
+
+  private applyLiveSeekOffset(offsetSec: number): void {
+    const clamped = Math.min(0, offsetSec);
+    if (Math.abs(clamped - this.liveSeekOffsetSec) < 0.05) return;
+    this.liveSeekOffsetSec = clamped;
+    const nextUrl = this.buildLiveSeekUrl(clamped);
+    if (!nextUrl) return;
+    this.reloadSource(nextUrl);
   }
 }

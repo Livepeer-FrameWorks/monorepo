@@ -421,6 +421,20 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
         },
       };
 
+      // TEMP: log buffer_window and track timing from MistServer
+      const bw = mergedStreamInfo.meta?.buffer_window;
+      const tracks = mergedStreamInfo.meta?.tracks;
+      if (bw !== undefined || tracks) {
+        const trackTiming = tracks
+          ? Object.entries(tracks)
+              .map(([k, t]) => `${k}:[${(t as any).firstms ?? "?"},${(t as any).lastms ?? "?"}]`)
+              .join(" ")
+          : "none";
+        console.debug(
+          `[StreamStateClient] buffer_window=${bw ?? "undefined"} tracks=${trackTiming}`
+        );
+      }
+
       newState = {
         status: "ONLINE",
         isOnline: true,

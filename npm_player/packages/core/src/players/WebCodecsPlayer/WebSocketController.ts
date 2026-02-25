@@ -17,6 +17,7 @@ import type {
   CodecDataMessage,
   InfoMessage,
   OnTimeMessage,
+  SetSpeedMessage,
   RawChunk,
   TrackInfo,
 } from "./types";
@@ -36,9 +37,10 @@ export interface WebSocketControllerEvents {
   codecdata: CodecDataMessage;
   info: InfoMessage;
   ontime: OnTimeMessage;
+  setspeed: SetSpeedMessage;
   tracks: TrackInfo[];
   chunk: RawChunk;
-  pause: { paused: boolean };
+  pause: { paused: boolean; reason?: string; begin?: number; end?: number };
   stop: void;
   error: Error;
 }
@@ -429,8 +431,9 @@ export class WebSocketController {
       // Complete timing for responses
       if (message.type === "codec_data") {
         this.serverDelay.completeTiming("request_codec_data");
-      } else if (message.type === "on_time") {
+      } else if (message.type === "seek") {
         this.serverDelay.completeTiming("seek");
+      } else if (message.type === "set_speed") {
         this.serverDelay.completeTiming("set_speed");
       }
 
@@ -447,12 +450,18 @@ export class WebSocketController {
           this.emit("info", message as InfoMessage);
           break;
 
-        case "on_time":
-          if ((message as OnTimeMessage).tracks?.length) {
-            this.log(`on_time tracks: ${JSON.stringify((message as OnTimeMessage).tracks)}`);
+        case "on_time": {
+          const otMsg = message as OnTimeMessage;
+          if (otMsg.tracks?.length) {
+            this.log(`on_time tracks: ${JSON.stringify(otMsg.tracks)}`);
           }
-          this.emit("ontime", message as OnTimeMessage);
+          // TEMP: log seekable range from on_time
+          if (otMsg.begin !== undefined || otMsg.end !== undefined) {
+            this.log(`on_time begin=${otMsg.begin} end=${otMsg.end} current=${otMsg.current}`);
+          }
+          this.emit("ontime", otMsg);
           break;
+        }
 
         case "tracks":
           this.emit("tracks", (message as any).tracks);
@@ -468,12 +477,22 @@ export class WebSocketController {
 
         case "pause":
           // Server-initiated pause (e.g., buffer underrun on server side)
-          // Per rawws.js:661-662, forward the paused state to the player
-          this.emit("pause", { paused: !!(message as any).paused });
+          // Preserve reason/begin/end for dead-point recovery (OG util.js:1697)
+          this.emit("pause", {
+            paused: !!(message as any).paused,
+            reason: (message as any).reason,
+            begin: (message as any).begin,
+            end: (message as any).end,
+          });
           break;
 
         case "set_speed":
-          // Acknowledgment - no action needed
+          this.emit("setspeed", message as SetSpeedMessage);
+          break;
+
+        case "seek":
+          // Seek acknowledgment from server (expected after send({type:"seek"}).
+          // OG rawws.js does not treat this as unknown/noise.
           break;
 
         default:

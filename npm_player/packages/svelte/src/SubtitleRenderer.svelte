@@ -37,7 +37,7 @@
   }
 
   interface Props {
-    /** Current video playback time in seconds */
+    /** Current video playback time in milliseconds */
     currentTime: number;
     /** Whether subtitles are enabled */
     enabled?: boolean;
@@ -160,7 +160,7 @@
       return;
     }
 
-    const currentTimeMs = currentTime * 1000;
+    const currentTimeMs = currentTime;
     const activeCue = allCues.find((cue) => {
       const start = cue.startTime;
       const end = cue.endTime;
@@ -178,7 +178,7 @@
 
   // Clean up expired cues
   $effect(() => {
-    const currentTimeMs = currentTime * 1000;
+    const currentTimeMs = currentTime;
 
     liveCues = liveCues.filter((cue) => {
       const endTime = cue.endTime === Infinity ? cue.startTime + 10000 : cue.endTime;

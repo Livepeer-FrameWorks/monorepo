@@ -101,13 +101,15 @@ export class ABRController {
       return;
     }
 
-    // Setup resize observer for ABR_resize mode
-    if (this.options.mode === "resize" || this.options.mode === "auto") {
+    if (this.options.mode === "auto") {
+      // Upstream: resize ABR takes priority; bitrate only if resize unavailable
       this.setupResizeObserver();
-    }
-
-    // Start active bandwidth monitoring for bitrate mode
-    if (this.options.mode === "bitrate" || this.options.mode === "auto") {
+      if (!this.resizeObserver) {
+        this.startActiveMonitoring();
+      }
+    } else if (this.options.mode === "resize") {
+      this.setupResizeObserver();
+    } else if (this.options.mode === "bitrate") {
       this.startActiveMonitoring();
     }
   }

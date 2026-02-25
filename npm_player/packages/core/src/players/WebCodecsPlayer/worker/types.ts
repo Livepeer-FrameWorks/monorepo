@@ -235,7 +235,10 @@ export interface FrameTiming {
     tweak: number;
     combined: number;
   };
-  seeking: boolean;
+  /** Seek target timestamp in microseconds, or false when not seeking.
+   *  Frames before this timestamp are skipped (closed) during post-seek catchup.
+   *  Matches upstream webcodecsworker.js: frameTiming.seeking = seekTo * 1e3 */
+  seeking: number | false;
   paused: boolean;
   /** Server-sent current time */
   serverTime: number;
@@ -289,6 +292,10 @@ export interface PipelineState {
   annexBConvert?: boolean;
   /** Pressure drop: dropping all frames until next keyframe to avoid moshing */
   droppingUntilKeyframe?: boolean;
+  /** Stored decoder config for reconfiguration after reset (seek flush) */
+  lastDecoderConfig: VideoDecoderConfig | AudioDecoderConfig | null;
+  /** Timestamp of last error-triggered reset, for rate limiting (upstream: 1s minimum) */
+  lastResetTime: number;
 }
 
 // ============================================================================

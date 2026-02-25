@@ -24,24 +24,24 @@ describe("formatTime", () => {
 
   it("formats seconds only", () => {
     expect(formatTime(0)).toBe("00:00");
-    expect(formatTime(5)).toBe("00:05");
-    expect(formatTime(59)).toBe("00:59");
+    expect(formatTime(5000)).toBe("00:05");
+    expect(formatTime(59000)).toBe("00:59");
   });
 
   it("formats minutes and seconds", () => {
-    expect(formatTime(60)).toBe("01:00");
-    expect(formatTime(65)).toBe("01:05");
-    expect(formatTime(125)).toBe("02:05");
+    expect(formatTime(60000)).toBe("01:00");
+    expect(formatTime(65000)).toBe("01:05");
+    expect(formatTime(125000)).toBe("02:05");
   });
 
   it("formats hours, minutes, seconds", () => {
-    expect(formatTime(3600)).toBe("1:00:00");
-    expect(formatTime(3665)).toBe("1:01:05");
-    expect(formatTime(36000)).toBe("10:00:00");
+    expect(formatTime(3600000)).toBe("1:00:00");
+    expect(formatTime(3665000)).toBe("1:01:05");
+    expect(formatTime(36000000)).toBe("10:00:00");
   });
 
-  it("floors fractional seconds", () => {
-    expect(formatTime(65.9)).toBe("01:05");
+  it("floors fractional milliseconds", () => {
+    expect(formatTime(65900)).toBe("01:05");
   });
 });
 
@@ -66,11 +66,11 @@ describe("formatTimeDisplay", () => {
   it("shows wall-clock time for live with unixoffset", () => {
     const result = formatTimeDisplay({
       isLive: true,
-      currentTime: 60,
+      currentTime: 60000,
       duration: Infinity,
-      liveEdge: 60,
+      liveEdge: 60000,
       seekableStart: 0,
-      unixoffset: new Date("2024-01-15T14:29:45Z").getTime(),
+      unixoffset: new Date("2024-01-15T14:29:00Z").getTime(),
     });
     expect(result).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   });
@@ -78,9 +78,9 @@ describe("formatTimeDisplay", () => {
   it("shows 'LIVE' when at live edge", () => {
     const result = formatTimeDisplay({
       isLive: true,
-      currentTime: 60,
+      currentTime: 60000,
       duration: Infinity,
-      liveEdge: 60,
+      liveEdge: 60000,
       seekableStart: 0,
     });
     expect(result).toBe("LIVE");
@@ -89,9 +89,9 @@ describe("formatTimeDisplay", () => {
   it("shows negative time when behind live", () => {
     const result = formatTimeDisplay({
       isLive: true,
-      currentTime: 50,
+      currentTime: 50000,
       duration: Infinity,
-      liveEdge: 60,
+      liveEdge: 60000,
       seekableStart: 0,
     });
     expect(result).toBe("-00:10");
@@ -100,9 +100,9 @@ describe("formatTimeDisplay", () => {
   it("shows current / duration for VOD", () => {
     const result = formatTimeDisplay({
       isLive: false,
-      currentTime: 65,
-      duration: 300,
-      liveEdge: 300,
+      currentTime: 65000,
+      duration: 300000,
+      liveEdge: 300000,
       seekableStart: 0,
     });
     expect(result).toBe("01:05 / 05:00");
@@ -111,7 +111,7 @@ describe("formatTimeDisplay", () => {
   it("shows only current time for VOD without valid duration", () => {
     const result = formatTimeDisplay({
       isLive: false,
-      currentTime: 65,
+      currentTime: 65000,
       duration: 0,
       liveEdge: 0,
       seekableStart: 0,
@@ -122,19 +122,19 @@ describe("formatTimeDisplay", () => {
 
 describe("formatTooltipTime", () => {
   it("formats VOD time normally", () => {
-    expect(formatTooltipTime(65, false)).toBe("01:05");
+    expect(formatTooltipTime(65000, false)).toBe("01:05");
   });
 
   it("shows 'LIVE' when at live edge", () => {
-    expect(formatTooltipTime(60, true, 60)).toBe("LIVE");
+    expect(formatTooltipTime(60000, true, 60000)).toBe("LIVE");
   });
 
   it("shows negative time when behind live", () => {
-    expect(formatTooltipTime(50, true, 60)).toBe("-00:10");
+    expect(formatTooltipTime(50000, true, 60000)).toBe("-00:10");
   });
 
   it("formats normally when no live edge provided", () => {
-    expect(formatTooltipTime(65, true)).toBe("01:05");
+    expect(formatTooltipTime(65000, true)).toBe("01:05");
   });
 });
 
@@ -148,8 +148,8 @@ describe("formatDuration", () => {
   });
 
   it("formats finite duration", () => {
-    expect(formatDuration(300, false)).toBe("05:00");
-    expect(formatDuration(3665)).toBe("1:01:05");
+    expect(formatDuration(300000, false)).toBe("05:00");
+    expect(formatDuration(3665000)).toBe("1:01:05");
   });
 });
 

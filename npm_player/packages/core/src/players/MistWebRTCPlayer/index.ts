@@ -190,6 +190,10 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     }
   }
 
+  canSeek(): boolean {
+    return false;
+  }
+
   async destroy(): Promise<void> {
     this.destroyed = true;
 
@@ -237,13 +241,14 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.listeners.clear();
   }
 
-  // Override seek to use signaling
-  seek(time: number): void {
+  // Override seek to use signaling (timeMs in milliseconds)
+  seek(timeMs: number): void {
     if (!this.signaling?.isConnected || !this.videoElement) return;
 
+    const timeSec = timeMs / 1000;
     this.videoElement.pause();
-    this.seekOffset = time - this.videoElement.currentTime;
-    this.signaling.seek(time).catch((e) => {
+    this.seekOffset = timeSec - this.videoElement.currentTime;
+    this.signaling.seek(timeSec).catch((e) => {
       console.warn("[MistWebRTC] Seek failed:", e);
     });
   }
@@ -270,16 +275,20 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     return this.isLiveStream;
   }
 
-  // Override getDuration to use signaling data
+  // Override getDuration to use signaling data (returns ms)
   getDuration(): number {
-    return this.durationMs > 0 ? this.durationMs / 1000 : super.getDuration();
+    if (this.durationMs > 0) {
+      if (!Number.isFinite(this.durationMs)) return this.durationMs; // preserve Infinity
+      return this.durationMs;
+    }
+    return super.getDuration();
   }
 
-  // Override getCurrentTime to include seek offset
+  // Override getCurrentTime to include seek offset (returns ms)
   getCurrentTime(): number {
     const v = this.videoElement;
     if (!v) return 0;
-    return this.seekOffset + v.currentTime;
+    return (this.seekOffset + v.currentTime) * 1000;
   }
 
   /**

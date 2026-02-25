@@ -92,11 +92,13 @@ export interface WebSocketManagerOptions {
   onOpen: () => void;
   onClose: () => void;
   onError: (message: string) => void;
+  shouldReconnect?: () => boolean;
 }
 
 export interface SourceBufferManagerOptions {
   mediaSource: MediaSource;
   videoElement: HTMLVideoElement;
+  container: "mp4" | "webm";
   onError: (message: string) => void;
 }
 

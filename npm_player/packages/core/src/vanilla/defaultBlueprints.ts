@@ -129,13 +129,13 @@ function play(ctx: BlueprintContext): HTMLElement {
 
 function seekBackward(ctx: BlueprintContext): HTMLElement {
   return btn("fw-btn-flush fw-bp-seek-back", ctx.translate("skipBack", "Skip back 10s"), () =>
-    ctx.api.skipBack(10)
+    ctx.api.skipBack(10000)
   );
 }
 
 function seekForward(ctx: BlueprintContext): HTMLElement {
   return btn("fw-btn-flush fw-bp-seek-fwd", ctx.translate("skipForward", "Skip forward 10s"), () =>
-    ctx.api.skipForward(10)
+    ctx.api.skipForward(10000)
   );
 }
 

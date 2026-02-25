@@ -111,13 +111,15 @@ export interface InfoMessage {
 
 export interface OnTimeMessage {
   type: "on_time";
-  /** Current playback time (seconds) */
+  /** Current playback time (ms — MistServer uses ms for all timestamps) */
   current: number;
-  /** Total duration (seconds, Infinity for live) */
+  /** Total duration (ms, Infinity for live) */
   total: number;
-  /** Available buffer end time (seconds) */
+  /** Available buffer end time (ms) */
   available?: number;
-  /** End time of available content (seconds) */
+  /** Earliest available content (ms) — start of DVR/seekable window */
+  begin?: number;
+  /** End time of available content (ms) */
   end?: number;
   /** Server-reported jitter (ms) */
   jitter?: number;
@@ -137,7 +139,9 @@ export interface TracksMessage {
 
 export interface SetSpeedMessage {
   type: "set_speed";
-  play_rate: number | "auto";
+  play_rate?: number | "auto";
+  play_rate_curr?: number | "auto" | "fast-forward";
+  play_rate_prev?: number | "auto" | "fast-forward";
 }
 
 export interface PauseMessage {
@@ -153,6 +157,10 @@ export interface ErrorMessage {
   message: string;
 }
 
+export interface SeekAckMessage {
+  type: "seek";
+}
+
 export type ControlMessage =
   | CodecDataMessage
   | InfoMessage
@@ -161,7 +169,8 @@ export type ControlMessage =
   | SetSpeedMessage
   | PauseMessage
   | OnStopMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | SeekAckMessage;
 
 // Outbound control commands
 export interface PlayCommand {

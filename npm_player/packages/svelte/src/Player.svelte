@@ -202,7 +202,7 @@
     isPlaying: false,
     isPaused: true,
     isBuffering: false,
-    isMuted: true,
+    isMuted: false,
     volume: 1,
     error: null as string | null,
     isPassiveError: false,
@@ -247,7 +247,7 @@
       mistUrl: options?.mistUrl,
       authToken: options?.authToken,
       autoplay: options?.autoplay !== false,
-      muted: options?.muted !== false,
+      muted: options?.muted === true,
       controls: options?.stockControls === true,
       poster: thumbnailUrl || undefined,
       debug: options?.debug,
@@ -587,7 +587,7 @@
                   >
                     {$translatorStore("retry")}
                   </button>
-                  {#if playerStore?.getController()?.canAttemptFallback()}
+                  {#if options?.devMode && playerStore?.getController()?.canAttemptFallback()}
                     <button
                       type="button"
                       class="fw-error-btn fw-error-btn--secondary"
@@ -600,17 +600,19 @@
                       {$translatorStore("tryNext")}
                     </button>
                   {/if}
-                  <button
-                    type="button"
-                    class="fw-error-btn fw-error-btn--secondary"
-                    onclick={() => {
-                      playerStore?.clearError();
-                      playerStore?.reload();
-                    }}
-                    aria-label={$translatorStore("reloadPlayer")}
-                  >
-                    {$translatorStore("reloadPlayer")}
-                  </button>
+                  {#if options?.devMode}
+                    <button
+                      type="button"
+                      class="fw-error-btn fw-error-btn--secondary"
+                      onclick={() => {
+                        playerStore?.clearError();
+                        playerStore?.reload();
+                      }}
+                      aria-label={$translatorStore("reloadPlayer")}
+                    >
+                      {$translatorStore("reloadPlayer")}
+                    </button>
+                  {/if}
                 </div>
               </div>
             </div>
@@ -665,6 +667,8 @@
               onStatsToggle={() => (isStatsOpen = !isStatsOpen)}
               isContentLive={storeState.isEffectivelyLive}
               onJumpToLive={() => playerStore?.getController()?.jumpToLive()}
+              controllerSeekableStart={playerStore?.getController()?.getSeekableStart()}
+              controllerLiveEdge={playerStore?.getController()?.getLiveEdge()}
               {activeLocale}
               onLocaleChange={(l) => {
                 activeLocale = l;

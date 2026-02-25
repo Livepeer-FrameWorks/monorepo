@@ -508,11 +508,15 @@ export class DashJsPlayerImpl extends BasePlayer {
    * Returns synthetic growing duration for live content.
    */
   getDuration(): number {
+    let sec: number;
     // Use proxy if available for live duration handling
     if (this.videoProxy && this.isLiveStream()) {
-      return (this.videoProxy as any).duration ?? 0;
+      sec = (this.videoProxy as any).duration ?? 0;
+    } else {
+      sec = this.videoElement?.duration ?? 0;
     }
-    return this.videoElement?.duration ?? 0;
+    if (!Number.isFinite(sec)) return sec;
+    return sec * 1000;
   }
 
   /**

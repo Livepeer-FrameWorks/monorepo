@@ -113,7 +113,7 @@ describe("MetaTrackManager", () => {
     );
   });
 
-  it("dispatches non-timed events immediately", () => {
+  it("dispatches non-timed events after playback time advances past them", () => {
     const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
     const cb = vi.fn();
     manager.subscribe("1", cb);
@@ -122,12 +122,15 @@ describe("MetaTrackManager", () => {
       JSON.stringify({ time: 2000, track: 1, data: { key: "score", value: 1 } })
     );
 
+    // All timed events are now buffered (upstream parity), so advance playback time
+    expect(cb).not.toHaveBeenCalled();
+    manager.setPlaybackTime(2);
     expect(cb).toHaveBeenCalledWith(
       expect.objectContaining({ type: "score", trackId: "1", timestamp: 2000 })
     );
   });
 
-  it("handles on_time hold and seek messages", () => {
+  it("handles on_time, seek and live control messages", () => {
     const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
     const ws = new MockWebSocket("ws://mock");
     (manager as any).ws = ws as unknown as WebSocket;
@@ -145,6 +148,11 @@ describe("MetaTrackManager", () => {
 
     expect((manager as any).timedEventBuffer.size).toBe(1);
     (manager as any).handleMessage(JSON.stringify({ type: "seek" }));
+    expect((manager as any).timedEventBuffer.size).toBe(0);
+
+    // Some MistServer builds emit {type:"live"} status messages.
+    // They should be treated as benign (no warning/no state mutation).
+    (manager as any).handleMessage(JSON.stringify({ type: "live" }));
     expect((manager as any).timedEventBuffer.size).toBe(0);
   });
 

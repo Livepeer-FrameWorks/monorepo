@@ -21,7 +21,7 @@ export const SkipButton: React.FC<SkipButtonProps> = ({
   const ctx = usePlayerContextOptional();
   const t = useTranslate();
   const Icon = direction === "back" ? SkipBackIcon : SkipForwardIcon;
-  const delta = direction === "back" ? -seconds : seconds;
+  const delta = (direction === "back" ? -seconds : seconds) * 1000;
   const label = direction === "back" ? t("skipBackward") : t("skipForward");
   const title = direction === "back" ? `${t("seekBackward")} (j)` : `${t("seekForward")} (l)`;
 

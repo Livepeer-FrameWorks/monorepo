@@ -36,7 +36,7 @@ export interface LiveDurationState {
 export class LiveDurationProxy {
   private video: HTMLVideoElement;
   private options: Required<LiveDurationProxyOptions>;
-  private lastProgressTime: number = 0;
+  private lastProgressTime: number = Date.now();
   private lastBufferEnd: number = 0;
   private listeners: Array<() => void> = [];
   private _calculatedDuration: number = 0;
@@ -74,20 +74,12 @@ export class LiveDurationProxy {
   }
 
   /**
-   * Get the current buffer end position
+   * Get the current buffer end position.
+   * Upstream html5.js: this.buffered.end(this.buffered.length-1)
    */
   getBufferEnd(): number {
     const buffered = this.video.buffered;
     if (buffered.length === 0) return 0;
-
-    // Find the buffer range containing current time, or the last one
-    for (let i = 0; i < buffered.length; i++) {
-      if (buffered.start(i) <= this.video.currentTime && buffered.end(i) > this.video.currentTime) {
-        return buffered.end(i);
-      }
-    }
-
-    // Return the end of the last buffer range
     return buffered.end(buffered.length - 1);
   }
 
@@ -155,7 +147,7 @@ export class LiveDurationProxy {
       duration: this.getDuration(),
       isLive: this.isLive(),
       bufferEnd: this.getBufferEnd(),
-      elapsed: this.lastProgressTime > 0 ? (Date.now() - this.lastProgressTime) / 1000 : 0,
+      elapsed: (Date.now() - this.lastProgressTime) / 1000,
     };
   }
 

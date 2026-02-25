@@ -73,7 +73,7 @@ const initialState: PlayerControllerHostState = {
   isPlaying: false,
   isPaused: true,
   isBuffering: false,
-  isMuted: true,
+  isMuted: false,
   volume: 1,
   error: null,
   errorDetails: null,
@@ -209,7 +209,10 @@ export class PlayerControllerHost implements ReactiveController {
 
     u.push(
       controller.on("stateChange", ({ state }) => {
-        this.update({ state });
+        this.update({
+          state,
+          shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+        });
         this.dispatchEvent("fw-state-change", { state });
       })
     );
@@ -249,6 +252,7 @@ export class PlayerControllerHost implements ReactiveController {
         this.update({
           error,
           isPassiveError: controller.isPassiveError(),
+          shouldShowIdleScreen: controller.shouldShowIdleScreen(),
         });
         this.dispatchEvent("fw-error", { error });
       })

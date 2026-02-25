@@ -18,6 +18,7 @@ export class SourceBufferManager {
   private mediaSource: MediaSource;
   private videoElement: HTMLVideoElement;
   private sourceBuffer: SourceBuffer | null = null;
+  private container: "mp4" | "webm";
   private onError: (message: string) => void;
 
   // Append queue for when buffer is busy (ported from mews.js:218)
@@ -49,6 +50,7 @@ export class SourceBufferManager {
   constructor(options: SourceBufferManagerOptions) {
     this.mediaSource = options.mediaSource;
     this.videoElement = options.videoElement;
+    this.container = options.container;
     this.onError = options.onError;
   }
 
@@ -66,8 +68,7 @@ export class SourceBufferManager {
       return false;
     }
 
-    const container = "mp4"; // Could be 'webm' for WebM container
-    const mime = `video/${container};codecs="${codecs.join(",")}"`;
+    const mime = `video/${this.container};codecs="${codecs.join(",")}"`;
 
     if (!MediaSource.isTypeSupported(mime)) {
       this.onError(`Unsupported MSE codec: ${mime}`);
@@ -249,8 +250,7 @@ export class SourceBufferManager {
       return;
     }
 
-    const container = "mp4";
-    const mime = `video/${container};codecs="${codecs.join(",")}"`;
+    const mime = `video/${this.container};codecs="${codecs.join(",")}"`;
     if (!MediaSource.isTypeSupported(mime)) {
       this.onError(`Unsupported codec for switch: ${mime}`);
       return;
@@ -317,6 +317,19 @@ export class SourceBufferManager {
       } catch {
         // Ignore errors during cleanup
       }
+    });
+  }
+
+  /**
+   * Clear the entire buffer. Used for VoD loop restart.
+   * Ported from mews.js:1162-1164
+   */
+  clearBuffer(): void {
+    this._do(() => {
+      if (!this.sourceBuffer) return;
+      try {
+        this.sourceBuffer.remove(0, Infinity);
+      } catch {}
     });
   }
 

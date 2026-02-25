@@ -69,7 +69,7 @@ export interface FrameWorksPlayerOptions {
   onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
   /** Called when stream state changes (for live streams) */
   onStreamStateChange?: (state: StreamState) => void;
-  /** Called on time update during playback */
+  /** Called on time update during playback (milliseconds) */
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   /** Called on error */
   onError?: (error: string) => void;
@@ -142,7 +142,7 @@ export class FrameWorksPlayer {
       gatewayUrl: normalizedOptions.gatewayUrl,
       authToken: normalizedOptions.authToken,
       autoplay: normalizedOptions.autoplay ?? true,
-      muted: normalizedOptions.muted ?? true,
+      muted: normalizedOptions.muted ?? false,
       controls: normalizedOptions.controls ?? true,
       poster: normalizedOptions.poster,
       debug: normalizedOptions.debug,
@@ -175,7 +175,7 @@ export class FrameWorksPlayer {
     this.controller.pause();
   }
 
-  /** Seek to time in seconds */
+  /** Seek to time in milliseconds */
   seek(time: number): void {
     this.controller.seek(time);
   }
@@ -234,12 +234,12 @@ export class FrameWorksPlayer {
     return this.controller.isReady();
   }
 
-  /** Get current time in seconds */
+  /** Get current time in milliseconds */
   getCurrentTime(): number {
     return this.controller.getCurrentTime();
   }
 
-  /** Get duration in seconds */
+  /** Get duration in milliseconds */
   getDuration(): number {
     return this.controller.getDuration();
   }

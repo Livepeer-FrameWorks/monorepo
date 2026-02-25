@@ -324,6 +324,15 @@ export interface PlaybackQuality {
   frameDropRate: number;
   latency: number;
   timestamp: number;
+  /** Optional transport-level metrics for debug/stats panels */
+  transport?: {
+    serverDelayMs?: number;
+    localJitterMs?: number;
+    queueDepth?: number;
+    decodeTimeMs?: number;
+    displayTimeMs?: number;
+    syncDriftMs?: number;
+  };
 }
 
 export interface QualityThresholds {

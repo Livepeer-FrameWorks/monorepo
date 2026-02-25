@@ -87,6 +87,8 @@ export interface InteractionControllerConfig {
   onIdle?: () => void;
   /** Callback fired when user becomes active after being idle */
   onActive?: () => void;
+  /** Keyboard capture scope: false=none, "focus"=container only, "global"=document (default "focus") */
+  keyControls?: false | "focus" | "global";
   /** Custom key bindings. Merged over DEFAULT_KEY_MAP. */
   keyMap?: Partial<PlayerKeyMap>;
 }
@@ -196,11 +198,16 @@ export class InteractionController {
       container.setAttribute("tabindex", "0");
     }
 
-    // Keyboard events
-    container.addEventListener("keydown", this.boundKeyDown);
-    container.addEventListener("keyup", this.boundKeyUp);
-    document.addEventListener("keydown", this.boundDocumentKeyDown);
-    document.addEventListener("keyup", this.boundDocumentKeyUp);
+    // Keyboard events — scope controlled by keyControls option
+    const keyScope = this.config.keyControls ?? "focus";
+    if (keyScope === "focus" || keyScope === "global") {
+      container.addEventListener("keydown", this.boundKeyDown);
+      container.addEventListener("keyup", this.boundKeyUp);
+    }
+    if (keyScope === "global") {
+      document.addEventListener("keydown", this.boundDocumentKeyDown);
+      document.addEventListener("keyup", this.boundDocumentKeyUp);
+    }
 
     // Pointer events (unified mouse + touch)
     container.addEventListener("pointerdown", this.boundPointerDown);

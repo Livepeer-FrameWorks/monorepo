@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getContext } from "svelte";
+  import { readable } from "svelte/store";
   import type { Readable } from "svelte/store";
   import {
     cn,
@@ -39,9 +40,10 @@
   } from "./icons";
 
   // i18n: get translator from context, fall back to default English
-  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
-  const fallbackT = createTranslator({ locale: "en" });
-  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorStore: Readable<TranslateFn> =
+    getContext<Readable<TranslateFn> | undefined>("fw-translator") ??
+    readable(createTranslator({ locale: "en" }));
+  let t: TranslateFn = $derived($translatorStore);
 
   // Props - aligned with React PlayerControls
   interface Props {
@@ -63,6 +65,10 @@
     onJumpToLive?: () => void;
     activeLocale?: FwLocale;
     onLocaleChange?: (locale: FwLocale) => void;
+    /** Controller-derived seekable start (ms) — preferred over player direct */
+    controllerSeekableStart?: number;
+    /** Controller-derived live edge (ms) — preferred over player direct */
+    controllerLiveEdge?: number;
   }
 
   let {
@@ -82,6 +88,8 @@
     onJumpToLive = undefined,
     activeLocale = undefined,
     onLocaleChange = undefined,
+    controllerSeekableStart = undefined,
+    controllerLiveEdge = undefined,
   }: Props = $props();
 
   // Video element discovery
@@ -224,16 +232,22 @@
   let isWebRTC = $derived(isMediaStreamSource(video));
   let supportsPlaybackRate = $derived(coreSupportsPlaybackRate(video));
   function deriveBufferWindowMs(
-    tracks?: Record<string, { firstms?: number; lastms?: number }>
+    tracks?: Record<string, { type?: string; firstms?: number; lastms?: number }>
   ): number | undefined {
     if (!tracks) return undefined;
-    const list = Object.values(tracks);
-    if (list.length === 0) return undefined;
-    const firstmsValues = list.map((t) => t.firstms).filter((v): v is number => v !== undefined);
-    const lastmsValues = list.map((t) => t.lastms).filter((v): v is number => v !== undefined);
+    const trackValues = Object.values(tracks).filter(
+      (t) => t.type !== "meta" && (t.lastms === undefined || t.lastms > 0)
+    );
+    if (trackValues.length === 0) return undefined;
+    const firstmsValues = trackValues
+      .map((t) => t.firstms)
+      .filter((v): v is number => v !== undefined);
+    const lastmsValues = trackValues
+      .map((t) => t.lastms)
+      .filter((v): v is number => v !== undefined);
     if (firstmsValues.length === 0 || lastmsValues.length === 0) return undefined;
-    const firstms = Math.max(...firstmsValues);
-    const lastms = Math.min(...lastmsValues);
+    const firstms = Math.min(...firstmsValues);
+    const lastms = Math.max(...lastmsValues);
     const window = lastms - firstms;
     if (!Number.isFinite(window) || window <= 0) return undefined;
     return window;
@@ -243,26 +257,10 @@
     mistStreamInfo?.meta?.buffer_window ??
       deriveBufferWindowMs(
         mistStreamInfo?.meta?.tracks as
-          | Record<string, { firstms?: number; lastms?: number }>
+          | Record<string, { type?: string; firstms?: number; lastms?: number }>
           | undefined
       )
   );
-
-  function getPlayerSeekableRange(): { seekableStart: number; liveEdge: number } | null {
-    const player = globalPlayerManager.getCurrentPlayer();
-    if (player && typeof (player as any).getSeekableRange === "function") {
-      const range = (player as any).getSeekableRange();
-      if (
-        range &&
-        Number.isFinite(range.start) &&
-        Number.isFinite(range.end) &&
-        range.end >= range.start
-      ) {
-        return { seekableStart: range.start, liveEdge: range.end };
-      }
-    }
-    return null;
-  }
 
   let allowMediaStreamDvr = $derived(
     isMediaStreamSource(video) &&
@@ -272,19 +270,29 @@
       sourceType !== "webrtc"
   );
 
-  // Seekable range using core calculation (allow player override)
-  let seekableRange = $derived.by(
-    () =>
-      getPlayerSeekableRange() ??
-      calculateSeekableRange({
-        isLive,
-        video,
-        mistStreamInfo,
-        currentTime,
-        duration,
-        allowMediaStreamDvr,
-      })
+  // Seekable range: prefer controller-derived values (same pattern as React/WC)
+  let calcRange = $derived(
+    calculateSeekableRange({
+      isLive,
+      video,
+      mistStreamInfo,
+      currentTime,
+      duration,
+      allowMediaStreamDvr,
+    })
   );
+  let useControllerRange = $derived(
+    Number.isFinite(controllerSeekableStart) &&
+      Number.isFinite(controllerLiveEdge) &&
+      (controllerLiveEdge as number) >= (controllerSeekableStart as number) &&
+      ((controllerLiveEdge as number) > 0 || (controllerSeekableStart as number) > 0)
+  );
+  let seekableRange = $derived({
+    seekableStart: useControllerRange
+      ? (controllerSeekableStart as number)
+      : calcRange.seekableStart,
+    liveEdge: useControllerRange ? (controllerLiveEdge as number) : calcRange.liveEdge,
+  });
   let seekableStart = $derived(seekableRange.seekableStart);
   let liveEdge = $derived(seekableRange.liveEdge);
   let hasDvrWindow = $derived(
@@ -422,24 +430,24 @@
   }
 
   function handleSkipBack() {
-    const newTime = Math.max(0, currentTime - 10);
+    const newTime = Math.max(0, currentTime - 10000);
     if (onseek) {
       onseek(newTime);
       return;
     }
     const v = findVideoElement();
-    if (v) v.currentTime = newTime;
+    if (v) v.currentTime = newTime / 1000;
   }
 
   function handleSkipForward() {
-    const maxTime = Number.isFinite(duration) ? duration : currentTime + 10;
-    const newTime = Math.min(maxTime, currentTime + 10);
+    const maxTime = Number.isFinite(duration) ? duration : currentTime + 10000;
+    const newTime = Math.min(maxTime, currentTime + 10000);
     if (onseek) {
       onseek(newTime);
       return;
     }
     const v = findVideoElement();
-    if (v) v.currentTime = newTime;
+    if (v) v.currentTime = newTime / 1000;
   }
 
   function handleMute() {
@@ -592,7 +600,7 @@
             if (onseek) {
               onseek(time);
             } else if (video) {
-              video.currentTime = time;
+              video.currentTime = time / 1000;
             }
           }}
         />

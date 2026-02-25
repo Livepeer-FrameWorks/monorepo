@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getContext } from "svelte";
+  import { readable } from "svelte/store";
   import type { Readable } from "svelte/store";
   import { SettingsIcon } from "../icons";
   import {
@@ -48,9 +49,10 @@
   let availableLocales = getAvailableLocales();
 
   let controller: any = getContext("fw-player-controller");
-  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
-  const fallbackT = createTranslator({ locale: "en" });
-  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorStore: Readable<TranslateFn> =
+    getContext<Readable<TranslateFn> | undefined>("fw-translator") ??
+    readable(createTranslator({ locale: "en" }));
+  let t: TranslateFn = $derived($translatorStore);
   let isOpen = $state(false);
 
   let qualities = $derived(propQualities ?? controller?.getQualities?.() ?? []);

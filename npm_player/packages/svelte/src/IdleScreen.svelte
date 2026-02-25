@@ -14,6 +14,7 @@
 -->
 <script lang="ts">
   import { onMount, onDestroy, getContext } from "svelte";
+  import { readable } from "svelte/store";
   import type { Readable } from "svelte/store";
   import { createTranslator, type TranslateFn } from "@livepeer-frameworks/player-core";
   import type { StreamStatus } from "@livepeer-frameworks/player-core";
@@ -28,9 +29,10 @@
     onRetry?: () => void;
   }
 
-  const translatorCtx = getContext<Readable<TranslateFn> | undefined>("fw-translator");
-  const fallbackT = createTranslator({ locale: "en" });
-  let t: TranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorStore: Readable<TranslateFn> =
+    getContext<Readable<TranslateFn> | undefined>("fw-translator") ??
+    readable(createTranslator({ locale: "en" }));
+  let t: TranslateFn = $derived($translatorStore);
 
   let {
     status = "OFFLINE",

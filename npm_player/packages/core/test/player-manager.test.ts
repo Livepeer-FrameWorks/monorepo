@@ -21,7 +21,20 @@ function makePlayer(overrides: Partial<IPlayer["capability"]> & { shortname: str
     }),
     isBrowserSupported: vi.fn(() => ["video", "audio"] as Array<"video" | "audio">),
     initialize: vi.fn(async (_c, _s, _o) => {
-      return document.createElement("video") as unknown as HTMLVideoElement;
+      return {
+        play: vi.fn(),
+        pause: vi.fn(),
+        load: vi.fn(),
+        currentTime: 0,
+        duration: 0,
+        muted: false,
+        volume: 1,
+        paused: true,
+        readyState: 0,
+        buffered: { length: 0, start: vi.fn(), end: vi.fn() },
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      } as unknown as HTMLVideoElement;
     }),
     destroy: vi.fn(),
     play: vi.fn(),
@@ -374,9 +387,9 @@ describe("PlayerManager", () => {
       expect(mgr.canAttemptFallback()).toBe(false);
     });
 
-    it("getRemainingFallbackAttempts defaults to 3", () => {
+    it("getRemainingFallbackAttempts defaults to Infinity (exhaust all combos)", () => {
       const mgr = new PlayerManager();
-      expect(mgr.getRemainingFallbackAttempts()).toBe(3);
+      expect(mgr.getRemainingFallbackAttempts()).toBe(Infinity);
     });
 
     it("getRemainingFallbackAttempts uses custom max", () => {
@@ -479,6 +492,77 @@ describe("PlayerManager", () => {
     it("can be called without error when no player", async () => {
       const mgr = new PlayerManager();
       await expect(mgr.destroy()).resolves.toBeUndefined();
+    });
+  });
+
+  // ===========================================================================
+  // Fallback playhead preservation (D03-HIGH-1 / D13-HIGH-1)
+  // ===========================================================================
+  describe("fallback playhead preservation", () => {
+    it("VOD fallback restores currentTime", async () => {
+      const mgr = new PlayerManager({ debug: false });
+      // Use different MIME types so each player maps to a different source,
+      // avoiding the source-filter issue where only the "best" player per source
+      // is checked against excludedCombos.
+      // Lower priority number = higher score (selected first), so player1 is selected first.
+      const player1 = makePlayer({
+        shortname: "hls",
+        mimes: ["application/x-mpegURL"],
+        priority: 1,
+      });
+      const player2 = makePlayer({ shortname: "native", mimes: ["video/mp4"], priority: 2 });
+      (player1 as any).getCurrentTime = vi.fn(() => 60000);
+
+      mgr.registerPlayer(player1);
+      mgr.registerPlayer(player2);
+
+      const container = { innerHTML: "", classList: { add: vi.fn() } } as any;
+      const vodStreamInfo = makeStreamInfo([
+        { url: "https://cdn.example.com/hls/live.m3u8", type: "application/x-mpegURL" },
+        { url: "https://cdn.example.com/live.mp4", type: "video/mp4" },
+      ]);
+      vodStreamInfo.type = "vod";
+
+      await mgr.initializePlayer(container, vodStreamInfo, {});
+
+      const result = await mgr.tryPlaybackFallback();
+      expect(result).toBe(true);
+
+      const newPlayer = mgr.getCurrentPlayer();
+      if (newPlayer?.seek) {
+        expect(newPlayer.seek).toHaveBeenCalledWith(60000);
+      }
+    });
+
+    it("live fallback does NOT restore stale time", async () => {
+      const mgr = new PlayerManager({ debug: false });
+      const player1 = makePlayer({
+        shortname: "hls",
+        mimes: ["application/x-mpegURL"],
+        priority: 1,
+      });
+      const player2 = makePlayer({ shortname: "native", mimes: ["video/mp4"], priority: 2 });
+      (player1 as any).getCurrentTime = vi.fn(() => 30000);
+
+      mgr.registerPlayer(player1);
+      mgr.registerPlayer(player2);
+
+      const container = { innerHTML: "", classList: { add: vi.fn() } } as any;
+      const liveStreamInfo = makeStreamInfo([
+        { url: "https://cdn.example.com/hls/live.m3u8", type: "application/x-mpegURL" },
+        { url: "https://cdn.example.com/live.mp4", type: "video/mp4" },
+      ]);
+      liveStreamInfo.type = "live";
+
+      await mgr.initializePlayer(container, liveStreamInfo, {});
+
+      const result = await mgr.tryPlaybackFallback();
+      expect(result).toBe(true);
+
+      const newPlayer = mgr.getCurrentPlayer();
+      if (newPlayer?.seek) {
+        expect(newPlayer.seek).not.toHaveBeenCalled();
+      }
     });
   });
 });

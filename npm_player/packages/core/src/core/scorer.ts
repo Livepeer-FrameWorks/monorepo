@@ -238,7 +238,8 @@ export function calculateReliabilityScore(playerShortname: string): number {
  *
  * IMPORTANT: Track compatibility is enforced by trackScore (50% weight).
  * Mode bonuses (12% weight) only affect ordering among compatible options.
- * A protocol missing required tracks will never be selected regardless of mode bonus.
+ * Partial track support (e.g. video-only) gets a normalized trackScore penalty
+ * that naturally pushes it below full combos.
  *
  * Priority rationale:
  * - Low-latency: WHEP/WebRTC first (<1s), then MP4/WS (2-5s), HLS last (10-30s)

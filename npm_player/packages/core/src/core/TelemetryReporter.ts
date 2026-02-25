@@ -49,6 +49,7 @@ export class TelemetryReporter {
   private lastStallStart = 0;
   private videoElement: HTMLVideoElement | null = null;
   private qualityGetter: (() => PlaybackQuality | null) | null = null;
+  private bufferedRangesGetter: (() => TimeRanges | null) | null = null;
   private listeners: Array<() => void> = [];
 
   constructor(config: TelemetryReporterConfig) {
@@ -68,11 +69,16 @@ export class TelemetryReporter {
   /**
    * Start telemetry reporting
    */
-  start(videoElement: HTMLVideoElement, qualityGetter?: () => PlaybackQuality | null): void {
+  start(
+    videoElement: HTMLVideoElement,
+    qualityGetter?: () => PlaybackQuality | null,
+    bufferedRangesGetter?: () => TimeRanges | null
+  ): void {
     this.stop();
 
     this.videoElement = videoElement;
     this.qualityGetter = qualityGetter ?? null;
+    this.bufferedRangesGetter = bufferedRangesGetter ?? null;
     this.stallCount = 0;
     this.totalStallMs = 0;
     this.errors = [];
@@ -177,15 +183,13 @@ export class TelemetryReporter {
       framesDropped = stats.droppedVideoFrames;
     }
 
-    // Calculate buffered seconds
+    // Calculate buffered seconds (prefer player-corrected ranges)
     let bufferedSeconds = 0;
-    if (video.buffered.length > 0) {
-      for (let i = 0; i < video.buffered.length; i++) {
-        if (
-          video.buffered.start(i) <= video.currentTime &&
-          video.buffered.end(i) > video.currentTime
-        ) {
-          bufferedSeconds = video.buffered.end(i) - video.currentTime;
+    const buffered = this.bufferedRangesGetter?.() ?? video.buffered;
+    if (buffered && buffered.length > 0) {
+      for (let i = 0; i < buffered.length; i++) {
+        if (buffered.start(i) <= video.currentTime && buffered.end(i) > video.currentTime) {
+          bufferedSeconds = buffered.end(i) - video.currentTime;
           break;
         }
       }

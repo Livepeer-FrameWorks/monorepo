@@ -267,15 +267,21 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
 
   // Core utility-based calculations
   const deriveBufferWindowMs = useCallback(
-    (tracks?: Record<string, { firstms?: number; lastms?: number }>) => {
+    (tracks?: Record<string, { type?: string; firstms?: number; lastms?: number }>) => {
       if (!tracks) return undefined;
-      const list = Object.values(tracks);
-      if (list.length === 0) return undefined;
-      const firstmsValues = list.map((t) => t.firstms).filter((v): v is number => v !== undefined);
-      const lastmsValues = list.map((t) => t.lastms).filter((v): v is number => v !== undefined);
+      const trackValues = Object.values(tracks).filter(
+        (t) => t.type !== "meta" && (t.lastms === undefined || t.lastms > 0)
+      );
+      if (trackValues.length === 0) return undefined;
+      const firstmsValues = trackValues
+        .map((t) => t.firstms)
+        .filter((v): v is number => v !== undefined);
+      const lastmsValues = trackValues
+        .map((t) => t.lastms)
+        .filter((v): v is number => v !== undefined);
       if (firstmsValues.length === 0 || lastmsValues.length === 0) return undefined;
-      const firstms = Math.max(...firstmsValues);
-      const lastms = Math.min(...lastmsValues);
+      const firstms = Math.min(...firstmsValues);
+      const lastms = Math.max(...lastmsValues);
       const window = lastms - firstms;
       if (!Number.isFinite(window) || window <= 0) return undefined;
       return window;
@@ -287,7 +293,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
     mistStreamInfo?.meta?.buffer_window ??
     deriveBufferWindowMs(
       mistStreamInfo?.meta?.tracks as
-        | Record<string, { firstms?: number; lastms?: number }>
+        | Record<string, { type?: string; firstms?: number; lastms?: number }>
         | undefined
     );
 
@@ -499,24 +505,26 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   };
 
   const handleSkipBack = () => {
-    const newTime = Math.max(0, currentTime - 10);
+    const freshTime = player?.getCurrentTime?.() ?? currentTime;
+    const newTime = Math.max(0, freshTime - 10000);
     if (onSeek) {
       onSeek(newTime);
       return;
     }
     const v = findVideoElement();
-    if (v) v.currentTime = newTime;
+    if (v) v.currentTime = newTime / 1000;
   };
 
   const handleSkipForward = () => {
-    const maxTime = Number.isFinite(duration) ? duration : currentTime + 10;
-    const newTime = Math.min(maxTime, currentTime + 10);
+    const freshTime = player?.getCurrentTime?.() ?? currentTime;
+    const maxTime = Number.isFinite(duration) ? duration : freshTime + 10000;
+    const newTime = Math.min(maxTime, freshTime + 10000);
     if (onSeek) {
       onSeek(newTime);
       return;
     }
     const v = findVideoElement();
-    if (v) v.currentTime = newTime;
+    if (v) v.currentTime = newTime / 1000;
   };
 
   const handleMute = () => {
@@ -669,11 +677,12 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
               seekableStart={seekableStart}
               liveEdge={liveEdge}
               commitOnRelease={commitOnRelease}
+              isPlaying={isPlaying}
               onSeek={(time) => {
                 if (onSeek) {
                   onSeek(time);
                 } else if (video) {
-                  video.currentTime = time;
+                  video.currentTime = time / 1000;
                 }
               }}
             />

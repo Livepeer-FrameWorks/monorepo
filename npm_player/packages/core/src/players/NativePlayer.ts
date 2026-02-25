@@ -1,6 +1,5 @@
 import { BasePlayer } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
-import { appendUrlParams, parseUrlParams, stripUrlParams } from "../core/UrlUtils";
 import {
   checkProtocolMismatch,
   getBrowserInfo,
@@ -63,17 +62,11 @@ export class NativePlayerImpl extends BasePlayer {
   private pausedAt: number | null = null;
   private currentSourceUrl: string | null = null;
   private currentMimeType: string | null = null;
+  private sourceElement: HTMLSourceElement | null = null; // legacy, always null now
   private isMP3Source = false;
-  private liveSeekEnabled = false;
-  private liveSeekOffsetSec = 0;
-  private liveSeekBaseUrl: string | null = null;
-  private liveSeekListeners: Array<() => void> = [];
-  private liveSeekTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingLiveSeekOffset: number | null = null;
 
   // Auto-recovery threshold (reference: 5 seconds)
   private static readonly PAUSE_RECOVERY_THRESHOLD = 5000;
-  private static readonly LIVE_SEEK_DEBOUNCE_MS = 300;
 
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.indexOf(mimetype) !== -1;
@@ -91,7 +84,6 @@ export class NativePlayerImpl extends BasePlayer {
       // Check codec compatibility - WebRTC can only carry certain codecs
       const codecCompat = checkWebRTCCodecCompatibility(streamInfo.meta.tracks);
       if (!codecCompat.compatible) {
-        // Log why we're skipping WebRTC for this stream
         if (codecCompat.incompatibleCodecs.length > 0) {
           console.debug(
             "[WHEP] Skipping - incompatible codecs:",
@@ -110,7 +102,6 @@ export class NativePlayerImpl extends BasePlayer {
         playable.push("audio");
       }
 
-      // If stream has tracks but we found compatible ones, we can play
       return playable.length > 0 ? playable : false;
     }
     // Check protocol mismatch
@@ -289,15 +280,17 @@ export class NativePlayerImpl extends BasePlayer {
     // This enables seeking and jump-to-live for native MP4/WebM/HLS live streams
     const isLiveStream = streamInfo?.type === "live";
     if (source.type !== "whep" && isLiveStream) {
-      this.setupLiveDurationProxy(video);
+      // Upstream html5.js:158-160: force loop=false for live
+      video.loop = false;
       this.setupAutoRecovery(video);
-      this.liveSeekEnabled = true;
-      this.liveSeekOffsetSec = 0;
-      this.liveSeekBaseUrl = this.stripStartUnixParam(source.url);
-    } else {
-      this.liveSeekEnabled = false;
-      this.liveSeekOffsetSec = 0;
-      this.liveSeekBaseUrl = null;
+      this.setupLiveDurationProxy(video);
+      // startunix URL rewriting only works for progressive formats (MP4/MPEG-TS/WebM).
+      // For HLS, the browser's native HLS stack handles DVR seeking via the playlist —
+      // startunix rewrites cause 404s ("Fragment out of range").
+      const isHLS = source.type?.includes("mpegurl");
+      if (!isHLS) {
+        this.initLiveSeek(source.url);
+      }
     }
 
     // Optional subtitle tracks helper from source extras
@@ -329,11 +322,7 @@ export class NativePlayerImpl extends BasePlayer {
         await this.startWhep(video, source.url, headers, iceServers);
         return video;
       } else {
-        // Set the source for direct HTML5 playback
         video.src = source.url;
-        if (options.autoplay) {
-          video.play().catch((e) => console.warn("HTML5 autoplay failed:", e));
-        }
         return video;
       }
     } catch (error: any) {
@@ -370,7 +359,7 @@ export class NativePlayerImpl extends BasePlayer {
       if (this.destroyed) return;
 
       // Check if we need to recover from long pause
-      if (this.pausedAt && this.liveDurationProxy?.isLive()) {
+      if (this.pausedAt && this.liveSeekEnabled) {
         const pauseDuration = Date.now() - this.pausedAt;
         if (pauseDuration > NativePlayerImpl.PAUSE_RECOVERY_THRESHOLD) {
           console.debug(
@@ -393,8 +382,7 @@ export class NativePlayerImpl extends BasePlayer {
     if (!this.videoElement) return;
     this.currentSourceUrl = url;
     if (this.liveSeekEnabled) {
-      this.liveSeekBaseUrl = this.stripStartUnixParam(url);
-      this.liveSeekOffsetSec = 0;
+      this.initLiveSeek(url);
     }
     this.videoElement.src = url;
     this.videoElement.load();
@@ -404,110 +392,32 @@ export class NativePlayerImpl extends BasePlayer {
    * Override seek for MP3 files (seeking not supported)
    * Ported from reference html5.js:185-191
    */
-  seek(time: number): void {
-    if (this.isMP3Source) {
-      console.warn("[NativePlayer] Seek not supported for MP3 files");
-      return;
-    }
-
-    if (this.liveSeekEnabled && this.liveDurationProxy?.isLive()) {
-      const duration = this.getDuration();
-      let offset = time - duration;
-      if (offset > 0) offset = 0;
-      this.scheduleLiveSeekOffset(offset, false);
-      return;
-    }
-
-    if (this.liveDurationProxy?.isLive()) {
-      // Use live duration proxy for constrained seeking
-      this.liveDurationProxy.seek(time);
-      return;
-    }
-
-    if (this.videoElement) {
-      this.videoElement.currentTime = time;
-    }
+  seek(timeMs: number): void {
+    if (this.isMP3Source) return;
+    super.seek(timeMs);
   }
 
-  /**
-   * Get the calculated duration (live-aware)
-   */
-  getDuration(): number {
-    if (this.liveSeekEnabled && this.liveDurationProxy?.isLive()) {
-      const base = this.liveDurationProxy.getDuration();
-      const offset = this.pendingLiveSeekOffset ?? this.liveSeekOffsetSec;
-      return Math.max(0, base - offset);
-    }
-    if (this.liveDurationProxy) {
-      return this.liveDurationProxy.getDuration();
-    }
-    return this.videoElement?.duration ?? 0;
+  canSeek(): boolean {
+    const v = this.videoElement;
+    if (!v) return false;
+    // MediaStream sources (WHEP/WebRTC) are real-time — nothing to seek through
+    if (v.srcObject instanceof MediaStream) return false;
+    return true;
   }
 
-  getCurrentTime(): number {
-    if (this.liveSeekEnabled && this.liveDurationProxy?.isLive() && this.videoElement) {
-      const offset = this.pendingLiveSeekOffset ?? this.liveSeekOffsetSec;
-      return Math.max(0, this.videoElement.currentTime - offset);
-    }
-    return this.videoElement?.currentTime ?? 0;
-  }
-
-  getSeekableRange(): { start: number; end: number } | null {
-    if (!this.liveSeekEnabled || !this.liveDurationProxy?.isLive() || !this.videoElement) {
-      return null;
-    }
-    const buffered = this.videoElement.buffered;
-    if (!buffered || buffered.length === 0) return null;
-    const offset = this.pendingLiveSeekOffset ?? this.liveSeekOffsetSec;
-    const start = buffered.start(0) - offset;
-    const end = buffered.end(buffered.length - 1) - offset;
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-    return { start: Math.max(0, start), end: Math.max(0, end) };
-  }
-
-  getBufferedRanges(): TimeRanges | null {
-    const video = this.videoElement;
-    if (!video) return null;
-    const buffered = video.buffered;
-    if (!this.liveSeekEnabled || !this.liveDurationProxy?.isLive()) {
-      return buffered;
-    }
-    if (!buffered || buffered.length === 0) return buffered;
-    const offset = this.pendingLiveSeekOffset ?? this.liveSeekOffsetSec;
-    const shifted: [number, number][] = [];
-    for (let i = 0; i < buffered.length; i++) {
-      const start = buffered.start(i) - offset;
-      const end = buffered.end(i) - offset;
-      if (Number.isFinite(start) && Number.isFinite(end)) {
-        shifted.push([Math.max(0, start), Math.max(0, end)]);
-      }
-    }
-    return this.createTimeRanges(shifted);
-  }
-
-  /**
-   * Check if current stream is live
-   */
-  isLive(): boolean {
-    return this.liveDurationProxy?.isLive() ?? false;
-  }
-
-  /**
-   * Get live latency in seconds
-   */
   getLiveLatency(): number {
     return this.liveDurationProxy?.getLatency() ?? 0;
   }
 
-  /**
-   * Jump to live edge
-   */
-  jumpToLive(): void {
-    if (this.liveSeekEnabled && this.liveDurationProxy?.isLive()) {
-      this.scheduleLiveSeekOffset(0, true);
-      return;
-    }
-    this.liveDurationProxy?.jumpToLive();
+  protected reloadSource(url: string): void {
+    if (!this.videoElement) return;
+    if (url === this.currentSourceUrl) return;
+    const wasPlaying = !this.videoElement.paused;
+    this.currentSourceUrl = url;
+    this.videoElement.src = url;
+    this.videoElement.load();
+    this._anchorRaw = 0;
+    if (wasPlaying) this.videoElement.play().catch(() => {});
   }
 
   async destroy(): Promise<void> {
@@ -559,96 +469,13 @@ export class NativePlayerImpl extends BasePlayer {
     }
 
     this.videoElement = null;
+    this.sourceElement = null;
     this.container = null;
     this.pausedAt = null;
     this.currentSourceUrl = null;
     this.currentMimeType = null;
-    this.liveSeekEnabled = false;
-    this.liveSeekOffsetSec = 0;
-    this.liveSeekBaseUrl = null;
-    this.liveSeekListeners.forEach((cleanup) => cleanup());
-    this.liveSeekListeners = [];
-    if (this.liveSeekTimer) {
-      clearTimeout(this.liveSeekTimer);
-      this.liveSeekTimer = null;
-    }
-    this.pendingLiveSeekOffset = null;
+    this.cleanupLiveSeek();
     this.listeners.clear();
-  }
-
-  private stripStartUnixParam(url: string): string {
-    const params = parseUrlParams(url);
-    delete params.startunix;
-    return appendUrlParams(stripUrlParams(url), params);
-  }
-
-  private buildLiveSeekUrl(offsetSec: number): string {
-    const base = this.liveSeekBaseUrl || this.currentSourceUrl || "";
-    if (!base) return "";
-    if (!offsetSec || offsetSec >= 0) {
-      return this.stripStartUnixParam(base);
-    }
-    const params = parseUrlParams(base);
-    params.startunix = String(offsetSec);
-    return appendUrlParams(stripUrlParams(base), params);
-  }
-
-  private applyLiveSeekOffset(offsetSec: number): void {
-    if (!this.videoElement) return;
-    const clamped = Math.min(0, offsetSec);
-    if (Math.abs(clamped - this.liveSeekOffsetSec) < 0.05) {
-      return;
-    }
-    this.liveSeekOffsetSec = clamped;
-    const nextUrl = this.buildLiveSeekUrl(clamped);
-    if (!nextUrl) return;
-    const wasPlaying = !this.videoElement.paused;
-    this.currentSourceUrl = nextUrl;
-    this.videoElement.src = nextUrl;
-    this.videoElement.load();
-    if (wasPlaying) {
-      this.videoElement.play().catch(() => {});
-    }
-  }
-
-  private createTimeRanges(ranges: [number, number][]): TimeRanges {
-    return {
-      length: ranges.length,
-      start(index: number): number {
-        if (index < 0 || index >= ranges.length) throw new DOMException("Index out of bounds");
-        return ranges[index][0];
-      },
-      end(index: number): number {
-        if (index < 0 || index >= ranges.length) throw new DOMException("Index out of bounds");
-        return ranges[index][1];
-      },
-    };
-  }
-
-  private scheduleLiveSeekOffset(offsetSec: number, immediate: boolean): void {
-    const clamped = Math.min(0, offsetSec);
-    if (immediate) {
-      if (this.liveSeekTimer) {
-        clearTimeout(this.liveSeekTimer);
-        this.liveSeekTimer = null;
-      }
-      this.pendingLiveSeekOffset = null;
-      this.applyLiveSeekOffset(clamped);
-      return;
-    }
-
-    this.pendingLiveSeekOffset = clamped;
-    if (this.liveSeekTimer) {
-      clearTimeout(this.liveSeekTimer);
-    }
-    this.liveSeekTimer = setTimeout(() => {
-      this.liveSeekTimer = null;
-      if (this.pendingLiveSeekOffset !== null) {
-        const pending = this.pendingLiveSeekOffset;
-        this.pendingLiveSeekOffset = null;
-        this.applyLiveSeekOffset(pending);
-      }
-    }, NativePlayerImpl.LIVE_SEEK_DEBOUNCE_MS);
   }
 
   /**

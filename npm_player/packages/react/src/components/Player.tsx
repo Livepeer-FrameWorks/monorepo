@@ -397,7 +397,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
                         >
                           {t("retry")}
                         </button>
-                        {controller?.canAttemptFallback?.() && (
+                        {options?.devMode && controller?.canAttemptFallback?.() && (
                           <button
                             type="button"
                             className="fw-error-btn fw-error-btn--secondary"
@@ -410,17 +410,19 @@ const PlayerInner: React.FC<PlayerProps> = ({
                             {t("tryNext")}
                           </button>
                         )}
-                        <button
-                          type="button"
-                          className="fw-error-btn fw-error-btn--secondary"
-                          aria-label={t("reloadPlayer")}
-                          onClick={() => {
-                            clearError();
-                            reload();
-                          }}
-                        >
-                          {t("reloadPlayer")}
-                        </button>
+                        {options?.devMode && (
+                          <button
+                            type="button"
+                            className="fw-error-btn fw-error-btn--secondary"
+                            aria-label={t("reloadPlayer")}
+                            onClick={() => {
+                              clearError();
+                              reload();
+                            }}
+                          >
+                            {t("reloadPlayer")}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

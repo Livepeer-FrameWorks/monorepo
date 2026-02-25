@@ -173,8 +173,8 @@ describe("BasePlayer", () => {
 
     video.currentTime = 12.5;
     video._fire("timeupdate");
-    expect(callbacks.onTimeUpdate).toHaveBeenCalledWith(12.5);
-    expect(onTimeUpdateEmit).toHaveBeenCalledWith(12.5);
+    expect(callbacks.onTimeUpdate).toHaveBeenCalledWith(12500);
+    expect(onTimeUpdateEmit).toHaveBeenCalledWith(12500);
 
     video.error = { message: "nope" } as any;
     video._fire("error");
@@ -183,7 +183,7 @@ describe("BasePlayer", () => {
 
     video.duration = 75;
     video._fire("durationchange");
-    expect(callbacks.onDurationChange).toHaveBeenCalledWith(75);
+    expect(callbacks.onDurationChange).toHaveBeenCalledWith(75000);
   });
 
   it("returns playback state defaults when no video element", async () => {
@@ -209,7 +209,7 @@ describe("BasePlayer", () => {
     player.setVideoElement(video);
 
     expect(player.getCurrentTime()).toBe(0);
-    expect(player.getDuration()).toBe(100);
+    expect(player.getDuration()).toBe(100000);
     expect(player.isPaused()).toBe(false);
     expect(player.isMuted()).toBe(false);
 
@@ -219,7 +219,7 @@ describe("BasePlayer", () => {
     player.pause();
     expect(video.pause).toHaveBeenCalledTimes(1);
 
-    player.seek(33);
+    player.seek(33000);
     expect(video.currentTime).toBe(33);
 
     player.setVolume(2);

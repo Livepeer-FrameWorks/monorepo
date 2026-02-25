@@ -52,6 +52,8 @@ const frameTiming: FrameTiming = {
 // Per-track wall-clock reference points for frame scheduling
 // Each track gets its own baseTime to handle different timestamp bases for A/V
 const trackBaseTimes = new Map<number, number>();
+// During seek, gate completion on a stable primary track (prefer video).
+let seekGateTrackIdx: number | null = null;
 
 // Buffer warmup state - prevents initial jitter by waiting for buffer to build
 // Before warmup, frames are queued but not output
@@ -79,6 +81,20 @@ function getTrackBaseTime(idx: number, frameTimeMs: number, now: number): number
 function resetBaseTime(): void {
   trackBaseTimes.clear();
   log(`Reset all track baseTimes`);
+}
+
+function selectSeekGateTrack(): number | null {
+  let fallbackIdx: number | null = null;
+  for (const pipeline of pipelines.values()) {
+    if (pipeline.closed) continue;
+    if (fallbackIdx === null || pipeline.idx < fallbackIdx) {
+      fallbackIdx = pipeline.idx;
+    }
+    if (pipeline.track.type === "video") {
+      return pipeline.idx;
+    }
+  }
+  return fallbackIdx;
 }
 
 function cloneVideoFrame(frame: VideoFrame): VideoFrame | null {
@@ -159,6 +175,7 @@ const MAX_DECODER_QUEUE_SIZE = 2;
 // Drop to next keyframe rather than buffering unboundedly.
 const MAX_INPUT_QUEUE_BEFORE_DROP = 300;
 const MAX_FRAME_HISTORY = 60;
+const MAX_OUTPUT_QUEUE = 60; // ~2s at 30fps; backpressure halts decoding above this
 const MAX_PAUSED_OUTPUT_QUEUE = 120;
 const MAX_PAUSED_INPUT_QUEUE = 600;
 
@@ -356,6 +373,8 @@ function handleCreate(msg: MainToWorkerMessage & { type: "create" }): void {
     payloadFormat: opts.payloadFormat || "avcc",
     directTransfer: false,
     wasmDecoder: null,
+    lastDecoderConfig: null,
+    lastResetTime: 0,
   };
 
   pipelines.set(idx, pipeline);
@@ -520,6 +539,7 @@ async function configureVideoDecoder(
 
   decoder.configure(config as VideoDecoderConfig);
   pipeline.decoder = decoder;
+  pipeline.lastDecoderConfig = config as VideoDecoderConfig;
 
   log(`Video decoder configured: ${config.codec}`);
 
@@ -628,6 +648,7 @@ function configureAudioDecoder(pipeline: PipelineState, description?: Uint8Array
 
   decoder.configure(config as AudioDecoderConfig);
   pipeline.decoder = decoder;
+  pipeline.lastDecoderConfig = config as AudioDecoderConfig;
 
   log(
     `Audio decoder configured: ${config.codec} ${config.sampleRate}Hz ${config.numberOfChannels}ch`
@@ -694,8 +715,11 @@ function handleDecoderError(pipeline: PipelineState, err: DOMException): void {
 }
 
 /**
- * Reset pipeline after a decoder error
- * Per rawws.js: recreate decoder if closed, otherwise just reset
+ * Reset pipeline after a decoder error.
+ * Matches upstream webcodecsworker.js pipeline.reset():
+ * - Closed decoder → recreate from lastDecoderConfig (rate-limited to 1s)
+ * - Open decoder → reset() + reconfigure()
+ * - Set droppingUntilKeyframe so we wait for a clean reference frame
  */
 function resetPipelineAfterError(pipeline: PipelineState): void {
   // Clear queues
@@ -705,24 +729,69 @@ function resetPipelineAfterError(pipeline: PipelineState): void {
   }
   pipeline.outputQueue = [];
 
-  // Mark as needing reconfiguration - we'll wait for next keyframe
-  pipeline.configured = false;
-  pipeline.droppingUntilKeyframe = false;
+  const now = performance.now();
 
-  // If decoder is closed, we need to recreate it (can't reset a closed decoder)
-  if (pipeline.decoder && pipeline.decoder.state === "closed") {
-    log(`Decoder closed for track ${pipeline.idx}, will recreate on next configure`);
+  // Close/null the old decoder
+  if (pipeline.decoder) {
+    if (pipeline.decoder.state !== "closed") {
+      try {
+        pipeline.decoder.close();
+      } catch {
+        // ignore
+      }
+    }
     pipeline.decoder = null;
-  } else if (pipeline.decoder && pipeline.decoder.state !== "closed") {
-    // Try to reset if not closed
+  }
+
+  // Auto-recover: recreate decoder from stored config (upstream pipeline.reset() pattern)
+  if (pipeline.lastDecoderConfig) {
+    // Rate limit: upstream throttles hard resets to 1s minimum
+    if (now - pipeline.lastResetTime < 1000) {
+      log(
+        `Rate-limiting reset for track ${pipeline.idx} (last reset ${Math.round(now - pipeline.lastResetTime)}ms ago)`
+      );
+      pipeline.configured = false;
+      pipeline.droppingUntilKeyframe = false;
+      // Schedule a delayed retry
+      setTimeout(() => {
+        if (pipeline.closed) return;
+        resetPipelineAfterError(pipeline);
+      }, 1000);
+      return;
+    }
+
+    pipeline.lastResetTime = now;
+
     try {
-      pipeline.decoder.reset();
-      log(`Reset decoder for track ${pipeline.idx}`);
+      if (pipeline.track.type === "video") {
+        const decoder = new VideoDecoder({
+          output: (frame: VideoFrame) => handleDecodedFrame(pipeline, frame),
+          error: (err: DOMException) => handleDecoderError(pipeline, err),
+        });
+        decoder.configure(pipeline.lastDecoderConfig as VideoDecoderConfig);
+        pipeline.decoder = decoder;
+      } else {
+        const decoder = new AudioDecoder({
+          output: (data: AudioData) => handleDecodedFrame(pipeline, data),
+          error: (err: DOMException) => handleDecoderError(pipeline, err),
+        });
+        decoder.configure(pipeline.lastDecoderConfig as AudioDecoderConfig);
+        pipeline.decoder = decoder;
+      }
+
+      pipeline.configured = true;
+      pipeline.droppingUntilKeyframe = true;
+      log(`Auto-recovered decoder for track ${pipeline.idx} (waiting for keyframe)`);
+      return;
     } catch (e) {
-      log(`Failed to reset decoder for track ${pipeline.idx}: ${e}`, "warn");
+      log(`Failed to auto-recover decoder for track ${pipeline.idx}: ${e}`, "warn");
       pipeline.decoder = null;
     }
   }
+
+  // Fallback: no stored config or recovery failed
+  pipeline.configured = false;
+  pipeline.droppingUntilKeyframe = false;
 }
 
 // ============================================================================
@@ -743,6 +812,8 @@ function resetPipelineAfterError(pipeline: PipelineState): void {
 function drainInputQueue(pipeline: PipelineState): void {
   if (pipeline.inputQueue.length === 0) return;
   if (pipeline.closed) return;
+  // Don't drain into a full output queue — wait for scheduler to catch up
+  if (pipeline.outputQueue.length >= MAX_OUTPUT_QUEUE) return;
 
   const decoder = pipeline.decoder;
   const isWasm = !!pipeline.wasmDecoder;
@@ -754,6 +825,8 @@ function drainInputQueue(pipeline: PipelineState): void {
     if (!isWasm && decoder && decoder.decodeQueueSize > MAX_DECODER_QUEUE_SIZE) {
       break;
     }
+    // Stop draining if output queue hit capacity
+    if (pipeline.outputQueue.length >= MAX_OUTPUT_QUEUE) break;
     const chunk = pipeline.inputQueue.shift()!;
     decodeChunk(pipeline, chunk);
     fed++;
@@ -800,11 +873,19 @@ function handleReceive(msg: MainToWorkerMessage & { type: "receive" }): void {
     );
   }
 
+  // Output queue backpressure: hold chunks in inputQueue when decoded frames
+  // are piling up (e.g. post-seek fast-forward). Encoded chunks are tiny vs
+  // decoded VideoFrame objects, so this caps memory without dropping data.
+  if (pipeline.outputQueue.length >= MAX_OUTPUT_QUEUE) {
+    pipeline.inputQueue.push(chunk);
+    return;
+  }
+
   // Sustained overload: drop until keyframe resets reference chain
   if (pipeline.droppingUntilKeyframe) {
     if (chunk.type === "key") {
       pipeline.droppingUntilKeyframe = false;
-      log(`Keyframe received after pressure drop — resuming decode for track ${idx}`);
+      log(`Keyframe received — resuming decode for track ${idx}`);
       pipeline.inputQueue = [];
       decodeChunk(pipeline, chunk);
     } else {
@@ -1054,7 +1135,9 @@ function processOutputQueue(pipeline: PipelineState): void {
     );
     if (!wasSorted) {
       pipeline.outputQueue.sort((a, b) => a.timestamp - b.timestamp);
-      log(`Sorted ${pipeline.outputQueue.length} frames in output queue for track ${pipeline.idx}`);
+      logVerbose(
+        `Sorted ${pipeline.outputQueue.length} frames in output queue for track ${pipeline.idx}`
+      );
     }
   }
 
@@ -1100,6 +1183,43 @@ function processOutputQueue(pipeline: PipelineState): void {
     }
   }
 
+  // Skip pre-seek frames (upstream webcodecsworker.js lines 470-497)
+  // Server sends data starting from the keyframe BEFORE the seek target,
+  // so we discard frames until we reach the target timestamp.
+  if (frameTiming.seeking !== false) {
+    while (pipeline.outputQueue.length > 0) {
+      const entry = pipeline.outputQueue[0];
+      if (entry.timestamp < frameTiming.seeking) {
+        pipeline.outputQueue.shift();
+        entry.frame.close();
+        pipeline.stats.framesDropped++;
+        logVerbose(
+          `Skipped pre-seek frame ${entry.timestamp} < ${frameTiming.seeking} (track ${pipeline.idx})`
+        );
+      } else {
+        if (seekGateTrackIdx === null) {
+          seekGateTrackIdx = selectSeekGateTrack();
+        }
+
+        if (seekGateTrackIdx !== null && pipeline.idx !== seekGateTrackIdx) {
+          // Keep this frame queued and wait for the gate track (prefer video)
+          // to reach target so we don't complete seek on audio first.
+          setTimeout(() => processOutputQueue(pipeline), 10);
+          return;
+        }
+
+        log(
+          `Reached seek target [${(frameTiming.seeking / 1e6).toFixed(3)}s] on track ${pipeline.idx}: resuming normal playback`
+        );
+        frameTiming.seeking = false;
+        seekGateTrackIdx = null;
+        self.postMessage({ type: "sendevent", kind: "seeked", uid: uidCounter++ });
+        break;
+      }
+    }
+    if (frameTiming.seeking !== false) return; // still waiting for target frame
+  }
+
   // Process all frames that are ready
   while (pipeline.outputQueue.length > 0) {
     const entry = pipeline.outputQueue[0];
@@ -1128,8 +1248,8 @@ function shouldOutputFrame(
 ): { shouldOutput: boolean; earliness: number; checkDelayMs: number } {
   const trackIdx = pipeline.idx;
 
-  if (frameTiming.seeking) {
-    // During seek, reset baseTime and output first keyframe immediately
+  if (frameTiming.seeking !== false) {
+    // Reached seek target — resume normal playback
     trackBaseTimes.delete(trackIdx);
     return { shouldOutput: true, earliness: 0, checkDelayMs: 0 };
   }
@@ -1403,8 +1523,12 @@ function handleSeek(msg: MainToWorkerMessage & { type: "seek" }): void {
   const { seekTime, uid } = msg;
 
   log(`Seek to ${seekTime}ms`);
-  frameTiming.seeking = true;
-  resetBaseTime(); // Reset timing reference for new position
+  // Store seek target in microseconds — frames before this are skipped during catchup.
+  // Matches upstream: frameTiming.seeking = seekTo * 1e3
+  frameTiming.seeking = seekTime * 1000;
+  frameTiming.out = seekTime * 1000;
+  seekGateTrackIdx = selectSeekGateTrack();
+  resetBaseTime();
 
   // Reset warmup state - need to rebuild buffer after seek
   warmupComplete = false;
@@ -1419,23 +1543,48 @@ function handleSeek(msg: MainToWorkerMessage & { type: "seek" }): void {
 }
 
 function flushPipeline(pipeline: PipelineState): void {
-  // Clear input queue
   pipeline.inputQueue = [];
 
-  // Close and clear output queue frames
   for (const entry of pipeline.outputQueue) {
     entry.frame.close();
   }
   pipeline.outputQueue = [];
 
-  // Reset decoder if possible
+  // WASM decoder: no reset/configure cycle needed
+  if (pipeline.wasmDecoder) {
+    return;
+  }
+
   if (pipeline.decoder && pipeline.decoder.state !== "closed") {
     try {
       pipeline.decoder.reset();
-    } catch {
-      // Ignore reset errors
+      // Reconfigure immediately — reset() puts decoder in "unconfigured" state.
+      // Matches upstream rawws.js: pipeline.reset() → decoder.reset() + configureDecoder()
+      if (pipeline.lastDecoderConfig) {
+        if (pipeline.track.type === "video") {
+          (pipeline.decoder as VideoDecoder).configure(
+            pipeline.lastDecoderConfig as VideoDecoderConfig
+          );
+        } else {
+          (pipeline.decoder as AudioDecoder).configure(
+            pipeline.lastDecoderConfig as AudioDecoderConfig
+          );
+        }
+        // Require keyframe before accepting delta frames after reconfigure.
+        // In-flight delta frames from the old position arrive after flush;
+        // feeding them to the decoder causes "A key frame is required" error.
+        // Matches upstream VideoPipeline wantKey pattern.
+        pipeline.droppingUntilKeyframe = true;
+        log(`Pipeline ${pipeline.idx} reconfigured after flush (waiting for keyframe)`);
+        return;
+      }
+    } catch (e) {
+      log(`Pipeline ${pipeline.idx} flush error: ${e}`, "warn");
     }
   }
+
+  // Only mark unconfigured if reconfigure failed or no stored config
+  pipeline.configured = false;
 }
 
 function handleFrameTiming(msg: MainToWorkerMessage & { type: "frametiming" }): void {
@@ -1453,6 +1602,7 @@ function handleFrameTiming(msg: MainToWorkerMessage & { type: "frametiming" }): 
     log(`Frame timing paused=${frameTiming.paused}`);
   } else if (action === "reset") {
     frameTiming.seeking = false;
+    seekGateTrackIdx = null;
     log("Frame timing reset (seek complete)");
   }
 
@@ -1681,7 +1831,7 @@ function sendStats(): void {
         decoded: frameTiming.decoded,
         out: frameTiming.out,
         speed: { ...frameTiming.speed },
-        seeking: frameTiming.seeking,
+        seeking: frameTiming.seeking !== false,
         paused: frameTiming.paused,
       },
       pipelines: pipelineStats,

@@ -143,9 +143,7 @@ export function selectDefaultProfile(
     return "quality";
   }
 
-  if (preferLowLatency) {
-    return "low";
-  }
-
-  return "balanced";
+  // Upstream rawws.js behavior targets low-latency live playback by default.
+  if (preferLowLatency) return "low";
+  return "low";
 }

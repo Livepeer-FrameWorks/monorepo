@@ -238,7 +238,7 @@ export interface WebRTCCodecCompatibility {
   videoCompatible: boolean;
   /** Whether at least one audio track is WebRTC-compatible (or no audio tracks) */
   audioCompatible: boolean;
-  /** Overall compatibility - both video and audio must be compatible */
+  /** Overall compatibility - at least one track type must be playable */
   compatible: boolean;
   /** List of incompatible codecs found */
   incompatibleCodecs: string[];
@@ -323,7 +323,7 @@ export function checkWebRTCCodecCompatibility(
   return {
     videoCompatible,
     audioCompatible,
-    compatible: videoCompatible && audioCompatible,
+    compatible: videoCompatible || audioCompatible,
     incompatibleCodecs,
     details: {
       videoTracks: videoTracks.length,

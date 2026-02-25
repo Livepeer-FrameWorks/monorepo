@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/player-react",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "type": "module",
   "description": "React components for FrameWorks streaming player",
   "main": "dist/esm/index.js",

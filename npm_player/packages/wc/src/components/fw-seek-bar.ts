@@ -108,8 +108,9 @@ export class FwSeekBar extends LitElement {
 
     const segments: BufferedSegment[] = [];
     for (let i = 0; i < buffered.length; i += 1) {
-      const start = buffered.start(i);
-      const end = buffered.end(i);
+      // buffered TimeRanges are in seconds (browser API), convert to ms
+      const start = buffered.start(i) * 1000;
+      const end = buffered.end(i) * 1000;
       const relativeStart = start - rangeStart;
       const relativeEnd = end - rangeStart;
 
@@ -122,12 +123,12 @@ export class FwSeekBar extends LitElement {
     return segments;
   }
 
-  private _formatTime(seconds: number): string {
-    if (!Number.isFinite(seconds) || seconds < 0) {
+  private _formatTime(ms: number): string {
+    if (!Number.isFinite(ms) || ms < 0) {
       return "0:00";
     }
 
-    const total = Math.floor(seconds);
+    const total = Math.floor(ms / 1000);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
@@ -139,13 +140,13 @@ export class FwSeekBar extends LitElement {
     return `${minutes}:${String(secs).padStart(2, "0")}`;
   }
 
-  private _formatLiveTime(seconds: number, edge: number): string {
-    const behindSeconds = edge - seconds;
-    if (behindSeconds < 1) {
+  private _formatLiveTime(ms: number, edgeMs: number): string {
+    const behindMs = edgeMs - ms;
+    if (behindMs < 1000) {
       return "LIVE";
     }
 
-    const total = Math.floor(behindSeconds);
+    const total = Math.floor(behindMs / 1000);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
@@ -218,7 +219,7 @@ export class FwSeekBar extends LitElement {
       return;
     }
 
-    const step = event.shiftKey ? 10 : 5;
+    const step = event.shiftKey ? 10000 : 5000;
     const rawRangeEnd = this.isLive ? this._effectiveLiveEdge : this.duration;
     const rangeEnd = Number.isFinite(rawRangeEnd) ? rawRangeEnd : this.currentTime + step;
     const rangeStart = this.isLive ? this.seekableStart : 0;
@@ -380,6 +381,13 @@ export class FwSeekBar extends LitElement {
             `
           )}
           <div class="fw-seek-progress" style=${styleMap({ width: `${progressPercent}%` })}></div>
+          ${this._hovering && !this._dragging
+            ? html`<div
+                class="fw-seek-hover-line"
+                style=${styleMap({ left: `${this._hoverPosition}%` })}
+              ></div>`
+            : nothing}
+          ${this.isLive ? html`<div class="fw-seek-live-edge"></div>` : nothing}
         </div>
 
         <div

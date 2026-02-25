@@ -1,7 +1,6 @@
 import { BasePlayer } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import { isFileProtocol } from "../core/detector";
-import { appendUrlParams, parseUrlParams, stripUrlParams } from "../core/UrlUtils";
 import type {
   StreamSource,
   StreamInfo,
@@ -22,18 +21,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
   private videojsPlayer: any = null;
   private container: HTMLElement | null = null;
   private destroyed = false;
-  private timeCorrection: number = 0;
-  private proxyElement: HTMLVideoElement | null = null;
-  private currentStreamInfo: StreamInfo | null = null;
   private liveDurationProxy: LiveDurationProxy | null = null;
-
-  // Live seeking via startunix (ported from NativePlayer/OG html5.js)
-  private liveSeekEnabled = false;
-  private liveSeekBaseUrl: string | null = null;
-  private liveSeekOffsetSec = 0;
-  private liveSeekTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingLiveSeekOffset: number | null = null;
-  private static readonly LIVE_SEEK_DEBOUNCE_MS = 300;
 
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
@@ -154,7 +142,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
   ): Promise<HTMLVideoElement> {
     this.destroyed = false;
     this.container = container;
-    this.currentStreamInfo = streamInfo || null;
     container.classList.add("fw-player-container");
 
     const video = document.createElement("video");
@@ -173,11 +160,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
     container.appendChild(video);
 
     this.setupVideoEventListeners(video, options);
-
-    // Set up live seek state (startunix URL rewriting)
-    this.liveSeekBaseUrl = this.stripStartUnixParam(source.url);
-    this.liveSeekOffsetSec = 0;
-    this.pendingLiveSeekOffset = null;
 
     try {
       const mod = await import("video.js");
@@ -203,7 +185,10 @@ export class VideoJsPlayerImpl extends BasePlayer {
         textTrackDisplay: useVideoJsControls, // We handle subtitles ourselves
         errorDisplay: useVideoJsControls,
         controlBar: useVideoJsControls,
-        liveTracker: useVideoJsControls,
+        // Defaults (trackingThreshold=20, liveTolerance=15) are calibrated to not
+        // fight VHS's holdback (3x target duration). Must stay enabled — we use
+        // seekToLiveEdge()/liveCurrentTime() for jumpToLive and getLiveLatency.
+        liveTracker: true,
         // Don't set children: [] - that can break internal VideoJS components
 
         // VHS (http-streaming) configuration - AGGRESSIVE for fastest startup
@@ -287,31 +272,33 @@ export class VideoJsPlayerImpl extends BasePlayer {
           video.networkState
         );
 
-        // Create time-corrected proxy for external consumers
-        if (this.currentStreamInfo) {
-          this.proxyElement = this.createTimeCorrectedProxy(video, this.currentStreamInfo);
-        }
-
-        // Check if live stream and set up LiveDurationProxy
+        // Check if live stream and set up LiveDurationProxy for duration tracking.
+        // DVR seeking is handled natively by VHS through the HLS playlist —
+        // no startunix URL rewriting needed (that's only for progressive formats).
         const duration = this.videojsPlayer.duration();
-        if (!isFinite(duration) && !this.liveDurationProxy) {
+        const isLive = !isFinite(duration);
+        if (isLive && !this.liveDurationProxy) {
           this.liveDurationProxy = new LiveDurationProxy(video, {
             constrainSeek: true,
             liveOffset: 0,
           });
-          this.liveSeekEnabled = true;
           console.debug("[VideoJS] LiveDurationProxy initialized for live stream");
         }
 
-        if (options.autoplay) {
-          // Ensure muted for autoplay - browsers block unmuted autoplay
-          if (!video.muted) {
-            video.muted = true;
-          }
-          this.videojsPlayer.play().catch((e: any) => {
-            console.warn("VideoJS autoplay failed:", e);
-            // Emit a warning but don't fail - user can click play
-          });
+        // Live streams may not emit canplay; synthesize it after a short delay
+        if (isLive) {
+          let canplayReceived = false;
+          const onCanPlay = () => {
+            canplayReceived = true;
+          };
+          video.addEventListener("canplay", onCanPlay, { once: true });
+          setTimeout(() => {
+            video.removeEventListener("canplay", onCanPlay);
+            if (!canplayReceived && !this.destroyed && video.readyState >= 2) {
+              console.debug("[VideoJS] Synthetic canplay for live stream");
+              video.dispatchEvent(new Event("canplay"));
+            }
+          }, 500);
         }
       });
 
@@ -376,102 +363,11 @@ export class VideoJsPlayerImpl extends BasePlayer {
         );
       });
 
-      // Emit seekable range updates for live streams (DVR support)
-      this.videojsPlayer.on("progress", () => {
-        if (this.destroyed) return;
-        try {
-          const seekable = this.videojsPlayer.seekable();
-          if (seekable && seekable.length > 0) {
-            const start = seekable.start(0);
-            const end = seekable.end(seekable.length - 1);
-            const bufferWindow = (end - start) * 1000; // Convert to ms
-            this.emit("seekablechange", {
-              start: start + this.timeCorrection,
-              end: end + this.timeCorrection,
-              bufferWindow,
-            });
-          }
-        } catch {
-          // Seekable not available yet
-        }
-      });
-
-      return this.proxyElement || video;
+      return video;
     } catch (error: any) {
       this.emit("error", error.message || String(error));
       throw error;
     }
-  }
-
-  /**
-   * Creates a Proxy wrapper around the video element that corrects
-   * currentTime/duration/buffered using the firstms offset from MistServer.
-   * This ensures timestamps align with MistServer's track metadata.
-   */
-  private createTimeCorrectedProxy(
-    video: HTMLVideoElement,
-    streamInfo: StreamInfo
-  ): HTMLVideoElement {
-    // Calculate correction from minimum firstms across all tracks
-    let firstms = Infinity;
-    for (const track of streamInfo.meta.tracks) {
-      if ((track as any).firstms !== undefined && (track as any).firstms < firstms) {
-        firstms = (track as any).firstms;
-      }
-    }
-    this.timeCorrection = firstms !== Infinity ? firstms / 1000 : 0;
-
-    // No correction needed or Proxy not supported
-    if (this.timeCorrection === 0 || typeof Proxy === "undefined") {
-      return video;
-    }
-
-    console.debug(
-      `[VideoJS] Applying timestamp correction: ${this.timeCorrection}s (firstms=${firstms})`
-    );
-
-    const correction = this.timeCorrection;
-    const vjsPlayer = this.videojsPlayer;
-
-    return new Proxy(video, {
-      get: (target, prop) => {
-        if (prop === "currentTime") {
-          const time = vjsPlayer ? vjsPlayer.currentTime() : target.currentTime;
-          return isNaN(time) ? 0 : time + correction;
-        }
-        if (prop === "duration") {
-          const duration = target.duration;
-          return isNaN(duration) ? 0 : duration + correction;
-        }
-        if (prop === "buffered") {
-          const buffered = target.buffered;
-          return {
-            length: buffered.length,
-            start: (i: number) => buffered.start(i) + correction,
-            end: (i: number) => buffered.end(i) + correction,
-          };
-        }
-        const value = target[prop as keyof HTMLVideoElement];
-        if (typeof value === "function") {
-          return value.bind(target);
-        }
-        return value;
-      },
-      set: (target, prop, value) => {
-        if (prop === "currentTime") {
-          // Use VideoJS API for seeking (fixes backwards seeking in HLS)
-          const correctedValue = value - correction;
-          if (vjsPlayer) {
-            vjsPlayer.currentTime(correctedValue);
-          } else {
-            target.currentTime = correctedValue;
-          }
-          return true;
-        }
-        (target as any)[prop] = value;
-        return true;
-      },
-    }) as HTMLVideoElement;
   }
 
   private getVideoJsType(mimeType?: string): string {
@@ -493,31 +389,11 @@ export class VideoJsPlayerImpl extends BasePlayer {
     } catch {}
   }
 
-  getCurrentTime(): number {
-    const v = this.proxyElement || this.videoElement;
-    return v?.currentTime ?? 0;
-  }
-
-  /**
-   * Seek to time using VideoJS API (fixes backwards seeking in HLS).
-   * Time should be in the corrected coordinate space (with firstms offset applied).
-   * For live streams, supports startunix URL rewriting for DVR-like seeking.
-   */
-  seek(time: number): void {
-    // Live seeking via startunix URL reload
-    if (this.liveSeekEnabled && this.liveDurationProxy?.isLive()) {
-      const duration = this.getDuration();
-      let offset = time - duration;
-      if (offset > 0) offset = 0;
-      this.scheduleLiveSeekOffset(offset, false);
-      return;
-    }
-
-    const correctedTime = time - this.timeCorrection;
+  protected seekInBuffer(timeSec: number): void {
     if (this.videojsPlayer) {
-      this.videojsPlayer.currentTime(correctedTime);
+      this.videojsPlayer.currentTime(timeSec);
     } else if (this.videoElement) {
-      this.videoElement.currentTime = correctedTime;
+      this.videoElement.currentTime = timeSec;
     }
   }
 
@@ -568,132 +444,42 @@ export class VideoJsPlayerImpl extends BasePlayer {
   // Live Stream Support
   // ============================================================================
 
-  /**
-   * Check if the stream is live
-   */
-  isLiveStream(): boolean {
-    if (this.liveDurationProxy) {
-      return this.liveDurationProxy.isLive();
-    }
-    const video = this.videoElement;
-    if (!video) return false;
-    return !isFinite(video.duration);
-  }
-
-  /**
-   * Get the calculated duration for live streams
-   */
   getDuration(): number {
-    if (this.liveDurationProxy) {
-      return this.liveDurationProxy.getDuration();
-    }
-    return this.videoElement?.duration ?? 0;
+    // LiveDurationProxy provides finite duration for live HLS streams
+    const sec = this.liveDurationProxy
+      ? this.liveDurationProxy.getDuration()
+      : (this.videoElement?.duration ?? 0);
+    if (!Number.isFinite(sec)) return sec;
+    return sec * 1000;
   }
 
-  /**
-   * Jump to live edge
-   * Uses VideoJS liveTracker when available, otherwise LiveDurationProxy
-   */
   jumpToLive(): void {
-    const video = this.videoElement;
-    if (!video) return;
-
-    // Reset startunix offset to return to live edge
-    if (this.liveSeekEnabled && this.liveSeekOffsetSec !== 0) {
-      this.scheduleLiveSeekOffset(0, true);
-      return;
-    }
-
-    // VideoJS has a liveTracker module for live streams
-    if (this.videojsPlayer && this.videojsPlayer.liveTracker) {
-      const tracker = this.videojsPlayer.liveTracker;
-      if (tracker.isLive && tracker.isLive()) {
-        const liveCurrentTime = tracker.liveCurrentTime?.();
-        if (typeof liveCurrentTime === "number" && liveCurrentTime > 0) {
-          console.debug("[VideoJS] jumpToLive using liveTracker:", liveCurrentTime);
-          this.videojsPlayer.currentTime(liveCurrentTime);
-          return;
-        }
-      }
-    }
-
-    // Fall back to LiveDurationProxy
-    if (this.liveDurationProxy && this.liveDurationProxy.isLive()) {
-      console.debug("[VideoJS] jumpToLive using LiveDurationProxy");
-      this.liveDurationProxy.jumpToLive();
-      return;
-    }
-
-    // VideoJS seekable fallback
-    if (this.videojsPlayer) {
-      try {
-        const seekable = this.videojsPlayer.seekable();
-        if (seekable && seekable.length > 0) {
-          const liveEdge = seekable.end(seekable.length - 1);
-          if (isFinite(liveEdge) && liveEdge > 0) {
-            console.debug("[VideoJS] jumpToLive using seekable.end:", liveEdge);
-            this.videojsPlayer.currentTime(liveEdge);
-            return;
-          }
-        }
-      } catch {}
-    }
-
-    // Native video seekable fallback
-    if (video.seekable && video.seekable.length > 0) {
-      const liveEdge = video.seekable.end(video.seekable.length - 1);
-      if (isFinite(liveEdge) && liveEdge > 0) {
-        console.debug("[VideoJS] jumpToLive using video.seekable.end:", liveEdge);
-        video.currentTime = liveEdge;
-      }
-    }
-  }
-
-  /**
-   * Provide a seekable range override for live streams.
-   * Uses VideoJS liveTracker seekableEnd as the live edge when available.
-   */
-  getSeekableRange(): { start: number; end: number } | null {
-    const video = this.videoElement;
-    if (!video?.seekable || video.seekable.length === 0) return null;
-    let start = video.seekable.start(0);
-    let end = video.seekable.end(video.seekable.length - 1);
-
     if (this.videojsPlayer?.liveTracker) {
       const tracker = this.videojsPlayer.liveTracker;
-      const trackerEnd = tracker.seekableEnd?.();
-      const trackerStart = tracker.seekableStart?.();
-      if (typeof trackerStart === "number" && Number.isFinite(trackerStart)) {
-        start = trackerStart;
-      }
-      if (typeof trackerEnd === "number" && Number.isFinite(trackerEnd) && trackerEnd > 0) {
-        end = Math.min(end, trackerEnd);
+      if (tracker.isLive?.() && typeof tracker.seekToLiveEdge === "function") {
+        tracker.seekToLiveEdge();
+        // seekToLiveEdge doesn't auto-resume since VideoJS 7.18.0
+        this.videojsPlayer.play();
+        return;
       }
     }
-
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-    return { start, end };
+    super.jumpToLive();
   }
 
-  /**
-   * Get latency from live edge (for live streams)
-   */
   getLiveLatency(): number {
     const video = this.videoElement;
     if (!video) return 0;
 
-    // VideoJS liveTracker provides seekableEnd
-    if (this.videojsPlayer && this.videojsPlayer.liveTracker) {
+    if (this.videojsPlayer?.liveTracker) {
       const tracker = this.videojsPlayer.liveTracker;
-      if (tracker.isLive?.() && typeof tracker.seekableEnd === "function") {
-        const liveEdge = tracker.seekableEnd();
-        if (typeof liveEdge === "number" && isFinite(liveEdge)) {
-          return Math.max(0, (liveEdge - video.currentTime) * 1000);
+      if (tracker.isLive?.() && typeof tracker.liveCurrentTime === "function") {
+        const liveTime = tracker.liveCurrentTime();
+        if (typeof liveTime === "number" && isFinite(liveTime)) {
+          return Math.max(0, (liveTime - video.currentTime) * 1000);
         }
       }
     }
 
-    // Fall back to proxy
     if (this.liveDurationProxy) {
       return this.liveDurationProxy.getLatency() * 1000;
     }
@@ -726,80 +512,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
 
     this.videoElement = null;
     this.container = null;
-    this.proxyElement = null;
-    this.currentStreamInfo = null;
-    this.timeCorrection = 0;
-    this.liveSeekEnabled = false;
-    this.liveSeekOffsetSec = 0;
-    this.liveSeekBaseUrl = null;
-    if (this.liveSeekTimer) {
-      clearTimeout(this.liveSeekTimer);
-      this.liveSeekTimer = null;
-    }
-    this.pendingLiveSeekOffset = null;
+    this.cleanupLiveSeek();
     this.listeners.clear();
-  }
-
-  // ============================================================================
-  // Live Seeking via startunix (ported from NativePlayer/OG html5.js)
-  // ============================================================================
-
-  private stripStartUnixParam(url: string): string {
-    const params = parseUrlParams(url);
-    delete params.startunix;
-    return appendUrlParams(stripUrlParams(url), params);
-  }
-
-  private buildLiveSeekUrl(offsetSec: number): string {
-    const base = this.liveSeekBaseUrl || "";
-    if (!base) return "";
-    if (!offsetSec || offsetSec >= 0) {
-      return this.stripStartUnixParam(base);
-    }
-    const params = parseUrlParams(base);
-    params.startunix = String(offsetSec);
-    return appendUrlParams(stripUrlParams(base), params);
-  }
-
-  private scheduleLiveSeekOffset(offsetSec: number, immediate: boolean): void {
-    const clamped = Math.min(0, offsetSec);
-    if (immediate) {
-      if (this.liveSeekTimer) {
-        clearTimeout(this.liveSeekTimer);
-        this.liveSeekTimer = null;
-      }
-      this.pendingLiveSeekOffset = null;
-      this.applyLiveSeekOffset(clamped);
-      return;
-    }
-
-    this.pendingLiveSeekOffset = clamped;
-    if (this.liveSeekTimer) {
-      clearTimeout(this.liveSeekTimer);
-    }
-    this.liveSeekTimer = setTimeout(() => {
-      this.liveSeekTimer = null;
-      if (this.pendingLiveSeekOffset !== null) {
-        const pending = this.pendingLiveSeekOffset;
-        this.pendingLiveSeekOffset = null;
-        this.applyLiveSeekOffset(pending);
-      }
-    }, VideoJsPlayerImpl.LIVE_SEEK_DEBOUNCE_MS);
-  }
-
-  private applyLiveSeekOffset(offsetSec: number): void {
-    if (!this.videojsPlayer) return;
-    const clamped = Math.min(0, offsetSec);
-    if (Math.abs(clamped - this.liveSeekOffsetSec) < 0.05) return;
-
-    this.liveSeekOffsetSec = clamped;
-    const nextUrl = this.buildLiveSeekUrl(clamped);
-    if (!nextUrl) return;
-
-    console.debug("[VideoJS] Reloading source with startunix offset:", clamped);
-    this.videojsPlayer.src({
-      src: nextUrl,
-      type: this.getVideoJsType(this.capability.mimes[0]),
-    });
   }
 }

@@ -339,7 +339,9 @@ body {
   background: transparent;
   color: hsl(var(--tn-fg-dark));
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .config-drawer-toggle:hover {

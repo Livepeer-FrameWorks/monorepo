@@ -27,10 +27,13 @@ export class WebSocketManager {
   // Allows multiple listeners per message type for proper seek/play sequencing
   private listeners: Record<string, MewsMessageListener[]> = {};
 
+  private reconnectionDisabled = false;
+
   private onMessage: (data: ArrayBuffer | string) => void;
   private onOpen: () => void;
   private onClose: () => void;
   private onError: (message: string) => void;
+  private shouldReconnect?: () => boolean;
 
   constructor(options: WebSocketManagerOptions) {
     this.url = options.url;
@@ -39,6 +42,7 @@ export class WebSocketManager {
     this.onOpen = options.onOpen;
     this.onClose = options.onClose;
     this.onError = options.onError;
+    this.shouldReconnect = options.shouldReconnect;
   }
 
   connect(): void {
@@ -85,7 +89,13 @@ export class WebSocketManager {
     ws.onclose = () => {
       if (this.isDestroyed) return;
 
-      if (this.wasConnected && this.reconnectAttempts < this.maxReconnectAttempts) {
+      const canReconnect =
+        this.wasConnected &&
+        !this.reconnectionDisabled &&
+        this.reconnectAttempts < this.maxReconnectAttempts &&
+        (!this.shouldReconnect || this.shouldReconnect());
+
+      if (canReconnect) {
         const backoff = Math.min(5000, 500 * Math.pow(2, this.reconnectAttempts));
         this.reconnectAttempts++;
         this.reconnectTimer = setTimeout(() => {
@@ -95,7 +105,9 @@ export class WebSocketManager {
         }, backoff);
       } else {
         this.onClose();
-        this.onError("WebSocket closed");
+        if (!this.reconnectionDisabled) {
+          this.onError("WebSocket closed");
+        }
       }
     };
   }
@@ -196,6 +208,21 @@ export class WebSocketManager {
       this.ws = null;
     }
     console.debug("[WebSocketManager] destroy() completed");
+  }
+
+  disableReconnection(): void {
+    this.reconnectionDisabled = true;
+    this.clearReconnectTimer();
+  }
+
+  sendDirect(cmd: object): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      this.ws.send(JSON.stringify(cmd));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   isConnected(): boolean {

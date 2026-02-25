@@ -29,7 +29,7 @@ export const WRAPPER_PARITY_INITIAL_STATE = {
   isPlaying: false,
   isPaused: true,
   isBuffering: false,
-  isMuted: true,
+  isMuted: false,
   volume: 1,
   error: null,
   errorDetails: null,

@@ -106,6 +106,10 @@ export class QualityMonitor {
   private consecutivePoorSamples = 0;
   private fallbackTriggered = false;
 
+  // Seek suppression: upstream resets monitor on seeking/seeked events, but
+  // MediaStream sources (WebCodecs) never fire those. Use a time window instead.
+  private seekSuppressUntil = 0;
+
   constructor(options: QualityMonitorOptions = {}) {
     this.options = {
       sampleInterval: options.sampleInterval ?? 500,
@@ -230,7 +234,8 @@ export class QualityMonitor {
     // Don't let that poison the score or trigger destructive fallback.
     const isActive = !video.paused && !video.ended && video.readyState >= 3;
 
-    if (isActive) {
+    const isSuppressed = performance.now() < this.seekSuppressUntil;
+    if (isActive && !isSuppressed) {
       this.updatePlaybackScore();
     }
 
@@ -256,7 +261,7 @@ export class QualityMonitor {
 
     // Track sustained poor quality for automatic fallback
     // Reference: player.js:654-665 - "nextCombo" after sustained poor playback
-    if (isActive && this.isPlaybackPoor()) {
+    if (isActive && this.isPlaybackPoor() && performance.now() >= this.seekSuppressUntil) {
       this.consecutivePoorSamples++;
 
       // Trigger fallback after sustained poor quality
@@ -547,9 +552,10 @@ export class QualityMonitor {
 
     // Final score is max of averaged and current
     score = Math.max(score, entry.score);
-    this.playbackScore = score;
+    // Keep playback score in expected 0..2 range.
+    this.playbackScore = Math.max(0, Math.min(2, score));
 
-    return score;
+    return this.playbackScore;
   }
 
   /**
@@ -592,6 +598,19 @@ export class QualityMonitor {
   resetFallbackState(): void {
     this.consecutivePoorSamples = 0;
     this.fallbackTriggered = false;
+  }
+
+  /**
+   * Reset for seek — clear score history and fallback state.
+   * Upstream MistServer embed resets monitor on seeking/seeked/ratechange events
+   * to prevent the expected stall during seek from triggering fallback.
+   */
+  resetForSeek(): void {
+    this.playbackScoreHistory = [];
+    this.playbackScore = 1.0;
+    this.consecutivePoorSamples = 0;
+    this.fallbackTriggered = false;
+    this.seekSuppressUntil = performance.now() + 10_000;
   }
 
   /**

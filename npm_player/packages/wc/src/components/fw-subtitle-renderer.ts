@@ -179,7 +179,7 @@ export class FwSubtitleRenderer extends LitElement {
       return;
     }
 
-    const currentTimeMs = this.currentTime * 1000;
+    const currentTimeMs = this.currentTime;
     const activeCue = this._getAllCues().find(
       (cue) => currentTimeMs >= cue.startTime && currentTimeMs < cue.endTime
     );
@@ -195,7 +195,7 @@ export class FwSubtitleRenderer extends LitElement {
       return;
     }
 
-    const currentTimeMs = this.currentTime * 1000;
+    const currentTimeMs = this.currentTime;
     const filtered = this._liveCues.filter((cue) => {
       const endTime = cue.endTime === Infinity ? cue.startTime + 10000 : cue.endTime;
       return endTime >= currentTimeMs - 30000;

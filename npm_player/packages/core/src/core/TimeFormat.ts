@@ -11,9 +11,13 @@
 
 export interface TimeDisplayParams {
   isLive: boolean;
+  /** Current playback position in milliseconds */
   currentTime: number;
+  /** Content duration in milliseconds */
   duration: number;
+  /** Live edge position in milliseconds */
   liveEdge: number;
+  /** Start of seekable range in milliseconds */
   seekableStart: number;
   /** Unix timestamp (ms) at stream time 0 - for wall-clock display */
   unixoffset?: number;
@@ -24,26 +28,26 @@ export interface TimeDisplayParams {
 // ============================================================================
 
 /**
- * Format seconds as MM:SS or HH:MM:SS.
+ * Format milliseconds as MM:SS or HH:MM:SS.
  *
- * @param seconds - Time in seconds
+ * @param ms - Time in milliseconds
  * @returns Formatted time string, or "LIVE" for invalid input
  *
  * @example
- * formatTime(65)    // "01:05"
- * formatTime(3665)  // "1:01:05"
- * formatTime(-1)    // "LIVE"
- * formatTime(NaN)   // "LIVE"
+ * formatTime(65000)    // "01:05"
+ * formatTime(3665000)  // "1:01:05"
+ * formatTime(-1)       // "LIVE"
+ * formatTime(NaN)      // "LIVE"
  */
-export function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) {
+export function formatTime(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) {
     return "LIVE";
   }
 
-  const total = Math.floor(seconds);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
 
   if (hours > 0) {
     return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
@@ -102,8 +106,8 @@ export function formatTimeDisplay(params: TimeDisplayParams): string {
     // For live: show actual wall-clock time using unixoffset
     if (unixoffset && unixoffset > 0) {
       // unixoffset is Unix timestamp in ms at timestamp 0 of the stream
-      // currentTime is playback position in seconds
-      const actualTimeMs = unixoffset + currentTime * 1000;
+      // currentTime is playback position in ms
+      const actualTimeMs = unixoffset + currentTime;
       const actualDate = new Date(actualTimeMs);
       return formatClockTime(actualDate);
     }
@@ -111,11 +115,11 @@ export function formatTimeDisplay(params: TimeDisplayParams): string {
     // Fallback: show relative time if no unixoffset
     const seekableWindow = liveEdge - seekableStart;
     if (seekableWindow > 0) {
-      const behindSeconds = liveEdge - currentTime;
-      if (behindSeconds < 1) {
+      const behindMs = liveEdge - currentTime;
+      if (behindMs < 1000) {
         return "LIVE";
       }
-      return `-${formatTime(Math.abs(behindSeconds))}`;
+      return `-${formatTime(Math.abs(behindMs))}`;
     }
 
     // No DVR window: show LIVE instead of a misleading timestamp
@@ -134,37 +138,37 @@ export function formatTimeDisplay(params: TimeDisplayParams): string {
  * Format time for seek bar tooltip.
  * For live streams, can show time relative to live edge.
  *
- * @param time - Time position in seconds
+ * @param timeMs - Time position in milliseconds
  * @param isLive - Whether stream is live
- * @param liveEdge - Live edge position (for relative display)
+ * @param liveEdgeMs - Live edge position in ms (for relative display)
  * @returns Formatted tooltip time
  */
-export function formatTooltipTime(time: number, isLive: boolean, liveEdge?: number): string {
-  if (isLive && liveEdge !== undefined && Number.isFinite(liveEdge)) {
-    const behindSeconds = liveEdge - time;
-    if (behindSeconds < 1) {
+export function formatTooltipTime(timeMs: number, isLive: boolean, liveEdgeMs?: number): string {
+  if (isLive && liveEdgeMs !== undefined && Number.isFinite(liveEdgeMs)) {
+    const behindMs = liveEdgeMs - timeMs;
+    if (behindMs < 1000) {
       return "LIVE";
     }
-    return `-${formatTime(Math.abs(behindSeconds))}`;
+    return `-${formatTime(Math.abs(behindMs))}`;
   }
 
-  return formatTime(time);
+  return formatTime(timeMs);
 }
 
 /**
  * Format duration for display (e.g., in stats panel).
  * Handles edge cases like infinite duration for live streams.
  *
- * @param duration - Duration in seconds
+ * @param durationMs - Duration in milliseconds
  * @param isLive - Whether content is live
  * @returns Formatted duration string
  */
-export function formatDuration(duration: number, isLive?: boolean): string {
-  if (isLive || !Number.isFinite(duration)) {
+export function formatDuration(durationMs: number, isLive?: boolean): string {
+  if (isLive || !Number.isFinite(durationMs)) {
     return "LIVE";
   }
 
-  return formatTime(duration);
+  return formatTime(durationMs);
 }
 
 /**

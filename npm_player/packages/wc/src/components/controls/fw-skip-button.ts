@@ -31,7 +31,7 @@ export class FwSkipButton extends LitElement {
   }
 
   private handleClick() {
-    const delta = this.direction === "back" ? -this.seconds : this.seconds;
+    const delta = (this.direction === "back" ? -this.seconds : this.seconds) * 1000;
     this._player?.pc?.seekBy(delta);
   }
 
