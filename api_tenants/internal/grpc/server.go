@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	geobucket "frameworks/api_tenants/internal/geo"
 	decklogclient "frameworks/pkg/clients/decklog"
 	"frameworks/pkg/clients/navigator"
 	purserclient "frameworks/pkg/clients/purser"
@@ -3827,6 +3828,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	var lat, lng interface{}
 	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
 		if geo := s.geoipReader.Lookup(ipStr); geo != nil {
+			geobucket.BucketGeoData(geo)
 			lat = geo.Latitude
 			lng = geo.Longitude
 		}
@@ -4043,6 +4045,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	var lat, lng interface{}
 	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
 		if geo := s.geoipReader.Lookup(ipStr); geo != nil {
+			geobucket.BucketGeoData(geo)
 			lat = geo.Latitude
 			lng = geo.Longitude
 		}

@@ -2,7 +2,7 @@
 FROM golang:1.25-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+RUN apk add --no-cache git ca-certificates tzdata build-base
 
 # Install grpcurl
 RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest

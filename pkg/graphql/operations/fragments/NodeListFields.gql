@@ -6,6 +6,8 @@ fragment NodeListFields on InfrastructureNode {
   nodeType
   region
   externalIp
+  latitude
+  longitude
   cpuCores
   memoryGb
   diskGb

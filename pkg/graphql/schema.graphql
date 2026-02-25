@@ -4756,6 +4756,10 @@ type InfrastructureNode implements Node {
   wireguardPublicKey: String
   "Geographic region (us-east, eu-west, etc.)."
   region: String
+  "GPS latitude."
+  latitude: Float
+  "GPS longitude."
+  longitude: Float
   "Availability zone within region."
   availabilityZone: String
   "Number of CPU cores."
