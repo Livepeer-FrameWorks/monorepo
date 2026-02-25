@@ -108,8 +108,8 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 		}
 	}
 
-	// 4. Fallback: assume input is already an internal name.
-	return &StreamTarget{InternalName: input}, nil
+	// 4. Nothing matched — stream does not exist.
+	return &StreamTarget{}, nil
 }
 
 // ResolveArtifactByHash resolves an artifact hash to tenant/content context and placement.

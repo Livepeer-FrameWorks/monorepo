@@ -259,6 +259,9 @@ func main() {
 				return nil
 			}(),
 		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			req.NodeId = &nodeID
+		}
 		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("purser")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (purser) failed")
 		} else {

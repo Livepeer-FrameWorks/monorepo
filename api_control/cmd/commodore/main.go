@@ -200,6 +200,9 @@ func main() {
 				return nil
 			}(),
 		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			req.NodeId = &nodeID
+		}
 		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), quartermasterGRPCClient, req, logger, qmbootstrap.DefaultRetryConfig("commodore")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (commodore) failed")
 		} else {

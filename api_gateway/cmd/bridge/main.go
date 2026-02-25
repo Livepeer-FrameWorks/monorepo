@@ -567,6 +567,9 @@ func main() {
 				return nil
 			}(),
 		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			req.NodeId = &nodeID
+		}
 		resp, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), serviceClients.Quartermaster, req, logger, qmbootstrap.DefaultRetryConfig("gateway"))
 		if err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
