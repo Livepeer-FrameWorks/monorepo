@@ -78,18 +78,14 @@ func (s *CrawlScheduler) Start(ctx context.Context) {
 	s.wg.Add(1)
 	defer s.wg.Done()
 
-	// Fire immediately then on interval — non-blocking so service startup isn't delayed
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-	first := true
 	for {
+		s.runCycle(ctx)
 		select {
 		case <-ctx.Done():
 			return
-		case <-timer.C:
-			s.runCycle(ctx, first)
-			first = false
-			timer.Reset(s.interval)
+		case <-time.After(1 * time.Minute):
+			// Brief pause between cycles to rebuild queue with fresh state.
+			// The actual pacing is inside drainQueue.
 		}
 	}
 }
@@ -194,7 +190,7 @@ func (s *CrawlScheduler) loadSources() []crawlSource {
 
 const directPageSourceRoot = "pagelist://direct"
 
-func (s *CrawlScheduler) runCycle(ctx context.Context, checkTTL bool) {
+func (s *CrawlScheduler) runCycle(ctx context.Context) {
 	defer s.cleanupStaleCache(ctx)
 
 	sources := s.loadSources()
@@ -203,123 +199,235 @@ func (s *CrawlScheduler) runCycle(ctx context.Context, checkTTL bool) {
 		return
 	}
 
-	var directPages, directPagesRendered []string
-	var localFiles []string
-	var sitemapSources []crawlSource
-	for _, src := range sources {
-		if src.localPath != "" {
-			localFiles = append(localFiles, src.localPath)
-		} else if src.direct {
-			if src.render {
-				directPagesRendered = append(directPagesRendered, src.url)
-			} else {
-				directPages = append(directPages, src.url)
-			}
-		} else {
-			sitemapSources = append(sitemapSources, src)
-		}
+	// Phase 1: Expand sitemaps into individual page URLs (lightweight XML fetch).
+	sitemapPages := s.expandSitemaps(ctx, sources)
+
+	// Phase 2: Load all cached page state for priority scoring.
+	cached := s.loadCachedPages(ctx)
+
+	// Phase 3: Build priority queue.
+	queue := BuildQueue(sources, cached, sitemapPages, time.Now(), s.interval)
+	total := queue.Total()
+	if total == 0 {
+		s.logger.Debug("Empty crawl queue, nothing to process")
+		return
 	}
+	s.logger.WithField("total", total).Info("Crawl queue built")
+	crawlQueueSize.Set(float64(total))
+
+	// Phase 4: Persist sitemap metadata for newly discovered pages.
+	s.persistSitemapMeta(ctx, sitemapPages, cached)
+
+	// Phase 5: Drain at steady rate.
+	s.health.StartCycle()
+	s.drainQueue(ctx, queue)
+}
+
+// expandSitemaps fetches and parses sitemap XML for each sitemap source.
+// Returns a map of sitemap URL → expanded pages. Failures are logged and skipped.
+func (s *CrawlScheduler) expandSitemaps(ctx context.Context, sources []crawlSource) map[string][]Page {
+	result := make(map[string][]Page)
+	var mu sync.Mutex
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(3)
-	for _, src := range sitemapSources {
-		if gctx.Err() != nil {
-			break
-		}
 
-		if checkTTL && s.pageCache != nil {
-			lastFetched, err := s.pageCache.LastFetchedForSource(ctx, s.tenantID, src.url)
-			if err == nil && lastFetched != nil && time.Since(*lastFetched) < s.interval {
-				s.logger.WithField("sitemap", src.url).
-					WithField("last_crawl", lastFetched.Format(time.RFC3339)).
-					WithField("ttl", s.interval.String()).
-					Info("Skipping sitemap — crawled recently")
-				continue
-			}
+	for _, src := range sources {
+		if src.localPath != "" || src.direct {
+			continue
 		}
-
 		src := src
 		g.Go(func() error {
-			s.logger.WithField("sitemap", src.url).Info("Starting scheduled crawl")
-			result, err := s.crawler.CrawlAndEmbed(gctx, s.tenantID, src.url, src.render)
+			pages, err := s.crawler.CrawlSitemap(gctx, src.url)
 			if err != nil {
-				s.logger.WithError(err).WithField("sitemap", src.url).Warn("Scheduled crawl failed")
-				failures := s.health.RecordFailure(src.url)
-				if failures >= 3 {
-					s.logger.WithField("sitemap", src.url).Warn("Source has 3+ consecutive failures")
-				}
-			} else {
-				s.logger.WithField("sitemap", src.url).
-					WithField("embedded", result.Embedded).
-					Info("Scheduled crawl completed")
-				s.health.RecordSuccess(src.url, result.Embedded)
+				s.logger.WithError(err).WithField("sitemap", src.url).Warn("Failed to expand sitemap")
+				return nil
 			}
+			mu.Lock()
+			result[src.url] = pages
+			mu.Unlock()
 			return nil
 		})
 	}
 	_ = g.Wait()
+	return result
+}
 
-	allDirect := append(directPages, directPagesRendered...)
-	if len(allDirect) > 0 {
-		skipDirect := false
-		if checkTTL && s.pageCache != nil {
-			lastFetched, err := s.pageCache.LastFetchedForSource(ctx, s.tenantID, directPageSourceRoot)
-			if err == nil && lastFetched != nil && time.Since(*lastFetched) < s.interval {
-				s.logger.WithField("source", directPageSourceRoot).
-					WithField("last_crawl", lastFetched.Format(time.RFC3339)).
-					WithField("ttl", s.interval.String()).
-					Info("Skipping direct pages — crawled recently")
-				skipDirect = true
-			}
-		}
-		if !skipDirect {
-			total := len(allDirect)
-			s.logger.WithField("pages", total).Info("Starting scheduled direct page crawl")
-			var crawlErr error
-			if len(directPages) > 0 {
-				if err := s.crawler.CrawlPages(ctx, s.tenantID, directPages, false); err != nil {
-					crawlErr = err
+func (s *CrawlScheduler) loadCachedPages(ctx context.Context) map[string]*PageCache {
+	if s.pageCache == nil {
+		return nil
+	}
+	all, err := s.pageCache.ListForTenant(ctx, s.tenantID)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to load page cache, building queue without history")
+		return nil
+	}
+	cached := make(map[string]*PageCache, len(all))
+	for i := range all {
+		cached[all[i].PageURL] = &all[i]
+	}
+	return cached
+}
+
+// persistSitemapMeta upserts page cache entries for newly discovered sitemap pages
+// so their priority/changefreq metadata is available for future cycles.
+func (s *CrawlScheduler) persistSitemapMeta(ctx context.Context, sitemapPages map[string][]Page, cached map[string]*PageCache) {
+	if s.pageCache == nil {
+		return
+	}
+	var newEntries []PageCache
+	for sitemapURL, pages := range sitemapPages {
+		for _, p := range pages {
+			if cached != nil {
+				if _, exists := cached[p.URL]; exists {
+					continue
 				}
 			}
-			if len(directPagesRendered) > 0 {
-				if err := s.crawler.CrawlPages(ctx, s.tenantID, directPagesRendered, true); err != nil {
-					crawlErr = err
-				}
-			}
-			if crawlErr != nil {
-				s.logger.WithError(crawlErr).Warn("Scheduled direct page crawl failed")
-				s.health.RecordFailure(directPageSourceRoot)
-			} else {
-				s.logger.WithField("pages", total).Info("Scheduled direct page crawl completed")
-				s.health.RecordSuccess(directPageSourceRoot, total)
-			}
+			newEntries = append(newEntries, PageCache{
+				TenantID:          s.tenantID,
+				SourceRoot:        sitemapURL,
+				PageURL:           p.URL,
+				SitemapPriority:   p.Priority,
+				SitemapChangeFreq: p.ChangeFreq,
+				SourceType:        "sitemap",
+				LastFetchedAt:     time.Time{}, // never fetched
+			})
 		}
+	}
+	if len(newEntries) > 0 {
+		if err := s.pageCache.BulkUpsert(ctx, newEntries); err != nil {
+			s.logger.WithError(err).Warn("Failed to persist sitemap metadata for new pages")
+		} else {
+			s.logger.WithField("count", len(newEntries)).Debug("Persisted sitemap metadata for new pages")
+		}
+	}
+}
+
+// drainQueue processes the crawl queue at a steady rate spread across the interval.
+func (s *CrawlScheduler) drainQueue(ctx context.Context, queue *CrawlQueue) {
+	total := queue.Total()
+	if total == 0 {
+		return
 	}
 
-	if len(localFiles) > 0 {
-		skipLocal := false
-		if checkTTL && s.pageCache != nil {
-			lastFetched, err := s.pageCache.LastFetchedForSource(ctx, s.tenantID, localFileSourceRoot)
-			if err == nil && lastFetched != nil && time.Since(*lastFetched) < s.interval {
-				s.logger.WithField("source", localFileSourceRoot).
-					WithField("last_crawl", lastFetched.Format(time.RFC3339)).
-					WithField("ttl", s.interval.String()).
-					Info("Skipping local files — ingested recently")
-				skipLocal = true
+	tickInterval := s.interval / time.Duration(total)
+	minDelay := s.crawler.minCrawlDelay
+	if minDelay <= 0 {
+		minDelay = defaultMinCrawlDelay
+	}
+	if tickInterval < minDelay {
+		tickInterval = minDelay
+	}
+	crawlTickInterval.Set(tickInterval.Seconds())
+
+	s.logger.WithField("tick", tickInterval.String()).WithField("total", total).Info("Starting queue drain")
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(3)
+
+	var result CrawlResult
+	var resultMu sync.Mutex
+
+	// Process first item immediately, then pace subsequent items.
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-gctx.Done():
+			_ = g.Wait()
+			s.logCycleResult(result)
+			return
+		case <-timer.C:
+			item := queue.Pop()
+			if item == nil {
+				_ = g.Wait()
+				s.logCycleResult(result)
+				return
 			}
-		}
-		if !skipLocal {
-			total := len(localFiles)
-			s.logger.WithField("files", total).Info("Starting local file ingestion")
-			if err := s.crawler.CrawlLocalFiles(ctx, s.tenantID, localFiles); err != nil {
-				s.logger.WithError(err).Warn("Local file ingestion failed")
-				s.health.RecordFailure(localFileSourceRoot)
-			} else {
-				s.logger.WithField("files", total).Info("Local file ingestion completed")
-				s.health.RecordSuccess(localFileSourceRoot, total)
+			crawlQueueRemaining.Set(float64(queue.Remaining()))
+
+			it := item
+			g.Go(func() error {
+				status := s.processItem(gctx, it)
+				resultMu.Lock()
+				result.add(status)
+				resultMu.Unlock()
+				return nil
+			})
+
+			if queue.Remaining() == 0 {
+				_ = g.Wait()
+				s.logCycleResult(result)
+				return
 			}
+			timer.Reset(tickInterval)
 		}
 	}
+}
+
+func (s *CrawlScheduler) processItem(ctx context.Context, item *CrawlItem) PageStatus {
+	if item.SourceType == "local" {
+		localPath := strings.TrimPrefix(item.PageURL, "local://")
+		err := s.crawler.CrawlLocalFiles(ctx, s.tenantID, []string{localPath})
+		if err != nil {
+			s.health.RecordFailure(item.SourceRoot)
+			s.updateOutcome(ctx, item, false, true)
+			return PageFailed
+		}
+		s.health.RecordSuccess(item.SourceRoot, 1)
+		s.updateOutcome(ctx, item, true, false)
+		return PageEmbedded
+	}
+
+	status, err := s.crawler.processPage(ctx, s.tenantID, item.SourceRoot, item.PageURL, item.SitemapLastMod, item.SourceType, item.Render, nil)
+	if err != nil {
+		s.health.RecordFailure(item.SourceRoot)
+		s.updateOutcome(ctx, item, false, true)
+		return PageFailed
+	}
+
+	changed := status == PageEmbedded
+	failed := status == PageFailed
+	s.updateOutcome(ctx, item, changed, failed)
+
+	if changed {
+		s.health.RecordSuccess(item.SourceRoot, 1)
+	}
+	return status
+}
+
+func (s *CrawlScheduler) updateOutcome(ctx context.Context, item *CrawlItem, changed, failed bool) {
+	if s.pageCache == nil {
+		return
+	}
+	if err := s.pageCache.UpdateCrawlOutcome(ctx, s.tenantID, item.PageURL, changed, failed); err != nil {
+		s.logger.WithError(err).WithField("url", item.PageURL).Warn("Failed to update crawl outcome")
+	}
+}
+
+func (s *CrawlScheduler) logCycleResult(result CrawlResult) {
+	s.logger.
+		WithField("embedded", result.Embedded).
+		WithField("skipped_304", result.Skipped304).
+		WithField("skipped_hash", result.SkippedHash).
+		WithField("skipped_ttl", result.SkippedTTL).
+		WithField("failed", result.Failed).
+		WithField("no_chunks", result.NoChunks).
+		WithField("excluded", result.Excluded).
+		WithField("disallowed", result.Disallowed).
+		Info("Crawl queue drain completed")
+
+	crawlPagesTotal.WithLabelValues("embedded").Add(float64(result.Embedded))
+	crawlPagesTotal.WithLabelValues("skipped_304").Add(float64(result.Skipped304))
+	crawlPagesTotal.WithLabelValues("skipped_hash").Add(float64(result.SkippedHash))
+	crawlPagesTotal.WithLabelValues("skipped_ttl").Add(float64(result.SkippedTTL))
+	crawlPagesTotal.WithLabelValues("failed").Add(float64(result.Failed))
+	crawlPagesTotal.WithLabelValues("no_chunks").Add(float64(result.NoChunks))
+	crawlPagesTotal.WithLabelValues("excluded").Add(float64(result.Excluded))
+	crawlPagesTotal.WithLabelValues("disallowed").Add(float64(result.Disallowed))
+
+	crawlQueueRemaining.Set(0)
 }
 
 func (s *CrawlScheduler) cleanupStaleCache(ctx context.Context) {

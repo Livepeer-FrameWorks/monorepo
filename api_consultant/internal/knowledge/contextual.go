@@ -23,12 +23,14 @@ type ContextualSummarizer interface {
 // LLMContextualSummarizer uses a (cheap) LLM to generate 1-2 sentence
 // context for each chunk in a single batched call per document.
 type LLMContextualSummarizer struct {
-	provider llm.Provider
+	provider     llm.Provider
+	providerName string
+	modelName    string
 }
 
 // NewLLMContextualSummarizer creates a summarizer backed by the given LLM provider.
-func NewLLMContextualSummarizer(provider llm.Provider) *LLMContextualSummarizer {
-	return &LLMContextualSummarizer{provider: provider}
+func NewLLMContextualSummarizer(provider llm.Provider, providerName, modelName string) *LLMContextualSummarizer {
+	return &LLMContextualSummarizer{provider: provider, providerName: providerName, modelName: modelName}
 }
 
 const contextualPromptTemplate = `You are given a document and its chunks. For each chunk, write a concise 1-2 sentence context that situates the chunk within the overall document. The context should help a search engine understand what the chunk is about without reading the full document.
@@ -69,7 +71,7 @@ func (s *LLMContextualSummarizer) SummarizeChunks(ctx context.Context, title, do
 		{Role: "user", Content: prompt},
 	}, nil)
 	if err != nil {
-		contextualCallsTotal.WithLabelValues("error").Inc()
+		contextualCallsTotal.WithLabelValues(s.providerName, s.modelName, "error").Inc()
 		return nil, fmt.Errorf("contextual summarization: %w", err)
 	}
 	defer stream.Close()
@@ -81,14 +83,14 @@ func (s *LLMContextualSummarizer) SummarizeChunks(ctx context.Context, title, do
 			break
 		}
 		if recvErr != nil {
-			contextualCallsTotal.WithLabelValues("error").Inc()
+			contextualCallsTotal.WithLabelValues(s.providerName, s.modelName, "error").Inc()
 			return nil, fmt.Errorf("contextual summarization stream: %w", recvErr)
 		}
 		content.WriteString(chunk.Content)
 	}
 
-	contextualDuration.Observe(time.Since(start).Seconds())
-	contextualCallsTotal.WithLabelValues("success").Inc()
+	contextualDuration.WithLabelValues(s.providerName, s.modelName).Observe(time.Since(start).Seconds())
+	contextualCallsTotal.WithLabelValues(s.providerName, s.modelName, "success").Inc()
 
 	lines := parseNumberedLines(content.String(), len(chunks))
 	return lines, nil

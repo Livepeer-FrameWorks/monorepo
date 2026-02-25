@@ -425,7 +425,7 @@ func TestOrchestratorSearchKnowledgeWithCrossEncoderReranker(t *testing.T) {
 
 	store := &inMemoryKnowledgeStore{chunks: allChunks}
 	rerankClient := &recordingRerankClient{}
-	reranker := knowledge.NewReranker(rerankClient)
+	reranker := knowledge.NewReranker(rerankClient, "test", "test-model")
 	provider := &fakeProvider{
 		sequences: [][]llm.Chunk{
 			{
@@ -480,7 +480,7 @@ func TestOrchestratorPreRetrieveWithCrossEncoderReranker(t *testing.T) {
 
 	store := &inMemoryKnowledgeStore{chunks: chunks}
 	rerankClient := &recordingRerankClient{}
-	reranker := knowledge.NewReranker(rerankClient)
+	reranker := knowledge.NewReranker(rerankClient, "test", "test-model")
 	provider := &fakeProvider{
 		sequences: [][]llm.Chunk{
 			{{Content: "[confidence:verified]\nPre-retrieval worked.\n[sources]\n[/sources]\n"}},
@@ -680,7 +680,7 @@ func TestOrchestratorSearchKnowledgeWithAllEnhancements(t *testing.T) {
 	recEmbedder := &recordingEmbedder{}
 
 	rerankClient := &recordingRerankClient{}
-	reranker := knowledge.NewReranker(rerankClient)
+	reranker := knowledge.NewReranker(rerankClient, "test", "test-model")
 
 	rewriterLLM := &fakeProvider{
 		sequences: [][]llm.Chunk{

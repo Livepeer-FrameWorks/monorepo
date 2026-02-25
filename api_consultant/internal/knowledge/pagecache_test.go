@@ -19,9 +19,7 @@ func TestPageCacheStoreGet(t *testing.T) {
 	store := NewPageCacheStore(db)
 	now := time.Now().UTC()
 
-	rows := sqlmock.NewRows([]string{
-		"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at",
-	}).AddRow("tenant", "https://example.com/sitemap.xml", "https://example.com/page1", "abc123", "\"etag-1\"", "Mon, 01 Jan 2024 00:00:00 GMT", int64(4096), now)
+	rows := sqlmock.NewRows(pageCacheSelectColumns).AddRow("tenant", "https://example.com/sitemap.xml", "https://example.com/page1", "abc123", "\"etag-1\"", "Mon, 01 Jan 2024 00:00:00 GMT", int64(4096), now, 0.5, nil, 0, 0, "sitemap")
 
 	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", "https://example.com/page1").WillReturnRows(rows)
 
@@ -78,7 +76,7 @@ func TestPageCacheStoreUpsert(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
 		"tenant", "https://example.com/sitemap.xml", "https://example.com/page1",
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), now,
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), now, "sitemap",
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err = store.Upsert(context.Background(), PageCache{

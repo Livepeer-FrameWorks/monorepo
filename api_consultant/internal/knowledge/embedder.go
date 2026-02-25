@@ -7,6 +7,8 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"frameworks/pkg/llm"
 )
@@ -40,6 +42,8 @@ type Embedder struct {
 	tokenLimit   int
 	tokenOverlap int
 	summarizer   ContextualSummarizer
+	providerName string
+	modelName    string
 }
 
 func NewEmbedder(client llm.EmbeddingClient, opts ...EmbedderOption) (*Embedder, error) {
@@ -81,6 +85,13 @@ func WithTokenOverlap(overlap int) EmbedderOption {
 func WithContextualRetrieval(s ContextualSummarizer) EmbedderOption {
 	return func(e *Embedder) {
 		e.summarizer = s
+	}
+}
+
+func WithProviderInfo(provider, model string) EmbedderOption {
+	return func(e *Embedder) {
+		e.providerName = provider
+		e.modelName = model
 	}
 }
 
@@ -138,12 +149,13 @@ func (e *Embedder) EmbedDocument(ctx context.Context, url, title, content string
 
 	embedStart := time.Now()
 	vectors, err := e.embedBatched(ctx, embedTexts)
-	embedDuration.Observe(time.Since(embedStart).Seconds())
+	embedDuration.WithLabelValues(e.providerName, e.modelName).Observe(time.Since(embedStart).Seconds())
 	if err != nil {
-		embedCallsTotal.WithLabelValues("error").Inc()
+		embedCallsTotal.WithLabelValues(e.providerName, e.modelName, "error").Inc()
 		return nil, fmt.Errorf("embed document: %w", err)
 	}
-	embedCallsTotal.WithLabelValues("success").Inc()
+	embedCallsTotal.WithLabelValues(e.providerName, e.modelName, "success").Inc()
+	embedInputsTotal.WithLabelValues(e.providerName, e.modelName).Add(float64(len(embedTexts)))
 	if len(vectors) != len(chunks) {
 		return nil, fmt.Errorf("embedding mismatch: %d chunks, %d vectors", len(chunks), len(vectors))
 	}
@@ -209,6 +221,7 @@ func (e *Embedder) EmbedQuery(ctx context.Context, query string) ([]float32, err
 	if query == "" {
 		return nil, errors.New("query is required")
 	}
+	embedInputsTotal.WithLabelValues(e.providerName, e.modelName).Add(1)
 	vectors, err := e.client.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
@@ -224,6 +237,7 @@ func (e *Embedder) chunkContent(content string) []string {
 	var chunks []string
 	var current []string
 	currentTokens := 0
+	chunkCharLimit := e.chunkCharLimit()
 
 	flushCurrent := func() {
 		if currentTokens == 0 {
@@ -240,12 +254,23 @@ func (e *Embedder) chunkContent(content string) []string {
 		if blockTokens == 0 {
 			continue
 		}
-		if blockTokens > e.tokenLimit || len(block) > maxChunkChars {
+		if blockTokens > e.tokenLimit || utf8.RuneCountInString(block) > chunkCharLimit {
 			flushCurrent()
+			blockWords := tokenize(block)
+			// No-whitespace chunks (CJK, minified text, long blobs) need rune-based
+			// splitting because strings.Fields cannot split them.
+			if len(blockWords) <= 1 {
+				runeLimit := e.tokenLimit
+				if runeLimit <= 0 {
+					runeLimit = chunkCharLimit
+				}
+				chunks = append(chunks, splitByRunes(block, runeLimit)...)
+				continue
+			}
 			// splitLargeBlock works on word arrays; convert BPE limits to word counts
 			wordLimit := int(float64(e.tokenLimit) / bpeMultiplier)
 			wordOverlap := int(float64(e.tokenOverlap) / bpeMultiplier)
-			chunks = append(chunks, splitLargeBlock(tokenize(block), wordLimit, wordOverlap)...)
+			chunks = append(chunks, splitLargeBlock(blockWords, wordLimit, wordOverlap)...)
 			continue
 		}
 
@@ -269,7 +294,19 @@ func (e *Embedder) chunkContent(content string) []string {
 	}
 
 	flushCurrent()
-	return enforceCharLimit(chunks, maxChunkChars)
+	return enforceCharLimit(chunks, chunkCharLimit)
+}
+
+func (e *Embedder) chunkCharLimit() int {
+	if e.tokenLimit <= 0 {
+		return maxChunkChars
+	}
+	// Approximate 4 chars per token for Latin scripts, then cap globally.
+	limit := e.tokenLimit * 4
+	if limit > maxChunkChars {
+		return maxChunkChars
+	}
+	return limit
 }
 
 func splitBlocks(content string) []string {
@@ -370,9 +407,41 @@ func tokenize(text string) []string {
 }
 
 // estimateBPETokens returns an approximate BPE token count for text.
-// Word count * 1.3 gives ~75% accuracy vs true BPE tokenizers.
+// Word count * 1.3 gives ~75% accuracy for space-delimited text.
+// For non-space scripts (CJK) and long single-token blobs, fallback to rune
+// count to avoid severe underestimation.
 func estimateBPETokens(text string) int {
-	return int(math.Ceil(float64(len(strings.Fields(text))) * bpeMultiplier))
+	words := len(strings.Fields(text))
+	byWords := int(math.Ceil(float64(words) * bpeMultiplier))
+	runes := utf8.RuneCountInString(text)
+	if runes == 0 {
+		return byWords
+	}
+	// If content is effectively a single token, assume worst-case tokenization.
+	if words <= 1 {
+		if !hasCJKRunes(text) && runes <= 32 {
+			return byWords
+		}
+		if runes > byWords {
+			return runes
+		}
+		return byWords
+	}
+	// General safety floor for mixed scripts / punctuation-heavy text.
+	byRunes := int(math.Ceil(float64(runes) / 4.0))
+	if byRunes > byWords {
+		return byRunes
+	}
+	return byWords
+}
+
+func hasCJKRunes(text string) bool {
+	for _, r := range text {
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitLargeBlock(tokens []string, limit, overlap int) []string {
@@ -413,26 +482,70 @@ func overlapTokens(text string, overlap int) string {
 // at word boundaries. This catches cases where word-based token estimation
 // dramatically underestimates (e.g. base64 blobs count as 1 word).
 func enforceCharLimit(chunks []string, maxChars int) []string {
+	if maxChars <= 0 {
+		return chunks
+	}
 	var result []string
 	for _, chunk := range chunks {
-		if len(chunk) <= maxChars {
+		if utf8.RuneCountInString(chunk) <= maxChars {
 			result = append(result, chunk)
 			continue
 		}
 		words := strings.Fields(chunk)
+		if len(words) == 0 {
+			result = append(result, splitByRunes(chunk, maxChars)...)
+			continue
+		}
 		var buf strings.Builder
+		bufRunes := 0
 		for _, w := range words {
-			if buf.Len() > 0 && buf.Len()+1+len(w) > maxChars {
+			wRunes := utf8.RuneCountInString(w)
+			if wRunes > maxChars {
+				if bufRunes > 0 {
+					result = append(result, buf.String())
+					buf.Reset()
+					bufRunes = 0
+				}
+				result = append(result, splitByRunes(w, maxChars)...)
+				continue
+			}
+			added := wRunes
+			if bufRunes > 0 {
+				added++
+			}
+			if bufRunes > 0 && bufRunes+added > maxChars {
 				result = append(result, buf.String())
 				buf.Reset()
+				bufRunes = 0
 			}
-			if buf.Len() > 0 {
+			if bufRunes > 0 {
 				buf.WriteByte(' ')
+				bufRunes++
 			}
 			buf.WriteString(w)
+			bufRunes += wRunes
 		}
-		if buf.Len() > 0 {
+		if bufRunes > 0 {
 			result = append(result, buf.String())
+		}
+	}
+	return result
+}
+
+func splitByRunes(text string, limit int) []string {
+	if limit <= 0 || text == "" {
+		return nil
+	}
+	runes := []rune(text)
+	result := make([]string, 0, (len(runes)+limit-1)/limit)
+	for start := 0; start < len(runes); start += limit {
+		end := start + limit
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunk := string(runes[start:end])
+		if chunk != "" {
+			result = append(result, chunk)
 		}
 	}
 	return result

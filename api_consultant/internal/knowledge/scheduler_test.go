@@ -15,56 +15,14 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestSchedulerSkipsFreshSource(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected request to %s — should have been skipped by TTL", r.URL.Path)
-	}))
-	defer server.Close()
-
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-
-	store := &fakeStore{}
-	embedder := &fakeEmbedder{}
-	cache := NewPageCacheStore(db)
-
-	crawler, err := NewCrawler(server.Client(), embedder, store, WithPageCache(cache), withSkipURLValidation())
-	if err != nil {
-		t.Fatalf("new crawler: %v", err)
-	}
-
-	sitemapURL := server.URL + "/sitemap.xml"
-
-	recent := time.Now().Add(-5 * time.Minute)
-	rows := sqlmock.NewRows([]string{"max"}).AddRow(recent)
-	mock.ExpectQuery("SELECT MAX").WithArgs("tenant", sitemapURL).WillReturnRows(rows)
-
-	scheduler := NewCrawlScheduler(SchedulerConfig{
-		Crawler:   crawler,
-		PageCache: cache,
-		Interval:  24 * time.Hour,
-		TenantID:  "tenant",
-		Sitemaps:  []string{sitemapURL},
-		Logger:    logging.NewLoggerWithService("test"),
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	scheduler.runCycle(ctx, true)
-
-	if embedder.calls != 0 {
-		t.Fatalf("expected 0 embed calls (TTL skip), got %d", embedder.calls)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("expectations: %v", err)
-	}
+// pageCacheSelectColumns matches the 13 columns returned by scanRow.
+var pageCacheSelectColumns = []string{
+	"tenant_id", "source_root", "page_url", "content_hash", "etag",
+	"last_modified", "raw_size", "last_fetched_at", "sitemap_priority",
+	"sitemap_changefreq", "consecutive_unchanged", "consecutive_failures", "source_type",
 }
 
-func TestSchedulerCrawlsStaleSource(t *testing.T) {
+func TestSchedulerProcessesNewPage(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -98,25 +56,38 @@ func TestSchedulerCrawlsStaleSource(t *testing.T) {
 
 	sitemapURL := server.URL + "/sitemap.xml"
 
-	// LastFetchedForSource returns stale time
-	stale := time.Now().Add(-48 * time.Hour)
-	mock.ExpectQuery("SELECT MAX").WithArgs("tenant", sitemapURL).WillReturnRows(
-		sqlmock.NewRows([]string{"max"}).AddRow(stale),
-	)
+	// 1. ListForTenant — no cached pages
+	mock.ExpectQuery("SELECT .* FROM skipper\\.skipper_page_cache WHERE tenant_id").
+		WithArgs("tenant").
+		WillReturnRows(sqlmock.NewRows(pageCacheSelectColumns))
 
-	// CrawlAndEmbed will call pageCache.Get for the page URL — return no rows
-	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", sqlmock.AnyArg()).WillReturnRows(
-		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}),
-	)
+	// 2. BulkUpsert — persist metadata for the new page from sitemap
+	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// CrawlAndEmbed will call pageCache.Upsert after embedding
-	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+	// 3. processPage's Get — no cached entry for this page
+	mock.ExpectQuery("SELECT .* FROM skipper\\.skipper_page_cache WHERE tenant_id.*AND page_url").
+		WillReturnRows(sqlmock.NewRows(pageCacheSelectColumns))
+
+	// 4. processPage's Upsert after embedding
+	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// 5. UpdateCrawlOutcome
+	mock.ExpectExec("UPDATE skipper\\.skipper_page_cache").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// 6. CleanupStale
+	mock.ExpectExec("DELETE FROM skipper\\.skipper_page_cache").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// 7. Crawl jobs cleanup
+	mock.ExpectExec("DELETE FROM skipper\\.skipper_crawl_jobs").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	scheduler := NewCrawlScheduler(SchedulerConfig{
 		Crawler:   crawler,
+		DB:        db,
 		PageCache: cache,
 		Interval:  24 * time.Hour,
 		TenantID:  "tenant",
@@ -127,17 +98,17 @@ func TestSchedulerCrawlsStaleSource(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	scheduler.runCycle(ctx, true)
+	scheduler.runCycle(ctx)
 
 	if embedder.calls != 1 {
-		t.Fatalf("expected 1 embed call (stale source), got %d", embedder.calls)
+		t.Fatalf("expected 1 embed call (new page), got %d", embedder.calls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
 	}
 }
 
-func TestSchedulerNeverCrawledSource(t *testing.T) {
+func TestSchedulerProcessesStalePage(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -147,7 +118,7 @@ func TestSchedulerNeverCrawledSource(t *testing.T) {
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><urlset>
 				<url><loc>` + server.URL + `/page.html</loc></url></urlset>`))
 		case "/page.html":
-			_, _ = w.Write([]byte(`<!doctype html><html><head><title>T</title></head><body><p>Body.</p></body></html>`))
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>T</title></head><body><p>New content.</p></body></html>`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -170,25 +141,45 @@ func TestSchedulerNeverCrawledSource(t *testing.T) {
 	}
 
 	sitemapURL := server.URL + "/sitemap.xml"
+	pageURL := server.URL + "/page.html"
+	staleTime := time.Now().Add(-48 * time.Hour)
 
-	// LastFetchedForSource returns NULL (never crawled)
-	mock.ExpectQuery("SELECT MAX").WithArgs("tenant", sitemapURL).WillReturnRows(
-		sqlmock.NewRows([]string{"max"}).AddRow(nil),
-	)
+	// 1. ListForTenant — returns the stale cached page
+	mock.ExpectQuery("SELECT .* FROM skipper\\.skipper_page_cache WHERE tenant_id").
+		WithArgs("tenant").
+		WillReturnRows(sqlmock.NewRows(pageCacheSelectColumns).AddRow(
+			"tenant", sitemapURL, pageURL, "oldhash", nil, nil, nil, staleTime,
+			0.5, nil, 0, 0, "sitemap",
+		))
 
-	// CrawlAndEmbed will call pageCache.Get — no rows
-	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", sqlmock.AnyArg()).WillReturnRows(
-		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}),
-	)
+	// 2. No BulkUpsert needed — page already in cache
 
-	// Upsert after embedding
-	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-	).WillReturnResult(sqlmock.NewResult(1, 1))
+	// 3. processPage's Get — returns the stale cache entry
+	mock.ExpectQuery("SELECT .* FROM skipper\\.skipper_page_cache WHERE tenant_id.*AND page_url").
+		WillReturnRows(sqlmock.NewRows(pageCacheSelectColumns).AddRow(
+			"tenant", sitemapURL, pageURL, "oldhash", nil, nil, nil, staleTime,
+			0.5, nil, 0, 0, "sitemap",
+		))
+
+	// 4. processPage's Upsert after embedding (content changed)
+	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// 5. UpdateCrawlOutcome
+	mock.ExpectExec("UPDATE skipper\\.skipper_page_cache").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// 6. CleanupStale
+	mock.ExpectExec("DELETE FROM skipper\\.skipper_page_cache").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// 7. Crawl jobs cleanup
+	mock.ExpectExec("DELETE FROM skipper\\.skipper_crawl_jobs").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	scheduler := NewCrawlScheduler(SchedulerConfig{
 		Crawler:   crawler,
+		DB:        db,
 		PageCache: cache,
 		Interval:  24 * time.Hour,
 		TenantID:  "tenant",
@@ -199,10 +190,10 @@ func TestSchedulerNeverCrawledSource(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	scheduler.runCycle(ctx, true)
+	scheduler.runCycle(ctx)
 
 	if embedder.calls != 1 {
-		t.Fatalf("expected 1 embed call (never crawled), got %d", embedder.calls)
+		t.Fatalf("expected 1 embed call (stale page), got %d", embedder.calls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
@@ -378,24 +369,19 @@ func TestSchedulerLoadSourcesLocalPrefix(t *testing.T) {
 	if len(result) != 3 {
 		t.Fatalf("expected 3 sources, got %d", len(result))
 	}
-	// First should be a sitemap source.
 	if result[0].url != "https://example.com/sitemap.xml" || result[0].localPath != "" {
 		t.Fatalf("expected sitemap source, got %+v", result[0])
 	}
-	// Second and third should be local file sources.
 	if result[1].localPath == "" {
 		t.Fatalf("expected local source with localPath set, got %+v", result[1])
 	}
-	// Path should be resolved relative to sitemapsDir.
 	expectedPath := filepath.Clean(filepath.Join(dir, "../faq/bitrate.md"))
 	if result[1].localPath != expectedPath {
 		t.Fatalf("expected localPath %q, got %q", expectedPath, result[1].localPath)
 	}
-	// URL should use local:// scheme.
 	if !strings.HasPrefix(result[1].url, "local://") {
 		t.Fatalf("expected local:// URL scheme, got %q", result[1].url)
 	}
-	// Should not be marked as direct or render.
 	if result[1].direct || result[1].render {
 		t.Fatalf("local source should not be direct or render: %+v", result[1])
 	}

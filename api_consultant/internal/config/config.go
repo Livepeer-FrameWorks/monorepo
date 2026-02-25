@@ -22,6 +22,7 @@ type Config struct {
 	EmbeddingModel      string
 	EmbeddingAPIKey     string
 	EmbeddingAPIURL     string
+	EmbeddingDimensions int
 	SearchProvider      string
 	SearchAPIKey        string
 	SearchAPIURL        string
@@ -53,6 +54,7 @@ type Config struct {
 	RerankAPIKey        string
 	RerankAPIURL        string
 	EnableHyDE          bool
+	SSRFAllowedHosts    []string
 }
 
 // GatewayMCPURL returns the MCP endpoint URL derived from the gateway base.
@@ -90,6 +92,7 @@ func LoadConfig() Config {
 		EmbeddingModel:      config.GetEnv("EMBEDDING_MODEL", config.GetEnv("LLM_MODEL", "")),
 		EmbeddingAPIKey:     config.GetEnv("EMBEDDING_API_KEY", config.GetEnv("LLM_API_KEY", "")),
 		EmbeddingAPIURL:     config.GetEnv("EMBEDDING_API_URL", config.GetEnv("LLM_API_URL", "")),
+		EmbeddingDimensions: config.GetEnvInt("EMBEDDING_DIMENSIONS", 0),
 		SearchProvider:      config.GetEnv("SEARCH_PROVIDER", ""),
 		SearchAPIKey:        config.GetEnv("SEARCH_API_KEY", ""),
 		SearchAPIURL:        config.GetEnv("SEARCH_API_URL", ""),
@@ -121,6 +124,7 @@ func LoadConfig() Config {
 		RerankAPIKey:        config.GetEnv("RERANKER_API_KEY", config.GetEnv("LLM_API_KEY", "")),
 		RerankAPIURL:        config.GetEnv("RERANKER_API_URL", ""),
 		EnableHyDE:          config.GetEnv("SKIPPER_ENABLE_HYDE", "") == "true",
+		SSRFAllowedHosts:    parseSitemapList(config.GetEnv("SKIPPER_SSRF_ALLOWED_HOSTS", "")),
 	}
 }
 

@@ -50,7 +50,7 @@ func TestSummarizeChunksSuccess(t *testing.T) {
 			},
 		},
 	}
-	summarizer := NewLLMContextualSummarizer(provider)
+	summarizer := NewLLMContextualSummarizer(provider, "test", "test-model")
 
 	results, err := summarizer.SummarizeChunks(context.Background(), "Test Doc", "Some prefix text", []string{
 		"Chunk one about authentication",
@@ -71,7 +71,7 @@ func TestSummarizeChunksSuccess(t *testing.T) {
 }
 
 func TestSummarizeChunksEmpty(t *testing.T) {
-	summarizer := NewLLMContextualSummarizer(&mockProvider{})
+	summarizer := NewLLMContextualSummarizer(&mockProvider{}, "test", "test-model")
 	results, err := summarizer.SummarizeChunks(context.Background(), "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -83,7 +83,7 @@ func TestSummarizeChunksEmpty(t *testing.T) {
 
 func TestSummarizeChunksProviderError(t *testing.T) {
 	provider := &mockProvider{err: errors.New("provider down")}
-	summarizer := NewLLMContextualSummarizer(provider)
+	summarizer := NewLLMContextualSummarizer(provider, "test", "test-model")
 
 	_, err := summarizer.SummarizeChunks(context.Background(), "Title", "Prefix", []string{"chunk"})
 	if err == nil {
@@ -98,7 +98,7 @@ func TestSummarizeChunksStreamError(t *testing.T) {
 	provider := &mockProvider{
 		stream: &mockStream{err: errors.New("stream broke")},
 	}
-	summarizer := NewLLMContextualSummarizer(provider)
+	summarizer := NewLLMContextualSummarizer(provider, "test", "test-model")
 
 	_, err := summarizer.SummarizeChunks(context.Background(), "Title", "Prefix", []string{"chunk"})
 	if err == nil {
@@ -112,7 +112,7 @@ func TestSummarizeChunksTimeout(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 
 	provider := &mockProvider{err: ctx.Err()}
-	summarizer := NewLLMContextualSummarizer(provider)
+	summarizer := NewLLMContextualSummarizer(provider, "test", "test-model")
 
 	_, err := summarizer.SummarizeChunks(ctx, "Title", "Prefix", []string{"chunk"})
 	if err == nil {
@@ -130,7 +130,7 @@ func TestSummarizeChunksStreamedInParts(t *testing.T) {
 			},
 		},
 	}
-	summarizer := NewLLMContextualSummarizer(provider)
+	summarizer := NewLLMContextualSummarizer(provider, "test", "test-model")
 
 	results, err := summarizer.SummarizeChunks(context.Background(), "Title", "Prefix", []string{"a", "b"})
 	if err != nil {

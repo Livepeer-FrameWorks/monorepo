@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 
 	"frameworks/pkg/llm"
 )
@@ -14,12 +15,14 @@ const rrfK = 60 // standard Reciprocal Rank Fusion constant
 // configured it delegates to the model; otherwise it falls back to the
 // RRF (Reciprocal Rank Fusion) heuristic.
 type Reranker struct {
-	client llm.RerankClient // nil = keyword fallback
+	client       llm.RerankClient // nil = keyword fallback
+	providerName string
+	modelName    string
 }
 
-// NewReranker creates a Reranker. Pass nil to use the keyword fallback.
-func NewReranker(client llm.RerankClient) *Reranker {
-	return &Reranker{client: client}
+// NewReranker creates a Reranker. Pass nil client to use the keyword fallback.
+func NewReranker(client llm.RerankClient, provider, model string) *Reranker {
+	return &Reranker{client: client, providerName: provider, modelName: model}
 }
 
 // Rerank rescores chunks and returns them sorted by descending relevance.
@@ -44,10 +47,15 @@ func (r *Reranker) crossEncoderRerank(ctx context.Context, query string, chunks 
 		documents[i] = c.Text
 	}
 
+	start := time.Now()
 	results, err := r.client.Rerank(ctx, query, documents)
+	rerankDuration.WithLabelValues(r.providerName, r.modelName).Observe(time.Since(start).Seconds())
 	if err != nil {
+		rerankCallsTotal.WithLabelValues(r.providerName, r.modelName, "error").Inc()
 		return nil
 	}
+	rerankCallsTotal.WithLabelValues(r.providerName, r.modelName, "success").Inc()
+	rerankDocumentsTotal.WithLabelValues(r.providerName, r.modelName).Add(float64(len(documents)))
 
 	type scored struct {
 		chunk Chunk

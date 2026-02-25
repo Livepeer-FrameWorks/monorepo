@@ -29,38 +29,42 @@ type GatewayToolCaller interface {
 }
 
 type OrchestratorConfig struct {
-	LLMProvider    llm.Provider
-	Logger         logging.Logger
-	SearchWeb      *SearchWebTool
-	Knowledge      KnowledgeSearcher
-	Embedder       KnowledgeEmbedder
-	Reranker       *knowledge.Reranker
-	QueryRewriter  *QueryRewriter
-	HyDE           *HyDEGenerator
-	Gateway        GatewayToolCaller
-	Diagnostics    *diagnostics.BaselineEvaluator
-	MaxRounds      int
-	SearchLimit    int
-	GlobalTenantID string
+	LLMProvider     llm.Provider
+	LLMProviderName string
+	LLMModelName    string
+	Logger          logging.Logger
+	SearchWeb       *SearchWebTool
+	Knowledge       KnowledgeSearcher
+	Embedder        KnowledgeEmbedder
+	Reranker        *knowledge.Reranker
+	QueryRewriter   *QueryRewriter
+	HyDE            *HyDEGenerator
+	Gateway         GatewayToolCaller
+	Diagnostics     *diagnostics.BaselineEvaluator
+	MaxRounds       int
+	SearchLimit     int
+	GlobalTenantID  string
 }
 
 const defaultGlobalTenantID = "00000000-0000-0000-0000-000000000001"
 
 type Orchestrator struct {
-	llmProvider    llm.Provider
-	logger         logging.Logger
-	searchWeb      *SearchWebTool
-	knowledge      KnowledgeSearcher
-	embedder       KnowledgeEmbedder
-	reranker       *knowledge.Reranker
-	queryRewriter  *QueryRewriter
-	hyde           *HyDEGenerator
-	gateway        GatewayToolCaller
-	diag           *diagnostics.BaselineEvaluator
-	tools          []llm.Tool
-	maxRounds      int
-	searchLimit    int
-	globalTenantID string
+	llmProvider     llm.Provider
+	llmProviderName string
+	llmModelName    string
+	logger          logging.Logger
+	searchWeb       *SearchWebTool
+	knowledge       KnowledgeSearcher
+	embedder        KnowledgeEmbedder
+	reranker        *knowledge.Reranker
+	queryRewriter   *QueryRewriter
+	hyde            *HyDEGenerator
+	gateway         GatewayToolCaller
+	diag            *diagnostics.BaselineEvaluator
+	tools           []llm.Tool
+	maxRounds       int
+	searchLimit     int
+	globalTenantID  string
 }
 
 type ToolDetail struct {
@@ -138,20 +142,22 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 		globalTenantID = defaultGlobalTenantID
 	}
 	return &Orchestrator{
-		llmProvider:    cfg.LLMProvider,
-		logger:         cfg.Logger,
-		searchWeb:      cfg.SearchWeb,
-		knowledge:      cfg.Knowledge,
-		embedder:       cfg.Embedder,
-		reranker:       cfg.Reranker,
-		queryRewriter:  cfg.QueryRewriter,
-		hyde:           cfg.HyDE,
-		gateway:        cfg.Gateway,
-		diag:           cfg.Diagnostics,
-		tools:          tools,
-		maxRounds:      maxRounds,
-		searchLimit:    searchLimit,
-		globalTenantID: globalTenantID,
+		llmProvider:     cfg.LLMProvider,
+		llmProviderName: cfg.LLMProviderName,
+		llmModelName:    cfg.LLMModelName,
+		logger:          cfg.Logger,
+		searchWeb:       cfg.SearchWeb,
+		knowledge:       cfg.Knowledge,
+		embedder:        cfg.Embedder,
+		reranker:        cfg.Reranker,
+		queryRewriter:   cfg.QueryRewriter,
+		hyde:            cfg.HyDE,
+		gateway:         cfg.Gateway,
+		diag:            cfg.Diagnostics,
+		tools:           tools,
+		maxRounds:       maxRounds,
+		searchLimit:     searchLimit,
+		globalTenantID:  globalTenantID,
 	}
 }
 
@@ -204,8 +210,8 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		llmStart := time.Now()
 		stream, err := o.llmProvider.Complete(ctx, messages, o.toolsForContext(ctx))
 		if err != nil {
-			llmCallsTotal.WithLabelValues("error").Inc()
-			llmDuration.Observe(time.Since(llmStart).Seconds())
+			llmCallsTotal.WithLabelValues(o.llmProviderName, o.llmModelName, "error").Inc()
+			llmDuration.WithLabelValues(o.llmProviderName, o.llmModelName).Observe(time.Since(llmStart).Seconds())
 			return OrchestratorResult{}, err
 		}
 
@@ -232,8 +238,8 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			}
 		}
 		_ = stream.Close()
-		llmCallsTotal.WithLabelValues("success").Inc()
-		llmDuration.Observe(time.Since(llmStart).Seconds())
+		llmCallsTotal.WithLabelValues(o.llmProviderName, o.llmModelName, "success").Inc()
+		llmDuration.WithLabelValues(o.llmProviderName, o.llmModelName).Observe(time.Since(llmStart).Seconds())
 		if err := filter.Flush(); err != nil {
 			return OrchestratorResult{}, err
 		}
@@ -346,8 +352,8 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 	}
 
 	outputTokens := estimateTokens(content)
-	llmTokensTotal.WithLabelValues("input").Add(float64(inputTokens))
-	llmTokensTotal.WithLabelValues("output").Add(float64(outputTokens))
+	llmTokensTotal.WithLabelValues(o.llmProviderName, o.llmModelName, "input").Add(float64(inputTokens))
+	llmTokensTotal.WithLabelValues(o.llmProviderName, o.llmModelName, "output").Add(float64(outputTokens))
 
 	return OrchestratorResult{
 		Content:    content,

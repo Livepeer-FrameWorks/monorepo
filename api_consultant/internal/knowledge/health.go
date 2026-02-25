@@ -33,7 +33,7 @@ func (h *HealthTracker) RecordSuccess(source string, pages int) {
 	s := h.ensure(source)
 	s.LastSuccessAt = time.Now()
 	s.ConsecutiveFailures = 0
-	s.PagesLastCycle = pages
+	s.PagesLastCycle += pages
 	s.PagesTotal += pages
 }
 
@@ -44,6 +44,15 @@ func (h *HealthTracker) RecordFailure(source string) int {
 	s.LastFailureAt = time.Now()
 	s.ConsecutiveFailures++
 	return s.ConsecutiveFailures
+}
+
+// StartCycle resets per-cycle page counters at the beginning of a queue drain.
+func (h *HealthTracker) StartCycle() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, s := range h.sources {
+		s.PagesLastCycle = 0
+	}
 }
 
 func (h *HealthTracker) Snapshot() []SourceHealth {

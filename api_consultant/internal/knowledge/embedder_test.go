@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 type fakeEmbeddingClient struct {
@@ -242,6 +243,7 @@ func TestEstimateBPETokens(t *testing.T) {
 		{"hello", 2},       // 1 * 1.3 = 1.3 → ceil = 2
 		{"hello world", 3}, // 2 * 1.3 = 2.6 → ceil = 3
 		{"one two three four five six seven", 10}, // 7 * 1.3 = 9.1 → ceil = 10
+		{"你好世界一", 5},                              // non-space script: fallback to rune count
 	}
 	for _, tt := range tests {
 		got := estimateBPETokens(tt.text)
@@ -405,12 +407,16 @@ func TestEnforceCharLimit(t *testing.T) {
 		}
 	})
 
-	t.Run("single huge word stays as one chunk", func(t *testing.T) {
+	t.Run("single huge word splits by runes", func(t *testing.T) {
 		blob := strings.Repeat("x", 50000)
 		result := enforceCharLimit([]string{blob}, 24000)
-		// A single word can't be split at word boundaries, so it stays as-is
-		if len(result) != 1 {
-			t.Fatalf("expected 1 chunk for unsplittable blob, got %d", len(result))
+		if len(result) < 2 {
+			t.Fatalf("expected 2+ chunks for huge blob, got %d", len(result))
+		}
+		for _, chunk := range result {
+			if utf8.RuneCountInString(chunk) > 24000 {
+				t.Fatalf("chunk exceeds rune limit: %d", utf8.RuneCountInString(chunk))
+			}
 		}
 	})
 }
@@ -437,6 +443,24 @@ func TestChunkContent_CharLimitTriggered(t *testing.T) {
 	for _, chunk := range chunks {
 		if len(chunk) > maxChunkChars {
 			t.Errorf("chunk exceeds char limit: %d > %d", len(chunk), maxChunkChars)
+		}
+	}
+}
+
+func TestChunkContent_NoWhitespaceTextRespectsTokenLimit(t *testing.T) {
+	embedder, err := NewEmbedder(fakeEmbeddingClient{}, WithTokenLimit(300), WithTokenOverlap(0))
+	if err != nil {
+		t.Fatalf("new embedder: %v", err)
+	}
+
+	content := strings.Repeat("你", 1000)
+	chunks := embedder.chunkContent(content)
+	if len(chunks) < 2 {
+		t.Fatalf("expected non-whitespace text to split, got %d chunks", len(chunks))
+	}
+	for _, chunk := range chunks {
+		if got := estimateBPETokens(chunk); got > 300 {
+			t.Fatalf("chunk token estimate exceeds limit: %d > 300", got)
 		}
 	}
 }

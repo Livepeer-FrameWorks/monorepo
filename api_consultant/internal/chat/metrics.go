@@ -39,16 +39,17 @@ var (
 			Name:      "llm_calls_total",
 			Help:      "Total LLM API calls",
 		},
-		[]string{"status"}, // "success", "error"
+		[]string{"provider", "model", "status"},
 	)
 
-	llmDuration = promauto.NewHistogram(
+	llmDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "skipper",
 			Name:      "llm_duration_seconds",
 			Help:      "Duration of LLM API calls in seconds",
 			Buckets:   prometheus.ExponentialBuckets(0.1, 2, 10), // 100ms to ~50s
 		},
+		[]string{"provider", "model"},
 	)
 
 	llmTokensTotal = promauto.NewCounterVec(
@@ -57,7 +58,7 @@ var (
 			Name:      "llm_tokens_total",
 			Help:      "Total LLM tokens consumed",
 		},
-		[]string{"direction"}, // "input", "output"
+		[]string{"provider", "model", "direction"},
 	)
 
 	conversationsActive = promauto.NewGauge(

@@ -3,9 +3,9 @@ package skipper
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
-	"hash/fnv"
 	"os"
 	"sync"
 
@@ -15,16 +15,18 @@ import (
 var (
 	hashSecret   []byte
 	hashSecretMu sync.RWMutex
-	useHMAC      bool
 	hashOnce     sync.Once
 )
 
 func initHashSecret() {
+	hashSecretMu.Lock()
+	defer hashSecretMu.Unlock()
 	if secret := os.Getenv("SKIPPER_USAGE_HASH_SECRET"); secret != "" {
-		hashSecretMu.Lock()
 		hashSecret = []byte(secret)
-		useHMAC = true
-		hashSecretMu.Unlock()
+	} else {
+		ephemeral := make([]byte, 32)
+		_, _ = rand.Read(ephemeral)
+		hashSecret = ephemeral
 	}
 }
 
@@ -35,17 +37,12 @@ func hashIdentifier(value string) uint64 {
 	hashOnce.Do(initHashSecret)
 
 	hashSecretMu.RLock()
-	secret, useMac := hashSecret, useHMAC
+	secret := hashSecret
 	hashSecretMu.RUnlock()
 
-	if useMac {
-		mac := hmac.New(sha256.New, secret)
-		_, _ = mac.Write([]byte(value))
-		return binary.BigEndian.Uint64(mac.Sum(nil)[:8])
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(value))
-	return h.Sum64()
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(value))
+	return binary.BigEndian.Uint64(mac.Sum(nil)[:8])
 }
 
 func tokenHashFromContext(ctx context.Context) uint64 {

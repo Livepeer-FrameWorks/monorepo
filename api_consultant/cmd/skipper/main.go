@@ -59,6 +59,10 @@ func main() {
 	logger.Info("Starting Skipper (AI Video Consultant API)")
 
 	cfg := skipperconfig.LoadConfig()
+	if len(cfg.SSRFAllowedHosts) > 0 {
+		knowledge.SetSSRFAllowedHosts(cfg.SSRFAllowedHosts)
+		logger.WithField("hosts", cfg.SSRFAllowedHosts).Info("SSRF allowlist configured")
+	}
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 
@@ -198,6 +202,28 @@ func main() {
 		embeddingClient = nil
 	}
 
+	// Auto-detect embedding dimensions and migrate the DB column if needed.
+	if embeddingClient != nil {
+		dims := cfg.EmbeddingDimensions
+		if dims == 0 {
+			probedDims, probeErr := llm.ProbeEmbeddingDimensions(context.Background(), embeddingClient)
+			if probeErr != nil {
+				logger.WithError(probeErr).Fatal("Failed to probe embedding dimensions — set EMBEDDING_DIMENSIONS to skip")
+			}
+			dims = probedDims
+			logger.WithField("dimensions", dims).Info("Probed embedding dimensions from model")
+		} else {
+			logger.WithField("dimensions", dims).Info("Using configured embedding dimensions")
+		}
+		migrated, migrateErr := knowledge.EnsureEmbeddingDimensions(context.Background(), db, dims)
+		if migrateErr != nil {
+			logger.WithError(migrateErr).Fatal("Failed to ensure embedding dimensions")
+		}
+		if migrated {
+			logger.WithField("dimensions", dims).Warn("Embedding dimensions changed — knowledge data truncated, re-crawl required")
+		}
+	}
+
 	// Utility LLM for background tasks (contextual retrieval, future: title generation).
 	// Falls back to main LLM if UTILITY_LLM_* env vars are not set.
 	var utilityLLM llm.Provider
@@ -229,11 +255,12 @@ func main() {
 			rerankClient = rc
 		}
 	}
-	reranker := knowledge.NewReranker(rerankClient)
+	reranker := knowledge.NewReranker(rerankClient, cfg.RerankProvider, cfg.RerankModel)
 
 	var embedder *knowledge.Embedder
 	if embeddingClient != nil {
 		var embedOpts []knowledge.EmbedderOption
+		embedOpts = append(embedOpts, knowledge.WithProviderInfo(cfg.EmbeddingProvider, cfg.EmbeddingModel))
 		if cfg.ChunkTokenLimit > 0 {
 			embedOpts = append(embedOpts, knowledge.WithTokenLimit(cfg.ChunkTokenLimit))
 		}
@@ -297,18 +324,20 @@ func main() {
 	searchTool.SetSearchLimit(cfg.SearchLimit)
 	globalTenantID := tenants.SystemTenantID.String()
 	orchestrator := chat.NewOrchestrator(chat.OrchestratorConfig{
-		LLMProvider:    llmProvider,
-		Logger:         logger,
-		SearchWeb:      searchTool,
-		Knowledge:      knowledgeStore,
-		Embedder:       embedder,
-		Reranker:       reranker,
-		QueryRewriter:  queryRewriter,
-		HyDE:           hyde,
-		Gateway:        gatewayClient,
-		Diagnostics:    baselineEvaluator,
-		SearchLimit:    cfg.SearchLimit,
-		GlobalTenantID: globalTenantID,
+		LLMProvider:     llmProvider,
+		LLMProviderName: cfg.LLMProvider,
+		LLMModelName:    cfg.LLMModel,
+		Logger:          logger,
+		SearchWeb:       searchTool,
+		Knowledge:       knowledgeStore,
+		Embedder:        embedder,
+		Reranker:        reranker,
+		QueryRewriter:   queryRewriter,
+		HyDE:            hyde,
+		Gateway:         gatewayClient,
+		Diagnostics:     baselineEvaluator,
+		SearchLimit:     cfg.SearchLimit,
+		GlobalTenantID:  globalTenantID,
 	})
 	var usageLogger skipper.UsageLogger
 	if decklogClient != nil {
@@ -428,6 +457,7 @@ func main() {
 		logger.WithError(err).Warn("Skipping knowledge admin API: embedding client not configured")
 	} else {
 		var adminEmbedOpts []knowledge.EmbedderOption
+		adminEmbedOpts = append(adminEmbedOpts, knowledge.WithProviderInfo(cfg.EmbeddingProvider, cfg.EmbeddingModel))
 		if cfg.ChunkTokenLimit > 0 {
 			adminEmbedOpts = append(adminEmbedOpts, knowledge.WithTokenLimit(cfg.ChunkTokenLimit))
 		}
@@ -435,7 +465,7 @@ func main() {
 			adminEmbedOpts = append(adminEmbedOpts, knowledge.WithTokenOverlap(cfg.ChunkTokenOverlap))
 		}
 		if cfg.ContextualRetrieval && utilityLLM != nil {
-			summarizer := knowledge.NewLLMContextualSummarizer(utilityLLM)
+			summarizer := knowledge.NewLLMContextualSummarizer(utilityLLM, cfg.UtilityLLMProvider, cfg.UtilityLLMModel)
 			adminEmbedOpts = append(adminEmbedOpts, knowledge.WithContextualRetrieval(summarizer))
 			logger.Info("Contextual retrieval enabled for crawler embedder")
 		}
@@ -596,6 +626,9 @@ func main() {
 				}
 				return nil
 			}(),
+		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			req.NodeId = &nodeID
 		}
 		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("skipper")); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (skipper) failed")

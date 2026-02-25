@@ -31,16 +31,26 @@ var (
 			Name:      "embed_calls_total",
 			Help:      "Total embedding API calls",
 		},
-		[]string{"status"},
+		[]string{"provider", "model", "status"},
 	)
 
-	embedDuration = promauto.NewHistogram(
+	embedDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "skipper",
 			Name:      "embed_duration_seconds",
 			Help:      "Duration of embedding API calls in seconds",
 			Buckets:   prometheus.DefBuckets,
 		},
+		[]string{"provider", "model"},
+	)
+
+	embedInputsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "skipper",
+			Name:      "embed_inputs_total",
+			Help:      "Total individual texts submitted for embedding",
+		},
+		[]string{"provider", "model"},
 	)
 
 	renderPagesTotal = promauto.NewCounterVec(
@@ -67,16 +77,45 @@ var (
 			Name:      "contextual_calls_total",
 			Help:      "Total contextual retrieval LLM calls",
 		},
-		[]string{"status"},
+		[]string{"provider", "model", "status"},
 	)
 
-	contextualDuration = promauto.NewHistogram(
+	contextualDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "skipper",
 			Name:      "contextual_duration_seconds",
 			Help:      "Duration of contextual retrieval LLM calls in seconds",
 			Buckets:   prometheus.ExponentialBuckets(0.5, 2, 8),
 		},
+		[]string{"provider", "model"},
+	)
+
+	rerankCallsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "skipper",
+			Name:      "rerank_calls_total",
+			Help:      "Total reranker API calls",
+		},
+		[]string{"provider", "model", "status"},
+	)
+
+	rerankDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "skipper",
+			Name:      "rerank_duration_seconds",
+			Help:      "Duration of reranker API calls in seconds",
+			Buckets:   prometheus.DefBuckets,
+		},
+		[]string{"provider", "model"},
+	)
+
+	rerankDocumentsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "skipper",
+			Name:      "rerank_documents_total",
+			Help:      "Total documents submitted for reranking",
+		},
+		[]string{"provider", "model"},
 	)
 
 	linkDiscoveryTotal = promauto.NewCounter(
@@ -102,5 +141,29 @@ var (
 			Help:      "Total chunks filtered during embedding",
 		},
 		[]string{"reason"},
+	)
+
+	crawlQueueSize = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "skipper",
+			Name:      "crawl_queue_size",
+			Help:      "Total items in the current crawl queue",
+		},
+	)
+
+	crawlQueueRemaining = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "skipper",
+			Name:      "crawl_queue_remaining",
+			Help:      "Remaining items in the current crawl queue",
+		},
+	)
+
+	crawlTickInterval = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "skipper",
+			Name:      "crawl_tick_interval_seconds",
+			Help:      "Current interval between crawl item dispatches",
+		},
 	)
 )

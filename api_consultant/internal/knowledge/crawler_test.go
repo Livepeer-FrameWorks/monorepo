@@ -202,11 +202,11 @@ func TestCrawlerCrawlAndEmbed_IdempotentWithCache(t *testing.T) {
 
 	// First run: cache miss, embed once.
 	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
-		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}),
+		sqlmock.NewRows(pageCacheSelectColumns),
 	)
 	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
 		"tenant", sitemapURL, pageURL,
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", sitemapURL, false); err != nil {
@@ -216,12 +216,12 @@ func TestCrawlerCrawlAndEmbed_IdempotentWithCache(t *testing.T) {
 	// Second run: cached hash match, no embedding.
 	now := time.Now().UTC()
 	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
-		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
-			AddRow("tenant", sitemapURL, pageURL, hash, nil, nil, nil, now),
+		sqlmock.NewRows(pageCacheSelectColumns).
+			AddRow("tenant", sitemapURL, pageURL, hash, nil, nil, nil, now, 0.5, nil, 0, 0, "sitemap"),
 	)
 	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
 		"tenant", sitemapURL, pageURL,
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", sitemapURL, false); err != nil {
@@ -314,14 +314,14 @@ func TestCrawlerSkipsOn304(t *testing.T) {
 
 	// Return cached entry with matching ETag
 	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
-		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
-			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, "oldhash", "\"etag-1\"", nil, nil, time.Now().Add(-1*time.Hour)),
+		sqlmock.NewRows(pageCacheSelectColumns).
+			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, "oldhash", "\"etag-1\"", nil, nil, time.Now().Add(-1*time.Hour), 0.5, nil, 0, 0, "sitemap"),
 	)
 
 	// After 304, update last_fetched_at
 	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
 		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
@@ -378,14 +378,14 @@ func TestCrawlerSkipsUnchangedContentHash(t *testing.T) {
 
 	// Return cached entry with matching content hash
 	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
-		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
-			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, precomputedHash, nil, nil, nil, time.Now().Add(-1*time.Hour)),
+		sqlmock.NewRows(pageCacheSelectColumns).
+			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, precomputedHash, nil, nil, nil, time.Now().Add(-1*time.Hour), 0.5, nil, 0, 0, "sitemap"),
 	)
 
 	// After hash match, update cache
 	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
 		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
@@ -436,8 +436,8 @@ func TestCrawlerSitemapLastmod(t *testing.T) {
 
 	// Return cached entry with LastFetchedAt after the sitemap lastmod
 	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
-		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
-			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, "hash", nil, nil, nil, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)),
+		sqlmock.NewRows(pageCacheSelectColumns).
+			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, "hash", nil, nil, nil, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), 0.5, nil, 0, 0, "sitemap"),
 	)
 
 	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
@@ -621,14 +621,14 @@ func TestCrawlPagesSkipsUnchangedHash(t *testing.T) {
 
 	// Return cached entry with matching content hash
 	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
-		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
-			AddRow("tenant", "pagelist://direct", pageURL, precomputedHash, nil, nil, nil, time.Now().Add(-1*time.Hour)),
+		sqlmock.NewRows(pageCacheSelectColumns).
+			AddRow("tenant", "pagelist://direct", pageURL, precomputedHash, nil, nil, nil, time.Now().Add(-1*time.Hour), 0.5, nil, 0, 0, "direct"),
 	)
 
 	// After hash match, update cache
 	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
 		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	pages := []string{pageURL}

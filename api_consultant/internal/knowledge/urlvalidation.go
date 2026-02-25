@@ -13,6 +13,22 @@ import (
 // privateCIDRs are pre-computed at package init to avoid re-parsing on every call.
 var privateCIDRs []*net.IPNet
 
+// ssrfAllowedHosts holds hostnames that bypass the private-IP SSRF check.
+// Set once at startup via SetSSRFAllowedHosts; read concurrently.
+var ssrfAllowedHosts map[string]bool
+
+// SetSSRFAllowedHosts registers hostnames that are allowed to resolve to
+// private/reserved addresses (e.g. Docker-internal services in dev).
+func SetSSRFAllowedHosts(hosts []string) {
+	m := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		if h = strings.TrimSpace(h); h != "" {
+			m[strings.ToLower(h)] = true
+		}
+	}
+	ssrfAllowedHosts = m
+}
+
 const dnsLookupTimeout = 5 * time.Second
 
 func init() {
@@ -58,13 +74,15 @@ func validateCrawlURLWithContext(ctx context.Context, rawURL string) (*url.URL, 
 	if err != nil {
 		return nil, fmt.Errorf("dns lookup failed for %s: %w", host, err)
 	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
-		}
-		if isPrivateIP(ip) {
-			return nil, fmt.Errorf("url resolves to private/reserved address %s", ipStr)
+	if !ssrfAllowedHosts[strings.ToLower(host)] {
+		for _, ipStr := range ips {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				continue
+			}
+			if isPrivateIP(ip) {
+				return nil, fmt.Errorf("url resolves to private/reserved address %s", ipStr)
+			}
 		}
 	}
 
@@ -99,13 +117,15 @@ func NewSSRFSafeTransport() *http.Transport {
 				return nil, fmt.Errorf("ssrf dialer: dns lookup %s: %w", host, err)
 			}
 
-			for _, ipStr := range ips {
-				ip := net.ParseIP(ipStr)
-				if ip == nil {
-					continue
-				}
-				if isPrivateIP(ip) {
-					return nil, fmt.Errorf("ssrf dialer: %s resolves to private address %s", host, ipStr)
+			if !ssrfAllowedHosts[strings.ToLower(host)] {
+				for _, ipStr := range ips {
+					ip := net.ParseIP(ipStr)
+					if ip == nil {
+						continue
+					}
+					if isPrivateIP(ip) {
+						return nil, fmt.Errorf("ssrf dialer: %s resolves to private address %s", host, ipStr)
+					}
 				}
 			}
 

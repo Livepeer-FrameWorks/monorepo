@@ -76,7 +76,7 @@ func TestRerankerCrossEncoder(t *testing.T) {
 			{Index: 0, RelevanceScore: 0.30},
 		},
 	}
-	r := NewReranker(client)
+	r := NewReranker(client, "test", "test-model")
 	chunks := []Chunk{
 		{Text: "low relevance doc", Similarity: 0.9},
 		{Text: "high relevance doc", Similarity: 0.3},
@@ -96,7 +96,7 @@ func TestRerankerCrossEncoder(t *testing.T) {
 
 func TestRerankerCrossEncoderError_FallsBackToRRF(t *testing.T) {
 	client := &mockRerankClient{err: errors.New("service down")}
-	r := NewReranker(client)
+	r := NewReranker(client, "test", "test-model")
 	chunks := []Chunk{
 		{Text: "stream encoder settings", Similarity: 0.5},
 		{Text: "configure stream latency", Similarity: 0.9},
@@ -112,7 +112,7 @@ func TestRerankerCrossEncoderError_FallsBackToRRF(t *testing.T) {
 }
 
 func TestRerankerNilClient_FallsBackToRRF(t *testing.T) {
-	r := NewReranker(nil)
+	r := NewReranker(nil, "", "")
 	chunks := []Chunk{
 		{Text: "low relevance", Similarity: 0.3},
 		{Text: "high relevance streaming", Similarity: 0.9},
@@ -135,7 +135,7 @@ func TestRerankerNilReceiver_FallsBackToRRF(t *testing.T) {
 }
 
 func TestRerankerEmptyChunks(t *testing.T) {
-	r := NewReranker(nil)
+	r := NewReranker(nil, "", "")
 	result := r.Rerank(context.Background(), "query", nil)
 	if len(result) != 0 {
 		t.Fatalf("expected 0, got %d", len(result))
