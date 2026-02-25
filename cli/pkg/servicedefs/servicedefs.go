@@ -7,7 +7,7 @@ type Service struct {
 	DefaultPort    int
 	HealthPath     string
 	HealthProtocol string // http|grpc
-	Role           string // control|routing|analytics|mesh|interface|infra|support
+	Role           string // control|data|analytics|media|mesh|interface|infra|support|observability
 }
 
 // Services is the canonical registry keyed by CLI service ID (brand name).
@@ -22,11 +22,13 @@ var Services = map[string]Service{
 	"periscope-query":  {ID: "periscope-query", DefaultPort: 18004, HealthPath: "/health", HealthProtocol: "http", Role: "analytics"},
 	"periscope-ingest": {ID: "periscope-ingest", DefaultPort: 18005, HealthPath: "/health", HealthProtocol: "http", Role: "analytics"},
 
-	// Routing/edge control
-	"decklog":   {ID: "decklog", DefaultPort: 18006, HealthPath: "/health", HealthProtocol: "grpc", Role: "routing"},
-	"helmsman":  {ID: "helmsman", DefaultPort: 18007, HealthPath: "/health", HealthProtocol: "http", Role: "routing"},
-	"foghorn":   {ID: "foghorn", DefaultPort: 18008, HealthPath: "/health", HealthProtocol: "http", Role: "routing"},
-	"signalman": {ID: "signalman", DefaultPort: 18009, HealthPath: "/health", HealthProtocol: "http", Role: "routing"},
+	// Data plane
+	"decklog":   {ID: "decklog", DefaultPort: 18006, HealthPath: "/health", HealthProtocol: "grpc", Role: "data"},
+	"signalman": {ID: "signalman", DefaultPort: 18009, HealthPath: "/health", HealthProtocol: "http", Role: "data"},
+
+	// Media plane
+	"foghorn":  {ID: "foghorn", DefaultPort: 18008, HealthPath: "/health", HealthProtocol: "http", Role: "media"},
+	"helmsman": {ID: "helmsman", DefaultPort: 18007, HealthPath: "/health", HealthProtocol: "http", Role: "media"},
 
 	// Infra services
 	"navigator": {ID: "navigator", DefaultPort: 18010, HealthPath: "/health", HealthProtocol: "http", Role: "infra"},

@@ -16,19 +16,37 @@ profiles:
     - chartroom
     - foredeck
     - logbook
-  control-core:
+  platform:
     - quartermaster
     - bridge
     - commodore
-  routing-only:
-    - foghorn
+    - purser
+    - skipper
+    - navigator
+    - steward
     - decklog
     - signalman
-  analytics-suite:
     - periscope-ingest
     - periscope-query
-  billing-only:
+  control:
+    - bridge
+    - commodore
+    - quartermaster
     - purser
+    - skipper
+  data:
+    - decklog
+    - signalman
+    - periscope-ingest
+    - periscope-query
+  media:
+    - foghorn
+  edge:
+    - helmsman
+  interfaces:
+    - chartroom
+    - foredeck
+    - logbook
   observability:
     - prometheus
     - grafana
@@ -67,8 +85,8 @@ services:
       port: 18001
   foghorn:
     name: foghorn
-    title: Foghorn (Routing)
-    role: routing
+    title: Foghorn (Media)
+    role: media
     image: ghcr.io/livepeer-frameworks/frameworks-foghorn:latest
     ports: ["18008:18008", "18019:18019"]
     health:
@@ -78,7 +96,7 @@ services:
   decklog:
     name: decklog
     title: Decklog (Firehose)
-    role: routing
+    role: data
     image: ghcr.io/livepeer-frameworks/frameworks-decklog:latest
     ports: ["18006:18006"]
     health:
@@ -87,7 +105,7 @@ services:
   signalman:
     name: signalman
     title: Signalman (WebSocket fan-out)
-    role: routing
+    role: data
     image: ghcr.io/livepeer-frameworks/frameworks-signalman:latest
     ports: ["18009:18009"]
     health:
@@ -137,7 +155,7 @@ services:
   helmsman:
     name: helmsman
     title: Helmsman (Sidecar)
-    role: routing
+    role: media
     image: ghcr.io/livepeer-frameworks/frameworks-helmsman:latest
     ports: ["18007:18007"]
     health:

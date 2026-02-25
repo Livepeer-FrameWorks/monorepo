@@ -340,7 +340,7 @@ func newServicesPlanCmd() *cobra.Command {
 		fmt.Fprint(cmd.OutOrStdout(), services.SummarizeSelection(specs))
 		return nil
 	}}
-	cmd.Flags().StringVar(&profile, "profile", "central-all", "profile preset (central-all|control-core|routing-only|analytics-suite|billing-only)")
+	cmd.Flags().StringVar(&profile, "profile", "central-all", "profile preset (central-all|platform|control|data|media|edge|interfaces|observability)")
 	cmd.Flags().StringVar(&include, "include", "", "comma-separated services to include")
 	cmd.Flags().StringVar(&exclude, "exclude", "", "comma-separated services to exclude")
 	cmd.Flags().StringVar(&dir, "dir", ".", "target directory for generated files")

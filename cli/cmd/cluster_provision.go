@@ -242,9 +242,12 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 
 	config.DeployName = task.Type
 
-	// Inject cluster ID from resolved task
+	// Inject cluster ID and node ID from resolved task
 	if task.ClusterID != "" {
 		config.Metadata["cluster_id"] = task.ClusterID
+	}
+	if task.Host != "" {
+		config.Metadata["node_id"] = task.Host
 	}
 
 	// Copy runtime data

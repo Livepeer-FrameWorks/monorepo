@@ -20,7 +20,7 @@ type ClusterConfig struct {
 	Name   string   `yaml:"name"`
 	Type   string   `yaml:"type"` // central, edge, etc.
 	Region string   `yaml:"region,omitempty"`
-	Roles  []string `yaml:"roles,omitempty"` // control, routing, analytics, support
+	Roles  []string `yaml:"roles,omitempty"` // control, data, analytics, media, mesh, interface, infra, support, observability
 }
 
 // Host represents a target machine
