@@ -6,6 +6,7 @@
   import {
     fragment,
     GetInfrastructureOverviewStore,
+    GetNetworkOverviewStore,
     GetNodesConnectionStore,
     GetServiceInstancesConnectionStore,
     SystemHealthStore,
@@ -38,6 +39,7 @@
   let clusterId = $derived(page.params.clusterId as string);
 
   const infrastructureStore = new GetInfrastructureOverviewStore();
+  const networkStore = new GetNetworkOverviewStore();
   const nodesStore = new GetNodesConnectionStore();
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
   const systemHealthSub = new SystemHealthStore();
@@ -87,6 +89,14 @@
     return metrics.reduce((sum, value) => sum + value, 0) / metrics.length;
   });
 
+  // Live stats from periscope (via network overview)
+  let clusterLiveStats = $derived(
+    $networkStore.data?.networkStatus?.clusters?.find((c) => c.clusterId === clusterId) ?? null
+  );
+  let currentStreams = $derived(clusterLiveStats?.currentStreams ?? 0);
+  let currentViewers = $derived(clusterLiveStats?.currentViewers ?? 0);
+  let currentBandwidthMbps = $derived(clusterLiveStats?.currentBandwidthMbps ?? 0);
+
   // Real-time system health
   type SystemHealthEvent = NonNullable<SystemHealth$result["liveSystemHealth"]>;
   let systemHealth = $state<Record<string, { event: SystemHealthEvent; ts: Date }>>({});
@@ -113,13 +123,13 @@
     {
       key: "streams",
       label: "Active Streams",
-      value: cluster?.currentStreamCount ?? 0,
+      value: currentStreams,
       tone: "text-success",
     },
     {
       key: "viewers",
       label: "Active Viewers",
-      value: cluster?.currentViewerCount ?? 0,
+      value: currentViewers,
       tone: "text-accent-purple",
     },
     {
@@ -166,6 +176,7 @@
     try {
       await Promise.all([
         infrastructureStore.fetch(),
+        networkStore.fetch(),
         nodesStore.fetch({ variables: { clusterId } }),
         serviceInstancesStore.fetch({ variables: { clusterId } }),
       ]);
@@ -412,7 +423,7 @@
               </div>
               <div class="space-y-1">
                 <p class="text-muted-foreground">Current Bandwidth</p>
-                <p class="font-medium">{cluster.currentBandwidthMbps} Mbps</p>
+                <p class="font-medium">{currentBandwidthMbps} Mbps</p>
               </div>
               <div class="space-y-1">
                 <p class="text-muted-foreground">Visibility</p>

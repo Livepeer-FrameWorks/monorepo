@@ -115,6 +115,13 @@ export const navigationConfig: Record<string, NavigationItem> = {
     active: true,
     description: "Quick overview with KPIs and contextual hints",
   },
+  globalNetwork: {
+    name: "Global Network",
+    href: "/network",
+    icon: "Globe",
+    active: true,
+    description: "Cross-cluster topology, peering, and federation traffic",
+  },
 
   // Content - Streaming & Media
   content: {
@@ -206,13 +213,6 @@ export const navigationConfig: Record<string, NavigationItem> = {
         icon: "Server",
         active: true,
         description: "Manage cluster connections and browse the marketplace",
-      },
-      federation: {
-        name: "Federation",
-        href: "/infrastructure/federation",
-        icon: "Globe",
-        active: true,
-        description: "Cross-cluster topology, peering, and federation traffic",
       },
       devices: {
         name: "Devices",
@@ -380,7 +380,19 @@ function getNavigationRoutes(): RouteInfo[] {
     },
   ];
 
-  for (const section of Object.values(navigationConfig)) {
+  for (const [sectionKey, section] of Object.entries(navigationConfig)) {
+    if (sectionKey !== "dashboard" && section.href) {
+      const route: RouteInfo = {
+        path: section.href,
+        name: section.name,
+        parent: "root",
+      };
+      if (section.description) {
+        route.description = section.description;
+      }
+      routes.push(route);
+    }
+
     if (!section.children) continue;
     for (const child of Object.values(section.children)) {
       if (!child.href) continue;
@@ -431,6 +443,9 @@ export function getBreadcrumbs(path: string): Breadcrumb[] {
 
   const staticRoute = routesByPath.get(normalizedPath);
   if (staticRoute) {
+    if (staticRoute.parent === "root") {
+      return [{ name: "Dashboard", href: "/" }, { name: staticRoute.name }];
+    }
     return [
       { name: "Dashboard", href: "/" },
       { name: staticRoute.parent },

@@ -36,6 +36,9 @@
     lat: number;
     lng: number;
     name: string;
+    clusterId?: string;
+    nodeType?: string;
+    status?: string;
   }
 
   type BucketType = "client" | "node";
@@ -64,6 +67,15 @@
     status: string;
     activeStreams: number;
     activeViewers: number;
+    peerCount?: number;
+    clusterType?: string;
+    shortDescription?: string;
+    maxStreams?: number;
+    currentStreams?: number;
+    maxViewers?: number;
+    currentViewers?: number;
+    maxBandwidthMbps?: number;
+    currentBandwidthMbps?: number;
   }
 
   interface RelationshipLine {
@@ -86,7 +98,7 @@
     onBucketClick?: (id: string) => void;
     flows?: Flow[];
     clusters?: ClusterMarker[];
-    relationships?: RelationshipLine[]; // TODO: wire up from federation API
+    relationships?: RelationshipLine[];
     height?: number;
     zoom?: number;
     center?: [number, number];
@@ -115,6 +127,14 @@
   let flowLayer: LayerGroup | null = null;
   let clusterLayer: LayerGroup | null = null;
   let relationshipLayer: LayerGroup | null = null;
+  let membershipLayer: LayerGroup | null = null;
+  let pulseTimers: number[] = [];
+
+  const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.15)";
+  const NODE_STATUS_COLORS: Record<string, string> = {
+    active: "rgb(59, 130, 246)",
+    offline: "rgb(100, 116, 139)",
+  };
 
   // UX state
   let isFullscreen = $state(false);
@@ -140,6 +160,8 @@
   });
 
   onDestroy(() => {
+    pulseTimers.forEach(clearInterval);
+    pulseTimers = [];
     if (map) {
       map.remove();
       map = null;
@@ -167,12 +189,13 @@
     // Enable scroll zoom only with modifier key (Alt/Option or Ctrl)
     mapContainer.addEventListener("wheel", handleWheel, { passive: false });
 
-    // Order matters: First added is at the bottom
+    // Order matters: first added is at the bottom
     bucketLayer = L.layerGroup().addTo(map);
     flowLayer = L.layerGroup().addTo(map);
+    membershipLayer = L.layerGroup().addTo(map);
     relationshipLayer = L.layerGroup().addTo(map);
-    clusterLayer = L.layerGroup().addTo(map);
     layerGroup = L.layerGroup().addTo(map);
+    clusterLayer = L.layerGroup().addTo(map);
 
     drawMap(routes, nodes, buckets, flows, clusters, relationships);
   }
@@ -198,6 +221,59 @@
     map?.setView(center, zoom);
   }
 
+  function formatLoad(current: number | undefined, max: number | undefined): string {
+    if (!max) return `${current ?? 0}`;
+    return `${current ?? 0} / ${max}`;
+  }
+
+  function startPulse(from: [number, number], to: [number, number]) {
+    if (!L || !relationshipLayer) return;
+    const steps = 60;
+    const interval = 50;
+    const layer = relationshipLayer;
+    const leaflet = L;
+
+    function createPulse(delay: number) {
+      let step = 0;
+      let marker: ReturnType<typeof leaflet.circleMarker> | null = null;
+
+      const timerId = window.setTimeout(() => {
+        const id = window.setInterval(() => {
+          const t = step / steps;
+          const lat = from[0] + (to[0] - from[0]) * t;
+          const lng = from[1] + (to[1] - from[1]) * t;
+
+          if (!marker) {
+            marker = leaflet
+              .circleMarker([lat, lng], {
+                radius: 3,
+                fillColor: "rgb(125, 207, 255)",
+                fillOpacity: 0.9,
+                stroke: false,
+                interactive: false,
+              })
+              .addTo(layer);
+          } else {
+            marker.setLatLng([lat, lng]);
+          }
+
+          const opacity = t < 0.1 ? t / 0.1 : t > 0.9 ? (1 - t) / 0.1 : 0.9;
+          marker.setStyle({ fillOpacity: opacity });
+
+          step++;
+          if (step > steps) step = 0;
+        }, interval);
+
+        pulseTimers.push(id);
+      }, delay);
+
+      pulseTimers.push(timerId);
+    }
+
+    createPulse(0);
+    createPulse(1500);
+  }
+
   function drawMap(
     currentRoutes: Route[],
     currentNodes: NodeLocation[],
@@ -208,19 +284,25 @@
   ) {
     if (!map || !L) return;
 
+    // Clean up pulse timers
+    pulseTimers.forEach(clearInterval);
+    pulseTimers = [];
+
     // Remove old layer groups from map entirely
     if (bucketLayer) map.removeLayer(bucketLayer);
     if (flowLayer) map.removeLayer(flowLayer);
+    if (membershipLayer) map.removeLayer(membershipLayer);
     if (relationshipLayer) map.removeLayer(relationshipLayer);
-    if (clusterLayer) map.removeLayer(clusterLayer);
     if (layerGroup) map.removeLayer(layerGroup);
+    if (clusterLayer) map.removeLayer(clusterLayer);
 
     // Recreate layer groups (order = z-order)
     bucketLayer = L.layerGroup().addTo(map);
     flowLayer = L.layerGroup().addTo(map);
+    membershipLayer = L.layerGroup().addTo(map);
     relationshipLayer = L.layerGroup().addTo(map);
-    clusterLayer = L.layerGroup().addTo(map);
     layerGroup = L.layerGroup().addTo(map);
+    clusterLayer = L.layerGroup().addTo(map);
 
     // 0. Draw bucket polygons first (optional)
     // Build a simple count map for heat intensity
@@ -263,20 +345,51 @@
       }).addTo(flowLayer!);
     });
 
-    // 1. Draw Infrastructure Nodes (Destinations)
-    const nodeIcon = L.divIcon({
-      className: "custom-node-icon",
-      html: `<div style="background-color: rgb(59, 130, 246); width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 10px rgb(59, 130, 246);"></div>`,
-      iconSize: [12, 12],
-      iconAnchor: [6, 6],
+    // Build cluster lookup for membership lines
+    const clusterMap: Record<string, ClusterMarker> = {};
+    currentClusters.forEach((c) => {
+      clusterMap[c.id] = c;
     });
 
+    // 0b. Node-to-cluster membership lines
     currentNodes.forEach((node) => {
+      if (!node.clusterId) return;
+      const cluster = clusterMap[node.clusterId];
+      if (!cluster) return;
+      const from: [number, number] = [node.lat, node.lng];
+      const to: [number, number] = [cluster.lat, cluster.lng];
+      if (from[0] === to[0] && from[1] === to[1]) return;
+
+      L.polyline([from, to], {
+        color: MEMBERSHIP_COLOR,
+        weight: 1,
+        opacity: 0.4,
+        smoothFactor: 1,
+        interactive: false,
+      }).addTo(membershipLayer!);
+    });
+
+    // 1. Draw Infrastructure Nodes
+    const nodeMap: Record<string, NodeLocation> = {};
+    currentNodes.forEach((node) => {
+      nodeMap[node.id] = node;
+      const color = NODE_STATUS_COLORS[node.status ?? "active"] || NODE_STATUS_COLORS.active;
+
+      const nodeIcon = L.divIcon({
+        className: "node-dot-marker",
+        html: `<div style="background-color: ${color}; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 10px ${color};"></div>`,
+        iconSize: [12, 12],
+        iconAnchor: [6, 6],
+      });
+
       L.marker([node.lat, node.lng], { icon: nodeIcon })
-        .bindTooltip(`<b>${node.name}</b><br>${node.id}`, {
-          direction: "top",
-          className: "dark-tooltip",
-        })
+        .bindTooltip(
+          `<b>${escapeHtml(node.name)}</b><br>` +
+            `${escapeHtml(node.nodeType || "node")}<br>` +
+            `Status: ${escapeHtml(node.status || "active")}<br>` +
+            (node.clusterId ? `Cluster: ${escapeHtml(node.clusterId)}` : ""),
+          { direction: "top", className: "dark-tooltip" }
+        )
         .addTo(layerGroup!);
     });
 
@@ -339,39 +452,62 @@
       }
 
       line.addTo(relationshipLayer!);
+
+      // Pulse animation on active peering lines
+      if (rel.active && rel.type === "peering") {
+        startPulse(rel.from, rel.to);
+      }
     });
 
     // 4. Draw cluster markers
+    const statusColors: Record<string, string> = {
+      healthy: "rgb(34, 197, 94)",
+      operational: "rgb(34, 197, 94)",
+      degraded: "rgb(234, 179, 8)",
+      down: "rgb(239, 68, 68)",
+    };
+
     currentClusters.forEach((cluster) => {
-      const statusColors: Record<string, string> = {
-        operational: "rgb(34, 197, 94)",
-        degraded: "rgb(234, 179, 8)",
-        down: "rgb(239, 68, 68)",
-      };
       const color = statusColors[cluster.status] || "rgb(148, 163, 184)";
-      const radius = Math.max(8, Math.min(20, 8 + cluster.nodeCount * 2));
+      const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
 
       const icon = L.divIcon({
         className: "cluster-marker",
-        html: `<div style="
+        html: `<div class="cluster-marker--glow" style="
           width: ${radius * 2}px; height: ${radius * 2}px; border-radius: 50%;
-          background: radial-gradient(circle, ${color}40, ${color}15);
+          background: radial-gradient(circle, color-mix(in srgb, ${color} 25%, transparent), color-mix(in srgb, ${color} 9%, transparent));
           border: 2px solid ${color};
           display: flex; align-items: center; justify-content: center;
           font-size: 10px; font-weight: 600; color: ${color};
+          box-shadow: 0 0 12px color-mix(in srgb, ${color} 30%, transparent);
+          --node-color: ${color};
         ">${cluster.nodeCount}</div>`,
         iconSize: [radius * 2, radius * 2],
         iconAnchor: [radius, radius],
       });
 
-      L.marker([cluster.lat, cluster.lng], { icon })
-        .bindTooltip(
-          `<b>${escapeHtml(cluster.name)}</b><br>` +
-            `Region: ${escapeHtml(cluster.region)}<br>` +
-            `Nodes: ${cluster.healthyNodeCount}/${cluster.nodeCount}<br>` +
-            `Status: ${escapeHtml(cluster.status)}`,
-          { direction: "top", className: "dark-tooltip" }
-        )
+      // Build enriched tooltip
+      let tooltip =
+        `<b>${escapeHtml(cluster.name)}</b><br>` +
+        `${escapeHtml(cluster.clusterType || cluster.region)}<br>` +
+        `Nodes: ${cluster.healthyNodeCount}/${cluster.nodeCount}<br>` +
+        (cluster.peerCount != null ? `Peers: ${cluster.peerCount}<br>` : "") +
+        `Status: ${escapeHtml(cluster.status)}`;
+
+      if ((cluster.maxStreams ?? 0) > 0 || (cluster.currentStreams ?? 0) > 0) {
+        tooltip +=
+          `<br><br><b>Load</b><br>` +
+          `Streams: ${formatLoad(cluster.currentStreams, cluster.maxStreams)}<br>` +
+          `Viewers: ${formatLoad(cluster.currentViewers, cluster.maxViewers)}<br>` +
+          `Bandwidth: ${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`;
+      }
+
+      if (cluster.shortDescription) {
+        tooltip += `<br><br><i>${escapeHtml(cluster.shortDescription)}</i>`;
+      }
+
+      L.marker([cluster.lat, cluster.lng], { icon, zIndexOffset: 1000 })
+        .bindTooltip(tooltip, { direction: "top", className: "dark-tooltip" })
         .addTo(clusterLayer!);
     });
   }
@@ -534,9 +670,36 @@
   }
 
   :global(.dark-tooltip) {
-    background-color: rgb(30, 41, 59);
-    border: 1px solid rgb(51, 65, 85);
-    color: rgb(226, 232, 240);
-    border-radius: 4px;
+    background-color: rgb(30, 41, 59) !important;
+    border: 1px solid rgb(51, 65, 85) !important;
+    color: rgb(226, 232, 240) !important;
+    border-radius: 4px !important;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    padding: 0.4rem 0.6rem !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+  }
+
+  :global(.dark-tooltip::before) {
+    border-top-color: rgb(51, 65, 85) !important;
+  }
+
+  :global(.cluster-marker--glow) {
+    animation: cluster-glow 3s ease-in-out infinite alternate;
+  }
+
+  @keyframes cluster-glow {
+    from {
+      box-shadow: 0 0 8px color-mix(in srgb, var(--node-color) 20%, transparent);
+    }
+    to {
+      box-shadow: 0 0 16px color-mix(in srgb, var(--node-color) 40%, transparent);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.cluster-marker--glow) {
+      animation: none;
+    }
   }
 </style>

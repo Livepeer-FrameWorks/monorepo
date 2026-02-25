@@ -164,6 +164,9 @@
   }
 
   const SvelteComponent = $derived(getIconComponent(navigationConfig.dashboard.icon));
+  const GlobalNetworkIcon = $derived(
+    getIconComponent(navigationConfig.globalNetwork?.icon ?? "Globe")
+  );
 </script>
 
 <div
@@ -187,11 +190,27 @@
           <span class="flex-1 text-left">{navigationConfig.dashboard.name}</span>
         {/if}
       </button>
+      {#if navigationConfig.globalNetwork}
+        <button
+          onclick={() => handleNavigation(navigationConfig.globalNetwork)}
+          class="{getItemClass(
+            navigationConfig.globalNetwork,
+            false,
+            currentPath
+          )} w-full mt-2 {collapsed ? 'justify-center relative' : ''}"
+          title={collapsed ? navigationConfig.globalNetwork.name : ""}
+        >
+          <GlobalNetworkIcon class="w-5 h-5 flex-shrink-0 {collapsed ? '' : 'mr-3'}" />
+          {#if !collapsed}
+            <span class="flex-1 text-left">{navigationConfig.globalNetwork.name}</span>
+          {/if}
+        </button>
+      {/if}
     </div>
 
     <!-- Feature Sections -->
     {#each Object.entries(navigationConfig) as [sectionKey, section] (sectionKey)}
-      {#if sectionKey !== "dashboard" && section.children}
+      {#if sectionKey !== "dashboard" && sectionKey !== "globalNetwork" && section.children}
         {@const SvelteComponent_1 = getIconComponent(section.icon)}
         {@const hasActiveChildren = sectionHasActiveChildren(sectionKey)}
         {@const childInfo = getActiveChildrenInfo(sectionKey)}

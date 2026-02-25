@@ -7,6 +7,7 @@
   import { page } from "$app/stores";
   import { base, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
+  import { loadStreamingConfig } from "$lib/stores/streaming-config";
   import { sidebarStore } from "$lib/stores/sidebar.svelte";
   import { getMarketingSiteUrl } from "$lib/config";
   import { getRouteInfo } from "$lib/navigation.js";
@@ -85,10 +86,14 @@
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
+    const wasAuthenticated = isAuthenticated;
     isAuthenticated = authState.isAuthenticated;
     user = authState.user || null;
     loading = authState.loading;
     initialized = authState.initialized;
+    if (!wasAuthenticated && isAuthenticated) {
+      loadStreamingConfig(true);
+    }
   });
 
   // Get current page title from navigation config
@@ -117,6 +122,7 @@
 
   onMount(async () => {
     await auth.checkAuth();
+    loadStreamingConfig();
   });
 
   function logout() {

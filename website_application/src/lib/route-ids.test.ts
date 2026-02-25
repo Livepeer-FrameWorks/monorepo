@@ -11,6 +11,15 @@ describe("route id helpers", () => {
     ).toBe("123e4567-e89b-12d3-a456-426614174000");
   });
 
+  it("ignores non-UUID stream payload ids and falls back to route param UUID", () => {
+    expect(
+      resolveOperationalStreamId({
+        routeParamId: "123e4567-e89b-12d3-a456-426614174000",
+        streamUuid: "live",
+      })
+    ).toBe("123e4567-e89b-12d3-a456-426614174000");
+  });
+
   it("accepts UUID route params for backwards compatibility", () => {
     expect(
       resolveOperationalStreamId({

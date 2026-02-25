@@ -1,0 +1,78 @@
+---
+title: "GeoDNS & Cluster Routing"
+description: "Per-cluster DNS domain strategy for multi-cluster streaming deployments."
+sidebar:
+  order: 11
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Every cluster — official or community — uses the same domain naming pattern. The cluster slug differentiates them; root domains (no slug) load-balance across official clusters via GeoDNS.
+
+## Domain Pattern
+
+| Domain                      | Level   | Purpose                                          |
+| --------------------------- | ------- | ------------------------------------------------ |
+| `foghorn.{base}`            | Root    | GeoDNS across official cluster Foghorn instances |
+| `foghorn.{slug}.{base}`     | Cluster | Points to this cluster's Foghorn instance(s)     |
+| `edge-ingest.{base}`        | Root    | GeoDNS across official cluster ingest nodes      |
+| `edge-ingest.{slug}.{base}` | Cluster | Points to this cluster's ingest nodes            |
+| `edge-egress.{base}`        | Root    | GeoDNS across official cluster edge nodes        |
+| `edge-egress.{slug}.{base}` | Cluster | Points to this cluster's edge nodes              |
+
+Root domains load-balance across official clusters. Community clusters only have slug-qualified domains.
+
+## Protocol Routing
+
+HTTP-based protocols (HLS, DASH, WHEP, MP4) go through Foghorn, which issues 307 redirects to the nearest edge node. Non-HTTP protocols (SRT, RTMP, RTSP, DTSC) connect directly to edge nodes — they can't follow HTTP redirects.
+
+| Protocol                   | Domain                      | Transport                 |
+| -------------------------- | --------------------------- | ------------------------- |
+| HLS, DASH, WHEP, MP4, WebM | `foghorn.{slug}.{base}`     | HTTP 307 redirect to edge |
+| SRT (ingest)               | `edge-ingest.{slug}.{base}` | Direct UDP                |
+| RTMP (ingest)              | `edge-ingest.{slug}.{base}` | Direct TCP                |
+| SRT (playback)             | `edge-egress.{slug}.{base}` | Direct UDP                |
+| RTSP, DTSC                 | `edge-egress.{slug}.{base}` | Direct TCP                |
+
+## DNS Configuration
+
+### TTL
+
+Use 60-second TTL for latency-based records. Shorter TTLs increase DNS query volume without meaningful failover improvement.
+
+### Health Checks
+
+- **Endpoint**: `GET /health` on Foghorn (HTTP port)
+- **Interval**: 30 seconds
+- **Failure threshold**: 3 consecutive failures before removing from pool
+
+### TLS Certificates
+
+Use wildcard certificates issued via DNS-01 challenge (Let's Encrypt or equivalent):
+
+- `*.{base}` — covers root-level domains
+- `*.{slug}.{base}` — covers per-cluster domains
+
+<Aside type="tip">
+  DNS-01 validation works regardless of whether HTTP is reachable, making it suitable for clusters
+  behind firewalls or in private networks.
+</Aside>
+
+## GeoDNS Strategy
+
+Use latency-based routing (Route53 latency records or Cloudflare Load Balancing) as the initial strategy:
+
+1. Each official cluster registers its Foghorn, ingest, and egress IPs in the DNS provider
+2. The provider routes queries to the closest healthy cluster based on measured latency
+3. Health checks remove unhealthy clusters from the pool automatically
+
+<Aside type="note">
+  GeoDNS is a stopgap until anycast DNS with a custom backend resolver is justified — typically at
+  10+ PoPs where sub-30-second failover matters.
+</Aside>
+
+## How the Frontend Uses This
+
+The GraphQL `streamingConfig` query returns cluster-specific domains for the authenticated tenant. Chartroom uses these to build protocol-specific URLs, falling back to `VITE_STREAMING_*` env vars when the query returns null (dev environment, unauthenticated users, or Quartermaster unavailable).
+
+The player and studio SDKs are unaffected — they use `resolveViewerEndpoint` / `resolveIngestEndpoint` for runtime node resolution and never read these domains.

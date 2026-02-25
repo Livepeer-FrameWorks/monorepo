@@ -1,0 +1,167 @@
+---
+title: "Multistreaming"
+description: "Push your live stream to Twitch, YouTube, Kick, Facebook, X, and custom RTMP/SRT destinations simultaneously."
+sidebar:
+  order: 5
+---
+
+import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
+
+Multistreaming lets you push a single live broadcast to multiple external platforms at once. When your stream goes live, FrameWorks automatically pushes to every enabled target — no third-party restreaming service required.
+
+<Aside type="tip">
+  Multistreaming uses native MistServer push, so there's no re-encoding or added latency. Each
+  target receives the same bitstream directly from the origin node.
+</Aside>
+
+## How It Works
+
+1. **Configure targets** — Add push targets to your stream via the dashboard or API
+2. **Go live** — Start broadcasting as usual (OBS, StreamCrafter, SRT, etc.)
+3. **Automatic push** — FrameWorks detects the stream going live and pushes to all enabled targets
+4. **Automatic stop** — When your stream ends, all pushes stop automatically
+
+Each push target has a live status indicator: **idle**, **pushing**, or **failed**.
+
+## Supported Platforms
+
+| Platform    | Protocol       | Ingest URL                                                                         |
+| ----------- | -------------- | ---------------------------------------------------------------------------------- |
+| Twitch      | RTMP           | `rtmp://live.twitch.tv/app/{stream_key}`                                           |
+| YouTube     | RTMP           | `rtmp://a.rtmp.youtube.com/live2/{stream_key}`                                     |
+| Facebook    | RTMPS          | `rtmps://live-api-s.facebook.com:443/rtmp/{stream_key}`                            |
+| Kick        | RTMPS          | `rtmps://fa723fc1b171.global-contribute.live-video.net/app/{stream_key}`           |
+| X (Twitter) | RTMPS          | `rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/{stream_key}` |
+| Custom      | RTMP/RTMPS/SRT | Any valid `rtmp://`, `rtmps://`, or `srt://` URI                                   |
+
+<Aside type="caution">
+  Your stream key for each platform is stored securely and masked in API responses. Never share your
+  stream keys publicly.
+</Aside>
+
+## Dashboard
+
+In the stream detail page, open the **Multistream** tab to manage push targets.
+
+- **Add Target** — Select a platform, enter your stream key, and give it a name
+- **Enable/Disable** — Toggle targets on or off without deleting them
+- **Status** — See real-time push status for each target
+- **Edit** — Update the name, stream key, or target URI at any time
+- **Delete** — Remove targets you no longer need
+
+## GraphQL API
+
+### Add a Push Target
+
+```graphql
+mutation {
+  createPushTarget(
+    streamId: "stream-global-id"
+    input: {
+      platform: "twitch"
+      name: "My Twitch Channel"
+      targetUri: "rtmp://live.twitch.tv/app/live_xxxxxxxxxxxx"
+    }
+  ) {
+    id
+    name
+    platform
+    targetUri
+    isEnabled
+    status
+  }
+}
+```
+
+### List Push Targets
+
+Push targets are available as a field on the `Stream` type:
+
+```graphql
+query {
+  stream(id: "stream-global-id") {
+    id
+    name
+    pushTargets {
+      id
+      name
+      platform
+      targetUri
+      isEnabled
+      status
+      lastError
+      lastPushedAt
+    }
+  }
+}
+```
+
+<Aside type="note">
+  The `targetUri` field is masked in API responses — the stream key portion is redacted (e.g.,
+  `rtmp://live.twitch.tv/app/live_****xxxx`). Full URIs are only used internally when pushing.
+</Aside>
+
+### Update a Push Target
+
+```graphql
+mutation {
+  updatePushTarget(id: "push-target-global-id", input: { isEnabled: false }) {
+    id
+    isEnabled
+    status
+  }
+}
+```
+
+### Delete a Push Target
+
+```graphql
+mutation {
+  deletePushTarget(id: "push-target-global-id") {
+    success
+    deletedId
+  }
+}
+```
+
+## Bandwidth Considerations
+
+Each push target consumes upstream bandwidth on the origin node proportional to your stream's bitrate. For a 6 Mbps stream with 3 push targets, the origin node uses ~18 Mbps of upload bandwidth for multistreaming alone.
+
+Keep this in mind when:
+
+- Streaming at high bitrates (4K, high-FPS)
+- Adding many simultaneous targets
+- Using nodes with limited upload capacity
+
+## Troubleshooting
+
+**Target shows "failed" status**
+
+- Verify your stream key is correct and hasn't expired
+- Check that the platform isn't blocking your IP or account
+- Some platforms require additional setup (e.g., Facebook requires creating a live broadcast first)
+
+**Push doesn't start when stream goes live**
+
+- Ensure the target is **enabled** (not just created)
+- Check that your stream is actually live on the origin node
+- Review the event log on the stream detail page for errors
+
+**High latency to external platforms**
+
+- This is normal — external platforms add their own buffering (typically 5-15 seconds)
+- The push from FrameWorks is real-time; additional delay is on the destination platform's side
+
+<CardGrid>
+  <LinkCard
+    title="Encoder Setup"
+    href="/streamers/encoder-setup"
+    description="Configure OBS, vMix, or other encoders"
+  />
+  <LinkCard
+    title="Ingest Protocols"
+    href="/streamers/ingest-advanced"
+    description="RTMP, SRT, WHIP ingest options"
+  />
+</CardGrid>

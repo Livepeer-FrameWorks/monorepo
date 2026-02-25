@@ -19,6 +19,10 @@
     DeleteStreamKeyStore,
     StreamEventsStore,
     GetStreamEventsStore,
+    GetPushTargetsStore,
+    CreatePushTargetStore,
+    UpdatePushTargetStore,
+    DeletePushTargetStore,
     ViewerMetricsStreamStore,
     TrackListUpdatesStore,
     ClipLifecycleStore,
@@ -53,6 +57,9 @@
     HealthSidebar,
     EventLog,
     StreamSetupPanel,
+    PushTargetsTabPanel,
+    PushTargetCreateModal,
+    PushTargetEditModal,
   } from "$lib/components/stream-details";
   import { SectionDivider } from "$lib/components/layout";
   import type { StreamEvent, EventType } from "$lib/components/stream-details/EventLog.svelte";
@@ -81,6 +88,10 @@
   const refreshStreamKeyMutation = new RefreshStreamKeyStore();
   const createStreamKeyMutation = new CreateStreamKeyStore();
   const deleteStreamKeyMutation = new DeleteStreamKeyStore();
+  const pushTargetsStore = new GetPushTargetsStore();
+  const createPushTargetMutation = new CreatePushTargetStore();
+  const updatePushTargetMutation = new UpdatePushTargetStore();
+  const deletePushTargetMutation = new DeletePushTargetStore();
   const streamEventsSub = new StreamEventsStore();
   const streamEventsStore = new GetStreamEventsStore();
   const viewerMetricsSub = new ViewerMetricsStreamStore();
@@ -144,6 +155,20 @@
       isActive: e.node.isActive,
       createdAt: e.node.createdAt,
       lastUsedAt: e.node.lastUsedAt ?? undefined,
+    })) ?? []
+  );
+  let pushTargets = $derived(
+    $pushTargetsStore.data?.stream?.pushTargets?.map((t) => ({
+      id: t.id,
+      streamId: t.streamId,
+      platform: t.platform ?? null,
+      name: t.name,
+      targetUri: t.targetUri,
+      isEnabled: t.isEnabled,
+      status: t.status,
+      lastError: t.lastError ?? null,
+      lastPushedAt: t.lastPushedAt ?? null,
+      createdAt: t.createdAt,
     })) ?? []
   );
   let recordings = $derived(
@@ -302,12 +327,19 @@
   let showEditModal = $state(false);
   let showDeleteModal = $state(false);
   let showCreateKeyModal = $state(false);
+  let showCreatePushTargetModal = $state(false);
+  let showEditPushTargetModal = $state(false);
+  let editingPushTarget = $state<(typeof pushTargets)[number] | null>(null);
   let actionLoading = $state({
     refreshKey: false,
     deleteStream: false,
     editStream: false,
     createKey: false,
     deleteKey: null as string | null,
+    createPushTarget: false,
+    updatePushTarget: false,
+    deletePushTarget: null as string | null,
+    togglePushTarget: null as string | null,
   });
 
   // Health sidebar state
@@ -757,6 +789,7 @@
       const qualityFirst = getQualityFirst(range);
       await Promise.all([
         streamKeysStore.fetch({ variables: { streamId: resolvedStreamId } }),
+        pushTargetsStore.fetch({ variables: { streamId } }),
         dvrRequestsStore.fetch({ variables: { streamId: resolvedStreamId } }),
         clipsStore.fetch({ variables: { streamId: resolvedStreamId, first: 100 } }),
         streamOverviewCoreStore
@@ -973,6 +1006,85 @@
       toast.error("Failed to delete stream key");
     } finally {
       actionLoading.deleteKey = null;
+    }
+  }
+
+  async function handleCreatePushTarget(formData: {
+    platform?: string;
+    name: string;
+    targetUri: string;
+  }) {
+    try {
+      actionLoading.createPushTarget = true;
+      await createPushTargetMutation.mutate({
+        streamId,
+        input: formData,
+      });
+      showCreatePushTargetModal = false;
+      toast.success("Push target added");
+      addEvent("info", `Push target "${formData.name}" added`);
+      await pushTargetsStore.fetch({ variables: { streamId } });
+    } catch (err) {
+      console.error("Failed to create push target:", err);
+      toast.error("Failed to add push target");
+    } finally {
+      actionLoading.createPushTarget = false;
+    }
+  }
+
+  async function handleUpdatePushTarget(updates: {
+    name?: string;
+    targetUri?: string;
+    isEnabled?: boolean;
+  }) {
+    if (!editingPushTarget) return;
+    try {
+      actionLoading.updatePushTarget = true;
+      await updatePushTargetMutation.mutate({
+        id: editingPushTarget.id,
+        input: updates,
+      });
+      showEditPushTargetModal = false;
+      editingPushTarget = null;
+      toast.success("Push target updated");
+      await pushTargetsStore.fetch({ variables: { streamId } });
+    } catch (err) {
+      console.error("Failed to update push target:", err);
+      toast.error("Failed to update push target");
+    } finally {
+      actionLoading.updatePushTarget = false;
+    }
+  }
+
+  async function handleTogglePushTarget(target: (typeof pushTargets)[number]) {
+    try {
+      actionLoading.togglePushTarget = target.id;
+      await updatePushTargetMutation.mutate({
+        id: target.id,
+        input: { isEnabled: !target.isEnabled },
+      });
+      toast.success(target.isEnabled ? "Push target disabled" : "Push target enabled");
+      await pushTargetsStore.fetch({ variables: { streamId } });
+    } catch (err) {
+      console.error("Failed to toggle push target:", err);
+      toast.error("Failed to toggle push target");
+    } finally {
+      actionLoading.togglePushTarget = null;
+    }
+  }
+
+  async function handleDeletePushTarget(targetId: string) {
+    try {
+      actionLoading.deletePushTarget = targetId;
+      await deletePushTargetMutation.mutate({ id: targetId });
+      toast.success("Push target deleted");
+      addEvent("info", "Push target deleted");
+      await pushTargetsStore.fetch({ variables: { streamId } });
+    } catch (err) {
+      console.error("Failed to delete push target:", err);
+      toast.error("Failed to delete push target");
+    } finally {
+      actionLoading.deletePushTarget = null;
     }
   }
 
@@ -1218,6 +1330,14 @@
                   Artefacts ({recordings.length + clips.length})
                 </TabsTrigger>
                 <TabsTrigger
+                  value="multistream"
+                  class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
+                >
+                  {@const RadioIcon = getIconComponent("Radio")}
+                  <RadioIcon class="w-4 h-4" />
+                  Multistream ({pushTargets.length})
+                </TabsTrigger>
+                <TabsTrigger
                   value="playback"
                   class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                 >
@@ -1258,6 +1378,21 @@
                   {recordings}
                   {clips}
                   onEnableRecording={() => (showEditModal = true)}
+                />
+              </TabsContent>
+
+              <TabsContent value="multistream" class="p-0 min-h-[20rem]">
+                <PushTargetsTabPanel
+                  {pushTargets}
+                  onAdd={() => (showCreatePushTargetModal = true)}
+                  onEdit={(target) => {
+                    editingPushTarget = target;
+                    showEditPushTargetModal = true;
+                  }}
+                  onToggle={handleTogglePushTarget}
+                  onDelete={handleDeletePushTarget}
+                  deleteLoading={actionLoading.deletePushTarget}
+                  toggleLoading={actionLoading.togglePushTarget}
                 />
               </TabsContent>
 
@@ -1333,5 +1468,16 @@
     bind:open={showCreateKeyModal}
     loading={actionLoading.createKey}
     onCreate={handleCreateStreamKey}
+  />
+  <PushTargetCreateModal
+    bind:open={showCreatePushTargetModal}
+    loading={actionLoading.createPushTarget}
+    onCreate={handleCreatePushTarget}
+  />
+  <PushTargetEditModal
+    bind:open={showEditPushTargetModal}
+    target={editingPushTarget}
+    loading={actionLoading.updatePushTarget}
+    onUpdate={handleUpdatePushTarget}
   />
 </div>

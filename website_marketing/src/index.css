@@ -18,6 +18,7 @@
 @import "./styles/marketing/partners.css";
 @import "./styles/marketing/timeline.css";
 @import "./styles/marketing/skipper.css";
+@import "./styles/marketing/network.css";
 
 /* Page-specific styles */
 @import "./styles/pages/about.css";

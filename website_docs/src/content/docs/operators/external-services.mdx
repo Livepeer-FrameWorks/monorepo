@@ -64,29 +64,56 @@ Navigator handles ACME certificate issuance and renewal via DNS-01. See [DNS Aut
 
 ## GeoIP Database
 
-**Purpose:** IP geolocation for geographic routing and analytics
+**Purpose:** IP geolocation for geographic routing, node placement, and analytics
 
 **Provider:** MaxMind (GeoLite2 or GeoIP2), DB-IP Lite, or IP2Location LITE
 
 **What You Need:**
 
-- Provider account (as required)
-- MMDB file
+- Provider account (MaxMind requires a free license key for GeoLite2)
+- MMDB file provisioned to target hosts
 
-**What the platform uses:**
+**Consumed By:**
 
-- A local MMDB file on Foghorn nodes for geo-aware routing
-- Optional IP header enrichment if you already run geo-aware proxies
+- **Foghorn** (`api_balancing`) — geo-aware viewer routing decisions
+- **Quartermaster** (`api_tenants`) — geolocates nodes at bootstrap for federation map placement
 
-**Manual Steps:**
+If no MMDB is configured, GeoIP is disabled and services fall back to non-geographic behavior.
 
-1. Download a City/Country MMDB file from your provider
-2. Place it on Foghorn hosts and set:
+**CLI Provisioning (recommended):**
+
+```bash
+# Download from MaxMind and distribute to all Foghorn + Quartermaster hosts
+frameworks cluster sync-geoip --license-key YOUR_MAXMIND_KEY
+
+# Use a local MMDB file instead
+frameworks cluster sync-geoip --source file --file /path/to/GeoLite2-City.mmdb
+
+# Target specific services, restart after upload
+frameworks cluster sync-geoip --license-key KEY --services foghorn,quartermaster --restart
+```
+
+The CLI reads your cluster manifest to find hosts by role, uploads the MMDB via SSH, and optionally restarts the target containers.
+
+**Manual Provisioning:**
+
+1. Download a City-level MMDB file from your provider
+2. Place it on each Foghorn and Quartermaster host at `/var/lib/GeoIP/GeoLite2-City.mmdb`
+3. Set environment variables on the target services:
    ```bash
-   export GEOIP_MMDB_PATH="/var/lib/GeoIP/GeoLite2-City.mmdb"
+   GEOIP_MMDB_PATH="/var/lib/GeoIP/GeoLite2-City.mmdb"
    ```
 
-**Usage:** Foghorn uses GeoIP for intelligent routing decisions. If no MMDB is configured, GeoIP is disabled.
+**Cache Tuning (optional):**
+
+The shared `pkg/geoip` reader caches lookups. Defaults are sensible for most deployments:
+
+```bash
+GEOIP_CACHE_TTL=3600       # Positive cache TTL in seconds (default: 1h)
+GEOIP_CACHE_SWR=300        # Stale-while-revalidate window in seconds
+GEOIP_CACHE_NEG_TTL=600    # Negative (miss) cache TTL in seconds
+GEOIP_CACHE_MAX=10000      # Max cached entries
+```
 
 ---
 
@@ -175,10 +202,10 @@ Navigator handles ACME certificate issuance and renewal via DNS-01. See [DNS Aut
 
 ## Summary
 
-| Service  | Provider                      | Required    | Automated by                 |
-| -------- | ----------------------------- | ----------- | ---------------------------- |
-| DNS      | Cloudflare (recommended)      | Yes         | Navigator (api_dns)          |
-| SSL/TLS  | Let's Encrypt (ACME)          | Yes         | Navigator (api_dns)          |
-| GeoIP    | MaxMind / DB-IP / IP2Location | Recommended | Operator-managed (MMDB file) |
-| SMTP     | Any provider                  | Optional    | Platform (email delivery)    |
-| Payments | Stripe, Mollie                | Optional    | Purser (webhook handling)    |
+| Service  | Provider                      | Required    | Automated by               |
+| -------- | ----------------------------- | ----------- | -------------------------- |
+| DNS      | Cloudflare (recommended)      | Yes         | Navigator (api_dns)        |
+| SSL/TLS  | Let's Encrypt (ACME)          | Yes         | Navigator (api_dns)        |
+| GeoIP    | MaxMind / DB-IP / IP2Location | Recommended | CLI (`cluster sync-geoip`) |
+| SMTP     | Any provider                  | Optional    | Platform (email delivery)  |
+| Payments | Stripe, Mollie                | Optional    | Purser (webhook handling)  |

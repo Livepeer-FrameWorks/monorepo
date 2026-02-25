@@ -13,7 +13,7 @@ export function resolveOperationalStreamId({
   routeParamId,
   streamUuid,
 }: StreamIdentifierInput): string {
-  if (streamUuid) {
+  if (isUuid(streamUuid)) {
     return streamUuid;
   }
 

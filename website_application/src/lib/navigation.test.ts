@@ -76,13 +76,27 @@ describe("navigation route hygiene", () => {
     const pageRoutes = collectPageRoutes(routeRoot);
 
     const activeRoutes = Object.values(navigationConfig)
-      .flatMap((section) => Object.values(section.children ?? {}))
+      .flatMap((section) => {
+        const routes = Object.values(section.children ?? {});
+        if (section.href) {
+          routes.push(section);
+        }
+        return routes;
+      })
       .filter((item) => item.active === true && item.href)
       .map((item) => item.href as string);
 
     for (const route of activeRoutes) {
       expect(pageRoutes.has(route), `Missing route for active nav href: ${route}`).toBe(true);
     }
+  });
+
+  it("resolves top-level global network route", () => {
+    expect(getRouteInfo("/network")?.name).toBe("Global Network");
+    expect(getBreadcrumbs("/network")).toEqual([
+      { name: "Dashboard", href: "/" },
+      { name: "Global Network" },
+    ]);
   });
 
   it("includes hidden infrastructure routes in route metadata", () => {

@@ -2,7 +2,12 @@
   import { onMount, onDestroy } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { auth } from "$lib/stores/auth";
-  import { GetNetworkOverviewStore, GetFederationEventsStore } from "$houdini";
+  import {
+    GetNetworkStatusStore,
+    GetClusterTrafficMatrixStore,
+    GetFederationSummaryStore,
+    GetFederationEventsStore,
+  } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
@@ -22,7 +27,9 @@
   const CalendarIcon = getIconComponent("Calendar");
   const RefreshCwIcon = getIconComponent("RefreshCw");
 
-  const networkStore = new GetNetworkOverviewStore();
+  const networkStore = new GetNetworkStatusStore();
+  const trafficStore = new GetClusterTrafficMatrixStore();
+  const summaryStore = new GetFederationSummaryStore();
   const eventsStore = new GetFederationEventsStore();
 
   let isAuthenticated = false;
@@ -30,21 +37,24 @@
 
   const POLL_INTERVAL_MS = 30_000;
 
-  let hasData = $derived(!!$networkStore.data);
-  let loading = $derived($networkStore.fetching && !hasData);
+  let hasData = $derived(!!$networkStore.data?.networkStatus);
+  let loading = $derived(
+    ($networkStore.fetching || $trafficStore.fetching || $summaryStore.fetching) && !hasData
+  );
 
   // Network topology
   let clusters = $derived($networkStore.data?.networkStatus?.clusters ?? []);
   let peerConnections = $derived($networkStore.data?.networkStatus?.peerConnections ?? []);
+  let networkNodes = $derived($networkStore.data?.networkStatus?.nodes ?? []);
   let totalNodes = $derived($networkStore.data?.networkStatus?.totalNodes ?? 0);
   let healthyNodes = $derived($networkStore.data?.networkStatus?.healthyNodes ?? 0);
   let updatedAt = $derived($networkStore.data?.networkStatus?.updatedAt ?? null);
 
   // Traffic matrix
-  let trafficMatrix = $derived($networkStore.data?.analytics?.infra?.clusterTrafficMatrix ?? []);
+  let trafficMatrix = $derived($trafficStore.data?.analytics?.infra?.clusterTrafficMatrix ?? []);
 
   // Federation summary
-  let fedSummary = $derived($networkStore.data?.analytics?.infra?.federationSummary);
+  let fedSummary = $derived($summaryStore.data?.analytics?.infra?.federationSummary);
   let totalEvents = $derived(fedSummary?.totalEvents ?? 0);
   let overallAvgLatencyMs = $derived(fedSummary?.overallAvgLatencyMs ?? 0);
   let overallFailureRate = $derived(fedSummary?.overallFailureRate ?? 0);
@@ -53,6 +63,21 @@
   // Federation events log
   let federationEvents = $derived(
     $eventsStore.data?.analytics?.infra?.federationEventsConnection?.edges?.map((e) => e.node) ?? []
+  );
+
+  // Transform nodes for RoutingMap
+  let mapNodes = $derived(
+    networkNodes
+      .filter((n) => n.latitude !== 0 || n.longitude !== 0)
+      .map((n) => ({
+        id: n.nodeId,
+        lat: n.latitude,
+        lng: n.longitude,
+        name: n.name,
+        clusterId: n.clusterId,
+        nodeType: n.nodeType,
+        status: n.status,
+      }))
   );
 
   // Transform clusters to RoutingMap ClusterMarker format
@@ -65,10 +90,18 @@
       lng: c.longitude,
       nodeCount: c.nodeCount,
       healthyNodeCount: c.healthyNodeCount,
-      status:
-        c.status === "operational" ? "operational" : c.status === "degraded" ? "degraded" : "down",
-      activeStreams: 0,
-      activeViewers: 0,
+      status: c.status,
+      activeStreams: c.currentStreams ?? 0,
+      activeViewers: c.currentViewers ?? 0,
+      peerCount: c.peerCount,
+      clusterType: c.clusterType ?? undefined,
+      shortDescription: c.shortDescription ?? undefined,
+      maxStreams: c.maxStreams ?? undefined,
+      currentStreams: c.currentStreams ?? undefined,
+      maxViewers: c.maxViewers ?? undefined,
+      currentViewers: c.currentViewers ?? undefined,
+      maxBandwidthMbps: c.maxBandwidthMbps ?? undefined,
+      currentBandwidthMbps: c.currentBandwidthMbps ?? undefined,
     }))
   );
 
@@ -177,17 +210,43 @@
     try {
       const range = resolveTimeRange(timeRange);
       const timeRangeInput = { start: range.start, end: range.end };
-      await Promise.all([
-        networkStore.fetch({ variables: { timeRange: timeRangeInput } }),
-        eventsStore.fetch({ variables: { timeRange: timeRangeInput, first: 50 } }),
-      ]);
-      if ($networkStore.errors?.length) {
-        console.error("Failed to load federation data:", $networkStore.errors);
-        toast.error("Failed to load federation data.");
+
+      // Public topology can always load without tenant context.
+      await networkStore.fetch();
+
+      // Tenant-scoped analytics should only run after auth is present.
+      if (!isAuthenticated) {
+        await auth.checkAuth();
+      }
+
+      if (isAuthenticated) {
+        await Promise.all([
+          trafficStore.fetch({ variables: { timeRange: timeRangeInput } }),
+          summaryStore.fetch({ variables: { timeRange: timeRangeInput } }),
+          eventsStore.fetch({ variables: { timeRange: timeRangeInput, first: 50 } }),
+        ]);
+      }
+
+      if (
+        $networkStore.errors?.length ||
+        $trafficStore.errors?.length ||
+        $summaryStore.errors?.length
+      ) {
+        console.error("Failed to load federation data:", [
+          ...($networkStore.errors ?? []),
+          ...($trafficStore.errors ?? []),
+          ...($summaryStore.errors ?? []),
+        ]);
+        toast.error("Failed to load federation data");
+      }
+
+      if (isAuthenticated && $eventsStore.errors?.length) {
+        console.error("Failed to load federation events:", $eventsStore.errors);
+        toast.error("Failed to load federation events");
       }
     } catch (error) {
       console.error("Failed to load federation data:", error);
-      toast.error("Failed to load federation data.");
+      toast.error("Failed to load federation data");
     }
   }
 
@@ -389,7 +448,7 @@
           <div class="slab-body">
             <RoutingMap
               routes={[]}
-              nodes={[]}
+              nodes={mapNodes}
               clusters={mapClusters}
               relationships={mapRelationships}
               height={450}

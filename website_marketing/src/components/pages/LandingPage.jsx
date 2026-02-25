@@ -19,11 +19,19 @@ import {
   SectionDivider,
   SkipperConversationPreview,
   AgentPipelineStrip,
+  NetworkMap,
 } from "@/components/marketing";
 import { Section, SectionContainer } from "@/components/ui/section";
 import { useState, useEffect, useMemo } from "react";
 import config from "../../config";
-import { ServerStackIcon, CodeBracketIcon, ChartBarIcon } from "@heroicons/react/24/outline";
+import {
+  ServerStackIcon,
+  CodeBracketIcon,
+  ChartBarIcon,
+  SignalIcon,
+  TvIcon,
+  BoltIcon,
+} from "@heroicons/react/24/outline";
 
 const generateGlitchStrips = () => {
   const strips = [];
@@ -283,10 +291,10 @@ const LandingPage = () => {
                     </span>
                   </div>
                   <p className="hero-player-card__subhead">
-                    Live stream path with automatic recovery
+                    Adaptive playback — WASM, WebCodecs, every protocol
                   </p>
                   <p className="hero-player-card__caption">
-                    Watch our streaming infrastructure in action.
+                    Auto-negotiates transport and codec per device. Fully embeddable.
                   </p>
                 </div>
 
@@ -462,6 +470,7 @@ const LandingPage = () => {
                 }
               />
               <MarketingFeatureWall items={pillarCards} columns={3} />
+              <NetworkMap />
             </MarketingBand>
           </SectionContainer>
         </Section>
@@ -636,6 +645,72 @@ const LandingPage = () => {
                 </div>
                 <AgentPipelineStrip />
               </div>
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        {/* Multistreaming Section */}
+        <Section className="bg-brand-surface landing-section--multistream">
+          <SectionContainer>
+            <MarketingBand preset="foundation" texturePattern="seams" textureNoise="film">
+              <HeadlineStack
+                eyebrow="Multistreaming"
+                title="One Stream, Every Platform"
+                subtitle="Push to Twitch, YouTube, Kick, Facebook, X, and any custom RTMP/SRT destination simultaneously. No third-party restreaming service required."
+                align="left"
+                underlineAlign="start"
+                actionsPlacement="inline"
+                actions={
+                  <CTACluster align="end">
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href={`${docsBase}/streamers/multistreaming`}
+                      label="Read the Docs"
+                      icon="book"
+                    />
+                  </CTACluster>
+                }
+              />
+              <MarketingFeatureWall
+                items={[
+                  {
+                    icon: SignalIcon,
+                    iconTone: "accent",
+                    tone: "accent",
+                    title: "Native RTMP/SRT Push",
+                    description:
+                      "MistServer pushes directly from the origin node. No transcoding middleman, no added latency, no bandwidth tax from a proxy service.",
+                    hover: "subtle",
+                    stripe: true,
+                    flush: true,
+                  },
+                  {
+                    icon: TvIcon,
+                    iconTone: "green",
+                    tone: "green",
+                    title: "Platform Presets",
+                    description:
+                      "Built-in presets for Twitch, YouTube, Facebook, Kick, and X. Paste your stream key and go — or use a custom RTMP/RTMPS/SRT endpoint.",
+                    hover: "subtle",
+                    stripe: true,
+                    flush: true,
+                  },
+                  {
+                    icon: BoltIcon,
+                    iconTone: "yellow",
+                    tone: "yellow",
+                    title: "Automatic Lifecycle",
+                    description:
+                      "Push targets activate when your stream goes live and stop when it ends. Status tracking, error reporting, and per-target enable/disable toggles.",
+                    hover: "subtle",
+                    stripe: true,
+                    flush: true,
+                  },
+                ]}
+                columns={3}
+              />
             </MarketingBand>
           </SectionContainer>
         </Section>
