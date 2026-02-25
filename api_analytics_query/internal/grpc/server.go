@@ -2320,15 +2320,15 @@ func (s *PeriscopeServer) GetClusterTrafficMatrix(ctx context.Context, req *pb.G
 	query := `
 		SELECT
 			cluster_id, remote_cluster_id,
-			sum(event_count) AS event_count,
-			sum(success_count) AS success_count,
-			sum(sum_latency_ms) / greatest(sum(event_count), 1) AS avg_latency_ms,
-			sum(sum_distance_km) / greatest(sum(event_count), 1) AS avg_distance_km,
+			sum(event_count) AS total_events,
+			sum(success_count) AS total_successes,
+			sum(sum_latency_ms) / greatest(total_events, 1) AS avg_latency_ms,
+			sum(sum_distance_km) / greatest(total_events, 1) AS avg_distance_km,
 			max(max_latency_ms) AS max_latency_ms
 		FROM periscope.routing_cluster_hourly
 		WHERE tenant_id = ? AND hour >= ? AND hour <= ?
 		GROUP BY cluster_id, remote_cluster_id
-		ORDER BY event_count DESC
+		ORDER BY total_events DESC
 	`
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, startTime, endTime)

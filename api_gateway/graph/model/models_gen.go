@@ -1012,23 +1012,24 @@ type MySubscriptionsConnection struct {
 }
 
 type NetworkClusterStatus struct {
-	ClusterID            string  `json:"clusterId"`
-	Name                 string  `json:"name"`
-	Region               string  `json:"region"`
-	Latitude             float64 `json:"latitude"`
-	Longitude            float64 `json:"longitude"`
-	NodeCount            int     `json:"nodeCount"`
-	HealthyNodeCount     int     `json:"healthyNodeCount"`
-	PeerCount            int     `json:"peerCount"`
-	Status               string  `json:"status"`
-	ClusterType          string  `json:"clusterType"`
-	ShortDescription     *string `json:"shortDescription,omitempty"`
-	MaxStreams           int     `json:"maxStreams"`
-	CurrentStreams       int     `json:"currentStreams"`
-	MaxViewers           int     `json:"maxViewers"`
-	CurrentViewers       int     `json:"currentViewers"`
-	MaxBandwidthMbps     int     `json:"maxBandwidthMbps"`
-	CurrentBandwidthMbps int     `json:"currentBandwidthMbps"`
+	ClusterID            string   `json:"clusterId"`
+	Name                 string   `json:"name"`
+	Region               string   `json:"region"`
+	Latitude             float64  `json:"latitude"`
+	Longitude            float64  `json:"longitude"`
+	NodeCount            int      `json:"nodeCount"`
+	HealthyNodeCount     int      `json:"healthyNodeCount"`
+	PeerCount            int      `json:"peerCount"`
+	Status               string   `json:"status"`
+	ClusterType          string   `json:"clusterType"`
+	ShortDescription     *string  `json:"shortDescription,omitempty"`
+	MaxStreams           int      `json:"maxStreams"`
+	CurrentStreams       int      `json:"currentStreams"`
+	MaxViewers           int      `json:"maxViewers"`
+	CurrentViewers       int      `json:"currentViewers"`
+	MaxBandwidthMbps     int      `json:"maxBandwidthMbps"`
+	CurrentBandwidthMbps int      `json:"currentBandwidthMbps"`
+	Services             []string `json:"services"`
 }
 
 type NetworkNode struct {

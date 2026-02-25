@@ -76,6 +76,7 @@
     currentViewers?: number;
     maxBandwidthMbps?: number;
     currentBandwidthMbps?: number;
+    services?: string[];
   }
 
   interface RelationshipLine {
@@ -91,6 +92,11 @@
     };
   }
 
+  interface ServiceInstance {
+    serviceId: string;
+    nodeId?: string | null;
+  }
+
   interface Props {
     routes: Route[];
     nodes: NodeLocation[];
@@ -99,6 +105,7 @@
     flows?: Flow[];
     clusters?: ClusterMarker[];
     relationships?: RelationshipLine[];
+    serviceInstances?: ServiceInstance[];
     height?: number;
     zoom?: number;
     center?: [number, number];
@@ -113,6 +120,7 @@
     flows = [],
     clusters = [],
     relationships = [],
+    serviceInstances = [],
     height = 500,
     zoom = 2,
     center = [20, 0],
@@ -369,6 +377,16 @@
       }).addTo(membershipLayer!);
     });
 
+    // Build per-node service list (populated when serviceInstances prop is provided)
+    const servicesByNode: Record<string, string[]> = {};
+    serviceInstances.forEach((si) => {
+      if (!si.nodeId) return;
+      if (!servicesByNode[si.nodeId]) servicesByNode[si.nodeId] = [];
+      if (!servicesByNode[si.nodeId].includes(si.serviceId)) {
+        servicesByNode[si.nodeId].push(si.serviceId);
+      }
+    });
+
     // 1. Draw Infrastructure Nodes
     const nodeMap: Record<string, NodeLocation> = {};
     currentNodes.forEach((node) => {
@@ -382,14 +400,18 @@
         iconAnchor: [6, 6],
       });
 
+      const nodeSvcs = servicesByNode[node.id];
+      let nodeTooltip =
+        `<b>${escapeHtml(node.name)}</b><br>` +
+        `Type: ${escapeHtml(node.nodeType || "node")}<br>` +
+        `Status: ${escapeHtml(node.status || "active")}<br>` +
+        (node.clusterId ? `Cluster: ${escapeHtml(node.clusterId)}` : "");
+      if (nodeSvcs?.length) {
+        nodeTooltip += `<br>Services: ${nodeSvcs.map(escapeHtml).join(", ")}`;
+      }
+
       L.marker([node.lat, node.lng], { icon: nodeIcon })
-        .bindTooltip(
-          `<b>${escapeHtml(node.name)}</b><br>` +
-            `${escapeHtml(node.nodeType || "node")}<br>` +
-            `Status: ${escapeHtml(node.status || "active")}<br>` +
-            (node.clusterId ? `Cluster: ${escapeHtml(node.clusterId)}` : ""),
-          { direction: "top", className: "dark-tooltip" }
-        )
+        .bindTooltip(nodeTooltip, { direction: "top", className: "dark-tooltip" })
         .addTo(layerGroup!);
     });
 
@@ -489,7 +511,8 @@
       // Build enriched tooltip
       let tooltip =
         `<b>${escapeHtml(cluster.name)}</b><br>` +
-        `${escapeHtml(cluster.clusterType || cluster.region)}<br>` +
+        (cluster.region ? `Region: ${escapeHtml(cluster.region)}<br>` : "") +
+        (cluster.clusterType ? `Type: ${escapeHtml(cluster.clusterType)}<br>` : "") +
         `Nodes: ${cluster.healthyNodeCount}/${cluster.nodeCount}<br>` +
         (cluster.peerCount != null ? `Peers: ${cluster.peerCount}<br>` : "") +
         `Status: ${escapeHtml(cluster.status)}`;
@@ -500,6 +523,10 @@
           `Streams: ${formatLoad(cluster.currentStreams, cluster.maxStreams)}<br>` +
           `Viewers: ${formatLoad(cluster.currentViewers, cluster.maxViewers)}<br>` +
           `Bandwidth: ${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`;
+      }
+
+      if (cluster.services?.length) {
+        tooltip += `<br>Services: ${cluster.services.map(escapeHtml).join(", ")}`;
       }
 
       if (cluster.shortDescription) {
@@ -574,7 +601,6 @@
     position: relative;
     width: 100%;
     border-radius: 0.5rem;
-    overflow: hidden;
     background-color: rgb(15, 23, 42);
     transition: all 0.3s ease;
   }
@@ -591,6 +617,15 @@
     width: 100%;
     height: 100%;
     z-index: 1;
+  }
+
+  /* Allow tooltips to overflow the map bounds while keeping tiles clipped */
+  :global(.map-container .leaflet-container) {
+    overflow: visible !important;
+  }
+
+  :global(.map-container .leaflet-tile-pane) {
+    overflow: hidden;
   }
 
   .map-controls {
@@ -678,6 +713,9 @@
     line-height: 1.5;
     padding: 0.4rem 0.6rem !important;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+    max-width: 320px;
+    white-space: normal;
+    word-wrap: break-word;
   }
 
   :global(.dark-tooltip::before) {

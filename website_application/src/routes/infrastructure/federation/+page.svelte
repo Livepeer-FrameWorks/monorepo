@@ -46,6 +46,7 @@
   let clusters = $derived($networkStore.data?.networkStatus?.clusters ?? []);
   let peerConnections = $derived($networkStore.data?.networkStatus?.peerConnections ?? []);
   let networkNodes = $derived($networkStore.data?.networkStatus?.nodes ?? []);
+  let serviceInstances = $derived($networkStore.data?.networkStatus?.serviceInstances ?? []);
   let totalNodes = $derived($networkStore.data?.networkStatus?.totalNodes ?? 0);
   let healthyNodes = $derived($networkStore.data?.networkStatus?.healthyNodes ?? 0);
   let updatedAt = $derived($networkStore.data?.networkStatus?.updatedAt ?? null);
@@ -102,6 +103,7 @@
       currentViewers: c.currentViewers ?? undefined,
       maxBandwidthMbps: c.maxBandwidthMbps ?? undefined,
       currentBandwidthMbps: c.currentBandwidthMbps ?? undefined,
+      services: c.services ?? [],
     }))
   );
 
@@ -451,6 +453,7 @@
               nodes={mapNodes}
               clusters={mapClusters}
               relationships={mapRelationships}
+              {serviceInstances}
               height={450}
               zoom={2}
             />

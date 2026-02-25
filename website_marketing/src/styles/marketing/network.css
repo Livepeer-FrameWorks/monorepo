@@ -87,6 +87,11 @@
 
   .network-viz .leaflet-container {
     background-color: rgb(15, 23, 42) !important;
+    overflow: visible !important;
+  }
+
+  .network-viz .leaflet-tile-pane {
+    overflow: hidden;
   }
 
   .network-viz .leaflet-control-attribution {
@@ -229,6 +234,9 @@
     line-height: 1.5;
     padding: 0.4rem 0.6rem !important;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+    max-width: 320px;
+    white-space: normal;
+    word-wrap: break-word;
   }
 
   .network-viz__tooltip::before {

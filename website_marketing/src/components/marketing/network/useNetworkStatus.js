@@ -21,6 +21,7 @@ const QUERY = `query GetNetworkStatus {
       currentViewers
       maxBandwidthMbps
       currentBandwidthMbps
+      services
     }
     peerConnections {
       sourceCluster

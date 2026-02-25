@@ -1,7 +1,6 @@
 -- Demo seed for Quartermaster and Purser
 
--- Ensure base cluster (platform default with marketplace fields)
--- Note: pricing_model is now managed via Purser, not Quartermaster
+-- Control plane cluster (gateway, commodore, purser, skipper, quartermaster)
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
@@ -9,10 +8,28 @@ INSERT INTO quartermaster.infrastructure_clusters (
     visibility, short_description
 )
 VALUES (
-    'central-primary', 'Central Primary Cluster', 'central', 'demo.frameworks.network',
+    'central-control', 'Central Control Plane', 'central', 'control.demo.frameworks.network',
+    0, 0, 0,
+    FALSE, TRUE,
+    'public', 'Control plane services: API, billing, orchestration'
+)
+ON CONFLICT (cluster_id) DO UPDATE SET
+    is_platform_official = TRUE,
+    visibility = 'public',
+    short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
+
+-- Media plane cluster (foghorn, signalman, decklog, periscope, helmsman)
+INSERT INTO quartermaster.infrastructure_clusters (
+    cluster_id, cluster_name, cluster_type, base_url,
+    max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+    is_default_cluster, is_platform_official,
+    visibility, short_description
+)
+VALUES (
+    'central-primary', 'Central Media Plane', 'central', 'demo.frameworks.network',
     10000, 1000000, 100000,
     TRUE, TRUE,
-    'public', 'FrameWorks shared infrastructure for all users'
+    'public', 'Media plane: stream routing, analytics, real-time delivery'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
     is_default_cluster = TRUE,
@@ -25,9 +42,9 @@ INSERT INTO quartermaster.services (service_id, name, plane, description, defaul
 VALUES ('api_tenants', 'Quartermaster', 'control', 'Tenant and cluster management service', 9008, '/health', 'frameworks/quartermaster', 'api_tenants', 'http')
 ON CONFLICT (service_id) DO NOTHING;
 
--- Assign service to cluster
+-- Assign quartermaster to the control cluster
 INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas, config_blob)
-VALUES ('central-primary', 'api_tenants', 'running', 1, '{"database_url": "postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks"}')
+VALUES ('central-control', 'api_tenants', 'running', 1, '{"database_url": "postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks"}')
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
 
 -- Demo tenant
@@ -36,7 +53,9 @@ VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pr
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO quartermaster.tenant_cluster_assignments (tenant_id, cluster_id, deployment_tier, is_primary)
-VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'pro', TRUE)
+VALUES
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'pro', TRUE),
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-control', 'pro', FALSE)
 ON CONFLICT (tenant_id, cluster_id) DO NOTHING;
 
 -- Demo user
@@ -1114,15 +1133,19 @@ INSERT INTO quartermaster.services (service_id, name, plane, description, defaul
     ('periscope_ingest', 'Periscope Ingest', 'data', 'Analytics ingest service', 18005, '/health', 'frameworks/periscope-ingest', 'periscope_ingest', 'http')
 ON CONFLICT (service_id) DO NOTHING;
 
--- Assign all services to the central cluster
+-- Assign control-plane services to the control cluster
 INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
-    ('central-primary', 'gateway', 'running', 1),
-    ('central-primary', 'commodore', 'running', 1),
+    ('central-control', 'gateway', 'running', 1),
+    ('central-control', 'commodore', 'running', 1),
+    ('central-control', 'purser', 'running', 1),
+    ('central-control', 'skipper', 'running', 1)
+ON CONFLICT (cluster_id, service_id) DO NOTHING;
+
+-- Assign data/media-plane services to the media cluster
+INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
     ('central-primary', 'foghorn', 'running', 2),
-    ('central-primary', 'periscope_query', 'running', 1),
-    ('central-primary', 'purser', 'running', 1),
-    ('central-primary', 'skipper', 'running', 1),
     ('central-primary', 'signalman', 'running', 1),
     ('central-primary', 'decklog', 'running', 1),
+    ('central-primary', 'periscope_query', 'running', 1),
     ('central-primary', 'periscope_ingest', 'running', 1)
 ON CONFLICT (cluster_id, service_id) DO NOTHING;

@@ -5158,6 +5158,7 @@ type NetworkClusterStatus {
   currentViewers: Int!
   maxBandwidthMbps: Int!
   currentBandwidthMbps: Int!
+  services: [String!]!
 }
 
 type NetworkPeerConnection {

@@ -70,7 +70,8 @@ function formatLoad(current, max) {
 function clusterTooltipHtml(cluster) {
   let html =
     `<b>${escapeHtml(cluster.name)}</b><br>` +
-    `Type: ${escapeHtml(cluster.clusterType || cluster.region)}<br>` +
+    (cluster.region ? `Region: ${escapeHtml(cluster.region)}<br>` : "") +
+    (cluster.clusterType ? `Type: ${escapeHtml(cluster.clusterType)}<br>` : "") +
     `Nodes: ${cluster.healthyNodeCount}/${cluster.nodeCount}<br>` +
     `Peers: ${cluster.peerCount}<br>` +
     `Status: ${escapeHtml(cluster.status)}`;
@@ -81,6 +82,10 @@ function clusterTooltipHtml(cluster) {
       `Streams: ${formatLoad(cluster.currentStreams, cluster.maxStreams)}<br>` +
       `Viewers: ${formatLoad(cluster.currentViewers, cluster.maxViewers)}<br>` +
       `Bandwidth: ${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`;
+  }
+
+  if (cluster.services?.length) {
+    html += `<br>Services: ${cluster.services.map(escapeHtml).join(", ")}`;
   }
 
   if (cluster.shortDescription) {
@@ -165,6 +170,16 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
     }
   });
 
+  // Build per-node service list from service instances
+  const servicesByNode = {};
+  (data.serviceInstances || []).forEach((si) => {
+    if (!si.nodeId) return;
+    if (!servicesByNode[si.nodeId]) servicesByNode[si.nodeId] = [];
+    if (!servicesByNode[si.nodeId].includes(si.serviceId)) {
+      servicesByNode[si.nodeId].push(si.serviceId);
+    }
+  });
+
   // 2. Individual nodes
   (data.nodes || []).forEach((node) => {
     if (!node.latitude && !node.longitude) return;
@@ -178,21 +193,34 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       iconAnchor: [6, 6],
     });
 
+    const nodeSvcs = servicesByNode[node.nodeId];
+    let nodeTooltip =
+      `<b>${escapeHtml(node.name)}</b><br>` +
+      `Type: ${escapeHtml(node.nodeType)}<br>` +
+      `Status: ${escapeHtml(node.status)}<br>` +
+      `Cluster: ${escapeHtml(node.clusterId)}`;
+    if (nodeSvcs?.length) {
+      nodeTooltip += `<br>Services: ${nodeSvcs.map(escapeHtml).join(", ")}`;
+    }
+
     L.marker([node.latitude, node.longitude], { icon, interactive: true })
-      .bindTooltip(
-        `<b>${escapeHtml(node.name)}</b><br>` +
-          `Type: ${escapeHtml(node.nodeType)}<br>` +
-          `Status: ${escapeHtml(node.status)}<br>` +
-          `Cluster: ${escapeHtml(node.clusterId)}`,
-        { direction: "top", className: "network-viz__tooltip" }
-      )
+      .bindTooltip(nodeTooltip, { direction: "top", className: "network-viz__tooltip" })
       .addTo(nodeLayer);
   });
 
-  // 3. Service instances (placed near their host node)
+  // 3. Service instances (placed near their host node, fallback to cluster geo)
   (data.serviceInstances || []).forEach((svc) => {
-    const node = nodeMap[svc.nodeId];
-    if (!node || (!node.latitude && !node.longitude)) return;
+    let lat, lng;
+    const node = svc.nodeId ? nodeMap[svc.nodeId] : null;
+    if (node && (node.latitude || node.longitude)) {
+      lat = node.latitude + 0.3;
+      lng = node.longitude + 0.3;
+    } else {
+      const cluster = clusterMap[svc.clusterId];
+      if (!cluster) return;
+      lat = cluster.latitude + 0.3;
+      lng = cluster.longitude + 0.3;
+    }
 
     const color = SERVICE_HEALTH_COLORS[svc.healthStatus] || SERVICE_HEALTH_COLORS.unknown;
 
@@ -203,14 +231,13 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       iconAnchor: [4, 4],
     });
 
-    L.marker([node.latitude + 0.3, node.longitude + 0.3], {
-      icon,
-      interactive: true,
-    })
+    L.marker([lat, lng], { icon, interactive: true })
       .bindTooltip(
         `<b>${escapeHtml(svc.serviceId)}</b><br>` +
           `Health: ${escapeHtml(svc.healthStatus)}<br>` +
-          `Node: ${escapeHtml(svc.nodeId)}`,
+          (svc.nodeId
+            ? `Node: ${escapeHtml(svc.nodeId)}`
+            : `Cluster: ${escapeHtml(svc.clusterId)}`),
         { direction: "top", className: "network-viz__tooltip" }
       )
       .addTo(serviceLayer);

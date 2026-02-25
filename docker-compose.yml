@@ -49,7 +49,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       USAGE_HASH_SECRET: ${USAGE_HASH_SECRET}
-      CLUSTER_ID: ${CLUSTER_ID}
+      CLUSTER_ID: central-control
       STREAMING_RTMP_PORT: ${STREAMING_RTMP_PORT}
       STREAMING_SRT_PORT: ${STREAMING_SRT_PORT}
       SKIPPER_SPOKE_URL: http://skipper:18018/mcp/spoke
@@ -486,7 +486,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
-      CLUSTER_ID: ${CLUSTER_ID}
+      CLUSTER_ID: central-control
       GEOIP_MMDB_PATH: ${GEOIP_MMDB_PATH}
       GEOIP_CACHE_TTL: ${GEOIP_CACHE_TTL}
       GEOIP_CACHE_SWR: ${GEOIP_CACHE_SWR}
@@ -538,7 +538,7 @@ services:
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
-      NODE_ID: central-node-1
+      NODE_ID: central-media-1
     ports:
       - "18006:18006"
       - "18026:18026"
@@ -594,7 +594,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
-      NODE_ID: central-node-1
+      NODE_ID: central-media-1
     ports:
       - "18009:18009"
       - "19005:19005"
@@ -636,7 +636,7 @@ services:
       WEBAPP_PUBLIC_URL: ${WEBAPP_PUBLIC_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
-      CLUSTER_ID: ${CLUSTER_ID}
+      CLUSTER_ID: central-control
       NODE_ID: central-node-1
     ports:
       - "18001:18001" # HTTP (auth, webhooks, health)
@@ -744,7 +744,7 @@ services:
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
-      NODE_ID: central-node-1
+      NODE_ID: central-media-1
     depends_on:
       postgres:
         condition: service_healthy
@@ -800,7 +800,7 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLUSTER_ID: ${CLUSTER_ID}
-      NODE_ID: central-node-1
+      NODE_ID: central-media-1
     depends_on:
       postgres:
         condition: service_healthy
@@ -860,7 +860,7 @@ services:
       DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR}
       PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
       PURSER_HOST: ${PURSER_HOST}
-      CLUSTER_ID: ${CLUSTER_ID}
+      CLUSTER_ID: central-control
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
       NODE_ID: central-node-1
       API_PUBLIC_URL: ${API_PUBLIC_URL}
@@ -937,7 +937,7 @@ services:
       PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
       QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
       SKIPPER_HOST: ${SKIPPER_HOST:-skipper}
-      CLUSTER_ID: ${CLUSTER_ID}
+      CLUSTER_ID: central-control
       LLM_PROVIDER: ${LLM_PROVIDER}
       LLM_MODEL: ${LLM_MODEL}
       LLM_API_KEY: ${LLM_API_KEY}

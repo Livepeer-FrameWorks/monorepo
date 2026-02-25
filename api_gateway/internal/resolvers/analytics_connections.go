@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
@@ -3581,12 +3582,39 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 	}
 
-	// Group nodes by cluster: count and average geo
+	// Pre-process service instances: build helper maps before the node loop so we
+	// can use service health as a fallback for node online/offline status.
+	var serviceInstances []*model.NetworkServiceInstance
+	nodesWithHealthyService := make(map[string]bool)
+	servicesByCluster := make(map[string]map[string]bool)
+	if instancesResp != nil {
+		for _, si := range instancesResp.Instances {
+			serviceInstances = append(serviceInstances, &model.NetworkServiceInstance{
+				InstanceID:   si.InstanceId,
+				ServiceID:    si.ServiceId,
+				ClusterID:    si.ClusterId,
+				NodeID:       si.NodeId,
+				Status:       si.Status,
+				HealthStatus: si.HealthStatus,
+			})
+			if si.NodeId != nil && si.HealthStatus == "healthy" {
+				nodesWithHealthyService[*si.NodeId] = true
+			}
+			if _, ok := servicesByCluster[si.ClusterId]; !ok {
+				servicesByCluster[si.ClusterId] = make(map[string]bool)
+			}
+			servicesByCluster[si.ClusterId][si.ServiceId] = true
+		}
+	}
+
+	// Group nodes by cluster: count, healthy count, average geo, and region
 	type clusterGeo struct {
-		nodeCount int
-		latSum    float64
-		lonSum    float64
-		geoCount  int
+		nodeCount    int
+		healthyCount int
+		latSum       float64
+		lonSum       float64
+		geoCount     int
+		region       string
 	}
 	nodesByCluster := make(map[string]*clusterGeo)
 	var networkNodes []*model.NetworkNode
@@ -3598,6 +3626,9 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 				nodesByCluster[n.ClusterId] = cg
 			}
 			cg.nodeCount++
+			if cg.region == "" && n.Region != nil && *n.Region != "" {
+				cg.region = *n.Region
+			}
 			var lat, lon float64
 			if n.Latitude != nil && n.Longitude != nil {
 				lat = *n.Latitude
@@ -3607,8 +3638,9 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 				cg.geoCount++
 			}
 			nodeStatus := "offline"
-			if n.LastHeartbeat != nil {
+			if n.LastHeartbeat != nil || nodesWithHealthyService[n.NodeId] {
 				nodeStatus = "active"
+				cg.healthyCount++
 			}
 			networkNodes = append(networkNodes, &model.NetworkNode{
 				NodeID:    n.NodeId,
@@ -3618,21 +3650,6 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 				Longitude: lon,
 				Status:    nodeStatus,
 				ClusterID: n.ClusterId,
-			})
-		}
-	}
-
-	// Map service instances to public model
-	var serviceInstances []*model.NetworkServiceInstance
-	if instancesResp != nil {
-		for _, si := range instancesResp.Instances {
-			serviceInstances = append(serviceInstances, &model.NetworkServiceInstance{
-				InstanceID:   si.InstanceId,
-				ServiceID:    si.ServiceId,
-				ClusterID:    si.ClusterId,
-				NodeID:       si.NodeId,
-				Status:       si.Status,
-				HealthStatus: si.HealthStatus,
 			})
 		}
 	}
@@ -3668,7 +3685,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		hn := 0
 		if cg, ok := nodesByCluster[c.ClusterId]; ok {
 			nc = cg.nodeCount
-			hn = cg.nodeCount
+			hn = cg.healthyCount
 			if cg.geoCount > 0 {
 				lat = cg.latSum / float64(cg.geoCount)
 				lon = cg.lonSum / float64(cg.geoCount)
@@ -3696,10 +3713,23 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			currentBwMbps = int((ls.UploadBytesPerSec + ls.DownloadBytesPerSec) * 8 / 1_000_000)
 		}
 
+		var clusterServices []string
+		if svcSet, ok := servicesByCluster[c.ClusterId]; ok {
+			for svcID := range svcSet {
+				clusterServices = append(clusterServices, svcID)
+			}
+			sort.Strings(clusterServices)
+		}
+
+		clusterRegion := ""
+		if cg, ok := nodesByCluster[c.ClusterId]; ok && cg.region != "" {
+			clusterRegion = cg.region
+		}
+
 		clusters = append(clusters, &model.NetworkClusterStatus{
 			ClusterID:            c.ClusterId,
 			Name:                 c.ClusterName,
-			Region:               c.ClusterType,
+			Region:               clusterRegion,
 			Latitude:             lat,
 			Longitude:            lon,
 			NodeCount:            nc,
@@ -3714,6 +3744,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			CurrentViewers:       currentViewers,
 			MaxBandwidthMbps:     int(c.MaxBandwidthMbps),
 			CurrentBandwidthMbps: currentBwMbps,
+			Services:             clusterServices,
 		})
 		totalNodes += nc
 		healthyNodes += hn
