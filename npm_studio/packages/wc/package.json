@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-wc",
-  "version": "0.2.1",
+  "version": "0.2.4",
   "type": "module",
   "description": "Lit Web Components for StreamCrafter - framework-agnostic streaming UI",
   "main": "dist/esm/index.js",
