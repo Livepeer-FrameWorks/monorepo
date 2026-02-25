@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"frameworks/cli/pkg/detect"
@@ -212,11 +211,10 @@ func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventor
 func (f *FlexibleProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, svcInfo *gitops.ServiceInfo) error {
 	fmt.Printf("Provisioning %s in native mode...\n", f.serviceName)
 
-	// Get binary URL for current OS/arch (or explicit override)
+	// Get binary URL for target OS/arch (or explicit override)
 	binaryURL := config.BinaryURL
 	var err error
 	if binaryURL == "" {
-		// Allow wildcard "*" when using a single URL override via svcInfo.Binaries
 		if svcInfo.Binaries != nil {
 			if v, ok := svcInfo.Binaries["*"]; ok && v != "" {
 				binaryURL = v
@@ -224,7 +222,11 @@ func (f *FlexibleProvisioner) provisionNative(ctx context.Context, host inventor
 		}
 	}
 	if binaryURL == "" {
-		binaryURL, err = svcInfo.GetBinaryURL(runtime.GOOS, runtime.GOARCH)
+		remoteOS, remoteArch, archErr := f.DetectRemoteArch(ctx, host)
+		if archErr != nil {
+			return fmt.Errorf("failed to detect remote architecture: %w", archErr)
+		}
+		binaryURL, err = svcInfo.GetBinaryURL(remoteOS, remoteArch)
 	}
 	if err != nil {
 		return fmt.Errorf("binary not available: %w", err)

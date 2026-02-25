@@ -504,6 +504,7 @@ jobs:
           done
 
           # Native Binaries (for bare-metal deployment)
+          RELEASE_DL="${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}"
           echo "" >> dist/manifest.yaml
           echo "native_binaries:" >> dist/manifest.yaml
           for f in dist/digests/*.json; do
@@ -518,8 +519,24 @@ jobs:
               artifacts:
                 - arch: linux-amd64
                   file: frameworks-${name}-${{ github.ref_name }}-linux-amd64.tar.gz
+                  url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-linux-amd64.tar.gz
                 - arch: linux-arm64
                   file: frameworks-${name}-${{ github.ref_name }}-linux-arm64.tar.gz
+                  url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-linux-arm64.tar.gz
+          YAML
+          done
+
+          # Binary-only services (no Docker image, only native binaries)
+          for svc in privateer; do
+            cat >> dist/manifest.yaml <<YAML
+            - name: ${svc}
+              artifacts:
+                - arch: linux-amd64
+                  file: frameworks-${svc}-${{ github.ref_name }}-linux-amd64.tar.gz
+                  url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-linux-amd64.tar.gz
+                - arch: linux-arm64
+                  file: frameworks-${svc}-${{ github.ref_name }}-linux-arm64.tar.gz
+                  url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-linux-arm64.tar.gz
           YAML
           done
 

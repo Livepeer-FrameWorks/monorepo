@@ -75,35 +75,9 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 
 // parseUnameOutput parses "uname -sm" output (e.g. "Linux x86_64") into Go-style
 // os and arch values (e.g. "linux", "amd64").
-func parseUnameOutput(output string) (osName, goArch string, err error) {
-	parts := strings.Fields(strings.TrimSpace(output))
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("unexpected uname output: %q", output)
-	}
-	osName = strings.ToLower(parts[0])
-	switch parts[1] {
-	case "x86_64":
-		goArch = "amd64"
-	case "aarch64", "arm64":
-		goArch = "arm64"
-	case "armv7l":
-		goArch = "arm"
-	default:
-		goArch = parts[1]
-	}
-	return osName, goArch, nil
-}
-
-// detectRemoteArch detects the remote host's OS and architecture via SSH.
+// detectRemoteArch delegates to BaseProvisioner.DetectRemoteArch.
 func (e *EdgeProvisioner) detectRemoteArch(ctx context.Context, host inventory.Host) (osName, goArch string, err error) {
-	result, err := e.RunCommand(ctx, host, "uname -sm")
-	if err != nil {
-		return "", "", fmt.Errorf("failed to detect remote architecture: %w", err)
-	}
-	if result.ExitCode != 0 {
-		return "", "", fmt.Errorf("uname failed: %s", result.Stderr)
-	}
-	return parseUnameOutput(result.Stdout)
+	return e.DetectRemoteArch(ctx, host)
 }
 
 // sudoPrefix returns "sudo " for non-root SSH users, empty string for root.

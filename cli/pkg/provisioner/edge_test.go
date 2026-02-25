@@ -327,16 +327,16 @@ func TestParseUnameOutput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			osName, arch, err := parseUnameOutput(tt.input)
+			osName, arch, err := ParseUnameOutput(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseUnameOutput() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseUnameOutput() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if osName != tt.wantOS {
-				t.Errorf("parseUnameOutput() osName = %q, want %q", osName, tt.wantOS)
+				t.Errorf("ParseUnameOutput() osName = %q, want %q", osName, tt.wantOS)
 			}
 			if arch != tt.wantArch {
-				t.Errorf("parseUnameOutput() arch = %q, want %q", arch, tt.wantArch)
+				t.Errorf("ParseUnameOutput() arch = %q, want %q", arch, tt.wantArch)
 			}
 		})
 	}

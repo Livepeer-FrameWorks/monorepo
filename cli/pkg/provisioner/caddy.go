@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"frameworks/cli/pkg/gitops"
@@ -275,7 +274,11 @@ func (c *CaddyProvisioner) provisionNative(ctx context.Context, host inventory.H
 	fmt.Printf("Provisioning %s in native mode...\n", c.GetName())
 
 	// Download and install binary
-	binaryURL, err := svcInfo.GetBinaryURL(runtime.GOOS, runtime.GOARCH)
+	remoteOS, remoteArch, archErr := c.DetectRemoteArch(ctx, host)
+	if archErr != nil {
+		return fmt.Errorf("failed to detect remote architecture: %w", archErr)
+	}
+	binaryURL, err := svcInfo.GetBinaryURL(remoteOS, remoteArch)
 	if err != nil {
 		return fmt.Errorf("caddy binary not available: %w", err)
 	}

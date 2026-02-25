@@ -164,11 +164,40 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 	return manifest, nil
 }
 
-// fetchFromRepo downloads a manifest from the gitops repository
-func (f *Fetcher) fetchFromRepo(channel, version string) (*Manifest, error) {
-	// Build URL: https://raw.githubusercontent.com/Livepeer-FrameWorks/gitops/main/manifests/{channel}/{version}.yaml
-	url := fmt.Sprintf("%s/manifests/%s/%s.yaml", f.repository, channel, version)
+// channelPointer represents a channel file that points to a specific release manifest.
+type channelPointer struct {
+	PlatformVersion string    `yaml:"platform_version"`
+	Manifest        string    `yaml:"manifest"` // relative path, e.g. "releases/v0.1.0-rc2.yaml"
+	UpdatedAt       time.Time `yaml:"updated_at"`
+}
 
+// fetchFromRepo downloads a manifest from the gitops repository.
+// For "latest": resolves the channel pointer (channels/{channel}.yaml), then fetches the release manifest it references.
+// For pinned versions: fetches releases/{version}.yaml directly.
+func (f *Fetcher) fetchFromRepo(channel, version string) (*Manifest, error) {
+	if version == "latest" {
+		pointerURL := fmt.Sprintf("%s/channels/%s.yaml", f.repository, channel)
+		pointerData, err := f.fetchHTTP(pointerURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch %s channel pointer: %w", channel, err)
+		}
+		var pointer channelPointer
+		if err := yaml.Unmarshal(pointerData, &pointer); err != nil {
+			return nil, fmt.Errorf("failed to parse channel pointer: %w", err)
+		}
+		if pointer.Manifest == "" {
+			return nil, fmt.Errorf("channel pointer %s has no manifest path", channel)
+		}
+		manifestURL := fmt.Sprintf("%s/%s", f.repository, pointer.Manifest)
+		return f.fetchManifestHTTP(manifestURL)
+	}
+
+	manifestURL := fmt.Sprintf("%s/releases/%s.yaml", f.repository, version)
+	return f.fetchManifestHTTP(manifestURL)
+}
+
+// fetchHTTP downloads raw bytes from a URL with retries.
+func (f *Fetcher) fetchHTTP(url string) ([]byte, error) {
 	var lastErr error
 	for attempt := 1; attempt <= f.retryCount; attempt++ {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
@@ -178,29 +207,20 @@ func (f *Fetcher) fetchFromRepo(channel, version string) (*Manifest, error) {
 
 		resp, err := f.client.Do(req)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to download manifest: %w", err)
+			lastErr = fmt.Errorf("failed to download %s: %w", url, err)
 		} else {
-			defer resp.Body.Close()
+			data, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				lastErr = fmt.Errorf("manifest not found: %s (HTTP %d)", url, resp.StatusCode)
+				lastErr = fmt.Errorf("fetch failed: %s (HTTP %d)", url, resp.StatusCode)
 				if !shouldRetryStatus(resp.StatusCode) {
 					return nil, lastErr
 				}
+			} else if readErr != nil {
+				return nil, fmt.Errorf("failed to read response from %s: %w", url, readErr)
 			} else {
-				// Read body
-				data, err := io.ReadAll(resp.Body)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read manifest: %w", err)
-				}
-
-				// Parse YAML
-				var manifest Manifest
-				if err := yaml.Unmarshal(data, &manifest); err != nil {
-					return nil, fmt.Errorf("failed to parse manifest: %w", err)
-				}
-
-				return &manifest, nil
+				return data, nil
 			}
 		}
 
@@ -210,8 +230,20 @@ func (f *Fetcher) fetchFromRepo(channel, version string) (*Manifest, error) {
 			}
 		}
 	}
-
 	return nil, lastErr
+}
+
+// fetchManifestHTTP downloads and parses a manifest YAML from a URL.
+func (f *Fetcher) fetchManifestHTTP(url string) (*Manifest, error) {
+	data, err := f.fetchHTTP(url)
+	if err != nil {
+		return nil, err
+	}
+	var manifest Manifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+	return &manifest, nil
 }
 
 // loadFromCache loads a manifest from local cache
@@ -298,17 +330,7 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				FullImage: fmt.Sprintf("%s@%s", svc.Image, svc.Digest),
 				Binaries:  make(map[string]string),
 			}
-
-			// Find binaries for this service
-			for _, nb := range m.NativeBinaries {
-				if nb.Name == serviceName {
-					for _, artifact := range nb.Artifacts {
-						info.Binaries[artifact.Arch] = artifact.File
-					}
-					break
-				}
-			}
-
+			m.populateBinaries(info)
 			return info, nil
 		}
 	}
@@ -318,7 +340,7 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 		if iface.Name == serviceName {
 			return &ServiceInfo{
 				Name:      iface.Name,
-				Version:   "", // Interfaces don't have separate versions
+				Version:   "",
 				Image:     iface.Image,
 				Digest:    iface.Digest,
 				FullImage: fmt.Sprintf("%s@%s", iface.Image, iface.Digest),
@@ -327,20 +349,46 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 		}
 	}
 
+	// Search in native_binaries for binary-only services (e.g., privateer)
+	for _, nb := range m.NativeBinaries {
+		if nb.Name == serviceName {
+			info := &ServiceInfo{
+				Name:     nb.Name,
+				Binaries: make(map[string]string),
+			}
+			m.populateBinaries(info)
+			return info, nil
+		}
+	}
+
 	return nil, fmt.Errorf("service %s not found in manifest", serviceName)
 }
 
-// GetBinaryURL returns the download URL for a binary
+// populateBinaries fills ServiceInfo.Binaries from the manifest's native_binaries.
+// Prefers artifact.URL when available; falls back to artifact.File.
+func (m *Manifest) populateBinaries(info *ServiceInfo) {
+	for _, nb := range m.NativeBinaries {
+		if nb.Name == info.Name {
+			for _, artifact := range nb.Artifacts {
+				if artifact.URL != "" {
+					info.Binaries[artifact.Arch] = artifact.URL
+				} else {
+					info.Binaries[artifact.Arch] = artifact.File
+				}
+			}
+			break
+		}
+	}
+}
+
+// GetBinaryURL returns the download URL (or filename) for a binary matching the given os and arch.
 func (s *ServiceInfo) GetBinaryURL(os, arch string) (string, error) {
 	key := fmt.Sprintf("%s-%s", os, arch)
-	filename, ok := s.Binaries[key]
+	value, ok := s.Binaries[key]
 	if !ok {
 		return "", fmt.Errorf("binary not available for %s", key)
 	}
-
-	// For now, return the filename - provisioner will need to construct full URL
-	// based on GitHub releases or local path
-	return filename, nil
+	return value, nil
 }
 
 // isLocalPath checks if a path is local (starts with / or ./)
@@ -415,42 +463,38 @@ func shouldRetryStatus(status int) bool {
 
 // fetchFromLocal loads a manifest from local filesystem
 func (f *Fetcher) fetchFromLocal(channel, version string) (*Manifest, error) {
-	// For local paths, support two patterns:
-	// 1. /path/to/gitops/releases/vX.Y.Z.yaml (specific version)
-	// 2. /path/to/gitops/channels/stable.yaml (channel pointer)
-
 	var manifestPath string
 
 	if version == "latest" {
-		// Try channel file first
-		manifestPath = filepath.Join(f.repository, "channels", channel+".yaml")
-		if _, err := os.Stat(manifestPath); err != nil {
-			// Fallback to releases directory, find latest
+		// Try channel pointer file first
+		channelPath := filepath.Join(f.repository, "channels", channel+".yaml")
+		if data, err := os.ReadFile(channelPath); err == nil {
+			var pointer channelPointer
+			if yaml.Unmarshal(data, &pointer) == nil && pointer.Manifest != "" {
+				manifestPath = filepath.Join(f.repository, pointer.Manifest)
+			}
+		}
+
+		// Fallback: scan releases directory for latest file alphabetically
+		if manifestPath == "" {
 			releasesDir := filepath.Join(f.repository, "releases")
 			files, err := os.ReadDir(releasesDir)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read releases directory: %w", err)
 			}
 
-			// Find latest release (simple heuristic: last file alphabetically)
-			var latestFile string
 			var releaseFiles []string
 			for _, file := range files {
 				if !file.IsDir() && filepath.Ext(file.Name()) == ".yaml" {
 					releaseFiles = append(releaseFiles, file.Name())
 				}
 			}
+			sort.Strings(releaseFiles)
 
-			if len(releaseFiles) > 0 {
-				sort.Strings(releaseFiles)
-				latestFile = releaseFiles[len(releaseFiles)-1]
-			}
-
-			if latestFile == "" {
+			if len(releaseFiles) == 0 {
 				return nil, fmt.Errorf("no release manifests found in %s", releasesDir)
 			}
-
-			manifestPath = filepath.Join(releasesDir, latestFile)
+			manifestPath = filepath.Join(releasesDir, releaseFiles[len(releaseFiles)-1])
 		}
 	} else {
 		// Specific version

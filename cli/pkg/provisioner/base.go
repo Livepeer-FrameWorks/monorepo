@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -113,6 +114,42 @@ func (b *BaseProvisioner) UploadFile(ctx context.Context, host inventory.Host, o
 	}
 
 	return runner.Upload(ctx, opts)
+}
+
+// DetectRemoteArch detects the remote host's OS and architecture via SSH.
+// For localhost, returns the local runtime values.
+func (b *BaseProvisioner) DetectRemoteArch(ctx context.Context, host inventory.Host) (osName, goArch string, err error) {
+	if host.Address == "127.0.0.1" || host.Address == "localhost" || host.Address == "" {
+		return runtime.GOOS, runtime.GOARCH, nil
+	}
+	result, err := b.RunCommand(ctx, host, "uname -sm")
+	if err != nil {
+		return "", "", fmt.Errorf("failed to detect remote architecture: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return "", "", fmt.Errorf("uname failed: %s", result.Stderr)
+	}
+	return ParseUnameOutput(result.Stdout)
+}
+
+// ParseUnameOutput converts `uname -sm` output (e.g. "Linux x86_64") to Go GOOS/GOARCH values.
+func ParseUnameOutput(output string) (osName, goArch string, err error) {
+	parts := strings.Fields(strings.TrimSpace(output))
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("unexpected uname output: %q", output)
+	}
+	osName = strings.ToLower(parts[0])
+	switch parts[1] {
+	case "x86_64":
+		goArch = "amd64"
+	case "aarch64", "arm64":
+		goArch = "arm64"
+	case "armv7l":
+		goArch = "arm"
+	default:
+		goArch = parts[1]
+	}
+	return osName, goArch, nil
 }
 
 // Cleanup stops a service for rollback. Default implementation tries docker/systemd stop.

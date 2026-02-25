@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"time"
 
@@ -95,11 +94,12 @@ fi
 
 func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory.Host, version string) error {
 	// Fetch from GitOps
+	channel, resolved := gitops.ResolveVersion(version)
 	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
 	if err != nil {
 		return err
 	}
-	manifest, err := fetcher.Fetch("stable", version)
+	manifest, err := fetcher.Fetch(channel, resolved)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,11 @@ func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory
 	if err != nil {
 		return err
 	}
-	url, err := svcInfo.GetBinaryURL(runtime.GOOS, runtime.GOARCH)
+	remoteOS, remoteArch, archErr := p.DetectRemoteArch(ctx, host)
+	if archErr != nil {
+		return fmt.Errorf("failed to detect remote architecture: %w", archErr)
+	}
+	url, err := svcInfo.GetBinaryURL(remoteOS, remoteArch)
 	if err != nil {
 		return err
 	}
