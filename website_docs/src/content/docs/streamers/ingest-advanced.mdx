@@ -23,10 +23,7 @@ The encoder runs in a Web Worker and uses `RTCRtpScriptTransform` to inject enco
 If you need to force standard WebRTC encoding:
 
 ```tsx
-// React
-<StreamCrafter whipUrl="..." useWebCodecs={false} />;
-
-// Vanilla
+// Vanilla / headless
 const studio = createStreamCrafter({
   whipUrl: "...",
   useWebCodecs: false,
@@ -146,8 +143,13 @@ For custom UIs that need to resolve a WHIP URL before initializing:
 ```ts
 import { IngestClient } from "@livepeer-frameworks/streamcrafter-core";
 
-const client = new IngestClient({ gatewayUrl: "%GATEWAY_URL%/graphql" });
-const { whipUrl } = await client.resolveEndpoint("my-stream-key");
+const client = new IngestClient({
+  gatewayUrl: "%GATEWAY_URL%/graphql",
+  streamKey: "my-stream-key",
+});
+const endpoints = await client.resolve();
+const whipUrl = endpoints.primary?.whipUrl;
+if (!whipUrl) throw new Error("No WHIP endpoint resolved");
 
 // Now use the resolved URL
 const studio = createStreamCrafter({ whipUrl });
@@ -168,10 +170,7 @@ await studio.startCamera({
 await studio.startScreenShare({ audio: true });
 
 // Custom MediaStream
-await studio.controller.addSource(customStream, {
-  label: "External Source",
-  type: "custom",
-});
+studio.addCustomSource(customStream, "External Source");
 ```
 
 ### Source Management
@@ -269,20 +268,20 @@ Override default keyboard shortcuts:
 const studio = createStreamCrafter({
   whipUrl: "...",
   keyMap: {
-    toggleStreaming: ["g"],
+    toggleStream: ["g"],
     toggleMute: ["m"],
     addCamera: ["c"],
-    addScreen: ["s"],
+    shareScreen: ["s"],
   },
 });
 ```
 
 Default hotkeys:
 
-| Action           | Default Key |
-| ---------------- | ----------- |
-| Toggle streaming | `g`         |
-| Toggle mute      | `m`         |
-| Add camera       | `c`         |
-| Add screen share | `s`         |
-| Toggle settings  | `,`         |
+| Action           | Default Key   |
+| ---------------- | ------------- |
+| Toggle streaming | `Shift+Enter` |
+| Toggle mute      | `m`           |
+| Add camera       | `c`           |
+| Add screen share | `s`           |
+| Toggle settings  | `,`           |

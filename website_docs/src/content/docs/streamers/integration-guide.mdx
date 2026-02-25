@@ -45,8 +45,9 @@ Replace the default layout with framework sub-components. Mix our components wit
 // Player — custom control bar
 <Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
   <PlayButton />
-  <ProgressBar />
-  <VolumeSlider />
+  <VolumeControl />
+  <SettingsMenu />
+  <FullscreenButton />
   <MyCustomOverlay />
 </Player>
 
@@ -71,14 +72,14 @@ Build your own UI entirely using the provided state management primitives.
 
 ```tsx
 // React hooks
-const { playing, volume, play, pause } = usePlayer({ ... });
+const { state, togglePlay, setVolume } = usePlayerController({ ... });
 
 // Svelte stores
 const crafter = createStreamCrafterContextV2();
 crafter.startCamera();
 
 // Vanilla reactive state
-player.state.on("volume", (v) => updateSlider(v));
+player.subscribe.on("volume", (v) => updateSlider(v));
 studio.reactiveState.on("streaming", (live) => updateButton(live));
 
 // WC controller
@@ -94,14 +95,19 @@ Best for: Fully custom UI, unique design requirements, embedding in complex appl
 Run the media engine without any visual UI. Full programmatic control.
 
 ```ts
-// Vanilla player — no target
-const player = createPlayer({ contentId: "pk_...", gatewayUrl: "..." });
+// Vanilla player (no built-in UI)
+const player = createPlayer({
+  target: "#player",
+  contentId: "pk_...",
+  gatewayUrl: "...",
+  skin: false,
+});
 
 // Vanilla studio — no target
 const studio = createStreamCrafter({ whipUrl: "..." });
 
-// WC — controls disabled
-<fw-player content-id="pk_..." controls="false"></fw-player>
+// WC — provide your own controls slot content
+<fw-player content-id="pk_..."><div slot="controls"></div></fw-player>
 <fw-streamcrafter whip-url="..." controls="false"></fw-streamcrafter>
 ```
 
@@ -138,12 +144,11 @@ Framework packages re-export core types. You only need to install one package pe
 ### Themed Player with Custom Controls
 
 ```tsx
-<Player contentId="pk_..." contentType="live" theme="tokyo-night" options={{ gatewayUrl: "..." }}>
+<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "...", theme: "tokyo-night" }}>
   <PlayButton />
-  <ProgressBar />
+  <SettingsMenu />
   <div className="spacer" />
-  <VolumeSlider />
-  <QualitySelector />
+  <VolumeControl />
   <FullscreenButton />
 </Player>
 ```
@@ -189,14 +194,7 @@ function LiveDashboard() {
   <body>
     <!-- Player -->
     <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
-    <fw-player
-      content-id="pk_..."
-      content-type="live"
-      gateway-url="..."
-      autoplay
-      muted
-      controls
-    ></fw-player>
+    <fw-player content-id="pk_..." content-type="live" gateway-url="..." autoplay muted></fw-player>
 
     <!-- Studio -->
     <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>

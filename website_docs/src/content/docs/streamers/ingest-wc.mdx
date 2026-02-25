@@ -140,17 +140,17 @@ Without `for`, sub-components look for the nearest ancestor `<fw-streamcrafter>`
 
 ## Attributes Reference
 
-| Attribute           | Type      | Default       | Description                        |
-| ------------------- | --------- | ------------- | ---------------------------------- |
-| `whip-url`          | `string`  | —             | Direct WHIP ingest endpoint        |
-| `gateway-url`       | `string`  | —             | Gateway GraphQL endpoint           |
-| `stream-key`        | `string`  | —             | Stream key (used with gateway-url) |
-| `initial-profile`   | `string`  | `"broadcast"` | Quality preset                     |
-| `controls`          | `string`  | `""`          | Set to `"false"` for headless mode |
-| `theme`             | `string`  | `"default"`   | Theme preset name                  |
-| `locale`            | `string`  | `"en"`        | UI language                        |
-| `enable-compositor` | `boolean` | `true`        | Enable compositor                  |
-| `debug`             | `boolean` | `false`       | Enable debug logging               |
+| Attribute           | Type      | Default       | Description                                                            |
+| ------------------- | --------- | ------------- | ---------------------------------------------------------------------- |
+| `whip-url`          | `string`  | —             | Direct WHIP ingest endpoint                                            |
+| `gateway-url`       | `string`  | —             | Gateway GraphQL endpoint                                               |
+| `stream-key`        | `string`  | —             | Stream key (used with gateway-url)                                     |
+| `initial-profile`   | `string`  | `"broadcast"` | Quality preset                                                         |
+| `controls`          | `string`  | `""`          | Set to `"false"` for headless mode                                     |
+| `theme`             | `string`  | `"default"`   | Theme preset name                                                      |
+| `locale`            | `string`  | `"en"`        | UI language                                                            |
+| `enable-compositor` | `boolean` | `true`        | Enable compositor (set `el.enableCompositor = false` in JS to disable) |
+| `debug`             | `boolean` | `false`       | Enable debug logging                                                   |
 
 ## Events
 
@@ -161,10 +161,6 @@ const studio = document.querySelector("fw-streamcrafter");
 
 studio.addEventListener("fw-sc-state-change", (e) => {
   console.log("State:", e.detail.state);
-});
-
-studio.addEventListener("fw-sc-layout-apply", (e) => {
-  console.log("Layout:", e.detail.layout);
 });
 ```
 

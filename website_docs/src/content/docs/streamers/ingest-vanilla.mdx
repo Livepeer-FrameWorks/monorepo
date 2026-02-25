@@ -34,7 +34,7 @@ const studio = createStreamCrafter({
 studio.state; // "idle"
 studio.streaming; // false
 studio.sources; // []
-studio.profile; // { name: "broadcast", ... }
+studio.profile; // "broadcast"
 
 // Change state (mutations)
 await studio.startCamera();
@@ -69,22 +69,22 @@ All queries are synchronous getters on the instance.
 
 ## Mutations (Change State)
 
-| Mutation                    | Signature                  | Description               |
-| --------------------------- | -------------------------- | ------------------------- |
-| `startCamera(opts?)`        | `(opts?) => Promise<void>` | Add camera source         |
-| `startScreenShare(opts?)`   | `(opts?) => Promise<void>` | Add screen share source   |
-| `goLive()`                  | `() => Promise<void>`      | Start streaming           |
-| `stop()`                    | `() => Promise<void>`      | Stop streaming            |
-| `removeSource(id)`          | `(id: string) => void`     | Remove a source           |
-| `setSourceVolume(id, vol)`  | `(id, number) => void`     | Set source volume         |
-| `setSourceMuted(id, muted)` | `(id, boolean) => void`    | Mute/unmute source        |
-| `setSourceActive(id)`       | `(id: string) => void`     | Set active source         |
-| `setPrimaryVideo(id)`       | `(id: string) => void`     | Set primary video         |
-| `profile =`                 | `set profile(p)`           | Change quality profile    |
-| `masterVolume =`            | `set masterVolume(v)`      | Set master volume         |
-| `theme =`                   | `set theme(t)`             | Switch theme preset       |
-| `setEncoderOverrides(o)`    | `(overrides) => void`      | Override encoder settings |
-| `destroy()`                 | `() => void`               | Cleanup and tear down     |
+| Mutation                      | Signature                                 | Description               |
+| ----------------------------- | ----------------------------------------- | ------------------------- |
+| `startCamera(opts?)`          | `(opts?) => Promise<MediaSource>`         | Add camera source         |
+| `startScreenShare(opts?)`     | `(opts?) => Promise<MediaSource \| null>` | Add screen share source   |
+| `goLive()`                    | `() => Promise<void>`                     | Start streaming           |
+| `stop()`                      | `() => Promise<void>`                     | Stop streaming            |
+| `removeSource(id)`            | `(id: string) => void`                    | Remove a source           |
+| `setSourceVolume(id, vol)`    | `(id, number) => void`                    | Set source volume         |
+| `setSourceMuted(id, muted)`   | `(id, boolean) => void`                   | Mute/unmute source        |
+| `setSourceActive(id, active)` | `(id, boolean) => void`                   | Set active source         |
+| `setPrimaryVideo(id)`         | `(id: string) => void`                    | Set primary video         |
+| `profile =`                   | `set profile(p)`                          | Change quality profile    |
+| `masterVolume =`              | `set masterVolume(v)`                     | Set master volume         |
+| `theme =`                     | `set theme(t)`                            | Switch theme preset       |
+| `setEncoderOverrides(o)`      | `(overrides) => void`                     | Override encoder settings |
+| `destroy()`                   | `() => void`                              | Cleanup and tear down     |
 
 ## Subscriptions — Events
 
@@ -100,9 +100,9 @@ unsub();
 | Event                 | Payload                  | Description                      |
 | --------------------- | ------------------------ | -------------------------------- |
 | `stateChange`         | `{ state, context }`     | Lifecycle state transition       |
-| `sourceAdded`         | `MediaSource`            | New source added                 |
+| `sourceAdded`         | `{ source }`             | New source added                 |
 | `sourceRemoved`       | `{ sourceId }`           | Source removed                   |
-| `sourceUpdated`       | `MediaSource`            | Source properties changed        |
+| `sourceUpdated`       | `{ source, changes }`    | Source properties changed        |
 | `qualityChanged`      | `QualityProfile`         | Quality profile changed          |
 | `statsUpdate`         | `Stats`                  | Streaming statistics update      |
 | `deviceChange`        | `MediaDeviceInfo[]`      | Available devices changed        |
@@ -129,20 +129,20 @@ const unsub2 = studio.reactiveState.on("sources", (sources) => {
 const isLive = studio.reactiveState.get("streaming");
 ```
 
-| Property            | Type                             | Trigger Events                                  |
-| ------------------- | -------------------------------- | ----------------------------------------------- |
-| `state`             | `IngestState`                    | `stateChange`                                   |
-| `stateContext`      | `IngestStateContextV2`           | `stateChange`                                   |
-| `streaming`         | `boolean`                        | `stateChange`                                   |
-| `capturing`         | `boolean`                        | `stateChange`                                   |
-| `reconnecting`      | `boolean`                        | `stateChange`                                   |
-| `sources`           | `MediaSource[]`                  | `sourceAdded`, `sourceRemoved`, `sourceUpdated` |
-| `primaryVideo`      | `MediaSource \| null`            | `sourceUpdated`                                 |
-| `masterVolume`      | `number`                         | `stateChange`                                   |
-| `profile`           | `QualityProfile`                 | `qualityChanged`                                |
-| `error`             | `{ error, recoverable } \| null` | `error`, `stateChange`                          |
-| `compositorEnabled` | `boolean`                        | `stateChange`                                   |
-| `webCodecsActive`   | `boolean`                        | `webCodecsActive`                               |
+| Property            | Type                   | Trigger Events                                  |
+| ------------------- | ---------------------- | ----------------------------------------------- |
+| `state`             | `IngestState`          | `stateChange`                                   |
+| `stateContext`      | `IngestStateContextV2` | `stateChange`                                   |
+| `streaming`         | `boolean`              | `stateChange`                                   |
+| `capturing`         | `boolean`              | `stateChange`                                   |
+| `reconnecting`      | `boolean`              | `stateChange`                                   |
+| `sources`           | `MediaSource[]`        | `sourceAdded`, `sourceRemoved`, `sourceUpdated` |
+| `primaryVideo`      | `MediaSource \| null`  | `sourceUpdated`                                 |
+| `masterVolume`      | `number`               | `stateChange`                                   |
+| `profile`           | `QualityProfile`       | `qualityChanged`                                |
+| `error`             | `string \| null`       | `error`, `stateChange`                          |
+| `compositorEnabled` | `boolean`              | `stateChange`                                   |
+| `webCodecsActive`   | `boolean`              | `webCodecsActive`                               |
 
 ## Options
 
@@ -159,7 +159,7 @@ const isLive = studio.reactiveState.get("streaming");
 | `reconnection`     | `ReconnectionConfig`    | `{ enabled: true }` | Reconnection settings                        |
 | `debug`            | `boolean`               | `false`             | Debug logging                                |
 | `enableCompositor` | `boolean`               | `true`              | Enable compositor                            |
-| `enableWebCodecs`  | `boolean`               | auto                | WebCodecs encoder (auto-enabled on Chromium) |
+| `useWebCodecs`     | `boolean`               | auto                | WebCodecs encoder (auto-enabled on Chromium) |
 
 ## Headless Mode
 
@@ -173,27 +173,24 @@ const studio = createStreamCrafter({
 
 // No UI rendered — control everything programmatically
 await studio.startCamera();
-const stream = studio.controller.getMediaStream();
+const stream = studio.mediaStream;
 myVideoElement.srcObject = stream;
 
 studio.reactiveState.on("state", (s) => updateUI(s));
 await studio.goLive();
 ```
 
-## Using the Controller Directly
+## Advanced Controls
 
-For advanced use cases, access the underlying `IngestControllerV2`:
+The vanilla facade already exposes advanced operations directly:
 
 ```ts
-const ctrl = studio.controller;
-
 // Device enumeration
-const devices = await ctrl.getDevices();
+const devices = await studio.devices;
 
 // Compositor
-ctrl.enableCompositor();
-ctrl.applyLayout({ mode: "pip-br", scalingMode: "letterbox", pipScale: 0.25 });
+await studio.enableCompositor({ renderer: "webgl" });
 
 // Stats
-const stats = await ctrl.getStats();
+const stats = await studio.stats;
 ```

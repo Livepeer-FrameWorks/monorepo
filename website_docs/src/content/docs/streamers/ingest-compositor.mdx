@@ -32,8 +32,11 @@ If you need raw source streaming without compositing overhead:
 **Web Components:**
 
 ```html
-<!-- Omit the enable-compositor attribute -->
-<fw-streamcrafter whip-url="..."></fw-streamcrafter>
+<!-- Disable via JS property -->
+<fw-streamcrafter id="studio" whip-url="..."></fw-streamcrafter>
+<script>
+  document.getElementById("studio").enableCompositor = false;
+</script>
 ```
 
 **Vanilla:**

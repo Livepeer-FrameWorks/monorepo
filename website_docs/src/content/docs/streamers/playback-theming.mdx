@@ -11,7 +11,7 @@ Both the Player and StreamCrafter ship with built-in theme presets. Apply with a
 
 ```tsx
 // React
-<Player contentId="pk_..." contentType="live" theme="dracula" />
+<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "...", theme: "dracula" }} />
 <StreamCrafter whipUrl="..." theme="tokyo-night" />
 ```
 
@@ -103,16 +103,18 @@ All tokens use bare HSL triplets. Consume via `hsl(var(--fw-*) / <alpha>)` for o
 
 ### Studio Tokens (`--fw-sc-*`)
 
-| Token                | Purpose                   |
-| -------------------- | ------------------------- |
-| `--fw-sc-bg`         | Background                |
-| `--fw-sc-surface`    | Panel surfaces            |
-| `--fw-sc-border`     | Border color              |
-| `--fw-sc-text`       | Primary text              |
-| `--fw-sc-text-muted` | Secondary text            |
-| `--fw-sc-accent`     | Interactive elements      |
-| `--fw-sc-success`    | Success/live indicators   |
-| `--fw-sc-danger`     | Error/destructive actions |
+| Token                    | Purpose                   |
+| ------------------------ | ------------------------- |
+| `--fw-sc-surface-deep`   | Deepest background        |
+| `--fw-sc-surface`        | Panel surfaces            |
+| `--fw-sc-surface-raised` | Elevated surfaces         |
+| `--fw-sc-surface-active` | Active/pressed state      |
+| `--fw-sc-border`         | Border color              |
+| `--fw-sc-text`           | Primary text              |
+| `--fw-sc-text-muted`     | Secondary text            |
+| `--fw-sc-accent`         | Interactive elements      |
+| `--fw-sc-success`        | Success/live indicators   |
+| `--fw-sc-danger`         | Error/destructive actions |
 
 ### Custom Overrides
 
@@ -130,7 +132,7 @@ fw-player,
 fw-streamcrafter,
 .fw-sc-root {
   --fw-sc-accent: 262 80% 60%;
-  --fw-sc-bg: 230 15% 12%;
+  --fw-sc-surface-deep: 230 15% 12%;
 }
 ```
 
@@ -146,7 +148,10 @@ player.setThemeOverrides({
 player.clearTheme(); // Reset to preset
 
 // Studio
-studio.theme = "custom"; // then override via CSS
+studio.theme = {
+  accent: "262 80% 60%",
+  surfaceDeep: "230 15% 12%",
+};
 ```
 
 ## Internationalization
@@ -267,10 +272,10 @@ Default player shortcuts:
 const studio = createStreamCrafter({
   whipUrl: "...",
   keyMap: {
-    toggleStreaming: ["g"],
+    toggleStream: ["g"],
     toggleMute: ["m"],
     addCamera: ["c"],
-    addScreen: ["s"],
+    shareScreen: ["s"],
     toggleSettings: [","],
   },
 });

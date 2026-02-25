@@ -37,7 +37,6 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
   gateway-url="%GATEWAY_URL%/graphql"
   autoplay
   muted
-  controls
 ></fw-player>
 ```
 
@@ -50,20 +49,19 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
   mist-url="https://edge.example.com"
   autoplay
   muted
-  controls
 ></fw-player>
 ```
 
 ### DVR and Clips
 
 ```html
-<fw-player content-type="dvr" content-id="pk_..." gateway-url="..." controls></fw-player>
-<fw-player content-type="clip" content-id="pk_..." gateway-url="..." controls></fw-player>
+<fw-player content-type="dvr" content-id="pk_..." gateway-url="..."></fw-player>
+<fw-player content-type="clip" content-id="pk_..." gateway-url="..."></fw-player>
 ```
 
-## Headless Mode
+## Custom Controls Mode
 
-Omit the `controls` attribute for a bare video element. Access the controller for programmatic control:
+Provide your own controls via the `controls` slot. Access the controller for programmatic control:
 
 ```html
 <fw-player
@@ -81,8 +79,8 @@ Omit the `controls` attribute for a bare video element. Access the controller fo
   // Access the controller
   player.controller.play();
   player.controller.pause();
-  player.controller.seek(30);
-  player.controller.volume = 0.5;
+  player.controller.seek(30000);
+  player.controller.setVolume(0.5);
 
   // Listen for state changes
   player.addEventListener("fw-state-change", (e) => {
@@ -137,19 +135,21 @@ Use sub-components outside the player element with the `for` attribute:
 
 ## Attributes Reference
 
-| Attribute       | Type      | Default     | Description                     |
-| --------------- | --------- | ----------- | ------------------------------- |
-| `content-id`    | `string`  | —           | Playback ID                     |
-| `content-type`  | `string`  | `"live"`    | `live`, `dvr`, `clip`, or `vod` |
-| `gateway-url`   | `string`  | —           | Gateway GraphQL endpoint        |
-| `mist-url`      | `string`  | —           | Direct MistServer URL           |
-| `autoplay`      | `boolean` | `false`     | Auto-start playback             |
-| `muted`         | `boolean` | `false`     | Start muted                     |
-| `controls`      | `boolean` | `false`     | Show built-in controls          |
-| `theme`         | `string`  | `"default"` | Theme preset                    |
-| `playback-mode` | `string`  | `"auto"`    | Protocol preference             |
-| `force-type`    | `string`  | —           | Force source type               |
-| `debug`         | `boolean` | `false`     | Debug logging                   |
+| Attribute         | Type      | Default     | Description                       |
+| ----------------- | --------- | ----------- | --------------------------------- |
+| `content-id`      | `string`  | —           | Playback ID                       |
+| `content-type`    | `string`  | `"live"`    | `live`, `dvr`, `clip`, or `vod`   |
+| `gateway-url`     | `string`  | —           | Gateway GraphQL endpoint          |
+| `mist-url`        | `string`  | —           | Direct MistServer URL             |
+| `autoplay`        | `boolean` | `true`      | Auto-start playback               |
+| `muted`           | `boolean` | `false`     | Start muted                       |
+| `controls`        | `boolean` | `false`     | Compatibility no-op               |
+| `stock-controls`  | `boolean` | `false`     | Use browser-native video controls |
+| `native-controls` | `boolean` | `false`     | Alias for `stock-controls`        |
+| `theme`           | `string`  | `"default"` | Theme preset                      |
+| `playback-mode`   | `string`  | `"auto"`    | Protocol preference               |
+| `dev-mode`        | `boolean` | `false`     | Show dev panel                    |
+| `debug`           | `boolean` | `false`     | Debug logging                     |
 
 ## Theming
 
@@ -171,14 +171,7 @@ Or use a preset:
 
 ```vue
 <template>
-  <fw-player
-    :content-id="contentId"
-    content-type="live"
-    :gateway-url="gatewayUrl"
-    autoplay
-    muted
-    controls
-  />
+  <fw-player :content-id="contentId" content-type="live" :gateway-url="gatewayUrl" autoplay muted />
 </template>
 
 <script setup>
@@ -207,6 +200,5 @@ export class AppModule {}
   [attr.gateway-url]="gatewayUrl"
   autoplay
   muted
-  controls
 ></fw-player>
 ```

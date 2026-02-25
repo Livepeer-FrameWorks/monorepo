@@ -56,7 +56,8 @@ Any MCP-compatible client can connect using the endpoint URL and authentication 
 
 ## Resources
 
-Read-only data sources. 21 URIs across 10 categories.
+Read-only data sources for account, billing, streams, analytics, infrastructure, support, and API
+discovery.
 
 | URI                                         | Description                                       |
 | ------------------------------------------- | ------------------------------------------------- |
@@ -72,6 +73,9 @@ Read-only data sources. 21 URIs across 10 categories.
 | `analytics://usage`                         | Current billing period usage                      |
 | `analytics://viewers`                       | Viewer metrics (last 24h)                         |
 | `analytics://geographic`                    | Geographic viewer distribution                    |
+| `analytics://routing`                       | Routing efficiency and cross-cluster traffic      |
+| `analytics://federation`                    | Federation operations summary                     |
+| `analytics://network-topology`              | Cluster topology and peer connectivity            |
 | `nodes://list`                              | Infrastructure nodes                              |
 | `nodes://{id}`                              | Node details                                      |
 | `clusters://list`                           | Subscribed clusters                               |
@@ -114,43 +118,48 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 ## Tools
 
-Actions the agent can perform. 33 tools across 13 categories.
+Actions the agent can perform.
 
-| Tool                        | Description                                   | Requires          |
-| --------------------------- | --------------------------------------------- | ----------------- |
-| `update_billing_details`    | Set billing address                           | Auth              |
-| `get_payment_options`       | Get x402 payment options                      | None              |
-| `submit_payment`            | Submit x402 payment (auth-only or top-up)     | None              |
-| `topup_balance`             | Request crypto deposit address                | Billing details   |
-| `check_topup`               | Check crypto payment status                   | Auth              |
-| `create_stream`             | Create a new stream                           | Billing + Balance |
-| `update_stream`             | Update stream settings                        | Auth              |
-| `delete_stream`             | Delete a stream                               | Auth              |
-| `refresh_stream_key`        | Generate new stream key                       | Auth              |
-| `create_clip`               | Create clip from stream                       | Billing + Balance |
-| `delete_clip`               | Delete a clip                                 | Auth              |
-| `start_dvr`                 | Start DVR recording                           | Billing + Balance |
-| `stop_dvr`                  | Stop DVR recording                            | Auth              |
-| `create_vod_upload`         | Start a VOD upload                            | Billing + Balance |
-| `complete_vod_upload`       | Finalize a VOD upload                         | Auth              |
-| `abort_vod_upload`          | Cancel an upload                              | Auth              |
-| `delete_vod_asset`          | Delete a VOD asset                            | Auth              |
-| `resolve_playback_endpoint` | Get viewer playback URLs                      | None              |
-| `diagnose_rebuffering`      | Analyze rebuffering events                    | Auth              |
-| `diagnose_buffer_health`    | Analyze buffer health and dry events          | Auth              |
-| `diagnose_packet_loss`      | Analyze packet loss (protocol-aware)          | Auth              |
-| `diagnose_routing`          | Analyze CDN routing decisions                 | Auth              |
-| `get_stream_health_summary` | Aggregated stream health metrics              | Auth              |
-| `get_anomaly_report`        | Detect anomalies vs baseline                  | Auth              |
-| `search_support_history`    | Search support conversations                  | Auth              |
-| `introspect_schema`         | Explore the GraphQL schema                    | Auth              |
-| `generate_query`            | Generate a GraphQL query from templates       | Auth              |
-| `execute_query`             | Execute a GraphQL query                       | Auth              |
-| `ask_consultant`            | Full Skipper pipeline with confidence tagging | Auth              |
-| `browse_marketplace`        | Browse available infrastructure clusters      | None              |
-| `subscribe_to_cluster`      | Subscribe to a cluster                        | Auth              |
-| `set_preferred_cluster`     | Set preferred cluster for DNS steering        | Auth              |
-| `create_private_cluster`    | Create private cluster (returns token)        | Auth              |
+| Tool                        | Description                                    | Requires          |
+| --------------------------- | ---------------------------------------------- | ----------------- |
+| `update_billing_details`    | Set billing address                            | Auth              |
+| `get_payment_options`       | Get x402 payment options                       | None              |
+| `submit_payment`            | Submit x402 payment (auth-only or top-up)      | None              |
+| `topup_balance`             | Request crypto deposit address                 | Billing details   |
+| `check_topup`               | Check crypto payment status                    | Auth              |
+| `create_stream`             | Create a new stream                            | Billing + Balance |
+| `update_stream`             | Update stream settings                         | Auth              |
+| `delete_stream`             | Delete a stream                                | Auth              |
+| `refresh_stream_key`        | Generate new stream key                        | Auth              |
+| `create_clip`               | Create clip from stream                        | Billing + Balance |
+| `delete_clip`               | Delete a clip                                  | Auth              |
+| `start_dvr`                 | Start DVR recording                            | Billing + Balance |
+| `stop_dvr`                  | Stop DVR recording                             | Auth              |
+| `create_vod_upload`         | Start a VOD upload                             | Billing + Balance |
+| `complete_vod_upload`       | Finalize a VOD upload                          | Auth              |
+| `abort_vod_upload`          | Cancel an upload                               | Auth              |
+| `delete_vod_asset`          | Delete a VOD asset                             | Auth              |
+| `resolve_playback_endpoint` | Get viewer playback URLs                       | None              |
+| `diagnose_rebuffering`      | Analyze rebuffering events                     | Auth              |
+| `diagnose_buffer_health`    | Analyze buffer health and dry events           | Auth              |
+| `diagnose_packet_loss`      | Analyze packet loss (protocol-aware)           | Auth              |
+| `diagnose_routing`          | Analyze CDN routing decisions                  | Auth              |
+| `get_stream_health_summary` | Aggregated stream health metrics               | Auth              |
+| `get_anomaly_report`        | Detect anomalies vs baseline                   | Auth              |
+| `search_support_history`    | Search support conversations                   | Auth              |
+| `introspect_schema`         | Explore the GraphQL schema                     | Auth              |
+| `generate_query`            | Generate a GraphQL query from templates        | Auth              |
+| `execute_query`             | Execute a GraphQL query                        | Auth              |
+| `ask_consultant`            | Full Skipper pipeline with confidence tagging  | Auth              |
+| `browse_marketplace`        | Browse available infrastructure clusters       | None              |
+| `subscribe_to_cluster`      | Subscribe to a cluster                         | Auth              |
+| `set_preferred_cluster`     | Set preferred cluster for DNS steering         | Auth              |
+| `create_enrollment_token`   | Create an enrollment token for edge bootstrap  | Auth              |
+| `get_node_info`             | Fetch node details                             | Auth              |
+| `manage_node`               | Activate/deactivate/drain/restart a node       | Auth              |
+| `set_node_mode`             | Set node mode (production/standby/maintenance) | Auth              |
+| `get_node_health`           | Node health and metrics summary                | Auth              |
+| `create_private_cluster`    | Create private cluster (returns token)         | Auth              |
 
 Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`, `browse_marketplace`.
 
@@ -213,8 +222,8 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 
 **generate_query**
 
-- `field` (required): Field name or dot-separated path (e.g., `streams`, `stream.health`)
-- `operation`: `query`, `mutation`, or `subscription` (default `query`)
+- `field_name` or `field_path` (one required): Field name or dot-separated path (e.g., `streamsConnection`, `analytics.usage.streaming.viewerHoursHourlyConnection`)
+- `operation_type`: `query`, `mutation`, or `subscription` (default `query`)
 
 **execute_query**
 
