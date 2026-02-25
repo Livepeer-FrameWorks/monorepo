@@ -359,24 +359,6 @@ export class SyncController {
       return this.getState(currentBufferMs);
     }
 
-    // Proactive live catchup — only from normal bucket to avoid fighting the bucket system
-    if (
-      this._speedBucket === "normal" &&
-      this.isLive &&
-      playRateCurr !== "fast-forward" &&
-      serverCurrentMs !== undefined &&
-      serverEndMs !== undefined &&
-      serverEndMs > serverCurrentMs &&
-      serverEndMs - serverCurrentMs < this.liveCatchupThresholdMs &&
-      serverEndMs - serverCurrentMs > Math.max(serverJitterMs * 1.1, serverJitterMs + 250) &&
-      currentBufferMs - desired < 1000 &&
-      now - this.lastLiveCatchup > this.liveCatchupCooldown
-    ) {
-      this.lastLiveCatchup = now;
-      this.requestFastForward(this.liveCatchupRequestMs);
-      this.emit("livecatchup", { fastForwardMs: this.liveCatchupRequestMs });
-    }
-
     // Determine speed bucket with hysteresis to prevent oscillation.
     // Entering a bucket requires crossing the outer threshold; leaving requires
     // the buffer recovering to 1.0× desired (wider dead-band than entry).
@@ -437,6 +419,24 @@ export class SyncController {
           }
           break;
       }
+    } else if (
+      // Proactive live catchup — in else to prevent sending fast_forward more
+      // than once per evaluation (upstream rawws.js parity). Low-buffer
+      // fast-forward above takes priority; this only fires when bucket stays normal.
+      this._speedBucket === "normal" &&
+      this.isLive &&
+      playRateCurr !== "fast-forward" &&
+      serverCurrentMs !== undefined &&
+      serverEndMs !== undefined &&
+      serverEndMs > serverCurrentMs &&
+      serverEndMs - serverCurrentMs < this.liveCatchupThresholdMs &&
+      serverEndMs - serverCurrentMs > Math.max(serverJitterMs * 1.1, serverJitterMs + 250) &&
+      currentBufferMs - desired < 1000 &&
+      now - this.lastLiveCatchup > this.liveCatchupCooldown
+    ) {
+      this.lastLiveCatchup = now;
+      this.requestFastForward(this.liveCatchupRequestMs);
+      this.emit("livecatchup", { fastForwardMs: this.liveCatchupRequestMs });
     }
 
     return this.getState(currentBufferMs);
