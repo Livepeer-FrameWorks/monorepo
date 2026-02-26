@@ -16,6 +16,7 @@ const config = {
   // Community URLs
   forumUrl: import.meta.env.VITE_FORUM_URL ?? "",
   discordUrl: import.meta.env.VITE_DISCORD_URL ?? "",
+  twitterUrl: import.meta.env.VITE_TWITTER_URL ?? "",
 
   // Demo configuration
   demoStreamName: import.meta.env.VITE_DEMO_STREAM_NAME ?? "",

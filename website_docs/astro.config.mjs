@@ -189,6 +189,11 @@ export default defineConfig({
           label: "GitHub",
           href: "https://github.com/livepeer-frameworks/monorepo",
         },
+        {
+          icon: "x.com",
+          label: "X (Twitter)",
+          href: "https://x.com/GetFrames",
+        },
       ],
       customCss: [
         // Relative path to your custom CSS file

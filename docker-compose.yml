@@ -959,6 +959,10 @@ services:
       SKIPPER_SITEMAPS_DIR: /etc/skipper/sitemaps
       CRAWL_INTERVAL: ${CRAWL_INTERVAL:-168h}
       SKIPPER_SSRF_ALLOWED_HOSTS: ${SKIPPER_SSRF_ALLOWED_HOSTS:-localhost,nginx}
+      SKIPPER_SOCIAL_ENABLED: ${SKIPPER_SOCIAL_ENABLED:-false}
+      SKIPPER_SOCIAL_INTERVAL: ${SKIPPER_SOCIAL_INTERVAL:-2h}
+      SKIPPER_SOCIAL_MAX_PER_DAY: ${SKIPPER_SOCIAL_MAX_PER_DAY:-2}
+      SKIPPER_SOCIAL_NOTIFY_EMAIL: ${SKIPPER_SOCIAL_NOTIFY_EMAIL:-}
       NODE_ID: central-node-1
     volumes:
       - ./config/skipper/sitemaps:/etc/skipper/sitemaps:ro

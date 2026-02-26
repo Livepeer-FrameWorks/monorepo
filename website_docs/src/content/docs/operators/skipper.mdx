@@ -190,6 +190,15 @@ Assuming ~2K input tokens and ~500 output tokens per response:
 | `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request          | `20`            |
 | `GATEWAY_PUBLIC_URL`                | API Gateway base URL for MCP tool access              | —               |
 
+**Social posting:**
+
+| Variable                      | Purpose                                               | Default |
+| ----------------------------- | ----------------------------------------------------- | ------- |
+| `SKIPPER_SOCIAL_ENABLED`      | Enable event-driven social posting agent              | `false` |
+| `SKIPPER_SOCIAL_INTERVAL`     | How often to check for noteworthy events              | `2h`    |
+| `SKIPPER_SOCIAL_MAX_PER_DAY`  | Max posts per day (`0` = unlimited)                   | `2`     |
+| `SKIPPER_SOCIAL_NOTIFY_EMAIL` | Email to send draft tweets to (required when enabled) | —       |
+
 ### Configuration Examples
 
 <Tabs>
