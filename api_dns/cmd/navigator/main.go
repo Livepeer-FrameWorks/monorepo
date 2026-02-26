@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 )
 
 // ServerMetrics holds Prometheus metrics for the gRPC server
@@ -206,6 +207,7 @@ func main() {
 		hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 		hs.SetServingStatus(pb.NavigatorService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 		grpc_health_v1.RegisterHealthServer(grpcServer, hs)
+		reflection.Register(grpcServer)
 
 		logger.WithField("port", grpcPort).Info("Navigator gRPC server starting...")
 		if err := grpcServer.Serve(lis); err != nil {

@@ -40,6 +40,7 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -1439,6 +1440,7 @@ func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 	hs.SetServingStatus(pb.HelmsmanControl_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 	grpc_health_v1.RegisterHealthServer(srv, hs)
+	reflection.Register(srv)
 
 	// Register additional services
 	for _, reg := range cfg.Registrars {

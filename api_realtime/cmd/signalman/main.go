@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -305,6 +306,7 @@ func main() {
 		hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 		hs.SetServingStatus(pb.SignalmanService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)
+		reflection.Register(grpcSrv)
 
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 		if err := grpcSrv.Serve(lis); err != nil {

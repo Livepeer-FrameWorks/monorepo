@@ -50,6 +50,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 )
 
 func main() {
@@ -517,6 +520,9 @@ func main() {
 			),
 		)
 		pb.RegisterSkipperChatServiceServer(grpcSrv, grpcChatServer)
+		hs := health.NewServer()
+		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)
+		reflection.Register(grpcSrv)
 		logger.WithField("port", cfg.GRPCPort).Info("Starting Skipper gRPC server")
 		if serveErr := grpcSrv.Serve(grpcLis); serveErr != nil {
 			logger.WithError(serveErr).Fatal("Skipper gRPC server failed")

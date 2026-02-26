@@ -37,6 +37,7 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -7021,6 +7022,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	// Register gRPC health checking service
 	hs := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(server, hs)
+	reflection.Register(server)
 
 	return server
 }

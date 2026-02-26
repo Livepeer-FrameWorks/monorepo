@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -480,6 +481,7 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	// Register gRPC health checking service
 	hs := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(server, hs)
+	reflection.Register(server)
 	return server, nil
 }
 

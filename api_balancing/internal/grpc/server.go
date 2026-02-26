@@ -41,6 +41,7 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -395,6 +396,7 @@ func StartGRPCServer(addr string, server *FoghornGRPCServer) error {
 	hs.SetServingStatus(pb.ViewerControlService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 	hs.SetServingStatus(pb.VodControlService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 	grpc_health_v1.RegisterHealthServer(grpcServer, hs)
+	reflection.Register(grpcServer)
 
 	server.logger.WithField("addr", addr).Info("Starting Foghorn gRPC server")
 	return grpcServer.Serve(lis)
