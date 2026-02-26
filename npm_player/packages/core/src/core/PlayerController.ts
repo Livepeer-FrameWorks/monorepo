@@ -630,6 +630,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _liveThresholds: LiveThresholds = { exitLive: 15000, enterLive: 5000 };
   private _buffered: TimeRanges | null = null;
   private _hasAudio: boolean = true;
+  private _boundMediaStreamForAudio: MediaStream | null = null;
+  private _onMediaStreamTrackChange: (() => void) | null = null;
   private _lastVolume: number = 1;
   private _supportsPlaybackRate: boolean = true;
   private _isWebRTC: boolean = false;
@@ -1872,11 +1874,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       );
     }
     const allowMediaStreamDvr =
-      isMediaStreamSource(el) &&
-      bufferWindowMs !== undefined &&
-      bufferWindowMs > 0 &&
-      sourceType !== "whep" &&
-      sourceType !== "webrtc";
+      isMediaStreamSource(el) && bufferWindowMs !== undefined && bufferWindowMs > 0;
     // Pass shifted buffered start so the fallback formula uses the same coordinate
     // space as liveEdge (both include lastms shift from NativePlayer)
     const bufferedRanges = this.currentPlayer?.getBufferedRanges?.() ?? null;
@@ -2014,22 +2012,52 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * Detect audio tracks on the video element.
    * Called after video metadata is loaded.
    */
+  private unbindMediaStreamAudioListeners(): void {
+    if (this._boundMediaStreamForAudio && this._onMediaStreamTrackChange) {
+      this._boundMediaStreamForAudio.removeEventListener(
+        "addtrack",
+        this._onMediaStreamTrackChange
+      );
+      this._boundMediaStreamForAudio.removeEventListener(
+        "removetrack",
+        this._onMediaStreamTrackChange
+      );
+    }
+    this._boundMediaStreamForAudio = null;
+    this._onMediaStreamTrackChange = null;
+  }
+
   private detectAudioTracks(): void {
-    // Primary: trust MistServer stream metadata (matches ddvtech embed approach)
-    const mistHasAudio = this.streamState?.streamInfo?.hasAudio;
-    if (mistHasAudio !== undefined) {
-      this._hasAudio = mistHasAudio;
+    const el = this.videoElement;
+    if (!el) {
+      this.unbindMediaStreamAudioListeners();
+      return;
+    }
+
+    // MediaStream: bind track change listeners (WebRTC tracks arrive async)
+    if (el.srcObject instanceof MediaStream) {
+      const stream = el.srcObject;
+      if (stream !== this._boundMediaStreamForAudio) {
+        this.unbindMediaStreamAudioListeners();
+        this._boundMediaStreamForAudio = stream;
+        this._onMediaStreamTrackChange = () => {
+          this._hasAudio = stream.getAudioTracks().length > 0;
+          this.emitSeekingState();
+        };
+        stream.addEventListener("addtrack", this._onMediaStreamTrackChange);
+        stream.addEventListener("removetrack", this._onMediaStreamTrackChange);
+      }
+      this._hasAudio = stream.getAudioTracks().length > 0;
       this.emitSeekingState();
       return;
     }
 
-    const el = this.videoElement;
-    if (!el) return;
+    this.unbindMediaStreamAudioListeners();
 
-    // Check MediaStream audio tracks
-    if (el.srcObject instanceof MediaStream) {
-      const audioTracks = el.srcObject.getAudioTracks();
-      this._hasAudio = audioTracks.length > 0;
+    // Fallback: trust MistServer stream metadata for non-MediaStream sources.
+    const mistHasAudio = this.streamState?.streamInfo?.hasAudio;
+    if (mistHasAudio !== undefined) {
+      this._hasAudio = mistHasAudio;
       this.emitSeekingState();
       return;
     }
@@ -2524,8 +2552,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         throw new Error(data.error);
       }
 
-      const rawSources: Array<{ url: string; type: string }> = Array.isArray(data.source)
-        ? data.source
+      const mistDatachannelsRaw = data?.capa?.datachannels;
+      const mistDatachannels =
+        mistDatachannelsRaw === undefined ? undefined : Boolean(mistDatachannelsRaw);
+      this.log(
+        `[resolveFromMistServer] capa.datachannels=${String(mistDatachannelsRaw)} normalized=${String(mistDatachannels)}`
+      );
+      const rawSources: StreamSource[] = Array.isArray(data.source)
+        ? data.source.map((s: { url: string; type: string }) => ({
+            ...s,
+            mistDatachannels,
+          }))
         : [];
       if (rawSources.length === 0) {
         throw new Error("No sources available from MistServer");
@@ -2963,6 +3000,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this.currentPlayer = this.playerManager.getCurrentPlayer();
         this._seekingLoggedOnce = false;
         this.setupVideoEventListeners(el);
+        // Listen for player-reported seekable range updates (WebRTC/WHEP data channel)
+        if (this.currentPlayer) {
+          const playerForListener = this.currentPlayer;
+          const onSeekableChange = () => {
+            this.updateSeekingState();
+          };
+          playerForListener.on("seekablechange", onSeekableChange);
+          this.cleanupFns.push(() => {
+            playerForListener.off("seekablechange", onSeekableChange);
+          });
+        }
         // Initialize sub-controllers after video is ready
         this.initializeSubControllers();
         this.emit("ready", { videoElement: el });
@@ -3115,6 +3163,15 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       // Recalculate seeking state when buffer updates
       this.updateSeekingState();
     };
+    const elWithAudio = el as HTMLVideoElement & {
+      audioTracks?: {
+        addEventListener?: (type: string, fn: () => void) => void;
+        removeEventListener?: (type: string, fn: () => void) => void;
+      };
+    };
+    const onAudioTracksChange = () => {
+      this.detectAudioTracks();
+    };
     const onLoadedMetadata = () => {
       // Detect audio tracks and WebRTC source
       this.detectAudioTracks();
@@ -3123,13 +3180,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       // Initial seeking state calculation
       this.updateSeekingState();
       // Safari: audioTracks may be populated after loadedmetadata for HLS streams
-      const elWithAudio = el as HTMLVideoElement & {
-        audioTracks?: { addEventListener?: (type: string, fn: () => void) => void };
-      };
       if (elWithAudio.audioTracks?.addEventListener) {
-        elWithAudio.audioTracks.addEventListener("addtrack", () => {
-          this.detectAudioTracks();
-        });
+        elWithAudio.audioTracks.addEventListener("addtrack", onAudioTracksChange);
+        elWithAudio.audioTracks.addEventListener("removetrack", onAudioTracksChange);
       }
     };
 
@@ -3176,6 +3229,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       el.removeEventListener("enterpictureinpicture", onEnterPiP);
       el.removeEventListener("leavepictureinpicture", onLeavePiP);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
+      if (elWithAudio.audioTracks?.removeEventListener) {
+        elWithAudio.audioTracks.removeEventListener("addtrack", onAudioTracksChange);
+        elWithAudio.audioTracks.removeEventListener("removetrack", onAudioTracksChange);
+      }
+      this.unbindMediaStreamAudioListeners();
     });
   }
 

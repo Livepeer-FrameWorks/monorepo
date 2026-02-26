@@ -290,10 +290,10 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     "dash/video/mp4": 0.4, // DASH - ABR support
     "ws/video/mp4": 0.35, // MEWS - seekable via MSE
     "wss/video/mp4": 0.35,
-    // WHEP/WebRTC: HARD PENALTY - no seek support, inappropriate for VOD
-    whep: -1.0,
-    webrtc: -1.0,
-    "mist/webrtc": -1.0,
+    // WHEP/WebRTC: low priority for VOD (seeking via MistControl data channel)
+    whep: 0.1,
+    webrtc: 0.1,
+    "mist/webrtc": 0.1,
   },
   auto: {
     // WebCodecs raw: highest priority for low-latency live streams

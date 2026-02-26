@@ -131,7 +131,9 @@ export function getLatencyTier(sourceType?: string): LatencyTier {
 
 /**
  * Check if video element is using WebRTC/MediaStream source.
- * WebRTC streams have special constraints (no seeking, no playback rate changes).
+ * MediaStream sources require data channel signaling for seeking
+ * (not native browser seeking) and don't support playback rate changes
+ * via the HTML5 video element API.
  *
  * @param video - HTML video element
  * @returns true if source is a MediaStream
@@ -183,7 +185,7 @@ export function calculateSeekableRange(params: SeekableRangeParams): SeekableRan
   }
 
   // Fallback for live without seekable ranges (progressive, WebRTC, pre-playback)
-  let liveEdge = Number.isFinite(duration) ? duration : currentTime;
+  const liveEdge = Number.isFinite(duration) ? duration : currentTime;
 
   // Upstream skins.js getBufferWindow():
   // 1. MistVideo.info.meta.buffer_window
@@ -238,14 +240,14 @@ export function calculateSeekableRange(params: SeekableRangeParams): SeekableRan
 export function canSeekStream(params: CanSeekParams): boolean {
   const { video, isLive, duration, bufferWindowMs, playerCanSeek, playerSeekableRange } = params;
 
-  // Player API says no
-  if (playerCanSeek && !playerCanSeek()) {
-    return false;
-  }
-
   // Player reports a valid seekable range — trust it
   if (playerSeekableRange && playerSeekableRange.end > playerSeekableRange.start) {
     return true;
+  }
+
+  // Player API says no
+  if (playerCanSeek && !playerCanSeek()) {
+    return false;
   }
 
   // Player API says yes - trust it for VOD, but require buffer for live

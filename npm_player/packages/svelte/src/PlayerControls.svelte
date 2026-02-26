@@ -149,40 +149,77 @@
 
   // Audio detection: trust MistServer metadata first, then DOM fallback
   $effect(() => {
-    // Primary: trust MistServer stream metadata (matches ddvtech embed approach)
-    if (mistStreamInfo?.hasAudio !== undefined) {
-      hasAudio = mistStreamInfo.hasAudio;
-      return;
-    }
-
     if (!video) {
       hasAudio = true;
       return;
     }
+    const currentVideo = video;
+
+    let boundStream: MediaStream | null = null;
+    let streamListener: (() => void) | null = null;
+
+    const unbindStream = () => {
+      if (boundStream && streamListener) {
+        boundStream.removeEventListener("addtrack", streamListener);
+        boundStream.removeEventListener("removetrack", streamListener);
+      }
+      boundStream = null;
+      streamListener = null;
+    };
 
     const checkAudio = () => {
-      if (video!.srcObject instanceof MediaStream) {
-        hasAudio = video!.srcObject.getAudioTracks().length > 0;
+      // Prefer actual MediaStream tracks over metadata to avoid phantom controls.
+      if (currentVideo.srcObject instanceof MediaStream) {
+        const stream = currentVideo.srcObject;
+        if (stream !== boundStream) {
+          unbindStream();
+          boundStream = stream;
+          streamListener = () => {
+            hasAudio = stream.getAudioTracks().length > 0;
+          };
+          stream.addEventListener("addtrack", streamListener);
+          stream.addEventListener("removetrack", streamListener);
+        }
+        hasAudio = stream.getAudioTracks().length > 0;
         return;
       }
-      const videoAny = video as any;
+
+      unbindStream();
+
+      // Fallback: metadata for non-MediaStream sources.
+      if (mistStreamInfo?.hasAudio !== undefined) {
+        hasAudio = mistStreamInfo.hasAudio;
+        return;
+      }
+
+      const videoAny = currentVideo as any;
       if (videoAny.audioTracks && videoAny.audioTracks.length !== undefined) {
         hasAudio = videoAny.audioTracks.length > 0;
         return;
       }
+
       hasAudio = true;
     };
+
     checkAudio();
-    video.addEventListener("loadedmetadata", checkAudio);
-    // Safari: audioTracks may be populated after loadedmetadata for HLS streams
-    const audioTracks = (video as any).audioTracks;
+    currentVideo.addEventListener("loadedmetadata", checkAudio);
+    currentVideo.addEventListener("loadeddata", checkAudio);
+    currentVideo.addEventListener("durationchange", checkAudio);
+
+    const audioTracks = (currentVideo as any).audioTracks;
     if (audioTracks?.addEventListener) {
       audioTracks.addEventListener("addtrack", checkAudio);
+      audioTracks.addEventListener("removetrack", checkAudio);
     }
+
     return () => {
-      video!.removeEventListener("loadedmetadata", checkAudio);
+      unbindStream();
+      currentVideo.removeEventListener("loadedmetadata", checkAudio);
+      currentVideo.removeEventListener("loadeddata", checkAudio);
+      currentVideo.removeEventListener("durationchange", checkAudio);
       if (audioTracks?.removeEventListener) {
         audioTracks.removeEventListener("addtrack", checkAudio);
+        audioTracks.removeEventListener("removetrack", checkAudio);
       }
     };
   });
@@ -263,11 +300,7 @@
   );
 
   let allowMediaStreamDvr = $derived(
-    isMediaStreamSource(video) &&
-      bufferWindowMs !== undefined &&
-      bufferWindowMs > 0 &&
-      sourceType !== "whep" &&
-      sourceType !== "webrtc"
+    isMediaStreamSource(video) && bufferWindowMs !== undefined && bufferWindowMs > 0
   );
 
   // Seekable range: prefer controller-derived values (same pattern as React/WC)

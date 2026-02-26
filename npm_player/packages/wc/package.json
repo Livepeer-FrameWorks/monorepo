@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/player-wc",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "type": "module",
   "description": "Lit Web Components for FrameWorks streaming player — <fw-player> custom element with full UI",
   "main": "dist/esm/index.js",

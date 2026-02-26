@@ -212,8 +212,8 @@ describe("scorer", () => {
       );
     });
 
-    it("vod penalizes WHEP with -1.0", () => {
-      expect(calculateModeBonus("whep", "vod")).toBe(-1.0);
+    it("vod deprioritizes WHEP (low but not excluded)", () => {
+      expect(calculateModeBonus("whep", "vod")).toBe(0.1);
     });
 
     it("vod favors MP4", () => {

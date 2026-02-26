@@ -223,11 +223,7 @@ export class FwPlayerControls extends LitElement {
     const isWebRTC = isMediaStreamSource(state.videoElement);
 
     const allowMediaStreamDvr =
-      isMediaStreamSource(state.videoElement) &&
-      bufferWindowMs !== undefined &&
-      bufferWindowMs > 0 &&
-      sourceType !== "whep" &&
-      sourceType !== "webrtc";
+      isMediaStreamSource(state.videoElement) && bufferWindowMs !== undefined && bufferWindowMs > 0;
 
     const calculatedRange = calculateSeekableRange({
       isLive,

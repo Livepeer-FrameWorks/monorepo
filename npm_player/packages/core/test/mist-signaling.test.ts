@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-import { MistSignaling, type MistSignalingConfig } from "../src/core/MistSignaling";
+import { MistSignaling } from "../src/core/MistSignaling";
 
 // ---------------------------------------------------------------------------
 // Mock WebSocket
@@ -264,6 +264,31 @@ describe("MistSignaling", () => {
       });
     });
 
+    it("routes on_time when payload is nested in data", () => {
+      const { sig, ws } = createConnected();
+      const handler = vi.fn();
+      sig.on("time_update", handler);
+
+      ws.simulateMessage({
+        type: "on_time",
+        data: {
+          current: 7000,
+          end: 61000,
+          begin: 1000,
+          paused: false,
+        },
+      });
+
+      expect(handler).toHaveBeenCalledWith({
+        current: 7000,
+        end: 61000,
+        begin: 1000,
+        tracks: undefined,
+        paused: false,
+        live_point: undefined,
+      });
+    });
+
     it("routes on_stop", () => {
       const { sig, ws } = createConnected();
       const handler = vi.fn();
@@ -299,6 +324,23 @@ describe("MistSignaling", () => {
 
       ws.simulateMessage({ type: "set_speed", play_rate: 2, play_rate_curr: 2 });
       expect(handler).toHaveBeenCalledWith({ play_rate: 2, play_rate_curr: 2 });
+    });
+
+    it("routes pause when payload is nested in data", () => {
+      const { sig, ws } = createConnected();
+      const handler = vi.fn();
+      sig.on("pause_request", handler);
+
+      ws.simulateMessage({
+        type: "pause",
+        data: { paused: true, reason: "at_dead_point", begin: 100, end: 900 },
+      });
+      expect(handler).toHaveBeenCalledWith({
+        paused: true,
+        reason: "at_dead_point",
+        begin: 100,
+        end: 900,
+      });
     });
 
     it("routes seek and resolves seekPromise", async () => {
@@ -380,6 +422,12 @@ describe("MistSignaling", () => {
       const { sig, ws } = createConnected();
       sig.pause();
       expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: "hold" }));
+    });
+
+    it("play sends play type", () => {
+      const { sig, ws } = createConnected();
+      sig.play();
+      expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: "play" }));
     });
 
     it("stop sends stop type", () => {

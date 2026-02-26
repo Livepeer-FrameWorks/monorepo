@@ -85,6 +85,14 @@ export interface PlayerControllerState {
   subtitlesEnabled: boolean;
   /** Toast message to display (auto-dismisses) */
   toast: { message: string; timestamp: number } | null;
+  /** Controller-derived seekable start (ms) — reactively updated via seekingStateChange */
+  controllerSeekableStart: number;
+  /** Controller-derived live edge (ms) — reactively updated via seekingStateChange */
+  controllerLiveEdge: number;
+  /** Controller-derived canSeek — reactively updated via seekingStateChange */
+  controllerCanSeek: boolean;
+  /** Controller-derived hasAudio — reactively updated via seekingStateChange */
+  controllerHasAudio: boolean;
 }
 
 export interface PlayerControllerStore extends Readable<PlayerControllerState> {
@@ -184,6 +192,10 @@ const initialState: PlayerControllerState = {
   playbackQuality: null,
   subtitlesEnabled: false,
   toast: null,
+  controllerSeekableStart: 0,
+  controllerLiveEdge: 0,
+  controllerCanSeek: false,
+  controllerHasAudio: true,
 };
 
 // ============================================================================
@@ -409,6 +421,18 @@ export function createPlayerControllerStore(
     unsubscribers.push(
       controller.on("captionsChange", ({ enabled }) => {
         store.update((prev) => ({ ...prev, subtitlesEnabled: enabled }));
+      })
+    );
+
+    unsubscribers.push(
+      controller.on("seekingStateChange", (data) => {
+        store.update((prev) => ({
+          ...prev,
+          controllerSeekableStart: data.seekableStart,
+          controllerLiveEdge: data.liveEdge,
+          controllerCanSeek: data.canSeek,
+          controllerHasAudio: data.hasAudio,
+        }));
       })
     );
 

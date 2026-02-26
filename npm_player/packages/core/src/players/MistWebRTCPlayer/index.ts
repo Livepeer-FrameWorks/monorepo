@@ -31,6 +31,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   private signaling: MistSignaling | null = null;
   private peerConnection: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
+  private incomingMediaStream: MediaStream | null = null;
   private container: HTMLElement | null = null;
   private destroyed = false;
 
@@ -38,7 +39,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   private seekOffset = 0;
   private durationMs = 0;
   private isLiveStream = true;
-  private playRate: number | "auto" = "auto";
+  private playRate: number | "auto" | "fast-forward" = "auto";
 
   // Buffer window tracking (P2)
   private bufferWindow = 0;
@@ -158,7 +159,9 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     // Load browser equalizer script (P0) - extract host from source URL
     try {
       const url = new URL(source.url, window.location.href);
-      const host = `${url.protocol}//${url.host}`;
+      const httpProtocol =
+        url.protocol === "wss:" ? "https:" : url.protocol === "ws:" ? "http:" : url.protocol;
+      const host = `${httpProtocol}//${url.host}`;
       await this.loadBrowserEqualizer(host);
     } catch {}
 
@@ -191,7 +194,21 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   }
 
   canSeek(): boolean {
-    return false;
+    return this.signaling?.isConnected === true;
+  }
+
+  async play(): Promise<void> {
+    if (this.signaling?.isConnected) {
+      this.signaling.play();
+    }
+    return super.play();
+  }
+
+  pause(): void {
+    super.pause();
+    if (this.signaling?.isConnected) {
+      this.signaling.pause();
+    }
   }
 
   async destroy(): Promise<void> {
@@ -237,6 +254,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     }
 
     this.videoElement = null;
+    this.incomingMediaStream = null;
     this.container = null;
     this.listeners.clear();
   }
@@ -473,6 +491,13 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     return this.bufferWindow;
   }
 
+  getSeekableRange(): { start: number; end: number } | null {
+    if (this.bufferWindow <= 0) return null;
+    const end = Number.isFinite(this.durationMs) ? this.durationMs : this.getCurrentTime();
+    if (end <= 0) return null;
+    return { start: Math.max(0, end - this.bufferWindow), end };
+  }
+
   /**
    * Request video track matching the given player size (P2 - ABR_resize)
    * Uses MistServer's ~widthxheight track selection syntax.
@@ -566,6 +591,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     // Create peer connection
     const pc = new RTCPeerConnection({ iceServers });
     this.peerConnection = pc;
+    this.incomingMediaStream = null;
 
     // Create data channel for metadata
     this.dataChannel = pc.createDataChannel("*", { protocol: "JSON" });
@@ -578,8 +604,20 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     // Handle incoming tracks
     pc.ontrack = (event) => {
       if (this.destroyed) return;
-      if (video && event.streams[0]) {
-        video.srcObject = event.streams[0];
+      if (!video) return;
+      if (!this.incomingMediaStream) {
+        this.incomingMediaStream = new MediaStream();
+        video.srcObject = this.incomingMediaStream;
+      }
+      const aggregate = this.incomingMediaStream;
+      const incomingTracks =
+        event.streams && event.streams.length > 0
+          ? event.streams.flatMap((s) => s.getTracks())
+          : [event.track];
+      for (const track of incomingTracks) {
+        if (!aggregate.getTracks().some((t) => t.id === track.id)) {
+          aggregate.addTrack(track);
+        }
       }
     };
 
@@ -685,6 +723,21 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
       video.dispatchEvent(new CustomEvent("ratechange", { detail: { play_rate_curr } }));
     });
 
+    // Handle at_dead_point: seek to buffer midpoint (upstream util.js:1697-1708)
+    this.signaling.on("pause_request", (msg) => {
+      if (this.destroyed) return;
+      if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
+        const seekTo = (msg.begin + msg.end) / 2;
+        if (!isNaN(seekTo) && seekTo > 0) {
+          this.signaling?.seek(seekTo / 1000).catch(() => {});
+          return;
+        }
+      }
+      if (msg.paused && this.videoElement) {
+        this.videoElement.pause();
+      }
+    });
+
     this.signaling.on("stopped", () => {
       if (this.destroyed) return;
       this.isLiveStream = false;
@@ -716,6 +769,14 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
     // Track buffer window (P2)
     this.bufferWindow = update.end - update.begin;
+
+    // Notify controller of updated seekable range
+    const endMs = update.end === 0 ? update.current : update.end;
+    this.emit("seekablechange", {
+      start: update.begin,
+      end: endMs,
+      bufferWindow: this.bufferWindow,
+    });
 
     // Fire track changed events (P1)
     if (update.tracks && !this.arraysEqual(update.tracks, this.currentTracks)) {

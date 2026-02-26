@@ -69,6 +69,10 @@ export type {
 
 // MistServer WebRTC signaling (MistMetaPlayer feature backport)
 export { MistSignaling } from "./MistSignaling";
+
+// MistServer RTCDataChannel control protocol (upstream wheprtc.js compliance)
+export { MistControlChannel } from "./MistControlChannel";
+export type { MistControlChannelEvents, MistControlTimeUpdate } from "./MistControlChannel";
 export type {
   MistSignalingConfig,
   MistSignalingEvents,

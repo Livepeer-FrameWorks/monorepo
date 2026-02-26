@@ -13,6 +13,8 @@ export interface StreamSource {
   index?: number;
   streamName?: string;
   mistPlayerUrl?: string;
+  /** MistServer capability hint for WebRTC datachannel control support (WHEP seeking). */
+  mistDatachannels?: boolean;
 }
 
 export interface StreamTrack {

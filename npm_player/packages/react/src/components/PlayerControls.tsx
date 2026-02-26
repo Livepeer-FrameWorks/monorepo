@@ -308,11 +308,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
 
   // Seekable range using core calculation (allow controller override)
   const allowMediaStreamDvr =
-    isMediaStreamSource(video) &&
-    bufferWindowMs !== undefined &&
-    bufferWindowMs > 0 &&
-    sourceType !== "whep" &&
-    sourceType !== "webrtc";
+    isMediaStreamSource(video) && bufferWindowMs !== undefined && bufferWindowMs > 0;
   const { seekableStart: calcSeekableStart, liveEdge: calcLiveEdge } = useMemo(
     () =>
       calculateSeekableRange({
@@ -447,22 +443,45 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   }, [video]);
 
   useEffect(() => {
-    // Primary: trust MistServer stream metadata (matches ddvtech embed approach)
-    if (mistStreamInfo?.hasAudio !== undefined) {
-      setHasAudio(mistStreamInfo.hasAudio);
-      return;
-    }
-
     if (!video) {
       setHasAudio(true);
       return;
     }
+    let boundStream: MediaStream | null = null;
+    let streamListener: (() => void) | null = null;
+
+    const unbindStream = () => {
+      if (boundStream && streamListener) {
+        boundStream.removeEventListener("addtrack", streamListener);
+        boundStream.removeEventListener("removetrack", streamListener);
+      }
+      boundStream = null;
+      streamListener = null;
+    };
+
     const checkAudio = () => {
+      // Prefer actual MediaStream tracks over metadata to avoid phantom audio controls.
       if (video.srcObject instanceof MediaStream) {
-        const audioTracks = video.srcObject.getAudioTracks();
-        setHasAudio(audioTracks.length > 0);
+        const stream = video.srcObject;
+        if (stream !== boundStream) {
+          unbindStream();
+          boundStream = stream;
+          streamListener = () => setHasAudio(stream.getAudioTracks().length > 0);
+          stream.addEventListener("addtrack", streamListener);
+          stream.addEventListener("removetrack", streamListener);
+        }
+        setHasAudio(stream.getAudioTracks().length > 0);
         return;
       }
+
+      unbindStream();
+
+      // Fallback: metadata for non-MediaStream sources.
+      if (mistStreamInfo?.hasAudio !== undefined) {
+        setHasAudio(mistStreamInfo.hasAudio);
+        return;
+      }
+
       const videoAny = video as any;
       if (videoAny.audioTracks && videoAny.audioTracks.length !== undefined) {
         setHasAudio(videoAny.audioTracks.length > 0);
@@ -470,17 +489,24 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
       }
       setHasAudio(true);
     };
+
     checkAudio();
     video.addEventListener("loadedmetadata", checkAudio);
-    // Safari: audioTracks may be populated after loadedmetadata for HLS streams
+    video.addEventListener("loadeddata", checkAudio);
+    video.addEventListener("durationchange", checkAudio);
     const audioTracks = (video as any).audioTracks;
     if (audioTracks?.addEventListener) {
       audioTracks.addEventListener("addtrack", checkAudio);
+      audioTracks.addEventListener("removetrack", checkAudio);
     }
     return () => {
+      unbindStream();
       video.removeEventListener("loadedmetadata", checkAudio);
+      video.removeEventListener("loadeddata", checkAudio);
+      video.removeEventListener("durationchange", checkAudio);
       if (audioTracks?.removeEventListener) {
         audioTracks.removeEventListener("addtrack", checkAudio);
+        audioTracks.removeEventListener("removetrack", checkAudio);
       }
     };
   }, [video, mistStreamInfo?.hasAudio]);

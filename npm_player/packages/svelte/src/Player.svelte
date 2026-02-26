@@ -221,6 +221,10 @@
     playbackQuality: null as any,
     subtitlesEnabled: false,
     toast: null as { message: string; timestamp: number } | null,
+    controllerSeekableStart: 0,
+    controllerLiveEdge: 0,
+    controllerCanSeek: false,
+    controllerHasAudio: true,
   });
 
   // Track if we've already attached to prevent double-attach race
@@ -667,8 +671,8 @@
               onStatsToggle={() => (isStatsOpen = !isStatsOpen)}
               isContentLive={storeState.isEffectivelyLive}
               onJumpToLive={() => playerStore?.getController()?.jumpToLive()}
-              controllerSeekableStart={playerStore?.getController()?.getSeekableStart()}
-              controllerLiveEdge={playerStore?.getController()?.getLiveEdge()}
+              controllerSeekableStart={storeState?.controllerSeekableStart ?? 0}
+              controllerLiveEdge={storeState?.controllerLiveEdge ?? 0}
               {activeLocale}
               onLocaleChange={(l) => {
                 activeLocale = l;

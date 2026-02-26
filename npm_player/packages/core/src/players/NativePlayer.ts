@@ -1,5 +1,6 @@
 import { BasePlayer } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
+import { MistControlChannel } from "../core/MistControlChannel";
 import {
   checkProtocolMismatch,
   getBrowserInfo,
@@ -46,16 +47,27 @@ export class NativePlayerImpl extends BasePlayer {
 
   private peerConnection: RTCPeerConnection | null = null;
   private sessionUrl: string | null = null;
+  private incomingMediaStream: MediaStream | null = null;
   private lastInboundStats: any = null;
   private reconnectEnabled = false;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 3;
   private reconnectTimer: any = null;
+  private controlOpenTimer: ReturnType<typeof setTimeout> | null = null;
   private currentWhepUrl: string | null = null;
   private currentHeaders: Record<string, string> | null = null;
   private currentIceServers: RTCIceServer[] | null = null;
   private container: HTMLElement | null = null;
   private destroyed = false;
+
+  // MistControl data channel for WHEP seeking (upstream wheprtc.js compliance)
+  private controlChannel: MistControlChannel | null = null;
+  private whepSeekOffset = 0;
+  private whepDurationMs = 0;
+  private whepIsLive = true;
+  private whepBufferWindow = 0;
+  private whepBeginMs = 0;
+  private whepEndMs = 0;
 
   // Reference html5.js features
   private liveDurationProxy: LiveDurationProxy | null = null;
@@ -389,20 +401,81 @@ export class NativePlayerImpl extends BasePlayer {
   }
 
   /**
-   * Override seek for MP3 files (seeking not supported)
-   * Ported from reference html5.js:185-191
+   * Override seek for MP3 files (seeking not supported) and WHEP data channel seeking.
+   * Ported from reference html5.js:185-191 + upstream wheprtc.js ControlChannel seeking.
    */
   seek(timeMs: number): void {
     if (this.isMP3Source) return;
+    // WHEP: seek via MistControl data channel (upstream util.js:1821-1867)
+    if (this.controlChannel?.isOpen && this.videoElement) {
+      this.videoElement.pause();
+      this.whepSeekOffset = timeMs / 1000 - this.videoElement.currentTime;
+      this.controlChannel.seek(timeMs);
+      return;
+    }
     super.seek(timeMs);
+  }
+
+  async play(): Promise<void> {
+    if (this.controlChannel?.isOpen) {
+      this.controlChannel.play();
+    }
+    return super.play();
+  }
+
+  pause(): void {
+    super.pause();
+    if (this.controlChannel?.isOpen) {
+      this.controlChannel.hold();
+    }
+  }
+
+  jumpToLive(): void {
+    if (this.controlChannel?.isOpen && this.videoElement) {
+      this.videoElement.pause();
+      this.whepSeekOffset = 0;
+      this.controlChannel.seek("live");
+      return;
+    }
+    super.jumpToLive();
   }
 
   canSeek(): boolean {
     const v = this.videoElement;
     if (!v) return false;
-    // MediaStream sources (WHEP/WebRTC) are real-time — nothing to seek through
+    // WHEP seeking is only reliable when MistControl channel is actually open.
+    if (this.controlChannel) {
+      return this.controlChannel.isOpen;
+    }
+    // MediaStream sources without data channel can't seek
     if (v.srcObject instanceof MediaStream) return false;
     return true;
+  }
+
+  getCurrentTime(): number {
+    if (this.controlChannel?.isOpen && this.videoElement) {
+      return (this.whepSeekOffset + this.videoElement.currentTime) * 1000;
+    }
+    return super.getCurrentTime();
+  }
+
+  getDuration(): number {
+    if (this.controlChannel?.isOpen && this.whepDurationMs > 0) {
+      if (!Number.isFinite(this.whepDurationMs)) return this.whepDurationMs;
+      return this.whepDurationMs;
+    }
+    return super.getDuration();
+  }
+
+  getSeekableRange(): { start: number; end: number } | null {
+    if (this.controlChannel?.isOpen && this.whepBufferWindow > 0) {
+      return { start: this.whepBeginMs, end: this.whepEndMs };
+    }
+    return super.getSeekableRange();
+  }
+
+  getBufferWindow(): number {
+    return this.whepBufferWindow;
   }
 
   getLiveLatency(): number {
@@ -436,6 +509,25 @@ export class NativePlayerImpl extends BasePlayer {
       } catch {}
       this.reconnectTimer = null;
     }
+    if (this.controlOpenTimer) {
+      try {
+        clearTimeout(this.controlOpenTimer);
+      } catch {}
+      this.controlOpenTimer = null;
+    }
+
+    // Clean up MistControl data channel
+    if (this.controlChannel) {
+      try {
+        this.controlChannel.close();
+      } catch {}
+      this.controlChannel = null;
+    }
+    this.whepSeekOffset = 0;
+    this.whepDurationMs = 0;
+    this.whepBufferWindow = 0;
+    this.whepBeginMs = 0;
+    this.whepEndMs = 0;
 
     // Best-effort WHEP session DELETE (CORS may block this)
     if (this.sessionUrl) {
@@ -469,6 +561,7 @@ export class NativePlayerImpl extends BasePlayer {
     }
 
     this.videoElement = null;
+    this.incomingMediaStream = null;
     this.sourceElement = null;
     this.container = null;
     this.pausedAt = null;
@@ -615,6 +708,88 @@ export class NativePlayerImpl extends BasePlayer {
     };
   }
 
+  /**
+   * Set up MistControl data channel event handlers for WHEP seeking.
+   * Mirrors upstream util.js ControlChannelAPI behavior.
+   */
+  private setupMistControl(control: MistControlChannel, video: HTMLVideoElement): void {
+    control.on("open", () => {
+      if (this.destroyed) return;
+      if (this.controlOpenTimer) {
+        clearTimeout(this.controlOpenTimer);
+        this.controlOpenTimer = null;
+      }
+      this.emit("seekablechange", {
+        start: this.whepBeginMs,
+        end: this.whepEndMs,
+        bufferWindow: this.whepBufferWindow,
+      });
+    });
+
+    control.on("close", () => {
+      if (this.destroyed) return;
+      this.emit("seekablechange", {
+        start: this.whepBeginMs,
+        end: this.whepEndMs,
+        bufferWindow: this.whepBufferWindow,
+      });
+    });
+
+    control.on("time_update", (update) => {
+      if (this.destroyed) return;
+      this.whepSeekOffset = update.current / 1000 - video.currentTime;
+      this.whepDurationMs = update.end === 0 ? Infinity : update.end;
+      this.whepIsLive = !isFinite(this.whepDurationMs) || this.whepDurationMs === 0;
+      this.whepBufferWindow = update.end - update.begin;
+      this.whepBeginMs = update.begin;
+      this.whepEndMs = update.end === 0 ? update.current : update.end;
+      this.emit("seekablechange", {
+        start: update.begin,
+        end: this.whepEndMs,
+        bufferWindow: this.whepBufferWindow,
+      });
+      if (!update.paused && video.paused) {
+        video.play().catch(() => {});
+      }
+    });
+
+    control.on("seeked", ({ live_point }) => {
+      if (this.destroyed) return;
+      video.dispatchEvent(
+        new CustomEvent("seeked", { detail: { seekOffset: this.whepSeekOffset } })
+      );
+      if (live_point) {
+        control.setSpeed("auto");
+      }
+      video.play().catch(() => {});
+    });
+
+    // Handle at_dead_point: seek to buffer midpoint (upstream util.js:1697-1708)
+    control.on("pause", (msg) => {
+      if (this.destroyed) return;
+      if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
+        const seekTo = (msg.begin + msg.end) / 2;
+        if (!isNaN(seekTo) && seekTo > 0) {
+          control.seek(seekTo);
+          return;
+        }
+      }
+      if (msg.paused) video.pause();
+    });
+
+    control.on("stopped", () => {
+      if (this.destroyed) return;
+      this.whepIsLive = false;
+      video.pause();
+      this.emit("ended", undefined);
+    });
+
+    control.on("control_error", ({ message }) => {
+      if (this.destroyed) return;
+      this.emit("error", message);
+    });
+  }
+
   private async startWhep(
     video: HTMLVideoElement,
     url: string,
@@ -632,11 +807,30 @@ export class NativePlayerImpl extends BasePlayer {
     // Create peer connection
     const pc = new RTCPeerConnection({ iceServers });
     this.peerConnection = pc;
+    this.incomingMediaStream = null;
+
+    // Create MistControl data channel for seeking/DVR (upstream wheprtc.js compliance).
+    // Must be created before createOffer() so it's included in the SDP exchange.
+    const mistControlDC = pc.createDataChannel("MistControl");
+    this.controlChannel = new MistControlChannel(mistControlDC);
+    this.setupMistControl(this.controlChannel, video);
 
     pc.ontrack = (event: RTCTrackEvent) => {
       if (this.destroyed) return; // Guard against zombie callbacks
-      if (video && event.streams[0]) {
-        video.srcObject = event.streams[0];
+      if (!video) return;
+      if (!this.incomingMediaStream) {
+        this.incomingMediaStream = new MediaStream();
+        video.srcObject = this.incomingMediaStream;
+      }
+      const aggregate = this.incomingMediaStream;
+      const incomingTracks =
+        event.streams && event.streams.length > 0
+          ? event.streams.flatMap((s) => s.getTracks())
+          : [event.track];
+      for (const track of incomingTracks) {
+        if (!aggregate.getTracks().some((t) => t.id === track.id)) {
+          aggregate.addTrack(track);
+        }
       }
     };
 
@@ -687,6 +881,22 @@ export class NativePlayerImpl extends BasePlayer {
     }
     const answerSdp = await response.text();
     await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
+
+    // WHEP can carry media without negotiating SCTP/DataChannel.
+    // When SCTP is absent, MistControl will never open and seeking must stay disabled.
+    if (!pc.sctp) {
+      console.warn("[NativePlayer] WHEP negotiated without SCTP; continuing without seek/control");
+      this.controlChannel = null;
+    } else if (this.controlChannel && !this.controlChannel.isOpen) {
+      if (this.controlOpenTimer) clearTimeout(this.controlOpenTimer);
+      this.controlOpenTimer = setTimeout(() => {
+        if (!this.destroyed && this.controlChannel && !this.controlChannel.isOpen) {
+          console.warn(
+            "[NativePlayer] WHEP MistControl datachannel did not open; seeking disabled"
+          );
+        }
+      }, 5000);
+    }
 
     // Resolve sessionUrl against the WHEP endpoint URL (Location header may be relative)
     const locationHeader = response.headers.get("Location");

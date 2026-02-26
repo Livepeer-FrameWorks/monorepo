@@ -44,7 +44,7 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
       notes: {
         "html5/application/vnd.apple.mpegurl":
           "No extra JS needed. Native on Safari/iOS. Chromium 142+: experimental.",
-        whep: "Sub-second latency via WHEP. No seeking. B-frames may cause stutters.",
+        whep: "Sub-second latency via WHEP. DVR seeking supported when MistControl data channel is available. B-frames may cause stutters.",
         "html5/video/mp4": "Progressive, <5s latency. Broadest device support of any protocol.",
         "html5/video/webm": "Progressive, <5s latency. Best on Chromium. Firefox: VP8/VP9 only.",
       },
@@ -72,7 +72,9 @@ const PLAYER_ENTRIES: LazyPlayerEntry[] = [
       mimes: ["webrtc", "mist/webrtc"],
       notes: {
         webrtc:
-          "Sub-second latency. MistServer-native signaling (not WHEP-interoperable). No seeking.",
+          "Sub-second latency. MistServer-native signaling (not WHEP-interoperable). DVR seeking supported via Mist control signaling.",
+        "mist/webrtc":
+          "Sub-second latency. MistServer-native signaling. DVR seeking supported via Mist control signaling.",
       },
     },
     load: () => import("../players/MistWebRTCPlayer").then((m) => new m.MistWebRTCPlayerImpl()),

@@ -12,6 +12,7 @@
  * Protocol messages (to MistServer):
  * - offer_sdp: SDP offer { offer_sdp: string }
  * - seek: Seek to position { seek_time: number | "live" }
+ * - play: Resume playback
  * - hold: Pause playback
  * - stop: Stop playback
  * - tracks: Select tracks { video: string, audio: string }
@@ -56,7 +57,12 @@ export interface MistSignalingEvents {
   /** Seek completed */
   seeked: { live_point?: boolean };
   /** Playback speed changed */
-  speed_changed: { play_rate: number; play_rate_curr: number };
+  speed_changed: {
+    play_rate: number | "auto" | "fast-forward";
+    play_rate_curr: number | "auto" | "fast-forward";
+  };
+  /** Server-initiated pause (e.g., buffer underrun at_dead_point) */
+  pause_request: { paused: boolean; reason?: string; begin?: number; end?: number };
   /** Stream ended */
   stopped: void;
   /** Error occurred */
@@ -176,6 +182,8 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    */
   private handleMessage(cmd: Record<string, unknown>): void {
     const type = cmd.type as string;
+    const payload =
+      cmd.data && typeof cmd.data === "object" ? (cmd.data as Record<string, unknown>) : cmd;
 
     switch (type) {
       case "on_connected":
@@ -184,30 +192,30 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
 
       case "on_disconnected":
         this._state = "disconnected";
-        this.emit("disconnected", { code: (cmd.code as number) || 0 });
+        this.emit("disconnected", { code: (payload.code as number) || 0 });
         break;
 
       case "on_answer_sdp":
         this.emit("answer_sdp", {
-          result: cmd.result as boolean,
-          answer_sdp: cmd.answer_sdp as string,
+          result: payload.result as boolean,
+          answer_sdp: payload.answer_sdp as string,
         });
         break;
 
       case "on_time":
         this.emit("time_update", {
-          current: cmd.current as number,
-          end: cmd.end as number,
-          begin: cmd.begin as number,
-          tracks: cmd.tracks as string[] | undefined,
-          paused: cmd.paused as boolean | undefined,
-          live_point: cmd.live_point as boolean | undefined,
+          current: payload.current as number,
+          end: payload.end as number,
+          begin: payload.begin as number,
+          tracks: payload.tracks as string[] | undefined,
+          paused: payload.paused as boolean | undefined,
+          live_point: payload.live_point as boolean | undefined,
         });
         break;
 
       case "seek":
         this.emit("seeked", {
-          live_point: (cmd as Record<string, unknown>).live_point as boolean | undefined,
+          live_point: payload.live_point as boolean | undefined,
         });
         // Resolve seek promise if pending
         if (this.seekPromise) {
@@ -218,8 +226,17 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
 
       case "set_speed":
         this.emit("speed_changed", {
-          play_rate: (cmd as Record<string, unknown>).play_rate as number,
-          play_rate_curr: (cmd as Record<string, unknown>).play_rate_curr as number,
+          play_rate: payload.play_rate as number | "auto" | "fast-forward",
+          play_rate_curr: payload.play_rate_curr as number | "auto" | "fast-forward",
+        });
+        break;
+
+      case "pause":
+        this.emit("pause_request", {
+          paused: payload.paused as boolean,
+          reason: payload.reason as string | undefined,
+          begin: payload.begin as number | undefined,
+          end: payload.end as number | undefined,
         });
         break;
 
@@ -228,7 +245,7 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
         break;
 
       case "on_error":
-        this.emit("error", { message: cmd.message as string });
+        this.emit("error", { message: payload.message as string });
         break;
 
       default:
@@ -283,6 +300,13 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
       // Store promise handlers
       this.seekPromise = { resolve, reject };
     });
+  }
+
+  /**
+   * Resume playback
+   */
+  play(): boolean {
+    return this.send({ type: "play" });
   }
 
   /**

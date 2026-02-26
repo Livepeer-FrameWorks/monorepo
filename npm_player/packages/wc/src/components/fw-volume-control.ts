@@ -20,6 +20,8 @@ export class FwVolumeControl extends LitElement {
 
   private _activePointerId: number | null = null;
   private _activeSliderTarget: HTMLElement | null = null;
+  private _boundStream: MediaStream | null = null;
+  private _onStreamTrackChange: (() => void) | null = null;
 
   static styles = [
     sharedStyles,
@@ -69,28 +71,52 @@ export class FwVolumeControl extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     this._endDragInteraction();
+    this._unbindStreamListeners();
   }
 
   protected updated(): void {
     this._updateHasAudio();
   }
 
-  private _updateHasAudio(): void {
-    // Primary: trust MistServer stream metadata (matches ddvtech embed approach)
-    const mistHasAudio = this.pc?.s.streamState?.streamInfo?.hasAudio;
-    if (mistHasAudio !== undefined) {
-      this._hasAudio = mistHasAudio;
-      return;
+  private _unbindStreamListeners(): void {
+    if (this._boundStream && this._onStreamTrackChange) {
+      this._boundStream.removeEventListener("addtrack", this._onStreamTrackChange);
+      this._boundStream.removeEventListener("removetrack", this._onStreamTrackChange);
     }
+    this._boundStream = null;
+    this._onStreamTrackChange = null;
+  }
 
+  private _updateHasAudio(): void {
     const video = this.pc?.s.videoElement;
     if (!video) {
+      this._unbindStreamListeners();
       this._hasAudio = true;
       return;
     }
 
+    // MediaStream: bind track change listeners (WebRTC tracks arrive async)
     if (video.srcObject instanceof MediaStream) {
-      this._hasAudio = video.srcObject.getAudioTracks().length > 0;
+      const stream = video.srcObject;
+      if (stream !== this._boundStream) {
+        this._unbindStreamListeners();
+        this._boundStream = stream;
+        this._onStreamTrackChange = () => {
+          this._hasAudio = stream.getAudioTracks().length > 0;
+        };
+        stream.addEventListener("addtrack", this._onStreamTrackChange);
+        stream.addEventListener("removetrack", this._onStreamTrackChange);
+      }
+      this._hasAudio = stream.getAudioTracks().length > 0;
+      return;
+    }
+
+    this._unbindStreamListeners();
+
+    // Fallback: metadata for non-MediaStream sources.
+    const mistHasAudio = this.pc?.s.streamState?.streamInfo?.hasAudio;
+    if (mistHasAudio !== undefined) {
+      this._hasAudio = mistHasAudio;
       return;
     }
 
