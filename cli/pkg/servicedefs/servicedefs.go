@@ -35,7 +35,8 @@ var Services = map[string]Service{
 	"privateer": {ID: "privateer", DefaultPort: 18012, HealthPath: "/health", HealthProtocol: "http", Role: "mesh"},
 
 	// AI / support
-	"skipper": {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
+	"skipper":  {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
+	"deckhand": {ID: "deckhand", DefaultPort: 18015, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
 
 	// Surfaces (interfaces)
 	"chartroom": {ID: "chartroom", DefaultPort: 18030, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
@@ -90,6 +91,7 @@ var defaultGRPCPorts = map[string]int{
 	"periscope-query": 19004,
 	"signalman":       19005,
 	"skipper":         19007,
+	"deckhand":        19006,
 	"navigator":       18011,
 	"foghorn":         18019,
 }
