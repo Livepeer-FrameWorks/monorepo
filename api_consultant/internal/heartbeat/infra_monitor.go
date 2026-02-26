@@ -60,6 +60,8 @@ func (a InfraAlert) Severity() string {
 type InfraNodeClient interface {
 	GetLiveNodes(ctx context.Context, tenantID string, nodeID *string, relatedTenantIDs []string) (*pb.GetLiveNodesResponse, error)
 	GetNodePerformance5m(ctx context.Context, tenantID string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetNodePerformance5MResponse, error)
+	GetNetworkLiveStats(ctx context.Context) (*pb.GetNetworkLiveStatsResponse, error)
+	GetFederationSummary(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*pb.GetFederationSummaryResponse, error)
 }
 
 // InfraClusterClient provides Quartermaster methods for cluster/node discovery.
@@ -75,6 +77,10 @@ type InfraMonitorConfig struct {
 	Baselines *diagnostics.BaselineEvaluator
 	SMTP      email.Config
 	Logger    logging.Logger
+
+	// Callbacks for external consumers (e.g. social posting agent).
+	OnNetworkStats      func(*pb.GetNetworkLiveStatsResponse)
+	OnFederationSummary func(ownerTenantID string, summary *pb.GetFederationSummaryResponse)
 }
 
 type InfraMonitor struct {
@@ -86,6 +92,9 @@ type InfraMonitor struct {
 	smtp      email.Config
 	cooldown  *diagnostics.TriageCooldown
 	logger    logging.Logger
+
+	onNetworkStats      func(*pb.GetNetworkLiveStatsResponse)
+	onFederationSummary func(string, *pb.GetFederationSummaryResponse)
 }
 
 func NewInfraMonitor(cfg *InfraMonitorConfig) *InfraMonitor {
@@ -93,14 +102,16 @@ func NewInfraMonitor(cfg *InfraMonitorConfig) *InfraMonitor {
 		return nil
 	}
 	return &InfraMonitor{
-		nodes:     cfg.Nodes,
-		clusters:  cfg.Clusters,
-		billing:   cfg.Billing,
-		baselines: cfg.Baselines,
-		emailer:   email.NewSender(cfg.SMTP),
-		smtp:      cfg.SMTP,
-		cooldown:  diagnostics.NewTriageCooldown(infraCooldownDuration),
-		logger:    cfg.Logger,
+		nodes:               cfg.Nodes,
+		clusters:            cfg.Clusters,
+		billing:             cfg.Billing,
+		baselines:           cfg.Baselines,
+		emailer:             email.NewSender(cfg.SMTP),
+		smtp:                cfg.SMTP,
+		cooldown:            diagnostics.NewTriageCooldown(infraCooldownDuration),
+		logger:              cfg.Logger,
+		onNetworkStats:      cfg.OnNetworkStats,
+		onFederationSummary: cfg.OnFederationSummary,
 	}
 }
 
@@ -113,6 +124,16 @@ func (m *InfraMonitor) Run(ctx context.Context) {
 			m.logger.WithField("panic", fmt.Sprint(r)).Error("Infrastructure monitor panic")
 		}
 	}()
+
+	// Platform-wide live stats — 1 global gRPC call, no tenant iteration.
+	if m.onNetworkStats != nil {
+		stats, err := m.nodes.GetNetworkLiveStats(ctx)
+		if err != nil {
+			m.logger.WithError(err).Debug("Infra monitor: network live stats failed")
+		} else {
+			m.onNetworkStats(stats)
+		}
+	}
 
 	clusters, err := m.discoverClusters(ctx)
 	if err != nil {
@@ -142,6 +163,35 @@ func (m *InfraMonitor) Run(ctx context.Context) {
 			}
 			seen[node.GetNodeId()] = true
 			m.checkNode(ctx, node, cluster)
+		}
+	}
+
+	// Federation metrics per unique cluster owner — C calls where C = unique owners.
+	m.collectFederation(ctx, clusters)
+}
+
+func (m *InfraMonitor) collectFederation(ctx context.Context, clusters []*pb.InfrastructureCluster) {
+	if m.onFederationSummary == nil {
+		return
+	}
+	now := time.Now().UTC()
+	timeRange := &periscope.TimeRangeOpts{
+		StartTime: now.Add(-24 * time.Hour),
+		EndTime:   now,
+	}
+	seen := make(map[string]bool)
+	for _, cluster := range clusters {
+		ownerID := cluster.GetOwnerTenantId()
+		if ownerID == "" || !cluster.GetIsActive() || seen[ownerID] {
+			continue
+		}
+		seen[ownerID] = true
+		summary, err := m.nodes.GetFederationSummary(ctx, ownerID, timeRange)
+		if err != nil {
+			continue
+		}
+		if s := summary.GetSummary(); s != nil && s.GetTotalEvents() > 0 {
+			m.onFederationSummary(ownerID, summary)
 		}
 	}
 }

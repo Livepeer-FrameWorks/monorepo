@@ -106,33 +106,35 @@ func (d *Detector) saveBaseline(ctx context.Context, ct ContentType, data map[st
 	}
 }
 
-// processPlatformStats aggregates per-tenant overview data pushed by the
-// heartbeat agent, compares against the stored baseline, and scores.
+// processPlatformStats processes platform-wide live stats pushed by the
+// infra_monitor's GetNetworkLiveStats callback. Multiple heartbeat cycles
+// may have pushed signals — we take the latest (highest viewer count) as
+// the current snapshot and compare against stored baseline.
 func (d *Detector) processPlatformStats(ctx context.Context, events []EventSignal) *EventSignal {
 	if len(events) == 0 {
 		return nil
 	}
 
-	var totalViewers, peakViewers, totalStreams float64
-	var totalEgressGB float64
-	for _, e := range events {
-		pv, _ := e.Data["peak_viewers"].(float64)
-		tv, _ := e.Data["total_viewers"].(float64)
-		as, _ := e.Data["active_streams"].(float64)
-		eg, _ := e.Data["egress_gb"].(float64)
-		totalViewers += tv
-		totalStreams += as
-		totalEgressGB += eg
-		if pv > peakViewers {
-			peakViewers = pv
+	// Take the snapshot with the most viewers (most recent peak).
+	best := events[0]
+	for _, e := range events[1:] {
+		cv, _ := e.Data["current_viewers"].(float64)
+		bestCV, _ := best.Data["current_viewers"].(float64)
+		if cv > bestCV {
+			best = e
 		}
 	}
 
+	viewers, _ := best.Data["current_viewers"].(float64)
+	streams, _ := best.Data["active_streams"].(float64)
+	bandwidthBps, _ := best.Data["bandwidth_bps"].(float64)
+	nodes, _ := best.Data["active_nodes"].(float64)
+
 	data := map[string]any{
-		"peak_viewers":   peakViewers,
-		"total_viewers":  totalViewers,
-		"active_streams": totalStreams,
-		"egress_gb":      totalEgressGB,
+		"current_viewers": viewers,
+		"active_streams":  streams,
+		"bandwidth_bps":   bandwidthBps,
+		"active_nodes":    nodes,
 	}
 
 	last := d.lastTriggerData(ctx, ContentPlatformStats)
@@ -142,39 +144,39 @@ func (d *Detector) processPlatformStats(ctx context.Context, events []EventSigna
 		return nil
 	}
 
-	lastPeakViewers, _ := last["peak_viewers"].(float64)
-	lastEgressGB, _ := last["egress_gb"].(float64)
+	lastViewers, _ := last["current_viewers"].(float64)
+	lastBandwidth, _ := last["bandwidth_bps"].(float64)
 
-	// New peak viewer record
-	if lastPeakViewers > 0 && peakViewers > lastPeakViewers {
+	// New viewer record
+	if lastViewers > 0 && viewers > lastViewers {
 		return &EventSignal{
 			ContentType: ContentPlatformStats,
-			Headline:    fmt.Sprintf("New peak viewer record: %.0f (previous: %.0f)", peakViewers, lastPeakViewers),
+			Headline:    fmt.Sprintf("New viewer record: %.0f concurrent (previous: %.0f)", viewers, lastViewers),
 			Data:        data,
 			Score:       0.8,
 		}
 	}
 
-	// Bandwidth milestone crossings (powers of 10 in TB)
-	egressTB := totalEgressGB / 1024
-	lastTB := lastEgressGB / 1024
-	milestones := []float64{0.1, 1, 10, 100}
+	// Bandwidth milestone crossings (Gbps)
+	bandwidthGbps := bandwidthBps / 1e9
+	lastGbps := lastBandwidth / 1e9
+	milestones := []float64{1, 10, 100, 1000}
 	for _, m := range milestones {
-		if egressTB >= m && lastTB < m {
+		if bandwidthGbps >= m && lastGbps < m {
 			return &EventSignal{
 				ContentType: ContentPlatformStats,
-				Headline:    fmt.Sprintf("Bandwidth milestone: %.1f TB served in 24h (%.1f GB)", egressTB, totalEgressGB),
+				Headline:    fmt.Sprintf("Bandwidth milestone: %.1f Gbps (%.0f active streams)", bandwidthGbps, streams),
 				Data:        data,
 				Score:       0.7,
 			}
 		}
 	}
 
-	// Significant increase in viewers (>25% above last reported)
-	if lastPeakViewers > 0 && peakViewers > lastPeakViewers*1.25 {
+	// Significant viewer growth (>25% above baseline)
+	if lastViewers > 0 && viewers > lastViewers*1.25 {
 		return &EventSignal{
 			ContentType: ContentPlatformStats,
-			Headline:    fmt.Sprintf("Viewer growth: %.0f peak viewers today (up %.0f%% from %.0f)", peakViewers, (peakViewers-lastPeakViewers)/lastPeakViewers*100, lastPeakViewers),
+			Headline:    fmt.Sprintf("Viewer surge: %.0f concurrent (up %.0f%% from %.0f)", viewers, (viewers-lastViewers)/lastViewers*100, lastViewers),
 			Data:        data,
 			Score:       0.5,
 		}

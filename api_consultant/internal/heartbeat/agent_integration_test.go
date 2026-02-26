@@ -160,11 +160,10 @@ func TestProcessTenantDegradedInvestigates(t *testing.T) {
 // --- Test helpers ---
 
 type fakePeriscopeClient struct {
-	healthResp     *pb.GetStreamHealthSummaryResponse
-	qoeResp        *pb.GetClientQoeSummaryResponse
-	overviewResp   *pb.GetPlatformOverviewResponse
-	streamMetrics  *pb.GetStreamHealthMetricsResponse
-	federationResp *pb.GetFederationSummaryResponse
+	healthResp    *pb.GetStreamHealthSummaryResponse
+	qoeResp       *pb.GetClientQoeSummaryResponse
+	overviewResp  *pb.GetPlatformOverviewResponse
+	streamMetrics *pb.GetStreamHealthMetricsResponse
 }
 
 func (f *fakePeriscopeClient) GetStreamHealthSummary(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error) {
@@ -184,11 +183,4 @@ func (f *fakePeriscopeClient) GetStreamHealthMetrics(_ context.Context, _ string
 		return f.streamMetrics, nil
 	}
 	return &pb.GetStreamHealthMetricsResponse{}, nil
-}
-
-func (f *fakePeriscopeClient) GetFederationSummary(_ context.Context, _ string, _ *periscope.TimeRangeOpts) (*pb.GetFederationSummaryResponse, error) {
-	if f.federationResp != nil {
-		return f.federationResp, nil
-	}
-	return &pb.GetFederationSummaryResponse{}, nil
 }

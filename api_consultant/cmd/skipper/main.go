@@ -398,41 +398,50 @@ func main() {
 			Baselines: baselineEvaluator,
 			SMTP:      notifyConfig.SMTP,
 			Logger:    logger,
-		},
-		OnPlatformOverview: func(tenantID string, overview *pb.GetPlatformOverviewResponse) {
-			if socialCollector == nil {
-				return
-			}
-			socialCollector.Push(social.EventSignal{
-				ContentType: social.ContentPlatformStats,
-				Headline:    fmt.Sprintf("Platform overview for tenant %s", tenantID),
-				Data: map[string]any{
-					"peak_viewers":   float64(overview.GetPeakViewers()),
-					"total_viewers":  float64(overview.GetTotalViewers()),
-					"active_streams": float64(overview.GetActiveStreams()),
-					"egress_gb":      overview.GetEgressGb(),
-				},
-				Score: 0.5,
-			})
-		},
-		OnFederationSummary: func(tenantID string, summary *pb.GetFederationSummaryResponse) {
-			if socialCollector == nil {
-				return
-			}
-			s := summary.GetSummary()
-			if s == nil {
-				return
-			}
-			socialCollector.Push(social.EventSignal{
-				ContentType: social.ContentFederation,
-				Headline:    fmt.Sprintf("Federation summary for tenant %s", tenantID),
-				Data: map[string]any{
-					"total_events":   float64(s.GetTotalEvents()),
-					"avg_latency_ms": s.GetOverallAvgLatencyMs(),
-					"failure_rate":   s.GetOverallFailureRate(),
-				},
-				Score: 0.5,
-			})
+			OnNetworkStats: func(stats *pb.GetNetworkLiveStatsResponse) {
+				if socialCollector == nil {
+					return
+				}
+				var viewers, streams, nodes float64
+				var uploadBps, downloadBps uint64
+				for _, c := range stats.GetClusters() {
+					viewers += float64(c.GetCurrentViewers())
+					streams += float64(c.GetActiveStreams())
+					nodes += float64(c.GetActiveNodes())
+					uploadBps += c.GetUploadBytesPerSec()
+					downloadBps += c.GetDownloadBytesPerSec()
+				}
+				socialCollector.Push(social.EventSignal{
+					ContentType: social.ContentPlatformStats,
+					Headline:    fmt.Sprintf("Platform: %.0f viewers, %.0f streams across %.0f nodes", viewers, streams, nodes),
+					Data: map[string]any{
+						"current_viewers": viewers,
+						"active_streams":  streams,
+						"bandwidth_bps":   float64(uploadBps + downloadBps),
+						"active_nodes":    nodes,
+					},
+					Score: 0.5,
+				})
+			},
+			OnFederationSummary: func(ownerTenantID string, summary *pb.GetFederationSummaryResponse) {
+				if socialCollector == nil {
+					return
+				}
+				s := summary.GetSummary()
+				if s == nil {
+					return
+				}
+				socialCollector.Push(social.EventSignal{
+					ContentType: social.ContentFederation,
+					Headline:    fmt.Sprintf("Federation for %s: %d events", ownerTenantID, s.GetTotalEvents()),
+					Data: map[string]any{
+						"total_events":   float64(s.GetTotalEvents()),
+						"avg_latency_ms": s.GetOverallAvgLatencyMs(),
+						"failure_rate":   s.GetOverallFailureRate(),
+					},
+					Score: 0.5,
+				})
+			},
 		},
 	})
 	go heartbeatAgent.Start(context.Background())

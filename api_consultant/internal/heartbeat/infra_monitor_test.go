@@ -31,6 +31,14 @@ func (f *fakeInfraNodeClient) GetNodePerformance5m(_ context.Context, _ string, 
 	return &pb.GetNodePerformance5MResponse{}, nil
 }
 
+func (f *fakeInfraNodeClient) GetNetworkLiveStats(_ context.Context) (*pb.GetNetworkLiveStatsResponse, error) {
+	return &pb.GetNetworkLiveStatsResponse{}, nil
+}
+
+func (f *fakeInfraNodeClient) GetFederationSummary(_ context.Context, _ string, _ *periscope.TimeRangeOpts) (*pb.GetFederationSummaryResponse, error) {
+	return &pb.GetFederationSummaryResponse{}, nil
+}
+
 type fakeInfraClusterClient struct {
 	clusters []*pb.InfrastructureCluster
 	owners   map[string]*pb.NodeOwnerResponse
