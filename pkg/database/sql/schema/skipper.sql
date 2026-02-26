@@ -177,3 +177,21 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_baselines (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     PRIMARY KEY (tenant_id, stream_id, metric_name)
 );
+
+-- ============================================================================
+-- SOCIAL POST DRAFTS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS skipper.skipper_posts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    content_type TEXT NOT NULL,
+    tweet_text TEXT NOT NULL,
+    context_summary TEXT,
+    trigger_data JSONB,
+    status TEXT NOT NULL DEFAULT 'draft',
+    sent_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS skipper_posts_status_created_idx
+    ON skipper.skipper_posts (status, created_at DESC);

@@ -55,6 +55,10 @@ type Config struct {
 	RerankAPIURL        string
 	EnableHyDE          bool
 	SSRFAllowedHosts    []string
+	SocialEnabled       bool
+	SocialInterval      time.Duration
+	SocialMaxPerDay     int
+	SocialNotifyEmail   string
 }
 
 // GatewayMCPURL returns the MCP endpoint URL derived from the gateway base.
@@ -125,6 +129,10 @@ func LoadConfig() Config {
 		RerankAPIURL:        config.GetEnv("RERANKER_API_URL", ""),
 		EnableHyDE:          config.GetEnv("SKIPPER_ENABLE_HYDE", "") == "true",
 		SSRFAllowedHosts:    parseSitemapList(config.GetEnv("SKIPPER_SSRF_ALLOWED_HOSTS", "")),
+		SocialEnabled:       config.GetEnv("SKIPPER_SOCIAL_ENABLED", "") == "true",
+		SocialInterval:      parseDuration(config.GetEnv("SKIPPER_SOCIAL_INTERVAL", "2h"), 2*time.Hour),
+		SocialMaxPerDay:     config.GetEnvInt("SKIPPER_SOCIAL_MAX_PER_DAY", 2),
+		SocialNotifyEmail:   config.GetEnv("SKIPPER_SOCIAL_NOTIFY_EMAIL", ""),
 	}
 }
 

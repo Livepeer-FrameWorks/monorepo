@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"frameworks/api_consultant/internal/metering"
 	"frameworks/api_consultant/internal/notify"
 	"frameworks/api_consultant/internal/skipper"
+	"frameworks/api_consultant/internal/social"
 	"frameworks/api_consultant/internal/webui"
 	"frameworks/pkg/auth"
 	decklogclient "frameworks/pkg/clients/decklog"
@@ -32,6 +34,7 @@ import (
 	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/database"
+	"frameworks/pkg/email"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
@@ -370,6 +373,13 @@ func main() {
 		Logger:     logger,
 		WebAppURL:  notifyConfig.WebAppURL,
 	}
+	// Create the social event collector early so heartbeat callbacks can
+	// push signals into it. The collector is nil when social is disabled.
+	var socialCollector *social.EventCollector
+	if cfg.SocialEnabled && cfg.SocialNotifyEmail != "" {
+		socialCollector = social.NewEventCollector()
+	}
+
 	heartbeatAgent := heartbeat.NewAgent(heartbeat.AgentConfig{
 		Interval:          heartbeatDuration,
 		Orchestrator:      orchestrator,
@@ -389,8 +399,84 @@ func main() {
 			SMTP:      notifyConfig.SMTP,
 			Logger:    logger,
 		},
+		OnPlatformOverview: func(tenantID string, overview *pb.GetPlatformOverviewResponse) {
+			if socialCollector == nil {
+				return
+			}
+			socialCollector.Push(social.EventSignal{
+				ContentType: social.ContentPlatformStats,
+				Headline:    fmt.Sprintf("Platform overview for tenant %s", tenantID),
+				Data: map[string]any{
+					"peak_viewers":   float64(overview.GetPeakViewers()),
+					"total_viewers":  float64(overview.GetTotalViewers()),
+					"active_streams": float64(overview.GetActiveStreams()),
+					"egress_gb":      overview.GetEgressGb(),
+				},
+				Score: 0.5,
+			})
+		},
+		OnFederationSummary: func(tenantID string, summary *pb.GetFederationSummaryResponse) {
+			if socialCollector == nil {
+				return
+			}
+			s := summary.GetSummary()
+			if s == nil {
+				return
+			}
+			socialCollector.Push(social.EventSignal{
+				ContentType: social.ContentFederation,
+				Headline:    fmt.Sprintf("Federation summary for tenant %s", tenantID),
+				Data: map[string]any{
+					"total_events":   float64(s.GetTotalEvents()),
+					"avg_latency_ms": s.GetOverallAvgLatencyMs(),
+					"failure_rate":   s.GetOverallFailureRate(),
+				},
+				Score: 0.5,
+			})
+		},
 	})
 	go heartbeatAgent.Start(context.Background())
+
+	// Start social posting agent (optional, off by default)
+	if cfg.SocialEnabled && cfg.SocialNotifyEmail != "" {
+		socialLLM := utilityLLM
+		if socialLLM == nil {
+			socialLLM = llmProvider
+		}
+		if socialLLM != nil {
+			socialStore := social.NewPostStore(db)
+			socialDetector := social.NewDetector(social.DetectorConfig{
+				Store:     socialStore,
+				Collector: socialCollector,
+				DB:        db,
+				Logger:    logger,
+			})
+			socialComposer := social.NewComposer(social.ComposerConfig{
+				LLM:    socialLLM,
+				Store:  socialStore,
+				Logger: logger,
+			})
+			socialPublisher := social.NewEmailPublisher(social.EmailPublisherConfig{
+				Sender: email.NewSender(notifyConfig.SMTP),
+				SMTP:   notifyConfig.SMTP,
+				To:     cfg.SocialNotifyEmail,
+				Logger: logger,
+			})
+			socialAgent := social.NewAgent(social.AgentConfig{
+				Interval:  cfg.SocialInterval,
+				MaxPerDay: cfg.SocialMaxPerDay,
+				Detector:  socialDetector,
+				Composer:  socialComposer,
+				Publisher: socialPublisher,
+				Store:     socialStore,
+				Logger:    logger,
+			})
+			go socialAgent.Start(context.Background())
+			logger.Info("Social posting agent started")
+		} else {
+			logger.Warn("Social posting agent: no LLM provider available, skipping")
+		}
+	}
 
 	// Start gRPC server for Bridge gateway integration
 	grpcChatServer := chat.NewGRPCServer(chat.GRPCServerConfig{
@@ -515,6 +601,20 @@ func main() {
 			Sitemaps:    cfg.Sitemaps,
 			SitemapsDir: cfg.SitemapsDir,
 			Logger:      logger,
+			OnPageEmbedded: func(evt knowledge.PageEmbeddedEvent) {
+				if socialCollector != nil {
+					socialCollector.Push(social.EventSignal{
+						ContentType: social.ContentKnowledge,
+						Headline:    fmt.Sprintf("New knowledge embedded: %s", evt.PageURL),
+						Data: map[string]any{
+							"page_url":    evt.PageURL,
+							"source_root": evt.SourceRoot,
+							"tenant_id":   evt.TenantID,
+						},
+						Score: 0.5,
+					})
+				}
+			},
 		})
 		go scheduler.Start(context.Background())
 		logger.Info("Knowledge crawl scheduler started")

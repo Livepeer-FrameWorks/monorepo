@@ -116,6 +116,10 @@ Multi-turn conversations stored in `skipper_conversations` / `skipper_messages` 
 | `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge                                      | —                    |
 | `SKIPPER_API_KEY`                   | API key for admin WebUI authentication (see Web UI)                          | — (network-trust)    |
 | `GATEWAY_PUBLIC_URL`                | API Gateway base URL (MCP endpoint derived as `$URL/mcp`)                    | —                    |
+| `SKIPPER_SOCIAL_ENABLED`            | Enable event-driven social posting agent                                     | `false`              |
+| `SKIPPER_SOCIAL_INTERVAL`           | How often to check for noteworthy events                                     | `2h`                 |
+| `SKIPPER_SOCIAL_MAX_PER_DAY`        | Max posts per day (`0` = unlimited)                                          | `2`                  |
+| `SKIPPER_SOCIAL_NOTIFY_EMAIL`       | Email to send draft tweets to (required when enabled)                        | —                    |
 
 ## Web UI
 

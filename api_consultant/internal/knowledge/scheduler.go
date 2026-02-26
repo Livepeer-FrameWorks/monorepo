@@ -14,30 +14,39 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// PageEmbeddedEvent is emitted when the crawler successfully embeds a page.
+type PageEmbeddedEvent struct {
+	PageURL    string
+	SourceRoot string
+	TenantID   string
+}
+
 type CrawlScheduler struct {
-	crawler     *Crawler
-	db          *sql.DB
-	pageCache   *PageCacheStore
-	health      *HealthTracker
-	interval    time.Duration
-	tenantID    string
-	sitemaps    []string
-	sitemapsDir string
-	logger      logging.Logger
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
+	crawler        *Crawler
+	db             *sql.DB
+	pageCache      *PageCacheStore
+	health         *HealthTracker
+	interval       time.Duration
+	tenantID       string
+	sitemaps       []string
+	sitemapsDir    string
+	logger         logging.Logger
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	onPageEmbedded func(PageEmbeddedEvent)
 }
 
 type SchedulerConfig struct {
-	Crawler     *Crawler
-	DB          *sql.DB
-	PageCache   *PageCacheStore
-	Health      *HealthTracker
-	Interval    time.Duration
-	TenantID    string
-	Sitemaps    []string
-	SitemapsDir string
-	Logger      logging.Logger
+	Crawler        *Crawler
+	DB             *sql.DB
+	PageCache      *PageCacheStore
+	Health         *HealthTracker
+	Interval       time.Duration
+	TenantID       string
+	Sitemaps       []string
+	SitemapsDir    string
+	Logger         logging.Logger
+	OnPageEmbedded func(PageEmbeddedEvent)
 }
 
 func NewCrawlScheduler(cfg SchedulerConfig) *CrawlScheduler {
@@ -50,15 +59,16 @@ func NewCrawlScheduler(cfg SchedulerConfig) *CrawlScheduler {
 		health = NewHealthTracker()
 	}
 	return &CrawlScheduler{
-		crawler:     cfg.Crawler,
-		db:          cfg.DB,
-		pageCache:   cfg.PageCache,
-		health:      health,
-		interval:    interval,
-		tenantID:    cfg.TenantID,
-		sitemaps:    cfg.Sitemaps,
-		sitemapsDir: cfg.SitemapsDir,
-		logger:      cfg.Logger,
+		crawler:        cfg.Crawler,
+		db:             cfg.DB,
+		pageCache:      cfg.PageCache,
+		health:         health,
+		interval:       interval,
+		tenantID:       cfg.TenantID,
+		sitemaps:       cfg.Sitemaps,
+		sitemapsDir:    cfg.SitemapsDir,
+		logger:         cfg.Logger,
+		onPageEmbedded: cfg.OnPageEmbedded,
 	}
 }
 
@@ -382,6 +392,13 @@ func (s *CrawlScheduler) processItem(ctx context.Context, item *CrawlItem) PageS
 		}
 		s.health.RecordSuccess(item.SourceRoot, 1)
 		s.updateOutcome(ctx, item, true, false)
+		if s.onPageEmbedded != nil {
+			s.onPageEmbedded(PageEmbeddedEvent{
+				PageURL:    item.PageURL,
+				SourceRoot: item.SourceRoot,
+				TenantID:   s.tenantID,
+			})
+		}
 		return PageEmbedded
 	}
 
@@ -398,6 +415,13 @@ func (s *CrawlScheduler) processItem(ctx context.Context, item *CrawlItem) PageS
 
 	if changed {
 		s.health.RecordSuccess(item.SourceRoot, 1)
+		if s.onPageEmbedded != nil {
+			s.onPageEmbedded(PageEmbeddedEvent{
+				PageURL:    item.PageURL,
+				SourceRoot: item.SourceRoot,
+				TenantID:   s.tenantID,
+			})
+		}
 	}
 	return status
 }

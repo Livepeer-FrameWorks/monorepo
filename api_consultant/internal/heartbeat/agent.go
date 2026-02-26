@@ -49,6 +49,10 @@ type AgentConfig struct {
 	Logger            logging.Logger
 	RequiredTierLevel int
 	InfraMonitor      *InfraMonitorConfig
+
+	// Callbacks for external consumers (e.g. social posting agent).
+	OnPlatformOverview  func(tenantID string, overview *pb.GetPlatformOverviewResponse)
+	OnFederationSummary func(tenantID string, summary *pb.GetFederationSummaryResponse)
 }
 
 type Agent struct {
@@ -66,6 +70,9 @@ type Agent struct {
 	requiredTierLevel int
 	thresholdTrigger  *ThresholdTrigger
 	infraMonitor      *InfraMonitor
+
+	onPlatformOverview  func(string, *pb.GetPlatformOverviewResponse)
+	onFederationSummary func(string, *pb.GetFederationSummaryResponse)
 }
 
 type healthSnapshot struct {
@@ -85,6 +92,7 @@ type PeriscopeClient interface {
 	GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetClientQoeSummaryResponse, error)
 	GetPlatformOverview(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*pb.GetPlatformOverviewResponse, error)
 	GetStreamHealthMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, pagination *periscope.CursorPaginationOpts) (*pb.GetStreamHealthMetricsResponse, error)
+	GetFederationSummary(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*pb.GetFederationSummaryResponse, error)
 }
 
 type BillingClient interface {
@@ -111,19 +119,21 @@ func NewAgent(cfg AgentConfig) *Agent {
 		perStream = diagnostics.NewPerStreamAnalyzer(cfg.Diagnostics)
 	}
 	agent := &Agent{
-		interval:          interval,
-		orchestrator:      cfg.Orchestrator,
-		periscope:         cfg.Periscope,
-		purser:            cfg.Purser,
-		quartermaster:     cfg.Quartermaster,
-		decklog:           cfg.Decklog,
-		reporter:          cfg.Reporter,
-		diagnostics:       cfg.Diagnostics,
-		cooldown:          diagnostics.NewTriageCooldown(diagnostics.DefaultFlagCooldown),
-		perStreamAnalyzer: perStream,
-		logger:            cfg.Logger,
-		requiredTierLevel: cfg.RequiredTierLevel,
-		infraMonitor:      NewInfraMonitor(cfg.InfraMonitor),
+		interval:            interval,
+		orchestrator:        cfg.Orchestrator,
+		periscope:           cfg.Periscope,
+		purser:              cfg.Purser,
+		quartermaster:       cfg.Quartermaster,
+		decklog:             cfg.Decklog,
+		reporter:            cfg.Reporter,
+		diagnostics:         cfg.Diagnostics,
+		cooldown:            diagnostics.NewTriageCooldown(diagnostics.DefaultFlagCooldown),
+		perStreamAnalyzer:   perStream,
+		logger:              cfg.Logger,
+		requiredTierLevel:   cfg.RequiredTierLevel,
+		infraMonitor:        NewInfraMonitor(cfg.InfraMonitor),
+		onPlatformOverview:  cfg.OnPlatformOverview,
+		onFederationSummary: cfg.OnFederationSummary,
 	}
 	agent.thresholdTrigger = NewThresholdTrigger(agent)
 	return agent
@@ -170,6 +180,11 @@ func (a *Agent) runCycle(ctx context.Context) {
 			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Heartbeat processing failed")
 		}
 	}
+
+	// Collect federation metrics across all active tenants for external
+	// consumers (social agent). Runs separately from per-tenant diagnostics
+	// because federation data is relevant even for tenants without streams.
+	a.collectFederation(ctx)
 
 	// Infrastructure health check — runs independently of per-tenant stream
 	// health. Iterates all clusters and checks node-level metrics (CPU,
@@ -233,7 +248,34 @@ func (a *Agent) countActiveStreams(ctx context.Context, tenantID string) (int, e
 	if err != nil {
 		return 0, err
 	}
+	if a.onPlatformOverview != nil {
+		a.onPlatformOverview(tenantID, resp)
+	}
 	return int(resp.GetActiveStreams()), nil
+}
+
+func (a *Agent) collectFederation(ctx context.Context) {
+	if a.onFederationSummary == nil || a.periscope == nil || a.quartermaster == nil {
+		return
+	}
+	tenants, err := a.quartermaster.ListActiveTenants(ctx)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	timeRange := &periscope.TimeRangeOpts{
+		StartTime: now.Add(-24 * time.Hour),
+		EndTime:   now,
+	}
+	for _, tenantID := range tenants {
+		summary, err := a.periscope.GetFederationSummary(ctx, tenantID, timeRange)
+		if err != nil {
+			continue
+		}
+		if s := summary.GetSummary(); s != nil && s.GetTotalEvents() > 0 {
+			a.onFederationSummary(tenantID, summary)
+		}
+	}
 }
 
 func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
