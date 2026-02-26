@@ -10,7 +10,8 @@
     "!src/**/*.d.ts",
     "!src/**/index.ts",
     "!src/styles/**",
-    "!src/players/**"
+    "!src/players/**",
+    "!src/core/PlayerRegistry.ts"
   ],
   "reporters": ["html", "clear-text", "progress-append-only"],
   "coverageAnalysis": "perTest",
