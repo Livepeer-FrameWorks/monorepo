@@ -48,8 +48,8 @@ WORKDIR /app
 RUN apk add --no-cache git ca-certificates tzdata \
   && corepack enable
 
-# workspace manifests
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# workspace manifests and config
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY patches/ patches/
 
 # npm_player workspace packages
@@ -98,8 +98,8 @@ RUN cd website_application && ../scripts/copy-agent-files.sh static
 # build the app (increase memory for Houdini codegen + Vite SSR + adapter-node)
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter frameworks-frontend... run build
 
-# prune to production dependencies only
-RUN CI=true pnpm prune --prod --ignore-scripts
+# deploy with production dependencies only into an isolated directory
+RUN pnpm --filter frameworks-frontend --prod deploy /app/deployed
 
 FROM node:24-alpine AS runner
 
@@ -109,21 +109,7 @@ ENV HOST=0.0.0.0
 
 WORKDIR /app
 
-# copy workspace manifests and pruned node_modules
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY npm_player/package.json npm_player/
-COPY npm_studio/package.json npm_studio/
-COPY website_application/package.json website_application/
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/website_application/node_modules ./website_application/node_modules
-COPY --from=builder /app/npm_player ./npm_player
-COPY --from=builder /app/npm_studio ./npm_studio
-
-# copy build artifacts
-COPY --from=builder /app/website_application/build ./website_application/build
-COPY --from=builder /app/website_application/static ./website_application/static
-
-WORKDIR /app/website_application
+COPY --from=builder /app/deployed .
 
 EXPOSE ${APP_PORT}
 

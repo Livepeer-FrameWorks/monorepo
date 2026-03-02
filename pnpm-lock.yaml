@@ -3,6 +3,7 @@ lockfileVersion: '9.0'
 settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
+  injectWorkspacePackages: true
 
 patchedDependencies:
   '@codecov/sveltekit-plugin':
@@ -700,6 +701,9 @@ importers:
       '@types/codemirror':
         specifier: ^5.60.17
         version: 5.60.17
+      '@types/geojson':
+        specifier: ^7946.0.16
+        version: 7946.0.16
       '@types/node':
         specifier: ^25.3.3
         version: 25.3.3
