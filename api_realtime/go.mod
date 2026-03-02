@@ -25,7 +25,7 @@ require (
 	github.com/failsafe-go/failsafe-go v0.9.6 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
-	github.com/gin-gonic/gin v1.11.0 // indirect
+	github.com/gin-gonic/gin v1.12.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.1 // indirect
@@ -37,7 +37,6 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lib/pq v1.11.2 // indirect
@@ -56,10 +55,11 @@ require (
 	github.com/twmb/franz-go v1.20.7 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.12.0 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/arch v0.24.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260223185530-2f722ef697dc // indirect

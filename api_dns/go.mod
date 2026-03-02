@@ -6,7 +6,7 @@ require (
 	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/failsafe-go/failsafe-go v0.9.6
-	github.com/gin-gonic/gin v1.11.0
+	github.com/gin-gonic/gin v1.12.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.79.1
 )
@@ -34,6 +34,7 @@ require (
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	go.opentelemetry.io/otel v1.40.0 // indirect
 	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
@@ -78,7 +79,7 @@ require (
 	golang.org/x/arch v0.24.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
