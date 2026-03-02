@@ -30,9 +30,9 @@
     "@typescript-eslint/parser": "^8.56.1",
     "@typescript-eslint/type-utils": "^8.56.1",
     "@typescript-eslint/utils": "^8.56.1",
-    "globals": "^17.3.0",
+    "globals": "^17.4.0",
     "knip": "^5.85.0",
-    "lefthook": "^2.1.1",
+    "lefthook": "^2.1.2",
     "prettier": "^3.8.1",
     "prettier-plugin-svelte": "^3.5.0"
   },
