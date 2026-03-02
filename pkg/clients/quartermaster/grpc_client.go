@@ -362,10 +362,11 @@ func (c *GRPCClient) ListNodes(ctx context.Context, clusterID, nodeType, region 
 	})
 }
 
-// ListHealthyNodesForDNS lists healthy nodes for DNS sync by node type or service type
-func (c *GRPCClient) ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int, serviceType string) (*pb.ListHealthyNodesForDNSResponse, error) {
+// ListHealthyNodesForDNS lists healthy nodes for DNS sync by service type.
+// Quartermaster resolves edge queries (service_type "edge" or "edge-*") via
+// node_type + heartbeat; all other queries use the service_instance join.
+func (c *GRPCClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*pb.ListHealthyNodesForDNSResponse, error) {
 	req := &pb.ListHealthyNodesForDNSRequest{
-		NodeType:              nodeType,
 		StaleThresholdSeconds: int32(staleThresholdSeconds),
 	}
 	if serviceType != "" {
@@ -408,6 +409,14 @@ func (c *GRPCClient) GetNodeByLogicalName(ctx context.Context, nodeID string) (*
 // Called by Foghorn when processing Register message with hardware info
 func (c *GRPCClient) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeHardwareRequest) error {
 	_, err := c.node.UpdateNodeHardware(ctx, req)
+	return err
+}
+
+// ReportAliveNodes batch-refreshes last_heartbeat for connected edge nodes.
+func (c *GRPCClient) ReportAliveNodes(ctx context.Context, nodeIDs []string) error {
+	_, err := c.node.ReportAliveNodes(ctx, &pb.ReportAliveNodesRequest{
+		NodeIds: nodeIDs,
+	})
 	return err
 }
 

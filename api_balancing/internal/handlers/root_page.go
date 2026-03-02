@@ -1167,7 +1167,7 @@ func HandleRootPage(c *gin.Context) {
 
 	if db != nil {
 		// Query all artifacts with vod_metadata
-		artifactRows, err := db.Query(`
+		artifactRows, err := db.QueryContext(c.Request.Context(), `
 			SELECT
 				a.artifact_hash, a.artifact_type, a.status, a.internal_name, a.tenant_id,
 				a.storage_location, a.sync_status, a.s3_url, a.format, a.size_bytes,
@@ -1299,7 +1299,7 @@ func HandleRootPage(c *gin.Context) {
 		}
 
 		// Query processing jobs
-		jobRows, err := db.Query(`
+		jobRows, err := db.QueryContext(c.Request.Context(), `
 			SELECT
 				job_id, tenant_id, artifact_hash, job_type, status, progress,
 				use_gateway, processing_node_id, routing_reason, error_message, retry_count,

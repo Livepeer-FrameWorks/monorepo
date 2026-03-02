@@ -276,7 +276,7 @@ func (pm *PeerManager) IsPeerConnected(clusterID string) bool {
 // NotifyPeers accepts peer discovery hints from stream validation.
 // All replicas register addresses (so GetPeerAddr works everywhere);
 // only the leader opens PeerChannel connections.
-func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
+func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer, tenantID string) {
 	var changed bool
 
 	pm.mu.Lock()
@@ -309,9 +309,14 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 			continue
 		}
 
+		var seedTenants []string
+		if tenantID != "" {
+			seedTenants = []string{tenantID}
+		}
 		ps := &peerState{
 			addr:        addr,
 			lifecycle:   lifecycle,
+			tenantIDs:   seedTenants,
 			fromRedis:   false,
 			lastRefresh: time.Now(),
 			s3Config: &ClusterS3Config{
@@ -346,6 +351,9 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 
 func (pm *PeerManager) shouldSendStreamToPeer(peerID string, ps *peerState, streamName, tenantID string) bool {
 	if len(ps.tenantIDs) > 0 && tenantID != "" && !slices.Contains(ps.tenantIDs, tenantID) {
+		return false
+	}
+	if tenantID != "" && len(ps.tenantIDs) == 0 && ps.lifecycle == peerStreamScoped {
 		return false
 	}
 	if ps.lifecycle == peerStreamScoped {
@@ -887,7 +895,7 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 		case *pb.PeerMessage_StreamLifecycle:
 			ev := payload.StreamLifecycle
 			if ev.GetIsLive() {
-				if err := pm.cache.SetRemoteLiveStream(ctx, ev.GetInternalName(), &RemoteLiveStreamEntry{
+				if err := pm.cache.SetRemoteLiveStream(ctx, ev.GetTenantId(), ev.GetInternalName(), &RemoteLiveStreamEntry{
 					ClusterID: ev.GetClusterId(),
 					TenantID:  ev.GetTenantId(),
 					UpdatedAt: time.Now().Unix(),
@@ -895,7 +903,7 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 					pm.logger.WithError(err).Debug("Failed to cache remote live stream from PeerChannel")
 				}
 			} else {
-				if err := pm.cache.DeleteRemoteLiveStream(ctx, ev.GetInternalName()); err != nil {
+				if err := pm.cache.DeleteRemoteLiveStream(ctx, ev.GetTenantId(), ev.GetInternalName()); err != nil {
 					pm.logger.WithError(err).Debug("Failed to delete remote live stream from PeerChannel")
 				}
 			}
@@ -952,6 +960,7 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 						GeoLat:       loc.GeoLat,
 						GeoLon:       loc.GeoLon,
 						UpdatedAt:    time.Now().Unix(),
+						TenantID:     loc.TenantId,
 					}
 					if err := pm.cache.SetRemoteArtifact(ctx, peerClusterID, entry); err != nil {
 						pm.logger.WithError(err).Debug("Failed to cache remote artifact from PeerChannel")
@@ -1242,6 +1251,12 @@ func (pm *PeerManager) pushArtifacts() {
 			continue
 		}
 		for _, a := range ns.Artifacts {
+			tenantID := ""
+			if a.StreamName != "" {
+				if ss := sm.GetStreamState(a.StreamName); ss != nil {
+					tenantID = ss.TenantID
+				}
+			}
 			locs = append(locs, &pb.ArtifactLocation{
 				ArtifactHash: a.ClipHash,
 				ArtifactType: artifactTypeToString(a.ArtifactType),
@@ -1252,6 +1267,7 @@ func (pm *PeerManager) pushArtifacts() {
 				LastAccessed: a.LastAccessed,
 				GeoLat:       snap.GeoLatitude,
 				GeoLon:       snap.GeoLongitude,
+				TenantId:     tenantID,
 			})
 		}
 	}
@@ -1260,22 +1276,31 @@ func (pm *PeerManager) pushArtifacts() {
 		return
 	}
 
-	msg := &pb.PeerMessage{
-		ClusterId: pm.clusterID,
-		Payload: &pb.PeerMessage_ArtifactAd{
-			ArtifactAd: &pb.ArtifactAdvertisement{
-				Artifacts: locs,
-				Timestamp: time.Now().Unix(),
-			},
-		},
-	}
-
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 
+	ts := time.Now().Unix()
 	for peerID, ps := range pm.peers {
 		if !ps.connected || ps.stream == nil {
 			continue
+		}
+		var peerLocs []*pb.ArtifactLocation
+		for _, loc := range locs {
+			if len(ps.tenantIDs) == 0 || loc.TenantId == "" || slices.Contains(ps.tenantIDs, loc.TenantId) {
+				peerLocs = append(peerLocs, loc)
+			}
+		}
+		if len(peerLocs) == 0 {
+			continue
+		}
+		msg := &pb.PeerMessage{
+			ClusterId: pm.clusterID,
+			Payload: &pb.PeerMessage_ArtifactAd{
+				ArtifactAd: &pb.ArtifactAdvertisement{
+					Artifacts: peerLocs,
+					Timestamp: ts,
+				},
+			},
 		}
 		pm.touchPool(peerID)
 		if err := ps.stream.Send(msg); err != nil {
@@ -1528,7 +1553,7 @@ func (pm *PeerManager) IsStreamLiveOnPeer(ctx context.Context, internalName, ten
 	if pm.cache == nil {
 		return "", false
 	}
-	entry, err := pm.cache.GetRemoteLiveStream(ctx, internalName)
+	entry, err := pm.cache.GetRemoteLiveStream(ctx, tenantID, internalName)
 	if err != nil || entry == nil {
 		return "", false
 	}

@@ -45,7 +45,7 @@ type streamContext struct {
 // Covers peer discovery, stream tracking, and cross-cluster ingest dedup.
 // Implemented by PeerManager which delegates reads to Redis internally.
 type PeerNotifier interface {
-	NotifyPeers(peers []*pb.TenantClusterPeer)
+	NotifyPeers(peers []*pb.TenantClusterPeer, tenantID string)
 	TrackStream(streamName string, clusterIDs []string)
 	UntrackStream(streamName string)
 	BroadcastStreamLifecycle(internalName, tenantID string, isLive bool)
@@ -296,14 +296,20 @@ func (p *Processor) GetStreamOrigin(internalName string) (tenantID, originCluste
 		return "", ""
 	}
 	suffix := ":" + internalName
+	var found int
 	for _, entry := range p.streamCache.Snapshot() {
 		if strings.HasSuffix(entry.Key, suffix) {
 			if info, ok := entry.Value.(streamContext); ok {
-				return info.TenantID, info.OriginClusterID
+				tenantID = info.TenantID
+				originClusterID = info.OriginClusterID
+				found++
+				if found > 1 {
+					return "", ""
+				}
 			}
 		}
 	}
-	return "", ""
+	return tenantID, originClusterID
 }
 
 // InvalidateTenantCache evicts all cache entries for a specific tenant.
@@ -728,7 +734,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			ClusterPeers:      streamValidation.GetClusterPeers(),
 		}
 		if p.peerNotifier != nil && len(info.ClusterPeers) > 0 {
-			p.peerNotifier.NotifyPeers(info.ClusterPeers)
+			p.peerNotifier.NotifyPeers(info.ClusterPeers, streamValidation.TenantId)
 			var cids []string
 			for _, peer := range info.ClusterPeers {
 				cids = append(cids, peer.GetClusterId())

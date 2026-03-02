@@ -249,6 +249,28 @@ func Init(logger logging.Logger, cClient *commodore.GRPCClient, processor MistTr
 	mistTriggerProcessor = processor
 }
 
+// AliveNodeIDs returns IDs of nodes with a heartbeat within the given threshold.
+// Used by the edge health sync to batch-report alive edges to Quartermaster.
+func AliveNodeIDs(staleThreshold time.Duration) []string {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	cutoff := time.Now().Add(-staleThreshold)
+	ids := make([]string, 0, len(registry.conns))
+	for _, c := range registry.conns {
+		if c.last.After(cutoff) {
+			id := c.canonicalID
+			if id == "" {
+				continue
+			}
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // CommandRelay forwards control commands to the Foghorn instance holding a node's stream.
 type CommandRelay struct {
 	store         *state.RedisStateStore
@@ -958,7 +980,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processFreezeProgress(x.FreezeProgress, nodeID, registry.log)
 		case *pb.ControlMessage_FreezeComplete:
 			// Handle freeze completion from Helmsman
-			go processFreezeComplete(x.FreezeComplete, nodeID, registry.log)
+			go processFreezeComplete(context.Background(), x.FreezeComplete, nodeID, registry.log)
 		case *pb.ControlMessage_DefrostProgress:
 			// Handle defrost progress updates from Helmsman
 			go processDefrostProgress(x.DefrostProgress, nodeID, registry.log)
@@ -2727,7 +2749,7 @@ func processFreezeProgress(progress *pb.FreezeProgress, nodeID string, logger lo
 }
 
 // processFreezeComplete handles freeze completion from Helmsman
-func processFreezeComplete(complete *pb.FreezeComplete, nodeID string, logger logging.Logger) {
+func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nodeID string, logger logging.Logger) {
 	requestID := complete.GetRequestId()
 	assetHash := complete.GetAssetHash()
 	status := complete.GetStatus()
@@ -2747,7 +2769,7 @@ func processFreezeComplete(complete *pb.FreezeComplete, nodeID string, logger lo
 
 	if status == "success" {
 		// Update artifact storage location in database
-		_, _ = db.Exec(`
+		_, _ = db.ExecContext(ctx, `
 				UPDATE foghorn.artifacts
 				SET storage_location = 'local',
 				    sync_status = 'synced',
@@ -2760,7 +2782,7 @@ func processFreezeComplete(complete *pb.FreezeComplete, nodeID string, logger lo
 			s3URL, assetHash)
 	} else {
 		// Revert storage location on failure
-		_, _ = db.Exec(`
+		_, _ = db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    sync_status = 'failed',
@@ -3686,7 +3708,7 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 		}
 
 		// Update foghorn.artifacts with sync status
-		_, _ = db.Exec(`
+		_, _ = db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    sync_status = 'synced',
@@ -3711,7 +3733,7 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 		}
 
 		// Update error in foghorn.artifacts
-		_, _ = db.Exec(`
+		_, _ = db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    sync_status = 'failed',

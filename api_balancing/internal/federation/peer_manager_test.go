@@ -172,7 +172,7 @@ func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
 			BaseUrl:     "example.com",
 			Role:        "official",
 		},
-	})
+	}, "tenant-a")
 
 	addr := pm.GetPeerAddr("remote-cluster")
 	if addr == "" {
@@ -197,7 +197,7 @@ func TestNotifyPeers_SkipsSelfAndDuplicate(t *testing.T) {
 		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com", Role: "preferred"},
 	}
 
-	pm.NotifyPeers(peers)
+	pm.NotifyPeers(peers, "tenant-a")
 
 	if pm.GetPeerAddr("local-cluster") != "" {
 		t.Fatal("should not register self as peer")
@@ -207,7 +207,7 @@ func TestNotifyPeers_SkipsSelfAndDuplicate(t *testing.T) {
 	}
 
 	// Call again — should not duplicate
-	pm.NotifyPeers(peers)
+	pm.NotifyPeers(peers, "tenant-a")
 	got := pm.GetPeers()
 	if len(got) != 1 {
 		t.Fatalf("expected 1 peer, got %d: %v", len(got), got)
@@ -224,7 +224,7 @@ func TestNotifyPeers_LeaderSyncsToRedis(t *testing.T) {
 
 	pm.NotifyPeers([]*pb.TenantClusterPeer{
 		{ClusterId: "remote-1", ClusterSlug: "r1", BaseUrl: "example.com", Role: "official"},
-	})
+	}, "tenant-a")
 
 	// Verify addresses were synced to Redis
 	ctx := context.Background()
@@ -523,7 +523,7 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 		ClusterSlug: "remote-old",
 		BaseUrl:     "example.com",
 		Role:        "subscribed",
-	}})
+	}}, "tenant-a")
 
 	pm.NotifyPeers([]*pb.TenantClusterPeer{{
 		ClusterId:   "remote-cluster",
@@ -533,7 +533,7 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 		S3Bucket:    "bucket-a",
 		S3Endpoint:  "https://s3.example.net",
 		S3Region:    "us-east-1",
-	}})
+	}}, "tenant-a")
 
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -564,7 +564,7 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 		ClusterSlug: "r1",
 		BaseUrl:     "old.example.com",
 		Role:        "official",
-	}})
+	}}, "tenant-a")
 
 	// Update address for the same peer
 	pm.NotifyPeers([]*pb.TenantClusterPeer{{
@@ -572,7 +572,7 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 		ClusterSlug: "r1",
 		BaseUrl:     "new.example.com",
 		Role:        "official",
-	}})
+	}}, "tenant-a")
 
 	ctx := context.Background()
 	addrs, err := cache.GetPeerAddresses(ctx)
@@ -601,6 +601,33 @@ func TestShouldSendStreamToPeer_StreamScopedRequiresTrackedStreamAndTenant(t *te
 	}
 	if pm.shouldSendStreamToPeer("remote", ps, "live+beta", "tenant-a") {
 		t.Fatal("expected untracked stream to be blocked for stream-scoped peer")
+	}
+}
+
+func TestShouldSendStreamToPeer_DenyUnscopedStreamScopedPeer(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, false)
+	pm.streamPeers["remote"] = map[string]bool{"live+alpha": true}
+
+	ps := &peerState{
+		lifecycle: peerStreamScoped,
+		tenantIDs: nil,
+	}
+
+	if pm.shouldSendStreamToPeer("remote", ps, "live+alpha", "tenant-a") {
+		t.Fatal("expected stream-scoped peer with empty tenantIDs to be blocked")
+	}
+}
+
+func TestShouldSendStreamToPeer_AllowUnscopedAlwaysOnPeer(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, false)
+
+	ps := &peerState{
+		lifecycle: peerAlwaysOn,
+		tenantIDs: nil,
+	}
+
+	if !pm.shouldSendStreamToPeer("remote", ps, "live+alpha", "tenant-a") {
+		t.Fatal("expected always-on peer with empty tenantIDs to be allowed")
 	}
 }
 
@@ -641,7 +668,7 @@ func TestIsStreamLiveOnPeer_RejectsTenantMismatch(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
 
 	ctx := context.Background()
-	err := cache.SetRemoteLiveStream(ctx, "stream-1", &RemoteLiveStreamEntry{
+	err := cache.SetRemoteLiveStream(ctx, "tenant-a", "stream-1", &RemoteLiveStreamEntry{
 		ClusterID: "remote-cluster",
 		TenantID:  "tenant-a",
 		UpdatedAt: time.Now().Unix(),
@@ -1036,7 +1063,7 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 	ctx := context.Background()
 	peerID := "remote-1"
 
-	if err := cache.SetRemoteLiveStream(ctx, "dead+stream", &RemoteLiveStreamEntry{
+	if err := cache.SetRemoteLiveStream(ctx, "tenant-a", "dead+stream", &RemoteLiveStreamEntry{
 		ClusterID: peerID,
 		TenantID:  "tenant-a",
 		UpdatedAt: time.Now().Unix(),
@@ -1211,12 +1238,12 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 		t.Fatalf("expected cached edge summary, summary=%v err=%v", summary, err)
 	}
 
-	liveEntry, err := cache.GetRemoteLiveStream(ctx, "live+stream")
+	liveEntry, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "live+stream")
 	if err != nil || liveEntry == nil {
 		t.Fatalf("expected live stream cached, entry=%v err=%v", liveEntry, err)
 	}
 
-	deadEntry, err := cache.GetRemoteLiveStream(ctx, "dead+stream")
+	deadEntry, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "dead+stream")
 	if err != nil {
 		t.Fatalf("GetRemoteLiveStream(dead+stream): %v", err)
 	}

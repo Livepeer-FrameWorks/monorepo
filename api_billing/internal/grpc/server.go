@@ -237,7 +237,7 @@ type PurserServer struct {
 // NewPurserServer creates a new Purser gRPC server
 func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, stripeClient *stripe.Client, mollieClient *mollie.Client, qmClient *qmclient.GRPCClient, commodoreClient handlers.CommodoreClient, decklogClient *decklogclient.BatchedClient) *PurserServer {
 	hdwallet := handlers.NewHDWallet(db, logger)
-	if created, err := hdwallet.EnsureState(os.Getenv("HD_WALLET_XPUB")); err != nil {
+	if created, err := hdwallet.EnsureState(context.Background(), os.Getenv("HD_WALLET_XPUB")); err != nil {
 		logger.WithError(err).Warn("HD wallet state not initialized; crypto deposits disabled until configured")
 	} else if created {
 		logger.Info("Initialized HD wallet state from HD_WALLET_XPUB")
@@ -360,7 +360,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 	}
 
 	// Get available payment methods (dynamically from env)
-	paymentMethods := s.getAvailablePaymentMethods()
+	paymentMethods := s.getAvailablePaymentMethods(ctx)
 
 	// Build cursors
 	var startCursor, endCursor string
@@ -1475,7 +1475,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 	isServiceCall := middleware.IsServiceCall(ctx)
 
 	// Validate payment method is available
-	availableMethods := s.getAvailablePaymentMethods()
+	availableMethods := s.getAvailablePaymentMethods(ctx)
 	methodAvailable := false
 	for _, m := range availableMethods {
 		if m == method {
@@ -1645,7 +1645,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 }
 
 // getAvailablePaymentMethods returns list of configured payment methods
-func (s *PurserServer) getAvailablePaymentMethods() []string {
+func (s *PurserServer) getAvailablePaymentMethods(ctx context.Context) []string {
 	methods := []string{}
 
 	// Check Stripe
@@ -1659,16 +1659,16 @@ func (s *PurserServer) getAvailablePaymentMethods() []string {
 	}
 
 	// Check crypto (Etherscan API for ETH/ERC-20, BlockCypher for BTC)
-	if s.hasHDWalletXpub() && hasAnyExplorerKey() {
+	if s.hasHDWalletXpub(ctx) && hasAnyExplorerKey() {
 		methods = append(methods, "crypto_eth", "crypto_usdc", "crypto_lpt")
 	}
 
 	return methods
 }
 
-func (s *PurserServer) hasHDWalletXpub() bool {
+func (s *PurserServer) hasHDWalletXpub(ctx context.Context) bool {
 	var xpub string
-	err := s.db.QueryRow(`SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
+	err := s.db.QueryRowContext(ctx, `SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
 	if err != nil {
 		s.logger.WithError(err).Debug("Failed to read hd_wallet_state")
 		return false
@@ -1861,7 +1861,7 @@ func (s *PurserServer) createCryptoPayment(invoiceID, tenantID, asset string, am
 func (s *PurserServer) GetPaymentMethods(ctx context.Context, req *pb.GetPaymentMethodsRequest) (*pb.PaymentMethodResponse, error) {
 	// Return available payment methods based on configured env vars
 	return &pb.PaymentMethodResponse{
-		Methods: s.getAvailablePaymentMethods(),
+		Methods: s.getAvailablePaymentMethods(ctx),
 	}, nil
 }
 

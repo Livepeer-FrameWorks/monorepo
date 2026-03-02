@@ -151,14 +151,14 @@ func (hw *HDWallet) GetNextNonZeroDerivationIndexTx(ctx context.Context, tx *sql
 
 // EnsureState ensures the HD wallet state row exists.
 // If no row exists, it will initialize with the provided xpub.
-func (hw *HDWallet) EnsureState(xpub string) (bool, error) {
+func (hw *HDWallet) EnsureState(ctx context.Context, xpub string) (bool, error) {
 	var existing string
-	err := hw.db.QueryRow(`SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&existing)
+	err := hw.db.QueryRowContext(ctx, `SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&existing)
 	if errors.Is(err, sql.ErrNoRows) {
 		if strings.TrimSpace(xpub) == "" {
 			return false, fmt.Errorf("hd_wallet_state not initialized and HD_WALLET_XPUB not set")
 		}
-		_, err = hw.db.Exec(`INSERT INTO purser.hd_wallet_state (id, xpub) VALUES (1, $1)`, xpub)
+		_, err = hw.db.ExecContext(ctx, `INSERT INTO purser.hd_wallet_state (id, xpub) VALUES (1, $1)`, xpub)
 		if err != nil {
 			return false, fmt.Errorf("failed to initialize hd_wallet_state: %w", err)
 		}
@@ -265,7 +265,7 @@ func (hw *HDWallet) GenerateDepositAddress(
 
 // InitializeHDWallet sets up the HD wallet state with an xpub.
 // The xpub should be derived offline at BIP44 path m/44'/60'/0'/0 for Ethereum.
-func (hw *HDWallet) InitializeHDWallet(xpub string, network string) error {
+func (hw *HDWallet) InitializeHDWallet(ctx context.Context, xpub string, network string) error {
 	extKey, err := hdkeychain.NewKeyFromString(xpub)
 	if err != nil {
 		return fmt.Errorf("invalid xpub: %w", err)
@@ -295,7 +295,7 @@ func (hw *HDWallet) InitializeHDWallet(xpub string, network string) error {
 		return fmt.Errorf("failed to derive test address: %w", err)
 	}
 
-	_, err = hw.db.Exec(`
+	_, err = hw.db.ExecContext(ctx, `
 		INSERT INTO purser.hd_wallet_state (id, xpub, network, next_index)
 		VALUES (1, $1, $2, 0)
 		ON CONFLICT (id) DO UPDATE SET xpub = $1, network = $2, updated_at = NOW()
@@ -313,9 +313,9 @@ func (hw *HDWallet) InitializeHDWallet(xpub string, network string) error {
 }
 
 // ValidateXpub checks if stored xpub can derive addresses
-func (hw *HDWallet) ValidateXpub() error {
+func (hw *HDWallet) ValidateXpub(ctx context.Context) error {
 	var xpub string
-	err := hw.db.QueryRow(`SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
+	err := hw.db.QueryRowContext(ctx, `SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("hd_wallet_state not initialized")
 	}

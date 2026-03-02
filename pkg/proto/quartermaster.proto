@@ -183,6 +183,10 @@ service NodeService {
   // Update node hardware specs (detected at startup)
   // Called by Foghorn when Helmsman registers with hardware info
   rpc UpdateNodeHardware(UpdateNodeHardwareRequest) returns (google.protobuf.Empty);
+
+  // Batch-report alive edge nodes to refresh last_heartbeat for DNS eligibility.
+  // Called periodically by Foghorn (60s) with connected edge node IDs.
+  rpc ReportAliveNodes(ReportAliveNodesRequest) returns (google.protobuf.Empty);
 }
 
 // BootstrapService handles node enrollment and service discovery
@@ -926,6 +930,10 @@ message UpdateNodeHardwareRequest {
   optional int32 disk_gb = 4;   // Total disk capacity in GB
 }
 
+message ReportAliveNodesRequest {
+  repeated string node_ids = 1;
+}
+
 // Matches pkg/api/quartermaster/types.go:NodeOwnerResponse (lines 431-437)
 message NodeOwnerResponse {
   string node_id = 1;                   // json:"node_id"
@@ -964,7 +972,7 @@ message BootstrapEdgeNodeResponse {
 // BootstrapInfrastructureNodeRequest registers a non-edge infrastructure node using a bootstrap token.
 message BootstrapInfrastructureNodeRequest {
   string token = 1;                     // json:"token" required
-  string node_type = 2;                 // json:"node_type" required (e.g., "edge", "gateway", "api")
+  string node_type = 2;                 // json:"node_type" required (e.g., "core", "edge")
   optional string node_id = 3;          // json:"node_id,omitempty" - client-supplied stable ID
   string hostname = 4;                  // json:"hostname"
   optional string external_ip = 5;      // json:"external_ip,omitempty"

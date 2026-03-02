@@ -408,6 +408,54 @@ func TestPeerClusterIDFromKey(t *testing.T) {
 	}
 }
 
+func TestRemoteLiveStream_TenantIsolation(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+
+	if err := cache.SetRemoteLiveStream(ctx, "tenant-a", "mystream", &RemoteLiveStreamEntry{
+		ClusterID: "cluster-1",
+		TenantID:  "tenant-a",
+		UpdatedAt: 1000,
+	}); err != nil {
+		t.Fatalf("SetRemoteLiveStream tenant-a: %v", err)
+	}
+	if err := cache.SetRemoteLiveStream(ctx, "tenant-b", "mystream", &RemoteLiveStreamEntry{
+		ClusterID: "cluster-2",
+		TenantID:  "tenant-b",
+		UpdatedAt: 2000,
+	}); err != nil {
+		t.Fatalf("SetRemoteLiveStream tenant-b: %v", err)
+	}
+
+	entryA, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "mystream")
+	if err != nil || entryA == nil {
+		t.Fatalf("expected tenant-a entry, got err=%v entry=%v", err, entryA)
+	}
+	if entryA.ClusterID != "cluster-1" {
+		t.Fatalf("expected cluster-1 for tenant-a, got %q", entryA.ClusterID)
+	}
+
+	entryB, err := cache.GetRemoteLiveStream(ctx, "tenant-b", "mystream")
+	if err != nil || entryB == nil {
+		t.Fatalf("expected tenant-b entry, got err=%v entry=%v", err, entryB)
+	}
+	if entryB.ClusterID != "cluster-2" {
+		t.Fatalf("expected cluster-2 for tenant-b, got %q", entryB.ClusterID)
+	}
+
+	if err := cache.DeleteRemoteLiveStream(ctx, "tenant-a", "mystream"); err != nil {
+		t.Fatalf("DeleteRemoteLiveStream tenant-a: %v", err)
+	}
+	deleted, _ := cache.GetRemoteLiveStream(ctx, "tenant-a", "mystream")
+	if deleted != nil {
+		t.Fatalf("expected tenant-a entry deleted, got %+v", deleted)
+	}
+	stillThere, _ := cache.GetRemoteLiveStream(ctx, "tenant-b", "mystream")
+	if stillThere == nil {
+		t.Fatal("expected tenant-b entry to survive tenant-a deletion")
+	}
+}
+
 func TestRemoteArtifact_SetGet(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
@@ -536,7 +584,7 @@ func TestRemoteArtifact_NoMatchReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestRemoteArtifact_OverwriteSamePeer(t *testing.T) {
+func TestRemoteArtifact_OverwriteSamePeerSameNode(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
 
@@ -549,7 +597,7 @@ func TestRemoteArtifact_OverwriteSamePeer(t *testing.T) {
 	}
 	cache.SetRemoteArtifact(ctx, "cluster-b", entry)
 
-	// Update with higher access count
+	// Update with higher access count on same node
 	entry.AccessCount = 50
 	cache.SetRemoteArtifact(ctx, "cluster-b", entry)
 
@@ -558,10 +606,43 @@ func TestRemoteArtifact_OverwriteSamePeer(t *testing.T) {
 		t.Fatalf("GetRemoteArtifacts: %v", err)
 	}
 	if len(hits) != 1 {
-		t.Fatalf("expected 1 entry (overwrite, not duplicate), got %d", len(hits))
+		t.Fatalf("expected 1 entry (overwrite same node), got %d", len(hits))
 	}
 	if hits[0].AccessCount != 50 {
 		t.Errorf("AccessCount = %d, want 50 (updated)", hits[0].AccessCount)
+	}
+}
+
+func TestRemoteArtifact_MultiNodeSamePeerRetained(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	ctx := context.Background()
+
+	cache.SetRemoteArtifact(ctx, "cluster-b", &RemoteArtifactEntry{
+		ArtifactHash: "clip-1",
+		ArtifactType: "clip",
+		NodeID:       "node-1",
+		BaseURL:      "edge1.peer.com",
+	})
+	cache.SetRemoteArtifact(ctx, "cluster-b", &RemoteArtifactEntry{
+		ArtifactHash: "clip-1",
+		ArtifactType: "clip",
+		NodeID:       "node-2",
+		BaseURL:      "edge2.peer.com",
+	})
+
+	hits, err := cache.GetRemoteArtifacts(ctx, "clip-1")
+	if err != nil {
+		t.Fatalf("GetRemoteArtifacts: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("expected 2 entries (multi-node retention), got %d", len(hits))
+	}
+	nodes := map[string]bool{}
+	for _, h := range hits {
+		nodes[h.NodeID] = true
+	}
+	if !nodes["node-1"] || !nodes["node-2"] {
+		t.Fatalf("expected both node-1 and node-2, got %v", nodes)
 	}
 }
 

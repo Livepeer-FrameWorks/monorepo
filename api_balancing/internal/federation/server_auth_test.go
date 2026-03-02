@@ -138,3 +138,46 @@ func TestPeerChannel_RejectsNonServiceAuth(t *testing.T) {
 		t.Fatalf("expected permission denied, got %v", err)
 	}
 }
+
+func TestCreateRemoteClip_RequiresServiceAuth(t *testing.T) {
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	_, err := srv.CreateRemoteClip(context.Background(), &pb.RemoteClipRequest{
+		InternalName: "stream-1",
+		TenantId:     "tenant-a",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected permission denied for non-service auth, got %v", err)
+	}
+}
+
+func TestCreateRemoteDVR_RequiresServiceAuth(t *testing.T) {
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	_, err := srv.CreateRemoteDVR(context.Background(), &pb.RemoteDVRRequest{
+		InternalName: "stream-1",
+		TenantId:     "tenant-a",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected permission denied for non-service auth, got %v", err)
+	}
+}
+
+func TestListTenantArtifacts_RequiresServiceAuth(t *testing.T) {
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	_, err := srv.ListTenantArtifacts(context.Background(), &pb.ListTenantArtifactsRequest{
+		TenantId: "tenant-a",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected permission denied for non-service auth, got %v", err)
+	}
+}
+
+func TestMigrateArtifactMetadata_RequiresServiceAuth(t *testing.T) {
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a"})
+	_, err := srv.MigrateArtifactMetadata(context.Background(), &pb.MigrateArtifactMetadataRequest{
+		TenantId:        "tenant-a",
+		SourceClusterId: "cluster-b",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected permission denied for non-service auth, got %v", err)
+	}
+}

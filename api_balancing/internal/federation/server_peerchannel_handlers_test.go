@@ -181,7 +181,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 		t.Fatalf("expected edge summary cached, summary=%v err=%v", summary, err)
 	}
 
-	live, err := cache.GetRemoteLiveStream(ctx, "stream-live")
+	live, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "stream-live")
 	if err != nil {
 		t.Fatalf("GetRemoteLiveStream: %v", err)
 	}

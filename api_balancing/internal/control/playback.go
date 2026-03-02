@@ -190,8 +190,14 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		// Check peer clusters for hot copies before falling through to S3/defrost
 		if deps.RemoteArtifacts != nil {
 			remoteHits, _ := deps.RemoteArtifacts.GetRemoteArtifacts(ctx, artifactResp.ArtifactHash)
-			if len(remoteHits) > 0 {
-				best := pickBestRemoteArtifact(remoteHits, deps.GeoLat, deps.GeoLon)
+			var authorizedHits []*RemoteArtifactInfo
+			for _, h := range remoteHits {
+				if isAuthorizedPeerCluster(h.PeerCluster, allowedClusters) {
+					authorizedHits = append(authorizedHits, h)
+				}
+			}
+			if len(authorizedHits) > 0 {
+				best := pickBestRemoteArtifact(authorizedHits, deps.GeoLat, deps.GeoLon)
 				if best != nil {
 					return &pb.ViewerEndpointResponse{
 						Primary: &pb.ViewerEndpoint{

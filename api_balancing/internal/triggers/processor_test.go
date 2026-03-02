@@ -836,6 +836,24 @@ func TestGetStreamOrigin_PrefixedStreamName(t *testing.T) {
 	})
 }
 
+func TestGetStreamOrigin_AmbiguousInternalName(t *testing.T) {
+	processor := newTestProcessor(t)
+
+	processor.streamCache.Set("tenant-a:mystream", streamContext{
+		TenantID:        "tenant-a",
+		OriginClusterID: "cluster-eu",
+	}, time.Minute)
+	processor.streamCache.Set("tenant-b:mystream", streamContext{
+		TenantID:        "tenant-b",
+		OriginClusterID: "cluster-us",
+	}, time.Minute)
+
+	tenantID, clusterID := processor.GetStreamOrigin("mystream")
+	if tenantID != "" || clusterID != "" {
+		t.Fatalf("expected empty returns for ambiguous name, got tenant=%q cluster=%q", tenantID, clusterID)
+	}
+}
+
 func TestApplyStreamContext_SeparatesClusterAndOrigin(t *testing.T) {
 	processor := newTestProcessor(t)
 	processor.clusterID = "cluster-local"

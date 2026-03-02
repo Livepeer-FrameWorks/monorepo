@@ -20,7 +20,6 @@ import (
 	decklogclient "frameworks/pkg/clients/decklog"
 	"frameworks/pkg/clients/navigator"
 	purserclient "frameworks/pkg/clients/purser"
-	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/dns"
 	"frameworks/pkg/geoip"
@@ -3182,6 +3181,27 @@ func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *pb.Up
 	return &emptypb.Empty{}, nil
 }
 
+// ReportAliveNodes batch-refreshes last_heartbeat for connected edge nodes.
+// Called periodically by Foghorn with IDs of nodes that have active control streams.
+func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.ReportAliveNodesRequest) (*emptypb.Empty, error) {
+	nodeIDs := req.GetNodeIds()
+	if len(nodeIDs) == 0 {
+		return &emptypb.Empty{}, nil
+	}
+	if len(nodeIDs) > 500 {
+		return nil, status.Errorf(codes.InvalidArgument, "too many node IDs (%d), max 500", len(nodeIDs))
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE quartermaster.infrastructure_nodes
+		SET last_heartbeat = NOW(), updated_at = NOW()
+		WHERE node_id = ANY($1)
+	`, pq.Array(nodeIDs))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update heartbeats: %v", err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
 // ListNodes returns nodes with optional filters
 func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRequest) (*pb.ListNodesResponse, error) {
 	// Parse bidirectional pagination
@@ -3345,7 +3365,20 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	return resp, nil
 }
 
-// ListHealthyNodesForDNS returns healthy nodes for DNS sync
+// ListHealthyNodesForDNS returns infrastructure nodes eligible for DNS records.
+//
+// Two resolution strategies based on service_type:
+//
+//  1. Edge queries (service_type = "edge" or "edge-*"): resolves by node_type.
+//     Edge nodes run helmsman+mistserver and register capabilities at Foghorn,
+//     not via BootstrapService. Health is determined by last_heartbeat
+//     (refreshed by Foghorn → ReportAliveNodes).
+//
+//  2. Platform service queries (all other service_type values): resolves by
+//     service_instance join. A node is healthy when it has a service_instance
+//     with health_status='healthy' and a recent last_health_check.
+//
+// Both paths require: accessible cluster, non-empty external_ip.
 func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *pb.ListHealthyNodesForDNSRequest) (*pb.ListHealthyNodesForDNSResponse, error) {
 	tenantID := middleware.GetTenantID(ctx)
 
@@ -3377,87 +3410,131 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 		staleThreshold = 300
 	}
 
-	where := baseWhere
+	serviceTypeFilter := req.GetServiceType()
+
+	// "edge" is the aggregate routing target (nearest eligible edge node).
+	// Health is determined by mesh heartbeat, not service_instance status.
+	// "edge-*" subtypes (edge-egress, edge-ingest, etc.) are capability
+	// registrations written by Foghorn via BootstrapService — they use the
+	// standard service_instance path like any other service.
+	if serviceTypeFilter == "edge" {
+		return s.listHealthyEdgeNodes(ctx, baseWhere, baseArgs, staleThreshold)
+	}
+	return s.listHealthyServiceNodes(ctx, baseWhere, baseArgs, serviceTypeFilter, staleThreshold)
+}
+
+// listHealthyEdgeNodes returns edge nodes with a recent heartbeat.
+// Edge nodes run helmsman+mistserver and register at Foghorn, not via
+// BootstrapService. Health is determined by last_heartbeat (refreshed by
+// Foghorn → ReportAliveNodes), not by service_instance status.
+func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWhere string, baseArgs []interface{}, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
+	where := baseWhere + " AND n.node_type = 'edge' AND n.external_ip IS NOT NULL AND n.external_ip <> ''"
 	args := append([]interface{}{}, baseArgs...)
 	argIdx := len(baseArgs) + 1
 
-	serviceTypeFilter := req.GetServiceType()
-	if serviceTypeFilter != "" {
-		where += fmt.Sprintf(" AND s.type = $%d", argIdx)
-		args = append(args, serviceTypeFilter)
-		argIdx++
-	} else if req.GetNodeType() != "" {
-		where += fmt.Sprintf(" AND n.node_type = $%d", argIdx)
-		args = append(args, req.GetNodeType())
-		argIdx++
-	}
-
-	where += " AND n.external_ip IS NOT NULL AND n.external_ip <> ''"
-
-	servicesJoin := ""
-	if serviceTypeFilter != "" {
-		servicesJoin = "\n\t\tJOIN quartermaster.services s ON si.service_id = s.service_id"
-	}
-
-	// totalQuery must include the same JOINs as the main query when filtering by service_type
-	var totalQuery string
-	if serviceTypeFilter != "" {
-		totalQuery = fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n
-		JOIN quartermaster.service_instances si
-			ON si.cluster_id = n.cluster_id
-			AND (si.node_id = n.node_id OR si.advertise_host = n.external_ip OR si.advertise_host = n.internal_ip)
-		%s %s`, servicesJoin, where)
-	} else {
-		totalQuery = fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_nodes n %s`, where)
-	}
 	var totalNodes int32
-	if err := s.db.QueryRowContext(ctx, totalQuery, args...).Scan(&totalNodes); err != nil {
+	if err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s`, where),
+		args...,
+	).Scan(&totalNodes); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
 	healthArgs := append([]interface{}{}, args...)
 	healthArgs = append(healthArgs, staleThreshold)
-	healthArgIdx := argIdx
-	healthWhere := where + fmt.Sprintf(" AND si.health_status = 'healthy' AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", healthArgIdx)
-
-	healthyCountQuery := fmt.Sprintf(`
-		SELECT COUNT(DISTINCT n.id)
-		FROM quartermaster.infrastructure_nodes n
-		JOIN quartermaster.service_instances si
-			ON si.cluster_id = n.cluster_id
-			AND (
-				si.node_id = n.node_id
-				OR si.advertise_host = n.external_ip
-				OR si.advertise_host = n.internal_ip
-			)
-		%s
-		%s
-	`, servicesJoin, healthWhere)
+	healthWhere := where + fmt.Sprintf(" AND n.last_heartbeat > NOW() - ($%d * INTERVAL '1 second')", argIdx)
 
 	var healthyNodes int32
-	if err := s.db.QueryRowContext(ctx, healthyCountQuery, healthArgs...).Scan(&healthyNodes); err != nil {
+	if err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s`, healthWhere),
+		healthArgs...,
+	).Scan(&healthyNodes); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	query := fmt.Sprintf(`
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
 		       n.wireguard_ip, n.wireguard_public_key, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
 		       n.cpu_cores, n.memory_gb, n.disk_gb,
 		       n.last_heartbeat, n.created_at, n.updated_at
 		FROM quartermaster.infrastructure_nodes n
+		%s
+	`, healthWhere), healthArgs...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var nodes []*pb.InfrastructureNode
+	for rows.Next() {
+		node, err := scanNode(rows)
+		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan node")
+			continue
+		}
+		nodes = append(nodes, node)
+	}
+
+	return &pb.ListHealthyNodesForDNSResponse{
+		Nodes:        nodes,
+		TotalNodes:   totalNodes,
+		HealthyNodes: healthyNodes,
+	}, nil
+}
+
+// listHealthyServiceNodes returns nodes with healthy service instances matching the type.
+// Used for platform services (bridge, foghorn, chartroom, etc.) that register
+// via BootstrapService and have service_instance health tracking.
+func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseWhere string, baseArgs []interface{}, serviceTypeFilter string, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
+	where := baseWhere
+	args := append([]interface{}{}, baseArgs...)
+	argIdx := len(baseArgs) + 1
+
+	if serviceTypeFilter != "" {
+		where += fmt.Sprintf(" AND s.type = $%d", argIdx)
+		args = append(args, serviceTypeFilter)
+		argIdx++
+	}
+
+	where += " AND n.external_ip IS NOT NULL AND n.external_ip <> ''"
+
+	servicesJoin := "\n\t\tJOIN quartermaster.services s ON si.service_id = s.service_id"
+	siJoin := `
 		JOIN quartermaster.service_instances si
 			ON si.cluster_id = n.cluster_id
-			AND (
-				si.node_id = n.node_id
-				OR si.advertise_host = n.external_ip
-				OR si.advertise_host = n.internal_ip
-			)
-		%s
-		%s
-	`, servicesJoin, healthWhere)
+			AND (si.node_id = n.node_id OR si.advertise_host = n.external_ip OR si.advertise_host = n.internal_ip)`
 
-	rows, err := s.db.QueryContext(ctx, query, healthArgs...)
+	var totalNodes int32
+	if err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s %s %s`, siJoin, servicesJoin, where),
+		args...,
+	).Scan(&totalNodes); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	healthArgs := append([]interface{}{}, args...)
+	healthArgs = append(healthArgs, staleThreshold)
+	healthWhere := where + fmt.Sprintf(" AND si.health_status = 'healthy' AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", argIdx)
+
+	var healthyNodes int32
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s %s %s
+	`, siJoin, servicesJoin, healthWhere), healthArgs...).Scan(&healthyNodes); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
+		       n.wireguard_ip, n.wireguard_public_key, n.region, n.availability_zone,
+		       n.latitude, n.longitude,
+		       n.cpu_cores, n.memory_gb, n.disk_gb,
+		       n.last_heartbeat, n.created_at, n.updated_at
+		FROM quartermaster.infrastructure_nodes n
+		%s
+		%s
+		%s
+	`, siJoin, servicesJoin, healthWhere), healthArgs...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -3502,7 +3579,6 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 		return nil, status.Error(codes.InvalidArgument, "cluster not found")
 	}
 
-	id := uuid.New().String()
 	now := time.Now()
 
 	_, err = s.db.ExecContext(ctx, `
@@ -3511,14 +3587,30 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 		                                                region, availability_zone,
 		                                                cpu_cores, memory_gb, disk_gb, status,
 		                                                created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15, $15)
-	`, id, nodeID, clusterID, req.GetNodeName(), req.GetNodeType(),
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active', $14, $14)
+		ON CONFLICT (node_id) DO UPDATE SET
+			cluster_id           = EXCLUDED.cluster_id,
+			node_name            = EXCLUDED.node_name,
+			node_type            = EXCLUDED.node_type,
+			internal_ip          = COALESCE(EXCLUDED.internal_ip, quartermaster.infrastructure_nodes.internal_ip),
+			external_ip          = COALESCE(EXCLUDED.external_ip, quartermaster.infrastructure_nodes.external_ip),
+			wireguard_ip         = COALESCE(EXCLUDED.wireguard_ip, quartermaster.infrastructure_nodes.wireguard_ip),
+			wireguard_public_key = COALESCE(EXCLUDED.wireguard_public_key, quartermaster.infrastructure_nodes.wireguard_public_key),
+			region               = COALESCE(EXCLUDED.region, quartermaster.infrastructure_nodes.region),
+			availability_zone    = COALESCE(EXCLUDED.availability_zone, quartermaster.infrastructure_nodes.availability_zone),
+			cpu_cores            = COALESCE(EXCLUDED.cpu_cores, quartermaster.infrastructure_nodes.cpu_cores),
+			memory_gb            = COALESCE(EXCLUDED.memory_gb, quartermaster.infrastructure_nodes.memory_gb),
+			disk_gb              = COALESCE(EXCLUDED.disk_gb, quartermaster.infrastructure_nodes.disk_gb),
+			status               = 'active',
+			updated_at           = EXCLUDED.updated_at
+	`, nodeID, clusterID, req.GetNodeName(), req.GetNodeType(),
 		req.InternalIp, req.ExternalIp, req.WireguardIp, req.WireguardPublicKey,
 		req.Region, req.AvailabilityZone,
 		req.CpuCores, req.MemoryGb, req.DiskGb, now)
 
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
+		s.logger.WithError(err).WithField("node_id", nodeID).Error("Failed to upsert node")
+		return nil, status.Errorf(codes.Internal, "failed to upsert node: %v", err)
 	}
 
 	node, err := s.queryNode(ctx, nodeID)
@@ -3526,29 +3618,9 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 		return nil, err
 	}
 
-	// Trigger DNS sync for the relevant service type (async, best-effort)
-	nodeType := req.GetNodeType()
-	if s.navigatorClient != nil && nodeType != "" {
-		syncReq := &pb.SyncDNSRequest{
-			ServiceType: nodeType,
-			RootDomain:  config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
-		}
-		go func() {
-			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if resp, err := s.navigatorClient.SyncDNS(syncCtx, syncReq); err != nil {
-				s.logger.WithError(err).WithField("service_type", nodeType).Error("Failed to trigger DNS sync")
-			} else if !resp.GetSuccess() {
-				s.logger.WithFields(logging.Fields{
-					"service_type": nodeType,
-					"message":      resp.GetMessage(),
-					"errors":       resp.GetErrors(),
-				}).Error("DNS sync failed via Navigator")
-			} else {
-				s.logger.WithField("service_type", nodeType).Info("DNS sync triggered successfully")
-			}
-		}()
-	}
+	// DNS sync is handled by Navigator's periodic reconciler. Triggering here
+	// would be premature: no services are deployed on a freshly-created node,
+	// and node_type (e.g. "core") is not a valid service type for DNS lookup.
 
 	return &pb.NodeResponse{Node: node}, nil
 }
@@ -3897,28 +3969,9 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		return nil, status.Errorf(codes.Internal, "failed to commit bootstrap: %v", err)
 	}
 
-	nodeType := "edge"
-	if s.navigatorClient != nil {
-		syncReq := &pb.SyncDNSRequest{
-			ServiceType: nodeType,
-			RootDomain:  config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
-		}
-		go func() {
-			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if resp, err := s.navigatorClient.SyncDNS(syncCtx, syncReq); err != nil {
-				s.logger.WithError(err).WithField("service_type", nodeType).Error("Failed to trigger DNS sync after bootstrap")
-			} else if !resp.GetSuccess() {
-				s.logger.WithFields(logging.Fields{
-					"service_type": nodeType,
-					"message":      resp.GetMessage(),
-					"errors":       resp.GetErrors(),
-				}).Error("DNS sync failed via Navigator after bootstrap")
-			} else {
-				s.logger.WithField("service_type", nodeType).Info("DNS sync triggered successfully after bootstrap")
-			}
-		}()
-	}
+	// DNS sync is handled by Navigator's periodic reconciler. Edge health
+	// is determined by mesh heartbeats (SyncMesh), not by service_instance
+	// status, so there's nothing to resolve until the mesh agent checks in.
 
 	return &pb.BootstrapEdgeNodeResponse{
 		NodeId:    nodeID,
@@ -3933,8 +3986,12 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	if token == "" {
 		return nil, status.Error(codes.InvalidArgument, "token required")
 	}
-	if req.GetNodeType() == "" {
+	nodeType := req.GetNodeType()
+	if nodeType == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_type required")
+	}
+	if nodeType != "core" && nodeType != "edge" {
+		return nil, status.Errorf(codes.InvalidArgument, "node_type must be 'core' or 'edge', got %q", nodeType)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -4053,9 +4110,9 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	}
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, latitude, longitude, tags, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8, $9, '{}', '{}', NOW(), NOW())
-	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, req.GetNodeType(), extIP, intIP, lat, lng)
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, latitude, longitude, tags, metadata, last_heartbeat, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8, $9, '{}', '{}', NOW(), NOW(), NOW())
+	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, nodeType, extIP, intIP, lat, lng)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
 	}
@@ -4079,28 +4136,9 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		tenantResp = &tenantID.String
 	}
 
-	nodeType := req.GetNodeType()
-	if s.navigatorClient != nil && nodeType != "" {
-		syncReq := &pb.SyncDNSRequest{
-			ServiceType: nodeType,
-			RootDomain:  config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
-		}
-		go func() {
-			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if resp, err := s.navigatorClient.SyncDNS(syncCtx, syncReq); err != nil {
-				s.logger.WithError(err).WithField("service_type", nodeType).Error("Failed to trigger DNS sync after bootstrap")
-			} else if !resp.GetSuccess() {
-				s.logger.WithFields(logging.Fields{
-					"service_type": nodeType,
-					"message":      resp.GetMessage(),
-					"errors":       resp.GetErrors(),
-				}).Error("DNS sync failed via Navigator after bootstrap")
-			} else {
-				s.logger.WithField("service_type", nodeType).Info("DNS sync triggered successfully after bootstrap")
-			}
-		}()
-	}
+	// DNS sync is handled by Navigator's periodic reconciler. Triggering here
+	// would be premature: no services are deployed on a freshly-created node,
+	// and node_type (e.g. "core") is not a valid service type for DNS lookup.
 
 	return &pb.BootstrapInfrastructureNodeResponse{
 		NodeId:    nodeID,
@@ -4513,10 +4551,10 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		}
 	}
 
-	// 5. Fetch service endpoints for DNS aliases
+	// 5. Fetch service endpoints for mesh DNS aliases (keyed by canonical service type)
 	serviceEndpoints := make(map[string]*pb.ServiceEndpoints)
 	svcRows, err := s.db.QueryContext(ctx, `
-		SELECT s.name, n.wireguard_ip::text
+		SELECT s.type, n.wireguard_ip::text
 		FROM quartermaster.services s
 		JOIN quartermaster.service_instances si ON si.service_id = s.service_id
 		JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
@@ -4524,16 +4562,17 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		  AND n.wireguard_ip IS NOT NULL
 		  AND n.status = 'active'
 		  AND n.cluster_id = $1
+		  AND s.type IS NOT NULL AND s.type <> ''
 	`, clusterID)
 	if err == nil {
 		defer func() { _ = svcRows.Close() }()
 		for svcRows.Next() {
-			var svcName, svcIP string
-			if scanErr := svcRows.Scan(&svcName, &svcIP); scanErr == nil && svcIP != "" {
-				if serviceEndpoints[svcName] == nil {
-					serviceEndpoints[svcName] = &pb.ServiceEndpoints{Ips: []string{}}
+			var svcType, svcIP string
+			if scanErr := svcRows.Scan(&svcType, &svcIP); scanErr == nil && svcIP != "" {
+				if serviceEndpoints[svcType] == nil {
+					serviceEndpoints[svcType] = &pb.ServiceEndpoints{Ips: []string{}}
 				}
-				serviceEndpoints[svcName].Ips = append(serviceEndpoints[svcName].Ips, svcIP)
+				serviceEndpoints[svcType].Ips = append(serviceEndpoints[svcType].Ips, svcIP)
 			}
 		}
 	} else {

@@ -318,6 +318,55 @@ func TestDeriveMistHTTPBase(t *testing.T) {
 	}
 }
 
+func TestRemoteArtifactFiltering_ExcludesUnauthorizedPeers(t *testing.T) {
+	remoteHits := []*RemoteArtifactInfo{
+		{PeerCluster: "authorized-1", BaseURL: "https://a.example.com", GeoLat: 0, GeoLon: 0},
+		{PeerCluster: "unauthorized", BaseURL: "https://b.example.com", GeoLat: 0, GeoLon: 0},
+	}
+	allowedClusters := []*pb.TenantClusterPeer{{ClusterId: "authorized-1"}}
+
+	var authorizedHits []*RemoteArtifactInfo
+	for _, h := range remoteHits {
+		if isAuthorizedPeerCluster(h.PeerCluster, allowedClusters) {
+			authorizedHits = append(authorizedHits, h)
+		}
+	}
+
+	if len(authorizedHits) != 1 {
+		t.Fatalf("expected 1 authorized hit, got %d", len(authorizedHits))
+	}
+	if authorizedHits[0].PeerCluster != "authorized-1" {
+		t.Fatalf("expected authorized-1, got %s", authorizedHits[0].PeerCluster)
+	}
+
+	best := pickBestRemoteArtifact(authorizedHits, 0, 0)
+	if best == nil {
+		t.Fatal("expected non-nil best artifact")
+	}
+	if best.PeerCluster != "authorized-1" {
+		t.Fatalf("expected authorized-1, got %s", best.PeerCluster)
+	}
+}
+
+func TestRemoteArtifactFiltering_AllUnauthorizedYieldsNoHits(t *testing.T) {
+	remoteHits := []*RemoteArtifactInfo{
+		{PeerCluster: "unauthorized-1", BaseURL: "https://a.example.com"},
+		{PeerCluster: "unauthorized-2", BaseURL: "https://b.example.com"},
+	}
+	allowedClusters := []*pb.TenantClusterPeer{{ClusterId: "some-other-cluster"}}
+
+	var authorizedHits []*RemoteArtifactInfo
+	for _, h := range remoteHits {
+		if isAuthorizedPeerCluster(h.PeerCluster, allowedClusters) {
+			authorizedHits = append(authorizedHits, h)
+		}
+	}
+
+	if len(authorizedHits) != 0 {
+		t.Fatalf("expected 0 authorized hits, got %d", len(authorizedHits))
+	}
+}
+
 type stubPeerResolver struct{}
 
 func (s stubPeerResolver) GetPeerAddr(clusterID string) string { return "foghorn.example:18019" }

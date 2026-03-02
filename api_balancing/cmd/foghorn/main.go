@@ -397,22 +397,22 @@ func main() {
 		gneg := 60 * time.Second
 		gmax := 50000
 		if v := config.GetEnv("GEOIP_CACHE_TTL", ""); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
+			if d, errParse := time.ParseDuration(v); errParse == nil {
 				gttl = d
 			}
 		}
 		if v := config.GetEnv("GEOIP_CACHE_SWR", ""); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
+			if d, errParse := time.ParseDuration(v); errParse == nil {
 				gswr = d
 			}
 		}
 		if v := config.GetEnv("GEOIP_CACHE_NEG_TTL", ""); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
+			if d, errParse := time.ParseDuration(v); errParse == nil {
 				gneg = d
 			}
 		}
 		if v := config.GetEnv("GEOIP_CACHE_MAX", ""); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n, errParse := strconv.Atoi(v); errParse == nil && n > 0 {
 				gmax = n
 			}
 		}
@@ -442,9 +442,9 @@ func main() {
 			AccessKey: config.GetEnv("STORAGE_S3_ACCESS_KEY", ""),
 			SecretKey: config.GetEnv("STORAGE_S3_SECRET_KEY", ""),
 		}
-		client, err := storage.NewS3Client(s3Config, logger)
-		if err != nil {
-			logger.WithError(err).Error("Failed to initialize S3 client for cold storage")
+		client, s3Err := storage.NewS3Client(s3Config, logger)
+		if s3Err != nil {
+			logger.WithError(s3Err).Error("Failed to initialize S3 client for cold storage")
 		} else {
 			// Only assign to interfaces if successfully created (avoids typed nil issue)
 			s3ForGRPC = client
@@ -677,6 +677,11 @@ func main() {
 	defer clusterRefreshCancel()
 	go control.StartServedClustersRefresh(clusterRefreshCtx, 5*time.Minute, logger)
 
+	// Relay edge heartbeats to Quartermaster so last_heartbeat stays fresh for DNS
+	if qmClient != nil {
+		go startEdgeHealthSync(qmClient, logger)
+	}
+
 	// Start the hourly storage snapshot scheduler
 	go startStorageSnapshotScheduler(triggerProcessor, logger)
 
@@ -855,6 +860,23 @@ func reconnectCommodore(
 		}
 		logger.Info("Commodore reconnected")
 		return
+	}
+}
+
+func startEdgeHealthSync(qm *qmclient.GRPCClient, log logging.Logger) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		nodeIDs := control.AliveNodeIDs(90 * time.Second)
+		if len(nodeIDs) == 0 {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := qm.ReportAliveNodes(ctx, nodeIDs)
+		cancel()
+		if err != nil {
+			log.WithError(err).WithField("count", len(nodeIDs)).Warn("edge health sync failed")
+		}
 	}
 }
 

@@ -1844,6 +1844,7 @@ const (
 	NodeService_GetNodeOwner_FullMethodName           = "/quartermaster.NodeService/GetNodeOwner"
 	NodeService_GetNodeByLogicalName_FullMethodName   = "/quartermaster.NodeService/GetNodeByLogicalName"
 	NodeService_UpdateNodeHardware_FullMethodName     = "/quartermaster.NodeService/UpdateNodeHardware"
+	NodeService_ReportAliveNodes_FullMethodName       = "/quartermaster.NodeService/ReportAliveNodes"
 )
 
 // NodeServiceClient is the client API for NodeService service.
@@ -1868,6 +1869,9 @@ type NodeServiceClient interface {
 	// Update node hardware specs (detected at startup)
 	// Called by Foghorn when Helmsman registers with hardware info
 	UpdateNodeHardware(ctx context.Context, in *UpdateNodeHardwareRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Batch-report alive edge nodes to refresh last_heartbeat for DNS eligibility.
+	// Called periodically by Foghorn (60s) with connected edge node IDs.
+	ReportAliveNodes(ctx context.Context, in *ReportAliveNodesRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type nodeServiceClient struct {
@@ -1958,6 +1962,16 @@ func (c *nodeServiceClient) UpdateNodeHardware(ctx context.Context, in *UpdateNo
 	return out, nil
 }
 
+func (c *nodeServiceClient) ReportAliveNodes(ctx context.Context, in *ReportAliveNodesRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, NodeService_ReportAliveNodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServiceServer is the server API for NodeService service.
 // All implementations must embed UnimplementedNodeServiceServer
 // for forward compatibility.
@@ -1980,6 +1994,9 @@ type NodeServiceServer interface {
 	// Update node hardware specs (detected at startup)
 	// Called by Foghorn when Helmsman registers with hardware info
 	UpdateNodeHardware(context.Context, *UpdateNodeHardwareRequest) (*emptypb.Empty, error)
+	// Batch-report alive edge nodes to refresh last_heartbeat for DNS eligibility.
+	// Called periodically by Foghorn (60s) with connected edge node IDs.
+	ReportAliveNodes(context.Context, *ReportAliveNodesRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedNodeServiceServer()
 }
 
@@ -2013,6 +2030,9 @@ func (UnimplementedNodeServiceServer) GetNodeByLogicalName(context.Context, *Get
 }
 func (UnimplementedNodeServiceServer) UpdateNodeHardware(context.Context, *UpdateNodeHardwareRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateNodeHardware not implemented")
+}
+func (UnimplementedNodeServiceServer) ReportAliveNodes(context.Context, *ReportAliveNodesRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportAliveNodes not implemented")
 }
 func (UnimplementedNodeServiceServer) mustEmbedUnimplementedNodeServiceServer() {}
 func (UnimplementedNodeServiceServer) testEmbeddedByValue()                     {}
@@ -2179,6 +2199,24 @@ func _NodeService_UpdateNodeHardware_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeService_ReportAliveNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportAliveNodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).ReportAliveNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_ReportAliveNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).ReportAliveNodes(ctx, req.(*ReportAliveNodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeService_ServiceDesc is the grpc.ServiceDesc for NodeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2217,6 +2255,10 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateNodeHardware",
 			Handler:    _NodeService_UpdateNodeHardware_Handler,
+		},
+		{
+			MethodName: "ReportAliveNodes",
+			Handler:    _NodeService_ReportAliveNodes_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

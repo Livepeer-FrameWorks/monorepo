@@ -245,6 +245,7 @@ message ArtifactLocation {
   int64 last_accessed = 7;    // Unix seconds
   double geo_lat = 8;
   double geo_lon = 9;
+  string tenant_id = 10;      // Owning tenant for scoped advertisement
 }
 
 // StreamAdvertisement is the autonomous routing primitive for the dCDN media plane.

@@ -878,7 +878,7 @@ func HandleNodesOverview(c *gin.Context) {
 
 	// Query DB artifacts with vod_metadata
 	if db != nil {
-		artifactRows, err := db.Query(`
+		artifactRows, err := db.QueryContext(c.Request.Context(), `
 			SELECT
 				a.artifact_hash, a.artifact_type, a.status, a.internal_name, a.tenant_id,
 				a.storage_location, a.sync_status, a.s3_url, a.format, a.size_bytes,
@@ -1003,7 +1003,7 @@ func HandleNodesOverview(c *gin.Context) {
 		}
 
 		// Query processing jobs
-		jobRows, err := db.Query(`
+		jobRows, err := db.QueryContext(c.Request.Context(), `
 			SELECT
 				job_id, tenant_id, artifact_hash, job_type, status, progress,
 				use_gateway, processing_node_id, routing_reason, error_message, retry_count,
@@ -2095,7 +2095,7 @@ func toInt64(v interface{}) (int64, bool) {
 }
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
@@ -2108,8 +2108,6 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64, 
 	if internalName == "" {
 		return nil, fmt.Errorf("stream not found")
 	}
-
-	ctx := context.Background()
 
 	// Loop prevention: if we're already pulling this stream via origin-pull, skip remote
 	// edge scoring entirely — let local scoring handle it (once DTSC pull completes, the
@@ -2781,7 +2779,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// Resolve endpoint
 	var response *pb.ViewerEndpointResponse
 	if contentType == "live" {
-		response, err = resolveLiveViewerEndpoint(req, lat, lon, internalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
+		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, internalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
 	} else {
 		response, err = resolveArtifactViewerEndpoint(req, lat, lon)
 	}

@@ -226,7 +226,7 @@ func TestGetVATRateForTenant_MalformedBillingAddressFallsBack(t *testing.T) {
 		logger: logging.NewLogger(),
 	}
 
-	rate, country, isB2B := handler.getVATRateForTenant("tenant-1", "")
+	rate, country, isB2B := handler.getVATRateForTenant(context.Background(), "tenant-1", "")
 	if country != "NL" {
 		t.Fatalf("country: got %q, want %q", country, "NL")
 	}

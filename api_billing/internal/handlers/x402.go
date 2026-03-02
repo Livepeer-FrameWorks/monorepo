@@ -340,7 +340,7 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 
 		// Check also in our database (for in-flight transactions)
 		var count int
-		err = h.db.QueryRow(`
+		err = h.db.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM purser.x402_nonces
 			WHERE network = $1 AND payer_address = $2 AND nonce = $3
 		`, payload.Network, strings.ToLower(auth.From), auth.Nonce).Scan(&count)
@@ -376,7 +376,7 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 		// Check if tenant has complete billing details (reuse billing details logic)
 		var billingEmail sql.NullString
 		var billingAddress []byte
-		err = h.db.QueryRow(`
+		err = h.db.QueryRowContext(ctx, `
 			SELECT billing_email, billing_address
 			FROM purser.tenant_subscriptions
 			WHERE tenant_id = $1 AND status != 'cancelled'
@@ -872,7 +872,7 @@ func (h *X402Handler) generateSimplifiedInvoice(ctx context.Context, tenantID st
 	}
 
 	// Get VAT rate using hybrid approach (billing country > GeoIP)
-	vatRateBps, country, isB2B := h.getVATRateForTenant(tenantID, clientIP)
+	vatRateBps, country, isB2B := h.getVATRateForTenant(ctx, tenantID, clientIP)
 	vatAmountCents := amountEurCents * int64(vatRateBps) / 10000
 	netAmountCents := amountEurCents - vatAmountCents
 
@@ -1192,11 +1192,11 @@ func parseBillingAddress(raw []byte) (billingAddress, error) {
 }
 
 // getVATRateForTenant returns VAT rate considering tenant's billing details
-func (h *X402Handler) getVATRateForTenant(tenantID, clientIP string) (rateBps int, country string, isB2B bool) {
+func (h *X402Handler) getVATRateForTenant(ctx context.Context, tenantID, clientIP string) (rateBps int, country string, isB2B bool) {
 	// 1. Check tenant's billing details (country and VAT number)
 	var taxID sql.NullString
 	var billingAddress []byte
-	err := h.db.QueryRow(`
+	err := h.db.QueryRowContext(ctx, `
 		SELECT tax_id, billing_address
 		FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1 AND status != 'cancelled'

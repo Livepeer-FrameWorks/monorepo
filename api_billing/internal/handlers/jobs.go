@@ -108,9 +108,9 @@ func calculateCharges(usageData map[string]float64, basePrice float64, meteringE
 	return baseAmount, meteredAmount
 }
 
-func loadSubscriptionPeriod(db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time) {
+func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time) {
 	var start, end sql.NullTime
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT billing_period_start, billing_period_end
 		FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1 AND status = 'active'
@@ -335,7 +335,7 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 	}
 
 	// Check billing model to determine processing path
-	billingModel, err := jm.getTenantBillingModel(summary.TenantID)
+	billingModel, err := jm.getTenantBillingModel(ctx, summary.TenantID)
 	if err != nil {
 		jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to get billing model, defaulting to postpaid")
 		billingModel = "postpaid"
@@ -363,9 +363,9 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 }
 
 // getTenantBillingModel returns the billing model for a tenant (prepaid or postpaid)
-func (jm *JobManager) getTenantBillingModel(tenantID string) (string, error) {
+func (jm *JobManager) getTenantBillingModel(ctx context.Context, tenantID string) (string, error) {
 	var billingModel string
-	err := jm.db.QueryRow(`
+	err := jm.db.QueryRowContext(ctx, `
 		SELECT COALESCE(billing_model, 'postpaid')
 		FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1 AND status = 'active'
@@ -430,7 +430,7 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 		customAllocations   models.AllocationDetails
 	)
 
-	err := jm.db.QueryRow(`
+	err := jm.db.QueryRowContext(ctx, `
 		SELECT bt.base_price, bt.metering_enabled,
 		       bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation,
 		       ts.custom_pricing, ts.custom_allocations
@@ -506,7 +506,7 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 		if _, found, err := jm.getBalanceTransactionByReference(ctx, tenantID, referenceType, *referenceID); err != nil {
 			return 0, false, err
 		} else if found {
-			balance, err := jm.getPrepaidBalance(tenantID)
+			balance, err := jm.getPrepaidBalance(ctx, tenantID)
 			if err != nil {
 				return 0, false, err
 			}
@@ -564,7 +564,7 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 				if rollbackErr := tx.Rollback(); rollbackErr != nil {
 					jm.logger.WithError(rollbackErr).Warn("Failed to rollback duplicate credit deduction")
 				}
-				balance, balanceErr := jm.getPrepaidBalance(tenantID)
+				balance, balanceErr := jm.getPrepaidBalance(ctx, tenantID)
 				if balanceErr != nil {
 					return 0, false, balanceErr
 				}
@@ -660,10 +660,10 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 }
 
 // getPrepaidBalance returns the current prepaid balance in cents for a tenant (0 if none exists)
-func (jm *JobManager) getPrepaidBalance(tenantID string) (int64, error) {
+func (jm *JobManager) getPrepaidBalance(ctx context.Context, tenantID string) (int64, error) {
 	var balanceCents int64
 	currency := billing.DefaultCurrency()
-	err := jm.db.QueryRow(`
+	err := jm.db.QueryRowContext(ctx, `
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 	`, tenantID, currency).Scan(&balanceCents)
@@ -701,7 +701,7 @@ func (jm *JobManager) getBalanceTransactionByReference(ctx context.Context, tena
 func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID string, balanceCents int64) error {
 	// Update subscription status to 'suspended'
 	// This blocks NEW ingests/streams via Foghorn (which checks suspension status)
-	result, err := jm.db.Exec(`
+	result, err := jm.db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET status = 'suspended', updated_at = NOW()
 		WHERE tenant_id = $1 AND status = 'active'
@@ -766,19 +766,19 @@ func (jm *JobManager) runInvoiceGeneration(ctx context.Context) {
 		case <-jm.stopCh:
 			return
 		case <-ticker.C:
-			jm.generateMonthlyInvoices()
+			jm.generateMonthlyInvoices(ctx)
 		}
 	}
 }
 
 // generateMonthlyInvoices generates invoices for tenants due for billing
-func (jm *JobManager) generateMonthlyInvoices() {
+func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	jm.logger.Info("Running monthly invoice generation")
 
 	now := time.Now()
 
 	// Get all active tenant subscriptions with their tiers
-	rows, err := jm.db.Query(`
+	rows, err := jm.db.QueryContext(ctx, `
 		SELECT ts.tenant_id, ts.billing_email, ts.tier_id, ts.status,
 		       ts.billing_period_start, ts.billing_period_end,
 		       bt.tier_name, bt.display_name, bt.base_price, bt.currency, bt.billing_period,
@@ -786,7 +786,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		       ts.custom_pricing, ts.custom_features, ts.custom_allocations
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-		WHERE ts.status = 'active' 
+		WHERE ts.status = 'active'
 		  AND bt.is_active = true
 		  AND (
 			  (ts.billing_period_end IS NOT NULL AND ts.billing_period_end <= $1)
@@ -842,7 +842,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 
 		// Check if a finalized invoice already exists for the previous month
 		var existingCount int
-		err = jm.db.QueryRow(`
+		err = jm.db.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM purser.billing_invoices
 			WHERE tenant_id = $1
 			  AND period_start = $2
@@ -861,7 +861,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 
 		// Check for an existing draft invoice for the previous month
 		var draftInvoiceID string
-		_ = jm.db.QueryRow(`
+		_ = jm.db.QueryRowContext(ctx, `
 			SELECT id FROM purser.billing_invoices
 			WHERE tenant_id = $1
 			  AND period_start = $2
@@ -876,7 +876,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		// - SKIP: unique counts (from Periscope enrichment only - cannot roll up 5-min windows)
 		usageData := map[string]float64{}
 
-		usageRows, err := jm.db.Query(`
+		usageRows, err := jm.db.QueryContext(ctx, `
 			SELECT usage_type,
 				CASE
 					WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
@@ -956,7 +956,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 
 		// Store or finalize the invoice
 		if draftInvoiceID != "" {
-			_, err = jm.db.Exec(`
+			_, err = jm.db.ExecContext(ctx, `
 				UPDATE purser.billing_invoices
 				SET amount = $1,
 					base_amount = $2,
@@ -972,7 +972,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			`, totalAmount, baseAmount, meteredAmount, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID)
 			invoiceID = draftInvoiceID
 		} else {
-			_, err = jm.db.Exec(`
+			_, err = jm.db.ExecContext(ctx, `
 				INSERT INTO purser.billing_invoices (
 					id, tenant_id, amount, currency, status, due_date,
 					base_amount, metered_amount,
@@ -1001,8 +1001,8 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		nextPeriodStart := periodEnd
 		nextPeriodEnd := periodEnd.Add(periodDuration)
 		nextBillingDate := nextPeriodEnd
-		_, err = jm.db.Exec(`
-			UPDATE purser.tenant_subscriptions 
+		_, err = jm.db.ExecContext(ctx, `
+			UPDATE purser.tenant_subscriptions
 			SET next_billing_date = $1,
 			    billing_period_start = $2,
 			    billing_period_end = $3,
@@ -1214,16 +1214,16 @@ func (jm *JobManager) runPaymentRetry(ctx context.Context) {
 		case <-jm.stopCh:
 			return
 		case <-ticker.C:
-			jm.retryFailedPayments()
-			jm.sendPaymentReminders()
+			jm.retryFailedPayments(ctx)
+			jm.sendPaymentReminders(ctx)
 		}
 	}
 }
 
 // retryFailedPayments retries payments that failed due to temporary issues
-func (jm *JobManager) retryFailedPayments() {
+func (jm *JobManager) retryFailedPayments(ctx context.Context) {
 	// Mark failed traditional payments for retry (crypto payments don't need retry)
-	_, err := jm.db.Exec(`
+	_, err := jm.db.ExecContext(ctx, `
 		UPDATE purser.billing_payments
 		SET status = 'pending', updated_at = NOW()
 		WHERE status = 'failed' 
@@ -1242,9 +1242,9 @@ func (jm *JobManager) retryFailedPayments() {
 }
 
 // sendPaymentReminders sends reminders for overdue invoices
-func (jm *JobManager) sendPaymentReminders() {
+func (jm *JobManager) sendPaymentReminders(ctx context.Context) {
 	// Get overdue invoices with tenant subscription information
-	rows, err := jm.db.Query(`
+	rows, err := jm.db.QueryContext(ctx, `
 		SELECT bi.id, bi.tenant_id, bi.amount, bi.currency, bi.due_date,
 		       ts.billing_email, bi.status
 		FROM purser.billing_invoices bi
@@ -1278,7 +1278,7 @@ func (jm *JobManager) sendPaymentReminders() {
 		daysPastDue := int(time.Since(dueDate).Hours() / 24)
 
 		if invoiceStatus == "pending" {
-			_, execErr := jm.db.ExecContext(context.Background(), `
+			_, execErr := jm.db.ExecContext(ctx, `
 					UPDATE purser.billing_invoices
 					SET status = 'overdue', updated_at = NOW()
 					WHERE id = $1 AND status = 'pending'
@@ -1336,14 +1336,14 @@ func (jm *JobManager) runWalletCleanup(ctx context.Context) {
 		case <-jm.stopCh:
 			return
 		case <-ticker.C:
-			jm.cleanupExpiredWallets()
+			jm.cleanupExpiredWallets(ctx)
 		}
 	}
 }
 
 // cleanupExpiredWallets marks expired crypto wallets as inactive
-func (jm *JobManager) cleanupExpiredWallets() {
-	result, err := jm.db.Exec(`
+func (jm *JobManager) cleanupExpiredWallets(ctx context.Context) {
+	result, err := jm.db.ExecContext(ctx, `
 		UPDATE purser.crypto_wallets
 		SET status = 'expired', updated_at = NOW()
 		WHERE status = 'active'
@@ -1507,7 +1507,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		customAllocations   models.AllocationDetails
 	)
 
-	err := jm.db.QueryRow(`
+	err := jm.db.QueryRowContext(ctx, `
 		SELECT ts.tier_id, ts.status, bt.tier_name, bt.display_name, bt.base_price, bt.currency, bt.metering_enabled,
 		       bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation, ts.custom_pricing, ts.custom_allocations
 		FROM purser.tenant_subscriptions ts
@@ -1526,7 +1526,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 
 	// Get current billing period
 	now := time.Now()
-	periodStart, periodEnd := loadSubscriptionPeriod(jm.db, tenantID, now)
+	periodStart, periodEnd := loadSubscriptionPeriod(ctx, jm.db, tenantID, now)
 
 	var finalizedCount int
 	if countErr := jm.db.QueryRowContext(ctx, `
@@ -1547,7 +1547,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 
 	// Aggregate usage for current billing period
 	// Only aggregate rollup-able metrics - uniques come from Periscope enrichment
-	rows, err := jm.db.Query(`
+	rows, err := jm.db.QueryContext(ctx, `
 		SELECT usage_type,
 		       CASE
 			       WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
@@ -1583,7 +1583,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 
 	// Apply prepaid credit if available (for postpaid users with prepaid balance)
 	var prepaidCreditApplied float64
-	prepaidBalance, err := jm.getPrepaidBalance(tenantID)
+	prepaidBalance, err := jm.getPrepaidBalance(ctx, tenantID)
 	if err != nil {
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get prepaid balance for invoice")
 	} else if prepaidBalance > 0 && grossAmount > 0 {
@@ -1650,7 +1650,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 
 	// Upsert draft invoice in billing_invoices
 	dueDate := periodEnd.AddDate(0, 0, 14)
-	result, err := jm.db.Exec(`
+	result, err := jm.db.ExecContext(ctx, `
 		UPDATE purser.billing_invoices
 		SET amount = $1,
 			base_amount = $2,
@@ -1674,7 +1674,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		_, err = jm.db.Exec(`
+		_, err = jm.db.ExecContext(ctx, `
 			INSERT INTO purser.billing_invoices (
 				id, tenant_id, amount, currency, status, due_date,
 				base_amount, metered_amount, prepaid_credit_applied, usage_details,

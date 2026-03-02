@@ -479,6 +479,9 @@ func (s *FederationServer) triggerAsyncFreeze(hash, artifactType, _tenantID stri
 // CreateRemoteClip handles a peer cluster requesting clip creation on the origin.
 // The origin has the live stream locally and can create the clip directly.
 func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteClipRequest) (*pb.RemoteClipResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
 	if req.GetInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
 	}
@@ -549,6 +552,9 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 // CreateRemoteDVR handles a peer cluster requesting DVR recording on the origin.
 // DVR must record on the origin cluster (co-located with ingest source).
 func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDVRRequest) (*pb.RemoteDVRResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
 	if req.GetInternalName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
 	}
@@ -716,7 +722,7 @@ func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerCluste
 		if clusterID == "" {
 			clusterID = ev.GetClusterId()
 		}
-		if err := s.cache.SetRemoteLiveStream(ctx, ev.GetInternalName(), &RemoteLiveStreamEntry{
+		if err := s.cache.SetRemoteLiveStream(ctx, ev.GetTenantId(), ev.GetInternalName(), &RemoteLiveStreamEntry{
 			ClusterID: clusterID,
 			TenantID:  ev.GetTenantId(),
 			UpdatedAt: time.Now().Unix(),
@@ -727,7 +733,7 @@ func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerCluste
 			}).Warn("Failed to cache remote live stream")
 		}
 	} else {
-		if err := s.cache.DeleteRemoteLiveStream(ctx, ev.GetInternalName()); err != nil {
+		if err := s.cache.DeleteRemoteLiveStream(ctx, ev.GetTenantId(), ev.GetInternalName()); err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"peer_cluster":  peerClusterID,
 				"internal_name": ev.GetInternalName(),
@@ -780,6 +786,7 @@ func (s *FederationServer) handleArtifactAdvertisement(ctx context.Context, peer
 			GeoLat:       loc.GeoLat,
 			GeoLon:       loc.GeoLon,
 			UpdatedAt:    time.Now().Unix(),
+			TenantID:     loc.TenantId,
 		}
 		if err := s.cache.SetRemoteArtifact(ctx, peerClusterID, entry); err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
@@ -857,6 +864,9 @@ func (s *FederationServer) handlePeerHeartbeat(ctx context.Context, peerClusterI
 
 // ListTenantArtifacts returns all artifact metadata for a tenant on this cluster.
 func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *pb.ListTenantArtifactsRequest) (*pb.ListTenantArtifactsResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -906,6 +916,9 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *pb.List
 
 // MigrateArtifactMetadata fetches artifact records from a source cluster and inserts them locally.
 func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *pb.MigrateArtifactMetadataRequest) (*pb.MigrateArtifactMetadataResponse, error) {
+	if err := requireFederationServiceAuth(ctx); err != nil {
+		return nil, err
+	}
 	tenantID := req.GetTenantId()
 	sourceClusterID := req.GetSourceClusterId()
 	if tenantID == "" || sourceClusterID == "" {

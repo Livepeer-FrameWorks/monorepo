@@ -277,7 +277,7 @@ func TestGenerateMonthlyInvoicesUpdatesDraftWithOverlappingUsage(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "tenant-overlap").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	jm.generateMonthlyInvoices()
+	jm.generateMonthlyInvoices(context.Background())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)

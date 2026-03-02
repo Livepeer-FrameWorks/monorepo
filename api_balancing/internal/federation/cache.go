@@ -124,8 +124,8 @@ func (c *RemoteEdgeCache) keyPeerAddresses() string {
 	return fmt.Sprintf("{%s}:peer_addresses", c.clusterID)
 }
 
-func (c *RemoteEdgeCache) keyRemoteLiveStream(internalName string) string {
-	return fmt.Sprintf("{%s}:remote_live_streams:%s", c.clusterID, internalName)
+func (c *RemoteEdgeCache) keyRemoteLiveStream(tenantID, internalName string) string {
+	return fmt.Sprintf("{%s}:remote_live_streams:%s:%s", c.clusterID, tenantID, internalName)
 }
 
 // --- Remote Edge Telemetry (per-node, per-peer, TTL 30s) ---
@@ -391,18 +391,18 @@ type RemoteLiveStreamEntry struct {
 }
 
 // SetRemoteLiveStream records that a stream is live on a peer cluster.
-func (c *RemoteEdgeCache) SetRemoteLiveStream(ctx context.Context, internalName string, entry *RemoteLiveStreamEntry) error {
+func (c *RemoteEdgeCache) SetRemoteLiveStream(ctx context.Context, tenantID, internalName string, entry *RemoteLiveStreamEntry) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal remote live stream: %w", err)
 	}
-	key := c.keyRemoteLiveStream(internalName)
+	key := c.keyRemoteLiveStream(tenantID, internalName)
 	return c.client.Set(ctx, key, data, remoteLiveStreamTTL).Err()
 }
 
 // GetRemoteLiveStream returns the peer cluster where a stream is live, or nil.
-func (c *RemoteEdgeCache) GetRemoteLiveStream(ctx context.Context, internalName string) (*RemoteLiveStreamEntry, error) {
-	key := c.keyRemoteLiveStream(internalName)
+func (c *RemoteEdgeCache) GetRemoteLiveStream(ctx context.Context, tenantID, internalName string) (*RemoteLiveStreamEntry, error) {
+	key := c.keyRemoteLiveStream(tenantID, internalName)
 	data, err := c.client.Get(ctx, key).Bytes()
 	if errors.Is(err, goredis.Nil) {
 		return nil, nil
@@ -418,8 +418,8 @@ func (c *RemoteEdgeCache) GetRemoteLiveStream(ctx context.Context, internalName 
 }
 
 // DeleteRemoteLiveStream removes the live-stream record (stream went offline).
-func (c *RemoteEdgeCache) DeleteRemoteLiveStream(ctx context.Context, internalName string) error {
-	return c.client.Del(ctx, c.keyRemoteLiveStream(internalName)).Err()
+func (c *RemoteEdgeCache) DeleteRemoteLiveStream(ctx context.Context, tenantID, internalName string) error {
+	return c.client.Del(ctx, c.keyRemoteLiveStream(tenantID, internalName)).Err()
 }
 
 // --- Remote Artifact Locations (hot artifacts on peer edges, TTL 90s) ---
@@ -439,10 +439,11 @@ type RemoteArtifactEntry struct {
 	GeoLat       float64 `json:"geo_lat"`
 	GeoLon       float64 `json:"geo_lon"`
 	UpdatedAt    int64   `json:"updated_at"`
+	TenantID     string  `json:"tenant_id,omitempty"`
 }
 
-func (c *RemoteEdgeCache) keyRemoteArtifact(peerClusterID, artifactHash string) string {
-	return fmt.Sprintf("{%s}:remote_artifacts:%s:%s", c.clusterID, peerClusterID, artifactHash)
+func (c *RemoteEdgeCache) keyRemoteArtifact(peerClusterID, artifactHash, nodeID string) string {
+	return fmt.Sprintf("{%s}:remote_artifacts:%s:%s:%s", c.clusterID, peerClusterID, artifactHash, nodeID)
 }
 
 func (c *RemoteEdgeCache) keyRemoteArtifactGlob() string {
@@ -456,14 +457,14 @@ func (c *RemoteEdgeCache) SetRemoteArtifact(ctx context.Context, peerClusterID s
 	if err != nil {
 		return fmt.Errorf("marshal remote artifact: %w", err)
 	}
-	key := c.keyRemoteArtifact(peerClusterID, entry.ArtifactHash)
+	key := c.keyRemoteArtifact(peerClusterID, entry.ArtifactHash, entry.NodeID)
 	return c.client.Set(ctx, key, data, remoteArtifactTTL).Err()
 }
 
 // GetRemoteArtifacts returns all peer-cluster locations for a given artifact hash.
 // Scans across all peer prefixes: {cluster}:remote_artifacts:*:{hash}
 func (c *RemoteEdgeCache) GetRemoteArtifacts(ctx context.Context, artifactHash string) ([]*RemoteArtifactEntry, error) {
-	pattern := fmt.Sprintf("{%s}:remote_artifacts:*:%s", c.clusterID, artifactHash)
+	pattern := fmt.Sprintf("{%s}:remote_artifacts:*:%s:*", c.clusterID, artifactHash)
 	return scanEntries[RemoteArtifactEntry](ctx, c.client, pattern)
 }
 

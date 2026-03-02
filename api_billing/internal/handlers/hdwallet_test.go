@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"strings"
@@ -144,7 +145,7 @@ func TestValidateXpub(t *testing.T) {
 			test.setupRow(&mock)
 
 			wallet := &HDWallet{db: mockDB, logger: logrus.New()}
-			err = wallet.ValidateXpub()
+			err = wallet.ValidateXpub(context.Background())
 			if test.wantErrMsg == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)

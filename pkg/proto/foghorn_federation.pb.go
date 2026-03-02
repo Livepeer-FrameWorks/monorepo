@@ -1699,6 +1699,7 @@ type ArtifactLocation struct {
 	LastAccessed  int64                  `protobuf:"varint,7,opt,name=last_accessed,json=lastAccessed,proto3" json:"last_accessed,omitempty"` // Unix seconds
 	GeoLat        float64                `protobuf:"fixed64,8,opt,name=geo_lat,json=geoLat,proto3" json:"geo_lat,omitempty"`
 	GeoLon        float64                `protobuf:"fixed64,9,opt,name=geo_lon,json=geoLon,proto3" json:"geo_lon,omitempty"`
+	TenantId      string                 `protobuf:"bytes,10,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // Owning tenant for scoped advertisement
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1794,6 +1795,13 @@ func (x *ArtifactLocation) GetGeoLon() float64 {
 		return x.GeoLon
 	}
 	return 0
+}
+
+func (x *ArtifactLocation) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
 }
 
 // StreamAdvertisement is the autonomous routing primitive for the dCDN media plane.
@@ -2840,7 +2848,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	" \x03(\tR\x05roles\"y\n" +
 	"\x15ArtifactAdvertisement\x12B\n" +
 	"\tartifacts\x18\x01 \x03(\v2$.foghorn_federation.ArtifactLocationR\tartifacts\x12\x1c\n" +
-	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\"\xa9\x02\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\"\xc6\x02\n" +
 	"\x10ArtifactLocation\x12#\n" +
 	"\rartifact_hash\x18\x01 \x01(\tR\fartifactHash\x12#\n" +
 	"\rartifact_type\x18\x02 \x01(\tR\fartifactType\x12\x17\n" +
@@ -2851,7 +2859,9 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\faccess_count\x18\x06 \x01(\rR\vaccessCount\x12#\n" +
 	"\rlast_accessed\x18\a \x01(\x03R\flastAccessed\x12\x17\n" +
 	"\ageo_lat\x18\b \x01(\x01R\x06geoLat\x12\x17\n" +
-	"\ageo_lon\x18\t \x01(\x01R\x06geoLon\"\x95\x02\n" +
+	"\ageo_lon\x18\t \x01(\x01R\x06geoLon\x12\x1b\n" +
+	"\ttenant_id\x18\n" +
+	" \x01(\tR\btenantId\"\x95\x02\n" +
 	"\x13StreamAdvertisement\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1f\n" +

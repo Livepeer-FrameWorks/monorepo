@@ -106,7 +106,7 @@ func TestCreateRemoteClipRejectsTenantMismatch(t *testing.T) {
 
 	cc := &clipCreatorSpy{}
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), ClipCreator: cc})
-	resp, err := srv.CreateRemoteClip(context.Background(), &pb.RemoteClipRequest{
+	resp, err := srv.CreateRemoteClip(serviceAuthContext(), &pb.RemoteClipRequest{
 		InternalName: "stream-a",
 		TenantId:     "tenant-other",
 	})
@@ -132,7 +132,7 @@ func TestCreateRemoteDVRRejectsTenantMismatch(t *testing.T) {
 
 	dc := &dvrCreatorSpy{}
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), DVRCreator: dc})
-	resp, err := srv.CreateRemoteDVR(context.Background(), &pb.RemoteDVRRequest{
+	resp, err := srv.CreateRemoteDVR(serviceAuthContext(), &pb.RemoteDVRRequest{
 		InternalName: "stream-a",
 		TenantId:     "tenant-other",
 	})
