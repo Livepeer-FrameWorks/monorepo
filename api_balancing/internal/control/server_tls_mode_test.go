@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -16,7 +17,7 @@ func TestStartGRPCServer_NoTLSSource_FailsClosedByDefault(t *testing.T) {
 	navigatorClient = nil
 	t.Cleanup(func() { navigatorClient = prevNavigator })
 
-	_, err := StartGRPCServer(GRPCServerConfig{Addr: "127.0.0.1:0", Logger: logging.NewLogger()})
+	_, err := StartGRPCServer(context.Background(), GRPCServerConfig{Addr: "127.0.0.1:0", Logger: logging.NewLogger()})
 	if err == nil {
 		t.Fatal("expected StartGRPCServer to fail without TLS source")
 	}
@@ -34,7 +35,7 @@ func TestStartGRPCServer_NoTLSSource_AllowsExplicitInsecureMode(t *testing.T) {
 	navigatorClient = nil
 	t.Cleanup(func() { navigatorClient = prevNavigator })
 
-	srv, err := StartGRPCServer(GRPCServerConfig{Addr: "127.0.0.1:0", Logger: logging.NewLogger()})
+	srv, err := StartGRPCServer(context.Background(), GRPCServerConfig{Addr: "127.0.0.1:0", Logger: logging.NewLogger()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

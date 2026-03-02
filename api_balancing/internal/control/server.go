@@ -221,12 +221,12 @@ type NodeOutputs struct {
 // Optional analytics callbacks set by handlers package
 var clipProgressHandler func(*pb.ClipProgress)
 var clipDoneHandler func(*pb.ClipDone)
-var artifactDeletedHandler func(*pb.ArtifactDeleted)
+var artifactDeletedHandler func(context.Context, *pb.ArtifactDeleted)
 var dvrDeletedHandler func(dvrHash string, sizeBytes uint64, nodeID string)
 var dvrStoppedHandler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)
 
 // SetClipHandlers registers callbacks for analytics emission
-func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone), onDeleted func(*pb.ArtifactDeleted)) {
+func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone), onDeleted func(context.Context, *pb.ArtifactDeleted)) {
 	clipProgressHandler = onProgress
 	clipDoneHandler = onDone
 	artifactDeletedHandler = onDeleted
@@ -712,7 +712,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 
 				// Register node IP with state manager for same-host avoidance logic.
 				// TenantID/ClusterID are resolved below via fingerprint or enrollment.
-				state.DefaultManager().SetNodeConnectionInfo(nodeID, host, tenantID, clusterID, nil)
+				state.DefaultManager().SetNodeConnectionInfo(context.Background(), nodeID, host, tenantID, clusterID, nil)
 
 				fpReq := &pb.ResolveNodeFingerprintRequest{PeerIp: host}
 				if x.Register != nil && x.Register.Fingerprint != nil {
@@ -801,11 +801,11 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				AddServedCluster(clusterID)
 			}
 			if tenantID != "" || clusterID != "" {
-				state.DefaultManager().SetNodeConnectionInfo(canonicalNodeID, "", tenantID, clusterID, nil)
+				state.DefaultManager().SetNodeConnectionInfo(context.Background(), canonicalNodeID, "", tenantID, clusterID, nil)
 				// When canonical differs, also stamp the actively-heartbeated nodeID
 				// so the balancer's tenant filter sees the correct ownership.
 				if canonicalNodeID != nodeID {
-					state.DefaultManager().SetNodeConnectionInfo(nodeID, "", tenantID, clusterID, nil)
+					state.DefaultManager().SetNodeConnectionInfo(context.Background(), nodeID, "", tenantID, clusterID, nil)
 				}
 			}
 
@@ -918,7 +918,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go handleClipDone(x.ClipDone, nodeID, registry.log)
 		case *pb.ControlMessage_ArtifactDeleted:
 			if artifactDeletedHandler != nil {
-				go artifactDeletedHandler(x.ArtifactDeleted)
+				go artifactDeletedHandler(context.Background(), x.ArtifactDeleted)
 			}
 			go handleArtifactDeleted(x.ArtifactDeleted, nodeID, registry.log)
 		case *pb.ControlMessage_Heartbeat:
@@ -1353,8 +1353,9 @@ type GRPCServerConfig struct {
 
 // StartGRPCServer starts the control gRPC server on the given addr (e.g., ":18009")
 // Additional services can be registered via Registrars in the config.
-func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
-	lis, err := net.Listen("tcp", cfg.Addr)
+func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(ctx, "tcp", cfg.Addr)
 	if err != nil {
 		return nil, err
 	}

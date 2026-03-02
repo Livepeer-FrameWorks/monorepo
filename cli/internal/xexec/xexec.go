@@ -2,14 +2,15 @@ package xexec
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
 )
 
 // Run executes a command in the given working directory and returns exit code, stdout, stderr, and error.
-func Run(cmd string, args []string, workdir string) (int, string, string, error) {
-	c := exec.Command(cmd, args...)
+func Run(ctx context.Context, cmd string, args []string, workdir string) (int, string, string, error) {
+	c := exec.CommandContext(ctx, cmd, args...)
 	if workdir != "" {
 		c.Dir = workdir
 	}

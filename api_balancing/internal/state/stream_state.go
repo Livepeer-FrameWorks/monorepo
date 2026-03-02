@@ -1315,7 +1315,7 @@ func (sm *StreamStateManager) GetClusterSnapshot() (streams []*StreamState, node
 // SetNodeConnectionInfo updates connection-related information for a node.
 // It primarily focuses on setting the binary host IP for same-host avoidance in the balancer.
 // Node tags are updated only if explicitly provided, allowing for flexible tag management.
-func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, tenantID string, clusterID string, tags []string) {
+func (sm *StreamStateManager) SetNodeConnectionInfo(ctx context.Context, nodeID string, host string, tenantID string, clusterID string, tags []string) {
 	sm.mu.Lock()
 
 	n := sm.nodes[nodeID]
@@ -1338,7 +1338,7 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, 
 
 	// Compute binary IP for fast comparison in load balancing decisions.
 	if host != "" {
-		n.BinHost = hostToBinary(host)
+		n.BinHost = hostToBinary(ctx, host)
 	}
 
 	n.LastUpdate = time.Now() // Update timestamp since node info changed.
@@ -2013,7 +2013,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 }
 
 // hostToBinary converts a hostname/IP to binary format for fast comparison
-func hostToBinary(host string) [16]byte {
+func hostToBinary(ctx context.Context, host string) [16]byte {
 	var binHost [16]byte
 
 	// Try to parse as IP first
@@ -2032,7 +2032,8 @@ func hostToBinary(host string) [16]byte {
 	}
 
 	// If not an IP, resolve hostname to IP
-	addrs, err := net.LookupHost(host)
+	resolver := &net.Resolver{}
+	addrs, err := resolver.LookupHost(ctx, host)
 	if err != nil || len(addrs) == 0 {
 		// Return zero array if can't resolve
 		return binHost

@@ -119,7 +119,7 @@ func runDiagnoseMediaAuto(cmd *cobra.Command, sshTarget, sshKey, dir, stream str
 	}
 	defer cleanup()
 
-	mode := detectEdgeMode(dir, ".edge.env", sshTarget, sshKey)
+	mode := detectEdgeMode(ctx, dir, ".edge.env", sshTarget, sshKey)
 	ar := mistdiag.NewAnalyzerRunner(runner, mode)
 
 	// Show available analyzers
@@ -210,7 +210,7 @@ func runDiagnoseMediaManual(cmd *cobra.Command, sshTarget, sshKey, dir, analyzer
 	}
 	defer cleanup()
 
-	mode := detectEdgeMode(dir, ".edge.env", sshTarget, sshKey)
+	mode := detectEdgeMode(ctx, dir, ".edge.env", sshTarget, sshKey)
 	ar := mistdiag.NewAnalyzerRunner(runner, mode)
 
 	analyzer = mistdiag.NormalizeAnalyzerName(analyzer)

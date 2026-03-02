@@ -379,8 +379,9 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 }
 
 // StartGRPCServer starts the Foghorn gRPC server
-func StartGRPCServer(addr string, server *FoghornGRPCServer) error {
-	lis, err := net.Listen("tcp", addr)
+func StartGRPCServer(ctx context.Context, addr string, server *FoghornGRPCServer) error {
+	lc := net.ListenConfig{}
+	lis, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}

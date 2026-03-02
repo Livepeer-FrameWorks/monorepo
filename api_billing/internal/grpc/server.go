@@ -5449,7 +5449,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *pb.GetPa
 	// The payer's identity comes from the authorization signature, not the request
 
 	// Get platform-wide x402 payTo address (HD index 0)
-	payToAddr, err := s.x402handler.GetPlatformX402Address()
+	payToAddr, err := s.x402handler.GetPlatformX402Address(ctx)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"error": err,
@@ -5630,7 +5630,7 @@ func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *pb.GetTena
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	address, derivationIndex, newlyCreated, err := s.x402handler.GetOrCreateTenantX402Address(tenantID)
+	address, derivationIndex, newlyCreated, err := s.x402handler.GetOrCreateTenantX402Address(ctx, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get x402 address: %v", err)
 	}

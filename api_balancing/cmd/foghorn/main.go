@@ -656,7 +656,7 @@ func main() {
 	if relayServer != nil {
 		registrars = append(registrars, relayServer.RegisterServices)
 	}
-	grpcServer, err := control.StartGRPCServer(control.GRPCServerConfig{
+	grpcServer, err := control.StartGRPCServer(context.Background(), control.GRPCServerConfig{
 		Addr:         controlAddr,
 		Logger:       logger,
 		ServiceToken: serviceToken,

@@ -133,8 +133,8 @@ const PlatformX402Index = uint32(0)
 // GetPlatformX402Address returns the platform-wide x402 payTo address (HD index 0).
 // This is used for all x402 payments regardless of tenant.
 // Callers identify the payer from the authorization signature, not the address.
-func (h *X402Handler) GetPlatformX402Address() (string, error) {
-	xpub, err := h.getXpub()
+func (h *X402Handler) GetPlatformX402Address(ctx context.Context) (string, error) {
+	xpub, err := h.getXpub(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -148,8 +148,7 @@ func (h *X402Handler) GetPlatformX402Address() (string, error) {
 // GetTenantDepositAddress returns a per-tenant deposit address for crypto invoices.
 // Unlike x402 (which uses the platform address), direct deposits go to tenant-specific addresses.
 // These use HD indexes 1+ (index 0 is reserved for platform x402).
-func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, derivationIndex int32, newlyCreated bool, err error) {
-	ctx := context.Background()
+func (h *X402Handler) GetTenantDepositAddress(ctx context.Context, tenantID string) (address string, derivationIndex int32, newlyCreated bool, err error) {
 	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", 0, false, fmt.Errorf("failed to begin transaction: %w", err)
@@ -170,7 +169,7 @@ func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, 
 
 	if existingIndex.Valid && existingIndex.Int32 > 0 {
 		// Derive address from existing index (must be > 0, index 0 is platform)
-		xpub, xpubErr := h.getXpub()
+		xpub, xpubErr := h.getXpub(ctx)
 		if xpubErr != nil {
 			return "", 0, false, xpubErr
 		}
@@ -224,14 +223,14 @@ func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, 
 // GetOrCreateTenantX402Address is deprecated - use GetPlatformX402Address for x402
 // or GetTenantDepositAddress for direct crypto deposits.
 // Kept for backward compatibility during migration.
-func (h *X402Handler) GetOrCreateTenantX402Address(tenantID string) (address string, derivationIndex int32, newlyCreated bool, err error) {
-	return h.GetTenantDepositAddress(tenantID)
+func (h *X402Handler) GetOrCreateTenantX402Address(ctx context.Context, tenantID string) (address string, derivationIndex int32, newlyCreated bool, err error) {
+	return h.GetTenantDepositAddress(ctx, tenantID)
 }
 
 // getXpub retrieves the stored extended public key
-func (h *X402Handler) getXpub() (string, error) {
+func (h *X402Handler) getXpub(ctx context.Context) (string, error) {
 	var xpub string
-	err := h.db.QueryRow(`SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
+	err := h.db.QueryRowContext(ctx, `SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("hd_wallet_state not initialized")
 	}
@@ -268,7 +267,7 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 	auth := payload.Payload.Authorization
 
 	// Get platform-wide payTo address (HD index 0)
-	expectedPayTo, err := h.GetPlatformX402Address()
+	expectedPayTo, err := h.GetPlatformX402Address(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get platform payTo address: %w", err)
 	}

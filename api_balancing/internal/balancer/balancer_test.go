@@ -168,18 +168,18 @@ func TestGetTopNodesWithScores_ClusterScope(t *testing.T) {
 
 	// Node owned by tenantA
 	addTestNode(t, sm, "node-a", "node-a", 0, 0, true)
-	sm.SetNodeConnectionInfo("node-a", "", "tenantA", "cluster-eu", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-a", "", "tenantA", "cluster-eu", nil)
 
 	// Node owned by tenantB
 	addTestNode(t, sm, "node-b", "node-b", 0, 0, true)
-	sm.SetNodeConnectionInfo("node-b", "", "tenantB", "cluster-us", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-b", "", "tenantB", "cluster-us", nil)
 
 	// Shared infrastructure node (no tenant)
 	addTestNode(t, sm, "node-shared", "node-shared", 0, 0, true)
 
 	// Second cluster owned by tenantA (co-located on same Foghorn)
 	addTestNode(t, sm, "node-a2", "node-a2", 0, 0, true)
-	sm.SetNodeConnectionInfo("node-a2", "", "tenantA", "cluster-ap", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-a2", "", "tenantA", "cluster-ap", nil)
 
 	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
 
@@ -265,7 +265,7 @@ func TestGetTopNodesWithScores_ClusterScope(t *testing.T) {
 
 func TestHostToBinaryIPv4Mapped(t *testing.T) {
 	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
-	bin := lb.hostToBinary("203.0.113.10")
+	bin := lb.hostToBinary(context.Background(), "203.0.113.10")
 
 	if bin[10] != 0xff || bin[11] != 0xff {
 		t.Fatalf("expected IPv4-mapped marker bytes, got %x %x", bin[10], bin[11])

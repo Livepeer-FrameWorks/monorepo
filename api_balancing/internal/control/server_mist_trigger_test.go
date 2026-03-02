@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
@@ -67,7 +68,7 @@ func TestProcessMistTrigger_PrefersNodeRegistryCluster(t *testing.T) {
 	})
 
 	sm := state.ResetDefaultManagerForTests()
-	sm.SetNodeConnectionInfo("node-remote", "10.0.0.5", "", "cluster-remote", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-remote", "10.0.0.5", "", "cluster-remote", nil)
 
 	capture := &captureMistTriggerProcessor{}
 	mistTriggerProcessor = capture

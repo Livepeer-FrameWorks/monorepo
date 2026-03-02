@@ -57,7 +57,7 @@ func (d *Detector) Detect(ctx context.Context, serviceName string) (*ServiceStat
 func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
 	// Read remote inventory file via SSH
 	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
-	exitCode, stdout, _, err := xexec.RunSSH(target, "cat", []string{"/etc/frameworks/inventory.json"}, "")
+	exitCode, stdout, _, err := xexec.RunSSH(ctx, target, "cat", []string{"/etc/frameworks/inventory.json"}, "")
 
 	if exitCode != 0 || err != nil {
 		//nolint:nilerr // detection failure is not an error, returned in result
@@ -112,7 +112,7 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 
 	for _, containerName := range containerNames {
 		cmd := fmt.Sprintf("docker ps -a --filter name=%s --format '{{.Names}}|{{.State}}|{{.Image}}'", containerName)
-		exitCode, stdout, _, err := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")
+		exitCode, stdout, _, err := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
 
 		if exitCode != 0 || err != nil {
 			continue
@@ -161,7 +161,7 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 
 	for _, svcName := range serviceNames {
 		cmd := fmt.Sprintf("systemctl show %s --property=LoadState,ActiveState,SubState", svcName)
-		exitCode, stdout, _, err := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")
+		exitCode, stdout, _, err := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
 
 		if exitCode != 0 || err != nil {
 			continue
@@ -203,7 +203,7 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 
 	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	cmd := fmt.Sprintf("ss -tlnp | grep ':%d ' || lsof -iTCP:%d -sTCP:LISTEN", port, port)
-	exitCode, stdout, _, err := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")
+	exitCode, stdout, _, err := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
 
 	if exitCode != 0 || err != nil || strings.TrimSpace(stdout) == "" {
 		//nolint:nilerr // detection failure is not an error
@@ -226,7 +226,7 @@ func (d *Detector) checkDockerRunning(ctx context.Context, serviceName string, s
 	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	containerName := fmt.Sprintf("frameworks-%s", serviceName)
 	cmd := fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s", containerName)
-	exitCode, stdout, _, _ := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")
+	exitCode, stdout, _, _ := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
 
 	if exitCode == 0 {
 		state.Running = strings.TrimSpace(stdout) == "true"
@@ -237,7 +237,7 @@ func (d *Detector) checkSystemdRunning(ctx context.Context, serviceName string, 
 	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	svcName := fmt.Sprintf("frameworks-%s", serviceName)
 	cmd := fmt.Sprintf("systemctl is-active %s", svcName)
-	exitCode, stdout, _, _ := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")
+	exitCode, stdout, _, _ := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
 
 	if exitCode == 0 {
 		state.Running = strings.TrimSpace(stdout) == "active"

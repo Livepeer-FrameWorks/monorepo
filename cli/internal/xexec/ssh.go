@@ -2,6 +2,7 @@ package xexec
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -9,12 +10,12 @@ import (
 )
 
 // RunSSH executes the equivalent of: ssh <target> 'cd <workdir> && <cmd> <args...>'
-func RunSSH(target string, cmd string, args []string, workdir string) (int, string, string, error) {
-	return RunSSHWithKey(target, "", cmd, args, workdir)
+func RunSSH(ctx context.Context, target string, cmd string, args []string, workdir string) (int, string, string, error) {
+	return RunSSHWithKey(ctx, target, "", cmd, args, workdir)
 }
 
 // RunSSHWithKey executes ssh with an optional private key.
-func RunSSHWithKey(target, keyPath string, cmd string, args []string, workdir string) (int, string, string, error) {
+func RunSSHWithKey(ctx context.Context, target, keyPath string, cmd string, args []string, workdir string) (int, string, string, error) {
 	// Build remote shell command
 	// Use sh -lc to have a login-like shell with PATH and && chaining
 	var remoteCmd strings.Builder
@@ -35,7 +36,7 @@ func RunSSHWithKey(target, keyPath string, cmd string, args []string, workdir st
 		sshArgs = append(sshArgs, "-i", keyPath)
 	}
 	sshArgs = append(sshArgs, target, "sh", "-lc", remoteCmd.String())
-	c := exec.Command("ssh", sshArgs...)
+	c := exec.CommandContext(ctx, "ssh", sshArgs...)
 	var outBuf, errBuf bytes.Buffer
 	c.Stdout = &outBuf
 	c.Stderr = &errBuf

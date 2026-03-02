@@ -429,27 +429,27 @@ func Init(
 				}
 			}()
 		},
-		func(del *pb.ArtifactDeleted) {
+		func(ctx context.Context, del *pb.ArtifactDeleted) {
 			clipHash := del.GetClipHash()
 			nodeID := del.GetNodeId()
 			reason := del.GetReason()
 
 			// This message indicates node-local deletion/eviction. Remove the node cache record.
-			_, err := db.Exec(`DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2`, clipHash, nodeID)
+			_, err := db.ExecContext(ctx, `DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2`, clipHash, nodeID)
 			if err != nil {
 				logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to remove artifact node assignment")
 			}
 
 			// If the artifact has no remaining cached nodes and is synced, reflect that it is now S3-only.
 			var hasAnyNodes bool
-			_ = db.QueryRow(`
+			_ = db.QueryRowContext(ctx, `
 				SELECT EXISTS(
 					SELECT 1 FROM foghorn.artifact_nodes
 					WHERE artifact_hash = $1 AND NOT is_orphaned
 				)
 			`, clipHash).Scan(&hasAnyNodes)
 			if !hasAnyNodes {
-				_, _ = db.Exec(`
+				_, _ = db.ExecContext(ctx, `
 					UPDATE foghorn.artifacts
 					SET storage_location = CASE
 						WHEN sync_status = 'synced' THEN 's3'
@@ -472,7 +472,7 @@ func Init(
 			// Only emit DELETED when the artifact is already soft-deleted in foghorn.artifacts.
 			// This avoids conflating node-local cleanup with user-initiated deletion.
 			var artifactStatus string
-			if err := db.QueryRow(`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1`, clipHash).Scan(&artifactStatus); err != nil {
+			if err := db.QueryRowContext(ctx, `SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1`, clipHash).Scan(&artifactStatus); err != nil {
 				logger.WithError(err).WithField("clip_hash", clipHash).Warn("Failed to read artifact status for deletion lifecycle")
 				return
 			}

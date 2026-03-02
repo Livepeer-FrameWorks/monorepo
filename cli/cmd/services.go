@@ -378,9 +378,9 @@ func newServicesUpCmd() *cobra.Command {
 		dockerArgs = append(dockerArgs, "--env-file", ".central.env", "up", "-d")
 		var out, errOut string
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", dockerArgs, dir)
 		} else {
-			_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.Run(cmd.Context(), "docker", dockerArgs, dir)
 		}
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "compose up error: %v\n%s\n%s\n", err, out, errOut)
@@ -454,9 +454,9 @@ func newServicesDownCmd() *cobra.Command {
 			dockerArgs = append(dockerArgs, "--env-file", ".central.env", "down")
 			var out, errOut string
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
+				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", dockerArgs, dir)
 			} else {
-				_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
+				_, out, errOut, err = xexec.Run(cmd.Context(), "docker", dockerArgs, dir)
 			}
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "compose down error: %v\n%s\n%s\n", err, out, errOut)
@@ -470,9 +470,9 @@ func newServicesDownCmd() *cobra.Command {
 			dockerArgs := []string{"compose", "-f", fmt.Sprintf("svc-%s.yml", s), "--env-file", ".central.env", "stop", s}
 			var out, errOut string
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
+				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", dockerArgs, dir)
 			} else {
-				_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
+				_, out, errOut, err = xexec.Run(cmd.Context(), "docker", dockerArgs, dir)
 			}
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "compose stop %s error: %v\n%s\n%s\n", s, err, out, errOut)
@@ -513,9 +513,9 @@ func newServicesStatusCmd() *cobra.Command {
 		dockerArgs = append(dockerArgs, "--env-file", ".central.env", "ps")
 		var out, errOut string
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", dockerArgs, dir)
 		} else {
-			_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.Run(cmd.Context(), "docker", dockerArgs, dir)
 		}
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "compose ps error: %v\n%s\n%s\n", err, out, errOut)
@@ -566,9 +566,9 @@ func newServicesLogsCmd() *cobra.Command {
 		}
 		var out, errOut string
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", dockerArgs, dir)
 		} else {
-			_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.Run(cmd.Context(), "docker", dockerArgs, dir)
 		}
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "compose logs error: %v\n%s\n%s\n", err, out, errOut)

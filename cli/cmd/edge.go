@@ -248,9 +248,9 @@ func newEdgeEnrollCmd() *cobra.Command {
 		var out, errOut string
 		var err error
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
+			_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
 		} else {
-			_, out, errOut, err = xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
+			_, out, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
 		}
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "docker compose up failed: %v\n%s\n%s\n", err, out, errOut)
@@ -306,11 +306,11 @@ func newEdgeEnrollCmd() *cobra.Command {
 
 // detectEdgeMode reads DEPLOY_MODE from .edge.env to determine if the edge
 // stack is running in docker or native mode. Falls back to "docker" if unset.
-func detectEdgeMode(dir, envFile, sshTarget, sshKey string) string {
+func detectEdgeMode(ctx context.Context, dir, envFile, sshTarget, sshKey string) string {
 	// For remote hosts, read .edge.env via SSH
 	if strings.TrimSpace(sshTarget) != "" {
 		remoteEnv := "/opt/frameworks/edge/" + envFile
-		_, out, _, err := xexec.RunSSHWithKey(sshTarget, sshKey, "sh", []string{"-c", fmt.Sprintf("grep ^DEPLOY_MODE= %s 2>/dev/null", remoteEnv)}, "")
+		_, out, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", fmt.Sprintf("grep ^DEPLOY_MODE= %s 2>/dev/null", remoteEnv)}, "")
 		if err == nil {
 			val := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out), "DEPLOY_MODE="))
 			if val == "native" {
@@ -538,7 +538,7 @@ Multi-node manifest example:
 			// Registration handled before EdgeProvisioner (needs QM client)
 			if registerNode {
 				fmt.Fprintln(cmd.OutOrStdout(), "\nRegistering node in Quartermaster...")
-				externalIP, _ := getRemoteExternalIP(sshTarget, sshKey)
+				externalIP, _ := getRemoteExternalIP(cmd.Context(), sshTarget, sshKey)
 				if errRegister := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); errRegister != nil {
 					return fmt.Errorf("node registration failed: %w", errRegister)
 				}
@@ -712,7 +712,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 
 	// Registration is done before calling EdgeProvisioner (needs QM client)
 	if registerNode {
-		externalIP, _ := getRemoteExternalIP(sshTarget, sshKey)
+		externalIP, _ := getRemoteExternalIP(cmd.Context(), sshTarget, sshKey)
 		if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
 			return fmt.Errorf("node registration failed: %w", err)
 		}
@@ -779,7 +779,7 @@ func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken stri
 }
 
 func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey string) (*pb.PreRegisterEdgeResponse, error) {
-	externalIP, _ := getRemoteExternalIP(sshTarget, sshKey)
+	externalIP, _ := getRemoteExternalIP(ctx, sshTarget, sshKey)
 
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
@@ -800,7 +800,7 @@ func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarge
 	})
 }
 
-func getRemoteExternalIP(sshTarget, sshKey string) (string, error) {
+func getRemoteExternalIP(ctx context.Context, sshTarget, sshKey string) (string, error) {
 	// Try multiple methods to detect external IP
 	methods := []struct {
 		cmd  string
@@ -812,7 +812,7 @@ func getRemoteExternalIP(sshTarget, sshKey string) (string, error) {
 	}
 
 	for _, m := range methods {
-		_, out, _, err := xexec.RunSSHWithKey(sshTarget, sshKey, m.cmd, m.args, "")
+		_, out, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, m.cmd, m.args, "")
 		if err == nil {
 			ip := strings.TrimSpace(out)
 			if ip != "" && !strings.Contains(ip, "<") { // Basic sanity check
@@ -922,7 +922,7 @@ func newEdgeStatusCmd() *cobra.Command {
 			dir = "."
 		}
 		envFile := ".edge.env"
-		deployMode := detectEdgeMode(dir, envFile, sshTarget, sshKey)
+		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 
 		var out, errOut string
 		var err error
@@ -930,9 +930,9 @@ func newEdgeStatusCmd() *cobra.Command {
 			// Native: check systemd units
 			statusCmd := "systemctl status frameworks-caddy frameworks-helmsman frameworks-mistserver --no-pager"
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "sh", []string{"-c", statusCmd}, "")
+				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", statusCmd}, "")
 			} else {
-				_, out, errOut, err = xexec.Run("sh", []string{"-c", statusCmd}, "")
+				_, out, errOut, err = xexec.Run(cmd.Context(), "sh", []string{"-c", statusCmd}, "")
 			}
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "systemctl status error: %v\n%s\n%s\n", err, out, errOut)
@@ -943,9 +943,9 @@ func newEdgeStatusCmd() *cobra.Command {
 			// Docker: compose ps
 			compose := "docker-compose.edge.yml"
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
+				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
 			} else {
-				_, out, errOut, err = xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
+				_, out, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
 			}
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "docker compose ps error: %v\n%s\n%s\n", err, out, errOut)
@@ -1001,17 +1001,17 @@ func newEdgeUpdateCmd() *cobra.Command {
 			dir = "."
 		}
 		envFile := ".edge.env"
-		deployMode := detectEdgeMode(dir, envFile, sshTarget, sshKey)
+		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 
 		if deployMode == "native" {
 			// Native: restart systemd units
 			restartCmd := "systemctl restart frameworks-mistserver frameworks-helmsman frameworks-caddy"
 			if strings.TrimSpace(sshTarget) != "" {
-				if _, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "sh", []string{"-c", restartCmd}, ""); err != nil {
+				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", restartCmd}, ""); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "systemctl restart failed: %v\n%s\n%s\n", err, out, errOut)
 					return err
 				}
-			} else if _, out, errOut, err := xexec.Run("sh", []string{"-c", restartCmd}, ""); err != nil {
+			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "sh", []string{"-c", restartCmd}, ""); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "systemctl restart failed: %v\n%s\n%s\n", err, out, errOut)
 				return err
 			}
@@ -1020,21 +1020,21 @@ func newEdgeUpdateCmd() *cobra.Command {
 			compose := "docker-compose.edge.yml"
 			// pull
 			if strings.TrimSpace(sshTarget) != "" {
-				if _, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
+				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "compose pull failed: %v\n%s\n%s\n", err, out, errOut)
 					return err
 				}
-			} else if _, out, errOut, err := xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
+			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "compose pull failed: %v\n%s\n%s\n", err, out, errOut)
 				return err
 			}
 			// up -d
 			if strings.TrimSpace(sshTarget) != "" {
-				if _, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
+				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "compose up failed: %v\n%s\n%s\n", err, out, errOut)
 					return err
 				}
-			} else if _, out, errOut, err := xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
+			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "compose up failed: %v\n%s\n%s\n", err, out, errOut)
 				return err
 			}
@@ -1080,22 +1080,22 @@ func newEdgeCertCmd() *cobra.Command {
 			}
 		}
 		if reload {
-			deployMode := detectEdgeMode(dir, ".edge.env", sshTarget, sshKey)
+			deployMode := detectEdgeMode(cmd.Context(), dir, ".edge.env", sshTarget, sshKey)
 			var out, errOut string
 			var err error
 			if deployMode == "native" {
 				// Native: reload via systemctl
 				if strings.TrimSpace(sshTarget) != "" {
-					_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "systemctl", []string{"reload", "frameworks-caddy"}, "")
+					_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "systemctl", []string{"reload", "frameworks-caddy"}, "")
 				} else {
-					_, out, errOut, err = xexec.Run("systemctl", []string{"reload", "frameworks-caddy"}, "")
+					_, out, errOut, err = xexec.Run(cmd.Context(), "systemctl", []string{"reload", "frameworks-caddy"}, "")
 				}
 			} else {
 				// Docker: exec into container
 				if strings.TrimSpace(sshTarget) != "" {
-					_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
+					_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
 				} else {
-					_, out, errOut, err = xexec.Run("docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
+					_, out, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
 				}
 			}
 			if err != nil {
@@ -1125,7 +1125,7 @@ func newEdgeLogsCmd() *cobra.Command {
 			dir = "."
 		}
 		envFile := ".edge.env"
-		deployMode := detectEdgeMode(dir, envFile, sshTarget, sshKey)
+		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 		svc := ""
 		if len(args) == 1 {
 			svc = args[0]
@@ -1149,9 +1149,9 @@ func newEdgeLogsCmd() *cobra.Command {
 				return ""
 			}(), unit)}
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "sh", jArgs, "")
+				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", jArgs, "")
 			} else {
-				_, out, errOut, err = xexec.Run("sh", jArgs, "")
+				_, out, errOut, err = xexec.Run(cmd.Context(), "sh", jArgs, "")
 			}
 		} else {
 			compose := "docker-compose.edge.yml"
@@ -1166,9 +1166,9 @@ func newEdgeLogsCmd() *cobra.Command {
 				arg = append(arg, svc)
 			}
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", arg, dir)
+				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", arg, dir)
 			} else {
-				_, out, errOut, err = xexec.Run("docker", arg, dir)
+				_, out, errOut, err = xexec.Run(cmd.Context(), "docker", arg, dir)
 			}
 		}
 
@@ -1226,7 +1226,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 		}
 		compose := "docker-compose.edge.yml"
 		envFile := ".edge.env"
-		_, out, errOut, err := xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
+		_, out, errOut, err := xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
 		fmt.Fprintln(cmd.OutOrStdout(), "Compose Services:")
 		if err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), " compose ps error: %v\n%s\n", err, errOut)
@@ -1266,7 +1266,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 		func() {
 			diagCtx, diagCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer diagCancel()
-			deployMode := detectEdgeMode(dir, ".edge.env", "", "")
+			deployMode := detectEdgeMode(diagCtx, dir, ".edge.env", "", "")
 			localRunner := fwssh.NewLocalRunner("")
 			ar := mistdiag.NewAnalyzerRunner(localRunner, deployMode)
 
@@ -1328,9 +1328,9 @@ the change and pushes an updated ConfigSeed back to the node.`, Args: cobra.Rang
 			var out, errOut string
 			var err error
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "curl", curlArgs, "")
+				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
 			} else {
-				_, out, errOut, err = xexec.Run("curl", curlArgs, "")
+				_, out, errOut, err = xexec.Run(cmd.Context(), "curl", curlArgs, "")
 			}
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "failed to get node mode: %v\n%s\n", err, errOut)
@@ -1352,9 +1352,9 @@ the change and pushes an updated ConfigSeed back to the node.`, Args: cobra.Rang
 		var out, errOut string
 		var err error
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "curl", curlArgs, "")
+			_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
 		} else {
-			_, out, errOut, err = xexec.Run("curl", curlArgs, "")
+			_, out, errOut, err = xexec.Run(cmd.Context(), "curl", curlArgs, "")
 		}
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "failed to set node mode: %v\n%s\n", err, errOut)

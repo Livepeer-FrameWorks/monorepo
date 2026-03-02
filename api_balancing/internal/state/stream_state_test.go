@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -650,7 +651,7 @@ func TestCanonicalNodeID_TenantPropagation(t *testing.T) {
 	sm.SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 
 	// Simulate Quartermaster resolution: tenant written to canonicalNodeID only
-	sm.SetNodeConnectionInfo(canonicalNodeID, "", "tenantA", "cluster-eu", nil)
+	sm.SetNodeConnectionInfo(context.Background(), canonicalNodeID, "", "tenantA", "cluster-eu", nil)
 
 	// Heartbeats keep nodeID alive
 	sm.TouchNode(nodeID, true)
@@ -672,7 +673,7 @@ func TestCanonicalNodeID_TenantPropagation(t *testing.T) {
 	}
 	// Before the fix, this would be empty; after the fix both entries have the tenant.
 	// The fix stamps nodeID too, so simulate that:
-	sm.SetNodeConnectionInfo(nodeID, "", "tenantA", "cluster-eu", nil)
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, "", "tenantA", "cluster-eu", nil)
 
 	sm.mu.RLock()
 	nActive = sm.nodes[nodeID]

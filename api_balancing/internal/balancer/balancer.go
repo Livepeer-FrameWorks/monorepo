@@ -40,7 +40,7 @@ func NewLoadBalancer(logger logging.Logger) *LoadBalancer {
 }
 
 // hostToBinary converts hostname to 16-byte binary representation (IPv6 compatible)
-func (lb *LoadBalancer) hostToBinary(hostname string) [16]byte {
+func (lb *LoadBalancer) hostToBinary(ctx context.Context, hostname string) [16]byte {
 	var binHost [16]byte
 
 	// Try to parse as IP first
@@ -58,14 +58,15 @@ func (lb *LoadBalancer) hostToBinary(hostname string) [16]byte {
 	}
 
 	// Try to resolve hostname to IP
-	ips, err := net.LookupIP(hostname)
-	if err != nil || len(ips) == 0 {
+	resolver := &net.Resolver{}
+	addrs, err := resolver.LookupIPAddr(ctx, hostname)
+	if err != nil || len(addrs) == 0 {
 		lb.logger.WithField("hostname", hostname).Warn("Could not resolve hostname to IP")
 		return binHost // Return zero-filled array
 	}
 
 	// Use first IP address
-	ip := ips[0]
+	ip := addrs[0].IP
 	if ipv4 := ip.To4(); ipv4 != nil {
 		// IPv4 - store in IPv6 mapped format
 		copy(binHost[12:], ipv4)
@@ -252,7 +253,7 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 
 	var clientBinHost [16]byte
 	if clientIP != "" {
-		clientBinHost = lb.hostToBinary(clientIP)
+		clientBinHost = lb.hostToBinary(ctx, clientIP)
 	}
 
 	rejections := map[nodeRejectionReason]int{}

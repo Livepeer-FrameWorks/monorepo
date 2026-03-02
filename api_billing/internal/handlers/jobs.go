@@ -326,7 +326,7 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		return nil
 	}
 
-	if err := jm.processUsageSummary(summary, "kafka"); err != nil {
+	if err := jm.processUsageSummary(ctx, summary, "kafka"); err != nil {
 		jm.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": summary.TenantID,
 			"period":    summary.Period,
@@ -1372,7 +1372,7 @@ func (jm *JobManager) cleanupExpiredWallets(ctx context.Context) {
 // ============================================================================
 
 // processUsageSummary processes a single usage summary and stores it in the usage records table
-func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source string) error {
+func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.UsageSummary, source string) error {
 	// Parse the period to get the actual start and end time of usage
 	// Format is expected to be "start_time_rfc3339/end_time_rfc3339"
 	var periodStart, periodEnd time.Time
@@ -1472,7 +1472,7 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 			continue
 		}
 
-		_, err := jm.db.Exec(`
+		_, err := jm.db.ExecContext(ctx, `
 			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 			ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET

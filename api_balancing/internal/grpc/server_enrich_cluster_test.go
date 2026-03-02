@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"context"
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
@@ -14,7 +15,7 @@ func TestEnrichClusterID_RespectsTenantOnFallback(t *testing.T) {
 	streamName := "shared-stream"
 
 	sm.SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
-	sm.SetNodeConnectionInfo(nodeID, "", "tenant-a", "cluster-a", nil)
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, "", "tenant-a", "cluster-a", nil)
 	if err := sm.UpdateStreamFromBuffer(streamName, streamName, nodeID, "tenant-a", "ready", ""); err != nil {
 		t.Fatalf("UpdateStreamFromBuffer: %v", err)
 	}
