@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"frameworks/cli/pkg/detect"
@@ -128,19 +129,30 @@ func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventor
 		port = config.Port
 	}
 
+	// Write env file to remote host before compose references it
+	svcEnvFile := fmt.Sprintf("/etc/frameworks/%s.env", f.serviceName)
+	if err := f.writeServiceEnvFile(ctx, host, svcEnvFile, config); err != nil {
+		fmt.Printf("    Warning: could not write env file %s: %v\n", svcEnvFile, err)
+	}
+
 	// Generate docker-compose.yml
 	envFile := config.EnvFile
 	if envFile == "" {
-		envFile = fmt.Sprintf("/etc/frameworks/%s.env", f.serviceName)
+		envFile = svcEnvFile
 	}
 
-	// Build inline environment from metadata (CLUSTER_ID, NODE_ID)
+	// Use merged env vars from config, falling back to metadata for CLUSTER_ID/NODE_ID
 	envVars := make(map[string]string)
-	if clusterID, ok := config.Metadata["cluster_id"].(string); ok && clusterID != "" {
-		envVars["CLUSTER_ID"] = clusterID
+	for k, v := range config.EnvVars {
+		envVars[k] = v
 	}
-	if nodeID, ok := config.Metadata["node_id"].(string); ok && nodeID != "" {
-		envVars["NODE_ID"] = nodeID
+	if len(envVars) == 0 {
+		if clusterID, ok := config.Metadata["cluster_id"].(string); ok && clusterID != "" {
+			envVars["CLUSTER_ID"] = clusterID
+		}
+		if nodeID, ok := config.Metadata["node_id"].(string); ok && nodeID != "" {
+			envVars["NODE_ID"] = nodeID
+		}
 	}
 
 	composeData := DockerComposeData{
@@ -193,7 +205,9 @@ func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventor
 	commands := []string{
 		fmt.Sprintf("cd /opt/frameworks/%s", f.serviceName),
 		"docker compose pull",
-		"docker compose up -d",
+	}
+	if !config.DeferStart {
+		commands = append(commands, "docker compose up -d")
 	}
 
 	for _, cmd := range commands {
@@ -203,7 +217,11 @@ func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventor
 		}
 	}
 
-	fmt.Printf("✓ %s provisioned in Docker mode\n", f.serviceName)
+	if config.DeferStart {
+		fmt.Printf("⏸ %s deployed but NOT started (missing required config)\n", f.serviceName)
+	} else {
+		fmt.Printf("✓ %s provisioned in Docker mode\n", f.serviceName)
+	}
 	return nil
 }
 
@@ -258,24 +276,10 @@ echo "Binary installed"
 		return fmt.Errorf("failed to install binary: %w\nStderr: %s", errExec, result.Stderr)
 	}
 
-	// Ensure CLUSTER_ID and NODE_ID are in the env file
+	// Write merged env vars to the service env file
 	svcEnvFile := fmt.Sprintf("/etc/frameworks/%s.env", f.serviceName)
-	if config.EnvFile != "" {
-		svcEnvFile = config.EnvFile
-	}
-	var envAppend []string
-	if clusterID, ok := config.Metadata["cluster_id"].(string); ok && clusterID != "" {
-		envAppend = append(envAppend, fmt.Sprintf("CLUSTER_ID=%s", clusterID))
-	}
-	if nodeID, ok := config.Metadata["node_id"].(string); ok && nodeID != "" {
-		envAppend = append(envAppend, fmt.Sprintf("NODE_ID=%s", nodeID))
-	}
-	if len(envAppend) > 0 {
-		appendCmd := fmt.Sprintf("mkdir -p /etc/frameworks && printf '\\n%s\\n' >> %s",
-			strings.Join(envAppend, "\\n"), svcEnvFile)
-		if r, e := f.RunCommand(ctx, host, appendCmd); e != nil || r.ExitCode != 0 {
-			fmt.Printf("    Warning: could not append env vars to %s\n", svcEnvFile)
-		}
+	if err = f.writeServiceEnvFile(ctx, host, svcEnvFile, config); err != nil {
+		fmt.Printf("    Warning: could not write env file %s: %v\n", svcEnvFile, err)
 	}
 
 	// Generate systemd unit
@@ -309,14 +313,64 @@ echo "Binary installed"
 		return fmt.Errorf("failed to upload systemd unit: %w", errUpload)
 	}
 
-	// Enable and start service
-	enableCmd := fmt.Sprintf("systemctl daemon-reload && systemctl enable frameworks-%s && systemctl start frameworks-%s", f.serviceName, f.serviceName)
-	result, err = f.RunCommand(ctx, host, enableCmd)
+	// Reload systemd and optionally enable + start
+	reloadCmd := "systemctl daemon-reload"
+	result, err = f.RunCommand(ctx, host, reloadCmd)
 	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to start service: %w\nStderr: %s", err, result.Stderr)
+		return fmt.Errorf("failed to reload systemd: %w\nStderr: %s", err, result.Stderr)
 	}
 
-	fmt.Printf("✓ %s provisioned in native mode\n", f.serviceName)
+	if config.DeferStart {
+		fmt.Printf("⏸ %s deployed but NOT started (missing required config)\n", f.serviceName)
+	} else {
+		enableCmd := fmt.Sprintf("systemctl enable frameworks-%s && systemctl start frameworks-%s", f.serviceName, f.serviceName)
+		result, err = f.RunCommand(ctx, host, enableCmd)
+		if err != nil || result.ExitCode != 0 {
+			return fmt.Errorf("failed to start service: %w\nStderr: %s", err, result.Stderr)
+		}
+		fmt.Printf("✓ %s provisioned in native mode\n", f.serviceName)
+	}
+	return nil
+}
+
+// writeServiceEnvFile writes merged environment variables to the remote host.
+// If config.EnvVars is populated, writes those. Otherwise falls back to CLUSTER_ID/NODE_ID from metadata.
+func (f *FlexibleProvisioner) writeServiceEnvFile(ctx context.Context, host inventory.Host, envFilePath string, config ServiceConfig) error {
+	envVars := config.EnvVars
+	if len(envVars) == 0 {
+		envVars = make(map[string]string)
+		if clusterID, ok := config.Metadata["cluster_id"].(string); ok && clusterID != "" {
+			envVars["CLUSTER_ID"] = clusterID
+		}
+		if nodeID, ok := config.Metadata["node_id"].(string); ok && nodeID != "" {
+			envVars["NODE_ID"] = nodeID
+		}
+	}
+	if len(envVars) == 0 {
+		return nil
+	}
+
+	// Build env file content with sorted keys for deterministic output
+	keys := make([]string, 0, len(envVars))
+	for k := range envVars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, k := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", k, envVars[k]))
+	}
+
+	// Write atomically: create file with all env vars (not append)
+	content := strings.Join(lines, "\n") + "\n"
+	writeCmd := fmt.Sprintf("mkdir -p /etc/frameworks && cat > %s << 'ENVEOF'\n%sENVEOF", envFilePath, content)
+	result, err := f.RunCommand(ctx, host, writeCmd)
+	if err != nil {
+		return fmt.Errorf("failed to write env file: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("failed to write env file: %s", result.Stderr)
+	}
 	return nil
 }
 
@@ -332,7 +386,7 @@ func (f *FlexibleProvisioner) Validate(ctx context.Context, host inventory.Host,
 		Timeout: 5,
 	}
 
-	result := checker.Check(host.Address, f.port)
+	result := checker.Check(host.ExternalIP, f.port)
 	if !result.OK {
 		return fmt.Errorf("%s health check failed: %s", f.serviceName, result.Error)
 	}

@@ -33,7 +33,7 @@ func main() {
 		logger.Fatal("SERVICE_TOKEN is required for steady-state operation")
 	}
 
-	dnsPort := 5353
+	dnsPort := 53
 	if p := os.Getenv("DNS_PORT"); p != "" {
 		if port, err := strconv.Atoi(p); err == nil {
 			dnsPort = port

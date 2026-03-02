@@ -39,7 +39,7 @@ func main() {
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
-	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope:19004")
+	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope-query:19004")
 
 	// Payment provider credentials (optional - service works without them)
 	stripeSecretKey := config.GetEnv("STRIPE_SECRET_KEY", "")

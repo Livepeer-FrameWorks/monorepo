@@ -12,7 +12,7 @@ type Phase string
 const (
 	PhaseInfrastructure Phase = "infrastructure" // Postgres, Kafka, ZK, ClickHouse
 	PhaseApplications   Phase = "applications"   // FrameWorks services
-	PhaseInterfaces     Phase = "interfaces"     // Nginx, webapp, website
+	PhaseInterfaces     Phase = "interfaces"     // Caddy, chartroom, foredeck
 	PhaseAll            Phase = "all"            // All phases
 )
 

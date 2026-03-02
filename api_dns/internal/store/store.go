@@ -193,8 +193,8 @@ func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Dur
 	var certs []Certificate
 	for rows.Next() {
 		var c Certificate
-		if err := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
-			return nil, err
+		if scanErr := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); scanErr != nil {
+			return nil, scanErr
 		}
 		if c.KeyPEM, err = s.decryptField(c.KeyPEM); err != nil {
 			return nil, fmt.Errorf("decrypt certificate key for %s: %w", c.Domain, err)
@@ -235,8 +235,8 @@ func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) 
 	var certs []Certificate
 	for rows.Next() {
 		var c Certificate
-		if err := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
-			return nil, err
+		if scanErr := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); scanErr != nil {
+			return nil, scanErr
 		}
 		if c.KeyPEM, err = s.decryptField(c.KeyPEM); err != nil {
 			return nil, fmt.Errorf("decrypt certificate key for %s: %w", c.Domain, err)

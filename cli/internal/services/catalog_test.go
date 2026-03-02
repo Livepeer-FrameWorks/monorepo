@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/provisioner"
-	"frameworks/cli/pkg/servicedefs"
+	"frameworks/pkg/servicedefs"
 )
 
 func TestCatalogServicesHaveRegistryEntries(t *testing.T) {

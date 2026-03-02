@@ -169,7 +169,7 @@ func TestSendServiceEventPublishesToKafka(t *testing.T) {
 	serviceEvent := &pb.ServiceEvent{
 		EventId:      "event-123",
 		EventType:    "auth",
-		Source:       "api_gateway",
+		Source:       "bridge",
 		TenantId:     tenantID,
 		UserId:       "user-456",
 		ResourceType: "session",
@@ -200,7 +200,7 @@ func TestSendServiceEventPublishesToKafka(t *testing.T) {
 	if got := call.headers["event_type"]; got != "auth" {
 		t.Fatalf("expected event_type auth, got %s", got)
 	}
-	if got := call.headers["source"]; got != "api_gateway" {
+	if got := call.headers["source"]; got != "bridge" {
 		t.Fatalf("expected source api_gateway, got %s", got)
 	}
 
@@ -317,7 +317,7 @@ func TestSendServiceEventRejectsMissingTenant(t *testing.T) {
 	serviceEvent := &pb.ServiceEvent{
 		EventId:   "event-123",
 		EventType: "auth",
-		Source:    "api_gateway",
+		Source:    "bridge",
 		Payload: &pb.ServiceEvent_AuthEvent{
 			AuthEvent: &pb.AuthEvent{
 				UserId:   "user-456",
@@ -1040,7 +1040,7 @@ func TestSendServiceEventNilTimestamp(t *testing.T) {
 	serviceEvent := &pb.ServiceEvent{
 		EventId:   "event-nil-ts",
 		EventType: "auth",
-		Source:    "api_gateway",
+		Source:    "bridge",
 		TenantId:  tenantID,
 		Payload: &pb.ServiceEvent_AuthEvent{
 			AuthEvent: &pb.AuthEvent{

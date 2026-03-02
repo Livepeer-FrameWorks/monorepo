@@ -310,7 +310,7 @@ func restoreConfig(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		break
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Restoring config files on %s...\n", host.Address)
+	fmt.Fprintf(cmd.OutOrStdout(), "Restoring config files on %s...\n", host.ExternalIP)
 
 	// Get runner
 	runner, err := getRunner(host, pool)

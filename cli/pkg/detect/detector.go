@@ -9,7 +9,7 @@ import (
 
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/inventory"
-	"frameworks/cli/pkg/servicedefs"
+	"frameworks/pkg/servicedefs"
 )
 
 // Detector performs multi-method service detection
@@ -56,7 +56,7 @@ func (d *Detector) Detect(ctx context.Context, serviceName string) (*ServiceStat
 // detectFromInventory checks /etc/frameworks/inventory.json
 func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
 	// Read remote inventory file via SSH
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.Address)
+	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	exitCode, stdout, _, err := xexec.RunSSH(target, "cat", []string{"/etc/frameworks/inventory.json"}, "")
 
 	if exitCode != 0 || err != nil {
@@ -101,7 +101,7 @@ func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, 
 
 // detectFromDocker checks for Docker container
 func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.Address)
+	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 
 	// Try both naming patterns
 	containerNames := []string{
@@ -151,7 +151,7 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 
 // detectFromSystemd checks for systemd service
 func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.Address)
+	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 
 	// Try both naming patterns
 	serviceNames := []string{
@@ -201,7 +201,7 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 		return &DetectionResult{Method: "port", Success: false}, nil
 	}
 
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.Address)
+	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	cmd := fmt.Sprintf("ss -tlnp | grep ':%d ' || lsof -iTCP:%d -sTCP:LISTEN", port, port)
 	exitCode, stdout, _, err := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")
 
@@ -223,7 +223,7 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 // Helper methods
 
 func (d *Detector) checkDockerRunning(ctx context.Context, serviceName string, state *ServiceState) {
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.Address)
+	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	containerName := fmt.Sprintf("frameworks-%s", serviceName)
 	cmd := fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s", containerName)
 	exitCode, stdout, _, _ := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")
@@ -234,7 +234,7 @@ func (d *Detector) checkDockerRunning(ctx context.Context, serviceName string, s
 }
 
 func (d *Detector) checkSystemdRunning(ctx context.Context, serviceName string, state *ServiceState) {
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.Address)
+	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	svcName := fmt.Sprintf("frameworks-%s", serviceName)
 	cmd := fmt.Sprintf("systemctl is-active %s", svcName)
 	exitCode, stdout, _, _ := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")

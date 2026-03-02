@@ -57,6 +57,26 @@ Skipper doesn't just generate text. It uses **30+ MCP tools** organized across s
 
 Tool results render in specialized cards: diagnostic cards show health status with metrics and recommendations, code cards show GraphQL with copy buttons, stream cards display keys with show/hide toggles.
 
+## Heartbeat Monitoring
+
+Skipper runs periodic health checks on active streams. Every 30 minutes (configurable), it fetches stream health and client QoE metrics from Periscope, compares them against Welford running baselines it builds over time, and runs a deterministic triage:
+
+- **Threshold violations** (hard limits on rebuffer ratio, packet loss, etc.) trigger an investigation
+- **Cross-metric correlations** — 5 failure hypotheses (network degradation, encoder overload, viewer-side issues, ingest instability, CDN pressure) are matched against deviation patterns. Confidence ≥ 50% triggers investigation.
+- **Baseline deviations** — metrics exceeding 2σ from the running mean are flagged for review
+
+When investigation is warranted, Skipper runs the full orchestrator with the diagnostic context — deviations, correlations, per-stream anomalies — and produces a structured report with root cause and recommendations. Healthy tenants consume zero LLM calls per cycle.
+
+Per-stream drill-down identifies the most anomalous individual streams (up to 20) by comparing each against the tenant-wide baseline.
+
+Infrastructure monitoring checks node-level CPU, memory, and disk across all clusters, with persistence confirmation to prevent transient spikes from triggering alerts. Notifications go out via email, WebSocket, or MCP.
+
+## Social Posting
+
+Skipper can draft social media posts from platform events. The heartbeat agent and knowledge crawler push signals into an event collector — viewer records, bandwidth milestones, federation metrics, newly embedded documentation pages. A detector classifies and scores these signals against stored baselines.
+
+The top-scoring signal is composed into a tweet by the utility LLM (max 280 characters, references recent posts to avoid theme repetition). Posts are saved as drafts and emailed to a configured address for human review before publishing. Configurable daily limit (default 2) and check interval (default 2h).
+
 ## Where to Use It
 
 Skipper is available in three places — all backed by the same MCP gateway:

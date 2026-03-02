@@ -5,7 +5,7 @@ import (
 	"os"
 	"sort"
 
-	"frameworks/cli/pkg/servicedefs"
+	"frameworks/pkg/servicedefs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,6 +46,13 @@ func (m *Manifest) Validate() error {
 	// Validate hosts exist
 	if m.Type == "cluster" && len(m.Hosts) == 0 {
 		return fmt.Errorf("cluster type requires at least one host")
+	}
+
+	// Validate each host has an external_ip
+	for name, host := range m.Hosts {
+		if host.ExternalIP == "" {
+			return fmt.Errorf("host '%s': external_ip is required", name)
+		}
 	}
 
 	// Validate host references in infrastructure
@@ -97,6 +104,18 @@ func (m *Manifest) Validate() error {
 		}
 	}
 
+	// Validate host cluster references
+	for hostName, host := range m.Hosts {
+		if host.Cluster != "" && len(m.Clusters) > 0 {
+			if _, ok := m.Clusters[host.Cluster]; !ok {
+				return fmt.Errorf("host '%s' references undefined cluster '%s'", hostName, host.Cluster)
+			}
+		}
+	}
+
+	// Services that auto-scope to manifest hosts when no explicit placement is given
+	autoScopedServices := map[string]bool{"privateer": true}
+
 	// Validate service host references
 	for name, svc := range m.Services {
 		if _, ok := servicedefs.Lookup(name); !ok {
@@ -107,6 +126,9 @@ func (m *Manifest) Validate() error {
 		}
 		if _, ok := m.Observability[name]; ok {
 			return fmt.Errorf("service '%s' also defined in observability (duplicate name)", name)
+		}
+		if svc.Enabled && svc.Host == "" && len(svc.Hosts) == 0 && !autoScopedServices[name] {
+			return fmt.Errorf("service '%s' is enabled but has no host or hosts defined", name)
 		}
 		if svc.Cluster != "" && len(m.Clusters) > 0 {
 			if _, ok := m.Clusters[svc.Cluster]; !ok {
@@ -132,9 +154,17 @@ func (m *Manifest) Validate() error {
 		if _, ok := m.Observability[name]; ok {
 			return fmt.Errorf("interface '%s' also defined in observability (duplicate name)", name)
 		}
+		if iface.Enabled && iface.Host == "" && len(iface.Hosts) == 0 {
+			return fmt.Errorf("interface '%s' is enabled but has no host or hosts defined", name)
+		}
 		if iface.Host != "" {
 			if _, ok := m.Hosts[iface.Host]; !ok {
 				return fmt.Errorf("interface '%s' host '%s' not found in hosts", name, iface.Host)
+			}
+		}
+		for _, h := range iface.Hosts {
+			if _, ok := m.Hosts[h]; !ok {
+				return fmt.Errorf("interface '%s' host '%s' not found in hosts", name, h)
 			}
 		}
 	}
@@ -144,9 +174,17 @@ func (m *Manifest) Validate() error {
 		if _, ok := servicedefs.Lookup(name); !ok {
 			return fmt.Errorf("unknown observability service '%s' (not in service registry)", name)
 		}
+		if obs.Enabled && obs.Host == "" && len(obs.Hosts) == 0 {
+			return fmt.Errorf("observability '%s' is enabled but has no host or hosts defined", name)
+		}
 		if obs.Host != "" {
 			if _, ok := m.Hosts[obs.Host]; !ok {
 				return fmt.Errorf("observability '%s' host '%s' not found in hosts", name, obs.Host)
+			}
+		}
+		for _, h := range obs.Hosts {
+			if _, ok := m.Hosts[h]; !ok {
+				return fmt.Errorf("observability '%s' host '%s' not found in hosts", name, h)
 			}
 		}
 	}
@@ -221,6 +259,25 @@ func (m *Manifest) ResolveCluster(serviceName string) string {
 	}
 
 	return fmt.Sprintf("%s-%s", m.Type, m.Profile)
+}
+
+// HostCluster returns the cluster ID for a host.
+// Priority: explicit host.cluster > single-cluster shortcut > empty.
+func (m *Manifest) HostCluster(hostName string) string {
+	host, ok := m.Hosts[hostName]
+	if !ok {
+		return ""
+	}
+	if host.Cluster != "" {
+		return host.Cluster
+	}
+	// Single cluster — all hosts implicitly belong to it
+	if len(m.Clusters) == 1 {
+		for id := range m.Clusters {
+			return id
+		}
+	}
+	return ""
 }
 
 // AllClusterIDs returns all cluster IDs from the manifest.

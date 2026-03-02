@@ -68,9 +68,8 @@ func newDNSDoctorCmd() *cobra.Command {
 				"edge-ingest": "edge-ingest",
 				"foghorn":     "foghorn",
 				"bridge":      "bridge",
-				"gateway":     "bridge",
 				"chartroom":   "chartroom",
-				"website":     "@",
+				"foredeck":    "@",
 				"logbook":     "logbook",
 				"steward":     "steward",
 			}

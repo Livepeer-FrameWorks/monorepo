@@ -107,6 +107,9 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if cfg.NodeType == "" {
 		cfg.NodeType = "edge"
+		if cfg.Logger != nil {
+			cfg.Logger.Warn("MESH_NODE_TYPE not set, defaulting to 'edge'")
+		}
 	}
 	if cfg.NodeName == "" {
 		if hostname, err := os.Hostname(); err == nil && hostname != "" {

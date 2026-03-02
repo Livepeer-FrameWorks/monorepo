@@ -8,7 +8,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
-	"frameworks/cli/pkg/servicedefs"
+	"frameworks/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 )
@@ -128,6 +128,9 @@ Reports critical issues and provides actionable recommendations.`,
 	return cmd
 }
 
+// perHostTimeout is the detection timeout for each individual service check.
+const perHostTimeout = 15 * time.Second
+
 // runDetect executes the detect command
 func runDetect(cmd *cobra.Command, manifestPath string) error {
 	// Load manifest
@@ -140,29 +143,26 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "Cluster type: %s, Profile: %s\n", manifest.Type, manifest.Profile)
 	fmt.Fprintf(cmd.OutOrStdout(), "Hosts: %d\n\n", len(manifest.Hosts))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
 	// Detect infrastructure services
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
-		detectService(ctx, cmd, manifest, "postgres", "postgres", manifest.Infrastructure.Postgres.Host)
+		detectServiceWithTimeout(cmd, manifest, "postgres", "postgres", manifest.Infrastructure.Postgres.Host)
 	}
 
 	if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
-		detectService(ctx, cmd, manifest, "clickhouse", "clickhouse", manifest.Infrastructure.ClickHouse.Host)
+		detectServiceWithTimeout(cmd, manifest, "clickhouse", "clickhouse", manifest.Infrastructure.ClickHouse.Host)
 	}
 
 	if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
 		for _, broker := range manifest.Infrastructure.Kafka.Brokers {
 			serviceName := fmt.Sprintf("kafka-broker-%d", broker.ID)
-			detectService(ctx, cmd, manifest, serviceName, "kafka", broker.Host)
+			detectServiceWithTimeout(cmd, manifest, serviceName, "kafka", broker.Host)
 		}
 	}
 
 	if manifest.Infrastructure.Zookeeper != nil && manifest.Infrastructure.Zookeeper.Enabled {
 		for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
 			serviceName := fmt.Sprintf("zookeeper-%d", node.ID)
-			detectService(ctx, cmd, manifest, serviceName, "zookeeper", node.Host)
+			detectServiceWithTimeout(cmd, manifest, serviceName, "zookeeper", node.Host)
 		}
 	}
 
@@ -177,7 +177,7 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
 				continue
 			}
-			detectService(ctx, cmd, manifest, name, deploy, svc.Host)
+			detectServiceWithTimeout(cmd, manifest, name, deploy, svc.Host)
 		} else if len(svc.Hosts) > 0 {
 			for i, hostName := range svc.Hosts {
 				deploy, err := resolveDeployName(name, svc)
@@ -186,7 +186,7 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 					continue
 				}
 				serviceName := fmt.Sprintf("%s-%d", name, i+1)
-				detectService(ctx, cmd, manifest, serviceName, deploy, hostName)
+				detectServiceWithTimeout(cmd, manifest, serviceName, deploy, hostName)
 			}
 		}
 	}
@@ -202,7 +202,7 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
 				continue
 			}
-			detectService(ctx, cmd, manifest, name, deploy, iface.Host)
+			detectServiceWithTimeout(cmd, manifest, name, deploy, iface.Host)
 		}
 	}
 
@@ -217,11 +217,29 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
 				continue
 			}
-			detectService(ctx, cmd, manifest, name, deploy, obs.Host)
+			detectServiceWithTimeout(cmd, manifest, name, deploy, obs.Host)
 		}
 	}
 
 	return nil
+}
+
+// detectServiceWithTimeout wraps detectService with a per-host timeout.
+func detectServiceWithTimeout(cmd *cobra.Command, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), perHostTimeout)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		detectService(ctx, cmd, manifest, serviceName, deployName, hostName)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		fmt.Fprintf(cmd.OutOrStdout(), "✗ %s (%s): timed out after %s\n", serviceName, hostName, perHostTimeout)
+	}
 }
 
 // detectService detects a single service on a host
@@ -302,7 +320,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 				Password: "",
 				Database: "postgres",
 			}
-			result := checker.Check(host.Address, manifest.Infrastructure.Postgres.Port)
+			result := checker.Check(host.ExternalIP, manifest.Infrastructure.Postgres.Port)
 			printHealthResult(cmd, "Postgres/Yugabyte", result)
 			if result.OK {
 				passedChecks++
@@ -322,7 +340,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 				Password: "",
 				Database: "default",
 			}
-			result := checker.Check(host.Address, manifest.Infrastructure.ClickHouse.Port)
+			result := checker.Check(host.ExternalIP, manifest.Infrastructure.ClickHouse.Port)
 			printHealthResult(cmd, "ClickHouse", result)
 			if result.OK {
 				passedChecks++
@@ -340,7 +358,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 			}
 			totalChecks++
 			checker := &health.KafkaChecker{}
-			result := checker.Check(host.Address, broker.Port)
+			result := checker.Check(host.ExternalIP, broker.Port)
 			printHealthResult(cmd, fmt.Sprintf("Kafka Broker %d", broker.ID), result)
 			if result.OK {
 				passedChecks++
@@ -388,7 +406,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 			Path:    path,
 			Timeout: 5 * time.Second,
 		}
-		result := checker.Check(host.Address, port)
+		result := checker.Check(host.ExternalIP, port)
 		printHealthResult(cmd, name, result)
 		if result.OK {
 			passedChecks++
@@ -430,7 +448,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 			Path:    path,
 			Timeout: 5 * time.Second,
 		}
-		result := checker.Check(host.Address, port)
+		result := checker.Check(host.ExternalIP, port)
 		printHealthResult(cmd, name, result)
 		if result.OK {
 			passedChecks++
@@ -469,7 +487,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 				Path:    path,
 				Timeout: 5 * time.Second,
 			}
-			result := checker.Check(host.Address, port)
+			result := checker.Check(host.ExternalIP, port)
 			printHealthResult(cmd, name, result)
 			if result.OK {
 				passedChecks++

@@ -36,7 +36,7 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "localhost:19002")
+	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	navigatorURL := config.GetEnv("NAVIGATOR_URL", "") // Load Navigator URL (optional)
 
 	// Connect to database

@@ -14,7 +14,7 @@ import (
 
 func defaultEndpoints() Endpoints {
 	return Endpoints{
-		GatewayURL:            "http://localhost:18000",
+		BridgeURL:             "http://localhost:18000",
 		QuartermasterURL:      "http://localhost:18002", // deprecated
 		QuartermasterGRPCAddr: "localhost:19002",
 		ControlURL:            "http://localhost:18001", // deprecated

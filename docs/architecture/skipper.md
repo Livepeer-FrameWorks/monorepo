@@ -215,6 +215,118 @@ The LLM can also explicitly call `search_knowledge` with a `tenant_scope` parame
 
 Responses include citations and a confidence score based on whether the answer was matched in the knowledge base, from a web search, or from inference.
 
+## Heartbeat Monitoring
+
+Periodic health analysis of active streams per tenant. Runs every `HEARTBEAT_INTERVAL` (default 30 minutes).
+
+### Cycle
+
+1. **Tenant discovery** — list active tenants via Quartermaster, filter by billing tier (`SKIPPER_REQUIRED_TIER_LEVEL`), skip tenants with zero active streams
+2. **Snapshot** — fetch `StreamHealthSummary` and `ClientQoeSummary` from Periscope for a 15-minute window
+3. **Baseline check** — compare current metrics against Welford running averages (see Diagnostics), get deviations before updating the baseline with the current sample
+4. **Threshold check** — hard thresholds on critical metrics (rebuffer ratio, packet loss, etc.)
+5. **Correlation** — match deviations against known failure patterns (see Diagnostics)
+6. **Triage** — deterministic decision cascade, zero LLM calls:
+   - Threshold violation → `investigate`
+   - Correlation confidence ≥ 0.5 → `investigate`
+   - ≥ 2 baseline deviations → `flag`
+   - 1 deviation → `flag`
+   - Otherwise → `ok`
+7. **Per-stream drill-down** — when triage != ok, bulk fetch per-stream metrics, compare each against tenant-wide baseline, run correlation on outliers. Caps at 20 most anomalous streams sorted by max sigma.
+8. **Investigation** (only for `investigate`) — calls the chat orchestrator with a diagnostic system prompt, baseline deviations, correlations, per-stream anomalies, and raw metrics. Produces a JSON report with summary, root cause, and recommendations.
+9. **Flag** (only for `flag`) — sends a lightweight report via the reporter. Cooldown: 2 hours per tenant to suppress noise.
+10. **Reporting** — persisted to `skipper_reports`/`skipper_recommendations`, dispatched via email, WebSocket, or MCP.
+
+### Infrastructure Monitor
+
+Runs independently of per-tenant stream health. Iterates all active clusters, checks node-level metrics.
+
+- **Metrics**: CPU, memory, disk usage per node
+- **Hard thresholds**: CPU ≥ 95%, memory ≥ 95%, disk ≥ 90% (warning) / 95% (critical)
+- **Persistence check**: CPU and memory alerts require the violation to persist in 3 of 4 five-minute windows (prevents transient spikes from triggering alerts). Disk alerts fire immediately.
+- **Baselines**: same Welford system as stream health, keyed by `(ownerTenantID, "node:"+nodeID)`. Deviations logged even when below hard thresholds.
+- **Alerts**: email to cluster owner (resolved via billing status), 4-hour cooldown per node/alert type.
+- **Callbacks**: `OnNetworkStats` and `OnFederationSummary` hooks feed data to the social posting agent.
+
+| LLM Cost      | Scenario                                                  |
+| ------------- | --------------------------------------------------------- |
+| **0 calls**   | Healthy tenant, gray zone (flag), infrastructure check    |
+| **1-6 calls** | Degraded tenant (investigation triggers the orchestrator) |
+
+## Diagnostics Package
+
+Shared between heartbeat and chat. Located in `internal/diagnostics/`.
+
+### Baselines
+
+Welford online algorithm for running mean and standard deviation per `(tenant_id, stream_id, metric_name)`. Persisted in `skipper_baselines` table.
+
+- **Update**: heartbeat is the sole writer — one sample per metric per cycle
+- **Deviations**: reported when current value exceeds `sigmaLimit` (default 2.0) standard deviations from the mean, with a `minSamples` guard (default 5) to avoid false positives during warmup
+- **Cleanup**: stale baselines (not updated in 7 days) are pruned each cycle
+- **Chat integration**: diagnostic tool results are enriched with baseline deviations and correlation hypotheses, falling back to tenant-wide baselines when stream-specific data is insufficient
+
+### Correlator
+
+Pure-Go pattern matcher. Maps deviation patterns to 5 known failure hypotheses:
+
+| Pattern             | Signals                                                                      |
+| ------------------- | ---------------------------------------------------------------------------- |
+| Network degradation | packet_loss↑, bandwidth_in↓, buffer_health↓                                  |
+| Encoder overload    | fps↓, bitrate↓ (absence of packet_loss boosts confidence)                    |
+| Viewer-side issues  | buffer_health↓, rebuffer_count↑ (absence of bandwidth_out boosts confidence) |
+| Ingest instability  | bitrate↓, fps↓, issue_count↑                                                 |
+| CDN pressure        | bandwidth_out↑, active_sessions↑, optional rebuffer↑ or buffer_health↓       |
+
+Confidence = matched signals / total signals, with an absence boost (+0.1) when a metric expected in competing hypotheses is absent.
+
+### Triage
+
+Deterministic decision cascade. Replaced the previous LLM-based `evaluateDecision()`. See the cascade in the Heartbeat Monitoring section above.
+
+### Per-Stream Analysis
+
+Groups metrics by stream ID, compares each against the tenant-wide baseline (`stream_id=""`), runs `Correlate()` on outliers. Returns up to 20 streams sorted by maximum sigma.
+
+## Social Posting Agent
+
+Event-driven pipeline that drafts social media posts from platform signals. Located in `internal/social/`.
+
+### Pipeline
+
+```
+Event sources (heartbeat infra monitor, knowledge scheduler)
+    │
+    ▼
+Collector (thread-safe buffer, push-based)
+    │
+    ▼
+Detector (classifies signals, scores, deduplicates against recent posts)
+    │
+    ▼
+Composer (utility LLM drafts tweet, max 280 chars, retries once if too long)
+    │
+    ▼
+Publisher (sends draft to configured email for human review)
+```
+
+### Signal Types
+
+| Type             | Source                              | Triggers                                                                                |
+| ---------------- | ----------------------------------- | --------------------------------------------------------------------------------------- |
+| `platform_stats` | Infra monitor `OnNetworkStats`      | New viewer record, bandwidth milestone (1/10/100/1000 Gbps), viewer surge (>25% growth) |
+| `federation`     | Infra monitor `OnFederationSummary` | Latency improvement (>20% drop), event volume milestone                                 |
+| `knowledge`      | Knowledge scheduler                 | Newly embedded documentation page                                                       |
+
+The detector saves a baseline on first observation per content type. Subsequent signals are compared against the baseline. Knowledge signals are deduplicated against the last 20 posts.
+
+### Constraints
+
+- **Daily limit**: configurable via `SKIPPER_SOCIAL_MAX_PER_DAY` (default 2, `0` = unlimited)
+- **Check interval**: `SKIPPER_SOCIAL_INTERVAL` (default 2h)
+- **Human review**: posts are drafts sent to `SKIPPER_SOCIAL_NOTIFY_EMAIL`, not auto-published
+- **Theme avoidance**: composer receives last 10 posts and is instructed not to repeat themes
+
 ## Standalone Mode (Planned)
 
 Skipper's internal dependencies are decoupled behind interfaces (Phase 1) so all platform components — gRPC clients, Kafka, billing — gracefully degrade to nil. Standalone mode will consolidate into the existing binary: when `JWT_SECRET` is absent, Skipper runs with API key auth, auto-migration, and no platform wiring. See `PLAN_SKIPPER_APPLIANCE.md` for details.

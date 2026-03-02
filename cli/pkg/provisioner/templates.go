@@ -207,11 +207,11 @@ func GenerateCentralCaddyfile(data CaddyfileData) (string, error) {
 	}
 }
 
-{{if .Routes.website}}
+{{if .Routes.foredeck}}
 # Marketing Website (Root & www)
 {$CADDY_ROOT_DOMAIN}, www.{$CADDY_ROOT_DOMAIN} {
 	handle {
-		reverse_proxy localhost:{{.Routes.website}}
+		reverse_proxy localhost:{{.Routes.foredeck}}
 	}
 }
 {{end}}
@@ -260,8 +260,183 @@ listmonk.{$CADDY_ROOT_DOMAIN} {
 	}
 }
 {{end}}
+
+{{if .Routes.chatwoot}}
+# Support Chat
+chatwoot.{$CADDY_ROOT_DOMAIN} {
+	handle {
+		reverse_proxy localhost:{{.Routes.chatwoot}}
+	}
+}
+{{end}}
 `
 	t, err := template.New("caddyfile").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf strings.Builder
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+// NginxConfData holds data for nginx.conf template
+type NginxConfData struct {
+	RootDomain    string
+	ListenAddress string         // e.g. "80"
+	Routes        map[string]int // service name -> port
+}
+
+// GenerateNginxConf creates an nginx config with subdomain-based routing
+func GenerateNginxConf(data NginxConfData) (string, error) {
+	if data.RootDomain == "" {
+		return "", fmt.Errorf("RootDomain is required for nginx config generation")
+	}
+	if data.ListenAddress == "" {
+		data.ListenAddress = "80"
+	}
+
+	const tmpl = `server {
+    listen {{.ListenAddress}} default_server;
+    server_name _;
+
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+
+    location /nginx_status {
+        stub_status on;
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+    }
+}
+{{if .Routes.foredeck}}
+server {
+    listen {{.ListenAddress}};
+    server_name {{.RootDomain}} www.{{.RootDomain}};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{.Routes.foredeck}};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+{{end}}{{if .Routes.bridge}}
+server {
+    listen {{.ListenAddress}};
+    server_name bridge.{{.RootDomain}};
+
+    location /graphql/ws {
+        proxy_pass http://127.0.0.1:{{.Routes.bridge}}/graphql/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:{{.Routes.bridge}};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+{{end}}{{if .Routes.chartroom}}
+server {
+    listen {{.ListenAddress}};
+    server_name chartroom.{{.RootDomain}};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{.Routes.chartroom}};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+{{end}}{{if .Routes.logbook}}
+server {
+    listen {{.ListenAddress}};
+    server_name logbook.{{.RootDomain}};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{.Routes.logbook}};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+{{end}}{{if .Routes.steward}}
+server {
+    listen {{.ListenAddress}};
+    server_name steward.{{.RootDomain}};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{.Routes.steward}};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+{{end}}{{if .Routes.listmonk}}
+server {
+    listen {{.ListenAddress}};
+    server_name listmonk.{{.RootDomain}};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{.Routes.listmonk}};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+{{end}}{{if .Routes.chatwoot}}
+server {
+    listen {{.ListenAddress}};
+    server_name chatwoot.{{.RootDomain}};
+
+    location /cable {
+        proxy_pass http://127.0.0.1:{{.Routes.chatwoot}}/cable;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:{{.Routes.chatwoot}};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+{{end}}`
+
+	t, err := template.New("nginx").Parse(tmpl)
 	if err != nil {
 		return "", err
 	}

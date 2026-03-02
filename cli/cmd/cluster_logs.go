@@ -128,7 +128,7 @@ func runLogs(cmd *cobra.Command, manifestPath, serviceName string, follow bool, 
 		}
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Fetching logs for %s on %s...\n\n", serviceName, host.Address)
+	fmt.Fprintf(cmd.OutOrStdout(), "Fetching logs for %s on %s...\n\n", serviceName, host.ExternalIP)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -156,7 +156,7 @@ func runLogs(cmd *cobra.Command, manifestPath, serviceName string, follow bool, 
 	}
 
 	if !state.Exists {
-		return fmt.Errorf("service %s does not exist on %s", serviceName, host.Address)
+		return fmt.Errorf("service %s does not exist on %s", serviceName, host.ExternalIP)
 	}
 
 	// Build log command based on mode
@@ -186,11 +186,11 @@ func runLogs(cmd *cobra.Command, manifestPath, serviceName string, follow bool, 
 
 	// Get runner
 	var runner ssh.Runner
-	if host.Address == "" || host.Address == "localhost" || host.Address == "127.0.0.1" {
+	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
 		runner = ssh.NewLocalRunner("")
 	} else {
 		sshConfig := &ssh.ConnectionConfig{
-			Address: host.Address,
+			Address: host.ExternalIP,
 			Port:    22,
 			User:    host.User,
 			KeyPath: host.SSHKey,

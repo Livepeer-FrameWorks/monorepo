@@ -224,7 +224,7 @@ func main() {
 		advertiseHost := config.GetEnv("PERISCOPE_INGEST_HOST", "periscope-ingest")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
 		req := &pb.BootstrapServiceRequest{
-			Type:           "periscope_ingest",
+			Type:           "periscope-ingest",
 			Version:        version.Version,
 			Protocol:       "http",
 			HealthEndpoint: &healthEndpoint,
@@ -240,10 +240,10 @@ func main() {
 		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
 			req.NodeId = &nodeID
 		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope_ingest")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_ingest) failed")
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope-ingest")); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (periscope-ingest) failed")
 		} else {
-			logger.Info("Quartermaster bootstrap (periscope_ingest) ok")
+			logger.Info("Quartermaster bootstrap (periscope-ingest) ok")
 		}
 	}()
 

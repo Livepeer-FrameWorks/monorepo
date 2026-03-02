@@ -55,7 +55,7 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, c
 	}
 
 	// Generate Ansible playbook (use address as identifier)
-	hostID := host.Address
+	hostID := host.ExternalIP
 	if hostID == "" {
 		hostID = "localhost"
 	}
@@ -66,7 +66,7 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, c
 	inv := ansible.NewInventory()
 	inv.AddHost(&ansible.InventoryHost{
 		Name:    hostID,
-		Address: host.Address,
+		Address: host.ExternalIP,
 		Vars: map[string]string{
 			"ansible_user":                 host.User,
 			"ansible_ssh_private_key_file": host.SSHKey,
@@ -94,7 +94,7 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, c
 func (k *KafkaProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	checker := &health.KafkaChecker{}
 
-	result := checker.Check(host.Address, config.Port)
+	result := checker.Check(host.ExternalIP, config.Port)
 	if !result.OK {
 		return fmt.Errorf("kafka health check failed: %s", result.Error)
 	}
@@ -111,7 +111,7 @@ func (k *KafkaProvisioner) Initialize(ctx context.Context, host inventory.Host, 
 		return nil
 	}
 
-	broker := fmt.Sprintf("%s:%d", host.Address, config.Port)
+	broker := fmt.Sprintf("%s:%d", host.ExternalIP, config.Port)
 	brokers := []string{broker}
 
 	// Create each topic

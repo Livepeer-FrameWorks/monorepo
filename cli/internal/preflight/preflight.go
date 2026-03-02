@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -25,30 +26,31 @@ type Summary struct {
 }
 
 // DNSResolution checks that a domain resolves.
-func DNSResolution(domain string) Check {
+func DNSResolution(ctx context.Context, domain string) Check {
 	if strings.TrimSpace(domain) == "" {
 		return Check{Name: "dns", OK: true, Detail: "no domain provided"}
 	}
-	ips, err := net.LookupIP(domain)
+	resolver := &net.Resolver{}
+	addrs, err := resolver.LookupIPAddr(ctx, domain)
 	if err != nil {
 		return Check{Name: "dns", OK: false, Detail: "lookup failed", Error: err.Error()}
 	}
-	list := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		list = append(list, ip.String())
+	list := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		list = append(list, addr.IP.String())
 	}
 	return Check{Name: "dns", OK: true, Detail: fmt.Sprintf("%s -> %s", domain, strings.Join(list, ", "))}
 }
 
 // HasDocker checks that docker and docker compose are available.
-func HasDocker() []Check {
+func HasDocker(ctx context.Context) []Check {
 	var out []Check
 	if _, err := exec.LookPath("docker"); err != nil {
 		out = append(out, Check{Name: "docker", OK: false, Detail: "docker not found", Error: err.Error()})
 	} else {
 		out = append(out, Check{Name: "docker", OK: true, Detail: "docker found"})
 		// docker compose plugin
-		cmd := exec.Command("docker", "compose", "version")
+		cmd := exec.CommandContext(ctx, "docker", "compose", "version")
 		if err := cmd.Run(); err != nil {
 			out = append(out, Check{Name: "docker-compose", OK: false, Detail: "docker compose plugin not available", Error: err.Error()})
 		} else {
@@ -119,13 +121,14 @@ func UlimitNoFile() Check {
 }
 
 // PortChecks suggests that 80/443 are free for inbound use.
-func PortChecks() []Check {
+func PortChecks(ctx context.Context) []Check {
 	// We cannot reliably test inbound availability; just try a local dial to determine if already bound.
 	var out []Check
+	dialer := &net.Dialer{Timeout: 250 * time.Millisecond}
 	try := func(port int) Check {
 		// attempt to listen; requires privileges and can be disruptive, so avoid.
 		// Instead, try to dial localhost:port; if connect succeeds, something is listening.
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond)
+		conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			return Check{Name: fmt.Sprintf("port-%d", port), OK: true, Detail: "no listener detected"}
 		}

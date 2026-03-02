@@ -10,6 +10,7 @@ import (
 	"frameworks/api_dns/internal/provider/cloudflare"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/proto"
+	"frameworks/pkg/servicedefs"
 
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
@@ -157,7 +158,6 @@ func (f *fakeCloudflareClient) CreatePool(pool cloudflare.Pool) (*cloudflare.Poo
 }
 
 type fakeQuartermasterClient struct {
-	nodeType         string
 	serviceType      string
 	staleAge         int
 	response         *proto.ListHealthyNodesForDNSResponse
@@ -167,9 +167,8 @@ type fakeQuartermasterClient struct {
 	clustersErr      error
 }
 
-func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error) {
+func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error) {
 	f.callCount++
-	f.nodeType = nodeType
 	f.serviceType = serviceType
 	f.staleAge = staleThresholdSeconds
 	return f.response, f.err
@@ -191,9 +190,6 @@ func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {
 	_, err := manager.SyncService(context.Background(), "edge-egress", "")
 	if err == nil {
 		t.Fatal("expected error from Quartermaster")
-	}
-	if qm.nodeType != "" {
-		t.Fatalf("expected empty node type for capability-specific edge type, got %s", qm.nodeType)
 	}
 	if qm.serviceType != "edge-egress" {
 		t.Fatalf("expected service type edge-egress, got %s", qm.serviceType)
@@ -497,6 +493,7 @@ func newTestManager(cf *fakeCloudflareClient) *DNSManager {
 			Retries:  2,
 		},
 		servicePorts: defaultServicePorts(),
+		healthPaths:  defaultServiceHealthPaths(),
 	}
 }
 
@@ -1180,7 +1177,7 @@ func TestSyncService_CustomRootDomain(t *testing.T) {
 	}
 }
 
-func TestSyncService_WebsiteUsesRootDomain(t *testing.T) {
+func TestSyncService_ForedeckUsesRootDomain(t *testing.T) {
 	ip := "10.0.0.1"
 	var createdFQDN string
 	qm := &fakeQuartermasterClient{
@@ -1200,11 +1197,11 @@ func TestSyncService_WebsiteUsesRootDomain(t *testing.T) {
 	m := newTestManager(cf)
 	m.qmClient = qm
 
-	_, err := m.SyncService(context.Background(), "website", "")
+	_, err := m.SyncService(context.Background(), "foredeck", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// website subdomain is "@", so fqdn should be just the domain
+	// foredeck subdomain is "@", so fqdn should be just the domain
 	if createdFQDN != "example.com" {
 		t.Fatalf("expected example.com (root domain), got %s", createdFQDN)
 	}
@@ -1221,10 +1218,9 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 		{"edge-storage", "edge-storage.example.com"},
 		{"edge-processing", "edge-processing.example.com"},
 		{"foghorn", "foghorn.example.com"},
-		{"gateway", "bridge.example.com"},
 		{"bridge", "bridge.example.com"},
 		{"chartroom", "chartroom.example.com"},
-		{"website", "example.com"},
+		{"foredeck", "example.com"},
 		{"logbook", "logbook.example.com"},
 		{"steward", "steward.example.com"},
 	}
@@ -1305,8 +1301,8 @@ func TestLoadProxyServices_Default(t *testing.T) {
 	// Unset the env var to test default behavior
 	t.Setenv("NAVIGATOR_PROXY_SERVICES", "")
 	proxy := loadProxyServices()
-	if !proxy["chartroom"] || !proxy["website"] || !proxy["logbook"] {
-		t.Fatalf("expected chartroom, website, logbook in defaults, got %v", proxy)
+	if !proxy["chartroom"] || !proxy["foredeck"] || !proxy["logbook"] {
+		t.Fatalf("expected chartroom, foredeck, logbook in defaults, got %v", proxy)
 	}
 	if proxy["edge-egress"] {
 		t.Fatal("edge-egress should not be proxied by default")
@@ -1314,10 +1310,10 @@ func TestLoadProxyServices_Default(t *testing.T) {
 }
 
 func TestLoadProxyServices_Custom(t *testing.T) {
-	t.Setenv("NAVIGATOR_PROXY_SERVICES", "edge-egress, gateway, ")
+	t.Setenv("NAVIGATOR_PROXY_SERVICES", "edge-egress, bridge, ")
 	proxy := loadProxyServices()
-	if !proxy["edge-egress"] || !proxy["gateway"] {
-		t.Fatalf("expected edge-egress, gateway from env, got %v", proxy)
+	if !proxy["edge-egress"] || !proxy["bridge"] {
+		t.Fatalf("expected edge-egress, bridge from env, got %v", proxy)
 	}
 	if proxy["chartroom"] {
 		t.Fatal("chartroom should not be in custom proxy list")
@@ -1342,10 +1338,9 @@ func TestClusterServiceFQDN(t *testing.T) {
 		{"edge-storage", "c1.example.com", "edge-storage.c1.example.com"},
 		{"edge-processing", "c1.example.com", "edge-processing.c1.example.com"},
 		{"foghorn", "c1.example.com", "foghorn.c1.example.com"},
-		{"gateway", "c1.example.com", "bridge.c1.example.com"},
 		{"bridge", "c1.example.com", "bridge.c1.example.com"},
 		{"chartroom", "c1.example.com", "chartroom.c1.example.com"},
-		{"website", "c1.example.com", "c1.example.com"},
+		{"foredeck", "c1.example.com", "c1.example.com"},
 		{"logbook", "c1.example.com", "logbook.c1.example.com"},
 		{"steward", "c1.example.com", "steward.c1.example.com"},
 	}
@@ -1548,5 +1543,163 @@ func TestSyncServiceByCluster_UsesClusterScopedPoolNames(t *testing.T) {
 		if port != 18008 {
 			t.Fatalf("expected health check monitor on port 18008 (foghorn), got %d", port)
 		}
+	}
+}
+
+func TestDefaultServicePorts_MatchServicedefs(t *testing.T) {
+	ports := defaultServicePorts()
+
+	checks := map[string]struct {
+		servicedefsName string
+		wantPort        int
+	}{
+		"bridge":    {"bridge", 0},
+		"foghorn":   {"foghorn", 0},
+		"chartroom": {"chartroom", 0},
+		"foredeck":  {"foredeck", 0},
+		"logbook":   {"logbook", 0},
+		"steward":   {"steward", 0},
+	}
+
+	for key, check := range checks {
+		svc, ok := servicedefs.Lookup(check.servicedefsName)
+		if !ok {
+			t.Fatalf("servicedefs missing entry for %q", check.servicedefsName)
+		}
+		check.wantPort = svc.DefaultPort
+
+		got, ok := ports[key]
+		if !ok {
+			t.Errorf("defaultServicePorts missing key %q", key)
+			continue
+		}
+		if got != check.wantPort {
+			t.Errorf("port[%q] = %d, want %d (from servicedefs[%q])", key, got, check.wantPort, check.servicedefsName)
+		}
+	}
+}
+
+func TestDefaultServicePorts_EdgeServicesUse18008(t *testing.T) {
+	ports := defaultServicePorts()
+	for _, svc := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
+		if ports[svc] != 18008 {
+			t.Errorf("port[%q] = %d, want 18008", svc, ports[svc])
+		}
+	}
+}
+
+func TestDefaultServiceHealthPaths_MatchServicedefs(t *testing.T) {
+	paths := defaultServiceHealthPaths()
+
+	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward"} {
+		svc, ok := servicedefs.Lookup(name)
+		if !ok {
+			t.Fatalf("servicedefs missing entry for %q", name)
+		}
+		if got := paths[name]; got != svc.HealthPath {
+			t.Errorf("healthPath[%q] = %q, want %q", name, got, svc.HealthPath)
+		}
+	}
+
+}
+
+func TestSyncService_BridgeUsesServiceType(t *testing.T) {
+	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
+	cf := &fakeCloudflareClient{}
+	logger := logrus.New()
+	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
+
+	_, _ = manager.SyncService(context.Background(), "bridge", "")
+	if qm.serviceType != "bridge" {
+		t.Fatalf("expected serviceType='bridge', got %q", qm.serviceType)
+	}
+}
+
+func TestSyncService_FoghornUsesServiceType(t *testing.T) {
+	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
+	cf := &fakeCloudflareClient{}
+	logger := logrus.New()
+	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
+
+	_, _ = manager.SyncService(context.Background(), "foghorn", "")
+	if qm.serviceType != "foghorn" {
+		t.Fatalf("expected serviceType='foghorn', got %q", qm.serviceType)
+	}
+}
+
+func TestSyncService_WebServicesUseServiceType(t *testing.T) {
+	for _, svc := range []string{"chartroom", "foredeck", "logbook", "steward"} {
+		qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
+		cf := &fakeCloudflareClient{}
+		logger := logrus.New()
+		manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
+
+		_, _ = manager.SyncService(context.Background(), svc, "")
+		if qm.serviceType != svc {
+			t.Errorf("%s: expected serviceType=%q, got %q", svc, svc, qm.serviceType)
+		}
+	}
+}
+
+func TestSyncService_GenericEdgePassesServiceType(t *testing.T) {
+	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
+	cf := &fakeCloudflareClient{}
+	logger := logrus.New()
+	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
+
+	_, _ = manager.SyncService(context.Background(), "edge", "")
+	if qm.serviceType != "edge" {
+		t.Fatalf("expected serviceType='edge', got %q", qm.serviceType)
+	}
+}
+
+func TestEnsureMonitor_UsesPerServiceHealthPath(t *testing.T) {
+	var createdMonitor cloudflare.Monitor
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			createdMonitor = monitor
+			monitor.ID = "mon-1"
+			return &monitor, nil
+		},
+	}
+	manager := newTestManager(cf)
+	// Override healthPaths to verify it's used
+	manager.healthPaths = map[string]string{
+		"logbook": "/custom-health",
+	}
+
+	_, err := manager.ensureMonitor("logbook")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if createdMonitor.Path != "/custom-health" {
+		t.Fatalf("expected monitor path '/custom-health', got %q", createdMonitor.Path)
+	}
+}
+
+func TestEnsureMonitor_FallsBackToHealth(t *testing.T) {
+	var createdMonitor cloudflare.Monitor
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			createdMonitor = monitor
+			monitor.ID = "mon-1"
+			return &monitor, nil
+		},
+	}
+	manager := newTestManager(cf)
+	manager.healthPaths = map[string]string{} // empty map
+
+	_, err := manager.ensureMonitor("unknown-svc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if createdMonitor.Path != "/health" {
+		t.Fatalf("expected fallback path '/health', got %q", createdMonitor.Path)
 	}
 }

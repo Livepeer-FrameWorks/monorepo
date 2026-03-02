@@ -137,7 +137,7 @@ func (z *ZookeeperProvisioner) Provision(ctx context.Context, host inventory.Hos
 // Validate checks if Zookeeper is healthy.
 func (z *ZookeeperProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	checker := &health.TCPChecker{}
-	result := checker.Check(host.Address, config.Port)
+	result := checker.Check(host.ExternalIP, config.Port)
 	if !result.OK {
 		return fmt.Errorf("zookeeper health check failed: %s", result.Error)
 	}

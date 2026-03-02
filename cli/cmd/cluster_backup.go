@@ -166,7 +166,7 @@ func backupPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory
 		return fmt.Errorf("postgres host not found: %s", manifest.Infrastructure.Postgres.Host)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  Backing up Postgres on %s...\n", host.Address)
+	fmt.Fprintf(cmd.OutOrStdout(), "  Backing up Postgres on %s...\n", host.ExternalIP)
 
 	// Get runner
 	runner, err := getRunner(host, pool)
@@ -204,7 +204,7 @@ func backupPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory
 			Path:      backupFile,
 			Size:      size,
 			SHA256:    strings.TrimSpace(checksumResult.Stdout),
-			Host:      host.Address,
+			Host:      host.ExternalIP,
 			Component: "postgres",
 		}
 	}
@@ -224,7 +224,7 @@ func backupClickHouse(ctx context.Context, cmd *cobra.Command, manifest *invento
 		return fmt.Errorf("clickhouse host not found: %s", manifest.Infrastructure.ClickHouse.Host)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  Backing up ClickHouse on %s...\n", host.Address)
+	fmt.Fprintf(cmd.OutOrStdout(), "  Backing up ClickHouse on %s...\n", host.ExternalIP)
 
 	// Get runner
 	runner, err := getRunner(host, pool)
@@ -273,7 +273,7 @@ done
 				Path:      tarFile,
 				Size:      size,
 				SHA256:    strings.TrimSpace(checksumResult.Stdout),
-				Host:      host.Address,
+				Host:      host.ExternalIP,
 				Component: "clickhouse",
 			}
 		}
@@ -295,7 +295,7 @@ func backupVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	successCount := 0
 
 	for hostName, host := range manifest.Hosts {
-		fmt.Fprintf(cmd.OutOrStdout(), "  Backing up Docker volumes on %s (%s)...\n", hostName, host.Address)
+		fmt.Fprintf(cmd.OutOrStdout(), "  Backing up Docker volumes on %s (%s)...\n", hostName, host.ExternalIP)
 
 		// Get runner
 		runner, err := getRunner(host, pool)
@@ -336,7 +336,7 @@ docker run --rm -v /var/lib/docker/volumes:/volumes -v %s:/backup alpine tar czf
 				Path:      backupFile,
 				Size:      size,
 				SHA256:    strings.TrimSpace(checksumResult.Stdout),
-				Host:      host.Address,
+				Host:      host.ExternalIP,
 				Component: "volumes",
 			}
 		}
@@ -369,7 +369,7 @@ func backupConfig(ctx context.Context, cmd *cobra.Command, manifest *inventory.M
 	successCount := 0
 
 	for hostName, host := range manifest.Hosts {
-		fmt.Fprintf(cmd.OutOrStdout(), "  Backing up config files on %s (%s)...\n", hostName, host.Address)
+		fmt.Fprintf(cmd.OutOrStdout(), "  Backing up config files on %s (%s)...\n", hostName, host.ExternalIP)
 
 		// Get runner
 		runner, err := getRunner(host, pool)
@@ -414,7 +414,7 @@ cd / && tar czf %s \
 				Path:      backupFile,
 				Size:      size,
 				SHA256:    strings.TrimSpace(checksumResult.Stdout),
-				Host:      host.Address,
+				Host:      host.ExternalIP,
 				Component: "config",
 			}
 		}
@@ -439,12 +439,12 @@ cd / && tar czf %s \
 
 // getRunner returns an SSH runner for a host
 func getRunner(host inventory.Host, pool *ssh.Pool) (ssh.Runner, error) {
-	if host.Address == "" || host.Address == "localhost" || host.Address == "127.0.0.1" {
+	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
 		return ssh.NewLocalRunner(""), nil
 	}
 
 	sshConfig := &ssh.ConnectionConfig{
-		Address: host.Address,
+		Address: host.ExternalIP,
 		Port:    22,
 		User:    host.User,
 		KeyPath: host.SSHKey,

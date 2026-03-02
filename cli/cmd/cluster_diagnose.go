@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"frameworks/cli/pkg/inventory"
-	"frameworks/cli/pkg/servicedefs"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 )
@@ -92,7 +92,7 @@ func diagnoseNetwork(ctx context.Context, cmd *cobra.Command, manifest *inventor
 	for i, sourceHost := range hosts {
 		runner, err := getRunner(sourceHost, pool)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "✗ Cannot connect to %s: %v\n", sourceHost.Address, err)
+			fmt.Fprintf(cmd.OutOrStderr(), "✗ Cannot connect to %s: %v\n", sourceHost.ExternalIP, err)
 			continue
 		}
 
@@ -102,13 +102,13 @@ func diagnoseNetwork(ctx context.Context, cmd *cobra.Command, manifest *inventor
 			}
 
 			// Ping test
-			pingCmd := fmt.Sprintf("ping -c 1 -W 2 %s", targetHost.Address)
+			pingCmd := fmt.Sprintf("ping -c 1 -W 2 %s", targetHost.ExternalIP)
 			result, err := runner.Run(ctx, pingCmd)
 
 			if err != nil || result.ExitCode != 0 {
-				fmt.Fprintf(cmd.OutOrStderr(), "✗ %s → %s: FAILED (no response)\n", sourceHost.Address, targetHost.Address)
+				fmt.Fprintf(cmd.OutOrStderr(), "✗ %s → %s: FAILED (no response)\n", sourceHost.ExternalIP, targetHost.ExternalIP)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "✓ %s → %s: OK\n", sourceHost.Address, targetHost.Address)
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ %s → %s: OK\n", sourceHost.ExternalIP, targetHost.ExternalIP)
 			}
 		}
 	}
@@ -121,7 +121,7 @@ func diagnoseResources(ctx context.Context, cmd *cobra.Command, manifest *invent
 	fmt.Fprintln(cmd.OutOrStdout(), "Resource Usage Diagnostics")
 
 	for hostname, host := range manifest.Hosts {
-		fmt.Fprintf(cmd.OutOrStdout(), "Host: %s (%s)\n", hostname, host.Address)
+		fmt.Fprintf(cmd.OutOrStdout(), "Host: %s (%s)\n", hostname, host.ExternalIP)
 
 		runner, err := getRunner(host, pool)
 		if err != nil {
@@ -167,7 +167,7 @@ func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	standardPorts := buildStandardPorts()
 
 	for hostname, host := range manifest.Hosts {
-		fmt.Fprintf(cmd.OutOrStdout(), "Host: %s (%s)\n", hostname, host.Address)
+		fmt.Fprintf(cmd.OutOrStdout(), "Host: %s (%s)\n", hostname, host.ExternalIP)
 
 		runner, err := getRunner(host, pool)
 		if err != nil {
@@ -195,7 +195,7 @@ func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 
 func buildStandardPorts() map[int]string {
 	standardPorts := map[int]string{
-		5353:  "privateer-dns",
+		53:    "privateer-dns",
 		18019: "foghorn-control",
 	}
 

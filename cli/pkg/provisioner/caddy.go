@@ -34,7 +34,7 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 	rootDomain, _ := config.Metadata["root_domain"].(string)
 	email, _ := config.Metadata["acme_email"].(string)
 	if rootDomain == "" {
-		rootDomain = "localhost" // Fallback for dev/local testing
+		return fmt.Errorf("caddy: root_domain is required (set root_domain in cluster manifest)")
 	}
 
 	// Determine Listen Address based on configured port or default to :80
@@ -64,10 +64,9 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 			"logbook":   ServicePorts["logbook"],
 			"steward":   ServicePorts["steward"],
 			"listmonk":  ServicePorts["listmonk"],
+			"chatwoot":  ServicePorts["chatwoot"],
 		}
 	}
-
-	routes = normalizeCaddyRoutes(routes)
 
 	caddyData := CaddyfileData{
 		Email:         email,
@@ -121,23 +120,8 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		}
 	}
 
-	fmt.Printf("✓ Caddy provisioned on %s\n", host.Address)
+	fmt.Printf("✓ Caddy provisioned on %s\n", host.ExternalIP)
 	return nil
-}
-
-func normalizeCaddyRoutes(routes map[string]int) map[string]int {
-	normalized := make(map[string]int, len(routes))
-	for key, value := range routes {
-		normalized[key] = value
-	}
-
-	// "foredeck" is the marketing site service name; the Caddyfile
-	// template uses .Routes.website for the root-domain block.
-	if port, ok := routes["foredeck"]; ok {
-		normalized["website"] = port
-	}
-
-	return normalized
 }
 
 // installCaddy uses FlexibleProvisioner's logic for installing Caddy itself
@@ -186,7 +170,7 @@ func (c *CaddyProvisioner) provisionDocker(ctx context.Context, host inventory.H
 		email = "caddy@example.com"
 	}
 	if rootDomain == "" {
-		rootDomain = "localhost"
+		return fmt.Errorf("caddy: root_domain is required (set root_domain in cluster manifest)")
 	}
 	caddyEnvVars := map[string]string{
 		"CADDY_EMAIL":       email,
@@ -265,7 +249,7 @@ func (c *CaddyProvisioner) provisionDocker(ctx context.Context, host inventory.H
 		}
 	}
 
-	fmt.Printf("✓ Caddy provisioned in Docker mode on %s\n", host.Address)
+	fmt.Printf("✓ Caddy provisioned in Docker mode on %s\n", host.ExternalIP)
 	return nil
 }
 
@@ -349,7 +333,7 @@ rm /tmp/caddy.tar.gz
 		return fmt.Errorf("failed to start Caddy service: %w (stderr: %s)", err, result.Stderr)
 	}
 
-	fmt.Printf("✓ Caddy provisioned in native mode on %s\n", host.Address)
+	fmt.Printf("✓ Caddy provisioned in native mode on %s\n", host.ExternalIP)
 	return nil
 }
 
@@ -366,10 +350,10 @@ func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, co
 	}
 	// For a native Caddy, port 2019 is local. For Docker Caddy, if admin port is exposed, too.
 	// Caddy's health endpoint on standard HTTP ports is /health or similar.
-	// We should probably check one of the public facing routes (e.g. website) through Caddy.
+	// We should probably check one of the public facing routes (e.g. foredeck) through Caddy.
 
 	// But as a self-check, the internal admin API is best.
-	result := checker.Check(host.Address, 2019) // Caddy admin API port
+	result := checker.Check(host.ExternalIP, 2019) // Caddy admin API port
 	if !result.OK {
 		return fmt.Errorf("caddy admin API health check failed: %s", result.Error)
 	}
@@ -379,7 +363,7 @@ func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, co
 	publicHTTP := &health.TCPChecker{
 		Timeout: 5 * time.Second,
 	}
-	httpResult := publicHTTP.Check(host.Address, 80)
+	httpResult := publicHTTP.Check(host.ExternalIP, 80)
 	if !httpResult.OK {
 		return fmt.Errorf("caddy public HTTP port check failed: %s", httpResult.Error)
 	}
@@ -387,7 +371,7 @@ func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, co
 	publicTLS := &health.TCPChecker{
 		Timeout: 5 * time.Second,
 	}
-	tlsResult := publicTLS.Check(host.Address, 443)
+	tlsResult := publicTLS.Check(host.ExternalIP, 443)
 	if !tlsResult.OK {
 		return fmt.Errorf("caddy public HTTPS port check failed: %s", tlsResult.Error)
 	}

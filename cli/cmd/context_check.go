@@ -142,7 +142,7 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 	}
 
 	// HTTP services
-	res = append(res, checkHTTP("bridge", ep.GatewayURL))
+	res = append(res, checkHTTP("bridge", ep.BridgeURL))
 	res = append(res, checkHTTP("quartermaster", ep.QuartermasterURL))
 	res = append(res, checkHTTP("commodore", ep.ControlURL))
 	res = append(res, checkHTTP("foghorn", ep.FoghornHTTPURL))

@@ -93,7 +93,7 @@ func newContextShowCmd() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "  cluster_id:          %s\n", c.ClusterID)
 		}
 		ep := c.Endpoints
-		fmt.Fprintf(cmd.OutOrStdout(), "  bridge (http):       %s\n", ep.GatewayURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  bridge (http):       %s\n", ep.BridgeURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "  quartermaster http:  %s\n", ep.QuartermasterURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "  commodore http:      %s\n", ep.ControlURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "  foghorn http:        %s\n", ep.FoghornHTTPURL)
@@ -125,7 +125,7 @@ func newContextSetURLCmd() *cobra.Command {
 		ep := cur.Endpoints
 		switch svc {
 		case "bridge":
-			ep.GatewayURL = url
+			ep.BridgeURL = url
 		case "quartermaster":
 			ep.QuartermasterURL = url
 		case "commodore":

@@ -7,48 +7,45 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-<Aside type="tip" title="Automated Setup Available">
-**Privateer (`api_mesh`)** automates WireGuard mesh configuration for FrameWorks infrastructure nodes. It handles key exchange, peer discovery, and configuration management via Quartermaster. Status: **In Testing**.
+## Automated Mesh (Privateer)
 
-This manual guide is for advanced users who need custom configurations or want to understand the underlying mesh architecture.
+**Privateer (`api_mesh`)** fully automates the WireGuard mesh for FrameWorks backend nodes. During CLI provisioning, Privateer is deployed to every host and handles:
 
-</Aside>
+- WireGuard key generation and exchange
+- Peer discovery via Quartermaster's SyncMesh API
+- IP allocation from the `10.200.0.0/16` range (managed by Quartermaster)
+- Local DNS resolution (port 53) for service discovery
+- `/etc/hosts` management for mesh hostnames
 
-A robust mesh network is the backbone of any distributed system. FrameWorks uses WireGuard to create a secure, high-performance private network that connects all your backend services across different regions and clouds.
+**No manual WireGuard configuration is needed.** The CLI provisions Privateer on all hosts, verifies mesh health (DNS resolution + WireGuard peers), then proceeds to deploy application services.
 
-<Aside type="note">
-  The IP ranges and configs below are **examples**. If you use Privateer, prefer configuring the
-  mesh via the `wireguard` section of your cluster manifest and let Privateer manage peers.
-</Aside>
+### How It Works
 
-<Aside type="note" title="Privateer uses a different mesh range">
-  Privateer (Quartermaster) currently allocates WireGuard IPs from **10.200.0.0/16**. The manual
-  examples below use **10.18.0.0/16** from the deployment checklist. If you plan to move to
-  Privateer later, either align your manual mesh to 10.200.0.0/16 now or be prepared to re-address
-  the mesh.
-</Aside>
-
-## Overview
-
-FrameWorks uses a WireGuard mesh to secure service-to-service traffic between backend infrastructure nodes (Central, Regional, and databases). A mesh is **required for multi-node backend clusters**. Single-node backend deployments can run without a mesh.
-
-**Note:** Edge streaming nodes do not participate in this mesh.
+1. CLI provisions Quartermaster (control plane)
+2. CLI runs bootstrap: creates tenant, clusters, nodes, enrollment tokens
+3. CLI deploys Privateer to every host with the enrollment token
+4. Each Privateer instance calls Quartermaster's SyncMesh RPC
+5. Quartermaster allocates a WireGuard IP from `10.200.0.0/16` and returns peer configs
+6. Privateer configures WireGuard and starts the local DNS resolver
+7. CLI verifies mesh health on all hosts before deploying services
 
 ### Network Architecture
 
-The manual mesh uses a structured IP allocation for backend infrastructure:
-
 ```
-10.18.0.0/16 - FrameWorks Manual WireGuard Mesh (Backend Infrastructure Only)
-├── 10.18.0.x  - Central control nodes
-├── 10.18.1.x  - Regional service nodes
-├── 10.18.2.x  - YugabyteDB nodes
-└── 10.18.3.x  - ClickHouse nodes
+10.200.0.0/16 - FrameWorks Mesh (auto-assigned by Quartermaster)
 ```
 
-**Reserved for future tenant meshes (manual plan):** `10.19.0.0/16` (subdivide per tenant, e.g. `/20` blocks).
+IPs are allocated sequentially as nodes enroll. The mesh is a full mesh: every node has a direct WireGuard peer connection to every other node.
 
-Edge streaming nodes are **not** part of this mesh—they communicate over the public internet.
+**Edge nodes do not join the mesh** — they communicate over the public internet.
+
+<Aside type="caution" title="Legacy Manual Mesh">
+  The manual WireGuard setup below is provided for reference only. New deployments should use
+  Privateer. If you have an existing manual mesh on `10.18.0.0/16`, Privateer will manage its own
+  mesh on `10.200.0.0/16` independently.
+</Aside>
+
+## Manual Setup (Legacy)
 
 ## Installation
 
@@ -168,8 +165,9 @@ sudo wg show wg0 dump
 
 ## Name Resolution
 
-Manual mesh deployments should use `/etc/hosts` or internal DNS for backend service names.
-Privateer provides local DNS for mesh hostnames (default `:5353`) and publishes service records from Quartermaster.
+**Privateer (automated):** Runs a local DNS resolver on port 53 that resolves service names (e.g., `quartermaster.internal`, `bridge.internal`) to their mesh IPs. Mappings are synced from Quartermaster.
+
+**Manual mesh:** Use `/etc/hosts` or internal DNS for backend service names.
 
 ## Firewall Configuration
 

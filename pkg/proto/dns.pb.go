@@ -25,7 +25,7 @@ const (
 type SyncDNSRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      *string                `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`    // Optional: tenant context for tenant-specific DNS records
-	ServiceType   string                 `protobuf:"bytes,2,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"` // e.g., "edge", "gateway", "app"
+	ServiceType   string                 `protobuf:"bytes,2,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"` // e.g., "bridge", "foghorn", "helmsman"
 	RootDomain    string                 `protobuf:"bytes,3,opt,name=root_domain,json=rootDomain,proto3" json:"root_domain,omitempty"`    // e.g., "frameworks.network"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

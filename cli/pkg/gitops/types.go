@@ -54,7 +54,7 @@ type Artifact struct {
 	SizeBytes int64  `yaml:"size_bytes,omitempty"`
 }
 
-// InterfaceEntry represents an interface service (webapp, website)
+// InterfaceEntry represents an interface service (chartroom, foredeck)
 type InterfaceEntry struct {
 	Name         string `yaml:"name"`
 	Image        string `yaml:"image"`

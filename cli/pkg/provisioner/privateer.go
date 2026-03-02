@@ -67,7 +67,7 @@ func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Hos
 		return fmt.Errorf("failed to configure DNS: %w", err)
 	}
 
-	fmt.Printf("✓ Privateer provisioned on %s\n", host.Address)
+	fmt.Printf("✓ Privateer provisioned on %s\n", host.ExternalIP)
 	return nil
 }
 
@@ -134,10 +134,18 @@ rm /tmp/privateer.tar.gz
 }
 
 func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Extract secrets from Metadata
+	// Extract secrets — prefer per-cluster token from EnvVars (resolved by buildServiceEnvVars)
 	qmGRPCAddr, _ := config.Metadata["quartermaster_grpc_addr"].(string)
-	token, _ := config.Metadata["enrollment_token"].(string)
+	token := config.EnvVars["ENROLLMENT_TOKEN"]
+	if token == "" {
+		token, _ = config.Metadata["enrollment_token"].(string)
+	}
 	serviceToken, _ := config.Metadata["service_token"].(string)
+	nodeType, _ := config.Metadata["mesh_node_type"].(string)
+	if nodeType == "" {
+		nodeType = "core"
+	}
+	nodeName, _ := config.Metadata["mesh_node_name"].(string)
 
 	dnsPort := strconv.Itoa(parseDNSPort(config.Metadata["dns_port"]))
 
@@ -146,7 +154,10 @@ SERVICE_TOKEN=%s
 ENROLLMENT_TOKEN=%s
 DNS_PORT=%s
 MESH_INTERFACE=wg0
-`, qmGRPCAddr, serviceToken, token, dnsPort)
+MESH_NODE_TYPE=%s
+MESH_NODE_NAME=%s
+MESH_EXTERNAL_IP=%s
+`, qmGRPCAddr, serviceToken, token, dnsPort, nodeType, nodeName, host.ExternalIP)
 
 	// Upload Env File
 	tmpEnv := filepath.Join(os.TempDir(), "privateer.env")
@@ -185,7 +196,7 @@ MESH_INTERFACE=wg0
 }
 
 func parseDNSPort(raw any) int {
-	const defaultPort = 5353
+	const defaultPort = 53
 	var port int
 
 	switch v := raw.(type) {

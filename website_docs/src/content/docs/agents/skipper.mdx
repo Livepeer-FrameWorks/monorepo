@@ -25,6 +25,8 @@ Skipper is the platform's AI video streaming consultant. Ask it about live strea
 
 **Platform operations** — "Create a stream called Weekly Standup with DVR enabled" or "Show me my current billing usage" — Skipper has full access to the platform API through the Gateway.
 
+**Automated monitoring** — Skipper runs periodic health checks on your streams and infrastructure, learns baseline patterns via Welford running averages, and flags anomalies. When something looks wrong, it runs a full diagnostic investigation and delivers a report with root cause and recommendations via email, WebSocket, or MCP.
+
 **General streaming knowledge** — codecs, protocols, bitrate planning, latency tradeoffs. Answers from general knowledge are tagged as `best_guess` so you know when to verify.
 
 ## Knowledge Base

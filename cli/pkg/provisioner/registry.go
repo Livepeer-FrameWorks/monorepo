@@ -33,9 +33,12 @@ var ServicePorts = map[string]int{
 	"logbook":          18033,
 	"skipper":          18018,
 	"caddy":            18090,
+	"nginx":            18090,
 	"mistserver":       8080,
 	"privateer":        18012,
 	"redis":            6379,
+	"chatwoot":         18092,
+	"deckhand":         18015,
 }
 
 // GetProvisioner returns a provisioner for a given service
@@ -67,6 +70,10 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewRedisProvisioner(pool)
 	case "privateer":
 		return NewPrivateerProvisioner(pool), nil
+	case "chatwoot":
+		return NewChatwootProvisioner(pool), nil
+	case "deckhand":
+		return NewFlexibleProvisioner("deckhand", port, pool), nil
 
 	case "quartermaster":
 		return NewFlexibleProvisioner("quartermaster", port, pool), nil
@@ -93,7 +100,7 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 	case "navigator":
 		return NewFlexibleProvisioner("navigator", port, pool), nil
 	case "listmonk":
-		return NewFlexibleProvisioner("listmonk", port, pool), nil
+		return NewListmonkProvisioner(pool), nil
 	case "prometheus":
 		return NewFlexibleProvisioner("prometheus", port, pool), nil
 	case "grafana":
@@ -103,6 +110,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 
 	case "caddy":
 		return NewCaddyProvisioner(pool), nil
+	case "nginx":
+		return NewFlexibleProvisioner("nginx", port, pool), nil
 	case "chartroom":
 		return NewFlexibleProvisioner("chartroom", port, pool), nil
 	case "foredeck":

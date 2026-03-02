@@ -30,7 +30,7 @@ func RunSSHWithKey(target, keyPath string, cmd string, args []string, workdir st
 		remoteCmd.WriteString(shellQuote(a))
 	}
 
-	sshArgs := []string{"-o", "BatchMode=yes"}
+	sshArgs := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
 	if strings.TrimSpace(keyPath) != "" {
 		sshArgs = append(sshArgs, "-i", keyPath)
 	}

@@ -20,26 +20,37 @@ Deploying FrameWorks gives you full ownership of your video infrastructure.
 
 ```bash
 # 1. Install CLI
-cd cli/ && go build -o frameworks && sudo mv frameworks /usr/local/bin/
+cd cli/ && make build-bin-cli && sudo mv bin/cli /usr/local/bin/frameworks
 
 # 2. Review prerequisites
 # See: /operators/prerequisites
 
-# 3. Create cluster manifest (define clusters for multi-cluster topologies)
+# 3. Create cluster manifest + secrets file
 # See: /operators/cluster-manifest
+# Copy config/env/secrets.env.example → gitops-private/secrets/production.env
 
-# 4. Deploy infrastructure
-frameworks cluster provision --manifest cluster.yaml --only infrastructure
+# 4. Detect hosts (verify SSH connectivity)
+frameworks cluster detect --manifest cluster.yaml
 
-# 5. Initialize databases
-frameworks cluster init all --manifest cluster.yaml
+# 5. Provision everything (infrastructure → QM → mesh → services → interfaces)
+frameworks cluster provision --manifest cluster.yaml
 
-# 6. Deploy applications
-frameworks cluster provision --manifest cluster.yaml --only applications
-
-# 7. Verify health
+# 6. Verify health
 frameworks cluster doctor --manifest cluster.yaml
 ```
+
+<Aside type="note" title="Provisioning Phases">
+The CLI provisions in dependency order:
+
+1. **Infrastructure** — Postgres, Kafka, Zookeeper, ClickHouse (parallel)
+2. **Quartermaster** — Control plane bootstrap (tenant, clusters, nodes, tokens)
+3. **Privateer** — Mesh agent on ALL hosts → mesh health verification
+4. **Application services** — All other services (parallel)
+5. **Interfaces** — Nginx, Chartroom, Foredeck, Logbook (parallel)
+
+Use `--only infrastructure|applications|interfaces` to run a single phase.
+
+</Aside>
 
 **Local Development:**
 
@@ -127,7 +138,7 @@ For detailed architecture documentation including service tables, ports, deploym
 - TLS at ingress (Caddy/Navigator/proxies) should be enabled; internal gRPC TLS is not enabled yet (RFC draft exists).
 - Kafka inter-broker encryption is not enabled yet; the mesh provides the current security boundary.
 - Service-to-service authentication uses `SERVICE_TOKEN` (RFC draft exists for stronger service identity).
-- Secrets are managed via environment variables (Vault RFC draft exists).
+- Secrets are currently managed via flat env files pushed during provisioning. This is an interim solution — a HashiCorp Vault integration is planned (RFC draft exists) to replace plaintext env files with dynamic secret injection.
 
 ### Access Control
 

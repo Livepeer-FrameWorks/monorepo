@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"frameworks/cli/pkg/servicedefs"
+	"frameworks/pkg/servicedefs"
 )
 
 type portRegistry map[string]map[int]string

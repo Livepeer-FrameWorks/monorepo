@@ -706,6 +706,88 @@ func TestAgentSyncApplyFailurePropagates(t *testing.T) {
 	}
 }
 
+func TestNewDefaultsNodeTypeToEdge(t *testing.T) {
+	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
+	agent, err := New(Config{
+		NodeIDPath:       nodeIDPath,
+		NodeName:         "test-node",
+		Logger:           logging.NewLogger(),
+		MeshClient:       &fakeMeshClient{},
+		WireGuardManager: &fakeWireguard{},
+		DNSService:       &fakeDNS{},
+	})
+	if err != nil {
+		t.Fatalf("new agent: %v", err)
+	}
+	if agent.nodeType != "edge" {
+		t.Fatalf("expected default node type 'edge', got %q", agent.nodeType)
+	}
+}
+
+func TestNewPreservesExplicitNodeType(t *testing.T) {
+	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
+	agent, err := New(Config{
+		NodeIDPath:       nodeIDPath,
+		NodeName:         "test-node",
+		NodeType:         "api",
+		Logger:           logging.NewLogger(),
+		MeshClient:       &fakeMeshClient{},
+		WireGuardManager: &fakeWireguard{},
+		DNSService:       &fakeDNS{},
+	})
+	if err != nil {
+		t.Fatalf("new agent: %v", err)
+	}
+	if agent.nodeType != "api" {
+		t.Fatalf("expected node type 'api', got %q", agent.nodeType)
+	}
+}
+
+func TestBootstrapSendsNodeType(t *testing.T) {
+	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
+	if err := os.WriteFile(nodeIDPath, []byte("node-typed"), 0600); err != nil {
+		t.Fatalf("write node id: %v", err)
+	}
+
+	mesh := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{err: status.Error(codes.NotFound, "missing")},
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.2",
+				WireguardPort: 51820,
+			}},
+		},
+		bootstrapResponses: []meshBootstrapResult{
+			{resp: &pb.BootstrapInfrastructureNodeResponse{NodeId: "node-typed", ClusterId: "cluster-1"}},
+		},
+	}
+	wg := &fakeWireguard{pubKey: "pub", privKey: "priv"}
+	dns := &fakeDNS{}
+
+	agent, err := New(Config{
+		EnrollmentToken:  "token-type-test",
+		NodeIDPath:       nodeIDPath,
+		NodeName:         "typed-node",
+		NodeType:         "core",
+		Logger:           logging.NewLogger(),
+		MeshClient:       mesh,
+		WireGuardManager: wg,
+		DNSService:       dns,
+	})
+	if err != nil {
+		t.Fatalf("new agent: %v", err)
+	}
+
+	agent.sync()
+
+	if len(mesh.bootstrapRequests) != 1 {
+		t.Fatalf("expected 1 bootstrap request, got %d", len(mesh.bootstrapRequests))
+	}
+	if got := mesh.bootstrapRequests[0].GetNodeType(); got != "core" {
+		t.Fatalf("expected bootstrap node_type 'core', got %q", got)
+	}
+}
+
 func TestAgentSyncBootstrapRetryFailureClearsMeshState(t *testing.T) {
 	logger := logging.NewLogger()
 	nodeIDPath := filepath.Join(t.TempDir(), "node_id")

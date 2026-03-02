@@ -12,6 +12,7 @@ import (
 	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/proto"
+	"frameworks/pkg/servicedefs"
 )
 
 // MonitorConfig holds Cloudflare health monitor settings
@@ -38,8 +39,9 @@ type DNSManager struct {
 	lbTTL         int
 	staleAge      time.Duration
 	monitorConfig MonitorConfig
-	servicePorts  map[string]int // Service type -> HTTP health check port
-	certChecker   CertChecker    // optional; nil = no cert gating
+	servicePorts  map[string]int    // Service type -> HTTP health check port
+	healthPaths   map[string]string // Service type -> health check path
+	certChecker   CertChecker       // optional; nil = no cert gating
 }
 
 type cloudflareClient interface {
@@ -63,7 +65,7 @@ type cloudflareClient interface {
 }
 
 type quartermasterClient interface {
-	ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error)
+	ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error)
 	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
 }
 
@@ -80,6 +82,7 @@ func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.L
 		staleAge:      staleAge,
 		monitorConfig: monitorConfig,
 		servicePorts:  defaultServicePorts(),
+		healthPaths:   defaultServiceHealthPaths(),
 	}
 }
 
@@ -101,22 +104,36 @@ func isGranularEdgeService(serviceType string) bool {
 	return false
 }
 
-// defaultServicePorts returns the default HTTP health check port for each service type
+// defaultServicePorts returns the default HTTP health check port for each service type,
+// sourced from the canonical servicedefs registry where possible.
 func defaultServicePorts() map[string]int {
-	return map[string]int{
-		"edge":            18008, // Any edge node (nearest-node routing)
-		"edge-egress":     18008, // Direct to edge nodes (viewer delivery)
-		"edge-ingest":     18008, // Direct to edge nodes (stream receive)
-		"edge-storage":    18008, // Direct to edge nodes (artifact storage)
-		"edge-processing": 18008, // Direct to edge nodes (transcoding)
-		"foghorn":         18008, // Foghorn viewer routing
-		"gateway":         18001, // Bridge HTTP port (alias)
-		"bridge":          18001, // Bridge HTTP port
-		"chartroom":       3000,  // SvelteKit dashboard
-		"website":         4321,  // Astro marketing (root domain)
-		"logbook":         4321,  // Astro docs
-		"steward":         18032, // Steward forms API
+	ports := map[string]int{
+		"edge":            18008,
+		"edge-egress":     18008,
+		"edge-ingest":     18008,
+		"edge-storage":    18008,
+		"edge-processing": 18008,
 	}
+	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward", "listmonk", "chatwoot"} {
+		if svc, ok := servicedefs.Lookup(name); ok {
+			ports[name] = svc.DefaultPort
+		}
+	}
+	return ports
+}
+
+// defaultServiceHealthPaths returns the health check path for each service type.
+func defaultServiceHealthPaths() map[string]string {
+	paths := make(map[string]string)
+	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward", "listmonk", "chatwoot"} {
+		if svc, ok := servicedefs.Lookup(name); ok && svc.HealthPath != "" {
+			paths[name] = svc.HealthPath
+		}
+	}
+	for _, e := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
+		paths[e] = "/health"
+	}
+	return paths
 }
 
 func loadProxyServices() map[string]bool {
@@ -124,7 +141,7 @@ func loadProxyServices() map[string]bool {
 	if env == "" {
 		return map[string]bool{
 			"chartroom": true,
-			"website":   true,
+			"foredeck":  true,
 			"logbook":   true,
 		}
 	}
@@ -172,14 +189,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		return nil, fmt.Errorf("failed to list clusters: %w", err)
 	}
 
-	var nodeTypeParam, serviceTypeParam string
-	switch serviceType {
-	case "edge-egress", "edge-ingest", "edge-storage", "edge-processing":
-		serviceTypeParam = serviceType
-	default:
-		nodeTypeParam = serviceType
-	}
-	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, nodeTypeParam, int(m.staleAge.Seconds()), serviceTypeParam)
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, int(m.staleAge.Seconds()), serviceType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
@@ -303,9 +313,9 @@ func isEdgeNodeRecord(recordName, prefix, suffix string) bool {
 func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {
 	subdomain := serviceType
 	switch serviceType {
-	case "gateway", "bridge":
+	case "bridge":
 		subdomain = "bridge"
-	case "website":
+	case "foredeck":
 		return rootDomain
 	}
 	return fmt.Sprintf("%s.%s", subdomain, rootDomain)
@@ -320,7 +330,7 @@ func (m *DNSManager) syncClusterService(ctx context.Context, fqdn, serviceType s
 	return m.applyLoadBalancerConfig(ctx, fqdn, poolName, serviceType, ips, m.shouldProxy(serviceType))
 }
 
-// SyncService synchronizes DNS records for a specific service type (e.g. "edge", "gateway")
+// SyncService synchronizes DNS records for a specific service type (e.g. "edge", "bridge")
 // It implements the "Smart Record" logic:
 // - 1 healthy node -> A record (Direct IP)
 // - >1 healthy nodes -> Load Balancer Pool + CNAME
@@ -329,14 +339,7 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	log.Info("Starting DNS sync")
 
 	// 1. Fetch Inventory from Quartermaster via gRPC
-	var nodeTypeParam, serviceTypeParam string
-	switch serviceType {
-	case "edge-egress", "edge-ingest", "edge-storage", "edge-processing":
-		serviceTypeParam = serviceType
-	default:
-		nodeTypeParam = serviceType
-	}
-	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, nodeTypeParam, int(m.staleAge.Seconds()), serviceTypeParam)
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, int(m.staleAge.Seconds()), serviceType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
@@ -368,16 +371,20 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 		subdomain = "edge-processing"
 	case "foghorn":
 		subdomain = "foghorn"
-	case "gateway", "bridge":
+	case "bridge":
 		subdomain = "bridge"
 	case "chartroom":
 		subdomain = "chartroom"
-	case "website":
+	case "foredeck":
 		subdomain = "@" // Root
 	case "logbook":
 		subdomain = "logbook"
 	case "steward":
 		subdomain = "steward"
+	case "listmonk":
+		subdomain = "listmonk"
+	case "chatwoot":
+		subdomain = "chatwoot"
 	default:
 		return nil, fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
 	}
@@ -661,12 +668,16 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 	}
 
 	// Create new monitor
+	path := m.healthPaths[serviceType]
+	if path == "" {
+		path = "/health"
+	}
 	m.logger.WithFields(logging.Fields{"name": monitorName, "port": port}).Info("Creating health check monitor")
 	monitor := cloudflare.Monitor{
 		Type:          "http",
 		Description:   monitorName,
 		Method:        "GET",
-		Path:          "/health",
+		Path:          path,
 		Port:          port,
 		Timeout:       m.monitorConfig.Timeout,
 		Interval:      m.monitorConfig.Interval,

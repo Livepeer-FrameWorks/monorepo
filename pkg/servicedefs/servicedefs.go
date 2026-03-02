@@ -37,6 +37,7 @@ var Services = map[string]Service{
 	// AI / support
 	"skipper":  {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
 	"deckhand": {ID: "deckhand", DefaultPort: 18015, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
+	"chatwoot": {ID: "chatwoot", DefaultPort: 18092, HealthPath: "/api", HealthProtocol: "http", Role: "support"},
 
 	// Surfaces (interfaces)
 	"chartroom": {ID: "chartroom", DefaultPort: 18030, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
@@ -84,20 +85,79 @@ func DefaultPort(id string) (int, bool) {
 	return s.DefaultPort, true
 }
 
-var defaultGRPCPorts = map[string]int{
-	"commodore":       19001,
-	"quartermaster":   19002,
-	"purser":          19003,
-	"periscope-query": 19004,
-	"signalman":       19005,
-	"skipper":         19007,
-	"deckhand":        19006,
-	"navigator":       18011,
-	"foghorn":         18019,
+// GRPCService defines a service's gRPC endpoint for env var generation.
+type GRPCService struct {
+	ServiceID string // Canonical service ID (matches manifest key)
+	EnvKey    string // Env var key consumers use (e.g. PERISCOPE_GRPC_ADDR)
+	Port      int    // Default gRPC port
+}
+
+// grpcServices is the canonical list of services with gRPC endpoints.
+// EnvKey is what consumers actually read — no string transforms.
+var grpcServices = []GRPCService{
+	{ServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Port: 19001},
+	{ServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Port: 19002},
+	{ServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Port: 19003},
+	{ServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Port: 19004},
+	{ServiceID: "signalman", EnvKey: "SIGNALMAN_GRPC_ADDR", Port: 19005},
+	{ServiceID: "deckhand", EnvKey: "DECKHAND_GRPC_ADDR", Port: 19006},
+	{ServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Port: 19007},
+	{ServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Port: 18011},
+	{ServiceID: "foghorn", EnvKey: "FOGHORN_GRPC_ADDR", Port: 18019},
 }
 
 // DefaultGRPCPort returns the default gRPC port for a canonical ID, if defined.
 func DefaultGRPCPort(id string) (int, bool) {
-	port, ok := defaultGRPCPorts[id]
-	return port, ok
+	for _, svc := range grpcServices {
+		if svc.ServiceID == id {
+			return svc.Port, true
+		}
+	}
+	return 0, false
+}
+
+// GRPCServices returns the full list of gRPC service definitions.
+func GRPCServices() []GRPCService {
+	out := make([]GRPCService, len(grpcServices))
+	copy(out, grpcServices)
+	return out
+}
+
+// GRPCPorts returns a map of service ID to gRPC port (for backward compatibility).
+func GRPCPorts() map[string]int {
+	out := make(map[string]int, len(grpcServices))
+	for _, svc := range grpcServices {
+		out[svc.ServiceID] = svc.Port
+	}
+	return out
+}
+
+// RequiredEnvVar describes an env var that requires operator input (not auto-generated).
+type RequiredEnvVar struct {
+	Key        string
+	SetupGuide string
+}
+
+var requiredExternalEnv = map[string][]RequiredEnvVar{
+	"deckhand": {
+		{Key: "CHATWOOT_API_TOKEN", SetupGuide: "Chatwoot admin > Settings > Application > Access Token"},
+	},
+	"navigator": {
+		{Key: "CLOUDFLARE_API_TOKEN", SetupGuide: "https://dash.cloudflare.com/profile/api-tokens"},
+		{Key: "CLOUDFLARE_ZONE_ID", SetupGuide: "Cloudflare dashboard > domain > Zone ID"},
+		{Key: "CLOUDFLARE_ACCOUNT_ID", SetupGuide: "Cloudflare dashboard > Account Home"},
+		{Key: "NAVIGATOR_ROOT_DOMAIN", SetupGuide: "Your root domain (e.g. example.com)"},
+	},
+	"chatwoot": {
+		{Key: "DATABASE_HOST", SetupGuide: "Enable postgres in infrastructure config"},
+		{Key: "REDIS_CHATWOOT_ADDR", SetupGuide: "Add a redis instance named 'chatwoot' to infrastructure config"},
+	},
+	"listmonk": {
+		{Key: "DATABASE_HOST", SetupGuide: "Enable postgres in infrastructure config"},
+	},
+}
+
+// RequiredExternalEnv returns required env vars that need operator input for a service.
+func RequiredExternalEnv(serviceID string) []RequiredEnvVar {
+	return requiredExternalEnv[serviceID]
 }

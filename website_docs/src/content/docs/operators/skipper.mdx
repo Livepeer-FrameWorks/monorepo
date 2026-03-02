@@ -747,3 +747,86 @@ Search uses a hybrid approach: 70% cosine vector similarity + 30% PostgreSQL ful
   Model pricing changes frequently. Verify with provider documentation before committing to a
   provider.
 </Aside>
+
+---
+
+## Heartbeat Monitoring
+
+Skipper periodically analyzes the health of active streams and infrastructure. The heartbeat agent runs every `HEARTBEAT_INTERVAL` (default 30 minutes) and processes each eligible tenant.
+
+### How It Works
+
+For each tenant with active streams and a qualifying billing tier:
+
+1. **Snapshot** — fetches stream health and client QoE metrics from Periscope for the last 15 minutes
+2. **Baseline comparison** — compares current metrics against Welford running averages that the heartbeat has been building over time. Deviations are detected when a metric exceeds 2 standard deviations from the mean (requires at least 5 samples to avoid false positives during warmup).
+3. **Triage** — a deterministic decision cascade (no LLM calls):
+   - Hard threshold violation → investigate
+   - Cross-metric correlation with ≥ 50% confidence → investigate
+   - Baseline deviations → flag for review
+   - Everything normal → skip
+4. **Per-stream drill-down** — when something looks wrong, Skipper fetches per-stream metrics, compares each against the tenant-wide baseline, and identifies the most anomalous streams (up to 20).
+5. **Investigation** — only when the triage result is "investigate", Skipper runs the chat orchestrator with the full diagnostic context (deviations, correlations, per-stream anomalies, raw metrics). This is the only step that uses LLM tokens.
+6. **Notification** — investigation reports and flag summaries are dispatched via email, WebSocket, or MCP.
+
+Healthy tenants consume zero LLM calls per heartbeat cycle.
+
+### Cross-Metric Correlation
+
+The diagnostics engine matches deviation patterns against 5 known failure hypotheses: network degradation, encoder overload, viewer-side issues, ingest instability, and CDN pressure. Each hypothesis has expected signal patterns (e.g., network degradation = packet_loss↑ + bandwidth_in↓ + buffer_health↓). Confidence is calculated as matched signals / total expected signals.
+
+### Infrastructure Monitoring
+
+Independently of per-tenant stream health, the heartbeat checks node-level metrics across all active clusters:
+
+- CPU ≥ 95% and memory ≥ 95% require the violation to persist across 3 of 4 five-minute windows before alerting (prevents transient spikes)
+- Disk ≥ 90% triggers a warning; ≥ 95% is critical (fires immediately since disk doesn't self-heal)
+- Alerts are emailed to the cluster owner with a 4-hour cooldown per node/alert type
+
+### Configuration
+
+**Heartbeat:**
+
+| Variable                      | Purpose                                       | Default |
+| ----------------------------- | --------------------------------------------- | ------- |
+| `HEARTBEAT_INTERVAL`          | How often to run the heartbeat cycle          | `30m`   |
+| `SKIPPER_REQUIRED_TIER_LEVEL` | Minimum billing tier for heartbeat processing | `3`     |
+
+**Notifications** (email):
+
+| Variable        | Purpose                      | Default |
+| --------------- | ---------------------------- | ------- |
+| `SMTP_HOST`     | SMTP server hostname         | —       |
+| `SMTP_PORT`     | SMTP server port             | `587`   |
+| `SMTP_FROM`     | Sender email address         | —       |
+| `SMTP_USERNAME` | SMTP authentication username | —       |
+| `SMTP_PASSWORD` | SMTP authentication password | —       |
+
+---
+
+## Social Posting
+
+When enabled, Skipper drafts social media posts based on noteworthy platform events. Posts are sent as drafts to a configured email address for human review — nothing is auto-published.
+
+### How It Works
+
+The social agent checks for noteworthy events every `SKIPPER_SOCIAL_INTERVAL` (default 2 hours):
+
+1. **Event collection** — the heartbeat agent and knowledge crawler push signals into a collector as they run (platform stats, federation metrics, newly embedded pages)
+2. **Detection** — the detector classifies signals, compares against stored baselines, and scores them:
+   - **Platform stats**: new viewer record, bandwidth milestone (1/10/100/1000 Gbps), significant viewer surge (>25% growth)
+   - **Federation**: latency improvement (>20% drop), event volume milestone
+   - **Knowledge**: newly crawled and embedded documentation page
+3. **Composition** — the utility LLM drafts a tweet (max 280 characters). It receives the last 10 posts to avoid repeating themes. If the draft exceeds 280 characters, it retries once, then truncates at the nearest word boundary.
+4. **Publishing** — the draft is saved to the database and emailed to `SKIPPER_SOCIAL_NOTIFY_EMAIL` for review.
+
+The first observation for each signal type saves a baseline instead of posting — subsequent signals are compared against it.
+
+### Configuration
+
+| Variable                      | Purpose                                               | Default |
+| ----------------------------- | ----------------------------------------------------- | ------- |
+| `SKIPPER_SOCIAL_ENABLED`      | Enable the social posting agent                       | `false` |
+| `SKIPPER_SOCIAL_INTERVAL`     | How often to check for noteworthy events              | `2h`    |
+| `SKIPPER_SOCIAL_MAX_PER_DAY`  | Max posts per day (`0` = unlimited)                   | `2`     |
+| `SKIPPER_SOCIAL_NOTIFY_EMAIL` | Email to send draft tweets to (required when enabled) | —       |

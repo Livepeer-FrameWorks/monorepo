@@ -56,7 +56,7 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, host inventory.Host
 	}
 
 	// Generate Ansible playbook (use address as identifier)
-	hostID := host.Address
+	hostID := host.ExternalIP
 	if hostID == "" {
 		hostID = "localhost"
 	}
@@ -67,7 +67,7 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, host inventory.Host
 	inv := ansible.NewInventory()
 	inv.AddHost(&ansible.InventoryHost{
 		Name:    hostID,
-		Address: host.Address,
+		Address: host.ExternalIP,
 		Vars: map[string]string{
 			"ansible_user":                 host.User,
 			"ansible_ssh_private_key_file": host.SSHKey,
@@ -100,14 +100,14 @@ func (p *PostgresProvisioner) Validate(ctx context.Context, host inventory.Host,
 		Database: "postgres",
 	}
 
-	result := checker.Check(host.Address, config.Port)
+	result := checker.Check(host.ExternalIP, config.Port)
 	if !result.OK {
 		return fmt.Errorf("postgres health check failed: %s", result.Error)
 	}
 
 	dbNames := databaseNamesFromMetadata(config.Metadata)
 	if len(dbNames) > 0 {
-		dbResult := checker.CheckDatabases(host.Address, config.Port, dbNames)
+		dbResult := checker.CheckDatabases(host.ExternalIP, config.Port, dbNames)
 		if !dbResult.OK {
 			return fmt.Errorf("postgres database readiness failed: %s", dbResult.Error)
 		}
@@ -120,7 +120,7 @@ func (p *PostgresProvisioner) Validate(ctx context.Context, host inventory.Host,
 func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	// Connection string for postgres database
 	connStr := fmt.Sprintf("host=%s port=%d user=postgres dbname=postgres sslmode=disable",
-		host.Address, config.Port)
+		host.ExternalIP, config.Port)
 
 	// Get databases to initialize from config
 	dbList, ok := config.Metadata["databases"].([]map[string]string)
@@ -202,7 +202,7 @@ func (p *PostgresProvisioner) executeEmbeddedSQL(ctx context.Context, host inven
 	}
 
 	connStr := fmt.Sprintf("host=%s port=%d user=postgres dbname=%s sslmode=disable",
-		host.Address, port, dbName)
+		host.ExternalIP, port, dbName)
 
 	return ExecuteSQLFile(ctx, connStr, string(sqlContent))
 }

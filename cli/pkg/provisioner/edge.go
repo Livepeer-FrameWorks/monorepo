@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/preflight"
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
@@ -164,7 +165,7 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 
 	// [1/7] Preflight
 	if !config.SkipPreflight {
-		fmt.Printf("[1/7] Running preflight checks on %s...\n", host.Address)
+		fmt.Printf("[1/7] Running preflight checks on %s...\n", host.ExternalIP)
 		if err := e.runPreflight(ctx, host, mode); err != nil {
 			return fmt.Errorf("preflight failed: %w", err)
 		}
@@ -226,7 +227,7 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		fmt.Println("[7/7] No domain set, skipping HTTPS verification")
 	}
 
-	fmt.Printf("Edge node provisioned successfully on %s (%s mode)\n", host.Address, mode)
+	fmt.Printf("Edge node provisioned successfully on %s (%s mode)\n", host.ExternalIP, mode)
 	return nil
 }
 
@@ -260,10 +261,27 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 		return fmt.Errorf("ports 80/443 already in use:\n%s", result.Stdout)
 	}
 
-	// Common: disk space
-	result, err = e.RunCommand(ctx, host, "df -Pk / | tail -1 | awk '{print $4}'")
+	// Common: disk space on / and /var/lib (20GB free, 10% minimum)
+	const minDiskFreeBytes = 20 * 1024 * 1024 * 1024
+	const minDiskFreePercent = 10.0
+	for _, path := range []string{"/", "/var/lib"} {
+		result, err = e.RunCommand(ctx, host, fmt.Sprintf("df -Pk %s", path))
+		if err != nil || result.ExitCode != 0 {
+			return fmt.Errorf("disk check failed for %s", path)
+		}
+		check := preflight.DiskSpaceFromDF(result.Stdout, path, minDiskFreeBytes, minDiskFreePercent)
+		if !check.OK {
+			return fmt.Errorf("insufficient disk space on %s: %s", path, check.Detail)
+		}
+		fmt.Printf("  disk %s: %s\n", path, check.Detail)
+	}
+
+	// Common: /dev/shm (needed for MistServer shared memory)
+	result, err = e.RunCommand(ctx, host, "df -h /dev/shm")
 	if err == nil && result.ExitCode == 0 {
-		fmt.Printf("  disk: / available\n")
+		fmt.Println("  /dev/shm: available")
+	} else {
+		fmt.Println("  /dev/shm: not mounted (MistServer may need --shm-size)")
 	}
 
 	return nil
@@ -773,7 +791,7 @@ func (e *EdgeProvisioner) Detect(ctx context.Context, host inventory.Host) (*det
 func (e *EdgeProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	// Check Caddy on port 443
 	checker := &health.TCPChecker{Timeout: 5 * time.Second}
-	result := checker.Check(host.Address, 443)
+	result := checker.Check(host.ExternalIP, 443)
 	if !result.OK {
 		return fmt.Errorf("edge HTTPS port check failed: %s", result.Error)
 	}

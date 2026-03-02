@@ -122,12 +122,12 @@ func runSyncGeoIP(_ *cobra.Command, manifestPath, licenseKey, source, filePath, 
 		}
 
 		connCfg := &ssh.ConnectionConfig{
-			Address: host.Address,
+			Address: host.ExternalIP,
 			User:    host.User,
 			KeyPath: host.SSHKey,
 		}
 
-		fmt.Printf("Uploading to %s (%s)...\n", hostName, host.Address)
+		fmt.Printf("Uploading to %s (%s)...\n", hostName, host.ExternalIP)
 		if err := pool.Upload(ctx, connCfg, ssh.UploadOptions{
 			LocalPath:  mmdbPath,
 			RemotePath: remotePath,

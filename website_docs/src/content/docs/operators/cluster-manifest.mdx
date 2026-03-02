@@ -20,9 +20,10 @@ The cluster manifest is the blueprint for your FrameWorks deployment. It's a YAM
 version: v1
 type: cluster
 profile: production
+channel: stable # optional: stable (default) or rc
+env_file: secrets/production.env # optional: shared secrets
 hosts: {}
 clusters: {}
-wireguard: {}
 infrastructure: {}
 services: {}
 interfaces: {}
@@ -74,17 +75,48 @@ profile: production
 
 ---
 
+### channel
+
+Release channel to track (optional). Defaults to `stable`.
+
+**Values:** `stable` (production-ready), `rc` (release candidate for staging/testing).
+
+**Example:**
+
+```yaml
+channel: rc
+```
+
+---
+
+### env_file
+
+Path to a shared environment file for all services (optional). Relative to the manifest directory. Values in this file override auto-generated environment variables (DATABASE_URL, KAFKA_BROKERS, etc.) but are overridden by per-service `env_file` and inline `config` entries.
+
+**Example:**
+
+```yaml
+env_file: secrets/production.env
+```
+
+---
+
 ### hosts
 
-Map of host definitions for SSH access.
+Map of host definitions for SSH access. The CLI connects to each host via SSH using `external_ip`.
+
+<Aside type="note">
+  Mesh IPs (WireGuard addresses) are **not** defined in the manifest. They are assigned at runtime
+  by Quartermaster when Privateer calls SyncMesh. The manifest only contains the public IPs that the
+  CLI can reach via SSH.
+</Aside>
 
 **Format:**
 
 ```yaml
 hosts:
   <hostname>:
-    address: <ip-or-hostname>
-    external_ip: <public-ip> # optional
+    external_ip: <public-ip>
     user: <ssh-user>
     ssh_key: <path-to-private-key> # optional
     roles: [infrastructure, services] # optional
@@ -94,8 +126,7 @@ hosts:
 
 **Fields:**
 
-- `address` (required) - IP address or hostname
-- `external_ip` (optional) - Public IP used for DNS registration
+- `external_ip` (required) - Public IP address used for SSH and DNS registration
 - `user` (required) - SSH username
 - `ssh_key` (optional) - Path to SSH private key
 - `roles` (optional) - Arbitrary tags used for human grouping
@@ -148,20 +179,20 @@ Resolution priority:
 
 ### wireguard
 
-WireGuard mesh configuration for backend infrastructure nodes. Managed by Privateer (`api_mesh`).
+WireGuard mesh configuration. In most deployments this section is **not needed** — Privateer (`api_mesh`) automatically manages the WireGuard mesh via Quartermaster's SyncMesh API.
 
-**Format:**
+<Aside type="tip">
+  The recommended approach is to omit the `wireguard` section entirely and let Privateer handle mesh
+  setup. Quartermaster allocates IPs from the `10.200.0.0/16` range automatically.
+</Aside>
+
+**Format (advanced/override only):**
 
 ```yaml
 wireguard:
   enabled: true
   interface: wg0
   manage_hosts_file: true
-  peers:
-    - name: central-01
-      public_key: <pubkey>
-      endpoint: 1.2.3.4:51820
-      allowed_ips: ["10.18.0.10/32"]
 ```
 
 **Fields:**
@@ -169,8 +200,8 @@ wireguard:
 - `enabled` (required)
 - `interface` (optional, default `wg0`)
 - `manage_hosts_file` (optional) - Write WireGuard hostnames into `/etc/hosts`
-- `peers` (optional) - Static peers (manual mesh only)
-  > Edge nodes do not join the mesh.
+
+> Edge nodes do not join the mesh.
 
 ---
 
@@ -328,19 +359,34 @@ services:
 
 - `enabled` (required)
 - `mode` (required) - `docker` or `native`
-- `version` (required)
+- `version` (optional) - Version or channel to track
 - `image` (optional) - Docker image (docker mode)
 - `binary_url` (optional) - Binary download URL (native mode)
 - `deploy` (optional) - Override deploy slug (container/binary name)
 - `cluster` (optional) - Explicit cluster assignment. Must reference a key in `clusters`. When omitted, the service's role determines its cluster automatically
 - `host` (optional) - Single host
-- `hosts` (optional) - Multiple hosts for replicas
+- `hosts` (optional) - Multiple hosts for replicas. The CLI creates one task per host (e.g., `bridge@regional-eu-1`)
 - `replicas` (optional) - Replica count
 - `port` (optional)
 - `grpc_port` (optional)
-- `env_file` (optional)
+- `env_file` (optional) - Per-service env file (overrides the top-level `env_file`)
 - `depends_on` (optional)
-- `config` (optional) - Service-specific settings
+- `config` (optional) - Inline key/value overrides (highest priority)
+
+<Aside type="note" title="Privateer auto-deploy">
+  When `privateer` has no `host` or `hosts` field, the CLI automatically deploys it to **every
+  host** in the manifest. This ensures the WireGuard mesh covers all nodes before application
+  services start.
+</Aside>
+
+**Environment variable merge order** (later wins):
+
+1. Auto-generated from manifest infrastructure (DATABASE_URL, KAFKA_BROKERS, QUARTERMASTER_GRPC_ADDR, etc.)
+2. Top-level `env_file`
+3. Per-service `env_file`
+4. Inline `config` map
+
+The merged result is written to `/etc/frameworks/{service}.env` on each host.
 
 ---
 

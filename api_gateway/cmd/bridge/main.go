@@ -586,7 +586,7 @@ func main() {
 		advertiseHost := config.GetEnv("BRIDGE_HOST", "bridge")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
 		req := &pb.BootstrapServiceRequest{
-			Type:           "gateway",
+			Type:           "bridge",
 			Version:        version.Version,
 			Protocol:       "http",
 			HealthEndpoint: &healthEndpoint,
@@ -602,9 +602,9 @@ func main() {
 		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
 			req.NodeId = &nodeID
 		}
-		resp, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), serviceClients.Quartermaster, req, logger, qmbootstrap.DefaultRetryConfig("gateway"))
+		resp, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), serviceClients.Quartermaster, req, logger, qmbootstrap.DefaultRetryConfig("bridge"))
 		if err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
+			logger.WithError(err).Warn("Quartermaster bootstrap (bridge) failed")
 		} else {
 			if resp != nil && resp.GetOwnerTenantId() != "" {
 				usageTracker.SetServiceTenantID(resp.GetOwnerTenantId())

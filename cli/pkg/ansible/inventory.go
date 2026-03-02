@@ -124,7 +124,7 @@ func FromManifest(manifest *inventory.Manifest) *Inventory {
 	for name, host := range manifest.Hosts {
 		invHost := &InventoryHost{
 			Name:    name,
-			Address: host.Address,
+			Address: host.ExternalIP,
 			Vars:    make(map[string]string),
 		}
 

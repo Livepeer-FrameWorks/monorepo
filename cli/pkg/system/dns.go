@@ -15,7 +15,7 @@ type SystemdResolvedConfig struct {
 func GenerateSystemdResolvedConfig(port int) (string, error) {
 	const tmpl = `[Resolve]
 DNS=127.0.0.1:{{.Port}}
-Domains=~internal
+Domains=internal
 DNSStubListener=yes
 `
 	t, err := template.New("resolved").Parse(tmpl)

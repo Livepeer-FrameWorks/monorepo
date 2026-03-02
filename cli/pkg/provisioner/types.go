@@ -40,9 +40,11 @@ type ServiceConfig struct {
 	Port       int                    // Primary port
 	Ports      []int                  // Additional ports
 	EnvFile    string                 // Path to env file
+	EnvVars    map[string]string      // Merged env vars to write to the service env file
 	DependsOn  []string               // Service dependencies
 	Metadata   map[string]interface{} // Service-specific config
 	Force      bool                   // Force re-provision even if exists
+	DeferStart bool                   // Deploy but don't start (missing required config)
 }
 
 // ProvisionContext holds context for provisioning operations

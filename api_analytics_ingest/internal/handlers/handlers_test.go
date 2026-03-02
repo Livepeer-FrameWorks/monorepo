@@ -912,7 +912,7 @@ func TestHandleServiceEventMissingTenantIDWritesIngestError(t *testing.T) {
 		EventID:   uuid.NewString(),
 		EventType: "tenant_created",
 		Timestamp: time.Now(),
-		Source:    "api_gateway",
+		Source:    "bridge",
 		TenantID:  "",
 		Data:      map[string]interface{}{"tenant_name": "acme"},
 	}

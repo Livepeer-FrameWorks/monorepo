@@ -5,7 +5,7 @@ var (
 	Version          = "dev"     // semantic version (e.g., v1.2.3)
 	GitCommit        = "unknown" // git commit hash
 	BuildDate        = "unknown" // build timestamp
-	ComponentName    = "unknown" // microservice/component name, e.g., gateway, quartermaster, cli
+	ComponentName    = "unknown" // microservice/component name, e.g., bridge, quartermaster, cli
 	ComponentVersion = "0.0.0"   // per-component SemVer (e.g., 1.7.3)
 )
 

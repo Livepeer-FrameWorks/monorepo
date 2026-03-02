@@ -69,9 +69,13 @@ func NewClient(config *ConnectionConfig) (*Client, error) {
 
 	// Connect
 	addr := fmt.Sprintf("%s:%d", config.Address, config.Port)
+	fmt.Fprintf(os.Stderr, "  Connecting to %s@%s...\n", config.User, addr)
 	conn, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial SSH: %w", err)
+		if isTimeoutError(err) {
+			return nil, fmt.Errorf("connection timed out reaching %s (is the host reachable?)", addr)
+		}
+		return nil, fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
 
 	return &Client{
@@ -150,6 +154,15 @@ func createTOFUCallback(knownHostsPath string, address string, port int) ssh.Hos
 		// New host - trust on first use
 		return trustAndSaveHostKey(knownHostsPath, hostname, remote, key)
 	}
+}
+
+// isTimeoutError checks if an error is a network timeout
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
 }
 
 // isKeyNotFoundError checks if the error indicates a new/unknown host

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/cli/pkg/inventory"
-	"frameworks/cli/pkg/servicedefs"
+	"frameworks/pkg/servicedefs"
 )
 
 // Planner creates execution plans from manifests
@@ -182,7 +182,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			Name:       "quartermaster",
 			Type:       deploy,
 			Host:       svc.Host,
-			ClusterID:  p.manifest.ResolveCluster("quartermaster"),
+			ClusterID:  p.manifest.HostCluster(svc.Host),
 			DependsOn:  infraDeps,
 			Phase:      PhaseApplications,
 			Idempotent: true,
@@ -190,10 +190,9 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	}
 
 	// 2. Privateer (System Mesh)
-	// Depends on Quartermaster (for token)
-	// Note: Privateer needs to be provisioned on ALL infrastructure nodes eventually.
-	// For now, we assume it's listed in the services manifest or we iterate all hosts.
-	// If 'privateer' is explicit in manifest services:
+	// Depends on Quartermaster (for enrollment token).
+	// Privateer must be provisioned on ALL hosts so the mesh covers every node
+	// before application services deploy (they rely on mesh DNS for discovery).
 	if svc, ok := p.manifest.Services["privateer"]; ok && svc.Enabled {
 		deploy, ok := servicedefs.DeployName("privateer", svc.Deploy)
 		if !ok {
@@ -204,25 +203,42 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			qmDep = append(qmDep, "quartermaster")
 		}
 
-		graph.AddTask(&Task{
-			Name:       "privateer",
-			Type:       deploy,
-			Host:       svc.Host,
-			ClusterID:  p.manifest.ResolveCluster("privateer"),
-			DependsOn:  qmDep,
-			Phase:      PhaseApplications, // Technically infra/system, but needs QM up
-			Idempotent: true,
-		})
+		// Deploy to explicitly listed hosts, or all non-edge manifest hosts if none specified.
+		// Privateer runs on core nodes only; edge nodes enroll through Foghorn.
+		privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
+
+		for _, hostName := range privateerHosts {
+			taskName := "privateer"
+			if len(privateerHosts) > 1 {
+				taskName = fmt.Sprintf("privateer@%s", hostName)
+			}
+			graph.AddTask(&Task{
+				Name:       taskName,
+				Type:       deploy,
+				Host:       hostName,
+				ClusterID:  p.manifest.HostCluster(hostName),
+				DependsOn:  qmDep,
+				Phase:      PhaseApplications,
+				Idempotent: true,
+			})
+		}
 	}
 
 	// 3. Other Applications
-	// Depend on Quartermaster AND Privateer
+	// Depend on Quartermaster AND all Privateer instances (mesh must be up first)
 	coreDeps := append([]string{}, infraDeps...)
 	if _, ok := p.manifest.Services["quartermaster"]; ok {
 		coreDeps = append(coreDeps, "quartermaster")
 	}
-	if _, ok := p.manifest.Services["privateer"]; ok {
-		coreDeps = append(coreDeps, "privateer")
+	if svc, ok := p.manifest.Services["privateer"]; ok && svc.Enabled {
+		privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
+		if len(privateerHosts) == 1 {
+			coreDeps = append(coreDeps, "privateer")
+		} else {
+			for _, h := range privateerHosts {
+				coreDeps = append(coreDeps, fmt.Sprintf("privateer@%s", h))
+			}
+		}
 	}
 
 	for name, svc := range p.manifest.Services {
@@ -237,18 +253,60 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			return fmt.Errorf("unknown service id: %s", name)
 		}
 
-		graph.AddTask(&Task{
-			Name:       name,
-			Type:       deploy,
-			Host:       svc.Host,
-			ClusterID:  p.manifest.ResolveCluster(name),
-			DependsOn:  coreDeps,
-			Phase:      PhaseApplications,
-			Idempotent: true,
-		})
+		hosts := resolveHosts(svc)
+		for _, hostName := range hosts {
+			taskName := name
+			if len(hosts) > 1 {
+				taskName = fmt.Sprintf("%s@%s", name, hostName)
+			}
+			graph.AddTask(&Task{
+				Name:       taskName,
+				Type:       deploy,
+				Host:       hostName,
+				ClusterID:  p.manifest.HostCluster(hostName),
+				DependsOn:  coreDeps,
+				Phase:      PhaseApplications,
+				Idempotent: true,
+			})
+		}
 	}
 
 	return nil
+}
+
+// resolveHosts returns the host list for a service config.
+// Uses Hosts (plural) if set, otherwise falls back to single Host.
+func resolveHosts(svc inventory.ServiceConfig) []string {
+	if len(svc.Hosts) > 0 {
+		return svc.Hosts
+	}
+	if svc.Host != "" {
+		return []string{svc.Host}
+	}
+	return nil
+}
+
+// EffectivePrivateerHosts returns the hosts that should run Privateer.
+// Uses explicit hosts if specified, otherwise all non-edge manifest hosts.
+func EffectivePrivateerHosts(svc inventory.ServiceConfig, hosts map[string]inventory.Host) []string {
+	explicit := resolveHosts(svc)
+	if len(explicit) > 0 {
+		return explicit
+	}
+	var result []string
+	for name, h := range hosts {
+		isEdge := false
+		for _, role := range h.Roles {
+			if role == "edge" {
+				isEdge = true
+				break
+			}
+		}
+		if !isEdge {
+			result = append(result, name)
+		}
+	}
+	return result
 }
 
 // addInterfaceTasks adds interface service provisioning tasks
@@ -256,12 +314,23 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 	// Interfaces depend on application services
 	appDeps := []string{}
 	for name, svc := range p.manifest.Services {
-		if svc.Enabled {
+		if !svc.Enabled {
+			continue
+		}
+		hosts := resolveHosts(svc)
+		if name == "privateer" && len(hosts) == 0 {
+			hosts = EffectivePrivateerHosts(svc, p.manifest.Hosts)
+		}
+		if len(hosts) > 1 {
+			for _, h := range hosts {
+				appDeps = append(appDeps, fmt.Sprintf("%s@%s", name, h))
+			}
+		} else {
 			appDeps = append(appDeps, name)
 		}
 	}
 
-	// Add each interface service
+	// Add each interface service (with multi-host support)
 	for name, iface := range p.manifest.Interfaces {
 		if !iface.Enabled {
 			continue
@@ -271,15 +340,22 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 			return fmt.Errorf("unknown interface id: %s", name)
 		}
 
-		graph.AddTask(&Task{
-			Name:       name,
-			Type:       deploy,
-			Host:       iface.Host,
-			ClusterID:  p.manifest.ResolveCluster(name),
-			DependsOn:  appDeps,
-			Phase:      PhaseInterfaces,
-			Idempotent: true,
-		})
+		hosts := resolveHosts(iface)
+		for _, hostName := range hosts {
+			taskName := name
+			if len(hosts) > 1 {
+				taskName = fmt.Sprintf("%s@%s", name, hostName)
+			}
+			graph.AddTask(&Task{
+				Name:       taskName,
+				Type:       deploy,
+				Host:       hostName,
+				ClusterID:  p.manifest.HostCluster(hostName),
+				DependsOn:  appDeps,
+				Phase:      PhaseInterfaces,
+				Idempotent: true,
+			})
+		}
 	}
 
 	// Observability stack (treated as interfaces for ordering)
@@ -292,15 +368,22 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 			return fmt.Errorf("unknown observability id: %s", name)
 		}
 
-		graph.AddTask(&Task{
-			Name:       name,
-			Type:       deploy,
-			Host:       obs.Host,
-			ClusterID:  p.manifest.ResolveCluster(name),
-			DependsOn:  appDeps,
-			Phase:      PhaseInterfaces,
-			Idempotent: true,
-		})
+		hosts := resolveHosts(obs)
+		for _, hostName := range hosts {
+			taskName := name
+			if len(hosts) > 1 {
+				taskName = fmt.Sprintf("%s@%s", name, hostName)
+			}
+			graph.AddTask(&Task{
+				Name:       taskName,
+				Type:       deploy,
+				Host:       hostName,
+				ClusterID:  p.manifest.HostCluster(hostName),
+				DependsOn:  appDeps,
+				Phase:      PhaseInterfaces,
+				Idempotent: true,
+			})
+		}
 	}
 
 	return nil

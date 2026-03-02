@@ -7,7 +7,7 @@ func TestManifestValidateKafkaRequiresZookeeperConnect(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"broker-1": {Address: "10.0.0.10", User: "root"},
+			"broker-1": {ExternalIP: "10.0.0.10", User: "root"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{
@@ -27,8 +27,8 @@ func TestManifestValidateKafkaWithZookeeperEnsemble(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"broker-1": {Address: "10.0.0.10", User: "root"},
-			"zk-1":     {Address: "10.0.0.20", User: "root"},
+			"broker-1": {ExternalIP: "10.0.0.10", User: "root"},
+			"zk-1":     {ExternalIP: "10.0.0.20", User: "root"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{

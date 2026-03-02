@@ -2,10 +2,12 @@ package inventory
 
 // Manifest represents the cluster.yaml configuration
 type Manifest struct {
-	Version string `yaml:"version"`
-	Type    string `yaml:"type"`              // cluster | edge
-	Profile string `yaml:"profile,omitempty"` // control-plane | regional | analytics-only | edge-gateway
-	Channel string `yaml:"channel,omitempty"` // release channel: "stable" (default), "rc"
+	Version    string `yaml:"version"`
+	Type       string `yaml:"type"`                  // cluster | edge
+	Profile    string `yaml:"profile,omitempty"`     // control-plane | regional | analytics-only | edge-gateway
+	Channel    string `yaml:"channel,omitempty"`     // release channel: "stable" (default), "rc"
+	RootDomain string `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
+	EnvFile    string `yaml:"env_file,omitempty"`    // shared env file for all services (relative to manifest dir)
 
 	Hosts          map[string]Host          `yaml:"hosts,omitempty"`
 	Clusters       map[string]ClusterConfig `yaml:"clusters,omitempty"`
@@ -26,10 +28,10 @@ type ClusterConfig struct {
 
 // Host represents a target machine
 type Host struct {
-	Address    string            `yaml:"address"`
-	ExternalIP string            `yaml:"external_ip,omitempty"`
+	ExternalIP string            `yaml:"external_ip"`
 	User       string            `yaml:"user"`
 	SSHKey     string            `yaml:"ssh_key,omitempty"`
+	Cluster    string            `yaml:"cluster,omitempty"` // Explicit cluster membership
 	Roles      []string          `yaml:"roles,omitempty"`
 	Labels     map[string]string `yaml:"labels,omitempty"`
 }

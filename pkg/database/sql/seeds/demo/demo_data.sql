@@ -1129,27 +1129,27 @@ ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPD
 -- Seed them so the map and GetClusterRouting work before first boot.
 
 INSERT INTO quartermaster.services (service_id, name, plane, description, default_port, health_check_path, docker_image, type, protocol) VALUES
-    ('gateway', 'Bridge', 'control', 'GraphQL API gateway', 18001, '/health', 'frameworks/bridge', 'gateway', 'http'),
-    ('commodore', 'Commodore', 'control', 'Stream control plane', 18003, '/health', 'frameworks/commodore', 'commodore', 'http'),
+    ('bridge', 'Bridge', 'control', 'GraphQL API gateway', 18000, '/health', 'frameworks/bridge', 'bridge', 'http'),
+    ('commodore', 'Commodore', 'control', 'Stream control plane', 18001, '/health', 'frameworks/commodore', 'commodore', 'http'),
     ('foghorn', 'Foghorn', 'media', 'Stream balancing and edge control service', 18019, '/health', 'frameworks/foghorn', 'foghorn', 'grpc'),
-    ('periscope_query', 'Periscope', 'data', 'Analytics query service', 18004, '/health', 'frameworks/periscope', 'periscope_query', 'http'),
-    ('purser', 'Purser', 'control', 'Billing and metering service', 18008, '/health', 'frameworks/purser', 'purser', 'http'),
-    ('skipper', 'Skipper', 'control', 'AI assistant service', 18010, '/health', 'frameworks/skipper', 'skipper', 'http'),
-    ('signalman', 'Signalman', 'data', 'Real-time signaling service', 18009, '/health', 'frameworks/signalman', 'signalman', 'grpc'),
+    ('periscope-query', 'Periscope', 'data', 'Analytics query service', 18004, '/health', 'frameworks/periscope', 'periscope-query', 'http'),
+    ('purser', 'Purser', 'control', 'Billing and metering service', 18003, '/health', 'frameworks/purser', 'purser', 'http'),
+    ('skipper', 'Skipper', 'control', 'AI assistant service', 18018, '/health', 'frameworks/skipper', 'skipper', 'http'),
+    ('signalman', 'Signalman', 'data', 'Real-time signaling service', 18009, '/health', 'frameworks/signalman', 'signalman', 'http'),
     ('decklog', 'Decklog', 'data', 'Service event firehose', 18006, '/health', 'frameworks/decklog', 'decklog', 'grpc'),
-    ('periscope_ingest', 'Periscope Ingest', 'data', 'Analytics ingest service', 18005, '/health', 'frameworks/periscope-ingest', 'periscope_ingest', 'http')
+    ('periscope-ingest', 'Periscope Ingest', 'data', 'Analytics ingest service', 18005, '/health', 'frameworks/periscope-ingest', 'periscope-ingest', 'http')
 ON CONFLICT (service_id) DO NOTHING;
 
 -- Assign control + data plane services to the platform cluster
 INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
-    ('central-primary', 'gateway', 'running', 1),
+    ('central-primary', 'bridge', 'running', 1),
     ('central-primary', 'commodore', 'running', 1),
     ('central-primary', 'purser', 'running', 1),
     ('central-primary', 'skipper', 'running', 1),
     ('central-primary', 'signalman', 'running', 1),
     ('central-primary', 'decklog', 'running', 1),
-    ('central-primary', 'periscope_query', 'running', 1),
-    ('central-primary', 'periscope_ingest', 'running', 1)
+    ('central-primary', 'periscope-query', 'running', 1),
+    ('central-primary', 'periscope-ingest', 'running', 1)
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
 
 -- Foghorn runs on the platform cluster but serves media clusters via foghorn_cluster_assignments

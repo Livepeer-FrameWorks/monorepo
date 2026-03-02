@@ -10,7 +10,7 @@ func TestManifestValidateDetectsPortCollisions(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-a": {Address: "10.0.0.1", User: "root"},
+			"host-a": {ExternalIP: "10.0.0.1", User: "root"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Postgres: &PostgresConfig{
@@ -42,7 +42,7 @@ func TestManifestValidateDetectsGRPCPortCollisions(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-a": {Address: "10.0.0.1", User: "root"},
+			"host-a": {ExternalIP: "10.0.0.1", User: "root"},
 		},
 		Services: map[string]ServiceConfig{
 			"quartermaster": {

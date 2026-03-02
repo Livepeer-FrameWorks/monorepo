@@ -1,7 +1,7 @@
 package config
 
 type Endpoints struct {
-	GatewayURL            string `yaml:"gateway_url"`
+	BridgeURL             string `yaml:"bridge_url"`
 	QuartermasterURL      string `yaml:"quartermaster_url"`       // deprecated: use QuartermasterGRPCAddr
 	QuartermasterGRPCAddr string `yaml:"quartermaster_grpc_addr"` // gRPC address (host:port)
 	ControlURL            string `yaml:"control_url"`             // deprecated: use CommodoreGRPCAddr

@@ -38,17 +38,17 @@ func (b *BaseProvisioner) GetName() string {
 // GetRunner returns an SSH runner for a host
 func (b *BaseProvisioner) GetRunner(host inventory.Host) (ssh.Runner, error) {
 	// Use local runner for localhost
-	if host.Address == "127.0.0.1" || host.Address == "localhost" {
+	if host.ExternalIP == "127.0.0.1" || host.ExternalIP == "localhost" {
 		return ssh.NewLocalRunner(""), nil
 	}
 
 	// Get SSH client from pool
 	sshConfig := &ssh.ConnectionConfig{
-		Address: host.Address,
+		Address: host.ExternalIP,
 		Port:    22, // Default SSH port
 		User:    host.User,
 		KeyPath: host.SSHKey,
-		Timeout: 30 * time.Second,
+		Timeout: 10 * time.Second,
 	}
 
 	return b.sshPool.Get(sshConfig)
@@ -119,7 +119,7 @@ func (b *BaseProvisioner) UploadFile(ctx context.Context, host inventory.Host, o
 // DetectRemoteArch detects the remote host's OS and architecture via SSH.
 // For localhost, returns the local runtime values.
 func (b *BaseProvisioner) DetectRemoteArch(ctx context.Context, host inventory.Host) (osName, goArch string, err error) {
-	if host.Address == "127.0.0.1" || host.Address == "localhost" || host.Address == "" {
+	if host.ExternalIP == "127.0.0.1" || host.ExternalIP == "localhost" || host.ExternalIP == "" {
 		return runtime.GOOS, runtime.GOARCH, nil
 	}
 	result, err := b.RunCommand(ctx, host, "uname -sm")

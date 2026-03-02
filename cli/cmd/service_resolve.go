@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"frameworks/cli/pkg/inventory"
-	"frameworks/cli/pkg/servicedefs"
+	"frameworks/pkg/servicedefs"
 )
 
 // resolveDeployName returns the deploy slug for a canonical service ID.

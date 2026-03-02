@@ -566,7 +566,7 @@ Multi-node manifest example:
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "Timeout for HTTPS readiness")
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Skip preflight checks")
 	cmd.Flags().BoolVar(&applyTuning, "tune", false, "Apply sysctl/limits tuning")
-	cmd.Flags().BoolVar(&registerNode, "register", false, "Register node in Quartermaster (triggers DNS sync)")
+	cmd.Flags().BoolVar(&registerNode, "register", false, "Register node in Quartermaster (DNS synced by Navigator reconciler)")
 	cmd.Flags().BoolVar(&fetchCert, "fetch-cert", false, "Fetch TLS certificate from Navigator (DNS-01 challenge)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to edge manifest file (edges.yaml) for multi-node provisioning")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of nodes to provision in parallel (for manifest mode)")
@@ -766,221 +766,9 @@ func sshTargetToHost(sshTarget, sshKey string) inventory.Host {
 		address = parts[1]
 	}
 	return inventory.Host{
-		Address: address,
-		User:    user,
-		SSHKey:  sshKey,
-	}
-}
-
-// runRemotePreflight runs preflight checks on remote host via SSH
-func runRemotePreflight(cmd *cobra.Command, sshTarget, sshKey string) error {
-	// Check Docker
-	_, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"--version"}, "")
-	if err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ Docker: not found (%s)\n", strings.TrimSpace(errOut))
-		return fmt.Errorf("docker not installed")
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Docker: %s\n", strings.TrimSpace(out))
-
-	// Check Docker Compose
-	_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "version"}, "")
-	if err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ Docker Compose: not found (%s)\n", strings.TrimSpace(errOut))
-		return fmt.Errorf("docker compose not available")
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Docker Compose: %s\n", strings.TrimSpace(out))
-
-	// Check ports 80/443 are available
-	_, _, _, err = xexec.RunSSHWithKey(sshTarget, sshKey, "ss", []string{"-tlnp"}, "")
-	if err == nil {
-		// Parse output to check if 80/443 are in use
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Port check: ss available\n")
-	}
-
-	// Check /dev/shm size
-	_, out, _, err = xexec.RunSSHWithKey(sshTarget, sshKey, "df", []string{"-h", "/dev/shm"}, "")
-	if err == nil {
-		lines := strings.Split(strings.TrimSpace(out), "\n")
-		if len(lines) >= 2 {
-			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ /dev/shm: available\n")
-		}
-	}
-
-	checkDisk := func(path string) error {
-		_, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "df", []string{"-Pk", path}, "")
-		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "  ✗ %s: %s\n", path, strings.TrimSpace(errOut))
-			return fmt.Errorf("disk check failed for %s", path)
-		}
-		result := preflight.DiskSpaceFromDF(out, path, minDiskFreeBytes, minDiskFreePercent)
-		if result.OK {
-			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ %s: %s\n", path, result.Detail)
-			return nil
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ %s: %s\n", path, result.Detail)
-		if result.Error != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", result.Error)
-		}
-		return fmt.Errorf("insufficient disk space on %s", path)
-	}
-
-	if err := checkDisk("/"); err != nil {
-		return err
-	}
-	if err := checkDisk("/var/lib"); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// runRemoteTuning applies sysctl and limits tuning on remote host
-func runRemoteTuning(cmd *cobra.Command, sshTarget, sshKey string) error {
-	sysctl := `# Frameworks Edge recommended network tuning
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.core.somaxconn = 8192
-net.ipv4.ip_local_port_range = 16384 65535
-`
-	limits := `# Frameworks Edge recommended file limits
-* soft nofile 1048576
-* hard nofile 1048576
-`
-
-	// Write sysctl config
-	sysctlCmd := fmt.Sprintf("echo '%s' | sudo tee /etc/sysctl.d/frameworks-edge.conf", sysctl)
-	_, _, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "sh", []string{"-c", sysctlCmd}, "")
-	if err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ sysctl config: %s\n", strings.TrimSpace(errOut))
-		return fmt.Errorf("failed to write sysctl config: %w", err)
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ sysctl config written\n")
-
-	// Write limits config
-	limitsCmd := fmt.Sprintf("echo '%s' | sudo tee /etc/security/limits.d/frameworks-edge.conf", limits)
-	_, _, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "sh", []string{"-c", limitsCmd}, "")
-	if err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ limits config: %s\n", strings.TrimSpace(errOut))
-		return fmt.Errorf("failed to write limits config: %w", err)
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ limits config written\n")
-
-	// Apply sysctl
-	_, _, _, err = xexec.RunSSHWithKey(sshTarget, sshKey, "sudo", []string{"sysctl", "--system"}, "")
-	if err == nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ sysctl applied\n")
-	}
-
-	return nil
-}
-
-// uploadEdgeTemplates generates edge templates locally and uploads to remote host
-func uploadEdgeTemplates(cmd *cobra.Command, sshTarget, sshKey string, vars templates.EdgeVars) error {
-	// Create temp directory for templates
-	tmpDir, err := os.MkdirTemp("", "frameworks-edge-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Write templates to temp directory
-	if errWrite := templates.WriteEdgeTemplates(tmpDir, vars, true); errWrite != nil {
-		return fmt.Errorf("failed to write templates: %w", errWrite)
-	}
-
-	// Create remote directory
-	remoteDir := "/opt/frameworks/edge"
-	_, _, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "sudo", []string{"mkdir", "-p", remoteDir}, "")
-	if err != nil {
-		return fmt.Errorf("failed to create remote directory: %s", strings.TrimSpace(errOut))
-	}
-
-	// Set ownership to current user for upload
-	_, _, _, _ = xexec.RunSSHWithKey(sshTarget, sshKey, "sudo", []string{"chown", "-R", "$USER:$USER", remoteDir}, "")
-
-	// Upload each file using scp
-	files := []string{"docker-compose.edge.yml", "Caddyfile", ".edge.env"}
-	for _, f := range files {
-		localPath := tmpDir + "/" + f
-		remotePath := remoteDir + "/" + f
-
-		// Use scp to upload (through shell)
-		scpArgs := []string{"-o", "BatchMode=yes"}
-		if strings.TrimSpace(sshKey) != "" {
-			scpArgs = append(scpArgs, "-i", sshKey)
-		}
-		scpArgs = append(scpArgs, localPath, fmt.Sprintf("%s:%s", sshTarget, remotePath))
-		_, _, errOut, err := xexec.Run("scp", scpArgs, "")
-		if err != nil {
-			return fmt.Errorf("failed to upload %s: %s", f, strings.TrimSpace(errOut))
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Uploaded %s\n", f)
-	}
-
-	return nil
-}
-
-// runRemoteDockerCompose starts the edge stack on remote host
-func runRemoteDockerCompose(cmd *cobra.Command, sshTarget, sshKey string) error {
-	remoteDir := "/opt/frameworks/edge"
-	compose := "docker-compose.edge.yml"
-	envFile := ".edge.env"
-
-	_, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, remoteDir)
-	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "docker compose up failed: %v\n%s\n%s\n", err, out, errOut)
-		return err
-	}
-	fmt.Fprintln(cmd.OutOrStdout(), "  ✓ Edge stack started (caddy, mistserver, helmsman)")
-	return nil
-}
-
-// waitForHTTPS waits for the edge domain to be HTTPS-ready
-func waitForHTTPS(cmd *cobra.Command, domain string, timeout time.Duration) error {
-	if strings.TrimSpace(domain) == "" {
-		fmt.Fprintln(cmd.OutOrStdout(), "  - No domain specified, skipping HTTPS check")
-		return nil
-	}
-
-	url := "https://" + domain + "/health"
-	httpClient := &http.Client{
-		Timeout:   5 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-	}
-	deadline := time.Now().Add(timeout)
-
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			cancel()
-			return err
-		}
-		resp, err := httpClient.Do(req)
-		cancel()
-		if err == nil && resp != nil && resp.StatusCode == 200 {
-			if resp.Body != nil {
-				_ = resp.Body.Close()
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ HTTPS ready at %s\n", url)
-			return nil
-		}
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-
-		if time.Now().After(deadline) {
-			if err != nil {
-				return fmt.Errorf("HTTPS check failed: %w", err)
-			}
-			if resp != nil {
-				return fmt.Errorf("HTTPS not ready: status %d", resp.StatusCode)
-			}
-			return fmt.Errorf("HTTPS not ready before timeout")
-		}
-
-		fmt.Fprintf(cmd.OutOrStdout(), "  - Waiting for HTTPS (retrying in 5s)...\n")
-		time.Sleep(5 * time.Second)
+		ExternalIP: address,
+		User:       user,
+		SSHKey:     sshKey,
 	}
 }
 
@@ -1079,7 +867,7 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Node registered: %s (ID: %s)\n", nodeName, resp.GetNode().GetNodeId())
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ DNS sync triggered for 'edge' service type\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Node registered (DNS will be synced by Navigator reconciler)\n")
 
 	return nil
 }
@@ -1121,64 +909,6 @@ func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, em
 
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Certificate issued for %s\n", domain)
 	return resp.GetCertPem(), resp.GetKeyPem(), nil
-}
-
-// uploadCertificates uploads certificate files to the edge node
-func uploadCertificates(cmd *cobra.Command, sshTarget, sshKey, certPEM, keyPEM string) error {
-	// Create certificate directory on remote host
-	certDir := "/etc/frameworks/certs"
-	_, _, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "sudo", []string{"mkdir", "-p", certDir}, "")
-	if err != nil {
-		return fmt.Errorf("failed to create cert directory: %s", strings.TrimSpace(errOut))
-	}
-
-	// Set ownership so we can write files
-	_, _, _, _ = xexec.RunSSHWithKey(sshTarget, sshKey, "sudo", []string{"chown", "-R", "$USER:$USER", certDir}, "")
-
-	// Create temp files locally
-	tmpDir, err := os.MkdirTemp("", "frameworks-certs-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	certPath := tmpDir + "/cert.pem"
-	keyPath := tmpDir + "/key.pem"
-
-	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
-		return fmt.Errorf("failed to write cert file: %w", err)
-	}
-	if err := os.WriteFile(keyPath, []byte(keyPEM), 0600); err != nil {
-		return fmt.Errorf("failed to write key file: %w", err)
-	}
-
-	// Upload files via scp
-	files := []struct {
-		local  string
-		remote string
-	}{
-		{certPath, certDir + "/cert.pem"},
-		{keyPath, certDir + "/key.pem"},
-	}
-
-	for _, f := range files {
-		scpArgs := []string{"-o", "BatchMode=yes"}
-		if strings.TrimSpace(sshKey) != "" {
-			scpArgs = append(scpArgs, "-i", sshKey)
-		}
-		scpArgs = append(scpArgs, f.local, sshTarget+":"+f.remote)
-		_, _, errOut, err := xexec.Run("scp", scpArgs, "")
-		if err != nil {
-			return fmt.Errorf("failed to upload %s: %s", f.local, strings.TrimSpace(errOut))
-		}
-	}
-
-	// Set proper permissions on key file
-	_, _, _, _ = xexec.RunSSHWithKey(sshTarget, sshKey, "sudo", []string{"chmod", "600", certDir + "/key.pem"}, "")
-
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Certificate uploaded to %s/cert.pem\n", certDir)
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Private key uploaded to %s/key.pem\n", certDir)
-	return nil
 }
 
 func newEdgeStatusCmd() *cobra.Command {

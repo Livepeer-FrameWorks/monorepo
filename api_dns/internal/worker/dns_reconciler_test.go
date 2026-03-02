@@ -16,7 +16,7 @@ type trackingQMClient struct {
 	listClustersCount int
 }
 
-func (t *trackingQMClient) ListHealthyNodesForDNS(_ context.Context, _ string, _ int, _ string) (*proto.ListHealthyNodesForDNSResponse, error) {
+func (t *trackingQMClient) ListHealthyNodesForDNS(_ context.Context, _ int, _ string) (*proto.ListHealthyNodesForDNSResponse, error) {
 	return nil, errors.New("intentional test stub")
 }
 
@@ -38,7 +38,7 @@ func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T)
 		"edge-storage",
 		"edge-processing",
 		"foghorn",
-		"gateway",
+		"bridge",
 		"chartroom",
 	})
 
@@ -46,7 +46,7 @@ func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T)
 
 	// SyncServiceByCluster calls ListClusters once per cluster-scoped type.
 	// edge-egress, edge-ingest, edge-storage, edge-processing, foghorn trigger it (5 calls).
-	// gateway and chartroom do not.
+	// bridge and chartroom do not.
 	if qm.listClustersCount != 5 {
 		t.Fatalf("expected ListClusters called 5 times (edge-egress, edge-ingest, edge-storage, edge-processing, foghorn), got %d", qm.listClustersCount)
 	}

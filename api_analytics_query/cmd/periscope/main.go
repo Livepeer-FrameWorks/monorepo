@@ -135,7 +135,7 @@ func main() {
 		advertiseHost := config.GetEnv("PERISCOPE_QUERY_HOST", "periscope-query")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
 		req := &pb.BootstrapServiceRequest{
-			Type:           "periscope_query",
+			Type:           "periscope-query",
 			Version:        version.Version,
 			Protocol:       "http",
 			HealthEndpoint: &healthEndpoint,
@@ -151,10 +151,10 @@ func main() {
 		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
 			req.NodeId = &nodeID
 		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope_query")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_query) failed")
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope-query")); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (periscope-query) failed")
 		} else {
-			logger.Info("Quartermaster bootstrap (periscope_query) ok")
+			logger.Info("Quartermaster bootstrap (periscope-query) ok")
 		}
 	}()
 

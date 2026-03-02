@@ -131,14 +131,6 @@ func optionalInt32Flag(cmd *cobra.Command, name string, value int) *int32 {
 	return nil
 }
 
-func optionalFloat64Flag(cmd *cobra.Command, name string, value float64) *float64 {
-	if cmd.Flags().Changed(name) {
-		v := value
-		return &v
-	}
-	return nil
-}
-
 func optionalBoolFlag(cmd *cobra.Command, name string, value bool) *bool {
 	if cmd.Flags().Changed(name) {
 		v := value
@@ -1562,7 +1554,7 @@ func newAdminNodesListCmd() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "filter by cluster ID")
-	cmd.Flags().StringVar(&nodeType, "type", "", "filter by node type (edge, api, app, website, docs, forms, etc.)")
+	cmd.Flags().StringVar(&nodeType, "type", "", "filter by node type (edge, bridge, chartroom, foredeck, logbook, steward, etc.)")
 	cmd.Flags().StringVar(&region, "region", "", "filter by region")
 	return cmd
 }

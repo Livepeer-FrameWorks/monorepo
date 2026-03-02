@@ -195,7 +195,7 @@ func (r *RedisProvisioner) provisionNative(ctx context.Context, host inventory.H
 		port = 6379
 	}
 
-	hostID := host.Address
+	hostID := host.ExternalIP
 	if hostID == "" {
 		hostID = "localhost"
 	}
@@ -205,7 +205,7 @@ func (r *RedisProvisioner) provisionNative(ctx context.Context, host inventory.H
 	inv := ansible.NewInventory()
 	inv.AddHost(&ansible.InventoryHost{
 		Name:    hostID,
-		Address: host.Address,
+		Address: host.ExternalIP,
 		Vars: map[string]string{
 			"ansible_user":                 host.User,
 			"ansible_ssh_private_key_file": host.SSHKey,
@@ -233,7 +233,7 @@ func (r *RedisProvisioner) provisionNative(ctx context.Context, host inventory.H
 // Validate checks if Redis is healthy via TCP.
 func (r *RedisProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	checker := &health.TCPChecker{}
-	result := checker.Check(host.Address, config.Port)
+	result := checker.Check(host.ExternalIP, config.Port)
 	if !result.OK {
 		return fmt.Errorf("redis health check failed: %s", result.Error)
 	}

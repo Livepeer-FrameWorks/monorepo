@@ -117,7 +117,7 @@ func (c *ClickHouseProvisioner) Validate(ctx context.Context, host inventory.Hos
 		Database: "default",
 	}
 
-	result := checker.Check(host.Address, config.Port)
+	result := checker.Check(host.ExternalIP, config.Port)
 	if !result.OK {
 		return fmt.Errorf("clickhouse health check failed: %s", result.Error)
 	}
@@ -135,7 +135,7 @@ func (c *ClickHouseProvisioner) Initialize(ctx context.Context, host inventory.H
 
 	// Connect to ClickHouse
 	conn, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{fmt.Sprintf("%s:%d", host.Address, config.Port)},
+		Addr: []string{fmt.Sprintf("%s:%d", host.ExternalIP, config.Port)},
 		Auth: clickhouse.Auth{
 			Database: "default",
 			Username: "default",

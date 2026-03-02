@@ -20,7 +20,7 @@ For self-hosted deployments, Privateer ensures your nodes communicate securely w
 - Token-based join: new nodes join mesh with time-limited bootstrap tokens
 - Peer discovery via Quartermaster
 - Health monitoring and reporting
-- Local DNS resolution for mesh hostnames (port 5353)
+- Local DNS resolution for mesh hostnames (port 53)
 
 ## How nodes join
 

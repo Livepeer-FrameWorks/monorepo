@@ -17,7 +17,7 @@ service NavigatorService {
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.
 message SyncDNSRequest {
   optional string tenant_id = 1; // Optional: tenant context for tenant-specific DNS records
-  string service_type = 2;       // e.g., "edge", "gateway", "app"
+  string service_type = 2;       // e.g., "bridge", "foghorn", "helmsman"
   string root_domain = 3;        // e.g., "frameworks.network"
 }
 

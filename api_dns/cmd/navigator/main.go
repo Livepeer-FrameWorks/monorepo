@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"frameworks/api_dns/internal/logic"
@@ -20,6 +21,7 @@ import (
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 
@@ -132,11 +134,13 @@ func main() {
 		"edge-storage",
 		"edge-processing",
 		"foghorn",
-		"gateway",
+		"bridge",
 		"chartroom",
-		"website",
+		"foredeck",
 		"logbook",
 		"steward",
+		"listmonk",
+		"chatwoot",
 	})
 	go reconciler.Start(context.Background())
 
@@ -222,6 +226,38 @@ func main() {
 	app.GET("/status", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "running", "version": version.Version})
 	})
+
+	// Best-effort service registration in Quartermaster
+	go func() {
+		grpcPortInt, _ := strconv.Atoi(config.GetEnv("NAVIGATOR_GRPC_PORT", "19004"))
+		if grpcPortInt <= 0 || grpcPortInt > 65535 {
+			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+			return
+		}
+		advertiseHost := config.GetEnv("NAVIGATOR_HOST", "navigator")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
+		req := &pb.BootstrapServiceRequest{
+			Type:          "navigator",
+			Version:       version.Version,
+			Protocol:      "grpc",
+			Port:          int32(grpcPortInt),
+			AdvertiseHost: &advertiseHost,
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
+		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			req.NodeId = &nodeID
+		}
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("navigator")); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (navigator) failed")
+		} else {
+			logger.Info("Quartermaster bootstrap (navigator) ok")
+		}
+	}()
 
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.WithError(err).Fatal("Navigator HTTP server failed")

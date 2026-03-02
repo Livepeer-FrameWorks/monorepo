@@ -7,6 +7,40 @@ sidebar:
 
 External service credentials required by the platform.
 
+## Credential Delivery
+
+The CLI automatically delivers credentials to each host during provisioning. Environment variables are merged in this order (later wins):
+
+1. **Auto-generated** from manifest infrastructure config (`DATABASE_URL`, `KAFKA_BROKERS`, `QUARTERMASTER_GRPC_ADDR`, `CLUSTER_ID`, `NODE_ID`, `SERVICE_TOKEN`)
+2. **Shared env_file** from the manifest's top-level `env_file` field
+3. **Per-service env_file** from each service's `env_file` field
+4. **Inline config** from the service's `config` map
+
+The merged result is written to `/etc/frameworks/{service}.env` on each host.
+
+**Setup:**
+
+1. Copy the template: `cp config/env/secrets.env.example gitops-private/secrets/production.env`
+2. Fill in real values (see sections below for each service)
+3. Reference it in your cluster manifest: `env_file: secrets/production.env`
+4. Run `frameworks cluster provision` — the CLI reads the file and pushes merged env vars to all hosts
+
+<Aside type="caution" title="Interim Solution">
+  Flat env files are a **bootstrap-stage approach**, not a production-grade secrets management
+  solution. Credentials are stored in plaintext on disk (both locally and on each host at
+  `/etc/frameworks/*.env`). This is acceptable for initial deployment but should be replaced with a
+  proper secrets manager (HashiCorp Vault, SOPS, or similar) once the cluster is stable. A Vault
+  integration RFC exists — future CLI versions will support fetching secrets from Vault at
+  provisioning time instead of reading flat files.
+
+In the meantime: keep the secrets file in a **private** repository, restrict file permissions
+(`chmod 600`) on remote hosts, and consider encrypting the file at rest with `git-crypt` or
+`sops`.
+
+</Aside>
+
+---
+
 ## Setting Up DNS
 
 **Purpose:** Domain management, geographic routing, load balancing

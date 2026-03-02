@@ -286,7 +286,7 @@ func main() {
 	}
 
 	// Quartermaster (gRPC)
-	quartermasterGRPCURL := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "localhost:19002")
+	quartermasterGRPCURL := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 		GRPCAddr:     quartermasterGRPCURL,
 		Timeout:      30 * time.Second,
@@ -307,7 +307,7 @@ func main() {
 	}
 
 	// Commodore (gRPC)
-	commodoreGRPCURL := config.GetEnv("COMMODORE_GRPC_ADDR", "localhost:19001")
+	commodoreGRPCURL := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
 
 	// Commodore Cache
 	ttl := 60 * time.Second
