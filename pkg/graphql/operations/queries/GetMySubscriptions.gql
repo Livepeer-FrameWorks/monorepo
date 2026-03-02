@@ -4,6 +4,7 @@ query GetMySubscriptions {
     id
     clusterId
     clusterName
+    clusterType
     healthStatus
     createdAt
     isDefaultCluster

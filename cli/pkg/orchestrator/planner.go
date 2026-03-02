@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/cli/pkg/inventory"
+	infra "frameworks/pkg/models"
 	"frameworks/pkg/servicedefs"
 )
 
@@ -297,7 +298,7 @@ func EffectivePrivateerHosts(svc inventory.ServiceConfig, hosts map[string]inven
 	for name, h := range hosts {
 		isEdge := false
 		for _, role := range h.Roles {
-			if role == "edge" {
+			if role == infra.NodeTypeEdge {
 				isEdge = true
 				break
 			}

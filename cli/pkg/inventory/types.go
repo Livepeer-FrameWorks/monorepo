@@ -21,7 +21,7 @@ type Manifest struct {
 // ClusterConfig defines a cluster to register in Quartermaster during provisioning
 type ClusterConfig struct {
 	Name   string   `yaml:"name"`
-	Type   string   `yaml:"type"` // central, edge, etc.
+	Type   string   `yaml:"type"` // central, edge
 	Region string   `yaml:"region,omitempty"`
 	Roles  []string `yaml:"roles,omitempty"` // control, data, analytics, media, mesh, interface, infra, support, observability
 }

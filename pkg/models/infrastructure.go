@@ -4,6 +4,61 @@ import (
 	"time"
 )
 
+// Cluster types — mirrors quartermaster.infrastructure_clusters.cluster_type values.
+const (
+	ClusterTypeCentral = "central"
+	ClusterTypeEdge    = "edge"
+
+	NodeTypeCore = "core"
+	NodeTypeEdge = "edge"
+)
+
+var clusterTypeValues = [...]string{
+	ClusterTypeCentral,
+	ClusterTypeEdge,
+}
+
+var nodeTypeValues = [...]string{
+	NodeTypeCore,
+	NodeTypeEdge,
+}
+
+func ClusterTypeValues() []string {
+	values := make([]string, len(clusterTypeValues))
+	copy(values, clusterTypeValues[:])
+	return values
+}
+
+func NodeTypeValues() []string {
+	values := make([]string, len(nodeTypeValues))
+	copy(values, nodeTypeValues[:])
+	return values
+}
+
+func IsValidClusterType(ct string) bool {
+	for _, valid := range clusterTypeValues {
+		if ct == valid {
+			return true
+		}
+	}
+	return false
+}
+
+func IsValidNodeType(nt string) bool {
+	for _, valid := range nodeTypeValues {
+		if nt == valid {
+			return true
+		}
+	}
+	return false
+}
+
+// ClusterTypeCanBePreferred reports whether ct is eligible as a tenant's
+// preferred (primary) cluster. Only media-plane types qualify.
+func ClusterTypeCanBePreferred(ct string) bool {
+	return ct == ClusterTypeEdge
+}
+
 // InfrastructureCluster represents a cluster in the infrastructure
 type InfrastructureCluster struct {
 	ID          string `json:"id" db:"id"`

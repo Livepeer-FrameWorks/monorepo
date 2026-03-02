@@ -17,6 +17,7 @@ import (
 	"frameworks/api_mesh/internal/wireguard"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
+	infra "frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
 
 	"github.com/google/uuid"
@@ -106,9 +107,9 @@ func New(cfg Config) (*Agent, error) {
 		cfg.ListenPort = 51820
 	}
 	if cfg.NodeType == "" {
-		cfg.NodeType = "edge"
+		cfg.NodeType = infra.NodeTypeEdge
 		if cfg.Logger != nil {
-			cfg.Logger.Warn("MESH_NODE_TYPE not set, defaulting to 'edge'")
+			cfg.Logger.Warnf("MESH_NODE_TYPE not set, defaulting to %q", infra.NodeTypeEdge)
 		}
 	}
 	if cfg.NodeName == "" {

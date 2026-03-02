@@ -26,7 +26,7 @@ INSERT INTO quartermaster.infrastructure_clusters (
     visibility, short_description
 )
 VALUES (
-    'demo-media', 'Demo Media Cluster', 'regional', 'demo.frameworks.network',
+    'demo-media', 'Demo Media Cluster', 'edge', 'demo.frameworks.network',
     10000, 1000000, 100000,
     TRUE, TRUE,
     'public', 'Media cluster: edge nodes, stream routing, viewer delivery'
@@ -1131,7 +1131,7 @@ ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPD
 INSERT INTO quartermaster.services (service_id, name, plane, description, default_port, health_check_path, docker_image, type, protocol) VALUES
     ('bridge', 'Bridge', 'control', 'GraphQL API gateway', 18000, '/health', 'frameworks/bridge', 'bridge', 'http'),
     ('commodore', 'Commodore', 'control', 'Stream control plane', 18001, '/health', 'frameworks/commodore', 'commodore', 'http'),
-    ('foghorn', 'Foghorn', 'media', 'Stream balancing and edge control service', 18019, '/health', 'frameworks/foghorn', 'foghorn', 'grpc'),
+    ('foghorn', 'Foghorn', 'media', 'Stream balancing and edge control service', 18008, '/health', 'frameworks/foghorn', 'foghorn', 'http'),
     ('periscope-query', 'Periscope', 'data', 'Analytics query service', 18004, '/health', 'frameworks/periscope', 'periscope-query', 'http'),
     ('purser', 'Purser', 'control', 'Billing and metering service', 18003, '/health', 'frameworks/purser', 'purser', 'http'),
     ('skipper', 'Skipper', 'control', 'AI assistant service', 18018, '/health', 'frameworks/skipper', 'skipper', 'http'),
@@ -1161,7 +1161,7 @@ ON CONFLICT (cluster_id, service_id) DO NOTHING;
 -- FOGHORN: Pre-seeded service instances for HA pair
 -- ============================================================================
 -- Both foghorn instances register on the platform cluster. At runtime,
--- BootstrapService matches by (service_id, cluster_id, protocol, port, advertise_host)
+-- BootstrapService matches by (service_id, cluster_id, protocol, port, node_id)
 -- and UPDATEs the pre-seeded row (preserving instance_id and UUID).
 -- LoadServedClusters queries by FOGHORN_INSTANCE_ID → finds cluster assignments.
 
@@ -1170,18 +1170,18 @@ INSERT INTO quartermaster.service_instances (
     protocol, advertise_host, port, status, health_status,
     started_at, created_at, updated_at
 ) VALUES
--- foghorn-1 (gRPC control plane, port 18019)
+-- foghorn-1 (HTTP health, port 18008)
 (
     '5eedf0e1-0001-da7a-f0e1-0001da7a0001',
-    'foghorn-1', 'central-primary', NULL, 'foghorn',
-    'grpc', 'foghorn', 18019, 'running', 'unknown',
+    'foghorn-1', 'central-primary', 'central-node-1', 'foghorn',
+    'http', 'foghorn', 18008, 'running', 'unknown',
     NOW(), NOW(), NOW()
 ),
--- foghorn-2 (HA peer, port 18029)
+-- foghorn-2 (HA peer, port 18008)
 (
     '5eedf0e1-0002-da7a-f0e1-0002da7a0002',
-    'foghorn-2', 'central-primary', NULL, 'foghorn',
-    'grpc', 'foghorn', 18029, 'running', 'unknown',
+    'foghorn-2', 'central-primary', 'central-node-1', 'foghorn',
+    'http', 'foghorn', 18008, 'running', 'unknown',
     NOW(), NOW(), NOW()
 )
 ON CONFLICT (instance_id) DO UPDATE SET

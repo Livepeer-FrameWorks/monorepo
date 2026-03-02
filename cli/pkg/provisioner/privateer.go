@@ -13,6 +13,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	"frameworks/cli/pkg/system"
+	infra "frameworks/pkg/models"
 )
 
 // PrivateerProvisioner provisions the Privateer mesh agent
@@ -143,7 +144,7 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 	serviceToken, _ := config.Metadata["service_token"].(string)
 	nodeType, _ := config.Metadata["mesh_node_type"].(string)
 	if nodeType == "" {
-		nodeType = "core"
+		nodeType = infra.NodeTypeCore
 	}
 	nodeName, _ := config.Metadata["mesh_node_name"].(string)
 

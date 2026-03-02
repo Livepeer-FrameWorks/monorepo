@@ -24,6 +24,7 @@ import (
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/clients/navigator"
 	"frameworks/pkg/clients/quartermaster"
+	infra "frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
@@ -846,7 +847,7 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 		NodeId:    nodeID,
 		ClusterId: clusterID,
 		NodeName:  nodeName,
-		NodeType:  "edge", // This triggers DNS sync for "edge" service type
+		NodeType:  infra.NodeTypeEdge, // This triggers DNS sync for "edge" service type
 	}
 
 	// Set optional fields

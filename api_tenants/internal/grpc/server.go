@@ -25,6 +25,7 @@ import (
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/models"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
@@ -723,23 +724,33 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	healthEndpoint := req.HealthEndpoint
 	port := req.GetPort()
 
-	// 5a. Auto-associate with node by IP when no explicit node_id provided
+	// 5a. Auto-associate with node by IP when no explicit node_id provided.
+	// If advHost is a hostname, resolve it to an IP first.
 	resolvedNodeID := req.NodeId
-	if resolvedNodeID == nil && advHost != "" && net.ParseIP(advHost) != nil {
-		var matchedNodeID string
-		_ = exec.QueryRowContext(ctx, `
-			SELECT node_id FROM quartermaster.infrastructure_nodes
-			WHERE cluster_id = $1
-			  AND (wireguard_ip = $2::inet OR internal_ip = $2::inet OR external_ip = $2::inet)
-			LIMIT 1
-		`, clusterID, advHost).Scan(&matchedNodeID)
-		if matchedNodeID != "" {
-			resolvedNodeID = &matchedNodeID
-			s.logger.WithFields(logging.Fields{
-				"service_type": serviceType,
-				"node_id":      matchedNodeID,
-				"advHost":      advHost,
-			}).Debug("Auto-associated service with node via IP match")
+	if resolvedNodeID == nil && advHost != "" {
+		matchIP := advHost
+		if net.ParseIP(matchIP) == nil {
+			if addrs, lookupErr := net.DefaultResolver.LookupHost(ctx, matchIP); lookupErr == nil && len(addrs) > 0 {
+				matchIP = addrs[0]
+			}
+		}
+		if net.ParseIP(matchIP) != nil {
+			var matchedNodeID string
+			_ = exec.QueryRowContext(ctx, `
+				SELECT node_id FROM quartermaster.infrastructure_nodes
+				WHERE cluster_id = $1
+				  AND (wireguard_ip = $2::inet OR internal_ip = $2::inet OR external_ip = $2::inet)
+				LIMIT 1
+			`, clusterID, matchIP).Scan(&matchedNodeID)
+			if matchedNodeID != "" {
+				resolvedNodeID = &matchedNodeID
+				s.logger.WithFields(logging.Fields{
+					"service_type": serviceType,
+					"node_id":      matchedNodeID,
+					"advHost":      advHost,
+					"resolvedIP":   matchIP,
+				}).Debug("Auto-associated service with node via IP match")
+			}
 		}
 	}
 
@@ -828,11 +839,12 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		UPDATE quartermaster.service_instances
 		SET status = 'stopped', stopped_at = NOW(), updated_at = NOW()
 		WHERE service_id = $1 AND cluster_id = $2 AND instance_id != $3
+		  AND protocol = $5
 		  AND status != 'stopped'
 		  AND (
 		    last_health_check IS NULL OR
 		    last_health_check < NOW() - INTERVAL '10 minutes' OR
-		    (COALESCE(advertise_host, '') = $4 AND COALESCE(protocol, '') = $5 AND COALESCE(port, 0) = $6)
+		    (COALESCE(advertise_host, '') = $4 AND COALESCE(port, 0) = $6)
 		  )
 	`, serviceID, clusterID, instanceID, advHost, proto, port)
 
@@ -2108,6 +2120,14 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 			if !exists {
 				return nil, status.Error(codes.FailedPrecondition, "cluster is not an active subscription for this tenant")
 			}
+
+			var clusterType string
+			if err := s.db.QueryRowContext(ctx, `SELECT cluster_type FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1`, newClusterID).Scan(&clusterType); err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to look up cluster type: %v", err)
+			}
+			if !models.ClusterTypeCanBePreferred(clusterType) {
+				return nil, status.Error(codes.FailedPrecondition, "only edge clusters can be set as preferred")
+			}
 		}
 	}
 
@@ -2495,6 +2515,13 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
+	clusterType := strings.TrimSpace(req.GetClusterType())
+	if clusterType == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_type required")
+	}
+	if !models.IsValidClusterType(clusterType) {
+		return nil, status.Errorf(codes.InvalidArgument, "cluster_type must be one of [%s], got %q", strings.Join(models.ClusterTypeValues(), ", "), clusterType)
+	}
 
 	userID := middleware.GetUserID(ctx)
 	// Determine deployment model (default to 'managed')
@@ -2533,7 +2560,7 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		                                                   max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		                                                   health_status, is_active, is_platform_official, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $15)
-	`, id, clusterID, req.GetClusterName(), req.GetClusterType(), deploymentModel,
+	`, id, clusterID, req.GetClusterName(), clusterType, deploymentModel,
 		ownerTenantID, req.GetBaseUrl(),
 		req.DatabaseUrl, req.PeriscopeUrl, pq.Array(req.GetKafkaBrokers()),
 		req.GetMaxConcurrentStreams(), req.GetMaxConcurrentViewers(), req.GetMaxBandwidthMbps(),
@@ -3199,6 +3226,17 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update heartbeats: %v", err)
 	}
+
+	// Mark edge-* service instances healthy on these nodes (health comes from foghorn heartbeat, not the poller)
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE quartermaster.service_instances
+		SET health_status = 'healthy', last_health_check = NOW(), updated_at = NOW()
+		WHERE node_id = ANY($1) AND service_id LIKE 'edge-%' AND status IN ('running','starting')
+	`, pq.Array(nodeIDs))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update edge service health: %v", err)
+	}
+
 	return &emptypb.Empty{}, nil
 }
 
@@ -3417,7 +3455,7 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	// "edge-*" subtypes (edge-egress, edge-ingest, etc.) are capability
 	// registrations written by Foghorn via BootstrapService — they use the
 	// standard service_instance path like any other service.
-	if serviceTypeFilter == "edge" {
+	if serviceTypeFilter == models.NodeTypeEdge {
 		return s.listHealthyEdgeNodes(ctx, baseWhere, baseArgs, staleThreshold)
 	}
 	return s.listHealthyServiceNodes(ctx, baseWhere, baseArgs, serviceTypeFilter, staleThreshold)
@@ -3428,9 +3466,10 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 // BootstrapService. Health is determined by last_heartbeat (refreshed by
 // Foghorn → ReportAliveNodes), not by service_instance status.
 func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWhere string, baseArgs []interface{}, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
-	where := baseWhere + " AND n.node_type = 'edge' AND n.external_ip IS NOT NULL AND n.external_ip <> ''"
 	args := append([]interface{}{}, baseArgs...)
-	argIdx := len(baseArgs) + 1
+	args = append(args, models.NodeTypeEdge)
+	where := baseWhere + fmt.Sprintf(" AND n.node_type = $%d AND n.external_ip IS NOT NULL AND n.external_ip <> ''", len(baseArgs)+1)
+	argIdx := len(args) + 1
 
 	var totalNodes int32
 	if err := s.db.QueryRowContext(ctx,
@@ -3990,8 +4029,8 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	if nodeType == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_type required")
 	}
-	if nodeType != "core" && nodeType != "edge" {
-		return nil, status.Errorf(codes.InvalidArgument, "node_type must be 'core' or 'edge', got %q", nodeType)
+	if !models.IsValidNodeType(nodeType) {
+		return nil, status.Errorf(codes.InvalidArgument, "node_type must be one of [%s], got %q", strings.Join(models.NodeTypeValues(), ", "), nodeType)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -4987,7 +5026,7 @@ func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID s
 	}
 
 	query := fmt.Sprintf(`
-		SELECT instance_id, service_id, cluster_id, protocol, advertise_host, port, health_endpoint_override, status, last_health_check
+		SELECT instance_id, service_id, cluster_id, protocol, advertise_host, port, health_endpoint_override, health_status, last_health_check
 		FROM quartermaster.service_instances
 		%s
 		ORDER BY service_id, instance_id
@@ -5355,7 +5394,7 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 		       cpu_cores, memory_gb, disk_gb,
 		       last_heartbeat, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes
-		WHERE node_id = $1
+		WHERE node_id = $1 OR id::text = $1
 	`, nodeID)
 
 	var node pb.InfrastructureNode

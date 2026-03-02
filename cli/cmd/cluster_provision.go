@@ -13,6 +13,7 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
+	infra "frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
 
 	"frameworks/cli/pkg/inventory"
@@ -455,11 +456,11 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		config.Mode = "native"
 		config.Metadata["mesh_node_name"] = task.Host
 		// Derive node type from the host's roles (default: core)
-		nodeType := "core"
+		nodeType := infra.NodeTypeCore
 		if hostInfo, ok := manifest.GetHost(task.Host); ok {
 			for _, role := range hostInfo.Roles {
-				if role == "edge" {
-					nodeType = "edge"
+				if role == infra.NodeTypeEdge {
+					nodeType = infra.NodeTypeEdge
 					break
 				}
 			}
@@ -876,10 +877,15 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrap
 
 	for _, clusterID := range clusterIDs {
 		clusterName := fmt.Sprintf("FrameWorks %s %s Cluster", manifest.Type, manifest.Profile)
-		clusterType := manifest.Type
+		clusterType := infra.ClusterTypeCentral
 		if cc, ok := manifest.Clusters[clusterID]; ok {
 			clusterName = cc.Name
 			clusterType = cc.Type
+		} else if manifest.Type == infra.ClusterTypeEdge {
+			clusterType = infra.ClusterTypeEdge
+		}
+		if !infra.IsValidClusterType(clusterType) {
+			return nil, fmt.Errorf("cluster %q has unsupported cluster type %q (allowed: %s)", clusterID, clusterType, strings.Join(infra.ClusterTypeValues(), ", "))
 		}
 
 		_, err = client.GetCluster(ctx, clusterID)
@@ -917,10 +923,10 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrap
 	}
 
 	for hostName, hostInfo := range manifest.Hosts {
-		nodeType := "core"
+		nodeType := infra.NodeTypeCore
 		for _, role := range hostInfo.Roles {
-			if role == "edge" {
-				nodeType = "edge"
+			if role == infra.NodeTypeEdge {
+				nodeType = infra.NodeTypeEdge
 				break
 			}
 		}

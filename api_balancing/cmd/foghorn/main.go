@@ -867,7 +867,7 @@ func startEdgeHealthSync(qm *qmclient.GRPCClient, log logging.Logger) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		nodeIDs := control.AliveNodeIDs(90 * time.Second)
+		nodeIDs := state.DefaultManager().AliveNodeIDs(90 * time.Second)
 		if len(nodeIDs) == 0 {
 			continue
 		}

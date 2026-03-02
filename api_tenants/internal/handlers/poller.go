@@ -92,6 +92,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
         FROM quartermaster.service_instances si
         JOIN quartermaster.services s ON si.service_id = s.service_id
         WHERE si.status IN ('running','starting')
+          AND si.service_id NOT LIKE 'edge-%'
           AND (si.last_health_check IS NULL OR si.last_health_check < $1)
         ORDER BY COALESCE(si.last_health_check, si.created_at) ASC
         LIMIT $2

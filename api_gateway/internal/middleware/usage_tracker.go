@@ -482,8 +482,10 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 					complexity = uint32(t)
 				}
 			}
-		} else if stats := extension.GetComplexityStats(c.Request.Context()); stats != nil {
-			complexity = uint32(stats.Complexity)
+		} else if graphql.HasOperationContext(c.Request.Context()) {
+			if stats := extension.GetComplexityStats(c.Request.Context()); stats != nil {
+				complexity = uint32(stats.Complexity)
+			}
 		}
 
 		var errorCount uint32

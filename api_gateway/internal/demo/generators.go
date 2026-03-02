@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/pkg/globalid"
+	infra "frameworks/pkg/models"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
@@ -3179,7 +3180,7 @@ func GenerateNodesConnection() *model.NodesConnection {
 			Id:            "node_demo_us_west_01",
 			NodeId:        "node_demo_us_west_01",
 			NodeName:      "US West Primary",
-			NodeType:      "edge",
+			NodeType:      infra.NodeTypeEdge,
 			ClusterId:     "cluster_demo_us_west",
 			InternalIp:    stringPtr("10.0.1.10"),
 			ExternalIp:    stringPtr("203.0.113.10"),
@@ -3195,7 +3196,7 @@ func GenerateNodesConnection() *model.NodesConnection {
 			Id:            "node_demo_eu_west_01",
 			NodeId:        "node_demo_eu_west_01",
 			NodeName:      "EU West Primary",
-			NodeType:      "edge",
+			NodeType:      infra.NodeTypeEdge,
 			ClusterId:     "cluster_demo_eu_west",
 			InternalIp:    stringPtr("10.0.2.10"),
 			ExternalIp:    stringPtr("203.0.113.20"),
@@ -3211,7 +3212,7 @@ func GenerateNodesConnection() *model.NodesConnection {
 			Id:            "node_demo_ap_east_01",
 			NodeId:        "node_demo_ap_east_01",
 			NodeName:      "AP East Primary",
-			NodeType:      "edge",
+			NodeType:      infra.NodeTypeEdge,
 			ClusterId:     "cluster_demo_ap_east",
 			InternalIp:    stringPtr("10.0.3.10"),
 			ExternalIp:    stringPtr("203.0.113.30"),
@@ -3257,7 +3258,7 @@ func GenerateClustersConnection() *model.ClustersConnection {
 			Id:                   "cluster_demo_us_west",
 			ClusterId:            "cluster_demo_us_west",
 			ClusterName:          "US West Demo Cluster",
-			ClusterType:          "edge",
+			ClusterType:          infra.ClusterTypeEdge,
 			DeploymentModel:      "hybrid",
 			BaseUrl:              "https://us-west.demo.frameworks.video",
 			MaxConcurrentStreams: 100,
@@ -3272,7 +3273,7 @@ func GenerateClustersConnection() *model.ClustersConnection {
 			Id:                   "cluster_demo_eu_west",
 			ClusterId:            "cluster_demo_eu_west",
 			ClusterName:          "EU West Demo Cluster",
-			ClusterType:          "edge",
+			ClusterType:          infra.ClusterTypeEdge,
 			DeploymentModel:      "hybrid",
 			BaseUrl:              "https://eu-west.demo.frameworks.video",
 			MaxConcurrentStreams: 50,
@@ -3450,7 +3451,7 @@ func GenerateMySubscriptions() []*pb.InfrastructureCluster {
 			Id:                   "cluster_demo_platform",
 			ClusterId:            "demo-media",
 			ClusterName:          "Demo Media Cluster",
-			ClusterType:          "regional",
+			ClusterType:          infra.ClusterTypeEdge,
 			DeploymentModel:      "managed",
 			BaseUrl:              "https://api.demo.frameworks.dev",
 			MaxConcurrentStreams: 100,
@@ -4703,10 +4704,10 @@ func GenerateNetworkStatus() *model.NetworkStatus {
 
 	return &model.NetworkStatus{
 		Clusters: []*model.NetworkClusterStatus{
-			{ClusterID: "central-primary", Name: "Central Platform", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 2, Status: "healthy", ClusterType: "central", ShortDescription: &platformDesc, MaxStreams: 0, CurrentStreams: 0, MaxViewers: 0, CurrentViewers: 0, MaxBandwidthMbps: 0, CurrentBandwidthMbps: 0, Services: []string{"bridge", "commodore", "decklog", "foghorn", "periscope-ingest", "purser", "signalman", "skipper"}},
-			{ClusterID: "demo-media", Name: "Demo Media Cluster", Region: "US-Central", Latitude: 41.9000, Longitude: -87.6500, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 0, Status: "healthy", ClusterType: "regional", ShortDescription: &mediaDesc, MaxStreams: 500, CurrentStreams: 12, MaxViewers: 10000, CurrentViewers: 340, MaxBandwidthMbps: 10000, CurrentBandwidthMbps: 1200, Services: []string{"helmsman"}},
-			{ClusterID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "healthy", ClusterType: "shared-community", ShortDescription: &usEastDesc, MaxStreams: 200, CurrentStreams: 5, MaxViewers: 5000, CurrentViewers: 180, MaxBandwidthMbps: 5000, CurrentBandwidthMbps: 600, Services: []string{"foghorn", "helmsman"}},
-			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "healthy", ClusterType: "shared-community", ShortDescription: &apacDesc, MaxStreams: 100, CurrentStreams: 3, MaxViewers: 3000, CurrentViewers: 95, MaxBandwidthMbps: 3000, CurrentBandwidthMbps: 280, Services: []string{"foghorn", "helmsman"}},
+			{ClusterID: "central-primary", Name: "Central Platform", Region: "US-Central", Latitude: 41.8781, Longitude: -87.6298, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 2, Status: "healthy", ClusterType: infra.ClusterTypeCentral, ShortDescription: &platformDesc, MaxStreams: 0, CurrentStreams: 0, MaxViewers: 0, CurrentViewers: 0, MaxBandwidthMbps: 0, CurrentBandwidthMbps: 0, Services: []string{"bridge", "commodore", "decklog", "foghorn", "periscope-ingest", "purser", "signalman", "skipper"}},
+			{ClusterID: "demo-media", Name: "Demo Media Cluster", Region: "US-Central", Latitude: 41.9000, Longitude: -87.6500, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 0, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &mediaDesc, MaxStreams: 500, CurrentStreams: 12, MaxViewers: 10000, CurrentViewers: 340, MaxBandwidthMbps: 10000, CurrentBandwidthMbps: 1200, Services: []string{"helmsman"}},
+			{ClusterID: "us-east-edge", Name: "US East Edge", Region: "US-East", Latitude: 40.7128, Longitude: -74.0060, NodeCount: 3, HealthyNodeCount: 3, PeerCount: 1, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &usEastDesc, MaxStreams: 200, CurrentStreams: 5, MaxViewers: 5000, CurrentViewers: 180, MaxBandwidthMbps: 5000, CurrentBandwidthMbps: 600, Services: []string{"foghorn", "helmsman"}},
+			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &apacDesc, MaxStreams: 100, CurrentStreams: 3, MaxViewers: 3000, CurrentViewers: 95, MaxBandwidthMbps: 3000, CurrentBandwidthMbps: 280, Services: []string{"foghorn", "helmsman"}},
 		},
 		PeerConnections: []*model.NetworkPeerConnection{
 			{SourceCluster: "central-primary", TargetCluster: "us-east-edge", Connected: true},
@@ -4714,19 +4715,19 @@ func GenerateNetworkStatus() *model.NetworkStatus {
 		},
 		Nodes: []*model.NetworkNode{
 			// Platform nodes (all services on central-primary)
-			{NodeID: "central-node-1", Name: "Platform Node 1", NodeType: "core", Latitude: 41.8781, Longitude: -87.6298, Status: "active", ClusterID: "central-primary"},
-			{NodeID: "central-node-2", Name: "Platform Node 2", NodeType: "core", Latitude: 41.8750, Longitude: -87.6350, Status: "active", ClusterID: "central-primary"},
+			{NodeID: "central-node-1", Name: "Platform Node 1", NodeType: infra.NodeTypeCore, Latitude: 41.8781, Longitude: -87.6298, Status: "active", ClusterID: "central-primary"},
+			{NodeID: "central-node-2", Name: "Platform Node 2", NodeType: infra.NodeTypeCore, Latitude: 41.8750, Longitude: -87.6350, Status: "active", ClusterID: "central-primary"},
 			// Media cluster edge nodes (demo-media)
-			{NodeID: "edge-node-1", Name: "Edge Leiden", NodeType: "edge", Latitude: 52.1601, Longitude: 4.4970, Status: "active", ClusterID: "demo-media"},
-			{NodeID: "edge-ashburn", Name: "Edge Ashburn", NodeType: "edge", Latitude: 39.0438, Longitude: -77.4874, Status: "offline", ClusterID: "demo-media"},
-			{NodeID: "edge-singapore", Name: "Edge Singapore", NodeType: "edge", Latitude: 1.3521, Longitude: 103.8198, Status: "offline", ClusterID: "demo-media"},
+			{NodeID: "edge-node-1", Name: "Edge Leiden", NodeType: infra.NodeTypeEdge, Latitude: 52.1601, Longitude: 4.4970, Status: "active", ClusterID: "demo-media"},
+			{NodeID: "edge-ashburn", Name: "Edge Ashburn", NodeType: infra.NodeTypeEdge, Latitude: 39.0438, Longitude: -77.4874, Status: "offline", ClusterID: "demo-media"},
+			{NodeID: "edge-singapore", Name: "Edge Singapore", NodeType: infra.NodeTypeEdge, Latitude: 1.3521, Longitude: 103.8198, Status: "offline", ClusterID: "demo-media"},
 			// US East edge nodes
-			{NodeID: "useast-edge-1", Name: "Edge 1", NodeType: "edge", Latitude: 40.7128, Longitude: -74.0060, Status: "active", ClusterID: "us-east-edge"},
-			{NodeID: "useast-edge-2", Name: "Edge 2", NodeType: "edge", Latitude: 40.7200, Longitude: -73.9900, Status: "active", ClusterID: "us-east-edge"},
-			{NodeID: "useast-core-1", Name: "Core 1", NodeType: "core", Latitude: 40.7050, Longitude: -74.0100, Status: "active", ClusterID: "us-east-edge"},
+			{NodeID: "useast-edge-1", Name: "Edge 1", NodeType: infra.NodeTypeEdge, Latitude: 40.7128, Longitude: -74.0060, Status: "active", ClusterID: "us-east-edge"},
+			{NodeID: "useast-edge-2", Name: "Edge 2", NodeType: infra.NodeTypeEdge, Latitude: 40.7200, Longitude: -73.9900, Status: "active", ClusterID: "us-east-edge"},
+			{NodeID: "useast-core-1", Name: "Core 1", NodeType: infra.NodeTypeCore, Latitude: 40.7050, Longitude: -74.0100, Status: "active", ClusterID: "us-east-edge"},
 			// APAC edge nodes
-			{NodeID: "apac-edge-1", Name: "Edge 1", NodeType: "edge", Latitude: 35.6762, Longitude: 139.6503, Status: "active", ClusterID: "apac-edge"},
-			{NodeID: "apac-edge-2", Name: "Edge 2", NodeType: "edge", Latitude: 35.6900, Longitude: 139.6700, Status: "active", ClusterID: "apac-edge"},
+			{NodeID: "apac-edge-1", Name: "Edge 1", NodeType: infra.NodeTypeEdge, Latitude: 35.6762, Longitude: 139.6503, Status: "active", ClusterID: "apac-edge"},
+			{NodeID: "apac-edge-2", Name: "Edge 2", NodeType: infra.NodeTypeEdge, Latitude: 35.6900, Longitude: 139.6700, Status: "active", ClusterID: "apac-edge"},
 		},
 		ServiceInstances: []*model.NetworkServiceInstance{
 			// All platform services on central-primary

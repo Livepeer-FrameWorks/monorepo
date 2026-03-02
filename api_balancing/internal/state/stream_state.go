@@ -856,6 +856,21 @@ func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID stri
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
+// AliveNodeIDs returns IDs of nodes with a recent heartbeat within the given threshold.
+// Used by edge health sync to report alive nodes to Quartermaster.
+func (sm *StreamStateManager) AliveNodeIDs(staleThreshold time.Duration) []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	cutoff := time.Now().Add(-staleThreshold)
+	var ids []string
+	for id, n := range sm.nodes {
+		if n.LastHeartbeat.After(cutoff) && n.IsHealthy {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // TouchNode updates only health + last update time without overwriting identity fields.
 func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	sm.mu.Lock()
