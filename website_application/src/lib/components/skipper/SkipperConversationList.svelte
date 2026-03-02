@@ -81,7 +81,6 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div class="flex h-full flex-col" role="presentation" onclick={() => (menuOpenId = null)}>
   <div class="flex items-center justify-between border-b border-border px-4 py-3">
     <span class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">

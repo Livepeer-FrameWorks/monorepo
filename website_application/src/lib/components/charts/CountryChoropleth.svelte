@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import type { Map as LeafletMap, GeoJSON as LeafletGeoJSON, Layer } from "leaflet";
-  import type { Feature, GeoJsonProperties, Geometry } from "geojson";
+  import type { Feature } from "geojson";
   import { getIconComponent } from "$lib/iconUtils";
   import "leaflet/dist/leaflet.css";
   import { iso2ToIso3, iso3ToIso2, getCountryName } from "$lib/utils/country-names";

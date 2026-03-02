@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getContentDeliveryUrls, PROTOCOL_INFO, type ContentType } from "$lib/config";
+  import { resolve } from "$app/paths";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { toast } from "$lib/stores/toast";
@@ -82,7 +83,7 @@
         Playback URLs for this {contentType === "dvr" ? "recording" : contentType}.
       </p>
       <a
-        href={docsUrl}
+        href={resolve(docsUrl)}
         target="_blank"
         rel="noopener noreferrer"
         class="text-xs text-info hover:underline inline-flex items-center gap-1"

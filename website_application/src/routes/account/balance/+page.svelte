@@ -255,12 +255,14 @@
               {/if}
               <p class="text-sm text-muted-foreground mt-4">
                 Balance is used for streaming, storage, and transcoding. API requests are free.
+                <!-- eslint-disable svelte/no-navigation-without-resolve -->
                 <a
                   href={`${docsSiteUrl}/streamers/billing`}
                   class="text-primary hover:underline"
                   target="_blank"
                   rel="noopener">Learn more</a
                 >
+                <!-- eslint-enable svelte/no-navigation-without-resolve -->
               </p>
             {:else}
               <p class="text-muted-foreground">No balance data available</p>

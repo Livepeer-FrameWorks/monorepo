@@ -297,12 +297,14 @@
             <div class="mt-4 pt-4 border-t border-border/30 text-sm text-muted-foreground">
               <strong>Embed StreamCrafter:</strong> You can drop this component into your website
               and even for non-FrameWorks media servers.
+              <!-- eslint-disable svelte/no-navigation-without-resolve -->
               <a
                 href={`${getDocsSiteUrl()}/streamers/ingest`}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-primary hover:underline">Read the Docs</a
               >
+              <!-- eslint-enable svelte/no-navigation-without-resolve -->
             </div>
           </div>
         {/if}

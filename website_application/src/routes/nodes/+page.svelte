@@ -415,7 +415,7 @@
     return `${Math.round(percent)}%`;
   }
 
-  function getStatusBadgeClass(status: string | null | undefined) {
+  function _getStatusBadgeClass(status: string | null | undefined) {
     switch (status?.toLowerCase()) {
       case "healthy":
         return "border-success/40 bg-success/10 text-success";

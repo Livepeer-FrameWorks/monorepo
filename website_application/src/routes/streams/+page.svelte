@@ -369,7 +369,7 @@
 
   // Navigate to watch page
   function watchStream(streamId: string) {
-    goto(`${resolve("/view")}?type=live&id=${streamId}`);
+    goto(resolve(`/view?type=live&id=${streamId}`));
   }
 
   // Show delete confirmation

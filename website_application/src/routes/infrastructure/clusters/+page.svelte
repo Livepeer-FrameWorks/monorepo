@@ -586,6 +586,7 @@
                         {@const isOwner =
                           accessByCluster.get(cluster.clusterId)?.accessLevel === "owner"}
                         {@const isPreferred = cluster.isDefaultCluster}
+                        {@const isCentral = cluster.clusterType === "central"}
                         <tr class="border-b border-border/30 hover:bg-muted/20">
                           <td class="py-3 px-4 font-medium text-foreground">
                             <div class="flex items-center gap-2">
@@ -614,6 +615,15 @@
                               >
                                 Preferred
                               </span>
+                            {:else if isCentral}
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Button variant="ghost" size="sm" disabled>Set</Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Platform clusters cannot be set as preferred
+                                </TooltipContent>
+                              </Tooltip>
                             {:else}
                               <Button
                                 variant="ghost"

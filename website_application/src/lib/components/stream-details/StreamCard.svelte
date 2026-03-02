@@ -171,6 +171,7 @@
 
   {#if isLive}
     <div class="slab-actions">
+      <!-- eslint-disable svelte/no-navigation-without-resolve -->
       <a
         href={getShareUrl(stream.playbackId || displayStreamId)}
         class="flex items-center justify-center py-3 text-sm font-medium text-primary hover:bg-primary/5 transition-colors"
@@ -180,6 +181,7 @@
         <PlayIcon class="w-4 h-4 mr-2" />
         Watch Live
       </a>
+      <!-- eslint-enable svelte/no-navigation-without-resolve -->
     </div>
   {/if}
 </div>

@@ -109,7 +109,7 @@
   let schemaSearch = $state("");
 
   // Schema section collapse state (all expanded by default)
-  let collapsedSections: SvelteSet<string> = $state(new SvelteSet());
+  let collapsedSections: SvelteSet<string> = new SvelteSet();
   function toggleSection(section: string) {
     const newSet = new SvelteSet(collapsedSections);
     if (newSet.has(section)) {

@@ -43,6 +43,7 @@
     </h3>
     <p class="text-xs text-muted-foreground/70 mt-1">
       Share these URLs with viewers to watch your stream.
+      <!-- eslint-disable svelte/no-navigation-without-resolve -->
       <a
         href={`${getDocsSiteUrl()}/streamers/playback`}
         target="_blank"
@@ -51,6 +52,7 @@
       >
         Protocol docs <ExternalLinkIcon class="w-3 h-3" />
       </a>
+      <!-- eslint-enable svelte/no-navigation-without-resolve -->
     </p>
   </div>
 

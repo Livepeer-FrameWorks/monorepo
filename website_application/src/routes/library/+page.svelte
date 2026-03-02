@@ -3,6 +3,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import { get } from "svelte/store";
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { page } from "$app/stores";
   import { auth } from "$lib/stores/auth";
   import {
@@ -796,6 +797,7 @@
   function playArtifact(artifact: UnifiedArtifact) {
     if (artifact.playbackId) {
       const url = getShareUrl(artifact.playbackId);
+      // eslint-disable-next-line svelte/no-navigation-without-resolve
       if (url) goto(url);
     }
   }
@@ -808,7 +810,7 @@
     } else {
       url.searchParams.set("type", type);
     }
-    goto(`${url.pathname}${url.search}`, { replaceState: true, noScroll: true });
+    goto(resolve(`${url.pathname}${url.search}`), { replaceState: true, noScroll: true });
   }
 
   // Icons

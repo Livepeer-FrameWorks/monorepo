@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { base } from "$app/paths";
+  import { resolve } from "$app/paths";
   import { navigationConfig, type NavigationItem } from "../navigation.js";
   import { createEventDispatcher, untrack } from "svelte";
   import { getIconComponent } from "../iconUtils";
@@ -22,13 +22,6 @@
 
   let currentPath = $derived($page.url.pathname);
 
-  // Helper to resolve hrefs safely - prepend base path if configured
-  function safeResolve(href: string | undefined): string {
-    if (!href) return "";
-    // Simply prepend base path (empty string by default, or configured base path)
-    return base + href;
-  }
-
   // Helper to get active children info for dot indicators in collapsed mode
   function getActiveChildrenInfo(sectionKey: string): {
     count: number;
@@ -40,8 +33,8 @@
 
     const activeChildren = Object.values(section.children).filter((child) => child.active === true);
 
-    const currentIndex = activeChildren.findIndex(
-      (child) => safeResolve(child.href) === currentPath
+    const currentIndex = activeChildren.findIndex((child) =>
+      child.href ? resolve(child.href) === currentPath : false
     );
 
     // Check if we're currently in this section (any child matches)
@@ -68,7 +61,7 @@
     for (const [sectionKey, section] of Object.entries(navigationConfig)) {
       if (sectionKey !== "dashboard" && section.children) {
         for (const [_childKey, child] of Object.entries(section.children)) {
-          if (safeResolve(child.href) === currentPath) {
+          if (child.href && resolve(child.href) === currentPath) {
             // Expand the section in the store (non-persisted) so user can toggle it later
             // Use untrack to prevent this effect from re-running if the store changes
             untrack(() => {
@@ -106,8 +99,8 @@
     }
 
     // Find current page index if we're already in this section
-    const currentChildIndex = activeChildren.findIndex(
-      ([, child]) => safeResolve(child.href) === currentPath
+    const currentChildIndex = activeChildren.findIndex(([, child]) =>
+      child.href ? resolve(child.href) === currentPath : false
     );
 
     if (currentChildIndex !== -1) {
@@ -143,7 +136,7 @@
     }
     // Navigate to active routes using SvelteKit client-side routing
     if (item.href && item.active === true) {
-      goto(safeResolve(item.href));
+      goto(resolve(item.href!));
     }
   }
 
@@ -157,7 +150,7 @@
     if (item.active === "disabled") {
       return `${baseClass} disabled ${childPadding}`;
     }
-    if (item.href && safeResolve(item.href) === currentPath) {
+    if (item.href && resolve(item.href) === currentPath) {
       return `${baseClass} active ${childPadding}`;
     }
     return `${baseClass} ${childPadding}`;
