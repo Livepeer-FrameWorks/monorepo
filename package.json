@@ -2,10 +2,10 @@
   "name": "stronk-monorepo",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@9.12.0",
+  "packageManager": "pnpm@10.30.3",
   "engines": {
     "node": ">=24 <25",
-    "pnpm": ">=9.12.0"
+    "pnpm": ">=10.0.0"
   },
   "workspaces": [
     "website_marketing",
@@ -30,13 +30,25 @@
     "@typescript-eslint/parser": "^8.56.1",
     "@typescript-eslint/type-utils": "^8.56.1",
     "@typescript-eslint/utils": "^8.56.1",
+    "eslint-config-prettier": "^10.1.8",
     "globals": "^17.3.0",
     "knip": "^5.85.0",
     "lefthook": "^2.1.1",
     "prettier": "^3.8.1",
-    "prettier-plugin-svelte": "^3.5.0"
+    "prettier-plugin-astro": "^0.14.1",
+    "prettier-plugin-svelte": "^3.5.0",
+    "typescript-eslint": "^8.56.1"
   },
   "pnpm": {
+    "onlyBuiltDependencies": [
+      "@reown/appkit",
+      "@swc/core",
+      "bufferutil",
+      "esbuild",
+      "lefthook",
+      "sharp",
+      "utf-8-validate"
+    ],
     "patchedDependencies": {
       "@codecov/sveltekit-plugin": "patches/@codecov__sveltekit-plugin.patch"
     }

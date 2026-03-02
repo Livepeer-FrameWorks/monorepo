@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@9.12.0",
+  "packageManager": "pnpm@10.30.3",
   "description": "FrameWorks streaming player - monorepo workspace",
   "scripts": {
     "build": "pnpm run build:core && pnpm run build:react && pnpm run build:svelte && pnpm run build:wc",
