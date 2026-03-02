@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getContext } from "svelte";
   import type { Snippet } from "svelte";
-  import type { Readable } from "svelte/store";
+  import { readable, type Readable } from "svelte/store";
   import {
     createStudioTranslator,
     type StudioTranslateFn,
@@ -19,9 +19,10 @@
   let { whipUrl, showSettingsButton = true, children }: Props = $props();
 
   let pc: any = getContext("fw-sc-controller");
-  const translatorCtx = getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator");
   const fallbackT = createStudioTranslator({ locale: "en" });
-  let t: StudioTranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorCtx =
+    getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator") ?? readable(fallbackT);
+  let t = $derived($translatorCtx);
 
   let canAddSource = $derived(pc?.state !== "destroyed" && pc?.state !== "error");
   let hasCamera = $derived(pc?.sources?.some((s: any) => s.type === "camera") ?? false);

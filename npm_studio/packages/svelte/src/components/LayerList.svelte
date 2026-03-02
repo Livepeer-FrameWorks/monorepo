@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getContext } from "svelte";
-  import type { Readable } from "svelte/store";
+  import { readable, type Readable } from "svelte/store";
   import CameraIcon from "../icons/CameraIcon.svelte";
   import EyeIcon from "../icons/EyeIcon.svelte";
   import MonitorIcon from "../icons/MonitorIcon.svelte";
@@ -36,9 +36,10 @@
     class: className = "",
   }: Props = $props();
 
-  const translatorCtx = getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator");
   const fallbackT = createStudioTranslator({ locale: "en" });
-  let t: StudioTranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorCtx =
+    getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator") ?? readable(fallbackT);
+  let t = $derived($translatorCtx);
 
   let draggedId = $state<string | null>(null);
   let dragOverId = $state<string | null>(null);

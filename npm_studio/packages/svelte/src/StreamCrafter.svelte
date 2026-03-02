@@ -148,11 +148,11 @@
   ]);
 
   // State
-  let videoEl: HTMLVideoElement;
-  let settingsDropdownEl: HTMLDivElement;
-  let settingsButtonEl: HTMLButtonElement;
-  let contextMenuEl: HTMLDivElement;
-  let showSettings = $state(initialShowSettings);
+  let videoEl = $state<HTMLVideoElement>(undefined!);
+  let settingsDropdownEl = $state<HTMLDivElement>(undefined!);
+  let settingsButtonEl = $state<HTMLButtonElement>(undefined!);
+  let contextMenuEl = $state<HTMLDivElement>(undefined!);
+  let showSettings = $state(false);
   let showSources = $state(true);
   let contextMenu = $state<{ x: number; y: number } | null>(null);
   let isAdvancedPanelOpen = $state(false);
@@ -166,7 +166,7 @@
     isReconnecting: false,
     error: null,
     stats: null,
-    qualityProfile: initialProfile,
+    qualityProfile: "broadcast",
     reconnectionState: null,
     // Encoder
     useWebCodecs: detectCapabilities().recommended === "webcodecs",
@@ -200,6 +200,14 @@
   });
   let encoderOverrides = $state<EncoderOverrides>({});
   const isWebCodecsAvailable = isWebCodecsEncodingPathSupported();
+
+  // Sync initial prop values into state
+  $effect(() => {
+    showSettings = initialShowSettings;
+  });
+  $effect(() => {
+    crafterState.qualityProfile = initialProfile;
+  });
 
   // Create store
   const crafter = createStreamCrafterContextV2();

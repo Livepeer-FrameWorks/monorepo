@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getContext } from "svelte";
-  import type { Readable } from "svelte/store";
+  import { readable, type Readable } from "svelte/store";
   import {
     createStudioTranslator,
     type StudioTranslateFn,
@@ -8,9 +8,10 @@
   import CameraIcon from "../icons/CameraIcon.svelte";
 
   let pc: any = getContext("fw-sc-controller");
-  const translatorCtx = getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator");
   const fallbackT = createStudioTranslator({ locale: "en" });
-  let t: StudioTranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorCtx =
+    getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator") ?? readable(fallbackT);
+  let t = $derived($translatorCtx);
 
   let videoEl: HTMLVideoElement;
 

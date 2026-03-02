@@ -10,7 +10,7 @@
 -->
 <script lang="ts">
   import { getContext } from "svelte";
-  import type { Readable } from "svelte/store";
+  import { readable, type Readable } from "svelte/store";
   import type {
     IngestState,
     IngestStats,
@@ -187,9 +187,10 @@
     onEncoderOverridesChange,
   }: Props = $props();
 
-  const translatorCtx = getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator");
   const fallbackT = createStudioTranslator({ locale: "en" });
-  let t: StudioTranslateFn = $derived(translatorCtx ? $translatorCtx : fallbackT);
+  const translatorCtx =
+    getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator") ?? readable(fallbackT);
+  let t = $derived($translatorCtx);
 
   let profileEncoderSettings = $derived(getEncoderSettings(qualityProfile));
   let effectiveEncoderConfig = $derived(

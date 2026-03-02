@@ -11,9 +11,11 @@
   } = $props();
 
   const streamCrafterContext = createStreamCrafterContext();
-  if (Object.keys(options).length > 0) {
-    streamCrafterContext.initialize(options as any);
-  }
+  $effect(() => {
+    if (Object.keys(options).length > 0) {
+      streamCrafterContext.initialize(options as any);
+    }
+  });
 
   // Set the context for descendant components
   setContext("StreamCrafterContext", streamCrafterContext);
