@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { base, resolve } from "$app/paths";
+  import { base } from "$app/paths";
   import { navigationConfig, type NavigationItem } from "../navigation.js";
   import { createEventDispatcher, untrack } from "svelte";
   import { getIconComponent } from "../iconUtils";
@@ -143,7 +143,7 @@
     }
     // Navigate to active routes using SvelteKit client-side routing
     if (item.href && item.active === true) {
-      goto(resolve(safeResolve(item.href)));
+      goto(safeResolve(item.href));
     }
   }
 

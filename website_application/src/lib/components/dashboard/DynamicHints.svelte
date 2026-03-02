@@ -171,7 +171,10 @@
         >{currentHint.getDescription()}</span
       >
       {#if currentHint.link}
-        <a href={resolve(currentHint.link)} class="text-primary hover:underline text-sm shrink-0">
+        <a
+          href={resolve(currentHint.link as any)}
+          class="text-primary hover:underline text-sm shrink-0"
+        >
           {currentHint.linkText} →
         </a>
       {/if}

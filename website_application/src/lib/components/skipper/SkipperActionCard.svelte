@@ -30,8 +30,8 @@
 
   const sensitivePatterns = /key|secret|token|password/i;
 
-  const isError = !!(payload.error || payload.Error);
-  const errorMessage = (payload.error || payload.Error || "") as string;
+  let isError = $derived(!!(payload.error || payload.Error));
+  let errorMessage = $derived((payload.error || payload.Error || "") as string);
 
   function formatKey(key: string): string {
     return key
@@ -62,9 +62,11 @@
 
   let showSensitive = $state(false);
 
-  const entries = Object.entries(payload).filter(
-    ([key, value]) =>
-      value !== null && value !== undefined && value !== "" && key !== "error" && key !== "Error"
+  let entries = $derived(
+    Object.entries(payload).filter(
+      ([key, value]) =>
+        value !== null && value !== undefined && value !== "" && key !== "error" && key !== "Error"
+    )
   );
 </script>
 

@@ -256,7 +256,7 @@
               <p class="text-sm text-muted-foreground mt-4">
                 Balance is used for streaming, storage, and transcoding. API requests are free.
                 <a
-                  href={resolve(`${docsSiteUrl}/streamers/billing`)}
+                  href={`${docsSiteUrl}/streamers/billing`}
                   class="text-primary hover:underline"
                   target="_blank"
                   rel="noopener">Learn more</a
@@ -279,9 +279,7 @@
           <div class="slab-body--padded space-y-4">
             <!-- Amount -->
             <div>
-              <label class="block text-sm font-medium text-muted-foreground mb-2"
-                >Amount (EUR)</label
-              >
+              <span class="block text-sm font-medium text-muted-foreground mb-2">Amount (EUR)</span>
               <div class="flex gap-2">
                 {#each [5, 10, 25, 50, 100] as amount (amount)}
                   <Button
@@ -307,8 +305,8 @@
 
             <!-- Method -->
             <div>
-              <label class="block text-sm font-medium text-muted-foreground mb-2"
-                >Payment Method</label
+              <span class="block text-sm font-medium text-muted-foreground mb-2"
+                >Payment Method</span
               >
               <div class="flex gap-2">
                 <Button
@@ -332,7 +330,7 @@
 
             {#if topupMethod === "crypto"}
               <div>
-                <label class="block text-sm font-medium text-muted-foreground mb-2">Asset</label>
+                <span class="block text-sm font-medium text-muted-foreground mb-2">Asset</span>
                 <div class="flex gap-2">
                   {#each ["ETH", "USDC", "LPT"] as asset (asset)}
                     <Button

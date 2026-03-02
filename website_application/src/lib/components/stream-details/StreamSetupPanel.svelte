@@ -91,6 +91,7 @@
   const CopyIcon = getIconComponent("Copy");
   const PlusIcon = getIconComponent("Plus");
   const TrashIcon = getIconComponent("Trash2");
+  const LoaderIcon = getIconComponent("Loader");
 </script>
 
 <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">

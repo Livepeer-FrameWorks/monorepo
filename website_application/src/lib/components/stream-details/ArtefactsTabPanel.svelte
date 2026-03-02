@@ -18,7 +18,7 @@
     expiresAt?: string | null;
     durationSeconds?: number | null;
     sizeBytes?: number | null;
-    isFrozen?: boolean;
+    isFrozen?: boolean | null;
   }
 
   interface Clip {
@@ -33,7 +33,7 @@
     expiresAt?: string | null;
     duration?: number | null;
     sizeBytes?: number | null;
-    isFrozen?: boolean;
+    isFrozen?: boolean | null;
   }
 
   interface Props {

@@ -202,9 +202,9 @@
     const routes: {
       from: [number, number];
       to: [number, number];
-      status: string | null | undefined;
-      score: number | null | undefined;
-      details: string | null | undefined;
+      status: string;
+      score?: number;
+      details?: string;
     }[] = [];
     const bucketPolys: {
       id: string;
@@ -249,9 +249,9 @@
           routes.push({
             from: [evt.clientLatitude, evt.clientLongitude],
             to: [nodeLat, nodeLng],
-            status: evt.status,
-            score: evt.score,
-            details: evt.details,
+            status: evt.status ?? "unknown",
+            score: evt.score ?? undefined,
+            details: evt.details ?? undefined,
           });
         }
 
@@ -1538,7 +1538,7 @@
                     </thead>
                     <tbody>
                       {#each recentRoutingEvents as evt, i (i)}
-                        {@const displayStreamId = evt.stream?.streamId ?? evt.streamId}
+                        {@const displayStreamId = evt.streamId}
                         {@const isCrossCluster = !!(
                           evt.remoteClusterId && evt.remoteClusterId !== evt.clusterId
                         )}

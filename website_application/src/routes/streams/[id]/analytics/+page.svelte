@@ -411,7 +411,7 @@
           {#each metricCards as card (card.key)}
             <div class="p-4 border-r border-b border-border/30 last:border-r-0">
               <div class="flex items-center gap-2 mb-2">
-                <svelte:component this={card.icon} class="w-4 h-4 text-muted-foreground" />
+                <card.icon class="w-4 h-4 text-muted-foreground" />
                 <span class="text-xs text-muted-foreground uppercase tracking-wide"
                   >{card.label}</span
                 >

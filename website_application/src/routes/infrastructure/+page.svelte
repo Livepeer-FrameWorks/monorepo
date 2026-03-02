@@ -13,7 +13,6 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import InfrastructureMetricCard from "$lib/components/shared/InfrastructureMetricCard.svelte";
   import { Badge } from "$lib/components/ui/badge";
-  import { Card, CardContent } from "$lib/components/ui/card";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
@@ -91,18 +90,21 @@
     {
       key: "activeNodes",
       label: "Active Nodes",
+      subtitle: "Nodes reporting telemetry",
       value: platformMetrics.totalActiveNodes ?? 0,
       tone: "text-success",
     },
     {
       key: "avgCpu",
       label: "Avg CPU Usage",
+      subtitle: "Rolling average across nodes",
       value: `${(platformMetrics.avgCpuUsage ?? 0).toFixed(1)}%`,
       tone: "text-primary",
     },
     {
       key: "avgMemory",
       label: "Avg Memory Usage",
+      subtitle: "Rolling average across nodes",
       value: `${(platformMetrics.avgMemoryUsage ?? 0).toFixed(1)}%`,
       tone: "text-accent-purple",
     },
@@ -280,7 +282,12 @@
           <div class="slab-body--padded">
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {#each platformPerformanceCards as stat (stat.key)}
-                <InfrastructureMetricCard label={stat.label} value={stat.value} tone={stat.tone} />
+                <InfrastructureMetricCard
+                  label={stat.label}
+                  subtitle={stat.subtitle}
+                  value={stat.value}
+                  tone={stat.tone}
+                />
               {/each}
             </div>
           </div>
@@ -313,21 +320,25 @@
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <InfrastructureMetricCard
                 label="Healthy"
+                subtitle="Service instances"
                 value={serviceHealthSummary.healthy}
                 tone="text-success"
               />
               <InfrastructureMetricCard
                 label="Degraded"
+                subtitle="Service instances"
                 value={serviceHealthSummary.degraded}
                 tone="text-warning"
               />
               <InfrastructureMetricCard
                 label="Unhealthy"
+                subtitle="Service instances"
                 value={serviceHealthSummary.unhealthy}
                 tone="text-destructive"
               />
               <InfrastructureMetricCard
                 label="Unknown"
+                subtitle="Service instances"
                 value={serviceHealthSummary.unknown}
                 tone="text-muted-foreground"
               />
@@ -361,14 +372,18 @@
                 {#each clusters as cluster, index (`${cluster.id}-${index}`)}
                   <a
                     href={resolve(`/infrastructure/${cluster.clusterId}`)}
-                    class="block no-underline hover:ring-2 hover:ring-primary/50 rounded-lg transition-shadow"
+                    class="block no-underline h-full"
                   >
-                    <Card>
-                      <CardContent class="space-y-4">
-                        <div class="flex items-start justify-between">
+                    <div
+                      class="slab slab--compact h-full border-border/50 transition-colors hover:border-primary/50"
+                    >
+                      <div class="slab-header">
+                        <div class="flex items-start justify-between gap-3 w-full">
                           <div>
-                            <h3 class="text-lg font-semibold">{cluster.clusterName}</h3>
-                            <p class="text-sm text-muted-foreground">{cluster.clusterId}</p>
+                            <h4 class="text-base font-semibold">{cluster.clusterName}</h4>
+                            <p class="text-xs text-muted-foreground font-mono">
+                              {cluster.clusterId}
+                            </p>
                           </div>
                           <Badge
                             variant="outline"
@@ -377,15 +392,22 @@
                             {cluster.healthStatus}
                           </Badge>
                         </div>
+                      </div>
+                      <div class="slab-body--padded pt-5">
                         <div class="space-y-1 text-sm text-muted-foreground">
+                          <p
+                            class="uppercase tracking-wide text-[0.65rem] text-muted-foreground/80"
+                          >
+                            Created
+                          </p>
                           <p>
-                            Created: {cluster.createdAt
+                            {cluster.createdAt
                               ? new Date(cluster.createdAt).toLocaleDateString()
                               : "N/A"}
                           </p>
                         </div>
-                      </CardContent>
-                    </Card>
+                      </div>
+                    </div>
                   </a>
                 {/each}
               </div>

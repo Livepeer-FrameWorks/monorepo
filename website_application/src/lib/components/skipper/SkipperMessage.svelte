@@ -149,8 +149,13 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="flex flex-col gap-2" data-message-id={message.id} onclick={handleClick}>
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div
+  class="flex flex-col gap-2"
+  role="presentation"
+  data-message-id={message.id}
+  onclick={handleClick}
+>
   <div class="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-muted-foreground">
     <span class="font-semibold">{message.role === "assistant" ? "Skipper" : "You"}</span>
     {#if message.role === "assistant" && message.confidence}

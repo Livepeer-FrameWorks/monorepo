@@ -10,13 +10,13 @@
     nodeType: string;
     region: string | null;
     externalIp: string | null;
-    internalIp: string | null;
-    wireguardIp: string | null;
+    internalIp?: string | null;
+    wireguardIp?: string | null;
     lastHeartbeat: string | null;
     cpuCores: number | null;
     memoryGb: number | null;
     diskGb: number | null;
-    availabilityZone: string | null;
+    availabilityZone?: string | null;
   }
 
   // Real-time system health data structure (includes ts which is computed client-side)

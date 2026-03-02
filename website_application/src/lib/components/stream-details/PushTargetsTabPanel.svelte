@@ -8,13 +8,13 @@
   interface PushTarget {
     id: string;
     streamId: string;
-    platform?: string | null;
+    platform: string | null;
     name: string;
     targetUri: string;
     isEnabled: boolean;
     status: string;
-    lastError?: string | null;
-    lastPushedAt?: string | null;
+    lastError: string | null;
+    lastPushedAt: string | null;
     createdAt: string;
   }
 

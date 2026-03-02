@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { resolve } from "$app/paths";
   import { getIconComponent } from "$lib/iconUtils";
   import { getShareUrl } from "$lib/config";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
@@ -173,7 +172,7 @@
   {#if isLive}
     <div class="slab-actions">
       <a
-        href={resolve(getShareUrl(stream.playbackId || displayStreamId))}
+        href={getShareUrl(stream.playbackId || displayStreamId)}
         class="flex items-center justify-center py-3 text-sm font-medium text-primary hover:bg-primary/5 transition-colors"
         onclick={(event) => event.stopPropagation()}
         title="Watch live stream"

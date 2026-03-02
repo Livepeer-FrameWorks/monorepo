@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import type { Map as LeafletMap } from "leaflet";
+  import type { Map as LeafletMap, HeatLayer } from "leaflet";
   import { getIconComponent } from "$lib/iconUtils";
   import "leaflet/dist/leaflet.css";
 
@@ -37,7 +37,7 @@
 
   let mapContainer = $state<HTMLElement>();
   let map: LeafletMap | null = null;
-  let heatLayer: L.HeatLayer | null = null;
+  let heatLayer: HeatLayer | null = null;
 
   // UX state
   let isFullscreen = $state(false);
@@ -117,7 +117,7 @@
     if (data.length === 0) return;
 
     // Convert data to format expected by leaflet.heat: [lat, lng, intensity]
-    const points = data.map((p) => [p.lat, p.lng, p.intensity]);
+    const points: [number, number, number][] = data.map((p) => [p.lat, p.lng, p.intensity]);
 
     // Create heat layer with our brand colors
     // Gradient: blue -> cyan -> green -> yellow -> red

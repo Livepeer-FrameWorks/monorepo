@@ -248,7 +248,7 @@
                   showSettings={false}
                   devMode={true}
                   debug={false}
-                  theme={themeStore.playerTheme}
+                  theme={themeStore.playerTheme as import("@livepeer-frameworks/streamcrafter-core").FwThemePreset}
                   enableCompositor={advancedSettings.enableCompositor}
                   compositorConfig={{ renderer: advancedSettings.compositorRenderer }}
                   onStateChange={handleStateChange}
@@ -298,7 +298,7 @@
               <strong>Embed StreamCrafter:</strong> You can drop this component into your website
               and even for non-FrameWorks media servers.
               <a
-                href={resolve(`${getDocsSiteUrl()}/streamers/ingest`)}
+                href={`${getDocsSiteUrl()}/streamers/ingest`}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-primary hover:underline">Read the Docs</a

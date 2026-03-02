@@ -20,7 +20,6 @@
 
   // Bot protection fields
   let phone_number = $state(""); // Honeypot - must remain empty
-  // @ts-expect-error - Vite env types not available in this context
   const turnstileSiteKey =
     (import.meta as { env: Record<string, string> }).env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
   const defaultHumanCheck = turnstileSiteKey ? "robot" : "human";
@@ -38,7 +37,6 @@
   const resetTurnstileWidget = () => {
     if (typeof window !== "undefined" && turnstileWidgetId) {
       try {
-        // @ts-expect-error - turnstile global
         window?.turnstile?.reset?.(turnstileWidgetId);
       } catch (_err) {
         console.warn("Turnstile reset failed", _err);
@@ -73,7 +71,6 @@
   });
 
   async function handleSubmit(event: Event) {
-    // @ts-expect-error - event type
     event.preventDefault();
     event.stopPropagation();
 

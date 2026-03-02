@@ -6,10 +6,10 @@
 
   let { toolName, payload }: Props = $props();
 
-  const status = (payload.status as string) ?? "unknown";
-  const metrics = (payload.metrics as Record<string, unknown>) ?? {};
-  const analysis = (payload.analysis as string) ?? "";
-  const recommendations = (payload.recommendations as string[]) ?? [];
+  let status = $derived((payload.status as string) ?? "unknown");
+  let metrics = $derived((payload.metrics as Record<string, unknown>) ?? {});
+  let analysis = $derived((payload.analysis as string) ?? "");
+  let recommendations = $derived((payload.recommendations as string[]) ?? []);
 
   const statusColors: Record<string, string> = {
     healthy: "bg-emerald-500",

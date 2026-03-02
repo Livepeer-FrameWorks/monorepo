@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
-  import type { Map as LeafletMap, GeoJSON, Layer } from "leaflet";
+  import type { Map as LeafletMap, GeoJSON as LeafletGeoJSON, Layer } from "leaflet";
+  import type { Feature, GeoJsonProperties, Geometry } from "geojson";
   import { getIconComponent } from "$lib/iconUtils";
   import "leaflet/dist/leaflet.css";
   import { iso2ToIso3, iso3ToIso2, getCountryName } from "$lib/utils/country-names";
@@ -30,10 +31,10 @@
 
   let mapContainer: HTMLElement;
   let map: LeafletMap | null = null;
-  let geoLayer: GeoJSON | null = null;
+  let geoLayer: LeafletGeoJSON | null = null;
   let L: typeof import("leaflet") | null = null;
 
-  let worldFeatures: GeoJSON.Feature[] = [];
+  let worldFeatures: Feature[] = [];
 
   // UX state
   let isFullscreen = $state(false);
@@ -46,7 +47,7 @@
     L = leafletModule.default;
 
     const geoJsonData = await import("$lib/data/countries.geo.json");
-    worldFeatures = geoJsonData.default.features;
+    worldFeatures = geoJsonData.default.features as Feature[];
 
     if (mapContainer) initMap();
   });
@@ -134,7 +135,7 @@
     geoLayer = L.geoJSON(worldFeatures as GeoJSON.Feature[], {
       style: (feature: GeoJSON.Feature | undefined) => {
         // GeoJSON uses 3-letter ISO code as feature.id (e.g., "USA")
-        const iso3 = (feature?.id || "").toUpperCase();
+        const iso3 = String(feature?.id ?? "").toUpperCase();
         const val = valueMap.get(iso3) || 0;
         return {
           fillColor: getColor(val),
@@ -144,7 +145,7 @@
         };
       },
       onEachFeature: (feature: GeoJSON.Feature, layer: Layer) => {
-        const iso3 = (feature?.id || "").toUpperCase();
+        const iso3 = String(feature?.id ?? "").toUpperCase();
         const iso2 = iso3ToIso2[iso3] || iso3;
         const val = valueMap.get(iso3) || 0;
         const name = getCountryName(iso2);

@@ -28,18 +28,18 @@
 
   let { toolName, payload }: Props = $props();
 
-  const isWeb = toolName === "search_web";
-  const isSupport = toolName === "search_support_history";
+  let isWeb = $derived(toolName === "search_web");
+  let isSupport = $derived(toolName === "search_support_history");
   const BookIcon = getIconComponent("BookOpen");
   const GlobeIcon = getIconComponent("Globe");
   const MessageCircleIcon = getIconComponent("MessageCircle");
 
-  const results: SearchResult[] = (() => {
+  let results: SearchResult[] = $derived.by(() => {
     if (Array.isArray(payload.results)) return payload.results as SearchResult[];
     if (Array.isArray(payload.Results)) return payload.Results as SearchResult[];
     if (Array.isArray(payload)) return payload as unknown as SearchResult[];
     return [];
-  })();
+  });
 
   function getTitle(r: SearchResult): string {
     return r.title || r.Title || r.subject || "Untitled";

@@ -48,15 +48,15 @@
 
   // Define public routes that don't require authentication
   const loginPath = resolve("/login");
-  const loginIndexPath = resolve("/login/");
+  const loginIndexPath = loginPath + "/";
   const registerPath = resolve("/register");
-  const registerIndexPath = resolve("/register/");
+  const registerIndexPath = registerPath + "/";
   const verifyEmailPath = resolve("/verify-email");
-  const verifyEmailIndexPath = resolve("/verify-email/");
+  const verifyEmailIndexPath = verifyEmailPath + "/";
   const forgotPasswordPath = resolve("/forgot-password");
-  const forgotPasswordIndexPath = resolve("/forgot-password/");
+  const forgotPasswordIndexPath = forgotPasswordPath + "/";
   const resetPasswordPath = resolve("/reset-password");
-  const resetPasswordIndexPath = resolve("/reset-password/");
+  const resetPasswordIndexPath = resetPasswordPath + "/";
   const dashboardPath = resolve("/");
 
   const marketingBaseUrl = getMarketingSiteUrl();

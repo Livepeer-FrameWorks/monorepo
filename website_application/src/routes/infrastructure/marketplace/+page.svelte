@@ -197,6 +197,17 @@
                             <Button variant="outline" size="sm" disabled class="opacity-70">
                               Pending...
                             </Button>
+                          {:else if !cluster.maxConcurrentStreams}
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Button variant="secondary" size="sm" disabled class="opacity-50">
+                                  Platform
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Platform cluster — not available for streaming
+                              </TooltipContent>
+                            </Tooltip>
                           {:else if !cluster.isEligible}
                             <Tooltip>
                               <TooltipTrigger>

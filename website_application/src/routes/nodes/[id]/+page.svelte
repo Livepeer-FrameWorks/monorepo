@@ -2,15 +2,11 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { get } from "svelte/store";
   import {
-    fragment,
-    GetNodesConnectionStore,
+    GetInfrastructureNodeStore,
     GetNodePerformance5mStore,
     GetServiceInstancesConnectionStore,
     SystemHealthStore,
-    NodeListFieldsStore,
-    PageInfoFieldsStore,
   } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -39,21 +35,19 @@
 
   let nodeRelayId = $derived(page.params.id as string);
 
-  const nodesStore = new GetNodesConnectionStore();
+  const nodeStore = new GetInfrastructureNodeStore();
   const perfStore = new GetNodePerformance5mStore();
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
   const systemHealthSub = new SystemHealthStore();
-  const nodeCoreStore = new NodeListFieldsStore();
-  const pageInfoStore = new PageInfoFieldsStore();
 
   let isAuthenticated = false;
 
-  let hasData = $derived(!!$nodesStore.data);
-  let loading = $derived($nodesStore.fetching && !hasData);
+  let hasData = $derived(!!$nodeStore.data);
+  let loading = $derived($nodeStore.fetching && !hasData);
 
-  let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
-  let allNodes = $derived(maskedNodes.map((n) => get(fragment(n, nodeCoreStore))));
-  let node = $derived(allNodes.find((n) => n.id === nodeRelayId) ?? null);
+  let node = $derived(
+    $nodeStore.data?.node?.__typename === "InfrastructureNode" ? $nodeStore.data.node : null
+  );
   let nodeId = $derived(node?.nodeId ?? "");
   let loadSequence = 0;
 
@@ -206,23 +200,22 @@
   async function loadNodeData() {
     const requestID = ++loadSequence;
     try {
-      const foundNode = await findNodeByRelayID(nodeRelayId);
+      await nodeStore.fetch({ variables: { id: nodeRelayId } });
       if (requestID !== loadSequence) return;
 
-      // Once we have the node, fetch performance + services using its nodeId
-      if (foundNode) {
+      if (node) {
         const range = resolveTimeRange(timeRange);
         const timeRangeInput = { start: range.start, end: range.end };
         await Promise.all([
           perfStore.fetch({
             variables: {
-              nodeId: foundNode.nodeId,
+              nodeId: node.nodeId,
               timeRange: timeRangeInput,
               first: 100,
             },
           }),
           serviceInstancesStore.fetch({
-            variables: { nodeId: foundNode.nodeId },
+            variables: { nodeId: node.nodeId },
           }),
         ]);
       }
@@ -230,23 +223,6 @@
       console.error("Failed to load node data:", error);
       toast.error("Failed to load node data.");
     }
-  }
-
-  async function findNodeByRelayID(relayID: string) {
-    let cursor: string | undefined;
-    for (let pageCount = 0; pageCount < 20; pageCount += 1) {
-      await nodesStore.fetch({ variables: { first: 100, after: cursor } });
-      const edges = $nodesStore.data?.nodesConnection?.edges ?? [];
-      const found = edges.map((edge) => edge.node).find((item) => item.id === relayID);
-      if (found) return get(fragment(found, nodeCoreStore));
-
-      const maskedPageInfo = $nodesStore.data?.nodesConnection?.pageInfo;
-      const pageInfo = maskedPageInfo ? get(fragment(maskedPageInfo, pageInfoStore)) : null;
-      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) return null;
-      cursor = pageInfo.endCursor;
-    }
-
-    return null;
   }
 
   // Real-time health subscription

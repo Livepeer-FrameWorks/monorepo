@@ -70,19 +70,21 @@
   );
 
   // Pending approval requests for clusters you own
+  type PendingSubscription = NonNullable<
+    import("$houdini").GetPendingSubscriptions$result["pendingSubscriptions"]
+  >[number];
+
   let pendingApprovalData = $state<
     {
       clusterId: string;
-      subscriptions: NonNullable<
-        NonNullable<
-          ReturnType<typeof get<InstanceType<typeof GetPendingSubscriptionsStore>>>["data"]
-        >["pendingSubscriptions"]
-      >;
+      subscriptions: PendingSubscription[];
     }[]
   >([]);
   let pendingApprovals = $derived(
     pendingApprovalData.flatMap((entry) =>
-      entry.subscriptions.filter((s) => s.subscriptionStatus === "PENDING_APPROVAL")
+      entry.subscriptions.filter(
+        (s: PendingSubscription) => s.subscriptionStatus === "PENDING_APPROVAL"
+      )
     )
   );
 

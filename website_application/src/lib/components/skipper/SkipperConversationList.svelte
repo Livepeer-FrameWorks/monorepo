@@ -81,8 +81,8 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="flex h-full flex-col" onclick={() => (menuOpenId = null)}>
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div class="flex h-full flex-col" role="presentation" onclick={() => (menuOpenId = null)}>
   <div class="flex items-center justify-between border-b border-border px-4 py-3">
     <span class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
       Conversations
@@ -108,21 +108,19 @@
       <div class="space-y-0.5 p-2">
         {#each conversations as convo (convo.id)}
           <div class="group relative">
-            <button
-              type="button"
-              class="w-full rounded-lg px-3 py-2.5 text-left transition {convo.id === activeId
-                ? 'bg-primary/10 text-foreground'
-                : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}"
-              onclick={() => onSelect?.(convo.id)}
-            >
-              <div class="flex items-start gap-2">
-                <MessageCircleIcon
-                  class="mt-0.5 h-3.5 w-3.5 shrink-0 {convo.id === activeId
-                    ? 'text-primary'
-                    : 'text-muted-foreground/50'}"
-                />
-                <div class="min-w-0 flex-1">
-                  {#if editingId === convo.id}
+            {#if editingId === convo.id}
+              <div
+                class="w-full rounded-lg px-3 py-2.5 text-left transition {convo.id === activeId
+                  ? 'bg-primary/10 text-foreground'
+                  : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}"
+              >
+                <div class="flex items-start gap-2">
+                  <MessageCircleIcon
+                    class="mt-0.5 h-3.5 w-3.5 shrink-0 {convo.id === activeId
+                      ? 'text-primary'
+                      : 'text-muted-foreground/50'}"
+                  />
+                  <div class="min-w-0 flex-1">
                     <!-- svelte-ignore a11y_autofocus -->
                     <div class="flex items-center gap-1">
                       <input
@@ -150,25 +148,53 @@
                         <XIcon class="h-3.5 w-3.5" />
                       </button>
                     </div>
-                  {:else}
-                    <p class="truncate pr-6 text-sm font-medium">
-                      {convo.title || "New conversation"}
-                    </p>
-                  {/if}
-                  <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                    <span>
-                      {#if convo.updatedAt && !isNaN(new Date(convo.updatedAt).getTime())}
-                        {formatDistanceToNow(new Date(convo.updatedAt), {
-                          addSuffix: true,
-                        })}
-                      {:else}
-                        just now
-                      {/if}
-                    </span>
+                    <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>
+                        {#if convo.updatedAt && !isNaN(new Date(convo.updatedAt).getTime())}
+                          {formatDistanceToNow(new Date(convo.updatedAt), {
+                            addSuffix: true,
+                          })}
+                        {:else}
+                          just now
+                        {/if}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </button>
+            {:else}
+              <button
+                type="button"
+                class="w-full rounded-lg px-3 py-2.5 text-left transition {convo.id === activeId
+                  ? 'bg-primary/10 text-foreground'
+                  : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}"
+                onclick={() => onSelect?.(convo.id)}
+              >
+                <div class="flex items-start gap-2">
+                  <MessageCircleIcon
+                    class="mt-0.5 h-3.5 w-3.5 shrink-0 {convo.id === activeId
+                      ? 'text-primary'
+                      : 'text-muted-foreground/50'}"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate pr-6 text-sm font-medium">
+                      {convo.title || "New conversation"}
+                    </p>
+                    <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>
+                        {#if convo.updatedAt && !isNaN(new Date(convo.updatedAt).getTime())}
+                          {formatDistanceToNow(new Date(convo.updatedAt), {
+                            addSuffix: true,
+                          })}
+                        {:else}
+                          just now
+                        {/if}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </button>
+            {/if}
 
             {#if editingId !== convo.id}
               <button

@@ -66,8 +66,8 @@
     return detail.payload;
   }
 
-  const toolName = extractToolName(detail.title);
-  const payload = getPayload();
+  let toolName = $derived(extractToolName(detail.title));
+  let payload = $derived(getPayload());
 
   function formatFallback(): string {
     if (typeof detail.payload === "string") return detail.payload;

@@ -25,28 +25,25 @@
     execute_query: "Query Result",
   };
 
-  const query = (payload.query || payload.Query || "") as string;
-  const variables = (payload.variables || payload.Variables || null) as Record<
-    string,
-    unknown
-  > | null;
-  const hints = (payload.hints || payload.Hints || []) as string[];
-  const hint = (payload.hint || payload.Hint || "") as string;
-  const fields = (payload.fields || payload.Fields || []) as FieldSummary[];
-  const source = (payload.source || payload.Source || "") as string;
+  let query = $derived((payload.query || payload.Query || "") as string);
+  let variables = $derived(
+    (payload.variables || payload.Variables || null) as Record<string, unknown> | null
+  );
+  let hints = $derived((payload.hints || payload.Hints || []) as string[]);
+  let hint = $derived((payload.hint || payload.Hint || "") as string);
+  let fields = $derived((payload.fields || payload.Fields || []) as FieldSummary[]);
+  let source = $derived((payload.source || payload.Source || "") as string);
 
-  const isExecuteQuery = toolName === "execute_query";
-  const isIntrospect = toolName === "introspect_schema";
+  let isExecuteQuery = $derived(toolName === "execute_query");
+  let isIntrospect = $derived(toolName === "introspect_schema");
 
-  function getCodeContent(): string {
+  let codeContent = $derived.by(() => {
     if (query) return query;
     if (isExecuteQuery) return JSON.stringify(payload, null, 2);
     return "";
-  }
-
-  const codeContent = getCodeContent();
-  const allHints = [...(hint ? [hint] : []), ...hints];
-  const hasVars = variables && Object.keys(variables).length > 0;
+  });
+  let allHints = $derived([...(hint ? [hint] : []), ...hints]);
+  let hasVars = $derived(variables && Object.keys(variables).length > 0);
 
   let copied = $state(false);
 

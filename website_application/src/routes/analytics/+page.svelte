@@ -258,7 +258,7 @@
         {/if}
 
         <!-- Main Content -->
-        <div class="px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        <div class="py-6 space-y-6">
           <!-- Top Streams by Usage -->
           {#if topStreamsByUsage.length > 0}
             <div class="slab">

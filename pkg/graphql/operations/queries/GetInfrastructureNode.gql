@@ -1,0 +1,32 @@
+# Fetch a single infrastructure node by its global relay ID
+query GetInfrastructureNode($id: ID!) {
+  node(id: $id) {
+    ... on InfrastructureNode {
+      id
+      nodeId
+      nodeName
+      clusterId
+      nodeType
+      region
+      externalIp
+      latitude
+      longitude
+      cpuCores
+      memoryGb
+      diskGb
+      lastHeartbeat
+      tags
+      liveState {
+        cpuPercent
+        ramUsedBytes
+        ramTotalBytes
+        isHealthy
+        activeStreams
+        updatedAt
+        diskUsedBytes
+        diskTotalBytes
+        location
+      }
+    }
+  }
+}

@@ -17,6 +17,7 @@
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import NodeCard from "$lib/components/infrastructure/NodeCard.svelte";
+  import InfrastructureMetricCard from "$lib/components/shared/InfrastructureMetricCard.svelte";
   import { GridSeam, SectionDivider } from "$lib/components/layout";
   import { getIconComponent } from "$lib/iconUtils";
   import { Input } from "$lib/components/ui/input";
@@ -38,10 +39,7 @@
   const ServerIcon = getIconComponent("Server");
   const HardDriveIcon = getIconComponent("HardDrive");
   const SearchIcon = getIconComponent("Search");
-  const CpuIcon = getIconComponent("Cpu");
-  const MemoryStickIcon = getIconComponent("MemoryStick");
   const ActivityIcon = getIconComponent("Activity");
-  const RadioIcon = getIconComponent("Radio");
   const CalendarIcon = getIconComponent("Calendar");
 
   // Houdini stores
@@ -159,6 +157,37 @@
       dataPoints: count,
     };
   });
+
+  let platformPerformanceCards = $derived([
+    {
+      key: "cpu",
+      label: "Avg CPU",
+      subtitle: `Peak ${performanceStats.maxCpu.toFixed(1)}%`,
+      value: `${performanceStats.avgCpu.toFixed(1)}%`,
+      tone: "text-primary",
+    },
+    {
+      key: "memory",
+      label: "Avg Memory",
+      subtitle: `Peak ${performanceStats.maxMemory.toFixed(1)}%`,
+      value: `${performanceStats.avgMemory.toFixed(1)}%`,
+      tone: "text-info",
+    },
+    {
+      key: "bandwidth",
+      label: "Total Bandwidth",
+      subtitle: "Aggregated across nodes",
+      value: `${(performanceStats.totalBandwidth / (1024 * 1024 * 1024)).toFixed(2)} GB`,
+      tone: "text-success",
+    },
+    {
+      key: "streams",
+      label: "Avg Streams",
+      subtitle: `Peak ${performanceStats.maxStreams}`,
+      value: performanceStats.avgStreams.toFixed(1),
+      tone: "text-accent-purple",
+    },
+  ]);
 
   // Filters and search
   let searchTerm = $state("");
@@ -558,62 +587,33 @@
 
         <!-- Performance Overview (from 5-minute aggregates) -->
         {#if performanceStats.dataPoints > 0}
-          <div class="slab mx-4 sm:mx-6 lg:mx-8 mt-4">
+          <div class="slab mt-4">
             <div class="slab-header">
               <div class="flex items-center gap-2">
                 <ActivityIcon class="w-4 h-4 text-primary" />
-                <h3>Platform Performance (24h)</h3>
+                <h3>Platform Performance ({currentRange.label})</h3>
               </div>
               <span class="text-xs text-muted-foreground"
                 >{performanceStats.dataPoints} data points</span
               >
             </div>
             <div class="slab-body--padded">
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div class="p-4 border border-border/30 bg-muted/10 text-center">
-                  <CpuIcon class="w-5 h-5 text-primary mx-auto mb-2" />
-                  <div class="text-xl font-bold text-primary">
-                    {performanceStats.avgCpu.toFixed(1)}%
-                  </div>
-                  <p class="text-xs text-muted-foreground">Avg CPU</p>
-                  <p class="text-xs text-muted-foreground mt-1">
-                    Peak: {performanceStats.maxCpu.toFixed(1)}%
-                  </p>
-                </div>
-                <div class="p-4 border border-border/30 bg-muted/10 text-center">
-                  <MemoryStickIcon class="w-5 h-5 text-info mx-auto mb-2" />
-                  <div class="text-xl font-bold text-info">
-                    {performanceStats.avgMemory.toFixed(1)}%
-                  </div>
-                  <p class="text-xs text-muted-foreground">Avg Memory</p>
-                  <p class="text-xs text-muted-foreground mt-1">
-                    Peak: {performanceStats.maxMemory.toFixed(1)}%
-                  </p>
-                </div>
-                <div class="p-4 border border-border/30 bg-muted/10 text-center">
-                  <RadioIcon class="w-5 h-5 text-success mx-auto mb-2" />
-                  <div class="text-xl font-bold text-success">
-                    {(performanceStats.totalBandwidth / (1024 * 1024 * 1024)).toFixed(2)} GB
-                  </div>
-                  <p class="text-xs text-muted-foreground">Total Bandwidth</p>
-                </div>
-                <div class="p-4 border border-border/30 bg-muted/10 text-center">
-                  <ServerIcon class="w-5 h-5 text-accent-purple mx-auto mb-2" />
-                  <div class="text-xl font-bold text-accent-purple">
-                    {performanceStats.avgStreams.toFixed(1)}
-                  </div>
-                  <p class="text-xs text-muted-foreground">Avg Streams</p>
-                  <p class="text-xs text-muted-foreground mt-1">
-                    Peak: {performanceStats.maxStreams}
-                  </p>
-                </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                {#each platformPerformanceCards as stat (stat.key)}
+                  <InfrastructureMetricCard
+                    label={stat.label}
+                    subtitle={stat.subtitle}
+                    value={stat.value}
+                    tone={stat.tone}
+                  />
+                {/each}
               </div>
             </div>
           </div>
         {/if}
 
         <!-- Raw Metrics (per node) -->
-        <div class="slab mx-4 sm:mx-6 lg:mx-8 mt-4">
+        <div class="slab mt-4">
           <div class="slab-header">
             <div class="flex items-center gap-2">
               <ActivityIcon class="w-4 h-4 text-info" />
@@ -918,7 +918,6 @@
                       {formatCpuUsage}
                       {formatMemoryUsage}
                       {formatDiskUsage}
-                      {getStatusBadgeClass}
                     />
                   {/each}
                 </div>

@@ -37,7 +37,7 @@
     class="flex items-center justify-center px-4 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] text-muted-foreground hover:text-foreground hover:bg-[hsl(var(--tn-bg-visual))] transition-colors cursor-pointer"
     title="Notifications"
   >
-    <svelte:component this={Bell} class="w-5 h-5" />
+    <Bell class="w-5 h-5" />
     {#if notificationStore.unreadCount > 0}
       <span
         class="absolute top-2 right-2 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold leading-none text-white bg-[hsl(var(--tn-red))] rounded-full"

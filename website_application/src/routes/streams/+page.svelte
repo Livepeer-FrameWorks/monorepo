@@ -364,12 +364,12 @@
 
   // Navigate to stream detail page
   function navigateToStream(streamId: string) {
-    goto(resolve(`/streams/${streamId}`));
+    goto(resolve("/streams/[id]", { id: streamId }));
   }
 
   // Navigate to watch page
   function watchStream(streamId: string) {
-    goto(resolve(`/view?type=live&id=${streamId}`));
+    goto(`${resolve("/view")}?type=live&id=${streamId}`);
   }
 
   // Show delete confirmation

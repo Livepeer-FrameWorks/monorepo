@@ -1,21 +1,38 @@
 <script lang="ts">
-  import { Card, CardContent } from "$lib/components/ui/card";
-  import { Badge } from "$lib/components/ui/badge";
-
   interface Props {
-    label: string;
+    label?: string;
+    title?: string;
+    subtitle?: string;
     value: string | number;
-    tone: string;
+    tone?: string;
+    class?: string;
   }
 
-  let { label, value, tone }: Props = $props();
+  let {
+    label = "",
+    title = "",
+    subtitle = "",
+    value,
+    tone = "text-foreground",
+    class: className = "",
+  }: Props = $props();
+
+  let displayTitle = $derived(title || label || "Metric");
 </script>
 
-<Card>
-  <CardContent class="py-4 text-center space-y-2">
-    <Badge variant="outline" class="mx-auto w-fit uppercase tracking-wide text-[0.65rem]">
-      {label}
-    </Badge>
-    <span class="text-2xl font-semibold {tone}">{value}</span>
-  </CardContent>
-</Card>
+<div class="metric-card h-full flex flex-col justify-between gap-3 {className}">
+  <div class="min-w-0">
+    <p
+      class="text-[0.65rem] uppercase tracking-[0.08em] text-muted-foreground font-medium truncate"
+      title={displayTitle}
+    >
+      {displayTitle}
+    </p>
+    {#if subtitle}
+      <p class="mt-1 text-xs text-muted-foreground/80 leading-snug">
+        {subtitle}
+      </p>
+    {/if}
+  </div>
+  <p class="text-2xl md:text-[1.65rem] leading-none font-semibold break-words {tone}">{value}</p>
+</div>

@@ -3,7 +3,6 @@
   import { SvelteSet } from "svelte/reactivity";
   import { get } from "svelte/store";
   import { goto } from "$app/navigation";
-  import { resolve } from "$app/paths";
   import { page } from "$app/stores";
   import { auth } from "$lib/stores/auth";
   import {
@@ -236,7 +235,7 @@
         sizeBytes: dvr.sizeBytes,
         createdAt: dvr.createdAt,
         expiresAt: dvr.expiresAt,
-        isFrozen: dvr.isFrozen,
+        isFrozen: dvr.isFrozen ?? undefined,
         storageLocation: dvr.storageLocation ?? undefined,
         rawData: dvr,
       });
@@ -797,7 +796,7 @@
   function playArtifact(artifact: UnifiedArtifact) {
     if (artifact.playbackId) {
       const url = getShareUrl(artifact.playbackId);
-      if (url) goto(resolve(url));
+      if (url) goto(url);
     }
   }
 
@@ -809,7 +808,7 @@
     } else {
       url.searchParams.set("type", type);
     }
-    goto(resolve(`${url.pathname}${url.search}`), { replaceState: true, noScroll: true });
+    goto(`${url.pathname}${url.search}`, { replaceState: true, noScroll: true });
   }
 
   // Icons
@@ -955,7 +954,7 @@
               <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <!-- Type Filter -->
                 <div>
-                  <label class="block text-sm font-medium text-muted-foreground mb-2">Type</label>
+                  <span class="block text-sm font-medium text-muted-foreground mb-2">Type</span>
                   <div class="flex border border-border rounded-md overflow-hidden">
                     <button
                       type="button"
@@ -1189,11 +1188,11 @@
                                   title="Delete"
                                   onclick={() => {
                                     if (artifact.type === "clips")
-                                      confirmDeleteClip(artifact.rawData);
+                                      confirmDeleteClip(artifact.rawData as ClipData);
                                     else if (artifact.type === "dvr")
-                                      confirmDeleteDvr(artifact.rawData);
+                                      confirmDeleteDvr(artifact.rawData as DvrData);
                                     else if (artifact.type === "vod")
-                                      confirmDeleteVod(artifact.rawData);
+                                      confirmDeleteVod(artifact.rawData as VodData);
                                   }}
                                 >
                                   <Trash2Icon class="w-3.5 h-3.5" />

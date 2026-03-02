@@ -6,7 +6,7 @@
   import {
     fragment,
     GetInfrastructureOverviewStore,
-    GetNetworkOverviewStore,
+    GetNetworkStatusStore,
     GetNodesConnectionStore,
     GetServiceInstancesConnectionStore,
     SystemHealthStore,
@@ -20,7 +20,6 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import InfrastructureMetricCard from "$lib/components/shared/InfrastructureMetricCard.svelte";
   import { Badge } from "$lib/components/ui/badge";
-  import { Card, CardContent } from "$lib/components/ui/card";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import {
@@ -39,7 +38,7 @@
   let clusterId = $derived(page.params.clusterId as string);
 
   const infrastructureStore = new GetInfrastructureOverviewStore();
-  const networkStore = new GetNetworkOverviewStore();
+  const networkStore = new GetNetworkStatusStore();
   const nodesStore = new GetNodesConnectionStore();
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
   const systemHealthSub = new SystemHealthStore();
@@ -111,30 +110,35 @@
     {
       key: "nodes",
       label: "Nodes",
+      subtitle: "Registered to this cluster",
       value: totalNodeCount,
       tone: "text-primary",
     },
     {
       key: "services",
       label: "Services",
+      subtitle: "Running service instances",
       value: serviceInstances.length,
       tone: "text-info",
     },
     {
       key: "streams",
       label: "Active Streams",
+      subtitle: "Live right now",
       value: currentStreams,
       tone: "text-success",
     },
     {
       key: "viewers",
       label: "Active Viewers",
+      subtitle: "Across active streams",
       value: currentViewers,
       tone: "text-accent-purple",
     },
     {
       key: "cpu",
       label: "Avg CPU",
+      subtitle: "From current node live state",
       value: `${clusterAvgCpu.toFixed(1)}%`,
       tone:
         clusterAvgCpu < 70
@@ -146,6 +150,7 @@
     {
       key: "memory",
       label: "Avg Memory",
+      subtitle: "From current node live state",
       value: `${clusterAvgMemory.toFixed(1)}%`,
       tone:
         clusterAvgMemory < 70
@@ -385,7 +390,12 @@
           <div class="slab-body--padded">
             <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               {#each metricCards as stat (stat.key)}
-                <InfrastructureMetricCard label={stat.label} value={stat.value} tone={stat.tone} />
+                <InfrastructureMetricCard
+                  label={stat.label}
+                  subtitle={stat.subtitle}
+                  value={stat.value}
+                  tone={stat.tone}
+                />
               {/each}
             </div>
           </div>
@@ -474,13 +484,12 @@
                   {@const memPercent = health?.event.ramMax
                     ? (((health.event.ramCurrent || 0) / health.event.ramMax) * 100).toFixed(0)
                     : null}
-                  <a
-                    href={resolve(`/nodes/${node.id}`)}
-                    class="block no-underline hover:ring-2 hover:ring-primary/50 rounded-lg transition-shadow"
-                  >
-                    <Card>
-                      <CardContent class="space-y-3">
-                        <div class="flex items-start justify-between">
+                  <a href={resolve(`/nodes/${node.id}`)} class="block no-underline h-full">
+                    <div
+                      class="slab slab--compact h-full border-border/50 transition-colors hover:border-primary/50"
+                    >
+                      <div class="slab-header">
+                        <div class="flex items-start justify-between gap-3 w-full">
                           <div>
                             <h4 class="font-semibold">{node.nodeName}</h4>
                             <p class="text-xs text-muted-foreground font-mono">{node.nodeId}</p>
@@ -496,6 +505,8 @@
                               (node.liveState?.isHealthy ? "Healthy" : "Unknown")}
                           </Badge>
                         </div>
+                      </div>
+                      <div class="slab-body--padded pt-5">
                         <div class="grid grid-cols-3 gap-2 text-xs">
                           <div>
                             <p class="text-muted-foreground">Type</p>
@@ -512,7 +523,7 @@
                         </div>
                         {#if cpuPercent || memPercent}
                           <div
-                            class="flex items-center gap-4 text-xs pt-1 border-t border-border/30"
+                            class="mt-2 flex items-center gap-4 border-t border-border/30 pt-2 text-xs"
                           >
                             {#if cpuPercent}
                               <span>
@@ -536,8 +547,8 @@
                             {/if}
                           </div>
                         {/if}
-                      </CardContent>
-                    </Card>
+                      </div>
+                    </div>
                   </a>
                 {/each}
               </div>

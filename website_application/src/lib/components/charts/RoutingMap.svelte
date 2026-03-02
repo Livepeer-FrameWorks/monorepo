@@ -313,6 +313,7 @@
     currentRelationships: RelationshipLine[] = []
   ) {
     if (!map || !L) return;
+    const leaflet = L;
 
     // Clean up pulse timers
     pulseTimers.forEach(clearInterval);
@@ -328,13 +329,13 @@
     if (clusterLayer) map.removeLayer(clusterLayer);
 
     // Recreate layer groups (order = z-order)
-    bucketLayer = L.layerGroup().addTo(map);
-    flowLayer = L.layerGroup().addTo(map);
-    membershipLayer = L.layerGroup().addTo(map);
-    relationshipLayer = L.layerGroup().addTo(map);
-    layerGroup = L.layerGroup().addTo(map);
-    serviceLayer = L.layerGroup().addTo(map);
-    clusterLayer = L.layerGroup().addTo(map);
+    bucketLayer = leaflet.layerGroup().addTo(map);
+    flowLayer = leaflet.layerGroup().addTo(map);
+    membershipLayer = leaflet.layerGroup().addTo(map);
+    relationshipLayer = leaflet.layerGroup().addTo(map);
+    layerGroup = leaflet.layerGroup().addTo(map);
+    serviceLayer = leaflet.layerGroup().addTo(map);
+    clusterLayer = leaflet.layerGroup().addTo(map);
 
     // 0. Draw bucket polygons first (optional)
     // Build a simple count map for heat intensity
@@ -351,7 +352,7 @@
         Math.log1p(count) / Math.log1p(Math.max(...Object.values(bucketCounts)))
       );
       // Leaflet expects [lat, lng]
-      const poly = L.polygon(b.coords, {
+      const poly = leaflet.polygon(b.coords, {
         color: b.kind === "client" ? "rgba(59,130,246,0.55)" : "rgba(16,185,129,0.55)",
         weight: 1,
         fillOpacity: 0.12 + intensity * 0.35,
@@ -381,12 +382,14 @@
     currentFlows.forEach((f) => {
       const color = f.color || "rgba(168, 85, 247, 0.5)"; // purple
       const weight = f.weight || 1.2;
-      L.polyline([f.from, f.to], {
-        color,
-        weight,
-        opacity: 0.7,
-        smoothFactor: 1,
-      }).addTo(flowLayer!);
+      leaflet
+        .polyline([f.from, f.to], {
+          color,
+          weight,
+          opacity: 0.7,
+          smoothFactor: 1,
+        })
+        .addTo(flowLayer!);
     });
 
     // Build cluster lookup for membership lines
@@ -404,13 +407,15 @@
       const to: [number, number] = [cluster.lat, cluster.lng];
       if (from[0] === to[0] && from[1] === to[1]) return;
 
-      L.polyline([from, to], {
-        color: MEMBERSHIP_COLOR,
-        weight: 1,
-        opacity: 0.4,
-        smoothFactor: 1,
-        interactive: false,
-      }).addTo(membershipLayer!);
+      leaflet
+        .polyline([from, to], {
+          color: MEMBERSHIP_COLOR,
+          weight: 1,
+          opacity: 0.4,
+          smoothFactor: 1,
+          interactive: false,
+        })
+        .addTo(membershipLayer!);
     });
 
     // Build per-node service list (populated when serviceInstances prop is provided)
@@ -429,7 +434,7 @@
       nodeMap[node.id] = node;
       const color = NODE_STATUS_COLORS[node.status ?? "active"] || NODE_STATUS_COLORS.active;
 
-      const nodeIcon = L.divIcon({
+      const nodeIcon = leaflet.divIcon({
         className: "node-dot-marker",
         html: `<div style="background-color: ${color}; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 10px ${color};"></div>`,
         iconSize: [12, 12],
@@ -449,7 +454,8 @@
       }
       nodePopup += "</div>";
 
-      L.marker([node.lat, node.lng], { icon: nodeIcon })
+      leaflet
+        .marker([node.lat, node.lng], { icon: nodeIcon })
         .bindPopup(nodePopup, { className: "dark-popup", maxWidth: 400, minWidth: 200 })
         .addTo(layerGroup!);
     });
@@ -461,7 +467,7 @@
       const weight = 1;
 
       // Draw line
-      const line = L.polyline([route.from, route.to], {
+      const line = leaflet.polyline([route.from, route.to], {
         color: color,
         weight: weight,
         opacity: 0.6,
@@ -478,7 +484,7 @@
       line.addTo(layerGroup!);
 
       // Draw Client (Origin) dot
-      const clientIcon = L.divIcon({
+      const clientIcon = leaflet.divIcon({
         className: "custom-client-icon",
         html: `<div style="background-color: ${isSuccess ? "rgb(34, 197, 94)" : "rgb(239, 68, 68)"}; width: 6px; height: 6px; border-radius: 50%;"></div>`,
         iconSize: [6, 6],
@@ -491,7 +497,8 @@
         "Location",
         `${route.from[0].toFixed(2)}, ${route.from[1].toFixed(2)}`
       );
-      L.marker(route.from, { icon: clientIcon })
+      leaflet
+        .marker(route.from, { icon: clientIcon })
         .bindPopup(
           `<div class="map-popup"><div class="map-popup__title">Viewer</div><table class="map-popup__table">${clientRows}</table></div>`,
           { className: "dark-popup", maxWidth: 280, minWidth: 160 }
@@ -509,7 +516,7 @@
       const lineColor = colorMap[rel.type] || "rgba(148, 163, 184, 0.4)";
       const lineWeight = rel.active ? Math.max(1.5, Math.min(4, (rel.weight ?? 1) * 0.5)) : 1;
 
-      const line = L.polyline([rel.from, rel.to], {
+      const line = leaflet.polyline([rel.from, rel.to], {
         color: lineColor,
         weight: lineWeight,
         opacity: rel.active ? 0.7 : 0.3,
@@ -561,7 +568,7 @@
 
       const health = svc.healthStatus ?? "unknown";
       const svcColor = SERVICE_HEALTH_COLORS[health] || SERVICE_HEALTH_COLORS.unknown;
-      const svcIcon = L.divIcon({
+      const svcIcon = leaflet.divIcon({
         className: "service-dot-marker",
         html: `<div style="background-color: ${svcColor}; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px ${svcColor}; opacity: 0.8;"></div>`,
         iconSize: [8, 8],
@@ -575,7 +582,8 @@
         `<div class="map-popup"><div class="map-popup__title">${escapeHtml(svc.serviceId)}</div>` +
         `<table class="map-popup__table">${svcRows}</table></div>`;
 
-      L.marker([lat, lng], { icon: svcIcon })
+      leaflet
+        .marker([lat, lng], { icon: svcIcon })
         .bindPopup(svcPopup, { className: "dark-popup", maxWidth: 300, minWidth: 180 })
         .addTo(serviceLayer!);
     });
@@ -592,7 +600,7 @@
       const color = statusColors[cluster.status] || "rgb(148, 163, 184)";
       const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
 
-      const icon = L.divIcon({
+      const icon = leaflet.divIcon({
         className: "cluster-marker",
         html: `<div class="cluster-marker--glow" style="
           width: ${radius * 2}px; height: ${radius * 2}px; border-radius: 50%;
@@ -640,7 +648,8 @@
 
       popup += "</div>";
 
-      L.marker([cluster.lat, cluster.lng], { icon, zIndexOffset: 1000 })
+      leaflet
+        .marker([cluster.lat, cluster.lng], { icon, zIndexOffset: 1000 })
         .bindPopup(popup, { className: "dark-popup", maxWidth: 400, minWidth: 220 })
         .addTo(clusterLayer!);
     });

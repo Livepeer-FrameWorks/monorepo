@@ -20,34 +20,32 @@
     refresh_stream_key: "Stream Key Refreshed",
   };
 
-  const isError = !!(payload.error || payload.Error);
-  const errorMessage = (payload.error || payload.Error || "") as string;
+  let isError = $derived(!!(payload.error || payload.Error));
+  let errorMessage = $derived((payload.error || payload.Error || "") as string);
 
-  const fields: { label: string; value: string; masked?: boolean }[] = [];
-
-  function addField(label: string, key: string, masked?: boolean) {
-    const value = (payload[key] ?? payload[key.charAt(0).toUpperCase() + key.slice(1)]) as
-      | string
-      | undefined;
-    if (value) fields.push({ label, value: String(value), masked });
-  }
-
-  addField("Name", "name");
-  addField("Name", "Name");
-  addField("Stream ID", "stream_id");
-  addField("Stream ID", "StreamID");
-  addField("Stream ID", "ID");
-  addField("Stream Key", "stream_key", true);
-  addField("Stream Key", "StreamKey", true);
-  addField("Playback ID", "playback_id");
-  addField("Playback ID", "PlaybackID");
-  addField("Message", "message");
-  addField("Message", "Message");
-
-  // Deduplicate by label (first wins)
-  const uniqueFields = fields.filter(
-    (field, index, arr) => arr.findIndex((f) => f.label === field.label) === index
-  );
+  let uniqueFields = $derived.by(() => {
+    const fields: { label: string; value: string; masked?: boolean }[] = [];
+    function addField(label: string, key: string, masked?: boolean) {
+      const value = (payload[key] ?? payload[key.charAt(0).toUpperCase() + key.slice(1)]) as
+        | string
+        | undefined;
+      if (value) fields.push({ label, value: String(value), masked });
+    }
+    addField("Name", "name");
+    addField("Name", "Name");
+    addField("Stream ID", "stream_id");
+    addField("Stream ID", "StreamID");
+    addField("Stream ID", "ID");
+    addField("Stream Key", "stream_key", true);
+    addField("Stream Key", "StreamKey", true);
+    addField("Playback ID", "playback_id");
+    addField("Playback ID", "PlaybackID");
+    addField("Message", "message");
+    addField("Message", "Message");
+    return fields.filter(
+      (field, index, arr) => arr.findIndex((f) => f.label === field.label) === index
+    );
+  });
 </script>
 
 <div class="rounded-lg border border-border bg-card text-sm">

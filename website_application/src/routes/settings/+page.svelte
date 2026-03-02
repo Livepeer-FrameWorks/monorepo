@@ -195,9 +195,9 @@
           address: hasAddress
             ? {
                 street: billingDetails.street,
-                city: billingDetails.city || null,
+                city: billingDetails.city || "",
                 state: billingDetails.state || null,
-                postalCode: billingDetails.postalCode || null,
+                postalCode: billingDetails.postalCode || "",
                 country: billingDetails.country,
               }
             : null,

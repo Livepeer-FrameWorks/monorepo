@@ -496,7 +496,7 @@
         <QueryEditor
           bind:query
           bind:variables
-          {schema}
+          schema={schema as Record<string, unknown> | null}
           onKeyPress={handleKeyPress}
           onCursorInfo={(info) => (activeDoc = info as FocusDoc)}
         />

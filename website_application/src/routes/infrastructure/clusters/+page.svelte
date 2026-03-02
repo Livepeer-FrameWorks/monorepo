@@ -95,19 +95,21 @@
     accessList.filter((a) => a.accessLevel === "owner").map((a) => a.clusterId)
   );
 
+  type PendingSubscription = NonNullable<
+    import("$houdini").GetPendingSubscriptions$result["pendingSubscriptions"]
+  >[number];
+
   let pendingApprovalData = $state<
     {
       clusterId: string;
-      subscriptions: NonNullable<
-        NonNullable<
-          ReturnType<typeof get<InstanceType<typeof GetPendingSubscriptionsStore>>>["data"]
-        >["pendingSubscriptions"]
-      >;
+      subscriptions: PendingSubscription[];
     }[]
   >([]);
   let pendingApprovals = $derived(
     pendingApprovalData.flatMap((entry) =>
-      entry.subscriptions.filter((s) => s.subscriptionStatus === "PENDING_APPROVAL")
+      entry.subscriptions.filter(
+        (s: PendingSubscription) => s.subscriptionStatus === "PENDING_APPROVAL"
+      )
     )
   );
 
@@ -188,10 +190,10 @@
       if (result.data?.acceptClusterInvite?.__typename === "ClusterSubscription") {
         toast.success(`Joined ${invite.clusterName}`);
         await Promise.all([
-          invitesStore.fetch(),
-          subscriptionsStore.fetch(),
-          accessStore.fetch(),
-          marketplaceStore.fetch(),
+          invitesStore.fetch({ policy: "NetworkOnly" }),
+          subscriptionsStore.fetch({ policy: "NetworkOnly" }),
+          accessStore.fetch({ policy: "NetworkOnly" }),
+          marketplaceStore.fetch({ policy: "NetworkOnly" }),
         ]);
       } else {
         toast.error("Failed to accept invite");
@@ -206,9 +208,9 @@
       await unsubscribeMutation.mutate({ clusterId });
       toast.success(`Disconnected from ${clusterName}`);
       await Promise.all([
-        subscriptionsStore.fetch(),
-        accessStore.fetch(),
-        marketplaceStore.fetch(),
+        subscriptionsStore.fetch({ policy: "NetworkOnly" }),
+        accessStore.fetch({ policy: "NetworkOnly" }),
+        marketplaceStore.fetch({ policy: "NetworkOnly" }),
       ]);
     } catch {
       toast.error("Failed to disconnect");
@@ -221,7 +223,7 @@
       const data = result.data?.setPreferredCluster;
       if (data?.__typename === "Cluster") {
         toast.success(`${clusterName} is now your preferred cluster`);
-        await subscriptionsStore.fetch();
+        await subscriptionsStore.fetch({ policy: "NetworkOnly" });
       } else if (
         data?.__typename === "ValidationError" ||
         data?.__typename === "NotFoundError" ||
@@ -838,6 +840,17 @@
                               <Button variant="outline" size="sm" disabled class="opacity-70">
                                 Pending...
                               </Button>
+                            {:else if !cluster.maxConcurrentStreams}
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Button variant="secondary" size="sm" disabled class="opacity-50">
+                                    Platform
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Platform cluster — not available for streaming
+                                </TooltipContent>
+                              </Tooltip>
                             {:else if !cluster.isEligible}
                               <Tooltip>
                                 <TooltipTrigger>
