@@ -99,7 +99,7 @@ RUN cd website_application && ../scripts/copy-agent-files.sh static
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter frameworks-frontend... run build
 
 # prune to production dependencies only
-RUN pnpm prune --prod
+RUN CI=true pnpm prune --prod --ignore-scripts
 
 FROM node:24-alpine AS runner
 
