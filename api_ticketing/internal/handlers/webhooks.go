@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	pb "frameworks/pkg/proto"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -157,11 +159,14 @@ func isChatwootWebhookDuplicate(ctx context.Context, payload ChatwootWebhookPayl
 	}
 
 	key := fmt.Sprintf("deckhand:webhooks:chatwoot:%s:%d:%d", payload.Event, payload.ID, payload.GetConversationID())
-	set, err := deps.Redis.SetNX(ctx, key, "1", 5*time.Minute).Result()
+	err := deps.Redis.SetArgs(ctx, key, "1", redis.SetArgs{Mode: "NX", TTL: 5 * time.Minute}).Err()
+	if errors.Is(err, redis.Nil) {
+		return true, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	return !set, nil
+	return false, nil
 }
 
 // handleConversationCreated enriches a new conversation with tenant context

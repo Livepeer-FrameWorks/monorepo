@@ -111,7 +111,7 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 	case "caddy":
 		return NewCaddyProvisioner(pool), nil
 	case "nginx":
-		return NewFlexibleProvisioner("nginx", port, pool), nil
+		return NewNginxProvisioner(pool), nil
 	case "chartroom":
 		return NewFlexibleProvisioner("chartroom", port, pool), nil
 	case "foredeck":

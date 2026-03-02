@@ -210,8 +210,8 @@ func CheckAnsibleInstalled() error {
 }
 
 // GetAnsibleVersion returns the installed Ansible version
-func GetAnsibleVersion() (string, error) {
-	cmd := exec.Command("ansible-playbook", "--version")
+func GetAnsibleVersion(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "ansible-playbook", "--version")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

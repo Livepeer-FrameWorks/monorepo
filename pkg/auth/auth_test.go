@@ -23,6 +23,34 @@ func TestPasswordHashAndCheck(t *testing.T) {
 	}
 }
 
+func TestPasswordHashDefaultCost(t *testing.T) {
+	hash, err := HashPassword("mypassword")
+	if err != nil {
+		t.Fatalf("hash error: %v", err)
+	}
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil {
+		t.Fatalf("cost extraction error: %v", err)
+	}
+	if cost != bcrypt.DefaultCost {
+		t.Fatalf("expected default cost %d, got %d", bcrypt.DefaultCost, cost)
+	}
+}
+
+func TestPasswordHashCustomCost(t *testing.T) {
+	hash, err := HashPassword("mypassword", bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash error: %v", err)
+	}
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil {
+		t.Fatalf("cost extraction error: %v", err)
+	}
+	if cost != bcrypt.MinCost {
+		t.Fatalf("expected cost %d, got %d", bcrypt.MinCost, cost)
+	}
+}
+
 func TestValidateServiceToken(t *testing.T) {
 	if err := ValidateServiceToken("", "expected"); err == nil {
 		t.Fatalf("expected missing token error")

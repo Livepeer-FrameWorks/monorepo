@@ -58,16 +58,17 @@ func newEdgeCmd() *cobra.Command {
 func newEdgePreflightCmd() *cobra.Command {
 	var domain string
 	cmd := &cobra.Command{Use: "preflight", Short: "Check host readiness (DNS/ports/sysctl/limits)", RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 		// Gather checks
 		results := []preflight.Check{}
 		if domain != "" {
-			results = append(results, preflight.DNSResolution(domain))
+			results = append(results, preflight.DNSResolution(ctx, domain))
 		}
-		results = append(results, preflight.HasDocker()...)
+		results = append(results, preflight.HasDocker(ctx)...)
 		results = append(results, preflight.LinuxSysctlChecks()...)
 		results = append(results, preflight.ShmSize())
 		results = append(results, preflight.UlimitNoFile())
-		results = append(results, preflight.PortChecks()...)
+		results = append(results, preflight.PortChecks(ctx)...)
 		results = append(results, preflight.DiskSpace("/", minDiskFreeBytes, minDiskFreePercent))
 		results = append(results, preflight.DiskSpace("/var/lib", minDiskFreeBytes, minDiskFreePercent))
 
@@ -1190,16 +1191,17 @@ func newEdgeDoctorCmd() *cobra.Command {
 	var domain string
 	var dir string
 	cmd := &cobra.Command{Use: "doctor", Short: "Run diagnostics and remediation hints", RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 		// Combine preflight + compose ps + https
 		results := []preflight.Check{}
 		if domain != "" {
-			results = append(results, preflight.DNSResolution(domain))
+			results = append(results, preflight.DNSResolution(ctx, domain))
 		}
-		results = append(results, preflight.HasDocker()...)
+		results = append(results, preflight.HasDocker(ctx)...)
 		results = append(results, preflight.LinuxSysctlChecks()...)
 		results = append(results, preflight.ShmSize())
 		results = append(results, preflight.UlimitNoFile())
-		results = append(results, preflight.PortChecks()...)
+		results = append(results, preflight.PortChecks(ctx)...)
 
 		// Print checks
 		okCount := 0

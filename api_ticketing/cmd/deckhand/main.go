@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	"frameworks/api_ticketing/internal/chatwoot"
@@ -18,6 +19,7 @@ import (
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/qmbootstrap"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 
@@ -222,6 +224,40 @@ func main() {
 		}
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// Best-effort service registration in Quartermaster
+	go func() {
+		httpPortInt, _ := strconv.Atoi(httpPort)
+		if httpPortInt <= 0 || httpPortInt > 65535 {
+			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+			return
+		}
+		healthEndpoint := "/health"
+		advertiseHost := config.GetEnv("DECKHAND_HOST", "deckhand")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
+		req := &pb.BootstrapServiceRequest{
+			Type:           "deckhand",
+			Version:        version.Version,
+			Protocol:       "http",
+			HealthEndpoint: &healthEndpoint,
+			Port:           int32(httpPortInt),
+			AdvertiseHost:  &advertiseHost,
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
+		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			req.NodeId = &nodeID
+		}
+		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("deckhand")); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (deckhand) failed")
+		} else {
+			logger.Info("Quartermaster bootstrap (deckhand) ok")
+		}
+	}()
 
 	// Start HTTP server with graceful shutdown
 	serverConfig := server.DefaultConfig("deckhand", httpPort)

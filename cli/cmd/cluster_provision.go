@@ -473,14 +473,14 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		}
 	}
 
-	// Caddy-specific metadata: inject root_domain and colocated services
-	if task.Type == "caddy" {
+	// Reverse proxy metadata: inject root_domain and colocated services
+	if task.Type == "caddy" || task.Type == "nginx" {
 		if manifest.RootDomain != "" {
 			config.Metadata["root_domain"] = manifest.RootDomain
 		}
 		localSvcs := make(map[string]interface{})
 		for ifaceName, iface := range manifest.Interfaces {
-			if !iface.Enabled || ifaceName == "caddy" {
+			if !iface.Enabled || ifaceName == task.Type {
 				continue
 			}
 			if iface.Host == task.Host || containsHost(iface.Hosts, task.Host) {
