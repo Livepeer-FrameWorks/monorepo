@@ -102,6 +102,18 @@ describe("WasmVideoDecoder", () => {
       await expect(dec.initialize()).rejects.toThrow("fetch failed");
       expect(errorFn).toHaveBeenCalledWith(expect.any(Error));
     });
+
+    it("wraps non-Error loading failures in Error for onError", async () => {
+      vi.mocked(loadDecoder).mockRejectedValueOnce("string failure");
+
+      const dec = new WasmVideoDecoder("hevc");
+      const errorFn = vi.fn();
+      dec.onError = errorFn;
+
+      await expect(dec.initialize()).rejects.toBe("string failure");
+      expect(errorFn).toHaveBeenCalledWith(expect.any(Error));
+      expect(errorFn.mock.calls[0][0].message).toContain("string failure");
+    });
   });
 
   // =========================================================================
@@ -205,6 +217,51 @@ describe("WasmVideoDecoder", () => {
       dec.onFrame = frameFn;
       dec.decode(new Uint8Array([1]), true, 0);
       expect(frameFn).not.toHaveBeenCalled();
+    });
+
+    it("calls onError when decode throws", async () => {
+      vi.mocked(loadDecoder).mockResolvedValueOnce({
+        createDecoder: () => ({
+          configure: vi.fn(),
+          decode: vi.fn(() => {
+            throw new Error("decode error");
+          }),
+          flush: vi.fn(() => []),
+          destroy: vi.fn(),
+        }),
+      });
+
+      const dec = new WasmVideoDecoder("hevc");
+      await dec.initialize();
+      dec.configure(new Uint8Array([1]));
+
+      const errorFn = vi.fn();
+      dec.onError = errorFn;
+      dec.decode(new Uint8Array([1]), true, 0);
+      expect(errorFn).toHaveBeenCalledWith(expect.any(Error));
+    });
+
+    it("wraps non-Error decode throws in Error", async () => {
+      vi.mocked(loadDecoder).mockResolvedValueOnce({
+        createDecoder: () => ({
+          configure: vi.fn(),
+          decode: vi.fn(() => {
+            throw "string error";
+          }),
+          flush: vi.fn(() => []),
+          destroy: vi.fn(),
+        }),
+      });
+
+      const dec = new WasmVideoDecoder("hevc");
+      await dec.initialize();
+      dec.configure(new Uint8Array([1]));
+
+      const errorFn = vi.fn();
+      dec.onError = errorFn;
+      dec.decode(new Uint8Array([1]), true, 0);
+      expect(errorFn).toHaveBeenCalledWith(expect.any(Error));
+      expect(errorFn.mock.calls[0][0].message).toContain("string error");
     });
   });
 
@@ -363,6 +420,24 @@ describe("WasmVideoDecoder", () => {
     it("does nothing if not initialized", () => {
       const dec = new WasmVideoDecoder("hevc");
       expect(() => dec.flush()).not.toThrow();
+    });
+
+    it("does nothing if destroyed", async () => {
+      const flushFn = vi.fn(() => []);
+      vi.mocked(loadDecoder).mockResolvedValueOnce({
+        createDecoder: () => ({
+          configure: vi.fn(),
+          decode: vi.fn(() => null),
+          flush: flushFn,
+          destroy: vi.fn(),
+        }),
+      });
+
+      const dec = new WasmVideoDecoder("hevc");
+      await dec.initialize();
+      dec.destroy();
+      dec.flush();
+      expect(flushFn).not.toHaveBeenCalled();
     });
   });
 

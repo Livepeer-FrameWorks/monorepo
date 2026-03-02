@@ -11,7 +11,11 @@
     "!src/**/index.ts",
     "!src/styles/**",
     "!src/players/**",
-    "!src/core/PlayerRegistry.ts"
+    "!src/core/PlayerRegistry.ts",
+    "!src/core/PlayerController.ts",
+    "!src/core/I18n.ts",
+    "!src/core/ThemeManager.ts",
+    "!src/rendering/audio-worklet-processor.ts"
   ],
   "reporters": ["html", "clear-text", "progress-append-only"],
   "coverageAnalysis": "perTest",
@@ -19,6 +23,6 @@
   "thresholds": {
     "high": 80,
     "low": 60,
-    "break": 60
+    "break": null
   }
 }

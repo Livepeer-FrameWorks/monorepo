@@ -2,7 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FrameWorksPlayer } from "../src/vanilla/FrameWorksPlayer";
 
-class MockElement {}
+class MockElement {
+  querySelector = vi.fn(() => null);
+  style = { setProperty: vi.fn() };
+}
+
+const mockApplyTheme = vi.fn();
+const mockApplyThemeOverrides = vi.fn();
+const mockClearTheme = vi.fn();
+
+vi.mock("../src/core/ThemeManager", () => ({
+  applyTheme: (...args: any[]) => mockApplyTheme(...args),
+  applyThemeOverrides: (...args: any[]) => mockApplyThemeOverrides(...args),
+  clearTheme: (...args: any[]) => mockClearTheme(...args),
+}));
 
 const { MockPlayerController } = vi.hoisted(() => {
   class MockPlayerController {
@@ -21,11 +34,11 @@ const { MockPlayerController } = vi.hoisted(() => {
     requestFullscreen = vi.fn().mockResolvedValue(undefined);
     requestPiP = vi.fn().mockResolvedValue(undefined);
     getState = vi.fn().mockReturnValue("idle");
-    getStreamState = vi.fn().mockReturnValue(null);
-    getVideoElement = vi.fn().mockReturnValue(null);
-    isReady = vi.fn().mockReturnValue(false);
-    getCurrentTime = vi.fn().mockReturnValue(0);
-    getDuration = vi.fn().mockReturnValue(0);
+    getStreamState = vi.fn().mockReturnValue("live");
+    getVideoElement = vi.fn().mockReturnValue({ seeking: false });
+    isReady = vi.fn().mockReturnValue(true);
+    getCurrentTime = vi.fn().mockReturnValue(12345);
+    getDuration = vi.fn().mockReturnValue(99000);
     isPaused = vi.fn().mockReturnValue(true);
     isMuted = vi.fn().mockReturnValue(false);
     retry = vi.fn().mockResolvedValue(undefined);
@@ -65,6 +78,9 @@ describe("FrameWorksPlayer", () => {
     (globalThis as any).document = origDocument;
     (globalThis as any).HTMLElement = origHTMLElement;
     MockPlayerController.instances = [];
+    mockApplyTheme.mockClear();
+    mockApplyThemeOverrides.mockClear();
+    mockClearTheme.mockClear();
     vi.restoreAllMocks();
   });
 
@@ -187,5 +203,148 @@ describe("FrameWorksPlayer", () => {
     player.destroy();
 
     expect(instance.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when container is null", () => {
+    expect(
+      () =>
+        new FrameWorksPlayer(null, {
+          contentId: "content",
+          contentType: "live",
+        })
+    ).toThrow("Container element not found");
+  });
+
+  describe("state getters delegate to controller", () => {
+    it("getStreamState returns controller value", () => {
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+      });
+      expect(player.getStreamState()).toBe("live");
+    });
+
+    it("getVideoElement returns controller value", () => {
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+      });
+      expect(player.getVideoElement()).toEqual({ seeking: false });
+    });
+
+    it("isReady returns controller value", () => {
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+      });
+      expect(player.isReady()).toBe(true);
+    });
+
+    it("getCurrentTime returns controller value", () => {
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+      });
+      expect(player.getCurrentTime()).toBe(12345);
+    });
+
+    it("getDuration returns controller value", () => {
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+      });
+      expect(player.getDuration()).toBe(99000);
+    });
+
+    it("isPaused returns controller value", () => {
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+      });
+      expect(player.isPaused()).toBe(true);
+    });
+
+    it("isMuted returns controller value", () => {
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+      });
+      expect(player.isMuted()).toBe(false);
+    });
+  });
+
+  describe("theming", () => {
+    it("setTheme applies theme to container", () => {
+      const player = new FrameWorksPlayer(new MockElement() as any, {
+        contentId: "content",
+        contentType: "live",
+      });
+      player.setTheme("dark");
+      expect(mockApplyTheme).toHaveBeenCalledWith(expect.anything(), "dark");
+    });
+
+    it("setThemeOverrides applies overrides", () => {
+      const player = new FrameWorksPlayer(new MockElement() as any, {
+        contentId: "content",
+        contentType: "live",
+      });
+      const overrides = { "--fw-accent": "#ff0" };
+      player.setThemeOverrides(overrides);
+      expect(mockApplyThemeOverrides).toHaveBeenCalledWith(expect.anything(), overrides);
+    });
+
+    it("clearTheme clears theme", () => {
+      const player = new FrameWorksPlayer(new MockElement() as any, {
+        contentId: "content",
+        contentType: "live",
+      });
+      player.clearTheme();
+      expect(mockClearTheme).toHaveBeenCalled();
+    });
+  });
+
+  describe("on() subscription", () => {
+    it("returns unsubscribe function from controller.on", () => {
+      const unsubFn = vi.fn();
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+      });
+      const instance = MockPlayerController.instances[0];
+      instance.on.mockReturnValue(unsubFn);
+
+      const unsub = player.on("stateChange", vi.fn());
+      expect(typeof unsub).toBe("function");
+    });
+  });
+
+  describe("cleanup callbacks in destroy", () => {
+    it("calls cleanup functions registered by callbacks", () => {
+      const unsubFns: ReturnType<typeof vi.fn>[] = [];
+
+      const player = new FrameWorksPlayer("#player", {
+        contentId: "content",
+        contentType: "live",
+        onStateChange: vi.fn(),
+        onStreamStateChange: vi.fn(),
+        onTimeUpdate: vi.fn(),
+        onError: vi.fn(),
+        onReady: vi.fn(),
+      });
+
+      const instance = MockPlayerController.instances[MockPlayerController.instances.length - 1];
+      // Collect unsub fns returned by on() calls during construction
+      for (const call of instance.on.mock.results) {
+        if (call.type === "return" && typeof call.value === "function") {
+          unsubFns.push(call.value);
+        }
+      }
+
+      expect(unsubFns.length).toBeGreaterThan(0);
+      player.destroy();
+      for (const unsub of unsubFns) {
+        expect(unsub).toHaveBeenCalled();
+      }
+    });
   });
 });
