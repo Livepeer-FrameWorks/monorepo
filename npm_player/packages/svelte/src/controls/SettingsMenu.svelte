@@ -101,7 +101,13 @@
 
   {#if isOpen}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="fw-settings-menu" role="menu" aria-label={t("settings")} onkeydown={handleKeyDown}>
+    <div
+      class="fw-settings-menu"
+      role="menu"
+      aria-label={t("settings")}
+      onkeydown={handleKeyDown}
+      tabindex="-1"
+    >
       {#if showModeSelector && onModeChange}
         <div class="fw-settings-section">
           <div class="fw-settings-label">{t("mode")}</div>

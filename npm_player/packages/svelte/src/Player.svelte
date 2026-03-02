@@ -90,8 +90,12 @@
   let isDevPanelOpen = $state(false);
   let skipDirection: SkipDirection = $state(null);
 
-  let activeTheme = $state<FwThemePreset>(options?.theme ?? "default");
-  let activeLocale = $state<FwLocale>(options?.locale ?? "en");
+  let activeTheme = $state<FwThemePreset>("default");
+  let activeLocale = $state<FwLocale>("en");
+  $effect(() => {
+    if (options.theme) activeTheme = options.theme;
+    if (options.locale) activeLocale = options.locale;
+  });
 
   // Sync locale state to i18n store and provide translator context
   $effect(() => {
