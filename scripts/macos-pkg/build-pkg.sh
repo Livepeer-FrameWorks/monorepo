@@ -77,6 +77,7 @@ mkdir -p "${OUTPUT_DIR}"
 
 productbuild \
   --distribution "${SCRIPT_DIR}/Distribution.xml" \
+  --resources "${SCRIPT_DIR}" \
   --package-path "${WORK_DIR}" \
   --version "${VERSION}" \
   "${WORK_DIR}/frameworks-${VERSION}-unsigned.pkg"
