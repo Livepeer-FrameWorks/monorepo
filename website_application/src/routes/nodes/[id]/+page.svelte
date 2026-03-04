@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
   import { resolve } from "$app/paths";
+  import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import {
     GetInfrastructureNodeStore,
@@ -50,6 +51,7 @@
   );
   let nodeId = $derived(node?.nodeId ?? "");
   let loadSequence = 0;
+  let lastLoadedNodeRelayId = $state<string | null>(null);
 
   let serviceInstances = $derived(
     sortServiceInstancesForRender(
@@ -189,7 +191,6 @@
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
-    await loadNodeData();
     systemHealthSub.listen();
   });
 
@@ -199,6 +200,7 @@
 
   async function loadNodeData() {
     const requestID = ++loadSequence;
+    currentHealth = null;
     try {
       await nodeStore.fetch({ variables: { id: nodeRelayId } });
       if (requestID !== loadSequence) return;
@@ -225,12 +227,22 @@
     }
   }
 
+  $effect(() => {
+    if (!isAuthenticated || !nodeRelayId || nodeRelayId === lastLoadedNodeRelayId) return;
+    lastLoadedNodeRelayId = nodeRelayId;
+    void loadNodeData();
+  });
+
   // Real-time health subscription
   $effect(() => {
     const healthData = $systemHealthSub.data?.liveSystemHealth;
-    if (healthData && nodeId) {
+    if (healthData && node) {
       untrack(() => {
-        if (healthData.node === nodeId) {
+        const matchesNode =
+          (!!healthData.nodeId && healthData.nodeId === node.id) ||
+          healthData.node === node.nodeId ||
+          healthData.node === node.nodeName;
+        if (matchesNode) {
           currentHealth = {
             event: healthData,
             ts: new Date(healthData.timestamp),
@@ -305,21 +317,12 @@
   <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
-        {#if node}
-          <a
-            href={resolve(`/infrastructure/${node.clusterId}`)}
-            class="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ArrowLeftIcon class="w-5 h-5" />
-          </a>
-        {:else}
-          <a
-            href={resolve("/nodes")}
-            class="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ArrowLeftIcon class="w-5 h-5" />
-          </a>
-        {/if}
+        <button
+          onclick={() => goto(resolve(node ? `/infrastructure/${node.clusterId}` : "/nodes"))}
+          class="text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeftIcon class="w-5 h-5" />
+        </button>
         <HardDriveIcon class="w-5 h-5 text-primary" />
         <div>
           <div class="flex items-center gap-2">

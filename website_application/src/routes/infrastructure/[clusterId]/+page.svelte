@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
   import { resolve } from "$app/paths";
+  import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import { get } from "svelte/store";
   import {
@@ -45,6 +46,8 @@
   const nodeCoreStore = new NodeListFieldsStore();
 
   let isAuthenticated = false;
+  let loadSequence = 0;
+  let lastLoadedClusterId = $state<string | null>(null);
 
   let hasData = $derived(!!$infrastructureStore.data);
   let loading = $derived($infrastructureStore.fetching && !hasData);
@@ -169,7 +172,6 @@
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
-    await loadClusterData();
     systemHealthSub.listen();
   });
 
@@ -178,6 +180,7 @@
   });
 
   async function loadClusterData() {
+    const requestId = ++loadSequence;
     try {
       await Promise.all([
         infrastructureStore.fetch(),
@@ -185,6 +188,7 @@
         nodesStore.fetch({ variables: { clusterId } }),
         serviceInstancesStore.fetch({ variables: { clusterId } }),
       ]);
+      if (requestId !== loadSequence) return;
 
       if ($infrastructureStore.errors?.length) {
         console.error("Failed to load cluster data:", $infrastructureStore.errors);
@@ -217,9 +221,7 @@
         }
       }
       untrack(() => {
-        if (Object.keys(systemHealth).length === 0 && Object.keys(initialHealth).length > 0) {
-          systemHealth = initialHealth;
-        }
+        systemHealth = initialHealth;
       });
     } catch (error) {
       console.error("Failed to load cluster data:", error);
@@ -227,14 +229,26 @@
     }
   }
 
+  $effect(() => {
+    if (!isAuthenticated || !clusterId || clusterId === lastLoadedClusterId) return;
+    lastLoadedClusterId = clusterId;
+    systemHealth = {};
+    void loadClusterData();
+  });
+
   // Handle real-time health updates for this cluster's nodes
   $effect(() => {
     const healthData = $systemHealthSub.data?.liveSystemHealth;
     if (healthData) {
       untrack(() => {
-        const nodeKey = healthData.node || "";
-        const isClusterNode = nodes.some((n) => n.nodeId === nodeKey);
-        if (isClusterNode && nodeKey) {
+        const matchedNode = nodes.find(
+          (n) =>
+            (!!healthData.nodeId && n.id === healthData.nodeId) ||
+            n.nodeId === healthData.node ||
+            n.nodeName === healthData.node
+        );
+        const nodeKey = matchedNode?.nodeId;
+        if (matchedNode && nodeKey) {
           systemHealth[nodeKey] = {
             event: healthData,
             ts: new Date(healthData.timestamp),
@@ -304,12 +318,12 @@
   <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center justify-between gap-4">
       <div class="flex items-center gap-3">
-        <a
-          href={resolve("/infrastructure")}
+        <button
+          onclick={() => goto(resolve("/infrastructure"))}
           class="text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeftIcon class="w-5 h-5" />
-        </a>
+        </button>
         <ServerIcon class="w-5 h-5 text-primary" />
         <div>
           <div class="flex items-center gap-2">

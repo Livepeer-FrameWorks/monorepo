@@ -18,13 +18,8 @@ const NODE_STATUS_COLORS = {
   offline: "rgb(100, 116, 139)",
 };
 
-const SERVICE_HEALTH_COLORS = {
-  healthy: "rgb(34, 197, 94)",
-  unhealthy: "rgb(234, 179, 8)",
-  unknown: "rgb(148, 163, 184)",
-};
-
-const CONNECTION_COLOR = "rgba(125, 207, 255, 0.5)";
+const ASSIGNMENT_COLOR = "rgba(148, 163, 184, 0.35)";
+const FEDERATION_COLOR = "rgba(125, 207, 255, 0.5)";
 const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.15)";
 
 function escapeHtml(s) {
@@ -74,13 +69,18 @@ function popupSection(title, rows) {
   return `<div class="map-popup__section-title">${escapeHtml(title)}</div><table class="map-popup__table">${rows}</table>`;
 }
 
-function clusterPopupHtml(cluster) {
-  const infoRows =
+function clusterPopupHtml(cluster, nodeTypeCounts, clusterServices) {
+  let infoRows =
     (cluster.region ? popupRow("Region", escapeHtml(cluster.region)) : "") +
     (cluster.clusterType ? popupRow("Type", escapeHtml(cluster.clusterType)) : "") +
     popupRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`) +
     popupRow("Peers", `${cluster.peerCount}`) +
     popupRow("Status", escapeHtml(cluster.status));
+
+  if (nodeTypeCounts) {
+    if (nodeTypeCounts.core > 0) infoRows += popupRow("Core Nodes", `${nodeTypeCounts.core}`);
+    if (nodeTypeCounts.edge > 0) infoRows += popupRow("Edge Nodes", `${nodeTypeCounts.edge}`);
+  }
 
   let html =
     `<div class="map-popup"><div class="map-popup__title">${escapeHtml(cluster.name)}</div>` +
@@ -97,8 +97,9 @@ function clusterPopupHtml(cluster) {
     html += popupSection("Load", loadRows);
   }
 
-  if (cluster.services?.length) {
-    html += `<div class="map-popup__tags">${cluster.services.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
+  const services = clusterServices?.length ? clusterServices : cluster.services;
+  if (services?.length) {
+    html += `<div class="map-popup__tags">${services.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
   }
 
   if (cluster.shortDescription) {
@@ -129,7 +130,6 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
     clusters: clusterLayer,
     connections: connLayer,
     nodes: nodeLayer,
-    services: serviceLayer,
     pulses: pulseLayer,
   } = layersRef.current;
   if (!clusterLayer || !connLayer || !nodeLayer || !pulseLayer) return;
@@ -141,7 +141,6 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
   clusterLayer.clearLayers();
   connLayer.clearLayers();
   nodeLayer.clearLayers();
-  serviceLayer.clearLayers();
   pulseLayer.clearLayers();
 
   const clusterMap = {};
@@ -175,7 +174,7 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
     });
   }
 
-  // 1. Peer connection lines
+  // 1. Peer connection lines — styled by connection type
   data.peerConnections.forEach((pc) => {
     const src = clusterMap[pc.sourceCluster];
     const tgt = clusterMap[pc.targetCluster];
@@ -183,16 +182,17 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
 
     const from = [src.latitude, src.longitude];
     const to = [tgt.latitude, tgt.longitude];
+    const isFederation = pc.connectionType === "federation";
 
     L.polyline([from, to], {
-      color: CONNECTION_COLOR,
-      weight: 1.5,
-      opacity: pc.connected ? 0.7 : 0.15,
-      dashArray: "8 12",
+      color: isFederation ? FEDERATION_COLOR : ASSIGNMENT_COLOR,
+      weight: isFederation ? 1.5 : 1,
+      opacity: pc.connected ? (isFederation ? 0.7 : 0.5) : 0.15,
+      dashArray: isFederation ? "8 12" : null,
       smoothFactor: 1,
     }).addTo(connLayer);
 
-    if (pc.connected) {
+    if (pc.connected && isFederation) {
       startPulse(L, pulseLayer, pulseTimersRef, from, to);
     }
   });
@@ -206,18 +206,46 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       servicesByNode[si.nodeId].push(si.serviceId);
     }
   });
+  Object.values(servicesByNode).forEach((svcs) => svcs.sort());
 
-  // 2. Individual nodes
+  // Build per-cluster service list and node type counts from node ownership
+  const servicesByCluster = {};
+  const nodeTypeCountByCluster = {};
+  (data.nodes || []).forEach((node) => {
+    const cid = node.clusterId;
+    if (!cid) return;
+    if (!nodeTypeCountByCluster[cid]) nodeTypeCountByCluster[cid] = { core: 0, edge: 0 };
+    const nt = (node.nodeType || "").toLowerCase();
+    if (nt === "core") nodeTypeCountByCluster[cid].core++;
+    else if (nt === "edge") nodeTypeCountByCluster[cid].edge++;
+    const nodeSvcs = servicesByNode[node.nodeId] || [];
+    nodeSvcs.forEach((s) => {
+      if (!servicesByCluster[cid]) servicesByCluster[cid] = [];
+      if (!servicesByCluster[cid].includes(s)) servicesByCluster[cid].push(s);
+    });
+  });
+  Object.values(servicesByCluster).forEach((svcs) => svcs.sort());
+
+  // 2. Individual nodes — suppress when co-located with cluster centroid
   (data.nodes || []).forEach((node) => {
     if (!node.latitude && !node.longitude) return;
+    const cluster = clusterMap[node.clusterId];
+    if (cluster) {
+      const dlat = Math.abs(node.latitude - cluster.latitude);
+      const dlng = Math.abs(node.longitude - cluster.longitude);
+      if (dlat < 0.05 && dlng < 0.05) return;
+    }
 
     const color = NODE_STATUS_COLORS[node.status] || NODE_STATUS_COLORS.offline;
+    const isEdge = (node.nodeType || "").toLowerCase() === "edge";
+    const size = isEdge ? 10 : 14;
+    const glow = isEdge ? "6px" : "12px";
 
     const icon = L.divIcon({
       className: "network-viz__marker",
-      html: `<div class="network-viz__node-dot" style="--node-dot-color: ${color};"></div>`,
-      iconSize: [12, 12],
-      iconAnchor: [6, 6],
+      html: `<div class="network-viz__node-dot" style="--node-dot-color: ${color}; width: ${size}px; height: ${size}px; box-shadow: 0 0 ${glow} ${color};"></div>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
     });
 
     const nodeSvcs = servicesByNode[node.nodeId];
@@ -231,50 +259,24 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       .addTo(nodeLayer);
   });
 
-  // 3. Service instances (placed near their host node, fallback to cluster geo)
-  (data.serviceInstances || []).forEach((svc) => {
-    let lat, lng;
-    const node = svc.nodeId ? nodeMap[svc.nodeId] : null;
-    if (node && (node.latitude || node.longitude)) {
-      lat = node.latitude + 0.3;
-      lng = node.longitude + 0.3;
-    } else {
-      const cluster = clusterMap[svc.clusterId];
-      if (!cluster) return;
-      lat = cluster.latitude + 0.3;
-      lng = cluster.longitude + 0.3;
-    }
-
-    const color = SERVICE_HEALTH_COLORS[svc.healthStatus] || SERVICE_HEALTH_COLORS.unknown;
-
-    const icon = L.divIcon({
-      className: "network-viz__marker",
-      html: `<div class="network-viz__service-dot" style="--svc-color: ${color};"></div>`,
-      iconSize: [8, 8],
-      iconAnchor: [4, 4],
-    });
-
-    const svcRows =
-      popupRow("Health", escapeHtml(svc.healthStatus)) +
-      popupRow(svc.nodeId ? "Node" : "Cluster", escapeHtml(svc.nodeId || svc.clusterId));
-    L.marker([lat, lng], { icon, interactive: true })
-      .bindPopup(
-        `<div class="map-popup"><div class="map-popup__title">${escapeHtml(svc.serviceId)}</div><table class="map-popup__table">${svcRows}</table></div>`,
-        { className: "network-viz__popup", maxWidth: 300, minWidth: 180 }
-      )
-      .addTo(serviceLayer);
-  });
-
-  // 4. Cluster markers (on top)
+  // 3. Cluster markers (on top) — core vs edge visual distinction
   data.clusters.forEach((cluster) => {
     const color = CLUSTER_STATUS_COLORS[cluster.status] || CLUSTER_STATUS_COLORS.unknown;
     const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
+    const ct = (cluster.clusterType || "").toLowerCase();
+    const isCore = ct === "central" || ct === "core";
+    const borderRadius = isCore ? "6px" : "50%";
+    const borderStyle = isCore ? `3px solid ${color}` : `2px dashed ${color}`;
 
     const icon = L.divIcon({
       className: "network-viz__marker",
-      html: `<div class="network-viz__node" style="
-        width: ${radius * 2}px; height: ${radius * 2}px;
-        --node-color: ${color};
+      html: `<div style="
+        width: ${radius * 2}px; height: ${radius * 2}px; border-radius: ${borderRadius};
+        background: radial-gradient(circle, color-mix(in srgb, ${color} 25%, transparent), color-mix(in srgb, ${color} 9%, transparent));
+        border: ${borderStyle};
+        display: flex; align-items: center; justify-content: center;
+        font-size: 10px; font-weight: 600; color: ${color};
+        box-shadow: 0 0 12px color-mix(in srgb, ${color} 30%, transparent);
       ">${cluster.nodeCount}</div>`,
       iconSize: [radius * 2, radius * 2],
       iconAnchor: [radius, radius],
@@ -285,11 +287,14 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       interactive: true,
       zIndexOffset: 1000,
     })
-      .bindPopup(clusterPopupHtml(cluster), {
-        className: "network-viz__popup",
-        maxWidth: 400,
-        minWidth: 220,
-      })
+      .bindPopup(
+        clusterPopupHtml(
+          cluster,
+          nodeTypeCountByCluster[cluster.clusterId],
+          servicesByCluster[cluster.clusterId]
+        ),
+        { className: "network-viz__popup", maxWidth: 400, minWidth: 220 }
+      )
       .addTo(clusterLayer);
   });
 }
@@ -354,7 +359,6 @@ function NetworkMapInner({ data }) {
     clusters: null,
     connections: null,
     nodes: null,
-    services: null,
     pulses: null,
   });
   const pulseTimersRef = useRef([]);
@@ -399,11 +403,10 @@ function NetworkMapInner({ data }) {
         { passive: false }
       );
 
-      // Layer order: membership → connections → nodes → services → pulses → clusters (on top)
+      // Layer order: membership → connections → nodes → pulses → clusters (on top)
       layersRef.current.membership = L.layerGroup().addTo(map);
       layersRef.current.connections = L.layerGroup().addTo(map);
       layersRef.current.nodes = L.layerGroup().addTo(map);
-      layersRef.current.services = L.layerGroup().addTo(map);
       layersRef.current.pulses = L.layerGroup().addTo(map);
       layersRef.current.clusters = L.layerGroup().addTo(map);
 

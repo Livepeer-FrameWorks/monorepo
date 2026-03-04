@@ -48,7 +48,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each nodePerformanceMetrics.slice(0, 10) as metric (metric.nodeId)}
+        {#each nodePerformanceMetrics.slice(0, 10) as metric, index (`${metric.nodeId}-${index}`)}
           {@const health = systemHealth[metric.nodeId]}
           <tr class="border-b border-border/20 transition hover:bg-background/40">
             <td class="py-3 px-4 font-mono text-xs">{metric.nodeId}</td>

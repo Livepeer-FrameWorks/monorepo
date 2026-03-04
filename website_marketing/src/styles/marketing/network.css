@@ -189,50 +189,10 @@
     border: none !important;
   }
 
-  .network-viz__node {
-    border-radius: 50%;
-    background: radial-gradient(
-      circle,
-      color-mix(in srgb, var(--node-color) 25%, transparent),
-      color-mix(in srgb, var(--node-color) 9%, transparent)
-    );
-    border: 2px solid var(--node-color);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--node-color);
-    box-shadow: 0 0 12px color-mix(in srgb, var(--node-color) 30%, transparent);
-    animation: network-node-glow 3s ease-in-out infinite alternate;
-  }
-
-  @keyframes network-node-glow {
-    from {
-      box-shadow: 0 0 8px color-mix(in srgb, var(--node-color) 20%, transparent);
-    }
-    to {
-      box-shadow: 0 0 16px color-mix(in srgb, var(--node-color) 40%, transparent);
-    }
-  }
-
-  /* --- Individual node dots --- */
+  /* --- Individual node dots (size and glow set inline per core/edge) --- */
   .network-viz__node-dot {
-    width: 12px;
-    height: 12px;
     border-radius: 50%;
     background-color: var(--node-dot-color);
-    box-shadow: 0 0 10px var(--node-dot-color);
-  }
-
-  /* --- Service instance dots --- */
-  .network-viz__service-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: var(--svc-color);
-    box-shadow: 0 0 6px var(--svc-color);
-    opacity: 0.8;
   }
 
   /* --- Dark popups --- */
@@ -375,15 +335,9 @@
   }
 
   /* --- Reduced motion --- */
-  .network-viz--reduced-motion .network-viz__node,
-  .network-viz--reduced-motion .network-viz__node-dot {
-    animation: none;
-  }
-
   @media (prefers-reduced-motion: reduce) {
-    .network-viz__node,
-    .network-viz__node-dot {
-      animation: none;
+    .network-viz__pulse {
+      display: none;
     }
   }
 }

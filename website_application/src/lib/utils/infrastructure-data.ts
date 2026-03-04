@@ -1,11 +1,13 @@
 export type ServiceInstanceLike = {
   id: string;
   instanceId: string;
+  status?: string | null;
   startedAt?: string | null;
   lastHealthCheck?: string | null;
 };
 
 export type NodePerformanceLike = {
+  id?: string | null;
   nodeId?: string | null;
   timestamp?: string | null;
 };
@@ -17,7 +19,12 @@ const toTime = (value: string | null | undefined): number => {
 };
 
 export function sortServiceInstancesForRender<T extends ServiceInstanceLike>(instances: T[]): T[] {
-  return [...instances].sort((a, b) => {
+  const activeInstances = instances.filter((instance) => {
+    const status = instance.status?.toLowerCase() ?? "";
+    return status === "" || status === "running" || status === "starting" || status === "active";
+  });
+
+  return [...activeInstances].sort((a, b) => {
     const healthDelta = toTime(b.lastHealthCheck) - toTime(a.lastHealthCheck);
     if (healthDelta !== 0) return healthDelta;
 
@@ -37,5 +44,19 @@ export function filterNodePerformance<T extends NodePerformanceLike>(
   nodeId: string
 ): T[] {
   if (!nodeId) return [];
-  return samples.filter((sample) => sample.nodeId === nodeId);
+
+  const deduped = new Map<string, T>();
+  for (const sample of samples) {
+    if (sample.nodeId !== nodeId) continue;
+    const key = sample.id ?? `${sample.nodeId ?? "unknown"}:${sample.timestamp ?? "unknown"}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, sample);
+    }
+  }
+
+  return [...deduped.values()].sort((a, b) => {
+    const timeDelta = toTime(b.timestamp) - toTime(a.timestamp);
+    if (timeDelta !== 0) return timeDelta;
+    return (a.id ?? "").localeCompare(b.id ?? "");
+  });
 }

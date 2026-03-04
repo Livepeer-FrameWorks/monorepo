@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { Card, CardContent } from "$lib/components/ui/card";
   import { Badge } from "$lib/components/ui/badge";
   import type { NodeStatus$options } from "$houdini";
 
@@ -52,13 +51,13 @@
   }: Props = $props();
 </script>
 
-<Card>
-  <CardContent class="space-y-4">
-    <div class="flex items-start justify-between gap-3">
+<div class="slab slab--compact h-full border-border/50">
+  <div class="slab-header">
+    <div class="flex items-start justify-between gap-3 w-full">
       <div>
-        <h3 class="text-lg font-semibold">{node.nodeName}</h3>
-        <p class="text-sm text-muted-foreground">
-          {node.nodeType} • {node.region}
+        <h3 class="text-base font-semibold">{node.nodeName}</h3>
+        <p class="text-xs text-muted-foreground">
+          {node.nodeType} • {node.region ?? "—"}
         </p>
       </div>
       <div class="text-right space-y-1">
@@ -82,7 +81,9 @@
         {/if}
       </div>
     </div>
+  </div>
 
+  <div class="slab-body--padded pt-5 space-y-4">
     <!-- Resource Usage -->
     <div class="grid grid-cols-3 gap-2 text-sm min-h-[44px]">
       {#if systemHealth[node.id]}
@@ -109,7 +110,7 @@
 
     <!-- Capacity Specs -->
     {#if node.cpuCores || node.memoryGb || node.diskGb}
-      <div class="grid grid-cols-3 gap-2 text-xs border-t border-border/40 pt-3">
+      <div class="mt-2 grid grid-cols-3 gap-2 border-t border-border/40 pt-3 text-xs">
         {#if node.cpuCores}
           <div>
             <p class="text-muted-foreground">CPU Cores</p>
@@ -132,7 +133,7 @@
     {/if}
 
     <!-- Network Info -->
-    <div class="grid grid-cols-2 gap-4 text-sm border-t border-border/40 pt-3">
+    <div class="mt-2 grid grid-cols-2 gap-4 border-t border-border/40 pt-3 text-sm">
       {#if node.externalIp}
         <div>
           <p class="text-muted-foreground">External IP</p>
@@ -177,7 +178,9 @@
       {@const shmUsed = systemHealth[node.id].event.shmUsedBytes || 0}
       {@const shmTotal = systemHealth[node.id].event.shmTotalBytes || 1}
       {@const shmPercent = (shmUsed / shmTotal) * 100}
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 border-t border-border/40 pt-3 text-xs">
+      <div
+        class="mt-2 grid grid-cols-2 gap-2 border-t border-border/40 pt-3 text-xs md:grid-cols-4"
+      >
         <div>
           <p class="text-muted-foreground">Disk</p>
           <p>
@@ -210,5 +213,5 @@
         </div>
       </div>
     {/if}
-  </CardContent>
-</Card>
+  </div>
+</div>

@@ -151,15 +151,16 @@
       metrics?: { eventCount?: number; avgLatencyMs?: number; successRate?: number };
     }> = [];
 
-    // Peer connections as peering lines
+    // Peer connections: federation peering and assignment links
     for (const pc of peerConnections) {
       const src = clusterGeoMap.get(pc.sourceCluster);
       const tgt = clusterGeoMap.get(pc.targetCluster);
       if (src && tgt) {
+        const isAssignment = pc.connectionType === "assignment";
         lines.push({
           from: [src.lat, src.lng],
           to: [tgt.lat, tgt.lng],
-          type: "peering",
+          type: isAssignment ? "replication" : "peering",
           active: pc.connected,
         });
       }

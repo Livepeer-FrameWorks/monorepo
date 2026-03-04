@@ -12,18 +12,21 @@ describe("infrastructure-data helpers", () => {
       {
         id: "3",
         instanceId: "decklog-1",
+        status: "running",
         startedAt: "2026-01-01T10:00:00.000Z",
         lastHealthCheck: "2026-01-01T11:00:00.000Z",
       },
       {
         id: "1",
         instanceId: "bridge-1",
+        status: "running",
         startedAt: "2026-01-01T09:00:00.000Z",
         lastHealthCheck: "2026-01-01T12:00:00.000Z",
       },
       {
         id: "2",
         instanceId: "bridge-2",
+        status: "running",
         startedAt: "2026-01-01T12:00:00.000Z",
         lastHealthCheck: "2026-01-01T12:00:00.000Z",
       },
@@ -48,16 +51,52 @@ describe("infrastructure-data helpers", () => {
     expect(before).not.toEqual(afterRestart);
   });
 
+  it("excludes non-active service instances", () => {
+    const sorted = sortServiceInstancesForRender([
+      {
+        id: "1",
+        instanceId: "bridge-old",
+        status: "stopped",
+        startedAt: "2026-01-01T08:00:00.000Z",
+        lastHealthCheck: "2026-01-01T09:00:00.000Z",
+      },
+      {
+        id: "2",
+        instanceId: "bridge-live",
+        status: "running",
+        startedAt: "2026-01-01T10:00:00.000Z",
+        lastHealthCheck: "2026-01-01T12:00:00.000Z",
+      },
+    ]);
+
+    expect(sorted).toHaveLength(1);
+    expect(sorted[0]?.instanceId).toBe("bridge-live");
+  });
+
   it("filters performance samples to the selected node", () => {
     const filtered = filterNodePerformance(
       [
-        { nodeId: "node-1", timestamp: "2026-01-01T12:00:00.000Z" },
-        { nodeId: "node-2", timestamp: "2026-01-01T12:05:00.000Z" },
+        { id: "sample-1", nodeId: "node-1", timestamp: "2026-01-01T12:00:00.000Z" },
+        { id: "sample-2", nodeId: "node-2", timestamp: "2026-01-01T12:05:00.000Z" },
       ],
       "node-2"
     );
 
     expect(filtered).toHaveLength(1);
     expect(filtered[0]?.nodeId).toBe("node-2");
+  });
+
+  it("dedupes node performance samples by stable id", () => {
+    const filtered = filterNodePerformance(
+      [
+        { id: "dup", nodeId: "node-2", timestamp: "2026-01-01T12:05:00.000Z" },
+        { id: "dup", nodeId: "node-2", timestamp: "2026-01-01T12:05:00.000Z" },
+        { id: "unique", nodeId: "node-2", timestamp: "2026-01-01T12:00:00.000Z" },
+      ],
+      "node-2"
+    );
+
+    expect(filtered).toHaveLength(2);
+    expect(filtered.map((sample) => sample.id)).toEqual(["dup", "unique"]);
   });
 });

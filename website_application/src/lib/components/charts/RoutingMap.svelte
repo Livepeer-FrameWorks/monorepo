@@ -98,10 +98,12 @@
   }
 
   interface ServiceInstance {
+    instanceId?: string;
     serviceId: string;
     nodeId?: string | null;
     clusterId?: string | null;
     healthStatus?: string | null;
+    status?: string | null;
   }
 
   interface Props {
@@ -150,11 +152,6 @@
   const NODE_STATUS_COLORS: Record<string, string> = {
     active: "rgb(59, 130, 246)",
     offline: "rgb(100, 116, 139)",
-  };
-  const SERVICE_HEALTH_COLORS: Record<string, string> = {
-    healthy: "rgb(34, 197, 94)",
-    unhealthy: "rgb(234, 179, 8)",
-    unknown: "rgb(148, 163, 184)",
   };
 
   // UX state
@@ -420,25 +417,63 @@
 
     // Build per-node service list (populated when serviceInstances prop is provided)
     const servicesByNode: Record<string, string[]> = {};
+    const pushUniqueService = (
+      target: Record<string, string[]>,
+      key: string,
+      serviceID: string
+    ) => {
+      if (!target[key]) target[key] = [];
+      if (!target[key].includes(serviceID)) {
+        target[key].push(serviceID);
+      }
+    };
     serviceInstances.forEach((si) => {
       if (!si.nodeId) return;
-      if (!servicesByNode[si.nodeId]) servicesByNode[si.nodeId] = [];
-      if (!servicesByNode[si.nodeId].includes(si.serviceId)) {
-        servicesByNode[si.nodeId].push(si.serviceId);
-      }
+      pushUniqueService(servicesByNode, si.nodeId, si.serviceId);
     });
+    Object.values(servicesByNode).forEach((svcs) => svcs.sort());
 
     // 1. Draw Infrastructure Nodes
     const nodeMap: Record<string, NodeLocation> = {};
+    const nodeTypeCountByCluster: Record<string, { core: number; edge: number; other: number }> =
+      {};
+    // Compute cluster centroids for co-location detection
+    const clusterCentroid: Record<string, { lat: number; lng: number }> = {};
+    currentClusters.forEach((c) => {
+      clusterCentroid[c.id] = { lat: c.lat, lng: c.lng };
+    });
+
     currentNodes.forEach((node) => {
       nodeMap[node.id] = node;
+      const clusterID = node.clusterId ?? "";
+      if (clusterID) {
+        if (!nodeTypeCountByCluster[clusterID]) {
+          nodeTypeCountByCluster[clusterID] = { core: 0, edge: 0, other: 0 };
+        }
+        const normalizedType = (node.nodeType ?? "").toLowerCase();
+        if (normalizedType === "core") nodeTypeCountByCluster[clusterID].core++;
+        else if (normalizedType === "edge") nodeTypeCountByCluster[clusterID].edge++;
+        else nodeTypeCountByCluster[clusterID].other++;
+      }
+
+      // Suppress node dot when co-located with cluster centroid
+      const centroid = clusterCentroid[clusterID];
+      if (centroid) {
+        const dlat = Math.abs(node.lat - centroid.lat);
+        const dlng = Math.abs(node.lng - centroid.lng);
+        if (dlat < 0.05 && dlng < 0.05) return;
+      }
+
       const color = NODE_STATUS_COLORS[node.status ?? "active"] || NODE_STATUS_COLORS.active;
+      const isEdge = (node.nodeType ?? "").toLowerCase() === "edge";
+      const size = isEdge ? 10 : 14;
+      const glow = isEdge ? "6px" : "12px";
 
       const nodeIcon = leaflet.divIcon({
         className: "node-dot-marker",
-        html: `<div style="background-color: ${color}; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 10px ${color};"></div>`,
-        iconSize: [12, 12],
-        iconAnchor: [6, 6],
+        html: `<div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; box-shadow: 0 0 ${glow} ${color};"></div>`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
       });
 
       const nodeSvcs = servicesByNode[node.id];
@@ -459,6 +494,18 @@
         .bindPopup(nodePopup, { className: "dark-popup", maxWidth: 400, minWidth: 200 })
         .addTo(layerGroup!);
     });
+
+    // Build per-cluster service list from node-owned services.
+    // This keeps service display tied to node ownership instead of detached markers.
+    const servicesByClusterFromNodes: Record<string, string[]> = {};
+    Object.entries(servicesByNode).forEach(([nodeID, nodeServices]) => {
+      const clusterID = nodeMap[nodeID]?.clusterId;
+      if (!clusterID) return;
+      nodeServices.forEach((serviceID) => {
+        pushUniqueService(servicesByClusterFromNodes, clusterID, serviceID);
+      });
+    });
+    Object.values(servicesByClusterFromNodes).forEach((svcs) => svcs.sort());
 
     // 2. Draw Routes (Bezier curves or straight lines)
     currentRoutes.forEach((route) => {
@@ -552,43 +599,7 @@
       }
     });
 
-    // 4. Draw service instance dots
-    serviceInstances.forEach((svc) => {
-      let lat: number, lng: number;
-      const hostNode = nodeMap[svc.nodeId ?? ""];
-      if (hostNode) {
-        lat = hostNode.lat + 0.3;
-        lng = hostNode.lng + 0.3;
-      } else {
-        const cluster = clusterMap[svc.clusterId ?? ""];
-        if (!cluster) return;
-        lat = cluster.lat + 0.3;
-        lng = cluster.lng + 0.3;
-      }
-
-      const health = svc.healthStatus ?? "unknown";
-      const svcColor = SERVICE_HEALTH_COLORS[health] || SERVICE_HEALTH_COLORS.unknown;
-      const svcIcon = leaflet.divIcon({
-        className: "service-dot-marker",
-        html: `<div style="background-color: ${svcColor}; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px ${svcColor}; opacity: 0.8;"></div>`,
-        iconSize: [8, 8],
-        iconAnchor: [4, 4],
-      });
-
-      const svcRows =
-        popupRow("Health", escapeHtml(health)) +
-        popupRow(svc.nodeId ? "Node" : "Cluster", escapeHtml(svc.nodeId ?? svc.clusterId ?? ""));
-      const svcPopup =
-        `<div class="map-popup"><div class="map-popup__title">${escapeHtml(svc.serviceId)}</div>` +
-        `<table class="map-popup__table">${svcRows}</table></div>`;
-
-      leaflet
-        .marker([lat, lng], { icon: svcIcon })
-        .bindPopup(svcPopup, { className: "dark-popup", maxWidth: 300, minWidth: 180 })
-        .addTo(serviceLayer!);
-    });
-
-    // 5. Draw cluster markers
+    // 4. Draw cluster markers
     const statusColors: Record<string, string> = {
       healthy: "rgb(34, 197, 94)",
       operational: "rgb(34, 197, 94)",
@@ -599,13 +610,17 @@
     currentClusters.forEach((cluster) => {
       const color = statusColors[cluster.status] || "rgb(148, 163, 184)";
       const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
+      const ct = (cluster.clusterType ?? "").toLowerCase();
+      const isCore = ct === "central" || ct === "core";
+      const borderRadius = isCore ? "6px" : "50%";
+      const borderStyle = isCore ? `3px solid ${color}` : `2px dashed ${color}`;
 
       const icon = leaflet.divIcon({
         className: "cluster-marker",
         html: `<div class="cluster-marker--glow" style="
-          width: ${radius * 2}px; height: ${radius * 2}px; border-radius: 50%;
+          width: ${radius * 2}px; height: ${radius * 2}px; border-radius: ${borderRadius};
           background: radial-gradient(circle, color-mix(in srgb, ${color} 25%, transparent), color-mix(in srgb, ${color} 9%, transparent));
-          border: 2px solid ${color};
+          border: ${borderStyle};
           display: flex; align-items: center; justify-content: center;
           font-size: 10px; font-weight: 600; color: ${color};
           box-shadow: 0 0 12px color-mix(in srgb, ${color} 30%, transparent);
@@ -622,6 +637,11 @@
         popupRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`) +
         (cluster.peerCount != null ? popupRow("Peers", `${cluster.peerCount}`) : "") +
         popupRow("Status", escapeHtml(cluster.status));
+      const nodeTypeCounts = nodeTypeCountByCluster[cluster.id];
+      if (nodeTypeCounts) {
+        if (nodeTypeCounts.core > 0) infoRows += popupRow("Core Nodes", `${nodeTypeCounts.core}`);
+        if (nodeTypeCounts.edge > 0) infoRows += popupRow("Edge Nodes", `${nodeTypeCounts.edge}`);
+      }
 
       let popup =
         `<div class="map-popup"><div class="map-popup__title">${escapeHtml(cluster.name)}</div>` +
@@ -638,8 +658,9 @@
         popup += popupSection("Load", loadRows);
       }
 
-      if (cluster.services?.length) {
-        popup += `<div class="map-popup__tags">${cluster.services.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
+      const clusterNodeServices = servicesByClusterFromNodes[cluster.id] ?? [];
+      if (clusterNodeServices.length) {
+        popup += `<div class="map-popup__tags">${clusterNodeServices.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
       }
 
       if (cluster.shortDescription) {
@@ -656,12 +677,48 @@
   }
 
   let drawTrigger = $derived({
-    routesLen: routes.length,
-    nodesLen: nodes.length,
-    bucketsLen: buckets.length,
-    flowsLen: flows.length,
-    clustersLen: clusters.length,
-    relationshipsLen: relationships.length,
+    routesKey: routes
+      .map((r) => `${r.from[0]}:${r.from[1]}:${r.to[0]}:${r.to[1]}:${r.status}:${r.score ?? ""}`)
+      .sort()
+      .join("|"),
+    nodesKey: nodes
+      .map((n) => `${n.id}:${n.clusterId ?? ""}:${n.nodeType ?? ""}:${n.status ?? ""}`)
+      .sort()
+      .join("|"),
+    bucketsKey: buckets
+      .map(
+        (b) =>
+          `${b.id}:${b.kind}:${b.coords.length}:${b.stats?.count ?? ""}:${b.stats?.successRate ?? ""}`
+      )
+      .sort()
+      .join("|"),
+    flowsKey: flows
+      .map(
+        (f) => `${f.from[0]}:${f.from[1]}:${f.to[0]}:${f.to[1]}:${f.weight ?? ""}:${f.color ?? ""}`
+      )
+      .sort()
+      .join("|"),
+    clustersKey: clusters
+      .map(
+        (c) =>
+          `${c.id}:${c.status}:${c.nodeCount}:${c.healthyNodeCount}:${c.peerCount ?? ""}:${(c.services ?? []).join(",")}`
+      )
+      .sort()
+      .join("|"),
+    relationshipsKey: relationships
+      .map(
+        (r) =>
+          `${r.from[0]}:${r.from[1]}:${r.to[0]}:${r.to[1]}:${r.type}:${r.active}:${r.weight ?? ""}:${r.metrics?.eventCount ?? ""}:${r.metrics?.avgLatencyMs ?? ""}:${r.metrics?.successRate ?? ""}`
+      )
+      .sort()
+      .join("|"),
+    servicesKey: serviceInstances
+      .map(
+        (s) =>
+          `${s.instanceId ?? ""}:${s.serviceId}:${s.nodeId ?? ""}:${s.clusterId ?? ""}:${s.healthStatus ?? ""}:${s.status ?? ""}`
+      )
+      .sort()
+      .join("|"),
   });
 
   $effect(() => {

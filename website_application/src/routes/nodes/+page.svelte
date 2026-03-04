@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
+  import { resolve } from "$app/paths";
   import { get } from "svelte/store";
   import { auth } from "$lib/stores/auth";
   import {
@@ -910,15 +911,17 @@
               {:else}
                 <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                   {#each filteredNodes as node (node.id ?? node.nodeName ?? node.externalIp)}
-                    <NodeCard
-                      {node}
-                      {systemHealth}
-                      {getNodeStatus}
-                      {getNodeHealthScore}
-                      {formatCpuUsage}
-                      {formatMemoryUsage}
-                      {formatDiskUsage}
-                    />
+                    <a href={resolve(`/nodes/${node.id}`)} class="block no-underline h-full">
+                      <NodeCard
+                        {node}
+                        {systemHealth}
+                        {getNodeStatus}
+                        {getNodeHealthScore}
+                        {formatCpuUsage}
+                        {formatMemoryUsage}
+                        {formatDiskUsage}
+                      />
+                    </a>
                   {/each}
                 </div>
 

@@ -27,6 +27,7 @@ const QUERY = `query GetNetworkStatus {
       sourceCluster
       targetCluster
       connected
+      connectionType
     }
     nodes {
       nodeId
