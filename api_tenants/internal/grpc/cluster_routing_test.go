@@ -49,6 +49,9 @@ func TestUpdateTenantCluster(t *testing.T) {
 				mock.ExpectQuery("SELECT EXISTS").
 					WithArgs("tenant-1", "cluster-new").
 					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+				mock.ExpectQuery("SELECT cluster_type FROM quartermaster.infrastructure_clusters").
+					WithArgs("cluster-new").
+					WillReturnRows(sqlmock.NewRows([]string{"cluster_type"}).AddRow("edge"))
 				mock.ExpectExec("UPDATE quartermaster.tenants SET").
 					WithArgs("cluster-new", "tenant-1").
 					WillReturnResult(sqlmock.NewResult(0, 1))
@@ -84,6 +87,9 @@ func TestUpdateTenantCluster(t *testing.T) {
 				mock.ExpectQuery("SELECT EXISTS").
 					WithArgs("tenant-gone", "cluster-new").
 					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+				mock.ExpectQuery("SELECT cluster_type FROM quartermaster.infrastructure_clusters").
+					WithArgs("cluster-new").
+					WillReturnRows(sqlmock.NewRows([]string{"cluster_type"}).AddRow("edge"))
 				mock.ExpectExec("UPDATE quartermaster.tenants SET").
 					WithArgs("cluster-new", "tenant-gone").
 					WillReturnResult(sqlmock.NewResult(0, 0))
@@ -117,6 +123,9 @@ func TestUpdateTenantCluster(t *testing.T) {
 				mock.ExpectQuery("SELECT EXISTS").
 					WithArgs("tenant-1", "cluster-new").
 					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+				mock.ExpectQuery("SELECT cluster_type FROM quartermaster.infrastructure_clusters").
+					WithArgs("cluster-new").
+					WillReturnRows(sqlmock.NewRows([]string{"cluster_type"}).AddRow("edge"))
 				mock.ExpectExec("UPDATE quartermaster.tenants SET").
 					WithArgs("cluster-new", "tenant-1").
 					WillReturnError(fmt.Errorf("connection refused"))

@@ -239,18 +239,19 @@ func TestListHealthyNodesForDNS_EdgeQueryUsesHeartbeatNotServiceInstances(t *tes
 
 	edgeSvc := "edge"
 
-	// Edge path: total count — no service_instance join, no service type arg
+	// Edge path: total count — filters by node_type=edge
 	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
+		WithArgs("edge").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
 	// Edge path: healthy count uses last_heartbeat (not si.health_status)
 	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
-		WithArgs(int32(300)).
+		WithArgs("edge", int32(300)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	// Edge path: main query returns healthy edge nodes
 	mock.ExpectQuery(`SELECT DISTINCT n\.id, n\.node_id`).
-		WithArgs(int32(300)).
+		WithArgs("edge", int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "1.2.3.4")...))
 
 	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
