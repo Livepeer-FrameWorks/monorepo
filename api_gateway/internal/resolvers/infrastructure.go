@@ -67,6 +67,21 @@ func buildCursorPagination(first *int, after *string, last *int, before *string)
 	return req
 }
 
+// normalizeFilterID accepts either raw IDs or Relay global IDs for string filter args.
+// Infrastructure filter arguments are schema-level String values, so callers may supply raw IDs.
+func normalizeFilterID(id *string, expectedType string) (string, error) {
+	if id == nil || strings.TrimSpace(*id) == "" {
+		return "", nil
+	}
+
+	trimmed := strings.TrimSpace(*id)
+	rawID, err := globalid.DecodeExpected(trimmed, expectedType)
+	if err != nil {
+		return "", err
+	}
+	return rawID, nil
+}
+
 // DoGetTenant returns tenant information
 func (r *Resolver) DoGetTenant(ctx context.Context) (*pb.Tenant, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -149,13 +164,9 @@ func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *mo
 	r.Logger.Info("Getting nodes")
 
 	// Build filter parameters for gRPC
-	clusterFilter := ""
-	if clusterID != nil {
-		rawID, err := globalid.DecodeExpected(*clusterID, globalid.TypeCluster)
-		if err != nil {
-			return nil, err
-		}
-		clusterFilter = rawID
+	clusterFilter, err := normalizeFilterID(clusterID, globalid.TypeCluster)
+	if err != nil {
+		return nil, err
 	}
 	typeFilter := ""
 	if typeArg != nil {
@@ -181,17 +192,13 @@ func (r *Resolver) DoGetServiceInstances(ctx context.Context, clusterID *string,
 	}
 
 	// Build filter parameters for gRPC
-	clusterFilter := ""
-	if clusterID != nil {
-		rawID, err := globalid.DecodeExpected(*clusterID, globalid.TypeCluster)
-		if err != nil {
-			return nil, err
-		}
-		clusterFilter = rawID
+	clusterFilter, err := normalizeFilterID(clusterID, globalid.TypeCluster)
+	if err != nil {
+		return nil, err
 	}
-	nodeFilter := ""
-	if nodeID != nil {
-		nodeFilter = *nodeID
+	nodeFilter, err := normalizeFilterID(nodeID, globalid.TypeInfrastructureNode)
+	if err != nil {
+		return nil, err
 	}
 	// Note: status filter can be added when proto supports it
 
@@ -735,14 +742,9 @@ func (r *Resolver) DoGetNodesConnection(ctx context.Context, clusterID *string, 
 		return r.buildNodesConnectionFromSlice(nodes, first, after, last, before), nil
 	}
 
-	// Decode global IDs
-	decodedClusterID := ""
-	if clusterID != nil {
-		rawID, err := globalid.DecodeExpected(*clusterID, globalid.TypeCluster)
-		if err != nil {
-			return nil, err
-		}
-		decodedClusterID = rawID
+	decodedClusterID, err := normalizeFilterID(clusterID, globalid.TypeCluster)
+	if err != nil {
+		return nil, err
 	}
 
 	nodeType := ""
@@ -871,22 +873,13 @@ func (r *Resolver) DoGetServiceInstancesConnection(ctx context.Context, clusterI
 		return r.buildServiceInstancesConnectionFromSlice(instances, first, after, last, before), nil
 	}
 
-	// Decode global IDs
-	decodedClusterID := ""
-	if clusterID != nil {
-		rawID, err := globalid.DecodeExpected(*clusterID, globalid.TypeCluster)
-		if err != nil {
-			return nil, err
-		}
-		decodedClusterID = rawID
+	decodedClusterID, err := normalizeFilterID(clusterID, globalid.TypeCluster)
+	if err != nil {
+		return nil, err
 	}
-	decodedNodeID := ""
-	if nodeID != nil {
-		rawID, err := globalid.DecodeExpected(*nodeID, globalid.TypeInfrastructureNode)
-		if err != nil {
-			return nil, err
-		}
-		decodedNodeID = rawID
+	decodedNodeID, err := normalizeFilterID(nodeID, globalid.TypeInfrastructureNode)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build bidirectional pagination request

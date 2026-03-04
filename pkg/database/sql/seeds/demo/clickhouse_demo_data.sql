@@ -995,16 +995,14 @@ GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
 INSERT INTO periscope.node_performance_5m
 SELECT
     toStartOfFiveMinutes(timestamp) AS timestamp_5m,
-    tenant_id,
-    cluster_id,
-    node_id,
-    avg(cpu_usage) AS avg_cpu,
-    max(cpu_usage) AS max_cpu,
-    avg(toFloat32(ram_current) / ram_max * 100) AS avg_memory,
-    max(toFloat32(ram_current) / ram_max * 100) AS max_memory,
-    sum(bandwidth_in + bandwidth_out) AS total_bandwidth,
-    avg(toFloat32(connections_current)) AS avg_streams,
-    max(connections_current) AS max_streams
+    tenant_id, cluster_id, node_id,
+    sum(cpu_usage), count(), max(cpu_usage),
+    sum(if(ram_max > 0, toFloat32(ram_current) / ram_max * 100, 0)), count(),
+    max(if(ram_max > 0, toFloat32(ram_current) / ram_max * 100, 0)),
+    max(bandwidth_in), min(bandwidth_in),
+    max(bandwidth_out), min(bandwidth_out),
+    sum(toFloat32(connections_current)), count(),
+    max(connections_current)
 FROM periscope.node_metrics_samples
 GROUP BY timestamp_5m, tenant_id, cluster_id, node_id;
 
@@ -1084,20 +1082,17 @@ GROUP BY day, tenant_id;
 INSERT INTO periscope.node_metrics_1h
 SELECT
     toStartOfHour(timestamp) AS timestamp_1h,
-    tenant_id,
-    cluster_id,
-    node_id,
-    avg(cpu_usage) AS avg_cpu,
-    max(cpu_usage) AS peak_cpu,
-    avg(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS avg_memory,
-    max(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS peak_memory,
-    avg(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS avg_disk,
-    max(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS peak_disk,
-    avg(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS avg_shm,
-    max(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS peak_shm,
-    max(bandwidth_in) - min(bandwidth_in) AS total_bandwidth_in,
-    max(bandwidth_out) - min(bandwidth_out) AS total_bandwidth_out,
-    if(avg(is_healthy) >= 0.5, 1, 0) AS was_healthy
+    tenant_id, cluster_id, node_id,
+    sum(cpu_usage), count(), max(cpu_usage),
+    sum(if(ram_max > 0, toFloat32(ram_current) / ram_max * 100, 0)), count(),
+    max(if(ram_max > 0, toFloat32(ram_current) / ram_max * 100, 0)),
+    sum(if(disk_total_bytes > 0, toFloat32(disk_used_bytes) / disk_total_bytes * 100, 0)), count(),
+    max(if(disk_total_bytes > 0, toFloat32(disk_used_bytes) / disk_total_bytes * 100, 0)),
+    sum(if(shm_total_bytes > 0, toFloat32(shm_used_bytes) / shm_total_bytes * 100, 0)), count(),
+    max(if(shm_total_bytes > 0, toFloat32(shm_used_bytes) / shm_total_bytes * 100, 0)),
+    max(bandwidth_in), min(bandwidth_in),
+    max(bandwidth_out), min(bandwidth_out),
+    sum(is_healthy), count()
 FROM periscope.node_metrics_samples
 GROUP BY timestamp_1h, tenant_id, cluster_id, node_id;
 

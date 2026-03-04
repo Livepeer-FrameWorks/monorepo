@@ -3762,19 +3762,65 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		healthyNodes += hn
 	}
 
-	// Build peer connections: every pair of clusters with foghorn instances
+	// Build peer connections from:
+	// 1) Foghorn assignment links (host cluster <-> served cluster), and
+	// 2) federation peering fallback (pairwise foghorn clusters).
 	var peerConnections []*model.NetworkPeerConnection
+	peerSeen := make(map[string]bool)
+	addPeerConnection := func(source, target, connType string) {
+		if source == "" || target == "" || source == target {
+			return
+		}
+		if _, ok := activeClusters[source]; !ok {
+			return
+		}
+		if _, ok := activeClusters[target]; !ok {
+			return
+		}
+		keyA, keyB := source, target
+		if keyA > keyB {
+			keyA, keyB = keyB, keyA
+		}
+		key := keyA + "|" + keyB
+		if peerSeen[key] {
+			return
+		}
+		peerSeen[key] = true
+		peerConnections = append(peerConnections, &model.NetworkPeerConnection{
+			SourceCluster:  source,
+			TargetCluster:  target,
+			Connected:      true,
+			ConnectionType: connType,
+		})
+	}
+
+	foghornHostClusterByInstanceID := make(map[string]string)
+	if instancesResp != nil {
+		for _, si := range instancesResp.Instances {
+			if si.ServiceId != "foghorn" || si.Id == "" || si.ClusterId == "" {
+				continue
+			}
+			foghornHostClusterByInstanceID[si.Id] = si.ClusterId
+		}
+	}
+	if poolStatus != nil {
+		for _, assignment := range poolStatus.Assignments {
+			if assignment == nil {
+				continue
+			}
+			servedClusterID := assignment.GetClusterId()
+			hostClusterID := foghornHostClusterByInstanceID[assignment.GetFoghornInstanceId()]
+			addPeerConnection(hostClusterID, servedClusterID, "assignment")
+		}
+	}
+
 	foghornList := make([]string, 0, len(foghornClusters))
 	for id := range foghornClusters {
 		foghornList = append(foghornList, id)
 	}
 	for i := 0; i < len(foghornList); i++ {
 		for j := i + 1; j < len(foghornList); j++ {
-			peerConnections = append(peerConnections, &model.NetworkPeerConnection{
-				SourceCluster: foghornList[i],
-				TargetCluster: foghornList[j],
-				Connected:     true,
-			})
+			addPeerConnection(foghornList[i], foghornList[j], "federation")
 		}
 	}
 

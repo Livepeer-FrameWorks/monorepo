@@ -390,7 +390,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		  AND si.status = 'running'
 		  AND COALESCE(si.advertise_host, '') <> ''
 		  AND COALESCE(si.port, 0) > 0
-		ORDER BY si.updated_at DESC, si.id ASC
+		ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		LIMIT 1
 	`, primaryClusterID).Scan(&foghornHost, &foghornPort)
 	if addr, ok := buildAdvertiseAddr(foghornHost, foghornPort); ok {
@@ -430,7 +430,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				  AND si.status = 'running'
 				  AND COALESCE(si.advertise_host, '') <> ''
 				  AND COALESCE(si.port, 0) > 0
-				ORDER BY si.updated_at DESC, si.id ASC
+				ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 				LIMIT 1
 			`, officialClusterID.String).Scan(&offFoghornHost, &offFoghornPort)
 			if addr, ok := buildAdvertiseAddr(offFoghornHost, offFoghornPort); ok {
@@ -453,7 +453,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND si.status = 'running'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
-		            ORDER BY si.updated_at DESC, si.id ASC
+		            ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           ''
 		       ) AS foghorn_advertise_host,
@@ -466,7 +466,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND si.status = 'running'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
-		            ORDER BY si.updated_at DESC, si.id ASC
+		            ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           0
 		       ) AS foghorn_port
@@ -909,12 +909,14 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 			 FROM quartermaster.foghorn_cluster_assignments fca
 			 JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
 			 WHERE fca.cluster_id = n.cluster_id AND fca.is_active = true AND si.status = 'running'
+			   AND si.protocol = 'grpc'
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
 			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1),
 			(SELECT si.port
 			 FROM quartermaster.foghorn_cluster_assignments fca
 			 JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
 			 WHERE fca.cluster_id = n.cluster_id AND fca.is_active = true AND si.status = 'running'
+			   AND si.protocol = 'grpc'
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
 			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1)
 		FROM quartermaster.infrastructure_nodes n
@@ -1431,7 +1433,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
 		LEFT JOIN quartermaster.foghorn_cluster_assignments fca
 		  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
-		WHERE svc.type = 'foghorn' AND si.status = 'running'
+		WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.protocol = 'grpc'
 		GROUP BY si.id, si.advertise_host, si.port
 		ORDER BY COUNT(fca.id) ASC, si.started_at ASC, si.id ASC
 		LIMIT 1
@@ -6886,7 +6888,8 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *pb.ListPeersRe
 		            WHERE fca.cluster_id = pc.cluster_id
 		              AND fca.is_active = TRUE
 		              AND si.status = 'running'
-		            ORDER BY si.updated_at DESC
+		              AND si.protocol = 'grpc'
+		            ORDER BY si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           ''
 		       ) AS foghorn_addr

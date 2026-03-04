@@ -1158,9 +1158,9 @@ INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_stat
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
 
 -- ============================================================================
--- FOGHORN: Pre-seeded service instances for HA pair
+-- FOGHORN: Pre-seeded service instances for HA pair (gRPC only)
 -- ============================================================================
--- Both foghorn instances register on the platform cluster. At runtime,
+-- Each foghorn registers a single gRPC service instance. At runtime,
 -- BootstrapService matches by (service_id, cluster_id, protocol, port, node_id)
 -- and UPDATEs the pre-seeded row (preserving instance_id and UUID).
 -- LoadServedClusters queries by FOGHORN_INSTANCE_ID → finds cluster assignments.
@@ -1170,25 +1170,25 @@ INSERT INTO quartermaster.service_instances (
     protocol, advertise_host, port, status, health_status,
     started_at, created_at, updated_at
 ) VALUES
--- foghorn-1 (HTTP health, port 18008)
+-- foghorn-1 gRPC (control plane + relay, docker-compose default 18019)
 (
     '5eedf0e1-0001-da7a-f0e1-0001da7a0001',
     'foghorn-1', 'central-primary', 'central-node-1', 'foghorn',
-    'http', 'foghorn', 18008, 'running', 'unknown',
+    'grpc', 'foghorn', 18019, 'running', 'unknown',
     NOW(), NOW(), NOW()
 ),
--- foghorn-2 (HA peer, port 18008)
+-- foghorn-2 gRPC (control plane + relay, docker-compose default 18029)
 (
     '5eedf0e1-0002-da7a-f0e1-0002da7a0002',
     'foghorn-2', 'central-primary', 'central-node-1', 'foghorn',
-    'http', 'foghorn', 18008, 'running', 'unknown',
+    'grpc', 'foghorn-2', 18029, 'running', 'unknown',
     NOW(), NOW(), NOW()
 )
 ON CONFLICT (instance_id) DO UPDATE SET
     status = 'running',
     updated_at = NOW();
 
--- Assign both foghorn instances to serve both clusters
+-- Assign foghorn instances to serve both clusters.
 INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id) VALUES
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'central-primary'),
     ('5eedf0e1-0001-da7a-f0e1-0001da7a0001', 'demo-media'),

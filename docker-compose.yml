@@ -294,6 +294,7 @@ services:
       CLUSTER_ID: ${CLUSTER_ID}
       REDIS_URL: ${FOGHORN_REDIS_URL}
       FOGHORN_INSTANCE_ID: foghorn-2
+      FOGHORN_HOST: foghorn-2
     ports:
       - "18028:18018"
       - "18029:18029"

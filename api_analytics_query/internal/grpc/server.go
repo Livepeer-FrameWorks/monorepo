@@ -1728,20 +1728,26 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	// Start count query in parallel
+	// Start count query in parallel — subquery deduplicates AGT groups
 	nodeID := req.GetNodeId()
-	countQuery := `SELECT count(*) FROM periscope.node_metrics_1h WHERE tenant_id = ? AND timestamp_1h >= ? AND timestamp_1h <= ?`
+	countQuery := `SELECT count(*) FROM (SELECT 1 FROM periscope.node_metrics_1h WHERE tenant_id = ? AND timestamp_1h >= ? AND timestamp_1h <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
 	if nodeID != "" {
 		countQuery += " AND node_id = ?"
 		countArgs = append(countArgs, nodeID)
 	}
+	countQuery += " GROUP BY timestamp_1h, cluster_id, node_id) sub"
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
-	// Query uses actual schema columns (no id column)
 	query := `
-		SELECT timestamp_1h, cluster_id, node_id, avg_cpu, peak_cpu, avg_memory, peak_memory,
-		       avg_disk, peak_disk, avg_shm, peak_shm, total_bandwidth_in, total_bandwidth_out, was_healthy
+		SELECT timestamp_1h, cluster_id, node_id,
+		       sum(cpu_sum)/sum(cpu_count) as avg_cpu, max(peak_cpu) as peak_cpu,
+		       sum(memory_sum)/sum(memory_count) as avg_memory, max(peak_memory) as peak_memory,
+		       sum(disk_sum)/sum(disk_count) as avg_disk, max(peak_disk) as peak_disk,
+		       sum(shm_sum)/sum(shm_count) as avg_shm, max(peak_shm) as peak_shm,
+		       max(bw_in_max) - min(bw_in_min) as total_bandwidth_in,
+		       max(bw_out_max) - min(bw_out_min) as total_bandwidth_out,
+		       if(sum(healthy_sum)/sum(healthy_count) >= 0.5, 1, 0) as was_healthy
 		FROM periscope.node_metrics_1h
 		WHERE tenant_id = ? AND timestamp_1h >= ? AND timestamp_1h <= ?
 	`
@@ -1758,6 +1764,7 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 		args = append(args, keysetArgs...)
 	}
 
+	query += " GROUP BY timestamp_1h, cluster_id, node_id"
 	query += buildOrderBy(params, "timestamp_1h", "concat(cluster_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
@@ -1830,16 +1837,28 @@ func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *pb.
 		SELECT cluster_id, node_id,
 		       avg(avg_cpu), avg(avg_memory), avg(avg_disk), avg(avg_shm),
 		       sum(total_bandwidth_in), sum(total_bandwidth_out),
-		       count()
-		FROM periscope.node_metrics_1h
-		WHERE tenant_id = ? AND timestamp_1h >= ? AND timestamp_1h <= ?
+		       sum(sample_count)
+		FROM (
+		    SELECT timestamp_1h, cluster_id, node_id,
+		           sum(cpu_sum)/sum(cpu_count) as avg_cpu,
+		           sum(memory_sum)/sum(memory_count) as avg_memory,
+		           sum(disk_sum)/sum(disk_count) as avg_disk,
+		           sum(shm_sum)/sum(shm_count) as avg_shm,
+		           max(bw_in_max) - min(bw_in_min) as total_bandwidth_in,
+		           max(bw_out_max) - min(bw_out_min) as total_bandwidth_out,
+		           sum(cpu_count) as sample_count
+		    FROM periscope.node_metrics_1h
+		    WHERE tenant_id = ? AND timestamp_1h >= ? AND timestamp_1h <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 	if req.GetNodeId() != "" {
 		query += " AND node_id = ?"
 		args = append(args, req.GetNodeId())
 	}
-	query += " GROUP BY cluster_id, node_id ORDER BY cluster_id, node_id"
+	query += `
+		    GROUP BY timestamp_1h, cluster_id, node_id
+		) sub
+		GROUP BY cluster_id, node_id ORDER BY cluster_id, node_id`
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -4520,18 +4539,25 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 
 	nodeID := req.GetNodeId()
 
-	// Count query
-	countQuery := `SELECT count(*) FROM node_performance_5m WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
+	// Count query — subquery deduplicates AGT groups
+	countQuery := `SELECT count(*) FROM (SELECT 1 FROM node_performance_5m WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
 	if nodeID != "" {
 		countQuery += " AND node_id = ?"
 		countArgs = append(countArgs, nodeID)
 	}
+	countQuery += " GROUP BY timestamp_5m, cluster_id, node_id) sub"
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp_5m, cluster_id, node_id, avg_cpu, max_cpu, avg_memory, max_memory,
-		       total_bandwidth, avg_streams, max_streams
+		SELECT timestamp_5m, cluster_id, node_id,
+		       sum(cpu_sum) / sum(cpu_count) as avg_cpu,
+		       max(max_cpu) as max_cpu,
+		       sum(memory_sum) / sum(memory_count) as avg_memory,
+		       max(max_memory) as max_memory,
+		       (max(bw_in_max) - min(bw_in_min)) + (max(bw_out_max) - min(bw_out_min)) as total_bandwidth,
+		       sum(streams_sum) / sum(streams_count) as avg_streams,
+		       max(max_streams) as max_streams
 		FROM node_performance_5m
 		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
 	`
@@ -4548,6 +4574,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 		args = append(args, keysetArgs...)
 	}
 
+	query += " GROUP BY timestamp_5m, cluster_id, node_id"
 	query += buildOrderBy(params, "timestamp_5m", "concat(cluster_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
@@ -4562,9 +4589,10 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 		var timestamp time.Time
 		var clusterID string
 		var nodeIDStr string
-		var avgCPU, maxCPU, avgMemory, maxMemory, avgStreams float32
+		var avgCPU, maxCPU, avgMemory, maxMemory float32
 		var totalBandwidth int64
-		var maxStreams int32
+		var avgStreams float64
+		var maxStreams uint32
 
 		err := rows.Scan(&timestamp, &clusterID, &nodeIDStr, &avgCPU, &maxCPU, &avgMemory, &maxMemory,
 			&totalBandwidth, &avgStreams, &maxStreams)
@@ -4583,7 +4611,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 			MaxMemory:      maxMemory,
 			TotalBandwidth: totalBandwidth,
 			AvgStreams:     int32(avgStreams),
-			MaxStreams:     maxStreams,
+			MaxStreams:     int32(maxStreams),
 		})
 	}
 

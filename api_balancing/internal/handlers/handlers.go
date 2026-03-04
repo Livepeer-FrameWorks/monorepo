@@ -30,7 +30,6 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
-	"frameworks/pkg/version"
 	"frameworks/pkg/x402"
 
 	"github.com/gin-gonic/gin"
@@ -77,44 +76,21 @@ func GetClusterInfo() (string, string) {
 	return clusterID, ownerTenantID
 }
 
-func bootstrapClusterInfo(ctx context.Context) error {
-	if quartermasterClient == nil {
-		return fmt.Errorf("quartermaster client not configured")
-	}
-	advertiseHost := config.GetEnv("FOGHORN_HOST", "foghorn")
-	reqClusterID := config.GetEnv("CLUSTER_ID", "")
-	nodeID := config.GetEnv("NODE_ID", "")
-	req := &pb.BootstrapServiceRequest{
-		Type:           "foghorn",
-		Version:        version.Version,
-		Protocol:       "http",
-		HealthEndpoint: func() *string { s := "/health"; return &s }(),
-		Port:           18008,
-		AdvertiseHost:  &advertiseHost,
-		ClusterId: func() *string {
-			if reqClusterID != "" {
-				return &reqClusterID
-			}
-			return nil
-		}(),
-	}
-	if nodeID != "" {
-		req.NodeId = &nodeID
-	}
-	resp, err := quartermasterClient.BootstrapService(ctx, req)
-	if err != nil {
-		return err
-	}
+// ApplyBootstrapMetadata extracts cluster attribution and self-geo from a
+// bootstrap response. Called once from main.go after the single gRPC bootstrap.
+func ApplyBootstrapMetadata(resp *pb.BootstrapServiceResponse) {
 	if resp == nil {
-		return fmt.Errorf("quartermaster bootstrap returned nil response")
+		return
 	}
 
 	if resp.OwnerTenantId != nil && *resp.OwnerTenantId != "" {
 		ownerTenantID = *resp.OwnerTenantId
-		logger.WithFields(logging.Fields{
-			"cluster_id":      resp.ClusterId,
-			"owner_tenant_id": ownerTenantID,
-		}).Info("Cached cluster owner tenant for dual-tenant attribution")
+		if logger != nil {
+			logger.WithFields(logging.Fields{
+				"cluster_id":      resp.ClusterId,
+				"owner_tenant_id": ownerTenantID,
+			}).Info("Cached cluster owner tenant for dual-tenant attribution")
+		}
 		if triggerProcessor != nil {
 			triggerProcessor.SetOwnerTenantID(ownerTenantID)
 		}
@@ -136,15 +112,15 @@ func bootstrapClusterInfo(ctx context.Context) error {
 				loc += result.CountryName
 			}
 			SetSelfGeo(result.Latitude, result.Longitude, loc)
-			logger.WithFields(logging.Fields{
-				"lat":      result.Latitude,
-				"lon":      result.Longitude,
-				"location": loc,
-				"node_id":  nodeID,
-			}).Info("Foghorn self-geo resolved from infrastructure node")
+			if logger != nil {
+				logger.WithFields(logging.Fields{
+					"lat":      result.Latitude,
+					"lon":      result.Longitude,
+					"location": loc,
+				}).Info("Foghorn self-geo resolved from infrastructure node")
+			}
 		}
 	}
-	return nil
 }
 
 type clipLifecycleContext struct {
@@ -293,19 +269,8 @@ func Init(
 	// Share Quartermaster client with control package
 	control.SetQuartermasterClient(qClient)
 
-	// Self-register Foghorn instance in Quartermaster and cache owner_tenant_id for dual-tenant attribution
-	bootstrapCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	if err := bootstrapClusterInfo(bootstrapCtx); err != nil {
-		logger.WithError(err).Warn("Synchronous bootstrap failed, retrying async")
-		go func() {
-			retryCtx, retryCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer retryCancel()
-			if err := bootstrapClusterInfo(retryCtx); err != nil {
-				logger.WithError(err).Warn("Async bootstrap failed")
-			}
-		}()
-	}
-	cancel()
+	// Cluster metadata (owner_tenant_id, self-geo) is now extracted from
+	// the single gRPC bootstrap in main.go via ApplyBootstrapMetadata.
 
 	// Register clip progress/done handlers to emit analytics
 	control.SetClipHandlers(
@@ -3140,16 +3105,6 @@ func findProtocolURL(outputs map[string]*pb.OutputEndpoint, protocol string) str
 func SetQuartermasterClient(client *qmclient.GRPCClient) {
 	quartermasterClient = client
 	control.SetQuartermasterClient(client)
-	if client == nil || logger == nil {
-		return
-	}
-	go func() {
-		bootstrapCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := bootstrapClusterInfo(bootstrapCtx); err != nil {
-			logger.WithError(err).Warn("Async bootstrap failed after Quartermaster reconnect")
-		}
-	}()
 }
 
 // SetCommodoreClient injects a Commodore client after initialization.

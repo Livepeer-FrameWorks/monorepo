@@ -628,6 +628,7 @@ func main() {
 		advertiseAddr := ""
 		if bsResp != nil {
 			advertiseAddr = bsResp.GetAdvertiseAddr()
+			handlers.ApplyBootstrapMetadata(bsResp)
 		}
 
 		if advertiseAddr != "" {

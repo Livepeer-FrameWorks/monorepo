@@ -917,14 +917,20 @@ CREATE TABLE IF NOT EXISTS node_performance_5m (
     tenant_id UUID,
     cluster_id LowCardinality(String),
     node_id LowCardinality(String),
-    avg_cpu Float32,
-    max_cpu Float32,
-    avg_memory Float32,
-    max_memory Float32,
-    total_bandwidth UInt64,
-    avg_streams Float32,
-    max_streams UInt32
-) ENGINE = MergeTree()
+    cpu_sum SimpleAggregateFunction(sum, Float64),
+    cpu_count SimpleAggregateFunction(sum, UInt64),
+    max_cpu SimpleAggregateFunction(max, Float32),
+    memory_sum SimpleAggregateFunction(sum, Float64),
+    memory_count SimpleAggregateFunction(sum, UInt64),
+    max_memory SimpleAggregateFunction(max, Float32),
+    bw_in_max SimpleAggregateFunction(max, UInt64),
+    bw_in_min SimpleAggregateFunction(min, UInt64),
+    bw_out_max SimpleAggregateFunction(max, UInt64),
+    bw_out_min SimpleAggregateFunction(min, UInt64),
+    streams_sum SimpleAggregateFunction(sum, Float64),
+    streams_count SimpleAggregateFunction(sum, UInt64),
+    max_streams SimpleAggregateFunction(max, UInt32)
+) ENGINE = AggregatingMergeTree()
 PARTITION BY (toYYYYMM(timestamp_5m), tenant_id)
 ORDER BY (tenant_id, cluster_id, node_id, timestamp_5m)
 TTL timestamp_5m + INTERVAL 180 DAY;
@@ -932,15 +938,19 @@ TTL timestamp_5m + INTERVAL 180 DAY;
 CREATE MATERIALIZED VIEW IF NOT EXISTS node_performance_5m_mv TO node_performance_5m AS
 SELECT
     toStartOfInterval(timestamp, INTERVAL 5 MINUTE) as timestamp_5m,
-    tenant_id,
-    cluster_id,
-    node_id,
-    avg(cpu_usage) as avg_cpu,
+    tenant_id, cluster_id, node_id,
+    sum(cpu_usage) as cpu_sum,
+    count() as cpu_count,
     max(cpu_usage) as max_cpu,
-    avg(if(ram_max > 0, ram_current / ram_max * 100, 0)) as avg_memory,
+    sum(if(ram_max > 0, ram_current / ram_max * 100, 0)) as memory_sum,
+    count() as memory_count,
     max(if(ram_max > 0, ram_current / ram_max * 100, 0)) as max_memory,
-    sum(bandwidth_in + bandwidth_out) as total_bandwidth,
-    avg(stream_count) as avg_streams,
+    max(bandwidth_in) as bw_in_max,
+    min(bandwidth_in) as bw_in_min,
+    max(bandwidth_out) as bw_out_max,
+    min(bandwidth_out) as bw_out_min,
+    sum(stream_count) as streams_sum,
+    count() as streams_count,
     max(stream_count) as max_streams
 FROM node_metrics_samples
 GROUP BY timestamp_5m, tenant_id, cluster_id, node_id;
@@ -950,18 +960,25 @@ CREATE TABLE IF NOT EXISTS node_metrics_1h (
     tenant_id UUID,
     cluster_id LowCardinality(String),
     node_id LowCardinality(String),
-    avg_cpu Float32,
-    peak_cpu Float32,
-    avg_memory Float32,
-    peak_memory Float32,
-    avg_disk Float32,
-    peak_disk Float32,
-    avg_shm Float32,
-    peak_shm Float32,
-    total_bandwidth_in UInt64,
-    total_bandwidth_out UInt64,
-    was_healthy UInt8
-) ENGINE = MergeTree()
+    cpu_sum SimpleAggregateFunction(sum, Float64),
+    cpu_count SimpleAggregateFunction(sum, UInt64),
+    peak_cpu SimpleAggregateFunction(max, Float32),
+    memory_sum SimpleAggregateFunction(sum, Float64),
+    memory_count SimpleAggregateFunction(sum, UInt64),
+    peak_memory SimpleAggregateFunction(max, Float32),
+    disk_sum SimpleAggregateFunction(sum, Float64),
+    disk_count SimpleAggregateFunction(sum, UInt64),
+    peak_disk SimpleAggregateFunction(max, Float32),
+    shm_sum SimpleAggregateFunction(sum, Float64),
+    shm_count SimpleAggregateFunction(sum, UInt64),
+    peak_shm SimpleAggregateFunction(max, Float32),
+    bw_in_max SimpleAggregateFunction(max, UInt64),
+    bw_in_min SimpleAggregateFunction(min, UInt64),
+    bw_out_max SimpleAggregateFunction(max, UInt64),
+    bw_out_min SimpleAggregateFunction(min, UInt64),
+    healthy_sum SimpleAggregateFunction(sum, UInt64),
+    healthy_count SimpleAggregateFunction(sum, UInt64)
+) ENGINE = AggregatingMergeTree()
 PARTITION BY (toYYYYMM(timestamp_1h), tenant_id)
 ORDER BY (tenant_id, cluster_id, node_id, timestamp_1h)
 TTL timestamp_1h + INTERVAL 365 DAY;
@@ -969,20 +986,20 @@ TTL timestamp_1h + INTERVAL 365 DAY;
 CREATE MATERIALIZED VIEW IF NOT EXISTS node_metrics_1h_mv TO node_metrics_1h AS
 SELECT
     toStartOfHour(timestamp) AS timestamp_1h,
-    tenant_id,
-    cluster_id,
-    node_id,
-    avg(cpu_usage) AS avg_cpu,
-    max(cpu_usage) AS peak_cpu,
-    avg(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS avg_memory,
+    tenant_id, cluster_id, node_id,
+    sum(cpu_usage) AS cpu_sum, count() AS cpu_count, max(cpu_usage) AS peak_cpu,
+    sum(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS memory_sum,
+    count() AS memory_count,
     max(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS peak_memory,
-    avg(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS avg_disk,
+    sum(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS disk_sum,
+    count() AS disk_count,
     max(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS peak_disk,
-    avg(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS avg_shm,
+    sum(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS shm_sum,
+    count() AS shm_count,
     max(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS peak_shm,
-    max(bandwidth_in) - min(bandwidth_in) AS total_bandwidth_in,
-    max(bandwidth_out) - min(bandwidth_out) AS total_bandwidth_out,
-    if(avg(is_healthy) >= 0.5, 1, 0) AS was_healthy
+    max(bandwidth_in) AS bw_in_max, min(bandwidth_in) AS bw_in_min,
+    max(bandwidth_out) AS bw_out_max, min(bandwidth_out) AS bw_out_min,
+    sum(is_healthy) AS healthy_sum, count() AS healthy_count
 FROM node_metrics_samples
 GROUP BY timestamp_1h, tenant_id, cluster_id, node_id;
 
