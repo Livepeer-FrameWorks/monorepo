@@ -71,6 +71,19 @@ Principles
 - Time‑serie/data-plane in ClickHouse; control/aggregates in Postgres
 - Type safety by reusing the gRPC types straight from the emitter. Passthrough and leave source data intact as much as possible, with optional enrichment fields
 
+## Supported Platforms
+
+| Component                    | linux/amd64 | linux/arm64 | darwin/arm64 | darwin/amd64 |
+| ---------------------------- | ----------- | ----------- | ------------ | ------------ |
+| Docker images (all services) | yes         | yes         | —            | —            |
+| Service binaries             | yes         | yes         | yes (signed) | yes (signed) |
+| CLI                          | yes         | yes         | yes (signed) | yes (signed) |
+| Edge node (native)           | yes         | yes         | yes          | yes          |
+
+All darwin binaries are code-signed and notarized via Apple Developer ID. Docker images are linux-only (macOS runs them via Docker Desktop's Linux VM).
+
+Install via Homebrew: `brew tap livepeer-frameworks/tap && brew install frameworks-cli`
+
 ## Quick Start
 
 ### Development Setup (docker-compose)

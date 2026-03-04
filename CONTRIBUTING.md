@@ -91,6 +91,21 @@ make verify                            # Pre-commit verification
 
 See `docs/standards/testing.md` for testing philosophy and best practices.
 
+## Release Build Infrastructure
+
+The release pipeline (`.github/workflows/release.yml`) uses two runner types:
+
+- **`ubuntu-latest`** (GitHub-hosted): builds linux/amd64 binaries and Docker images
+- **`macos-arm64-self-hosted`** (Mac Mini): builds linux/arm64 + darwin/arm64 + darwin/amd64 binaries, handles Apple code signing and notarization
+
+The Mac Mini runner requires:
+
+- GitHub Actions runner agent (configured as LaunchDaemon)
+- Go 1.25+
+- `filosottile/musl-cross/musl-cross` (Homebrew) for CGO linux cross-compilation
+- Apple Developer certificate (imported via secrets)
+- Docker Desktop (for future arm64 container image builds)
+
 ## Common Workflows
 
 ### Adding a New GraphQL Field
