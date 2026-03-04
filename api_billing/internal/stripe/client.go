@@ -7,10 +7,15 @@ import (
 
 	"frameworks/pkg/logging"
 
+	"math"
+	"strings"
+
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
 	"github.com/stripe/stripe-go/v82/customer"
+	stripeprice "github.com/stripe/stripe-go/v82/price"
+	stripeproduct "github.com/stripe/stripe-go/v82/product"
 	"github.com/stripe/stripe-go/v82/subscription"
 	"github.com/stripe/stripe-go/v82/webhook"
 )
@@ -339,4 +344,108 @@ func (c *Client) ExtractSubscriptionInfo(sub *stripe.Subscription) SubscriptionI
 	}
 
 	return info
+}
+
+// FindOrCreateProduct searches for an existing product by tier_name metadata, creates one if not found.
+func (c *Client) FindOrCreateProduct(ctx context.Context, tierName, displayName, description string) (*stripe.Product, error) {
+	params := &stripe.ProductSearchParams{}
+	params.Query = fmt.Sprintf("metadata['tier_name']:'%s'", tierName)
+	iter := stripeproduct.Search(params)
+
+	for iter.Next() {
+		prod := iter.Product()
+		c.logger.WithFields(map[string]interface{}{
+			"product_id": prod.ID,
+			"tier_name":  tierName,
+		}).Debug("Found existing Stripe product")
+		return prod, nil
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("failed to search Stripe products: %w", err)
+	}
+
+	prod, err := stripeproduct.New(&stripe.ProductParams{
+		Name:        stripe.String(displayName),
+		Description: stripe.String(description),
+		Metadata: map[string]string{
+			"tier_name": tierName,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Stripe product: %w", err)
+	}
+
+	c.logger.WithFields(map[string]interface{}{
+		"product_id": prod.ID,
+		"tier_name":  tierName,
+	}).Info("Created Stripe product")
+
+	return prod, nil
+}
+
+// FindOrCreatePrice finds an existing recurring price on a product matching the amount/currency/interval,
+// or creates a new one.
+func (c *Client) FindOrCreatePrice(ctx context.Context, productID string, amountCents int64, currency, interval string) (*stripe.Price, error) {
+	listParams := &stripe.PriceListParams{
+		Product:  stripe.String(productID),
+		Active:   stripe.Bool(true),
+		Currency: stripe.String(strings.ToLower(currency)),
+		Recurring: &stripe.PriceListRecurringParams{
+			Interval: stripe.String(interval),
+		},
+	}
+	iter := stripeprice.List(listParams)
+
+	for iter.Next() {
+		p := iter.Price()
+		if p.UnitAmount == amountCents {
+			c.logger.WithFields(map[string]interface{}{
+				"price_id":   p.ID,
+				"product_id": productID,
+			}).Debug("Found existing Stripe price")
+			return p, nil
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list Stripe prices: %w", err)
+	}
+
+	p, err := stripeprice.New(&stripe.PriceParams{
+		Product:    stripe.String(productID),
+		Currency:   stripe.String(strings.ToLower(currency)),
+		UnitAmount: stripe.Int64(amountCents),
+		Recurring: &stripe.PriceRecurringParams{
+			Interval: stripe.String(interval),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Stripe price: %w", err)
+	}
+
+	c.logger.WithFields(map[string]interface{}{
+		"price_id":     p.ID,
+		"product_id":   productID,
+		"amount_cents": amountCents,
+		"currency":     currency,
+		"interval":     interval,
+	}).Info("Created Stripe price")
+
+	return p, nil
+}
+
+// SyncTier ensures a Stripe product and monthly price exist for the given tier.
+// Returns the Stripe product ID and monthly price ID. Idempotent.
+func (c *Client) SyncTier(ctx context.Context, tierName, displayName, description string, basePrice float64, currency string) (productID, monthlyPriceID string, err error) {
+	prod, err := c.FindOrCreateProduct(ctx, tierName, displayName, description)
+	if err != nil {
+		return "", "", err
+	}
+
+	amountCents := int64(math.Round(basePrice * 100))
+	p, err := c.FindOrCreatePrice(ctx, prod.ID, amountCents, currency, "month")
+	if err != nil {
+		return prod.ID, "", err
+	}
+
+	return prod.ID, p.ID, nil
 }

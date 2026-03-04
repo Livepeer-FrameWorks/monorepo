@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net"
 	"strconv"
@@ -150,6 +151,10 @@ func main() {
 			Logger:        logger,
 		})
 		logger.Info("Stripe client initialized")
+
+		if err := syncBillingTiersWithStripe(context.Background(), db, stripeClient, logger); err != nil {
+			logger.WithError(err).Warn("Stripe tier sync failed - checkout will be unavailable until tiers are configured")
+		}
 	} else {
 		logger.Warn("STRIPE_SECRET_KEY not set - Stripe functionality disabled")
 	}
@@ -272,4 +277,78 @@ func main() {
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
+}
+
+// syncBillingTiersWithStripe ensures each paid billing tier has a corresponding
+// Stripe product and monthly price. Idempotent — safe to run on every startup.
+func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *stripe.Client, logger logging.Logger) error {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, tier_name, display_name, description, base_price, currency,
+		       stripe_product_id, stripe_price_id_monthly
+		FROM purser.billing_tiers
+		WHERE base_price > 0 AND is_active = true
+	`)
+	if err != nil {
+		return fmt.Errorf("query billing tiers: %w", err)
+	}
+	defer rows.Close()
+
+	type tier struct {
+		id                 string
+		tierName           string
+		displayName        string
+		description        string
+		basePrice          float64
+		currency           string
+		stripeProductID    sql.NullString
+		stripePriceMonthly sql.NullString
+	}
+
+	var tiers []tier
+	for rows.Next() {
+		var t tier
+		if err := rows.Scan(&t.id, &t.tierName, &t.displayName, &t.description,
+			&t.basePrice, &t.currency, &t.stripeProductID, &t.stripePriceMonthly); err != nil {
+			return fmt.Errorf("scan tier: %w", err)
+		}
+		tiers = append(tiers, t)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate tiers: %w", err)
+	}
+
+	var synced int
+	for _, t := range tiers {
+		if t.stripeProductID.Valid && t.stripePriceMonthly.Valid {
+			continue
+		}
+
+		productID, priceID, err := stripeClient.SyncTier(ctx, t.tierName, t.displayName, t.description, t.basePrice, t.currency)
+		if err != nil {
+			logger.WithError(err).WithField("tier", t.tierName).Error("Failed to sync tier with Stripe")
+			continue
+		}
+
+		_, err = db.ExecContext(ctx, `
+			UPDATE purser.billing_tiers
+			SET stripe_product_id = $1, stripe_price_id_monthly = $2, updated_at = NOW()
+			WHERE id = $3
+		`, productID, priceID, t.id)
+		if err != nil {
+			logger.WithError(err).WithField("tier", t.tierName).Error("Failed to update tier Stripe IDs")
+			continue
+		}
+
+		logger.WithFields(map[string]interface{}{
+			"tier":       t.tierName,
+			"product_id": productID,
+			"price_id":   priceID,
+		}).Info("Synced billing tier with Stripe")
+		synced++
+	}
+
+	if synced > 0 {
+		logger.WithField("count", synced).Info("Stripe tier sync complete")
+	}
+	return nil
 }
