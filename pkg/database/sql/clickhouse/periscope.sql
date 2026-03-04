@@ -871,6 +871,7 @@ CREATE TABLE IF NOT EXISTS node_state_current (
 
     active_streams UInt32,
     is_healthy UInt8,
+    operational_mode LowCardinality(String) DEFAULT 'normal',
 
     latitude Float64,
     longitude Float64,
@@ -903,6 +904,7 @@ CREATE TABLE IF NOT EXISTS node_metrics_samples (
     stream_count UInt32,
 
     is_healthy UInt8,
+    operational_mode LowCardinality(String) DEFAULT 'normal',
     latitude Float64,
     longitude Float64,
 

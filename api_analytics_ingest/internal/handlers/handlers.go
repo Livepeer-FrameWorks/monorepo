@@ -1378,7 +1378,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		INSERT INTO node_state_current (
 			tenant_id, cluster_id, node_id, cpu_percent, ram_used_bytes, ram_total_bytes,
 			disk_used_bytes, disk_total_bytes, up_speed, down_speed,
-			active_streams, is_healthy, latitude, longitude, location, metadata, updated_at
+			active_streams, is_healthy, operational_mode, latitude, longitude, location, metadata, updated_at
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_nodes batch: %v", err)
@@ -1389,6 +1389,10 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	}
 
 	cpuPercent := float32(nodeLifecycle.GetCpuTenths()) / 10.0
+	modeStr := strings.ToLower(strings.TrimPrefix(nodeLifecycle.GetOperationalMode().String(), "NODE_OPERATIONAL_MODE_"))
+	if modeStr == "unspecified" {
+		modeStr = "normal"
+	}
 
 	// Build operational metadata only - skip bulk data (streams, artifacts, storage)
 	metadata := map[string]interface{}{}
@@ -1420,6 +1424,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		uint64(nodeLifecycle.GetDownSpeed()),
 		uint32(nodeLifecycle.GetActiveStreams()),
 		boolToUint8(nodeLifecycle.GetIsHealthy()),
+		modeStr,
 		nodeLifecycle.GetLatitude(),
 		nodeLifecycle.GetLongitude(),
 		nodeLifecycle.GetLocation(),
@@ -1452,7 +1457,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 			timestamp, tenant_id, cluster_id, node_id, cpu_usage, ram_max, ram_current,
 			shm_total_bytes, shm_used_bytes, disk_total_bytes, disk_used_bytes,
 			bandwidth_in, bandwidth_out, up_speed, down_speed, connections_current,
-			stream_count, is_healthy, latitude, longitude, metadata
+			stream_count, is_healthy, operational_mode, latitude, longitude, metadata
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare node_metrics batch: %v", err)
@@ -1481,6 +1486,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		uint32(nodeLifecycle.GetConnectionsCurrent()), // current viewer connections
 		int(nodeLifecycle.GetActiveStreams()),
 		nodeLifecycle.GetIsHealthy(),
+		modeStr,
 		nodeLifecycle.GetLatitude(),
 		nodeLifecycle.GetLongitude(),
 		metadataJSON,

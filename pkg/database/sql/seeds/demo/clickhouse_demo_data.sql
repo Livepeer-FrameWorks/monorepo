@@ -605,7 +605,7 @@ INSERT INTO periscope.node_metrics_samples (
     disk_total_bytes, disk_used_bytes,
     bandwidth_in, bandwidth_out, up_speed, down_speed,
     connections_current, stream_count,
-    is_healthy, latitude, longitude,
+    is_healthy, operational_mode, latitude, longitude,
     metadata
 )
 SELECT
@@ -627,6 +627,7 @@ SELECT
     toUInt32(50 + rand()%30) as connections_current,
     toUInt32(1 + rand()%3) as stream_count,
     1 as is_healthy,
+    'normal' as operational_mode,
     52.1601 as latitude,
     4.4970 as longitude,
     '{"region":"eu-west"}' as metadata
