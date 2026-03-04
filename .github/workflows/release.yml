@@ -649,10 +649,10 @@ jobs:
           name: cli-arm64-darwin
           path: dist/cli
 
-      - name: Extract CLI binary
+      - name: Prepare CLI binary
         run: |
           cd dist/cli
-          tar xzf frameworks-cli-*-darwin-arm64.tar.gz || true
+          cp frameworks-darwin-arm64 frameworks
           chmod 755 frameworks
 
       - name: Import Application signing certificate
@@ -881,11 +881,18 @@ jobs:
           pattern: cli-*
           path: dist/cli
           merge-multiple: true
-      - name: Generate CLI checksums
+      - name: Package CLI binaries as tarballs
         run: |
           cd dist/cli
+          VERSION="${GITHUB_REF_NAME#v}"
           for f in frameworks-*; do
-            sha256sum "$f" > "${f}.sha256"
+            [[ "$f" == *.sha256 ]] && continue
+            [[ "$f" == *.tar.gz ]] && continue
+            tarball="frameworks-cli-v${VERSION}-${f#frameworks-}.tar.gz"
+            cp "$f" frameworks
+            tar czf "$tarball" frameworks
+            rm frameworks
+            sha256sum "$tarball" > "${tarball}.sha256"
           done
       - name: Download service binary artifacts
         uses: actions/download-artifact@v7
