@@ -148,7 +148,7 @@
   let serviceLayer: LayerGroup | null = null;
   let pulseTimers: number[] = [];
 
-  const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.15)";
+  const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.35)";
   const NODE_STATUS_COLORS: Record<string, string> = {
     active: "rgb(59, 130, 246)",
     offline: "rgb(100, 116, 139)",
@@ -253,7 +253,11 @@
     return `<div class="map-popup__section-title">${escapeHtml(title)}</div><table class="map-popup__table">${rows}</table>`;
   }
 
-  function startPulse(from: [number, number], to: [number, number]) {
+  function startPulse(
+    from: [number, number],
+    to: [number, number],
+    color: string = "rgb(125, 207, 255)"
+  ) {
     if (!L || !relationshipLayer) return;
     const steps = 60;
     const interval = 50;
@@ -274,7 +278,7 @@
             marker = leaflet
               .circleMarker([lat, lng], {
                 radius: 3,
-                fillColor: "rgb(125, 207, 255)",
+                fillColor: color,
                 fillOpacity: 0.9,
                 stroke: false,
                 interactive: false,
@@ -396,6 +400,10 @@
     });
 
     // 0b. Node-to-cluster membership lines
+    const MEMBERSHIP_COLORS: Record<string, string> = {
+      core: "rgba(59, 130, 246, 0.3)",
+      edge: "rgba(34, 197, 94, 0.3)",
+    };
     currentNodes.forEach((node) => {
       if (!node.clusterId) return;
       const cluster = clusterMap[node.clusterId];
@@ -404,11 +412,14 @@
       const to: [number, number] = [cluster.lat, cluster.lng];
       if (from[0] === to[0] && from[1] === to[1]) return;
 
+      const nodeKind = (node.nodeType ?? "").toLowerCase();
+      const lineColor = MEMBERSHIP_COLORS[nodeKind] || MEMBERSHIP_COLOR;
+
       leaflet
         .polyline([from, to], {
-          color: MEMBERSHIP_COLOR,
-          weight: 1,
-          opacity: 0.4,
+          color: lineColor,
+          weight: 1.5,
+          opacity: 0.6,
           smoothFactor: 1,
           interactive: false,
         })
@@ -556,18 +567,23 @@
     // 3. Draw relationship lines between clusters
     currentRelationships.forEach((rel) => {
       const colorMap = {
-        peering: "rgba(59, 130, 246, 0.6)",
-        traffic: "rgba(34, 197, 94, 0.5)",
-        replication: "rgba(168, 85, 247, 0.5)",
+        peering: "rgba(59, 130, 246, 0.7)",
+        traffic: "rgba(34, 197, 94, 0.6)",
+        replication: "rgba(168, 85, 247, 0.7)",
       };
       const lineColor = colorMap[rel.type] || "rgba(148, 163, 184, 0.4)";
-      const lineWeight = rel.active ? Math.max(1.5, Math.min(4, (rel.weight ?? 1) * 0.5)) : 1;
+      const lineWeight = rel.active ? Math.max(2, Math.min(4, (rel.weight ?? 1) * 0.5)) : 1.5;
+
+      const dashMap: Record<string, string | undefined> = {
+        peering: "8 4",
+        replication: "12 6",
+      };
 
       const line = leaflet.polyline([rel.from, rel.to], {
         color: lineColor,
         weight: lineWeight,
-        opacity: rel.active ? 0.7 : 0.3,
-        dashArray: rel.type === "peering" ? "8 4" : undefined,
+        opacity: rel.active ? 0.8 : 0.4,
+        dashArray: dashMap[rel.type],
         smoothFactor: 1,
       });
 
@@ -593,9 +609,10 @@
 
       line.addTo(relationshipLayer!);
 
-      // Pulse animation on active peering lines
-      if (rel.active && rel.type === "peering") {
-        startPulse(rel.from, rel.to);
+      // Directional pulse animation on active peering and assignment lines
+      if (rel.active && (rel.type === "peering" || rel.type === "replication")) {
+        const pulseColor = rel.type === "replication" ? "rgb(192, 132, 252)" : "rgb(125, 207, 255)";
+        startPulse(rel.from, rel.to, pulseColor);
       }
     });
 

@@ -18,9 +18,13 @@ const NODE_STATUS_COLORS = {
   offline: "rgb(100, 116, 139)",
 };
 
-const ASSIGNMENT_COLOR = "rgba(148, 163, 184, 0.35)";
-const FEDERATION_COLOR = "rgba(125, 207, 255, 0.5)";
-const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.15)";
+const ASSIGNMENT_COLOR = "rgba(168, 85, 247, 0.7)";
+const FEDERATION_COLOR = "rgba(59, 130, 246, 0.7)";
+const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.35)";
+const MEMBERSHIP_COLORS = {
+  core: "rgba(59, 130, 246, 0.3)",
+  edge: "rgba(34, 197, 94, 0.3)",
+};
 
 function escapeHtml(s) {
   return s
@@ -164,10 +168,13 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
       const to = [cluster.latitude, cluster.longitude];
       if (from[0] === to[0] && from[1] === to[1]) return;
 
+      const nodeKind = (node.nodeType || "").toLowerCase();
+      const lineColor = MEMBERSHIP_COLORS[nodeKind] || MEMBERSHIP_COLOR;
+
       L.polyline([from, to], {
-        color: MEMBERSHIP_COLOR,
-        weight: 1,
-        opacity: 0.4,
+        color: lineColor,
+        weight: 1.5,
+        opacity: 0.6,
         smoothFactor: 1,
         interactive: false,
       }).addTo(memberLayer);
@@ -186,14 +193,15 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
 
     L.polyline([from, to], {
       color: isFederation ? FEDERATION_COLOR : ASSIGNMENT_COLOR,
-      weight: isFederation ? 1.5 : 1,
-      opacity: pc.connected ? (isFederation ? 0.7 : 0.5) : 0.15,
-      dashArray: isFederation ? "8 12" : null,
+      weight: isFederation ? 2 : 1.5,
+      opacity: pc.connected ? 0.8 : 0.4,
+      dashArray: isFederation ? "8 4" : "12 6",
       smoothFactor: 1,
     }).addTo(connLayer);
 
-    if (pc.connected && isFederation) {
-      startPulse(L, pulseLayer, pulseTimersRef, from, to);
+    if (pc.connected) {
+      const pulseColor = isFederation ? "rgb(125, 207, 255)" : "rgb(192, 132, 252)";
+      startPulse(L, pulseLayer, pulseTimersRef, from, to, pulseColor);
     }
   });
 
@@ -299,7 +307,7 @@ function drawLayers(L, layersRef, pulseTimersRef, data) {
   });
 }
 
-function startPulse(L, layer, pulseTimersRef, from, to) {
+function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 255)") {
   const steps = 60;
   const interval = 50;
 
@@ -316,7 +324,7 @@ function startPulse(L, layer, pulseTimersRef, from, to) {
         if (!marker) {
           marker = L.circleMarker([lat, lng], {
             radius: 3,
-            fillColor: "rgb(125, 207, 255)",
+            fillColor: color,
             fillOpacity: 0.9,
             stroke: false,
             className: "network-viz__pulse",
