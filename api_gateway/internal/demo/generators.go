@@ -4710,8 +4710,8 @@ func GenerateNetworkStatus() *model.NetworkStatus {
 			{ClusterID: "apac-edge", Name: "APAC Edge", Region: "AP-Northeast", Latitude: 35.6762, Longitude: 139.6503, NodeCount: 2, HealthyNodeCount: 2, PeerCount: 1, Status: "healthy", ClusterType: infra.ClusterTypeEdge, ShortDescription: &apacDesc, MaxStreams: 100, CurrentStreams: 3, MaxViewers: 3000, CurrentViewers: 95, MaxBandwidthMbps: 3000, CurrentBandwidthMbps: 280, Services: []string{"foghorn", "helmsman"}},
 		},
 		PeerConnections: []*model.NetworkPeerConnection{
-			{SourceCluster: "central-primary", TargetCluster: "us-east-edge", Connected: true},
-			{SourceCluster: "central-primary", TargetCluster: "apac-edge", Connected: true},
+			{SourceCluster: "central-primary", TargetCluster: "us-east-edge", Connected: true, ConnectionType: "assignment"},
+			{SourceCluster: "central-primary", TargetCluster: "apac-edge", Connected: true, ConnectionType: "assignment"},
 		},
 		Nodes: []*model.NetworkNode{
 			// Platform nodes (all services on central-primary)

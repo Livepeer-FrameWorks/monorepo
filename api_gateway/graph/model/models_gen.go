@@ -1043,9 +1043,10 @@ type NetworkNode struct {
 }
 
 type NetworkPeerConnection struct {
-	SourceCluster string `json:"sourceCluster"`
-	TargetCluster string `json:"targetCluster"`
-	Connected     bool   `json:"connected"`
+	SourceCluster  string `json:"sourceCluster"`
+	TargetCluster  string `json:"targetCluster"`
+	Connected      bool   `json:"connected"`
+	ConnectionType string `json:"connectionType"`
 }
 
 type NetworkServiceInstance struct {
