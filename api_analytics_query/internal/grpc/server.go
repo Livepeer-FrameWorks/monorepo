@@ -2761,11 +2761,10 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetw
 	}
 	statsMap := make(map[string]*clusterStats)
 
-	// Per-cluster node stats
+	// Per-cluster node stats (bandwidth, health)
 	nodeQuery := `
 		SELECT
 			cluster_id,
-			COALESCE(sum(active_streams), 0),
 			COALESCE(sum(up_speed), 0),
 			COALESCE(sum(down_speed), 0),
 			countIf(is_healthy = 1)
@@ -2781,38 +2780,40 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetw
 	for rows.Next() {
 		var id string
 		var cs clusterStats
-		if scanErr := rows.Scan(&id, &cs.activeStreams, &cs.uploadBPS, &cs.downloadBPS, &cs.activeNodes); scanErr != nil {
+		if scanErr := rows.Scan(&id, &cs.uploadBPS, &cs.downloadBPS, &cs.activeNodes); scanErr != nil {
 			s.logger.WithError(scanErr).Warn("GetNetworkLiveStats: scan node row")
 			continue
 		}
 		statsMap[id] = &cs
 	}
 
-	// Per-cluster viewer counts from live streams (join stream→node for cluster_id)
-	viewerQuery := `
+	// Per-cluster stream counts + viewer counts from stream_state_current (authoritative source)
+	streamQuery := `
 		SELECT
 			n.cluster_id,
+			toInt32(count(*)),
 			COALESCE(sum(s.current_viewers), 0)
 		FROM periscope.stream_state_current AS s FINAL
 		INNER JOIN periscope.node_state_current AS n FINAL ON s.node_id = n.node_id
 		WHERE s.status = 'live'
 		GROUP BY n.cluster_id
 	`
-	vRows, err := s.clickhouse.QueryContext(ctx, viewerQuery)
+	sRows, err := s.clickhouse.QueryContext(ctx, streamQuery)
 	if err != nil {
-		s.logger.WithError(err).Warn("GetNetworkLiveStats: viewer query failed")
+		s.logger.WithError(err).Warn("GetNetworkLiveStats: stream query failed")
 	} else {
-		defer vRows.Close()
-		for vRows.Next() {
+		defer sRows.Close()
+		for sRows.Next() {
 			var id string
-			var viewers int32
-			if err := vRows.Scan(&id, &viewers); err != nil {
+			var streams, viewers int32
+			if err := sRows.Scan(&id, &streams, &viewers); err != nil {
 				continue
 			}
 			if cs, ok := statsMap[id]; ok {
+				cs.activeStreams = streams
 				cs.viewers = viewers
 			} else {
-				statsMap[id] = &clusterStats{viewers: viewers}
+				statsMap[id] = &clusterStats{activeStreams: streams, viewers: viewers}
 			}
 		}
 	}

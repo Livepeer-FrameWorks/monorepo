@@ -1765,6 +1765,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 					nodeUpdate.Streams[internalName] = sd
 				}
 			}
+			nodeUpdate.ActiveStreams = uint32(len(nodeUpdate.Streams))
 			logger.WithFields(logging.Fields{
 				"node_id":      nodeID,
 				"stream_count": len(nodeUpdate.Streams),
