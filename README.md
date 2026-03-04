@@ -73,12 +73,12 @@ Principles
 
 ## Supported Platforms
 
-| Component                    | linux/amd64 | linux/arm64 | darwin/arm64 | darwin/amd64 |
-| ---------------------------- | ----------- | ----------- | ------------ | ------------ |
-| Docker images (all services) | yes         | yes         | —            | —            |
-| Service binaries             | yes         | yes         | yes (signed) | yes (signed) |
-| CLI                          | yes         | yes         | yes (signed) | yes (signed) |
-| Edge node (native)           | yes         | yes         | yes          | yes          |
+| Component                    | linux/amd64 | linux/arm64 | darwin/arm64 |
+| ---------------------------- | ----------- | ----------- | ------------ |
+| Docker images (all services) | yes         | yes         | —            |
+| Service binaries             | yes         | yes         | yes (signed) |
+| CLI                          | yes         | yes         | yes (signed) |
+| Edge node (native)           | yes         | yes         | yes          |
 
 All darwin binaries are code-signed and notarized via Apple Developer ID. Docker images are linux-only (macOS runs them via Docker Desktop's Linux VM).
 

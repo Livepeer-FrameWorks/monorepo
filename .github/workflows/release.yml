@@ -342,7 +342,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist/cli
           cd cli
-          for target in linux-arm64 darwin-arm64 darwin-amd64; do
+          for target in linux-arm64 darwin-arm64; do
             IFS='-' read -r os arch <<< "$target"
             out="frameworks-${os}-${arch}"
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
@@ -359,22 +359,20 @@ jobs:
       - name: Sign and notarize darwin CLI binaries
         run: |
           set -euo pipefail
-          for arch in arm64 amd64; do
-            binary="dist/cli/frameworks-darwin-${arch}"
+          binary="dist/cli/frameworks-darwin-arm64"
 
-            codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
-                     --timestamp --options runtime \
-                     "$binary"
-            codesign --verify --verbose=2 "$binary"
+          codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
+                   --timestamp --options runtime \
+                   "$binary"
+          codesign --verify --verbose=2 "$binary"
 
-            ditto -c -k --keepParent "$binary" "${binary}.zip"
-            xcrun notarytool submit "${binary}.zip" \
-              --apple-id "${{ secrets.APPLE_ID }}" \
-              --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
-              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-              --wait
-            rm "${binary}.zip"
-          done
+          ditto -c -k --keepParent "$binary" "${binary}.zip"
+          xcrun notarytool submit "${binary}.zip" \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --wait
+          rm "${binary}.zip"
 
       - name: Upload CLI artifacts
         uses: actions/upload-artifact@v7
@@ -581,32 +579,6 @@ jobs:
           mkdir -p ../dist/binaries/${{ matrix.service.name }}
           tar czf "../dist/binaries/${{ matrix.service.name }}/${OUTPUT}.tar.gz" "${BINARY_NAME}"
 
-      - name: Build darwin/amd64 binary
-        if: ${{ !matrix.service.cgo }}
-        env:
-          GOOS: darwin
-          GOARCH: amd64
-          CGO_ENABLED: 0
-        run: |
-          set -euo pipefail
-          cd ${{ matrix.service.context }}
-
-          BINARY_NAME="frameworks-${{ matrix.service.name }}-darwin-amd64"
-          OUTPUT="frameworks-${{ matrix.service.name }}-${{ github.ref_name }}-darwin-amd64"
-
-          go build -ldflags "\
-            -X frameworks/pkg/version.Version=${{ github.ref_name }} \
-            -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
-            -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-            -X frameworks/pkg/version.ComponentName=${{ matrix.service.name }} \
-            -X frameworks/pkg/version.ComponentVersion=${{ steps.svcver.outputs.version }} \
-            -s -w" \
-            -o "${BINARY_NAME}" \
-            ${{ matrix.service.cmd_path }}
-
-          mkdir -p ../dist/binaries/${{ matrix.service.name }}
-          tar czf "../dist/binaries/${{ matrix.service.name }}/${OUTPUT}.tar.gz" "${BINARY_NAME}"
-
       - name: Import Apple signing certificate
         if: ${{ !matrix.service.cgo }}
         uses: apple-actions/import-codesign-certs@v2
@@ -619,47 +591,40 @@ jobs:
         run: |
           set -euo pipefail
           cd ${{ matrix.service.context }}
-          for arch in arm64 amd64; do
-            binary="frameworks-${{ matrix.service.name }}-darwin-${arch}"
-            if [[ -f "$binary" ]]; then
-              codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
-                       --timestamp --options runtime \
-                       "$binary"
-              codesign --verify --verbose=2 "$binary"
-            fi
-          done
+          binary="frameworks-${{ matrix.service.name }}-darwin-arm64"
+          if [[ -f "$binary" ]]; then
+            codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
+                     --timestamp --options runtime \
+                     "$binary"
+            codesign --verify --verbose=2 "$binary"
+          fi
 
       - name: Notarize darwin binaries
         if: ${{ !matrix.service.cgo }}
         run: |
           set -euo pipefail
           cd ${{ matrix.service.context }}
-          for arch in arm64 amd64; do
-            binary="frameworks-${{ matrix.service.name }}-darwin-${arch}"
-            if [[ -f "$binary" ]]; then
-              # notarytool requires a zip
-              ditto -c -k --keepParent "$binary" "${binary}.zip"
-              xcrun notarytool submit "${binary}.zip" \
-                --apple-id "${{ secrets.APPLE_ID }}" \
-                --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
-                --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-                --wait
-              rm "${binary}.zip"
-            fi
-          done
+          binary="frameworks-${{ matrix.service.name }}-darwin-arm64"
+          if [[ -f "$binary" ]]; then
+            ditto -c -k --keepParent "$binary" "${binary}.zip"
+            xcrun notarytool submit "${binary}.zip" \
+              --apple-id "${{ secrets.APPLE_ID }}" \
+              --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
+              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+              --wait
+            rm "${binary}.zip"
+          fi
 
       - name: Re-package signed darwin binaries
         if: ${{ !matrix.service.cgo }}
         run: |
           set -euo pipefail
           cd ${{ matrix.service.context }}
-          for arch in arm64 amd64; do
-            binary="frameworks-${{ matrix.service.name }}-darwin-${arch}"
-            output="frameworks-${{ matrix.service.name }}-${{ github.ref_name }}-darwin-${arch}"
-            if [[ -f "$binary" ]]; then
-              tar czf "../dist/binaries/${{ matrix.service.name }}/${output}.tar.gz" "${binary}"
-            fi
-          done
+          binary="frameworks-${{ matrix.service.name }}-darwin-arm64"
+          output="frameworks-${{ matrix.service.name }}-${{ github.ref_name }}-darwin-arm64"
+          if [[ -f "$binary" ]]; then
+            tar czf "../dist/binaries/${{ matrix.service.name }}/${output}.tar.gz" "${binary}"
+          fi
 
       - name: Upload binary artifacts
         uses: actions/upload-artifact@v7
@@ -841,9 +806,6 @@ jobs:
                 - arch: darwin-arm64
                   file: frameworks-${name}-${{ github.ref_name }}-darwin-arm64.tar.gz
                   url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-darwin-arm64.tar.gz
-                - arch: darwin-amd64
-                  file: frameworks-${name}-${{ github.ref_name }}-darwin-amd64.tar.gz
-                  url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-darwin-amd64.tar.gz
           YAML
             fi
           done
@@ -862,9 +824,6 @@ jobs:
                 - arch: darwin-arm64
                   file: frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.tar.gz
                   url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.tar.gz
-                - arch: darwin-amd64
-                  file: frameworks-${svc}-${{ github.ref_name }}-darwin-amd64.tar.gz
-                  url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-darwin-amd64.tar.gz
           YAML
           done
 

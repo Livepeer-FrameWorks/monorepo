@@ -96,7 +96,7 @@ See `docs/standards/testing.md` for testing philosophy and best practices.
 The release pipeline (`.github/workflows/release.yml`) uses two runner types:
 
 - **`ubuntu-latest`** (GitHub-hosted): builds linux/amd64 binaries and Docker images
-- **`macos-arm64-self-hosted`** (Mac Mini): builds linux/arm64 + darwin/arm64 + darwin/amd64 binaries, handles Apple code signing and notarization
+- **`macos-arm64-self-hosted`** (Mac Mini): builds linux/arm64 + darwin/arm64 binaries, handles Apple code signing and notarization
 
 The Mac Mini runner requires:
 

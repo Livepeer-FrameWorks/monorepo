@@ -1,6 +1,6 @@
 # Build & Packaging - Multi-Platform Release Pipeline
 
-FrameWorks builds for 4 targets: `linux/amd64`, `linux/arm64`, `darwin/arm64`, `darwin/amd64`. Linux amd64 builds run on GitHub-hosted ubuntu runners. Everything arm64 and all darwin builds run on a self-hosted Mac Mini ARM runner, eliminating QEMU emulation.
+FrameWorks builds for 3 targets: `linux/amd64`, `linux/arm64`, `darwin/arm64`. Linux amd64 builds run on GitHub-hosted ubuntu runners. All arm64 and darwin builds run on a self-hosted Mac Mini ARM runner, eliminating QEMU emulation. darwin/amd64 (Intel Mac) is not supported — Apple is phasing out Rosetta 2 in macOS 28.
 
 ## Architecture
 
@@ -36,9 +36,7 @@ Installed software:
 - FFmpeg, SRT, SRTP (MistServer deps)
 - `filosottile/musl-cross/musl-cross` (CGO linux cross-compilation)
 - Docker Desktop (linux/arm64 container builds, native ARM VM)
-- Rosetta 2 (darwin/amd64 cross-compilation)
-
-Certs are NOT on disk — injected at runtime via `apple-actions/import-codesign-certs@v2` from GitHub Secrets.
+  Certs are NOT on disk — injected at runtime via `apple-actions/import-codesign-certs@v2` from GitHub Secrets.
 
 ## Build Matrix
 
@@ -49,7 +47,6 @@ Certs are NOT on disk — injected at runtime via `apple-actions/import-codesign
 | `linux/amd64`  | ubuntu-latest | zig musl | All services                                   |
 | `linux/arm64`  | Mac Mini      | zig musl | All services, native ARM                       |
 | `darwin/arm64` | Mac Mini      | No       | Non-CGO only (excludes quartermaster, foghorn) |
-| `darwin/amd64` | Mac Mini      | No       | Non-CGO only                                   |
 
 ### MistServer (`build.yml` in mistserver repo)
 
@@ -60,7 +57,6 @@ MistServer is C++, built with Meson/Ninja.
 | `linux/amd64` binary  | ubuntu-latest | `apt-get` deps + meson               |
 | `linux/arm64` binary  | Mac Mini      | Alpine Docker container (native ARM) |
 | `darwin/arm64` binary | Mac Mini      | `brew` deps + meson                  |
-| `darwin/amd64` binary | Mac Mini      | `arch -x86_64` (Rosetta) + meson     |
 | Docker `linux/amd64`  | ubuntu-latest | buildx                               |
 | Docker `linux/arm64`  | Mac Mini      | buildx native (Docker Desktop)       |
 
@@ -113,8 +109,8 @@ productsign --sign "$APPLE_INSTALLER_ID" unsigned.pkg signed.pkg
 
 Every tagged release publishes:
 
-- `frameworks-cli-v*-{linux,darwin}-{amd64,arm64}.tar.gz`
-- `frameworks-{service}-v*-{linux,darwin}-{amd64,arm64}.tar.gz`
+- `frameworks-cli-v*-{linux-amd64,linux-arm64,darwin-arm64}.tar.gz`
+- `frameworks-{service}-v*-{linux-amd64,linux-arm64,darwin-arm64}.tar.gz`
 - `frameworks-v*.pkg` (macOS installer: CLI + tray app)
 - `manifest.yaml` (machine-readable release metadata)
 - Docker images pushed to registry
@@ -148,7 +144,6 @@ Auto-bumped on each release by `scripts/bump.sh` in the tap repo, triggered from
 
 ## Gotchas
 
-- Rosetta 2 must be installed on the Mac runner (`softwareupdate --install-rosetta --agree-to-license`). Without it, `arch -x86_64` fails silently.
 - MistServer linux/arm64 binary is built inside a Docker container on the Mac, not cross-compiled. Docker Desktop must be running.
 - Homebrew tap bump is `continue-on-error: true` — a failed tap update doesn't block the release.
 - The `GITOPS_APP_ID` variable (not secret) is reused for both gitops and homebrew-tap repo access. The app needs `repositories: homebrew-tap` in the token scope.
