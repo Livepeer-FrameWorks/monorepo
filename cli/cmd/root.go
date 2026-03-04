@@ -50,6 +50,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newDNSCmd())
 	rootCmd.AddCommand(newMeshCmd())
+	rootCmd.AddCommand(newUpdateCmd())
 	return rootCmd
 }
 

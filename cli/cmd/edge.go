@@ -53,6 +53,7 @@ func newEdgeCmd() *cobra.Command {
 	edge.AddCommand(newEdgeDoctorCmd())
 	edge.AddCommand(newEdgeDiagnoseCmd())
 	edge.AddCommand(newEdgeModeCmd())
+	edge.AddCommand(newEdgeDeployCmd())
 	return edge
 }
 

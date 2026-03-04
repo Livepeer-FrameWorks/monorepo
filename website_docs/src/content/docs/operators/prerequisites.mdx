@@ -59,6 +59,14 @@ For testing or small-scale deployments, you can run a consolidated stack on a si
 - `curl`, `wget`, `tar`, `gzip`.
 - `netstat` or `ss` for network diagnostics.
 
+## Install the CLI
+
+```bash
+curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | sh
+```
+
+This installs the `frameworks` binary to `/usr/local/bin`. Override the install directory with `FRAMEWORKS_INSTALL_DIR` or the version with `FRAMEWORKS_VERSION`.
+
 ## Network Prerequisites
 
 For multi-host deployments, you need:

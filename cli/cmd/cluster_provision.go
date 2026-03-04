@@ -11,6 +11,7 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/pkg/githubapp"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
 	infra "frameworks/pkg/models"
@@ -34,6 +35,10 @@ func newClusterProvisionCmd() *cobra.Command {
 	var dryRun bool
 	var force bool
 	var ignoreValidation bool
+	var repo string
+	var githubAppID int64
+	var githubInstallID int64
+	var githubKeyPath string
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -47,30 +52,124 @@ Phase Options (--only):
   all             - Provision everything (default)
 
 Provisioning is idempotent - safe to run multiple times.
-Existing services will be detected and skipped unless --force is used.`,
+Existing services will be detected and skipped unless --force is used.
+
+Use --repo to fetch manifests from a private GitHub repo via GitHub App credentials.`,
 		Example: `  # Provision all infrastructure
   frameworks cluster provision --only infrastructure --manifest cluster.yaml
 
   # Dry-run to see what would be provisioned
   frameworks cluster provision --manifest cluster.yaml --dry-run
 
-  # Force re-provision even if services exist
-  frameworks cluster provision --force --manifest cluster.yaml
+  # Provision from a GitHub repo (uses configured GitHub App credentials)
+  frameworks cluster provision --repo org/infra-repo
 
-  # Continue even if health validation fails (not recommended)
-  frameworks cluster provision --ignore-validation --manifest cluster.yaml`,
+  # Force re-provision even if services exist
+  frameworks cluster provision --force --manifest cluster.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if repo != "" {
+				return runProvisionFromRepo(cmd, repo, githubAppID, githubInstallID, githubKeyPath, manifestPath, only, dryRun, force, ignoreValidation)
+			}
 			return runProvision(cmd, manifestPath, only, dryRun, force, ignoreValidation)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
+	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file (or filename within repo)")
 	cmd.Flags().StringVar(&only, "only", "all", "Phase to provision (infrastructure|applications|interfaces|all)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if health validation fails (DANGEROUS)")
+	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo (owner/repo) to fetch manifest from")
+	cmd.Flags().Int64Var(&githubAppID, "github-app-id", 0, "GitHub App ID (overrides config)")
+	cmd.Flags().Int64Var(&githubInstallID, "github-installation-id", 0, "GitHub Installation ID (overrides config)")
+	cmd.Flags().StringVar(&githubKeyPath, "github-private-key", "", "Path to GitHub App private key PEM (overrides config)")
 
 	return cmd
+}
+
+// runProvisionFromRepo fetches the manifest from a GitHub repo and provisions.
+func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int64, keyPath, manifestFile, only string, dryRun, force, ignoreValidation bool) error {
+	cfg, _, err := fwcfg.Load()
+	if err != nil {
+		return err
+	}
+
+	// Resolve credentials: flags > config
+	gh := cfg.GitHub
+	if gh == nil {
+		gh = &fwcfg.GitHubApp{}
+	}
+	if appID == 0 {
+		appID = gh.AppID
+	}
+	if installID == 0 {
+		installID = gh.InstallationID
+	}
+	if keyPath == "" {
+		keyPath = gh.PrivateKeyPath
+	}
+	if repo == "" {
+		repo = gh.Repo
+	}
+	ref := gh.Ref
+
+	if appID == 0 || installID == 0 || keyPath == "" {
+		return fmt.Errorf("GitHub App credentials required: set via flags or 'frameworks config set github.*'")
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Fetching manifest from %s...\n", repo)
+
+	ghClient, err := githubapp.NewClient(cmd.Context(), githubapp.Config{
+		AppID:          appID,
+		InstallationID: installID,
+		PrivateKeyPath: keyPath,
+		Repo:           repo,
+		Ref:            ref,
+	})
+	if err != nil {
+		return fmt.Errorf("GitHub App authentication failed: %w", err)
+	}
+
+	// Fetch the cluster manifest
+	data, err := ghClient.Fetch(cmd.Context(), manifestFile)
+	if err != nil {
+		return fmt.Errorf("failed to fetch %s from %s: %w", manifestFile, repo, err)
+	}
+
+	// Validate the manifest parses correctly
+	manifest, err := inventory.LoadFromBytes(data)
+	if err != nil {
+		return fmt.Errorf("failed to parse manifest from %s: %w", repo, err)
+	}
+
+	// Fetch referenced files (env, edges manifest)
+	filesToFetch := []string{}
+	if manifest.EnvFile != "" {
+		filesToFetch = append(filesToFetch, manifest.EnvFile)
+	}
+	for _, name := range filesToFetch {
+		fileData, fetchErr := ghClient.Fetch(cmd.Context(), name)
+		if fetchErr != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not fetch %s: %v\n", name, fetchErr)
+			continue
+		}
+		localPath := filepath.Join(".", filepath.Base(name))
+		if writeErr := os.WriteFile(localPath, fileData, 0o600); writeErr != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not write %s: %v\n", name, writeErr)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Fetched %s\n", name)
+		}
+	}
+
+	// Write fetched manifest to a temp file and use the standard provision path
+	tmpManifest := filepath.Join(os.TempDir(), "frameworks-cluster-manifest.yaml")
+	if err := os.WriteFile(tmpManifest, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write temp manifest: %w", err)
+	}
+	defer os.Remove(tmpManifest)
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning cluster from %s/%s\n", repo, manifestFile)
+	return runProvision(cmd, tmpManifest, only, dryRun, force, ignoreValidation)
 }
 
 // runProvision executes the provision command

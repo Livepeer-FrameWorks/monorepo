@@ -961,6 +961,44 @@ frameworks admin nodes hardware --node-id edge-nyc-01 --cpu-cores 16 --memory-gb
 
 Edge node lifecycle operations. Most commands support `--ssh user@host` (and `--ssh-key`) for remote execution.
 
+### frameworks edge deploy
+
+Deploy an edge node in one command. Handles private cluster setup, enrollment token generation, pre-registration, and provisioning.
+
+**Mode A — Logged-in tenant (automatic VPC setup):**
+
+```bash
+# Deploys to your private cluster (creates one if needed)
+frameworks edge deploy --ssh ubuntu@edge-1 --email ops@example.com
+
+# Deploy to a specific cluster
+frameworks edge deploy --cluster-id my-edge-prod --ssh ubuntu@edge-1
+```
+
+**Mode B — Pre-existing token:**
+
+```bash
+frameworks edge deploy --enrollment-token <token> --foghorn-addr foghorn.cluster.example.com:18019 --ssh ubuntu@edge-1
+```
+
+**Flags:**
+
+- `--cluster-id` - Cluster to deploy to (auto-detected or auto-created if omitted)
+- `--cluster-name` - Name for new private cluster if one needs to be created
+- `--region` - Region for new private cluster
+- `--enrollment-token` - Pre-existing enrollment token (skips login/VPC setup)
+- `--foghorn-addr` - Foghorn gRPC address (required with `--enrollment-token`)
+- `--ssh` - SSH target (user@host) for remote deployment
+- `--ssh-key` - SSH private key path
+- `--mode` - Deployment mode: `docker` (default) or `native`
+- `--email` - ACME email for TLS certificates
+- `--tune` - Apply sysctl/limits tuning (default: true)
+- `--skip-preflight` - Skip preflight checks
+- `--version` - Platform version for binary resolution
+- `--timeout` - HTTPS verification timeout (default: 3m)
+
+---
+
 ### frameworks edge preflight
 
 Check host readiness (DNS, ports, sysctl, ulimits).
@@ -1484,6 +1522,26 @@ Tokens are stored in `~/.frameworks/.env` and never appear in shell history.
 ---
 
 ## Utility Commands
+
+### frameworks update
+
+Update the CLI to the latest version.
+
+```bash
+# Update to latest
+frameworks update
+
+# Check for updates without installing
+frameworks update --check
+```
+
+**Flags:**
+
+- `--check` - Only check for updates, don't install
+
+Downloads the latest release from GitHub, verifies the checksum, and atomically replaces the running binary. If the binary is installed in a directory requiring elevated permissions, use `sudo frameworks update`.
+
+---
 
 ### frameworks version
 

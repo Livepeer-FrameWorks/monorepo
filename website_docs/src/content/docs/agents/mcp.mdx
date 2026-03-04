@@ -161,6 +161,13 @@ Actions the agent can perform.
 | `get_node_health`           | Node health and metrics summary                | Auth              |
 | `create_private_cluster`    | Create private cluster (returns token)         | Auth              |
 
+<Aside type="tip" title="CLI Alternative">
+  For operators who prefer the CLI over MCP, `frameworks edge deploy` combines
+  `create_private_cluster` and `create_enrollment_token` into a single command that also provisions
+  the edge node. See the [CLI Reference](/operators/cli-reference#edge-deploy) and [Connecting Your
+  Edge](/hybrid/connecting) for details.
+</Aside>
+
 Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`, `browse_marketplace`.
 
 QoE tool responses use a consistent status enum: `healthy | warning | critical | no_data`.

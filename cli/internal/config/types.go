@@ -45,7 +45,16 @@ type Context struct {
 	Auth      Auth      `yaml:"auth"`
 }
 
+type GitHubApp struct {
+	AppID          int64  `yaml:"app_id,omitempty"`
+	InstallationID int64  `yaml:"installation_id,omitempty"`
+	PrivateKeyPath string `yaml:"private_key_path,omitempty"`
+	Repo           string `yaml:"repo,omitempty"`
+	Ref            string `yaml:"ref,omitempty"`
+}
+
 type Config struct {
 	Current  string             `yaml:"current"`
 	Contexts map[string]Context `yaml:"contexts"`
+	GitHub   *GitHubApp         `yaml:"github,omitempty"`
 }

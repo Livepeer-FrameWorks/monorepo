@@ -594,6 +594,12 @@ jobs:
           pattern: cli-*
           path: dist/cli
           merge-multiple: true
+      - name: Generate CLI checksums
+        run: |
+          cd dist/cli
+          for f in frameworks-*; do
+            sha256sum "$f" > "${f}.sha256"
+          done
       - name: Download service binary artifacts
         uses: actions/download-artifact@v7
         with:
@@ -628,6 +634,7 @@ jobs:
             dist/chartroom-build.tar.gz
             dist/foredeck-build.tar.gz
             dist/logbook-build.tar.gz
+            scripts/install.sh
 
   update-env:
     name: Update GitOps Environment Repo

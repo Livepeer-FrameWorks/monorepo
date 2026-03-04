@@ -29,6 +29,18 @@ func Load(path string) (*Manifest, error) {
 	return &manifest, nil
 }
 
+// LoadFromBytes parses a cluster manifest from raw YAML bytes.
+func LoadFromBytes(data []byte) (*Manifest, error) {
+	var manifest Manifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse manifest YAML: %w", err)
+	}
+	if err := manifest.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid manifest: %w", err)
+	}
+	return &manifest, nil
+}
+
 // Validate checks the manifest for errors
 func (m *Manifest) Validate() error {
 	if m.Version == "" {

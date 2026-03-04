@@ -6,6 +6,7 @@ require (
 	frameworks/pkg v0.0.0-00010101000000-000000000000
 	github.com/ClickHouse/clickhouse-go/v2 v2.43.0
 	github.com/IBM/sarama v1.47.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.11.2
 	github.com/sirupsen/logrus v1.9.4

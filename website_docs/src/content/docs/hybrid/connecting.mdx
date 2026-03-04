@@ -8,7 +8,50 @@ sidebar:
 
 Connecting your edge node is the final step in the setup process. Enrollment establishes a secure identity for your node, allowing it to receive traffic and report telemetry to the control plane.
 
-## Get an Enrollment Token
+## Install the CLI
+
+```bash
+curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | sh
+```
+
+Override the version or install directory with environment variables:
+
+```bash
+FRAMEWORKS_VERSION=v1.2.3 FRAMEWORKS_INSTALL_DIR=/usr/local/bin sh -c "$(curl -sSfL ...)"
+```
+
+Keep the CLI up to date:
+
+```bash
+frameworks update
+```
+
+## Quick Start: One-Command Deploy
+
+If you're logged in (`frameworks login`), deploy an edge node in a single command:
+
+```bash
+frameworks edge deploy --ssh ubuntu@edge-1 --email ops@example.com
+```
+
+This automatically:
+
+1. Creates a private cluster (VPC) if you don't have one
+2. Generates an enrollment token
+3. Pre-registers the edge node (assigns domain, ID, TLS certificate)
+4. Runs the full provision pipeline (preflight, tuning, templates, start, verify)
+
+To deploy to a specific cluster:
+
+```bash
+frameworks edge deploy --cluster-id my-edge-prod --ssh ubuntu@edge-1
+```
+
+## Manual Setup
+
+If you prefer step-by-step control, follow the sections below.
+
+### Get an Enrollment Token
 
 You need a bootstrap token from an admin, or from your tenant's dashboard (owner).
 
@@ -31,7 +74,7 @@ frameworks admin bootstrap-tokens create \
 
 By default, bootstrap tokens are single-use. Set `--usage-limit` if you need a reusable token.
 
-## Enroll the Node
+### Enroll the Node
 
 First, add the enrollment token to your `.edge.env`:
 

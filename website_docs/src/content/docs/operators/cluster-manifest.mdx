@@ -445,3 +445,43 @@ The CLI validates:
 - Cluster IDs (map keys) must be non-empty strings
 
 Unknown keys are ignored by the parser, but it’s best to keep manifests minimal and aligned with the schema above.
+
+## Remote Manifests (GitHub App)
+
+Instead of managing manifests locally, you can store them in a private GitHub repository and fetch them at provision time using GitHub App credentials.
+
+### Setup
+
+```bash
+# Configure credentials (stored in ~/.frameworks/config.yaml)
+frameworks config set github.app-id 12345
+frameworks config set github.installation-id 67890
+frameworks config set github.private-key /path/to/app-private-key.pem
+frameworks config set github.repo your-org/infra-repo
+frameworks config set github.ref main  # optional, defaults to main
+```
+
+### Usage
+
+```bash
+# Provision using the remote manifest
+frameworks cluster provision --repo your-org/infra-repo
+
+# Override credentials via flags
+frameworks cluster provision --repo your-org/infra-repo \
+  --github-app-id 12345 \
+  --github-installation-id 67890 \
+  --github-private-key /path/to/key.pem
+```
+
+The CLI fetches `cluster.yaml` (or whichever file `--manifest` specifies) from the repo, along with any referenced files like `env_file`. The standard provision pipeline then runs with the fetched data.
+
+### Configuration Keys
+
+| Key                      | Description                              |
+| ------------------------ | ---------------------------------------- |
+| `github.app-id`          | GitHub App ID                            |
+| `github.installation-id` | GitHub App Installation ID               |
+| `github.private-key`     | Path to PEM-encoded private key          |
+| `github.repo`            | Repository in `owner/repo` format        |
+| `github.ref`             | Git ref (branch/tag), defaults to `main` |
