@@ -41,7 +41,7 @@ RUN apk add --no-cache git ca-certificates tzdata \
   && corepack enable
 
 # copy workspace manifests first for better layer caching
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY patches/ patches/
 COPY npm_player/package.json npm_player/
 COPY npm_player/packages/core/package.json npm_player/packages/core/
