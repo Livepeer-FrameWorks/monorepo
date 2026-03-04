@@ -255,29 +255,26 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 	}
 
 	if mode == "docker" {
-		// Docker mode: verify docker + compose
-		result, err := e.RunCommand(ctx, host, "docker --version")
-		if err != nil || result.ExitCode != 0 {
+		result, dockerErr := e.RunCommand(ctx, host, "docker --version")
+		if dockerErr != nil || result.ExitCode != 0 {
 			return fmt.Errorf("docker not installed")
 		}
 		fmt.Printf("  docker: %s\n", strings.TrimSpace(result.Stdout))
 
-		result, err = e.RunCommand(ctx, host, "docker compose version")
-		if err != nil || result.ExitCode != 0 {
+		result, dockerErr = e.RunCommand(ctx, host, "docker compose version")
+		if dockerErr != nil || result.ExitCode != 0 {
 			return fmt.Errorf("docker compose not available")
 		}
 		fmt.Printf("  compose: %s\n", strings.TrimSpace(result.Stdout))
 	} else if remoteOS == "darwin" {
-		// Native macOS: verify launchctl
-		result, err := e.RunCommand(ctx, host, "launchctl version")
-		if err != nil || result.ExitCode != 0 {
+		result, launchErr := e.RunCommand(ctx, host, "launchctl version")
+		if launchErr != nil || result.ExitCode != 0 {
 			return fmt.Errorf("launchctl not available")
 		}
 		fmt.Printf("  launchctl: %s\n", strings.TrimSpace(result.Stdout))
 	} else {
-		// Native Linux: verify systemd
-		result, err := e.RunCommand(ctx, host, "systemctl --version")
-		if err != nil || result.ExitCode != 0 {
+		result, sysErr := e.RunCommand(ctx, host, "systemctl --version")
+		if sysErr != nil || result.ExitCode != 0 {
 			return fmt.Errorf("systemd not available")
 		}
 		fmt.Printf("  systemd: %s\n", strings.TrimSpace(strings.Split(result.Stdout, "\n")[0]))
@@ -356,11 +353,6 @@ echo "tuning applied"
 	}
 	fmt.Println("  sysctl + limits applied")
 	return nil
-}
-
-// stageCertificates uploads cert/key to /etc/frameworks/certs/.
-func (e *EdgeProvisioner) stageCertificates(ctx context.Context, host inventory.Host, certPEM, keyPEM string) error {
-	return e.stageCertificatesAt(ctx, host, certPEM, keyPEM, "/etc/frameworks/certs")
 }
 
 func (e *EdgeProvisioner) stageCertificatesAt(ctx context.Context, host inventory.Host, certPEM, keyPEM, certDir string) error {

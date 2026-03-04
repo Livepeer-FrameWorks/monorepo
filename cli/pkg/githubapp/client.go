@@ -141,7 +141,7 @@ func FetchFile(ctx context.Context, token, owner, repo, path, ref string) ([]byt
 	}
 
 	var contents contentsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&contents); err != nil {
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&contents); decodeErr != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
