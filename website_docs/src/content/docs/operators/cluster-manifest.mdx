@@ -474,7 +474,7 @@ frameworks cluster provision --repo your-org/infra-repo \
   --github-private-key /path/to/key.pem
 ```
 
-The CLI fetches `cluster.yaml` (or whichever file `--manifest` specifies) from the repo, along with any referenced files like `env_file`. The standard provision pipeline then runs with the fetched data.
+The CLI fetches `cluster.yaml` (or whichever file `--manifest` specifies) from the repo, along with all referenced `env_file` paths (top-level and per-service). The standard provision pipeline then runs with the fetched data.
 
 ### Configuration Keys
 

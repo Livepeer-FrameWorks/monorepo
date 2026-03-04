@@ -178,7 +178,11 @@ func verifyChecksum(ctx context.Context, checksumURL, filePath string) error {
 		return fmt.Errorf("failed to read checksum: %w", err)
 	}
 
-	expected := strings.Fields(strings.TrimSpace(string(body)))[0]
+	fields := strings.Fields(strings.TrimSpace(string(body)))
+	if len(fields) == 0 {
+		return fmt.Errorf("empty or malformed checksum response")
+	}
+	expected := fields[0]
 
 	f, err := os.Open(filePath)
 	if err != nil {

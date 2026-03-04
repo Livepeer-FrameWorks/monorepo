@@ -17,7 +17,8 @@ curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/downl
 Override the version or install directory with environment variables:
 
 ```bash
-FRAMEWORKS_VERSION=v1.2.3 FRAMEWORKS_INSTALL_DIR=/usr/local/bin sh -c "$(curl -sSfL ...)"
+FRAMEWORKS_VERSION=v1.2.3 FRAMEWORKS_INSTALL_DIR=/usr/local/bin \
+  sh -c "$(curl -sSfL https://get.frameworks.network/install.sh)"
 ```
 
 Keep the CLI up to date:

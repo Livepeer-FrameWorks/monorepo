@@ -20,6 +20,84 @@ type SystemdUnitData struct {
 	LimitNOFILE string // e.g., "1048576" for services needing high fd count
 }
 
+// LaunchdPlistData holds data for macOS launchd plist generation.
+type LaunchdPlistData struct {
+	Label       string            // e.g., "com.livepeer.frameworks.helmsman"
+	Description string            // Human-readable service description
+	Program     string            // Path to binary
+	ProgramArgs []string          // Additional arguments
+	WorkingDir  string            // WorkingDirectory
+	EnvVars     map[string]string // Environment variables
+	EnvFile     string            // Path to env file (loaded via wrapper script)
+	RunAtLoad   bool
+	KeepAlive   bool
+	UserName    string
+	LogPath     string // StandardOutPath
+	ErrorPath   string // StandardErrorPath
+}
+
+// GenerateLaunchdPlist creates a macOS launchd plist file.
+func GenerateLaunchdPlist(data LaunchdPlistData) (string, error) {
+	const tmpl = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{{.Label}}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{.Program}}</string>
+{{- range .ProgramArgs}}
+		<string>{{.}}</string>
+{{- end}}
+	</array>
+	<key>WorkingDirectory</key>
+	<string>{{.WorkingDir}}</string>
+{{- if .EnvVars}}
+	<key>EnvironmentVariables</key>
+	<dict>
+{{- range $k, $v := .EnvVars}}
+		<key>{{$k}}</key>
+		<string>{{$v}}</string>
+{{- end}}
+	</dict>
+{{- end}}
+	<key>RunAtLoad</key>
+	<{{if .RunAtLoad}}true{{else}}false{{end}}/>
+	<key>KeepAlive</key>
+	<{{if .KeepAlive}}true{{else}}false{{end}}/>
+{{- if .UserName}}
+	<key>UserName</key>
+	<string>{{.UserName}}</string>
+{{- end}}
+	<key>StandardOutPath</key>
+	<string>{{.LogPath}}</string>
+	<key>StandardErrorPath</key>
+	<string>{{.ErrorPath}}</string>
+</dict>
+</plist>
+`
+
+	if data.LogPath == "" {
+		data.LogPath = "/usr/local/var/log/frameworks/" + data.Label + ".log"
+	}
+	if data.ErrorPath == "" {
+		data.ErrorPath = "/usr/local/var/log/frameworks/" + data.Label + ".err"
+	}
+
+	t, err := template.New("launchd").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf strings.Builder
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
 // DockerComposeData holds data for docker-compose template
 type DockerComposeData struct {
 	ServiceName string

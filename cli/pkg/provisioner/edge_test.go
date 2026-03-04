@@ -65,7 +65,7 @@ func TestBuildEdgeVars_Docker(t *testing.T) {
 		KeyPEM:          "-----BEGIN PRIVATE KEY-----\nMIIE...\n",
 	}
 
-	vars := ep.buildEdgeVars(config)
+	vars := ep.buildEdgeVars(config, "linux")
 
 	if vars.Mode != "docker" {
 		t.Errorf("Mode = %q, want docker", vars.Mode)
@@ -92,7 +92,7 @@ func TestBuildEdgeVars_NoCertFallsBackToSingleDomain(t *testing.T) {
 		NodeDomain: "edge-abc123.us-west.example.com",
 	}
 
-	vars := ep.buildEdgeVars(config)
+	vars := ep.buildEdgeVars(config, "linux")
 
 	if vars.SiteAddress != "edge.us-west.example.com" {
 		t.Errorf("SiteAddress = %q, want edge.us-west.example.com (single domain when no cert)", vars.SiteAddress)
@@ -106,7 +106,7 @@ func TestBuildEdgeVars_NativeNoCerts(t *testing.T) {
 		NodeDomain: "edge-1.example.com",
 	}
 
-	vars := ep.buildEdgeVars(config)
+	vars := ep.buildEdgeVars(config, "linux")
 
 	if vars.Mode != "native" {
 		t.Errorf("Mode = %q, want native", vars.Mode)
@@ -376,7 +376,7 @@ func TestBuildEdgeVars_NativeEdgeEnv(t *testing.T) {
 		NodeID:          "node-456",
 	}
 
-	vars := ep.buildEdgeVars(config)
+	vars := ep.buildEdgeVars(config, "linux")
 	vars.Mode = "native"
 	vars.SetModeDefaults()
 

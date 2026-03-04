@@ -142,18 +142,50 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 		return fmt.Errorf("failed to parse manifest from %s: %w", repo, err)
 	}
 
-	// Fetch referenced files (env, edges manifest)
+	// Write manifest to a temp directory so all fetched files resolve correctly
+	tmpDir, err := os.MkdirTemp("", "frameworks-provision-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Collect all referenced env_file paths (top-level + per-service + per-interface)
 	filesToFetch := []string{}
 	if manifest.EnvFile != "" {
 		filesToFetch = append(filesToFetch, manifest.EnvFile)
 	}
-	for _, name := range filesToFetch {
+	for _, svc := range manifest.Services {
+		if svc.EnvFile != "" {
+			filesToFetch = append(filesToFetch, svc.EnvFile)
+		}
+	}
+	for _, iface := range manifest.Interfaces {
+		if iface.EnvFile != "" {
+			filesToFetch = append(filesToFetch, iface.EnvFile)
+		}
+	}
+
+	// Deduplicate
+	seen := make(map[string]bool)
+	unique := filesToFetch[:0]
+	for _, f := range filesToFetch {
+		if !seen[f] {
+			seen[f] = true
+			unique = append(unique, f)
+		}
+	}
+
+	for _, name := range unique {
 		fileData, fetchErr := ghClient.Fetch(cmd.Context(), name)
 		if fetchErr != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not fetch %s: %v\n", name, fetchErr)
 			continue
 		}
-		localPath := filepath.Join(".", filepath.Base(name))
+		localPath := filepath.Join(tmpDir, name)
+		if err := os.MkdirAll(filepath.Dir(localPath), 0o700); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not create dir for %s: %v\n", name, err)
+			continue
+		}
 		if writeErr := os.WriteFile(localPath, fileData, 0o600); writeErr != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not write %s: %v\n", name, writeErr)
 		} else {
@@ -161,12 +193,11 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 		}
 	}
 
-	// Write fetched manifest to a temp file and use the standard provision path
-	tmpManifest := filepath.Join(os.TempDir(), "frameworks-cluster-manifest.yaml")
+	// Write fetched manifest to the same temp directory
+	tmpManifest := filepath.Join(tmpDir, filepath.Base(manifestFile))
 	if err := os.WriteFile(tmpManifest, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write temp manifest: %w", err)
 	}
-	defer os.Remove(tmpManifest)
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning cluster from %s/%s\n", repo, manifestFile)
 	return runProvision(cmd, tmpManifest, only, dryRun, force, ignoreValidation)

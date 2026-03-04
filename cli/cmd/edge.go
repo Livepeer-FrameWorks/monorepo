@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ import (
 const (
 	minDiskFreeBytes   = 20 * 1024 * 1024 * 1024
 	minDiskFreePercent = 10.0
+	darwinLogDir       = "/usr/local/var/log/frameworks"
 )
 
 func newEdgeCmd() *cobra.Command {
@@ -67,12 +69,18 @@ func newEdgePreflightCmd() *cobra.Command {
 			results = append(results, preflight.DNSResolution(ctx, domain))
 		}
 		results = append(results, preflight.HasDocker(ctx)...)
-		results = append(results, preflight.LinuxSysctlChecks()...)
-		results = append(results, preflight.ShmSize())
+		if runtime.GOOS == "linux" {
+			results = append(results, preflight.LinuxSysctlChecks()...)
+			results = append(results, preflight.ShmSize())
+		}
 		results = append(results, preflight.UlimitNoFile())
 		results = append(results, preflight.PortChecks(ctx)...)
 		results = append(results, preflight.DiskSpace("/", minDiskFreeBytes, minDiskFreePercent))
-		results = append(results, preflight.DiskSpace("/var/lib", minDiskFreeBytes, minDiskFreePercent))
+		if runtime.GOOS == "linux" {
+			results = append(results, preflight.DiskSpace("/var/lib", minDiskFreeBytes, minDiskFreePercent))
+		} else {
+			results = append(results, preflight.DiskSpace("/usr/local", minDiskFreeBytes, minDiskFreePercent))
+		}
 
 		// Print
 		okCount := 0
@@ -100,6 +108,15 @@ func newEdgeTuneCmd() *cobra.Command {
 	var sysctlPath string
 	var limitsPath string
 	cmd := &cobra.Command{Use: "tune", Short: "Apply recommended sysctl/limits (requires sudo)", RunE: func(cmd *cobra.Command, args []string) error {
+		if runtime.GOOS == "darwin" {
+			fmt.Fprintln(cmd.OutOrStdout(), "macOS detected. Network tuning uses different mechanisms:")
+			fmt.Fprintln(cmd.OutOrStdout(), "  - File descriptors: launchctl limit maxfiles 1048576 1048576")
+			fmt.Fprintln(cmd.OutOrStdout(), "  - Socket buffers: sysctl -w kern.ipc.maxsockbuf=16777216")
+			fmt.Fprintln(cmd.OutOrStdout(), "  - Listen backlog: sysctl -w kern.ipc.somaxconn=8192")
+			fmt.Fprintln(cmd.OutOrStdout(), "\nThese require sudo and reset on reboot unless added to /etc/sysctl.conf.")
+			return nil
+		}
+
 		sysctl := `# Frameworks Edge recommended network tuning
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
@@ -327,6 +344,19 @@ func detectEdgeMode(ctx context.Context, dir, envFile, sshTarget, sshKey string)
 		return "native"
 	}
 	return "docker"
+}
+
+// detectEdgeOS returns "darwin" or "linux" for the target host.
+// For remote SSH targets, runs `uname -s`. For local, uses runtime.GOOS.
+func detectEdgeOS(ctx context.Context, sshTarget, sshKey string) string {
+	if strings.TrimSpace(sshTarget) != "" {
+		_, out, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "uname", []string{"-s"}, "")
+		if err == nil && strings.TrimSpace(strings.ToLower(out)) == "darwin" {
+			return "darwin"
+		}
+		return "linux"
+	}
+	return runtime.GOOS
 }
 
 func readEnvFileKey(path, key string) string {
@@ -929,15 +959,24 @@ func newEdgeStatusCmd() *cobra.Command {
 		var out, errOut string
 		var err error
 		if deployMode == "native" {
-			// Native: check systemd units
-			statusCmd := "systemctl status frameworks-caddy frameworks-helmsman frameworks-mistserver --no-pager"
+			edgeOS := detectEdgeOS(cmd.Context(), sshTarget, sshKey)
+			var statusCmd string
+			if edgeOS == "darwin" {
+				statusCmd = "launchctl print system/com.livepeer.frameworks.caddy system/com.livepeer.frameworks.helmsman system/com.livepeer.frameworks.mistserver 2>&1 || launchctl list | grep com.livepeer.frameworks"
+			} else {
+				statusCmd = "systemctl status frameworks-caddy frameworks-helmsman frameworks-mistserver --no-pager"
+			}
 			if strings.TrimSpace(sshTarget) != "" {
 				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", statusCmd}, "")
 			} else {
 				_, out, errOut, err = xexec.Run(cmd.Context(), "sh", []string{"-c", statusCmd}, "")
 			}
 			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "systemctl status error: %v\n%s\n%s\n", err, out, errOut)
+				tool := "systemctl"
+				if edgeOS == "darwin" {
+					tool = "launchctl"
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s status error: %v\n%s\n%s\n", tool, err, out, errOut)
 			} else {
 				fmt.Fprint(cmd.OutOrStdout(), out)
 			}
@@ -1006,15 +1045,20 @@ func newEdgeUpdateCmd() *cobra.Command {
 		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 
 		if deployMode == "native" {
-			// Native: restart systemd units
-			restartCmd := "systemctl restart frameworks-mistserver frameworks-helmsman frameworks-caddy"
+			edgeOS := detectEdgeOS(cmd.Context(), sshTarget, sshKey)
+			var restartCmd string
+			if edgeOS == "darwin" {
+				restartCmd = "launchctl kickstart -k system/com.livepeer.frameworks.mistserver && launchctl kickstart -k system/com.livepeer.frameworks.helmsman && launchctl kickstart -k system/com.livepeer.frameworks.caddy"
+			} else {
+				restartCmd = "systemctl restart frameworks-mistserver frameworks-helmsman frameworks-caddy"
+			}
 			if strings.TrimSpace(sshTarget) != "" {
 				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", restartCmd}, ""); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "systemctl restart failed: %v\n%s\n%s\n", err, out, errOut)
+					fmt.Fprintf(cmd.ErrOrStderr(), "restart failed: %v\n%s\n%s\n", err, out, errOut)
 					return err
 				}
 			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "sh", []string{"-c", restartCmd}, ""); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "systemctl restart failed: %v\n%s\n%s\n", err, out, errOut)
+				fmt.Fprintf(cmd.ErrOrStderr(), "restart failed: %v\n%s\n%s\n", err, out, errOut)
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Edge services restarted (native)")
@@ -1086,8 +1130,16 @@ func newEdgeCertCmd() *cobra.Command {
 			var out, errOut string
 			var err error
 			if deployMode == "native" {
-				// Native: reload via systemctl
-				if strings.TrimSpace(sshTarget) != "" {
+				edgeOS := detectEdgeOS(cmd.Context(), sshTarget, sshKey)
+				if edgeOS == "darwin" {
+					// macOS: kickstart caddy to reload
+					reloadCmd := "launchctl kickstart -k system/com.livepeer.frameworks.caddy"
+					if strings.TrimSpace(sshTarget) != "" {
+						_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", reloadCmd}, "")
+					} else {
+						_, out, errOut, err = xexec.Run(cmd.Context(), "sh", []string{"-c", reloadCmd}, "")
+					}
+				} else if strings.TrimSpace(sshTarget) != "" {
 					_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "systemctl", []string{"reload", "frameworks-caddy"}, "")
 				} else {
 					_, out, errOut, err = xexec.Run(cmd.Context(), "systemctl", []string{"reload", "frameworks-caddy"}, "")
@@ -1137,23 +1189,46 @@ func newEdgeLogsCmd() *cobra.Command {
 		var err error
 
 		if deployMode == "native" {
-			// Native: use journalctl
-			unit := ""
-			if svc != "" {
-				unit = "frameworks-" + svc
-			} else {
-				unit = "frameworks-caddy frameworks-helmsman frameworks-mistserver"
-			}
-			jArgs := []string{"-c", fmt.Sprintf("journalctl --no-pager -n %d %s -u %s", tail, func() string {
-				if follow {
-					return "-f"
+			edgeOS := detectEdgeOS(cmd.Context(), sshTarget, sshKey)
+			var logArgs []string
+
+			if edgeOS == "darwin" {
+				// macOS: read from launchd log files
+				var logFiles []string
+				if svc != "" {
+					label := "com.livepeer.frameworks." + svc
+					logFiles = append(logFiles, darwinLogDir+"/"+label+".log", darwinLogDir+"/"+label+".err")
+				} else {
+					for _, s := range []string{"caddy", "helmsman", "mistserver"} {
+						label := "com.livepeer.frameworks." + s
+						logFiles = append(logFiles, darwinLogDir+"/"+label+".log")
+					}
 				}
-				return ""
-			}(), unit)}
-			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", jArgs, "")
+				tailFlag := fmt.Sprintf("-n %d", tail)
+				if follow {
+					logArgs = []string{"-c", fmt.Sprintf("tail %s -f %s", tailFlag, strings.Join(logFiles, " "))}
+				} else {
+					logArgs = []string{"-c", fmt.Sprintf("tail %s %s", tailFlag, strings.Join(logFiles, " "))}
+				}
 			} else {
-				_, out, errOut, err = xexec.Run(cmd.Context(), "sh", jArgs, "")
+				// Linux: use journalctl
+				unit := ""
+				if svc != "" {
+					unit = "frameworks-" + svc
+				} else {
+					unit = "frameworks-caddy frameworks-helmsman frameworks-mistserver"
+				}
+				followFlag := ""
+				if follow {
+					followFlag = "-f"
+				}
+				logArgs = []string{"-c", fmt.Sprintf("journalctl --no-pager -n %d %s -u %s", tail, followFlag, unit)}
+			}
+
+			if strings.TrimSpace(sshTarget) != "" {
+				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", logArgs, "")
+			} else {
+				_, out, errOut, err = xexec.Run(cmd.Context(), "sh", logArgs, "")
 			}
 		} else {
 			compose := "docker-compose.edge.yml"
@@ -1194,14 +1269,16 @@ func newEdgeDoctorCmd() *cobra.Command {
 	var dir string
 	cmd := &cobra.Command{Use: "doctor", Short: "Run diagnostics and remediation hints", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		// Combine preflight + compose ps + https
+		// Combine preflight + service status + https
 		results := []preflight.Check{}
 		if domain != "" {
 			results = append(results, preflight.DNSResolution(ctx, domain))
 		}
 		results = append(results, preflight.HasDocker(ctx)...)
-		results = append(results, preflight.LinuxSysctlChecks()...)
-		results = append(results, preflight.ShmSize())
+		if runtime.GOOS == "linux" {
+			results = append(results, preflight.LinuxSysctlChecks()...)
+			results = append(results, preflight.ShmSize())
+		}
 		results = append(results, preflight.UlimitNoFile())
 		results = append(results, preflight.PortChecks(ctx)...)
 
@@ -1222,18 +1299,35 @@ func newEdgeDoctorCmd() *cobra.Command {
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Summary: %d/%d checks passed\n\n", okCount, len(results))
 
-		// Compose status
+		// Service status
 		if dir == "" {
 			dir = "."
 		}
-		compose := "docker-compose.edge.yml"
 		envFile := ".edge.env"
-		_, out, errOut, err := xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
-		fmt.Fprintln(cmd.OutOrStdout(), "Compose Services:")
-		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), " compose ps error: %v\n%s\n", err, errOut)
+		deployMode := detectEdgeMode(ctx, dir, envFile, "", "")
+		if deployMode == "native" {
+			fmt.Fprintln(cmd.OutOrStdout(), "Native Services:")
+			var statusCmd string
+			if runtime.GOOS == "darwin" {
+				statusCmd = "launchctl list | grep com.livepeer.frameworks"
+			} else {
+				statusCmd = "systemctl status frameworks-caddy frameworks-helmsman frameworks-mistserver --no-pager 2>&1 | head -30"
+			}
+			_, out, _, err := xexec.Run(ctx, "sh", []string{"-c", statusCmd}, "")
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), " service status error: %v\n", err)
+			} else {
+				fmt.Fprint(cmd.OutOrStdout(), out)
+			}
 		} else {
-			fmt.Fprint(cmd.OutOrStdout(), out)
+			compose := "docker-compose.edge.yml"
+			_, out, errOut, err := xexec.Run(ctx, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
+			fmt.Fprintln(cmd.OutOrStdout(), "Compose Services:")
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), " compose ps error: %v\n%s\n", err, errOut)
+			} else {
+				fmt.Fprint(cmd.OutOrStdout(), out)
+			}
 		}
 
 		// HTTPS health

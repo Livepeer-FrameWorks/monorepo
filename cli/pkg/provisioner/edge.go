@@ -20,7 +20,7 @@ import (
 )
 
 // EdgeProvisioner provisions the 3-service edge stack (Caddy, MistServer, Helmsman)
-// in either Docker (docker-compose) or native (systemd) mode.
+// in Docker (docker-compose), native Linux (systemd), or native macOS (launchd) mode.
 type EdgeProvisioner struct {
 	*BaseProvisioner
 }
@@ -163,6 +163,12 @@ func (e *EdgeProvisioner) uploadFileWithSudo(ctx context.Context, host inventory
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	mode := config.resolvedMode()
 
+	// Detect remote OS early so we can use OS-appropriate paths throughout
+	remoteOS, _, err := e.detectRemoteArch(ctx, host)
+	if err != nil {
+		return fmt.Errorf("failed to detect remote OS: %w", err)
+	}
+
 	// [1/7] Preflight
 	if !config.SkipPreflight {
 		fmt.Printf("[1/7] Running preflight checks on %s...\n", host.ExternalIP)
@@ -173,12 +179,14 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		fmt.Println("[1/7] Skipping preflight checks")
 	}
 
-	// [2/7] Tuning
-	if config.ApplyTuning {
+	// [2/7] Tuning (Linux-only; macOS has different tuning mechanisms)
+	if config.ApplyTuning && remoteOS == "linux" {
 		fmt.Println("[2/7] Applying sysctl/limits tuning...")
 		if err := e.applyTuning(ctx, host); err != nil {
 			return fmt.Errorf("tuning failed: %w", err)
 		}
+	} else if config.ApplyTuning && remoteOS == "darwin" {
+		fmt.Println("[2/7] Skipping sysctl tuning (macOS)")
 	} else {
 		fmt.Println("[2/7] Skipping sysctl tuning")
 	}
@@ -189,7 +197,11 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	// [4/7] Stage certificates
 	if config.CertPEM != "" && config.KeyPEM != "" {
 		fmt.Println("[4/7] Staging TLS certificates...")
-		if err := e.stageCertificates(ctx, host, config.CertPEM, config.KeyPEM); err != nil {
+		certDir := "/etc/frameworks/certs"
+		if remoteOS == "darwin" {
+			certDir = darwinConfDir + "/certs"
+		}
+		if err := e.stageCertificatesAt(ctx, host, config.CertPEM, config.KeyPEM, certDir); err != nil {
 			return fmt.Errorf("certificate staging failed: %w", err)
 		}
 	} else {
@@ -204,7 +216,11 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 			return fmt.Errorf("docker install failed: %w", err)
 		}
 	case "native":
-		fmt.Println("[5-6/7] Installing edge stack (native/systemd)...")
+		modeDesc := "native/systemd"
+		if remoteOS == "darwin" {
+			modeDesc = "native/launchd"
+		}
+		fmt.Printf("[5-6/7] Installing edge stack (%s)...\n", modeDesc)
 		if err := e.installNative(ctx, host, config); err != nil {
 			return fmt.Errorf("native install failed: %w", err)
 		}
@@ -233,6 +249,11 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 
 // runPreflight checks host readiness based on mode.
 func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host, mode string) error {
+	remoteOS, _, err := e.detectRemoteArch(ctx, host)
+	if err != nil {
+		return fmt.Errorf("failed to detect remote OS: %w", err)
+	}
+
 	if mode == "docker" {
 		// Docker mode: verify docker + compose
 		result, err := e.RunCommand(ctx, host, "docker --version")
@@ -246,8 +267,15 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 			return fmt.Errorf("docker compose not available")
 		}
 		fmt.Printf("  compose: %s\n", strings.TrimSpace(result.Stdout))
+	} else if remoteOS == "darwin" {
+		// Native macOS: verify launchctl
+		result, err := e.RunCommand(ctx, host, "launchctl version")
+		if err != nil || result.ExitCode != 0 {
+			return fmt.Errorf("launchctl not available")
+		}
+		fmt.Printf("  launchctl: %s\n", strings.TrimSpace(result.Stdout))
 	} else {
-		// Native mode: verify systemd
+		// Native Linux: verify systemd
 		result, err := e.RunCommand(ctx, host, "systemctl --version")
 		if err != nil || result.ExitCode != 0 {
 			return fmt.Errorf("systemd not available")
@@ -255,16 +283,26 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 		fmt.Printf("  systemd: %s\n", strings.TrimSpace(strings.Split(result.Stdout, "\n")[0]))
 	}
 
-	// Common: check ports 80/443
-	result, err := e.RunCommand(ctx, host, "ss -tlnp | grep -E ':80 |:443 '")
+	// Check ports 80/443 — use lsof on macOS, ss on Linux
+	var portCheckCmd string
+	if remoteOS == "darwin" {
+		portCheckCmd = "lsof -iTCP:80 -iTCP:443 -sTCP:LISTEN -P -n 2>/dev/null"
+	} else {
+		portCheckCmd = "ss -tlnp | grep -E ':80 |:443 '"
+	}
+	result, err := e.RunCommand(ctx, host, portCheckCmd)
 	if err == nil && result.ExitCode == 0 && strings.TrimSpace(result.Stdout) != "" {
 		return fmt.Errorf("ports 80/443 already in use:\n%s", result.Stdout)
 	}
 
-	// Common: disk space on / and /var/lib (20GB free, 10% minimum)
+	// Disk space — check OS-appropriate paths
 	const minDiskFreeBytes = 20 * 1024 * 1024 * 1024
 	const minDiskFreePercent = 10.0
-	for _, path := range []string{"/", "/var/lib"} {
+	diskPaths := []string{"/", "/var/lib"}
+	if remoteOS == "darwin" {
+		diskPaths = []string{"/", "/usr/local"}
+	}
+	for _, path := range diskPaths {
 		result, err = e.RunCommand(ctx, host, fmt.Sprintf("df -Pk %s", path))
 		if err != nil || result.ExitCode != 0 {
 			return fmt.Errorf("disk check failed for %s", path)
@@ -276,12 +314,14 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 		fmt.Printf("  disk %s: %s\n", path, check.Detail)
 	}
 
-	// Common: /dev/shm (needed for MistServer shared memory)
-	result, err = e.RunCommand(ctx, host, "df -h /dev/shm")
-	if err == nil && result.ExitCode == 0 {
-		fmt.Println("  /dev/shm: available")
-	} else {
-		fmt.Println("  /dev/shm: not mounted (MistServer may need --shm-size)")
+	// /dev/shm check (Linux only — macOS uses POSIX shared memory via shm_open)
+	if remoteOS != "darwin" {
+		result, err = e.RunCommand(ctx, host, "df -h /dev/shm")
+		if err == nil && result.ExitCode == 0 {
+			fmt.Println("  /dev/shm: available")
+		} else {
+			fmt.Println("  /dev/shm: not mounted (MistServer may need --shm-size)")
+		}
 	}
 
 	return nil
@@ -320,12 +360,15 @@ echo "tuning applied"
 
 // stageCertificates uploads cert/key to /etc/frameworks/certs/.
 func (e *EdgeProvisioner) stageCertificates(ctx context.Context, host inventory.Host, certPEM, keyPEM string) error {
-	_, err := e.RunSudoCommand(ctx, host, "mkdir -p /etc/frameworks/certs")
+	return e.stageCertificatesAt(ctx, host, certPEM, keyPEM, "/etc/frameworks/certs")
+}
+
+func (e *EdgeProvisioner) stageCertificatesAt(ctx context.Context, host inventory.Host, certPEM, keyPEM, certDir string) error {
+	_, err := e.RunSudoCommand(ctx, host, "mkdir -p "+certDir)
 	if err != nil {
 		return fmt.Errorf("failed to create cert directory: %w", err)
 	}
 
-	// Write cert/key to temp files locally, upload, cleanup
 	tmpDir, err := os.MkdirTemp("", "edge-certs-*")
 	if err != nil {
 		return err
@@ -342,23 +385,23 @@ func (e *EdgeProvisioner) stageCertificates(ctx context.Context, host inventory.
 	}
 
 	if err := e.uploadFileWithSudo(ctx, host, ssh.UploadOptions{
-		LocalPath: certPath, RemotePath: "/etc/frameworks/certs/cert.pem", Mode: 0644,
+		LocalPath: certPath, RemotePath: certDir + "/cert.pem", Mode: 0644,
 	}); err != nil {
 		return err
 	}
 	if err := e.uploadFileWithSudo(ctx, host, ssh.UploadOptions{
-		LocalPath: keyPath, RemotePath: "/etc/frameworks/certs/key.pem", Mode: 0600,
+		LocalPath: keyPath, RemotePath: certDir + "/key.pem", Mode: 0600,
 	}); err != nil {
 		return err
 	}
 
-	fmt.Println("  certificates staged at /etc/frameworks/certs/")
+	fmt.Printf("  certificates staged at %s/\n", certDir)
 	return nil
 }
 
 // installDocker generates edge templates, uploads them, and runs docker compose up.
 func (e *EdgeProvisioner) installDocker(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
-	vars := e.buildEdgeVars(config)
+	vars := e.buildEdgeVars(config, "linux") // Docker containers are always Linux
 	vars.Mode = "docker"
 	vars.SetModeDefaults()
 
@@ -419,7 +462,12 @@ func (e *EdgeProvisioner) installDocker(ctx context.Context, host inventory.Host
 
 // installNative installs MistServer, Helmsman, and Caddy as systemd services.
 func (e *EdgeProvisioner) installNative(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
-	vars := e.buildEdgeVars(config)
+	remoteOS, remoteArch, err := e.detectRemoteArch(ctx, host)
+	if err != nil {
+		return fmt.Errorf("failed to detect remote architecture: %w", err)
+	}
+
+	vars := e.buildEdgeVars(config, remoteOS)
 	vars.Mode = "native"
 	vars.SetModeDefaults()
 
@@ -437,28 +485,299 @@ func (e *EdgeProvisioner) installNative(ctx context.Context, host inventory.Host
 		}
 	}
 
-	remoteOS, remoteArch, err := e.detectRemoteArch(ctx, host)
-	if err != nil {
-		return fmt.Errorf("failed to detect remote architecture: %w", err)
-	}
 	arch := fmt.Sprintf("%s-%s", remoteOS, remoteArch)
 	fmt.Printf("  remote architecture: %s\n", arch)
 
+	switch remoteOS {
+	case "darwin":
+		return e.installNativeDarwin(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch)
+	case "linux":
+		return e.installNativeLinux(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch)
+	default:
+		return fmt.Errorf("unsupported OS for native mode: %s", remoteOS)
+	}
+}
+
+// macOS paths — follows Homebrew conventions.
+const (
+	darwinBaseDir  = "/usr/local/opt/frameworks"
+	darwinConfDir  = "/usr/local/etc/frameworks"
+	darwinLogDir   = "/usr/local/var/log/frameworks"
+	darwinPlistDir = "/Library/LaunchDaemons"
+)
+
+func (e *EdgeProvisioner) installNativeDarwin(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
+	// (a) Create directories
+	fmt.Println("  creating macOS directories...")
+	mkdirScript := fmt.Sprintf(`#!/bin/bash
+set -e
+mkdir -p %s/mistserver %s/helmsman %s/caddy %s %s/certs %s
+`, darwinBaseDir, darwinBaseDir, darwinBaseDir, darwinLogDir, darwinConfDir, darwinConfDir)
+	if _, err := e.ExecuteSudoScript(ctx, host, mkdirScript); err != nil {
+		return fmt.Errorf("failed to create directories: %w", err)
+	}
+
+	// (b) MistServer
+	fmt.Println("  installing MistServer...")
+	if err := e.installDarwinMistServer(ctx, host, manifest, arch); err != nil {
+		return fmt.Errorf("mistserver install failed: %w", err)
+	}
+
+	// (c) Helmsman
+	fmt.Println("  installing Helmsman...")
+	if err := e.installDarwinHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch); err != nil {
+		return fmt.Errorf("helmsman install failed: %w", err)
+	}
+
+	// (d) Caddy
+	fmt.Println("  installing Caddy...")
+	if err := e.installDarwinCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch); err != nil {
+		return fmt.Errorf("caddy install failed: %w", err)
+	}
+
+	// (e) Write .edge.env
+	fmt.Println("  writing .edge.env for mode detection...")
+	envTmpDir, err := os.MkdirTemp("", "edge-native-env-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(envTmpDir)
+
+	if err = templates.WriteEdgeTemplates(envTmpDir, vars, true); err != nil {
+		return fmt.Errorf("failed to render .edge.env: %w", err)
+	}
+
+	remoteDir := darwinBaseDir + "/edge"
+	if _, err = e.RunSudoCommand(ctx, host, "mkdir -p "+remoteDir); err != nil {
+		return fmt.Errorf("failed to create %s: %w", remoteDir, err)
+	}
+	if err = e.uploadFileWithSudo(ctx, host, ssh.UploadOptions{
+		LocalPath: filepath.Join(envTmpDir, ".edge.env"), RemotePath: remoteDir + "/.edge.env", Mode: 0600,
+	}); err != nil {
+		return fmt.Errorf("failed to upload .edge.env: %w", err)
+	}
+
+	// (f) Start all services via launchctl
+	fmt.Println("  starting services...")
+	startScript := fmt.Sprintf(`#!/bin/bash
+set -e
+launchctl bootstrap system %[1]s/com.livepeer.frameworks.mistserver.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.mistserver
+sleep 2
+launchctl bootstrap system %[1]s/com.livepeer.frameworks.helmsman.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.helmsman
+sleep 1
+launchctl bootstrap system %[1]s/com.livepeer.frameworks.caddy.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.caddy
+echo "all services started"
+`, darwinPlistDir)
+	result, err := e.ExecuteSudoScript(ctx, host, startScript)
+	if err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return fmt.Errorf("service start failed: %w (%s)", err, stderr)
+	}
+
+	fmt.Println("  edge stack running on macOS (launchd)")
+	return nil
+}
+
+func (e *EdgeProvisioner) installDarwinMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string) error {
+	var binaryURL string
+	if manifest != nil {
+		dep := manifest.GetExternalDependency("mistserver")
+		if dep != nil {
+			binaryURL = dep.GetBinaryURL(arch)
+		}
+	}
+	if binaryURL == "" {
+		return fmt.Errorf("MistServer binary URL not available for %s (ensure darwin builds exist in mistserver releases)", arch)
+	}
+
+	installScript := fmt.Sprintf(`#!/bin/bash
+set -e
+curl -sSfL -o /tmp/mistserver.tar.gz "%s"
+tar -xzf /tmp/mistserver.tar.gz -C %s/mistserver/
+rm -f /tmp/mistserver.tar.gz
+chmod +x %s/mistserver/MistServer
+echo "MistServer installed"
+`, binaryURL, darwinBaseDir, darwinBaseDir)
+
+	result, err := e.ExecuteSudoScript(ctx, host, installScript)
+	if err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
+	}
+
+	envContent := "# MistServer environment\nMIST_DEBUG=3\n"
+	if err := e.writeRemoteFile(ctx, host, darwinConfDir+"/mistserver.env", envContent, 0644); err != nil {
+		return err
+	}
+
+	return e.uploadLaunchdPlist(ctx, host, LaunchdPlistData{
+		Label:       "com.livepeer.frameworks.mistserver",
+		Description: "FrameWorks MistServer (edge media server)",
+		Program:     darwinBaseDir + "/mistserver/MistServer",
+		WorkingDir:  darwinBaseDir + "/mistserver",
+		EnvFile:     darwinConfDir + "/mistserver.env",
+		RunAtLoad:   true,
+		KeepAlive:   true,
+	})
+}
+
+func (e *EdgeProvisioner) installDarwinHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
+	var binaryURL string
+	if manifest != nil {
+		svcInfo, err := manifest.GetServiceInfo("helmsman")
+		if err == nil {
+			binaryURL, _ = svcInfo.GetBinaryURL(remoteOS, remoteArch)
+		}
+	}
+	if binaryURL == "" {
+		return fmt.Errorf("helmsman binary URL not available for %s/%s", remoteOS, remoteArch)
+	}
+
+	installScript := fmt.Sprintf(`#!/bin/bash
+set -e
+curl -sSfL -o /tmp/helmsman.tar.gz "%s"
+tar -xzf /tmp/helmsman.tar.gz -C /tmp/
+mv /tmp/frameworks-helmsman-* %[2]s/helmsman/helmsman 2>/dev/null || mv /tmp/helmsman %[2]s/helmsman/helmsman 2>/dev/null || true
+chmod +x %[2]s/helmsman/helmsman
+rm -f /tmp/helmsman.tar.gz
+echo "Helmsman installed"
+`, binaryURL, darwinBaseDir)
+
+	result, err := e.ExecuteSudoScript(ctx, host, installScript)
+	if err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
+	}
+
+	domain := config.primaryDomain()
+	envLines := []string{
+		"# Helmsman edge environment",
+		fmt.Sprintf("NODE_ID=%s", vars.NodeID),
+		fmt.Sprintf("EDGE_PUBLIC_URL=https://%s/view", domain),
+		fmt.Sprintf("FOGHORN_URL=%s", vars.FoghornHTTPBase),
+		fmt.Sprintf("FOGHORN_CONTROL_ADDR=%s", vars.FoghornGRPCAddr),
+		fmt.Sprintf("FOGHORN_HTTP_BASE=%s", vars.FoghornHTTPBase),
+		fmt.Sprintf("EDGE_ENROLLMENT_TOKEN=%s", vars.EnrollmentToken),
+		fmt.Sprintf("EDGE_DOMAIN=%s", domain),
+		fmt.Sprintf("ACME_EMAIL=%s", vars.AcmeEmail),
+		fmt.Sprintf("DEPLOY_MODE=%s", vars.Mode),
+		fmt.Sprintf("MISTSERVER_URL=http://%s", vars.MistUpstream),
+		fmt.Sprintf("HELMSMAN_WEBHOOK_URL=http://%s", vars.HelmsmanUpstream),
+		"CADDY_ADMIN_URL=http://localhost:2019",
+	}
+	envContent := strings.Join(envLines, "\n") + "\n"
+	if err := e.writeRemoteFile(ctx, host, darwinConfDir+"/helmsman.env", envContent, 0644); err != nil {
+		return err
+	}
+
+	return e.uploadLaunchdPlist(ctx, host, LaunchdPlistData{
+		Label:       "com.livepeer.frameworks.helmsman",
+		Description: "FrameWorks Helmsman (edge sidecar)",
+		Program:     darwinBaseDir + "/helmsman/helmsman",
+		WorkingDir:  darwinBaseDir + "/helmsman",
+		EnvFile:     darwinConfDir + "/helmsman.env",
+		RunAtLoad:   true,
+		KeepAlive:   true,
+	})
+}
+
+func (e *EdgeProvisioner) installDarwinCaddy(ctx context.Context, host inventory.Host, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
+	var binaryURL string
+	if manifest != nil {
+		dep := manifest.GetExternalDependency("caddy")
+		if dep != nil {
+			binaryURL = dep.GetBinaryURL(arch)
+		}
+		if binaryURL == "" {
+			svcInfo, err := manifest.GetServiceInfo("caddy")
+			if err == nil {
+				binaryURL, _ = svcInfo.GetBinaryURL(remoteOS, remoteArch)
+			}
+		}
+	}
+	if binaryURL == "" {
+		return fmt.Errorf("caddy binary URL not available for %s", arch)
+	}
+
+	installScript := fmt.Sprintf(`#!/bin/bash
+set -e
+curl -sSfL -o /tmp/caddy.tar.gz "%s"
+tar -xzf /tmp/caddy.tar.gz -C /tmp/
+mv /tmp/caddy %[2]s/caddy/caddy 2>/dev/null || true
+chmod +x %[2]s/caddy/caddy
+mkdir -p /usr/local/var/lib/caddy
+echo "Caddy installed"
+`, binaryURL, darwinBaseDir)
+
+	result, err := e.ExecuteSudoScript(ctx, host, installScript)
+	if err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
+	}
+
+	tmpDir, err := os.MkdirTemp("", "edge-caddy-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
+		return fmt.Errorf("failed to write templates: %w", err)
+	}
+
+	caddyfilePath := filepath.Join(tmpDir, "Caddyfile")
+	if err := e.uploadFileWithSudo(ctx, host, ssh.UploadOptions{
+		LocalPath: caddyfilePath, RemotePath: darwinConfDir + "/Caddyfile", Mode: 0644,
+	}); err != nil {
+		return fmt.Errorf("failed to upload Caddyfile: %w", err)
+	}
+
+	envContent := fmt.Sprintf("# Caddy edge environment\nCADDY_EMAIL=%s\n", vars.AcmeEmail)
+	if err := e.writeRemoteFile(ctx, host, darwinConfDir+"/caddy.env", envContent, 0644); err != nil {
+		return err
+	}
+
+	return e.uploadLaunchdPlist(ctx, host, LaunchdPlistData{
+		Label:       "com.livepeer.frameworks.caddy",
+		Description: "FrameWorks Caddy Reverse Proxy (edge)",
+		Program:     darwinBaseDir + "/caddy/caddy",
+		ProgramArgs: []string{"run", "--config", darwinConfDir + "/Caddyfile"},
+		WorkingDir:  darwinConfDir,
+		EnvFile:     darwinConfDir + "/caddy.env",
+		RunAtLoad:   true,
+		KeepAlive:   true,
+	})
+}
+
+// installNativeLinux is the original Linux systemd installation path.
+func (e *EdgeProvisioner) installNativeLinux(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
 	// (a) MistServer
 	fmt.Println("  installing MistServer...")
-	if err = e.installNativeMistServer(ctx, host, manifest, arch); err != nil {
+	if err := e.installNativeMistServer(ctx, host, manifest, arch); err != nil {
 		return fmt.Errorf("mistserver install failed: %w", err)
 	}
 
 	// (b) Helmsman
 	fmt.Println("  installing Helmsman...")
-	if err = e.installNativeHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch); err != nil {
+	if err := e.installNativeHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch); err != nil {
 		return fmt.Errorf("helmsman install failed: %w", err)
 	}
 
 	// (c) Caddy
 	fmt.Println("  installing Caddy...")
-	if err = e.installNativeCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch); err != nil {
+	if err := e.installNativeCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch); err != nil {
 		return fmt.Errorf("caddy install failed: %w", err)
 	}
 
@@ -784,6 +1103,18 @@ func (e *EdgeProvisioner) Detect(ctx context.Context, host inventory.Host) (*det
 		}, nil
 	}
 
+	// Try native (macOS launchd)
+	result, err = e.RunCommand(ctx, host, "launchctl print system/com.livepeer.frameworks.caddy 2>/dev/null")
+	if err == nil && result.ExitCode == 0 {
+		return &detect.ServiceState{
+			Exists:  true,
+			Running: true,
+			Metadata: map[string]string{
+				"mode": "native",
+			},
+		}, nil
+	}
+
 	return &detect.ServiceState{Exists: false, Running: false}, nil
 }
 
@@ -804,7 +1135,8 @@ func (e *EdgeProvisioner) Initialize(ctx context.Context, host inventory.Host, c
 }
 
 // buildEdgeVars converts EdgeProvisionConfig into templates.EdgeVars.
-func (e *EdgeProvisioner) buildEdgeVars(config EdgeProvisionConfig) templates.EdgeVars {
+// remoteOS should be "linux" or "darwin" to set OS-appropriate paths.
+func (e *EdgeProvisioner) buildEdgeVars(config EdgeProvisionConfig, remoteOS string) templates.EdgeVars {
 	domain := config.primaryDomain()
 	vars := templates.EdgeVars{
 		NodeID:          config.NodeID,
@@ -816,8 +1148,12 @@ func (e *EdgeProvisioner) buildEdgeVars(config EdgeProvisionConfig) templates.Ed
 		Mode:            config.resolvedMode(),
 	}
 	if config.CertPEM != "" && config.KeyPEM != "" {
-		vars.CertPath = "/etc/frameworks/certs/cert.pem"
-		vars.KeyPath = "/etc/frameworks/certs/key.pem"
+		certDir := "/etc/frameworks/certs"
+		if remoteOS == "darwin" {
+			certDir = darwinConfDir + "/certs"
+		}
+		vars.CertPath = certDir + "/cert.pem"
+		vars.KeyPath = certDir + "/key.pem"
 	}
 
 	// Wildcard Caddyfile: when a wildcard cert is available and we know the pool domain,
@@ -852,6 +1188,48 @@ func (e *EdgeProvisioner) writeRemoteFile(ctx context.Context, host inventory.Ho
 	return e.uploadFileWithSudo(ctx, host, ssh.UploadOptions{
 		LocalPath: tmpFile.Name(), RemotePath: remotePath, Mode: mode,
 	})
+}
+
+// uploadLaunchdPlist generates a launchd plist and uploads it to /Library/LaunchDaemons.
+// Since launchd doesn't support EnvironmentFile natively, we use a wrapper shell script
+// that sources the env file before exec-ing the program.
+func (e *EdgeProvisioner) uploadLaunchdPlist(ctx context.Context, host inventory.Host, data LaunchdPlistData) error {
+	// Create a wrapper script that loads the env file, then exec's the binary.
+	// This lets us keep the same env file pattern as systemd.
+	wrapperPath := darwinBaseDir + "/" + strings.TrimPrefix(data.Label, "com.livepeer.frameworks.") + "/run.sh"
+	program := data.Program
+	args := strings.Join(data.ProgramArgs, " ")
+
+	// Read env file line-by-line and export only valid KEY=VALUE pairs.
+	// Avoids shell injection from `source` which would evaluate $(), backticks, etc.
+	wrapperContent := fmt.Sprintf(`#!/bin/bash
+while IFS= read -r line || [ -n "$line" ]; do
+  line="${line%%#*}"
+  line="${line#"${line%%%%[! ]*}"}"
+  [ -z "$line" ] && continue
+  case "$line" in
+    *=*) export "$line" ;;
+  esac
+done < %s
+exec %s %s
+`, data.EnvFile, program, args)
+
+	if err := e.writeRemoteFile(ctx, host, wrapperPath, wrapperContent, 0755); err != nil {
+		return fmt.Errorf("failed to write wrapper script for %s: %w", data.Label, err)
+	}
+
+	// Point the plist at the wrapper script instead of the binary directly
+	data.Program = "/bin/bash"
+	data.ProgramArgs = []string{wrapperPath}
+	data.EnvFile = "" // Handled by wrapper
+
+	plistContent, err := GenerateLaunchdPlist(data)
+	if err != nil {
+		return fmt.Errorf("failed to generate launchd plist for %s: %w", data.Label, err)
+	}
+
+	plistPath := fmt.Sprintf("%s/%s.plist", darwinPlistDir, data.Label)
+	return e.writeRemoteFile(ctx, host, plistPath, plistContent, 0644)
 }
 
 // uploadSystemdUnit generates a unit file and uploads it.

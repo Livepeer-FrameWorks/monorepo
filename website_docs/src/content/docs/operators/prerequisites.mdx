@@ -47,25 +47,40 @@ For testing or small-scale deployments, you can run a consolidated stack on a si
 
 - Docker Engine (24.0+) and Docker Compose (2.20+) for containerized service deployment.
 
-**Native Deployment:**
+**Native Deployment (Linux):**
 
 - `systemd` for service management.
 - PostgreSQL client tools (or Postgres-compatible).
 - Basic build tools (GCC, Make, Git) for native compilation.
 
+**Native Deployment (macOS):**
+
+- macOS 12.0+ (Monterey or later), Apple Silicon (arm64) or Intel (amd64).
+- `launchd` for service management (built into macOS).
+- Homebrew for dependency management.
+
 **Both:**
 
 - SSH server with key-based authentication.
 - `curl`, `wget`, `tar`, `gzip`.
-- `netstat` or `ss` for network diagnostics.
+- `netstat`, `ss`, or `lsof` for network diagnostics.
 
 ## Install the CLI
+
+**Script (Linux & macOS):**
 
 ```bash
 curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | sh
 ```
 
 This installs the `frameworks` binary to `/usr/local/bin`. Override the install directory with `FRAMEWORKS_INSTALL_DIR` or the version with `FRAMEWORKS_VERSION`.
+
+**Homebrew (macOS):**
+
+```bash
+brew tap livepeer-frameworks/tap
+brew install frameworks-cli
+```
 
 ## Network Prerequisites
 
