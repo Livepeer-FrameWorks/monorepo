@@ -69,6 +69,7 @@ func newEdgePreflightCmd() *cobra.Command {
 			results = append(results, preflight.DNSResolution(ctx, domain))
 		}
 		results = append(results, preflight.HasDocker(ctx)...)
+		results = append(results, preflight.HasServiceManager())
 		if runtime.GOOS == "linux" {
 			results = append(results, preflight.LinuxSysctlChecks()...)
 			results = append(results, preflight.ShmSize())
@@ -1275,6 +1276,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 			results = append(results, preflight.DNSResolution(ctx, domain))
 		}
 		results = append(results, preflight.HasDocker(ctx)...)
+		results = append(results, preflight.HasServiceManager())
 		if runtime.GOOS == "linux" {
 			results = append(results, preflight.LinuxSysctlChecks()...)
 			results = append(results, preflight.ShmSize())

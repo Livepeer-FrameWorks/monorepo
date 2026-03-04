@@ -667,6 +667,68 @@ jobs:
           name: binary-${{ matrix.service.name }}-arm64-darwin
           path: dist/binaries/${{ matrix.service.name }}/*.tar.gz
 
+  # macOS .pkg installer — bundles helmsman + caddy for one-click edge node setup.
+  # Requires signed darwin/arm64 helmsman binary from build-arm64-and-darwin.
+  # Caddy is downloaded from the official release (already signed/notarized by Caddy project).
+  build-darwin-pkg:
+    name: Build macOS .pkg
+    needs: [build-cli-arm64-darwin]
+    runs-on: macos-arm64-self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download CLI darwin/arm64 binary
+        uses: actions/download-artifact@v7
+        with:
+          name: cli-arm64-darwin
+          path: dist/cli
+
+      - name: Extract CLI binary
+        run: |
+          cd dist/cli
+          tar xzf frameworks-cli-*-darwin-arm64.tar.gz || true
+          chmod 755 frameworks
+
+      - name: Import Application signing certificate
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Import Installer signing certificate
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_INSTALLER_P12 }}
+          p12-password: ${{ secrets.APPLE_INSTALLER_PASSWORD }}
+          create-keychain: false
+
+      # TODO: download tray app artifact once Phase 5b delivers it
+      # - name: Download tray app
+      #   uses: actions/download-artifact@v7
+      #   with:
+      #     name: tray-app-darwin
+      #     path: dist/tray
+
+      - name: Build .pkg
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_INSTALLER_ID: ${{ secrets.APPLE_INSTALLER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ./scripts/macos-pkg/build-pkg.sh \
+            "${VERSION}" \
+            dist/cli/frameworks
+
+      - name: Upload .pkg artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: darwin-pkg
+          path: dist/pkg/frameworks-*.pkg*
+
   manifest:
     name: Generate & Publish Manifest
     needs:
@@ -676,6 +738,7 @@ jobs:
       - build-cli-arm64-darwin
       - build-service-binaries
       - build-arm64-and-darwin
+      - build-darwin-pkg
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -886,6 +949,12 @@ jobs:
         with:
           name: logbook-bundle
           path: dist/
+      - name: Download macOS .pkg
+        uses: actions/download-artifact@v7
+        with:
+          name: darwin-pkg
+          path: dist/pkg
+        continue-on-error: true
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -896,10 +965,28 @@ jobs:
             dist/manifest.yaml
             dist/cli/*
             dist/binaries/*.tar.gz
+            dist/pkg/*
             dist/chartroom-build.tar.gz
             dist/foredeck-build.tar.gz
             dist/logbook-build.tar.gz
             scripts/install.sh
+
+      - name: Generate Homebrew tap token
+        id: homebrew-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          repositories: homebrew-tap
+        continue-on-error: true
+
+      - name: Bump Homebrew tap
+        if: steps.homebrew-token.outcome == 'success'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git clone "https://x-access-token:${{ steps.homebrew-token.outputs.token }}@github.com/Livepeer-FrameWorks/homebrew-tap.git" /tmp/homebrew-tap
+          bash /tmp/homebrew-tap/scripts/bump.sh "${VERSION}" "${{ steps.homebrew-token.outputs.token }}"
+        continue-on-error: true
 
   update-env:
     name: Update GitOps Environment Repo

@@ -242,6 +242,24 @@ func formatPercent(value float64) string {
 	return fmt.Sprintf("%.1f%%", value)
 }
 
+// HasServiceManager checks for the native service manager (launchctl on macOS, systemctl on Linux).
+func HasServiceManager() Check {
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath("launchctl"); err != nil {
+			return Check{Name: "launchctl", OK: false, Detail: "launchctl not found", Error: err.Error()}
+		}
+		return Check{Name: "launchctl", OK: true, Detail: "launchctl available"}
+	case "linux":
+		if _, err := exec.LookPath("systemctl"); err != nil {
+			return Check{Name: "systemctl", OK: false, Detail: "systemctl not found", Error: err.Error()}
+		}
+		return Check{Name: "systemctl", OK: true, Detail: "systemctl available"}
+	default:
+		return Check{Name: "service-manager", OK: false, Detail: fmt.Sprintf("unsupported OS: %s", runtime.GOOS)}
+	}
+}
+
 func errString(err error) string {
 	if err == nil {
 		return ""
