@@ -637,11 +637,18 @@ jobs:
       ENV_REPO: Livepeer-FrameWorks/gitops
       RELEASE_BRANCH: release/${{ github.ref_name }}
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          repositories: gitops
       - name: Checkout env repo
         uses: actions/checkout@v6
         with:
           repository: ${{ env.ENV_REPO }}
-          token: ${{ secrets.GITOPS_REPO_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           path: env-repo
       - name: Download manifest artifact
         uses: actions/download-artifact@v7
@@ -682,7 +689,7 @@ jobs:
 
       - name: Create or update PR to env repo
         env:
-          GH_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           cd env-repo
 
