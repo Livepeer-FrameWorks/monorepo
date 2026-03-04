@@ -182,6 +182,9 @@ message ControlMessage {
     ActivatePushTargets activate_push_targets = 80;
     DeactivatePushTargets deactivate_push_targets = 81;
     PushTargetStatusReport push_target_status = 82;
+    // Edge API token validation (Helmsman -> Foghorn -> Commodore/JWT)
+    ValidateEdgeTokenRequest validate_edge_token_request = 90;
+    ValidateEdgeTokenResponse validate_edge_token_response = 91;
   }
 }
 
@@ -1539,4 +1542,19 @@ message APIRequestAggregate {
   repeated uint64 user_hashes = 9;  // Hashed user IDs observed in the aggregate window
   repeated uint64 token_hashes = 10; // Hashed API token IDs observed in the aggregate window
   int64 timestamp = 11;             // First request timestamp (Unix seconds)
+}
+
+// ==================== Edge API Token Validation ====================
+
+// Helmsman sends to Foghorn; Foghorn validates via Commodore (API token) or JWT verification.
+message ValidateEdgeTokenRequest {
+  string token = 1;
+}
+
+message ValidateEdgeTokenResponse {
+  bool valid = 1;
+  string user_id = 2;
+  string tenant_id = 3;
+  string role = 4;
+  repeated string permissions = 5;
 }

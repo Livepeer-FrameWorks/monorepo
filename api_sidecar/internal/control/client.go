@@ -634,6 +634,8 @@ func runClient(addr string, logger logging.Logger) error {
 				go handleActivatePushTargets(logger, x.ActivatePushTargets)
 			case *pb.ControlMessage_DeactivatePushTargets:
 				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets)
+			case *pb.ControlMessage_ValidateEdgeTokenResponse:
+				handleValidateEdgeTokenResponse(msg.GetRequestId(), x.ValidateEdgeTokenResponse)
 			}
 		}
 	}()
@@ -1610,6 +1612,92 @@ func handleDeactivatePushTargets(logger logging.Logger, req *pb.DeactivatePushTa
 }
 
 // parseRequestedMode converts a string mode to protobuf enum for Register message.
+// Edge API token validation — Helmsman asks Foghorn, caches results with TTL.
+
+type edgeTokenResult struct {
+	resp      *pb.ValidateEdgeTokenResponse
+	expiresAt time.Time
+}
+
+var (
+	pendingEdgeTokenValidations = make(map[string]chan *pb.ValidateEdgeTokenResponse)
+	pendingEdgeTokenMutex       = make(chan struct{}, 1)
+	edgeTokenCache              sync.Map // token string -> *edgeTokenResult
+	edgeTokenCacheTTL           = 5 * time.Minute
+)
+
+func handleValidateEdgeTokenResponse(requestID string, resp *pb.ValidateEdgeTokenResponse) {
+	pendingEdgeTokenMutex <- struct{}{}
+	ch, exists := pendingEdgeTokenValidations[requestID]
+	<-pendingEdgeTokenMutex
+
+	if exists {
+		ch <- resp
+	}
+}
+
+// ValidateEdgeToken sends a token to Foghorn for validation and returns the result.
+// Results are cached with a TTL to avoid round-tripping on every request.
+func ValidateEdgeToken(ctx context.Context, token string) (*pb.ValidateEdgeTokenResponse, error) {
+	// Check cache first
+	if cached, ok := edgeTokenCache.Load(token); ok {
+		entry, _ := cached.(*edgeTokenResult)
+		if entry != nil && time.Now().Before(entry.expiresAt) {
+			return entry.resp, nil
+		}
+		edgeTokenCache.Delete(token)
+	}
+
+	stream := getStream()
+	if stream == nil {
+		return nil, fmt.Errorf("gRPC control stream not connected")
+	}
+
+	requestID := uuid.New().String()
+	responseCh := make(chan *pb.ValidateEdgeTokenResponse, 1)
+
+	pendingEdgeTokenMutex <- struct{}{}
+	pendingEdgeTokenValidations[requestID] = responseCh
+	<-pendingEdgeTokenMutex
+
+	msg := &pb.ControlMessage{
+		RequestId: requestID,
+		SentAt:    timestamppb.Now(),
+		Payload: &pb.ControlMessage_ValidateEdgeTokenRequest{
+			ValidateEdgeTokenRequest: &pb.ValidateEdgeTokenRequest{Token: token},
+		},
+	}
+	if err := stream.Send(msg); err != nil {
+		pendingEdgeTokenMutex <- struct{}{}
+		delete(pendingEdgeTokenValidations, requestID)
+		<-pendingEdgeTokenMutex
+		return nil, fmt.Errorf("failed to send token validation request: %w", err)
+	}
+
+	select {
+	case resp := <-responseCh:
+		pendingEdgeTokenMutex <- struct{}{}
+		delete(pendingEdgeTokenValidations, requestID)
+		<-pendingEdgeTokenMutex
+
+		edgeTokenCache.Store(token, &edgeTokenResult{
+			resp:      resp,
+			expiresAt: time.Now().Add(edgeTokenCacheTTL),
+		})
+		return resp, nil
+	case <-ctx.Done():
+		pendingEdgeTokenMutex <- struct{}{}
+		delete(pendingEdgeTokenValidations, requestID)
+		<-pendingEdgeTokenMutex
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Second):
+		pendingEdgeTokenMutex <- struct{}{}
+		delete(pendingEdgeTokenValidations, requestID)
+		<-pendingEdgeTokenMutex
+		return nil, fmt.Errorf("timeout waiting for token validation response")
+	}
+}
+
 func parseRequestedMode(mode string) pb.NodeOperationalMode {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "draining", "drain":

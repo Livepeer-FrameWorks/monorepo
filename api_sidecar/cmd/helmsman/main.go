@@ -125,6 +125,17 @@ func main() {
 		r.POST("/node/mode", handlers.HandleSetNodeMode)
 	}
 
+	// Edge API — read-only endpoints for tray app / CLI, authenticated via Foghorn
+	edge := r.Group("/api/edge", handlers.EdgeAPIAuthMiddleware())
+	{
+		edge.GET("/status", handlers.HandleEdgeStatus)
+		edge.GET("/health", handlers.HandleEdgeHealth)
+		edge.GET("/streams", handlers.HandleEdgeStreams)
+		edge.GET("/streams/:stream_name", handlers.HandleEdgeStreamDetail)
+		edge.GET("/clients", handlers.HandleEdgeClients)
+		edge.GET("/metrics", handlers.HandleEdgeMetrics)
+	}
+
 	// Webhook routes - MistServer triggers and webhooks
 	webhooks := r.Group("/webhooks")
 	{

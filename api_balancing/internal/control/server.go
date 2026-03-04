@@ -995,6 +995,8 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processSyncComplete(x.SyncComplete, nodeID, registry.log)
 		case *pb.ControlMessage_ModeChangeRequest:
 			go processModeChangeRequest(x.ModeChangeRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_ValidateEdgeTokenRequest:
+			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
 		}
 	}
 	if nodeID != "" {
@@ -4012,4 +4014,43 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 	}
 
 	return resp, nil
+}
+
+func processValidateEdgeToken(requestID string, req *pb.ValidateEdgeTokenRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	token := req.GetToken()
+	resp := &pb.ValidateEdgeTokenResponse{Valid: false}
+
+	if token == "" || CommodoreClient == nil {
+		sendEdgeTokenResponse(requestID, stream, resp, logger)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	apiResp, err := CommodoreClient.ValidateAPIToken(ctx, token)
+	if err != nil {
+		logger.WithError(err).WithField("node_id", nodeID).Warn("Edge token validation failed")
+		sendEdgeTokenResponse(requestID, stream, resp, logger)
+		return
+	}
+
+	resp.Valid = apiResp.GetValid()
+	resp.UserId = apiResp.GetUserId()
+	resp.TenantId = apiResp.GetTenantId()
+	resp.Role = apiResp.GetRole()
+	resp.Permissions = apiResp.GetPermissions()
+
+	sendEdgeTokenResponse(requestID, stream, resp, logger)
+}
+
+func sendEdgeTokenResponse(requestID string, stream pb.HelmsmanControl_ConnectServer, resp *pb.ValidateEdgeTokenResponse, logger logging.Logger) {
+	msg := &pb.ControlMessage{
+		RequestId: requestID,
+		SentAt:    timestamppb.Now(),
+		Payload:   &pb.ControlMessage_ValidateEdgeTokenResponse{ValidateEdgeTokenResponse: resp},
+	}
+	if err := stream.Send(msg); err != nil {
+		logger.WithError(err).Warn("Failed to send edge token validation response")
+	}
 }
