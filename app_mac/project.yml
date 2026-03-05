@@ -1,0 +1,30 @@
+name: FrameWorks
+options:
+  bundleIdPrefix: com.livepeer.frameworks
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+targets:
+  FrameWorks:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    resources:
+      - Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.livepeer.frameworks.desktop
+        INFOPLIST_FILE: Info.plist
+        INFOPLIST_KEY_LSUIElement: YES
+        CODE_SIGN_ENTITLEMENTS: FrameWorks.entitlements
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "5.0"
+        COMBINE_HIDPI_IMAGES: YES
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+        Release:
+          CODE_SIGN_STYLE: Manual

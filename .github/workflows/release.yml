@@ -632,12 +632,118 @@ jobs:
           name: binary-${{ matrix.service.name }}-arm64-darwin
           path: dist/binaries/${{ matrix.service.name }}/*.tar.gz
 
-  # macOS .pkg installer — bundles helmsman + caddy for one-click edge node setup.
-  # Requires signed darwin/arm64 helmsman binary from build-arm64-and-darwin.
-  # Caddy is downloaded from the official release (already signed/notarized by Caddy project).
+  # macOS tray app — FrameWorks desktop client (menu bar app).
+  # Built with Xcode via XcodeGen, signed and notarized on the Mac runner.
+  build-tray-app:
+    name: Build macOS Tray App
+    runs-on: macos-arm64-self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install XcodeGen
+        run: brew install xcodegen || true
+
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Generate Xcode project
+        working-directory: app_mac
+        run: xcodegen generate
+
+      - name: Set version from tag
+        working-directory: app_mac
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" Info.plist
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${BUILD_NUMBER}" Info.plist 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" Info.plist
+
+      - name: Archive
+        working-directory: app_mac
+        run: |
+          xcodebuild archive \
+            -project FrameWorks.xcodeproj \
+            -scheme FrameWorks \
+            -configuration Release \
+            -archivePath build/FrameWorks.xcarchive \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            CODE_SIGN_IDENTITY="${{ secrets.APPLE_DEVELOPER_ID }}"
+
+      - name: Export archive
+        working-directory: app_mac
+        run: |
+          cat > build/ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>developer-id</string>
+            <key>teamID</key>
+            <string>${{ secrets.APPLE_TEAM_ID }}</string>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath build/FrameWorks.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/export
+
+      - name: Verify signature
+        working-directory: app_mac
+        run: codesign --verify --verbose=2 build/export/FrameWorks.app
+
+      - name: Notarize
+        working-directory: app_mac
+        run: |
+          ditto -c -k --keepParent build/export/FrameWorks.app build/FrameWorks-notarize.zip
+          xcrun notarytool submit build/FrameWorks-notarize.zip \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
+            --wait
+          xcrun stapler staple build/export/FrameWorks.app
+
+      - name: Package artifacts
+        working-directory: app_mac
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # .zip for Homebrew Cask
+          ditto -c -k --keepParent build/export/FrameWorks.app "build/FrameWorks-v${VERSION}.zip"
+          shasum -a 256 "build/FrameWorks-v${VERSION}.zip" > "build/FrameWorks-v${VERSION}.zip.sha256"
+
+          # .dmg for direct download
+          mkdir -p build/dmg-staging
+          cp -R build/export/FrameWorks.app build/dmg-staging/
+          ln -s /Applications build/dmg-staging/Applications
+          hdiutil create -volname "FrameWorks" -srcfolder build/dmg-staging \
+            -ov -format UDZO "build/FrameWorks-v${VERSION}.dmg"
+          codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" --timestamp \
+            "build/FrameWorks-v${VERSION}.dmg"
+          shasum -a 256 "build/FrameWorks-v${VERSION}.dmg" > "build/FrameWorks-v${VERSION}.dmg.sha256"
+
+      - name: Upload tray app artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: tray-app-darwin
+          path: |
+            app_mac/build/FrameWorks-v*.zip
+            app_mac/build/FrameWorks-v*.zip.sha256
+            app_mac/build/FrameWorks-v*.dmg
+            app_mac/build/FrameWorks-v*.dmg.sha256
+
+  # macOS .pkg installer — bundles CLI + optional tray app.
   build-darwin-pkg:
     name: Build macOS .pkg
-    needs: [build-cli-arm64-darwin]
+    needs: [build-cli-arm64-darwin, build-tray-app]
     runs-on: macos-arm64-self-hosted
     steps:
       - name: Checkout
@@ -668,12 +774,22 @@ jobs:
           p12-password: ${{ secrets.APPLE_INSTALLER_PASSWORD }}
           create-keychain: false
 
-      # TODO: download tray app artifact once Phase 5b delivers it
-      # - name: Download tray app
-      #   uses: actions/download-artifact@v7
-      #   with:
-      #     name: tray-app-darwin
-      #     path: dist/tray
+      - name: Download tray app
+        uses: actions/download-artifact@v7
+        with:
+          name: tray-app-darwin
+          path: dist/tray
+        continue-on-error: true
+
+      - name: Extract tray app for .pkg bundling
+        run: |
+          if ls dist/tray/FrameWorks-v*.zip 1>/dev/null 2>&1; then
+            cd dist/tray
+            unzip -q FrameWorks-v*.zip
+            echo "Tray app extracted for .pkg bundling"
+          else
+            echo "No tray app artifact — .pkg will contain CLI only"
+          fi
 
       - name: Build .pkg
         env:
@@ -684,9 +800,14 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          TRAY_ARG=""
+          if [ -d "dist/tray/FrameWorks.app" ]; then
+            TRAY_ARG="dist/tray/FrameWorks.app"
+          fi
           ./scripts/macos-pkg/build-pkg.sh \
             "${VERSION}" \
-            dist/cli/frameworks
+            dist/cli/frameworks \
+            ${TRAY_ARG}
 
       - name: Upload .pkg artifact
         uses: actions/upload-artifact@v7
@@ -703,6 +824,7 @@ jobs:
       - build-cli-arm64-darwin
       - build-service-binaries
       - build-arm64-and-darwin
+      - build-tray-app
       - build-darwin-pkg
     runs-on: ubuntu-latest
     steps:
@@ -921,6 +1043,12 @@ jobs:
           name: darwin-pkg
           path: dist/pkg
         continue-on-error: true
+      - name: Download tray app artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: tray-app-darwin
+          path: dist/tray
+        continue-on-error: true
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -932,6 +1060,7 @@ jobs:
             dist/cli/*
             dist/binaries/*.tar.gz
             dist/pkg/*
+            dist/tray/*
             dist/chartroom-build.tar.gz
             dist/foredeck-build.tar.gz
             dist/logbook-build.tar.gz

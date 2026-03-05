@@ -1,0 +1,31 @@
+# XcodeGen output
+*.xcodeproj
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Archives
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Temporary
+*.hmap
+*.swp
+*~.nib
