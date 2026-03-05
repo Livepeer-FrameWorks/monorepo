@@ -14,6 +14,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     tryRestoreSession()
     startEdgeDetection()
     registerLoginItem()
+    MCPServer.shared.start()
+  }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    MCPServer.shared.stop()
   }
 
   private func registerLoginItem() {

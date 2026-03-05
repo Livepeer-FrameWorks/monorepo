@@ -10,6 +10,10 @@ targets:
   FrameWorks:
     type: application
     platform: macOS
+    preBuildScripts:
+      - name: Generate GQL Constants
+        script: "${SRCROOT}/../scripts/generate-swift-gql.sh"
+        basedOnDependencyAnalysis: false
     sources:
       - Sources
       - Assets.xcassets

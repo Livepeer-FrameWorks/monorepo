@@ -1192,8 +1192,20 @@ func (e *EdgeProvisioner) Detect(ctx context.Context, host inventory.Host) (*det
 		}, nil
 	}
 
-	// Try native (macOS launchd)
+	// Try native (macOS launchd — system domain)
 	result, err = e.RunCommand(ctx, host, "launchctl print system/com.livepeer.frameworks.caddy 2>/dev/null")
+	if err == nil && result.ExitCode == 0 {
+		return &detect.ServiceState{
+			Exists:  true,
+			Running: true,
+			Metadata: map[string]string{
+				"mode": "native",
+			},
+		}, nil
+	}
+
+	// Try native (macOS launchd — user domain)
+	result, err = e.RunCommand(ctx, host, "launchctl print gui/$(id -u)/com.livepeer.frameworks.caddy 2>/dev/null")
 	if err == nil && result.ExitCode == 0 {
 		return &detect.ServiceState{
 			Exists:  true,

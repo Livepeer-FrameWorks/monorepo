@@ -77,6 +77,76 @@ struct EdgeMetricsResponse: Codable {
   }
 }
 
+struct EdgeStreamDetailResponse: Codable {
+  // MistServer stream info — flexible shape
+  let meta: [String: AnyCodable]?
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let dict = try? container.decode([String: AnyCodable].self) {
+      meta = dict
+    } else {
+      meta = nil
+    }
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(meta)
+  }
+}
+
+struct EdgeClientsResponse: Codable {
+  let nodeId: String
+  let clients: [EdgeClientInfo]
+
+  enum CodingKeys: String, CodingKey {
+    case nodeId = "node_id"
+    case clients
+  }
+}
+
+struct EdgeClientInfo: Codable {
+  let stream: String?
+  let ip: String?
+  let protocol_: String?
+
+  enum CodingKeys: String, CodingKey {
+    case stream, ip
+    case protocol_ = "protocol"
+  }
+}
+
+// Simple wrapper for arbitrary JSON values
+struct AnyCodable: Codable {
+  let value: Any
+
+  init(_ value: Any) { self.value = value }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let v = try? container.decode(String.self) { value = v }
+    else if let v = try? container.decode(Int.self) { value = v }
+    else if let v = try? container.decode(Double.self) { value = v }
+    else if let v = try? container.decode(Bool.self) { value = v }
+    else if let v = try? container.decode([AnyCodable].self) { value = v.map(\.value) }
+    else if let v = try? container.decode([String: AnyCodable].self) {
+      value = v.mapValues(\.value)
+    } else { value = NSNull() }
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    switch value {
+    case let v as String: try container.encode(v)
+    case let v as Int: try container.encode(v)
+    case let v as Double: try container.encode(v)
+    case let v as Bool: try container.encode(v)
+    default: try container.encodeNil()
+    }
+  }
+}
+
 // MARK: - GraphQL Responses
 
 struct StreamsQueryResponse: Codable {

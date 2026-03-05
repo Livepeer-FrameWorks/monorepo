@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-cli \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper \
-	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy update fmt format \
+	proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test coverage env tidy update fmt format \
 	lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
@@ -35,8 +35,12 @@ graphql:
 graphql-frontend:
 	cd website_application && pnpm run gql:codegen
 
-# Generate GraphQL files (backend + frontend)
-graphql-all: graphql graphql-frontend
+# Generate GraphQL Swift constants (tray app)
+graphql-tray:
+	./scripts/generate-swift-gql.sh
+
+# Generate GraphQL files (backend + frontend + tray)
+graphql-all: graphql graphql-frontend graphql-tray
 
 # Build all service binaries
 build: proto graphql

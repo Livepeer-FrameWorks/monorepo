@@ -28,7 +28,6 @@ class AppState: ObservableObject {
 
   // Gateway
   var gatewayBaseURL = "https://bridge.frameworks.network"
-  var edgeBaseURL = "http://localhost:18007"
 }
 
 struct StreamSummary: Identifiable, Codable {
