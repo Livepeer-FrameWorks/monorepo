@@ -1,8 +1,10 @@
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
   @ObservedObject var appState: AppState
   var closePanel: () -> Void
+  @State private var launchAtLogin = false
 
   var body: some View {
     VStack(spacing: 0) {
@@ -20,6 +22,15 @@ struct SettingsView: View {
       Divider()
 
       Form {
+        Section("General") {
+          if #available(macOS 13.0, *) {
+            Toggle("Launch at login", isOn: $launchAtLogin)
+              .onChange(of: launchAtLogin) { _, newValue in
+                toggleLoginItem(newValue)
+              }
+          }
+        }
+
         Section("Connection") {
           TextField("Gateway URL", text: $appState.gatewayBaseURL)
           TextField("Edge URL", text: $appState.edgeBaseURL)
@@ -51,5 +62,26 @@ struct SettingsView: View {
     .frame(width: 420, height: 560)
     .background(.regularMaterial)
     .tint(Color.tnAccent)
+    .onAppear { loadLoginItemStatus() }
+  }
+
+  private func loadLoginItemStatus() {
+    if #available(macOS 13.0, *) {
+      launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+  }
+
+  private func toggleLoginItem(_ enable: Bool) {
+    if #available(macOS 13.0, *) {
+      do {
+        if enable {
+          try SMAppService.mainApp.register()
+        } else {
+          try SMAppService.mainApp.unregister()
+        }
+      } catch {
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+      }
+    }
   }
 }

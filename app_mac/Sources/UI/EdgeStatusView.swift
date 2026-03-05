@@ -12,6 +12,14 @@ struct EdgeStatusView: View {
         Image(systemName: "server.rack")
           .foregroundStyle(appState.edgeHealthy ? Color.tnGreen : Color.tnOrange)
         Text("Edge Node").font(.title2.bold())
+        if appState.edgeServiceDomain != .none {
+          Text(appState.edgeServiceDomain == .user ? "user" : "system")
+            .font(.caption2.bold())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(appState.edgeServiceDomain == .user ? Color.tnGreen.opacity(0.2) : Color.tnOrange.opacity(0.2))
+            .clipShape(Capsule())
+        }
         Spacer()
         Button(action: closePanel) {
           Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)

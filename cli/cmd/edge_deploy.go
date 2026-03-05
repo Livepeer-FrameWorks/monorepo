@@ -3,11 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
-	"frameworks/cli/internal/templates"
+	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
 	"frameworks/pkg/ctxkeys"
@@ -308,34 +309,35 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 }
 
 func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp *pb.PreRegisterEdgeResponse, foghornGRPC, foghornHTTPBase string) error {
-	_ = ctx
+	host := inventory.Host{
+		ExternalIP: "localhost",
+		User:       os.Getenv("USER"),
+	}
 
-	vars := templates.EdgeVars{
-		NodeID:          resp.GetNodeId(),
-		EdgeDomain:      resp.GetEdgeDomain(),
-		AcmeEmail:       cfg.email,
-		FoghornHTTPBase: foghornHTTPBase,
-		FoghornGRPCAddr: foghornGRPC,
+	epConfig := provisioner.EdgeProvisionConfig{
+		Mode:            "native",
+		NodeName:        "edge-" + resp.GetNodeId(),
+		NodeDomain:      resp.GetEdgeDomain(),
+		PoolDomain:      resp.GetPoolDomain(),
 		EnrollmentToken: cfg.enrollmentToken,
-		Mode:            cfg.mode,
+		FoghornGRPCAddr: foghornGRPC,
+		FoghornHTTPBase: foghornHTTPBase,
+		NodeID:          resp.GetNodeId(),
+		CertPEM:         resp.GetCertPem(),
+		KeyPEM:          resp.GetKeyPem(),
+		Email:           cfg.email,
+		SkipPreflight:   cfg.skipPreflight,
+		ApplyTuning:     cfg.applyTuning,
+		Timeout:         cfg.timeout,
+		Version:         cfg.version,
+		DarwinDomain:    provisioner.DomainUser,
 	}
 
-	// Stage TLS certs if provided
-	if cert := resp.GetCertPem(); cert != "" {
-		if key := resp.GetKeyPem(); key != "" {
-			vars.CertPath = "/etc/frameworks/certs/cert.pem"
-			vars.KeyPath = "/etc/frameworks/certs/key.pem"
-		}
-	}
+	pool := fwssh.NewPool(30 * time.Second)
+	ep := provisioner.NewEdgeProvisioner(pool)
 
-	target := "."
-	fmt.Fprintln(cmd.OutOrStdout(), "Writing edge templates...")
-	if err := templates.WriteEdgeTemplates(target, vars, false); err != nil {
-		return fmt.Errorf("failed to write templates: %w", err)
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Templates written to %s\n", target)
-	fmt.Fprintln(cmd.OutOrStdout(), "Start the edge stack with: frameworks edge enroll")
-	return nil
+	fmt.Fprintln(cmd.OutOrStdout(), "Provisioning edge locally (user LaunchAgent, no admin required)...")
+	return ep.Provision(ctx, host, epConfig)
 }
 
 // deriveFoghornHTTPBase derives HTTP base URL from gRPC address.

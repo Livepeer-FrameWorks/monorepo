@@ -396,11 +396,12 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var parallel int
 	var mode string
 	var version string
+	var local bool
 
 	cmd := &cobra.Command{
 		Use:   "provision",
-		Short: "Provision edge node(s) via SSH (preflight, tune, init, enroll)",
-		Long: `Provision edge node(s) by SSHing and running the full edge setup:
+		Short: "Provision edge node(s) via SSH or locally (preflight, tune, init, enroll)",
+		Long: `Provision edge node(s) by SSHing (or locally with --local) and running the full edge setup:
   1. Run preflight checks (Docker, ports, sysctl, limits)
   2. Apply sysctl/limits tuning (optional)
   3. Register node in Quartermaster (triggers DNS sync via Navigator)
@@ -416,6 +417,9 @@ Single node example:
     --node-name edge-us-east-1 \
     --email ops@example.com \
     --fetch-cert
+
+Local (user LaunchAgent, no admin required):
+  frameworks edge provision --local --enrollment-token <tok>
 
 Multi-node manifest example:
   frameworks edge provision --manifest edges.yaml --parallel 4`,
@@ -440,9 +444,10 @@ Multi-node manifest example:
 				foghornAddr = cliCtx.Endpoints.FoghornGRPCAddr
 			}
 
-			// Single node mode - require ssh target
-			if sshTarget == "" {
-				return fmt.Errorf("--ssh is required (user@host) or use --manifest for multi-node")
+			// Single node mode - require ssh target or --local
+			isLocal := local || sshTarget == "localhost" || sshTarget == "127.0.0.1"
+			if sshTarget == "" && !isLocal {
+				return fmt.Errorf("--ssh is required (user@host), --local for this machine, or --manifest for multi-node")
 			}
 
 			// PreRegisterEdge: if enrollment token is provided but domain is not,
@@ -460,7 +465,11 @@ Multi-node manifest example:
 				}
 
 				fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
-				preRegResp, preRegErr := preRegisterEdge(cmd.Context(), addr, enrollmentToken, sshTarget, sshKey)
+				preRegTarget := sshTarget
+				if isLocal {
+					preRegTarget = "localhost"
+				}
+				preRegResp, preRegErr := preRegisterEdge(cmd.Context(), addr, enrollmentToken, preRegTarget, sshKey)
 				if preRegErr != nil {
 					return fmt.Errorf("pre-registration failed: %w", preRegErr)
 				}
@@ -502,12 +511,18 @@ Multi-node manifest example:
 				primaryDomain = nodeDomain
 			}
 
-			// Default node name from SSH target or domain
+			// Default node name from SSH target, domain, or hostname
 			if nodeName == "" {
 				if nodeDomain != "" {
 					nodeName = strings.Split(nodeDomain, ".")[0]
+				} else if isLocal {
+					hostname, _ := os.Hostname()
+					if hostname != "" {
+						nodeName = hostname
+					} else {
+						nodeName = "localhost"
+					}
 				} else {
-					// Extract from ssh target (user@host -> host)
 					parts := strings.Split(sshTarget, "@")
 					if len(parts) > 1 {
 						nodeName = parts[1]
@@ -517,7 +532,11 @@ Multi-node manifest example:
 				}
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Provisioning edge node: %s (%s mode)\n", sshTarget, mode)
+			targetLabel := sshTarget
+			if isLocal {
+				targetLabel = "localhost"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Provisioning edge node: %s (%s mode)\n", targetLabel, mode)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node name: %s\n", nodeName)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Pool domain: %s\n", poolDomain)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node domain: %s\n", nodeDomain)
@@ -543,7 +562,24 @@ Multi-node manifest example:
 			if preRegFoghornAddr != "" {
 				foghornGRPC = preRegFoghornAddr
 			}
-			host := sshTargetToHost(sshTarget, sshKey)
+
+			var host inventory.Host
+			var darwinDomain provisioner.DarwinDomain
+			if isLocal {
+				host = inventory.Host{
+					ExternalIP: "localhost",
+					User:       os.Getenv("USER"),
+				}
+				darwinDomain = provisioner.DomainUser
+				if mode == "docker" {
+					mode = "native" // local install always uses native launchd
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "  launchd domain: user (no admin required)")
+			} else {
+				host = sshTargetToHost(sshTarget, sshKey)
+				darwinDomain = provisioner.DomainSystem
+			}
+
 			epConfig := provisioner.EdgeProvisionConfig{
 				Mode:            mode,
 				NodeName:        nodeName,
@@ -563,6 +599,7 @@ Multi-node manifest example:
 				RegisterNode:    registerNode,
 				Timeout:         timeout,
 				Version:         version,
+				DarwinDomain:    darwinDomain,
 			}
 
 			pool := fwssh.NewPool(30 * time.Second)
@@ -606,6 +643,7 @@ Multi-node manifest example:
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of nodes to provision in parallel (for manifest mode)")
 	cmd.Flags().StringVar(&mode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
 	cmd.Flags().StringVar(&version, "version", "", "Platform version for binary resolution (e.g., stable, v1.2.3)")
+	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 
 	return cmd
 }

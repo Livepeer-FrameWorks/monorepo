@@ -1,4 +1,5 @@
 import Cocoa
+import ServiceManagement
 import SwiftUI
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -12,6 +13,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     setupStatusBarIcon()
     tryRestoreSession()
     startEdgeDetection()
+    registerLoginItem()
+  }
+
+  private func registerLoginItem() {
+    if #available(macOS 13.0, *) {
+      let service = SMAppService.mainApp
+      if service.status != .enabled {
+        try? service.register()
+      }
+    }
   }
 
   // MARK: - Status Bar
@@ -129,8 +140,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private func startEdgeDetection() {
     Task {
       let reachable = await EdgeClient.shared.isReachable()
+      let domain = ServiceManager.detectedDomain()
       await MainActor.run {
         appState.edgeDetected = reachable
+        appState.edgeServiceDomain = domain
         if reachable && appState.isAuthenticated {
           startEdgePolling()
         }

@@ -13,6 +13,7 @@ class AppState: ObservableObject {
   @Published var edgeHealthy = false
   @Published var edgeNodeId: String?
   @Published var edgeOperationalMode: String?
+  @Published var edgeServiceDomain: ServiceDomain = .none
   @Published var activeStreamCount = 0
   @Published var totalViewers = 0
   @Published var bandwidthUp: UInt64 = 0
