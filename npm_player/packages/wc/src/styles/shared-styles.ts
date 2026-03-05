@@ -898,6 +898,20 @@ export const sharedStyles = css`
       transform: translateX(-50%);
     }
 
+    .fw-seek-thumbnail {
+      position: absolute;
+      bottom: 100%;
+      margin-bottom: 28px;
+      border-radius: 4px;
+      border: 2px solid hsl(var(--fw-surface-raised));
+      box-shadow: 0 4px 12px hsl(var(--fw-shadow-color) / 0.4);
+      background-color: hsl(var(--fw-surface-deep));
+      background-repeat: no-repeat;
+      pointer-events: none;
+      transform: translateX(-50%);
+      z-index: 10;
+    }
+
     /* --- Stats Panel --- */
     .fw-stats-panel {
       position: absolute;

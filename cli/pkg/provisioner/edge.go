@@ -1281,10 +1281,6 @@ func (e *EdgeProvisioner) writeRemoteFile(ctx context.Context, host inventory.Ho
 
 // uploadLaunchdPlist generates a launchd plist and uploads it to /Library/LaunchDaemons (system domain).
 // Kept for backward compatibility; new code should use uploadLaunchdPlistTo.
-func (e *EdgeProvisioner) uploadLaunchdPlist(ctx context.Context, host inventory.Host, data LaunchdPlistData) error {
-	return e.uploadLaunchdPlistTo(ctx, host, darwinPaths(DomainSystem), data)
-}
-
 // uploadLaunchdPlistTo generates a launchd plist and uploads it to the given directory set.
 // Since launchd doesn't support EnvironmentFile natively, we use a wrapper shell script
 // that sources the env file before exec-ing the program.

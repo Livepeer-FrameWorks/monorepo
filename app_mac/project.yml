@@ -12,7 +12,6 @@ targets:
     platform: macOS
     sources:
       - Sources
-    resources:
       - Assets.xcassets
     settings:
       base:
@@ -23,6 +22,9 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_VERSION: "5.0"
         COMBINE_HIDPI_IMAGES: YES
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
       configs:
         Debug:
           CODE_SIGN_STYLE: Automatic

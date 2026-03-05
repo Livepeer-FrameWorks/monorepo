@@ -29,12 +29,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func setupStatusBarIcon() {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    guard let button = statusItem.button else { return }
+    if let button = statusItem.button {
+      if let originalImage = NSImage(named: "StatusIcon") {
+        let targetSize = NSSize(width: 16, height: 16)
+        let resizedImage = NSImage(size: targetSize)
 
-    button.image = SFSymbols.image("tv.badge.wifi", accessibilityDescription: "FrameWorks")
-    button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-    button.action = #selector(handleStatusBarClick(_:))
-    button.target = self
+        resizedImage.lockFocus()
+        let originalSize = originalImage.size
+        let aspectRatio = originalSize.width / originalSize.height
+
+        var drawSize = targetSize
+        if aspectRatio > 1 {
+          drawSize.height = targetSize.width / aspectRatio
+        } else {
+          drawSize.width = targetSize.height * aspectRatio
+        }
+
+        let drawRect = NSRect(
+          x: (targetSize.width - drawSize.width) / 2,
+          y: (targetSize.height - drawSize.height) / 2,
+          width: drawSize.width,
+          height: drawSize.height
+        )
+
+        originalImage.draw(in: drawRect)
+        resizedImage.unlockFocus()
+        resizedImage.isTemplate = true
+        button.image = resizedImage
+      }
+      button.toolTip = "FrameWorks"
+      button.target = self
+      button.action = #selector(handleStatusBarClick(_:))
+      button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    }
   }
 
   @objc private func handleStatusBarClick(_ sender: NSStatusBarButton) {
@@ -161,18 +188,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   // MARK: - Status Icon
 
   func updateStatusIcon() {
-    guard let button = statusItem.button else { return }
-
-    if !appState.isAuthenticated {
-      button.image = SFSymbols.image("tv.badge.wifi")
-      return
-    }
-
-    if appState.edgeDetected {
-      let color: NSColor = appState.edgeHealthy ? .systemGreen : .systemOrange
-      button.image = SFSymbols.tintedImage("server.rack", color: color)
-    } else {
-      button.image = SFSymbols.tintedImage("tv.badge.wifi", color: .systemBlue)
-    }
+    // Icon is set once in setupStatusBarIcon; no dynamic changes needed
   }
 }

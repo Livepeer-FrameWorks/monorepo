@@ -35,7 +35,8 @@ class PanelManager: NSObject, NSWindowDelegate {
     if let panel = panel, panel.isVisible {
       closePanel()
     } else {
-      showView(.dashboard, relativeTo: button)
+      let view: PanelView = appState.isAuthenticated ? .dashboard : .login
+      showView(view, relativeTo: button)
     }
   }
 

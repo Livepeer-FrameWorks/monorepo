@@ -29,7 +29,7 @@ func TestCheckLatest(t *testing.T) {
 	// Override the releases URL by patching — we can't easily, so test the parsing logic
 	// via a direct HTTP call instead.
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -89,14 +89,6 @@ func TestUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	release := &Release{
-		TagName: "v2.0.0",
-		Assets: []Asset{
-			{Name: binaryName, BrowserDownloadURL: srv.URL + "/" + binaryName},
-			{Name: binaryName + ".sha256", BrowserDownloadURL: srv.URL + "/" + binaryName + ".sha256"},
-		},
-	}
-
 	// We can't easily override os.Executable() in tests, so test the download+checksum
 	// logic directly instead of calling Update().
 	tmpFile := filepath.Join(tmpDir, "download")
@@ -118,7 +110,6 @@ func TestUpdate(t *testing.T) {
 		t.Errorf("checksum verification failed: %v", err)
 	}
 
-	_ = release // used above for reference
 }
 
 func TestVerifyChecksumMismatch(t *testing.T) {
