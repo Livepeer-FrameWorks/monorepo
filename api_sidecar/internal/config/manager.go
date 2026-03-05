@@ -413,6 +413,12 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 		need = append(need, entry)
 	}
 
+	// ThumbVTT - ensure exists for thumbnail sprite VTT output
+	if _, ok := existingProtos["ThumbVTT"]; !ok {
+		entry := map[string]interface{}{"connector": "ThumbVTT"}
+		need = append(need, entry)
+	}
+
 	// Remove unwanted protocols (TSRIST is push-system-only, generates warnings)
 	unwanted := []string{"TSRIST"}
 	var toDelete []map[string]interface{}
