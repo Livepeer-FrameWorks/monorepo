@@ -690,15 +690,31 @@
                           </TableCell>
 
                           <TableCell class="px-4 py-2">
-                            <div class="flex flex-col">
-                              <div
-                                class="text-sm font-medium text-foreground truncate max-w-xs group-hover:text-primary transition-colors"
-                                title={stream.name}
-                              >
-                                {stream.name}
-                              </div>
-                              <div class="text-[10px] text-muted-foreground font-mono">
-                                {stream.streamId.slice(0, 8)}...
+                            <div class="flex items-center gap-3">
+                              {#if stream.thumbnailUrl}
+                                <img
+                                  src={stream.thumbnailUrl}
+                                  alt=""
+                                  loading="lazy"
+                                  class="w-16 h-9 rounded object-cover bg-muted shrink-0"
+                                />
+                              {:else}
+                                <div
+                                  class="w-16 h-9 rounded bg-muted shrink-0 flex items-center justify-center"
+                                >
+                                  <VideoIcon class="w-4 h-4 text-muted-foreground/50" />
+                                </div>
+                              {/if}
+                              <div class="flex flex-col min-w-0">
+                                <div
+                                  class="text-sm font-medium text-foreground truncate max-w-xs group-hover:text-primary transition-colors"
+                                  title={stream.name}
+                                >
+                                  {stream.name}
+                                </div>
+                                <div class="text-[10px] text-muted-foreground font-mono">
+                                  {stream.streamId.slice(0, 8)}...
+                                </div>
                               </div>
                             </div>
                           </TableCell>
