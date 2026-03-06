@@ -156,3 +156,74 @@ SeekBar components receive cues as a prop. On hover, `findCueAtTime()` binary-se
 `PlayerController.detectPreviewUrl()` finds a JPEG track with `lang === "pre"`, constructs `{mistBaseUrl}/{streamName}.jpg?video=pre`, uses it as the poster image for `ThumbnailOverlay`. Shown before playback starts.
 
 The explicit `poster` config prop (or `thumbnailUrl` on framework components) overrides auto-detection. When neither exists, no poster is shown.
+
+---
+
+## S3 Push Pipeline (Stream Listing Thumbnails)
+
+The player-side thumbnails above require an active viewer connection to a MistServer edge. Stream listing pages need thumbnails without per-stream edge resolution — that's the S3 push pipeline.
+
+### Flow
+
+```
+MistServer (process_thumbs)
+  → writes poster.jpg, sprite.jpg, sprite.vtt to /tmp/mist_thumbs/{streamName}/
+  → fires THUMBNAIL_UPDATED trigger
+
+Helmsman (webhook handler)
+  → receives trigger payload (stream name + file paths)
+  → sends ThumbnailUploadRequest to Foghorn via gRPC control stream
+
+Foghorn
+  → resolves internal_name → playback_id from StreamStateManager
+  → generates presigned PUT URLs via S3 client
+  → returns ThumbnailUploadResponse with presigned URLs + local paths
+
+Helmsman
+  → uploads files to S3 via presigned PUT (no edge credentials needed)
+  → sends ThumbnailUploaded confirmation to Foghorn
+
+Foghorn
+  → constructs Chandler URL: {CHANDLER_BASE_URL}/assets/{playbackId}/poster.jpg
+  → calls Commodore UpdateStreamThumbnail(playbackId, thumbnailUrl)
+
+Commodore
+  → stores thumbnail_url on streams table
+  → exposed via GetStream/ListStreams RPCs → GraphQL thumbnailUrl field
+```
+
+### S3 Key Layout
+
+```
+thumbnails/{playbackId}/poster.jpg     # latest preview frame
+thumbnails/{playbackId}/sprite.jpg     # 10x10 grid
+thumbnails/{playbackId}/sprite.vtt     # WebVTT manifest
+```
+
+### Chandler (Static Asset Server)
+
+`api_assets/` — HTTP-only service (port 18020) that caches and serves thumbnail assets from S3.
+
+Deterministic URL-to-S3 mapping: `/assets/{playbackId}/poster.jpg` → S3 key `thumbnails/{playbackId}/poster.jpg`. No database or Commodore contact needed.
+
+- In-memory LRU cache (~50MB, 30s TTL)
+- `Cache-Control: public, max-age=30` on responses
+- No auth (public assets; tenant isolation enforced at Commodore query layer)
+- Prometheus metrics: cache hits/misses, S3 fetch errors, request latency
+
+Config: reuses `STORAGE_S3_*` env vars (same bucket as clips/DVR/VOD). Read-only S3 access.
+
+### Key Files
+
+| File                                        | Purpose                                                   |
+| ------------------------------------------- | --------------------------------------------------------- |
+| `api_assets/cmd/chandler/main.go`           | HTTP server, S3 client, LRU cache                         |
+| `api_assets/internal/handlers/assets.go`    | GET /assets/{pk}/{file} handler                           |
+| `api_assets/internal/cache/lru.go`          | Thread-safe size-bounded LRU cache                        |
+| `api_sidecar/internal/config/manager.go`    | THUMBNAIL_UPDATED trigger registration                    |
+| `api_sidecar/internal/handlers/handlers.go` | HandleThumbnailUpdated webhook                            |
+| `api_sidecar/internal/control/client.go`    | SendThumbnailUploadRequest, handleThumbnailUploadResponse |
+| `api_balancing/internal/control/server.go`  | processThumbnailUploadRequest, processThumbnailUploaded   |
+| `api_control/internal/grpc/server.go`       | UpdateStreamThumbnail RPC                                 |
+| `pkg/proto/ipc.proto`                       | ThumbnailUpload\* control messages                        |
+| `pkg/proto/commodore.proto`                 | UpdateStreamThumbnailRequest, thumbnail_url on Stream     |
