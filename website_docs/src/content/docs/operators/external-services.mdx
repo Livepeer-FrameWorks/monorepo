@@ -13,19 +13,40 @@ External service credentials required by the platform.
 
 The CLI automatically delivers credentials to each host during provisioning. Environment variables are merged in this order (later wins):
 
-1. **Auto-generated** from manifest infrastructure config (`DATABASE_URL`, `KAFKA_BROKERS`, `QUARTERMASTER_GRPC_ADDR`, `CLUSTER_ID`, `NODE_ID`, `SERVICE_TOKEN`)
+1. **CLI-derived** from manifest infrastructure config (`DATABASE_HOST`, `DATABASE_PORT`, `KAFKA_BROKERS`, `CLICKHOUSE_ADDR`, `CLUSTER_ID`, `NODE_ID`)
 2. **Shared env_file** from the manifest's top-level `env_file` field
 3. **Per-service env_file** from each service's `env_file` field
 4. **Inline config** from the service's `config` map
+5. **CLI auto-generated** — missing security secrets are filled with cryptographic random values
+6. **CLI-composed** — `DATABASE_URL` and `COOKIE_DOMAIN` are derived from merged values
 
 The merged result is written to `/etc/frameworks/{service}.env` on each host.
+
+### Credential Categories
+
+| Category               | Examples                                                      | Who Sets It                    |
+| ---------------------- | ------------------------------------------------------------- | ------------------------------ |
+| **Operator-provided**  | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP | You — in your env_file         |
+| **CLI auto-generated** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`         | CLI — when left as `change-me` |
+| **CLI-derived**        | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`              | CLI — from manifest            |
+
+Auto-generated secrets use `crypto/rand` (64-char hex). The CLI generates them once and they persist across re-provisions via your env_file.
+
+### Infrastructure Credential Flow
+
+During `frameworks cluster provision`, the CLI also provisions database users:
+
+- **Postgres/YugabyteDB**: Creates the `DATABASE_USER` role (from your env_file) with `DATABASE_PASSWORD`, grants access to all configured databases
+- **ClickHouse**: Deploys `users.xml` with a `frameworks` user (password from `CLICKHOUSE_PASSWORD`) and a `readonly_user` (rate-limited, password from `CLICKHOUSE_READONLY_PASSWORD`)
+
+This ensures runtime services can connect with the same credentials the CLI provisioned.
 
 **Setup:**
 
 1. Copy the template: `cp config/env/secrets.env.example gitops-private/secrets/production.env`
-2. Fill in real values (see sections below for each service)
+2. Set at minimum: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD` (security secrets can be left as `change-me`)
 3. Reference it in your cluster manifest: `env_file: secrets/production.env`
-4. Run `frameworks cluster provision` — the CLI reads the file and pushes merged env vars to all hosts
+4. Run `frameworks cluster provision` — the CLI creates database users, generates missing secrets, and pushes merged env vars to all hosts
 
 ### Encrypting secrets with SOPS + age
 
@@ -278,10 +299,12 @@ GEOIP_CACHE_MAX=10000      # Max cached entries
 
 ## Summary
 
-| Service  | Provider                      | Required    | Automated by               |
-| -------- | ----------------------------- | ----------- | -------------------------- |
-| DNS      | Cloudflare (recommended)      | Yes         | Navigator (api_dns)        |
-| SSL/TLS  | Let's Encrypt (ACME)          | Yes         | Navigator (api_dns)        |
-| GeoIP    | MaxMind / DB-IP / IP2Location | Recommended | CLI (`cluster sync-geoip`) |
-| SMTP     | Any provider                  | Optional    | Platform (email delivery)  |
-| Payments | Stripe, Mollie                | Optional    | Purser (webhook handling)  |
+| Service    | Provider                      | Required    | Automated by                 |
+| ---------- | ----------------------------- | ----------- | ---------------------------- |
+| Database   | Postgres or YugabyteDB        | Yes         | CLI (user creation + grants) |
+| ClickHouse | ClickHouse                    | Yes         | CLI (users.xml deployment)   |
+| DNS        | Cloudflare (recommended)      | Yes         | Navigator (api_dns)          |
+| SSL/TLS    | Let's Encrypt (ACME)          | Yes         | Navigator (api_dns)          |
+| GeoIP      | MaxMind / DB-IP / IP2Location | Recommended | CLI (`cluster sync-geoip`)   |
+| SMTP       | Any provider                  | Optional    | Platform (email delivery)    |
+| Payments   | Stripe, Mollie                | Optional    | Purser (webhook handling)    |
