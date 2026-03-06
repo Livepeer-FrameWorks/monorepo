@@ -156,6 +156,9 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     active_ingest_cluster_id VARCHAR(100),
     active_ingest_cluster_updated_at TIMESTAMP,
 
+    -- ===== THUMBNAIL ASSETS =====
+    thumbnail_url VARCHAR(512),
+
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );

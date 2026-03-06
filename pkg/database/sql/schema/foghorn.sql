@@ -283,8 +283,15 @@ CREATE TABLE IF NOT EXISTS foghorn.processing_jobs (
 -- PROCESSING JOBS INDEXES
 -- ============================================================================
 
+-- ===== DEPENDENCY TRACKING =====
+ALTER TABLE foghorn.processing_jobs
+  ADD COLUMN IF NOT EXISTS parent_job_id UUID REFERENCES foghorn.processing_jobs(job_id),
+  ADD COLUMN IF NOT EXISTS output_metadata JSONB;
+
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_tenant ON foghorn.processing_jobs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_status ON foghorn.processing_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_artifact ON foghorn.processing_jobs(artifact_hash);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_queued ON foghorn.processing_jobs(status, created_at) WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_node ON foghorn.processing_jobs(processing_node_id) WHERE processing_node_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_parent ON foghorn.processing_jobs(parent_job_id) WHERE parent_job_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_artifact_status ON foghorn.processing_jobs(artifact_hash, status);
