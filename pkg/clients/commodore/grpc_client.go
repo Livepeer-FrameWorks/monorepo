@@ -510,6 +510,15 @@ func (c *GRPCClient) UpdateStream(ctx context.Context, req *pb.UpdateStreamReque
 	return c.stream.UpdateStream(ctx, req)
 }
 
+// UpdateStreamThumbnail updates the thumbnail URL for a stream (internal, called by Foghorn)
+func (c *GRPCClient) UpdateStreamThumbnail(ctx context.Context, playbackID, thumbnailURL string) error {
+	_, err := c.internal.UpdateStreamThumbnail(ctx, &pb.UpdateStreamThumbnailRequest{
+		PlaybackId:   playbackID,
+		ThumbnailUrl: thumbnailURL,
+	})
+	return err
+}
+
 // DeleteStream deletes a stream
 func (c *GRPCClient) DeleteStream(ctx context.Context, streamID string) (*pb.DeleteStreamResponse, error) {
 	return c.stream.DeleteStream(ctx, &pb.DeleteStreamRequest{
