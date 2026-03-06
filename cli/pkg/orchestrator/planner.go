@@ -72,16 +72,29 @@ func (p *Planner) Plan(ctx context.Context, opts ProvisionOptions) (*ExecutionPl
 
 // addInfrastructureTasks adds infrastructure provisioning tasks
 func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
-	// Add Postgres
-	if p.manifest.Infrastructure.Postgres != nil && p.manifest.Infrastructure.Postgres.Enabled {
-		graph.AddTask(&Task{
-			Name:       "postgres",
-			Type:       "postgres",
-			Host:       p.manifest.Infrastructure.Postgres.Host,
-			DependsOn:  []string{},
-			Phase:      PhaseInfrastructure,
-			Idempotent: true,
-		})
+	// Add Postgres / YugabyteDB
+	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
+			for _, node := range pg.Nodes {
+				graph.AddTask(&Task{
+					Name:       fmt.Sprintf("yugabyte-node-%d", node.ID),
+					Type:       "yugabyte",
+					Host:       node.Host,
+					DependsOn:  []string{},
+					Phase:      PhaseInfrastructure,
+					Idempotent: true,
+				})
+			}
+		} else {
+			graph.AddTask(&Task{
+				Name:       "postgres",
+				Type:       "postgres",
+				Host:       pg.Host,
+				DependsOn:  []string{},
+				Phase:      PhaseInfrastructure,
+				Idempotent: true,
+			})
+		}
 	}
 
 	// Add Redis
@@ -156,8 +169,14 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	// Application services depend on infrastructure
 	infraDeps := []string{}
 
-	if p.manifest.Infrastructure.Postgres != nil && p.manifest.Infrastructure.Postgres.Enabled {
-		infraDeps = append(infraDeps, "postgres")
+	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
+			for _, node := range pg.Nodes {
+				infraDeps = append(infraDeps, fmt.Sprintf("yugabyte-node-%d", node.ID))
+			}
+		} else {
+			infraDeps = append(infraDeps, "postgres")
+		}
 	}
 
 	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {

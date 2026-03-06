@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"sort"
@@ -46,17 +47,24 @@ func newDNSDoctorCmd() *cobra.Command {
 			}
 			defer qmClient.Close()
 
-			fmt.Fprintln(cmd.OutOrStdout(), "🏥 DNS Health Check")
-			fmt.Fprintln(cmd.OutOrStdout(), "===================")
+			isJSON := output == "json"
+			if !isJSON {
+				fmt.Fprintln(cmd.OutOrStdout(), "🏥 DNS Health Check")
+				fmt.Fprintln(cmd.OutOrStdout(), "===================")
+				fmt.Fprint(cmd.OutOrStdout(), "• Fetching inventory from Quartermaster... ")
+			}
 
 			// 2. Fetch Inventory
-			fmt.Fprint(cmd.OutOrStdout(), "• Fetching inventory from Quartermaster... ")
 			nodesResp, err := qmClient.ListNodes(context.Background(), "", "", "", nil)
 			if err != nil {
-				fmt.Fprintln(cmd.OutOrStdout(), "❌")
+				if !isJSON {
+					fmt.Fprintln(cmd.OutOrStdout(), "❌")
+				}
 				return fmt.Errorf("failed to get nodes: %w", err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "✓ (%d active nodes)\n", len(nodesResp.Nodes))
+			if !isJSON {
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ (%d active nodes)\n", len(nodesResp.Nodes))
+			}
 
 			// 3. Group Expected IPs by Role
 			expectedIPs := make(map[string][]string)
@@ -91,16 +99,19 @@ func newDNSDoctorCmd() *cobra.Command {
 			}
 
 			// 4. Verify Records
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "\nDOMAIN\tEXPECTED IPs\tACTUAL IPs\tSTATUS")
+			type dnsResult struct {
+				Domain      string   `json:"domain"`
+				ExpectedIPs []string `json:"expected_ips"`
+				ActualIPs   []string `json:"actual_ips"`
+				OK          bool     `json:"ok"`
+				Status      string   `json:"status"`
+			}
 
+			var results []dnsResult
 			allHealthy := true
 
-			// Check each expected domain
 			for fqdn, wantIPs := range expectedIPs {
 				sort.Strings(wantIPs)
-
-				// Resolve Public DNS
 				ips, err := net.LookupHost(fqdn)
 				var gotIPs []string
 				if err == nil {
@@ -108,21 +119,39 @@ func newDNSDoctorCmd() *cobra.Command {
 				}
 				sort.Strings(gotIPs)
 
-				// Compare
-				status := "✅ OK"
+				r := dnsResult{Domain: fqdn, ExpectedIPs: wantIPs, ActualIPs: gotIPs, OK: true, Status: "OK"}
 				if err != nil {
-					status = "❌ NXDOMAIN"
+					r.OK = false
+					r.Status = "NXDOMAIN"
 					allHealthy = false
 				} else if !slicesEqual(wantIPs, gotIPs) {
-					status = "⚠️  MISMATCH"
+					r.OK = false
+					r.Status = "MISMATCH"
 					allHealthy = false
 				}
+				results = append(results, r)
+			}
 
+			if isJSON {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(results)
+			}
+
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "\nDOMAIN\tEXPECTED IPs\tACTUAL IPs\tSTATUS")
+			for _, r := range results {
+				statusIcon := "✅ OK"
+				if r.Status == "NXDOMAIN" {
+					statusIcon = "❌ NXDOMAIN"
+				} else if r.Status == "MISMATCH" {
+					statusIcon = "⚠️  MISMATCH"
+				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-					fqdn,
-					strings.Join(wantIPs, ","),
-					strings.Join(gotIPs, ","),
-					status,
+					r.Domain,
+					strings.Join(r.ExpectedIPs, ","),
+					strings.Join(r.ActualIPs, ","),
+					statusIcon,
 				)
 			}
 			w.Flush()

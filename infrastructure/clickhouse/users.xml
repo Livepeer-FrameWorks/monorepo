@@ -37,7 +37,7 @@
             <networks>
                 <ip>::/0</ip>
             </networks>
-            <access_management>1</access_management>
+            <access_management>0</access_management>
             <allow_databases>
                 <database>periscope</database>
             </allow_databases>

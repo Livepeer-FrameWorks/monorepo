@@ -168,6 +168,145 @@ func (c *ClickHouseProvisioner) Initialize(ctx context.Context, host inventory.H
 	return nil
 }
 
+// Configure deploys users.xml and sets the CLICKHOUSE_PASSWORD env var
+// on the ClickHouse host so the "frameworks" user has a password.
+// Must be called after Provision (ClickHouse is installed and running).
+func (c *ClickHouseProvisioner) Configure(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	password, _ := config.Metadata["clickhouse_password"].(string)
+	if password == "" {
+		return nil // no password configured — skip (dev mode)
+	}
+
+	readonlyPassword, _ := config.Metadata["clickhouse_readonly_password"].(string)
+	if readonlyPassword == "" {
+		readonlyPassword = password // reuse primary password for readonly if not set
+	}
+
+	// Deploy users.xml and set env vars via a single script.
+	// ClickHouse reads CLICKHOUSE_PASSWORD from the process environment
+	// when users.xml uses <password from_env="CLICKHOUSE_PASSWORD"/>.
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
+
+# Write users.xml with from_env references
+cat > /etc/clickhouse-server/users.xml <<'USERSXML'
+<?xml version="1.0"?>
+<clickhouse>
+    <profiles>
+        <default>
+            <log_queries>1</log_queries>
+            <log_query_threads>1</log_query_threads>
+            <allow_ddl>1</allow_ddl>
+            <readonly>0</readonly>
+        </default>
+        <readonly>
+            <log_queries>0</log_queries>
+            <readonly>1</readonly>
+            <allow_ddl>0</allow_ddl>
+        </readonly>
+    </profiles>
+    <users>
+        <default>
+            <password></password>
+            <profile>default</profile>
+            <quota>default</quota>
+            <networks>
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
+            </networks>
+            <access_management>1</access_management>
+        </default>
+        <frameworks>
+            <password from_env="CLICKHOUSE_PASSWORD"></password>
+            <profile>default</profile>
+            <quota>frameworks_quota</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <access_management>0</access_management>
+            <allow_databases>
+                <database>periscope</database>
+            </allow_databases>
+        </frameworks>
+        <readonly_user>
+            <password from_env="CLICKHOUSE_READONLY_PASSWORD"></password>
+            <profile>readonly</profile>
+            <quota>readonly_quota</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <allow_databases>
+                <database>periscope</database>
+            </allow_databases>
+        </readonly_user>
+    </users>
+    <quotas>
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </default>
+        <frameworks_quota>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </frameworks_quota>
+        <readonly_quota>
+            <interval>
+                <duration>3600</duration>
+                <queries>1000</queries>
+                <errors>50</errors>
+                <result_rows>10000000</result_rows>
+                <read_rows>100000000</read_rows>
+                <execution_time>1800</execution_time>
+            </interval>
+        </readonly_quota>
+    </quotas>
+</clickhouse>
+USERSXML
+
+chown clickhouse:clickhouse /etc/clickhouse-server/users.xml
+chmod 640 /etc/clickhouse-server/users.xml
+
+# Set password env vars for systemd so ClickHouse reads them at startup
+mkdir -p /etc/systemd/system/clickhouse-server.service.d
+cat > /etc/systemd/system/clickhouse-server.service.d/passwords.conf <<EOF
+[Service]
+Environment="CLICKHOUSE_PASSWORD=%s"
+Environment="CLICKHOUSE_READONLY_PASSWORD=%s"
+EOF
+
+chmod 600 /etc/systemd/system/clickhouse-server.service.d/passwords.conf
+
+systemctl daemon-reload
+systemctl restart clickhouse-server
+
+sleep 3
+echo "ClickHouse configured with application credentials"
+`, password, readonlyPassword)
+
+	result, err := c.ExecuteScript(ctx, host, script)
+	if err != nil {
+		return fmt.Errorf("failed to configure ClickHouse credentials: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("ClickHouse configuration failed: %s", result.Stderr)
+	}
+
+	fmt.Printf("✓ ClickHouse credentials configured on %s\n", host.ExternalIP)
+	return nil
+}
+
 // initializePeriscopeDatabase runs ClickHouse schema for periscope
 func (c *ClickHouseProvisioner) initializePeriscopeDatabase(ctx context.Context, conn clickhouse.Conn) error {
 	sqlContent, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")

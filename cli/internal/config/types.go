@@ -1,48 +1,48 @@
 package config
 
 type Endpoints struct {
-	BridgeURL             string `yaml:"bridge_url"`
-	QuartermasterURL      string `yaml:"quartermaster_url"`       // deprecated: use QuartermasterGRPCAddr
-	QuartermasterGRPCAddr string `yaml:"quartermaster_grpc_addr"` // gRPC address (host:port)
-	ControlURL            string `yaml:"control_url"`             // deprecated: use CommodoreGRPCAddr
-	CommodoreGRPCAddr     string `yaml:"commodore_grpc_addr"`     // gRPC address (host:port)
-	FoghornHTTPURL        string `yaml:"foghorn_http_url"`        // deprecated
-	FoghornGRPCAddr       string `yaml:"foghorn_grpc_addr"`
-	DecklogGRPCAddr       string `yaml:"decklog_grpc_addr"`
-	PeriscopeQueryURL     string `yaml:"periscope_query_url"`  // deprecated: use PeriscopeGRPCAddr
-	PeriscopeGRPCAddr     string `yaml:"periscope_grpc_addr"`  // gRPC address (host:port)
-	PeriscopeIngestURL    string `yaml:"periscope_ingest_url"` // deprecated
-	PurserURL             string `yaml:"purser_url"`           // deprecated: use PurserGRPCAddr
-	PurserGRPCAddr        string `yaml:"purser_grpc_addr"`     // gRPC address (host:port)
-	SignalmanWSURL        string `yaml:"signalman_ws_url"`
-	SignalmanGRPCAddr     string `yaml:"signalman_grpc_addr"` // gRPC address (host:port)
-	NavigatorGRPCAddr     string `yaml:"navigator_grpc_addr"` // gRPC address for DNS/cert service (host:port)
+	BridgeURL             string `yaml:"bridge_url" json:"bridge_url"`
+	QuartermasterURL      string `yaml:"quartermaster_url" json:"quartermaster_url"`             // deprecated: use QuartermasterGRPCAddr
+	QuartermasterGRPCAddr string `yaml:"quartermaster_grpc_addr" json:"quartermaster_grpc_addr"` // gRPC address (host:port)
+	ControlURL            string `yaml:"control_url" json:"control_url"`                         // deprecated: use CommodoreGRPCAddr
+	CommodoreGRPCAddr     string `yaml:"commodore_grpc_addr" json:"commodore_grpc_addr"`         // gRPC address (host:port)
+	FoghornHTTPURL        string `yaml:"foghorn_http_url" json:"foghorn_http_url"`               // deprecated
+	FoghornGRPCAddr       string `yaml:"foghorn_grpc_addr" json:"foghorn_grpc_addr"`
+	DecklogGRPCAddr       string `yaml:"decklog_grpc_addr" json:"decklog_grpc_addr"`
+	PeriscopeQueryURL     string `yaml:"periscope_query_url" json:"periscope_query_url"`   // deprecated: use PeriscopeGRPCAddr
+	PeriscopeGRPCAddr     string `yaml:"periscope_grpc_addr" json:"periscope_grpc_addr"`   // gRPC address (host:port)
+	PeriscopeIngestURL    string `yaml:"periscope_ingest_url" json:"periscope_ingest_url"` // deprecated
+	PurserURL             string `yaml:"purser_url" json:"purser_url"`                     // deprecated: use PurserGRPCAddr
+	PurserGRPCAddr        string `yaml:"purser_grpc_addr" json:"purser_grpc_addr"`         // gRPC address (host:port)
+	SignalmanWSURL        string `yaml:"signalman_ws_url" json:"signalman_ws_url"`
+	SignalmanGRPCAddr     string `yaml:"signalman_grpc_addr" json:"signalman_grpc_addr"` // gRPC address (host:port)
+	NavigatorGRPCAddr     string `yaml:"navigator_grpc_addr" json:"navigator_grpc_addr"` // gRPC address for DNS/cert service (host:port)
 
 	// TLS configuration for external (non-mesh) connections
-	UseTLS        bool   `yaml:"use_tls"`         // Enable TLS for gRPC connections (via Caddy proxy)
-	TLSSkipVerify bool   `yaml:"tls_skip_verify"` // Skip TLS certificate verification (dev only!)
-	TLSCACert     string `yaml:"tls_ca_cert"`     // Path to CA certificate for custom CAs
+	UseTLS        bool   `yaml:"use_tls" json:"use_tls"`                 // Enable TLS for gRPC connections (via Caddy proxy)
+	TLSSkipVerify bool   `yaml:"tls_skip_verify" json:"tls_skip_verify"` // Skip TLS certificate verification (dev only!)
+	TLSCACert     string `yaml:"tls_ca_cert" json:"tls_ca_cert"`         // Path to CA certificate for custom CAs
 }
 
 type Executor struct {
-	Type         string `yaml:"type"` // local | ssh
-	SSHHost      string `yaml:"ssh_host,omitempty"`
-	SSHUser      string `yaml:"ssh_user,omitempty"`
-	SSHPort      int    `yaml:"ssh_port,omitempty"`
-	ProxyCommand string `yaml:"proxy_command,omitempty"`
+	Type         string `yaml:"type" json:"type"` // local | ssh
+	SSHHost      string `yaml:"ssh_host,omitempty" json:"ssh_host,omitempty"`
+	SSHUser      string `yaml:"ssh_user,omitempty" json:"ssh_user,omitempty"`
+	SSHPort      int    `yaml:"ssh_port,omitempty" json:"ssh_port,omitempty"`
+	ProxyCommand string `yaml:"proxy_command,omitempty" json:"proxy_command,omitempty"`
 }
 
 type Auth struct {
-	ServiceToken string `yaml:"service_token,omitempty"`
-	JWT          string `yaml:"jwt,omitempty"`
+	ServiceToken string `yaml:"service_token,omitempty" json:"-"`
+	JWT          string `yaml:"jwt,omitempty" json:"-"`
 }
 
 type Context struct {
-	Name      string    `yaml:"name"`
-	ClusterID string    `yaml:"cluster_id,omitempty"`
-	Endpoints Endpoints `yaml:"endpoints"`
-	Executor  Executor  `yaml:"executor"`
-	Auth      Auth      `yaml:"auth"`
+	Name      string    `yaml:"name" json:"name"`
+	ClusterID string    `yaml:"cluster_id,omitempty" json:"cluster_id,omitempty"`
+	Endpoints Endpoints `yaml:"endpoints" json:"endpoints"`
+	Executor  Executor  `yaml:"executor" json:"executor"`
+	Auth      Auth      `yaml:"auth" json:"-"`
 }
 
 type GitHubApp struct {

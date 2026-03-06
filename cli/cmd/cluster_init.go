@@ -98,28 +98,32 @@ func runInit(cmd *cobra.Command, manifestPath, service string) error {
 
 // initPostgres initializes Postgres databases
 func initPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
-	if manifest.Infrastructure.Postgres == nil || !manifest.Infrastructure.Postgres.Enabled {
+	pg := manifest.Infrastructure.Postgres
+	if pg == nil || !pg.Enabled {
 		fmt.Fprintln(cmd.OutOrStdout(), "Postgres not enabled, skipping...")
 		return nil
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "Initializing Postgres databases...")
-
-	// Get host
-	host, ok := manifest.GetHost(manifest.Infrastructure.Postgres.Host)
-	if !ok {
-		return fmt.Errorf("postgres host %s not found", manifest.Infrastructure.Postgres.Host)
-	}
-
-	// Create provisioner
-	prov, err := provisioner.NewPostgresProvisioner(pool)
-	if err != nil {
-		return err
+	// Resolve host — YugabyteDB uses first node, vanilla PG uses Host
+	var host inventory.Host
+	var ok bool
+	if pg.IsYugabyte() && len(pg.Nodes) > 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "Initializing YugabyteDB databases...")
+		host, ok = manifest.GetHost(pg.Nodes[0].Host)
+		if !ok {
+			return fmt.Errorf("yugabyte node host %s not found", pg.Nodes[0].Host)
+		}
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "Initializing Postgres databases...")
+		host, ok = manifest.GetHost(pg.Host)
+		if !ok {
+			return fmt.Errorf("postgres host %s not found", pg.Host)
+		}
 	}
 
 	// Build config
 	databases := []map[string]string{}
-	for _, db := range manifest.Infrastructure.Postgres.Databases {
+	for _, db := range pg.Databases {
 		databases = append(databases, map[string]string{
 			"name":  db.Name,
 			"owner": db.Owner,
@@ -127,18 +131,26 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory.M
 	}
 
 	config := provisioner.ServiceConfig{
-		Port: manifest.Infrastructure.Postgres.Port,
+		Port: pg.EffectivePort(),
 		Metadata: map[string]interface{}{
 			"databases": databases,
 		},
 	}
 
-	// Initialize
-	if err := prov.Initialize(ctx, host, config); err != nil {
-		return err
+	// Use the appropriate provisioner
+	if pg.IsYugabyte() {
+		prov, err := provisioner.NewYugabyteProvisioner(pool)
+		if err != nil {
+			return err
+		}
+		return prov.Initialize(ctx, host, config)
 	}
 
-	return nil
+	prov, err := provisioner.NewPostgresProvisioner(pool)
+	if err != nil {
+		return err
+	}
+	return prov.Initialize(ctx, host, config)
 }
 
 // initKafka initializes Kafka topics

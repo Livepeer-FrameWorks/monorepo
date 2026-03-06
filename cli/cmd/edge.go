@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -1321,6 +1322,12 @@ func newEdgeDoctorCmd() *cobra.Command {
 		}
 		results = append(results, preflight.UlimitNoFile())
 		results = append(results, preflight.PortChecks(ctx)...)
+
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(results)
+		}
 
 		// Print checks
 		okCount := 0

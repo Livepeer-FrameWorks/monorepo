@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"text/tabwriter"
@@ -63,21 +64,24 @@ func newMeshStatusCmd() *cobra.Command {
 			}
 			defer client.Close()
 
-			fmt.Fprintln(cmd.OutOrStdout(), "🕸️  Privateer Mesh Status")
-			fmt.Fprintln(cmd.OutOrStdout(), "========================")
+			isJSON := output == "json"
+			if !isJSON {
+				fmt.Fprintln(cmd.OutOrStdout(), "🕸️  Privateer Mesh Status")
+				fmt.Fprintln(cmd.OutOrStdout(), "========================")
+				fmt.Fprint(cmd.OutOrStdout(), "• Fetching topology from Quartermaster... ")
+			}
 
 			// Fetch Nodes via gRPC
-			fmt.Fprint(cmd.OutOrStdout(), "• Fetching topology from Quartermaster... ")
 			resp, err := client.ListNodes(context.Background(), "", "", "", nil)
 			if err != nil {
-				fmt.Fprintln(cmd.OutOrStdout(), "❌")
+				if !isJSON {
+					fmt.Fprintln(cmd.OutOrStdout(), "❌")
+				}
 				return fmt.Errorf("failed to get nodes: %w", err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "✓ (%d nodes)\n\n", len(resp.Nodes))
-
-			// Display Table
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NODE ID\tROLE\tINTERNAL IP\tWG IP\tLAST SEEN\tAGENT STATUS")
+			if !isJSON {
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ (%d nodes)\n\n", len(resp.Nodes))
+			}
 
 			// Sort by NodeId for stable output
 			nodes := resp.Nodes
@@ -85,6 +89,16 @@ func newMeshStatusCmd() *cobra.Command {
 				return nodes[i].Id < nodes[j].Id
 			})
 
+			type meshNode struct {
+				ID          string `json:"id"`
+				Role        string `json:"role"`
+				InternalIP  string `json:"internal_ip"`
+				WireguardIP string `json:"wireguard_ip"`
+				LastSeen    string `json:"last_seen"`
+				AgentStatus string `json:"agent_status"`
+			}
+
+			var meshNodes []meshNode
 			for _, node := range nodes {
 				wgIP := "-"
 				if node.WireguardIp != nil {
@@ -97,29 +111,37 @@ func newMeshStatusCmd() *cobra.Command {
 				}
 
 				lastSeen := "-"
-				agentStatus := "Offline" // Default to offline if no heartbeat
+				agentStatus := "Offline"
 
 				if node.LastHeartbeat != nil {
-					// Time since last heartbeat
 					duration := time.Since(node.LastHeartbeat.AsTime()).Round(time.Second)
 					lastSeen = fmt.Sprintf("%s ago", duration)
-
-					// Determine agent status based on heartbeat freshness
-					if duration < 90*time.Second { // Assuming agent syncs every 30s, 90s provides a buffer
+					if duration < 90*time.Second {
 						agentStatus = "Healthy"
 					} else {
 						agentStatus = "Stale/Offline"
 					}
 				}
 
+				meshNodes = append(meshNodes, meshNode{
+					ID: node.Id, Role: node.NodeType,
+					InternalIP: internalIP, WireguardIP: wgIP,
+					LastSeen: lastSeen, AgentStatus: agentStatus,
+				})
+			}
+
+			if isJSON {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(meshNodes)
+			}
+
+			// Display Table
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NODE ID\tROLE\tINTERNAL IP\tWG IP\tLAST SEEN\tAGENT STATUS")
+			for _, n := range meshNodes {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					node.Id,
-					node.NodeType,
-					internalIP,
-					wgIP,
-					lastSeen,
-					agentStatus,
-				)
+					n.ID, n.Role, n.InternalIP, n.WireguardIP, n.LastSeen, n.AgentStatus)
 			}
 			w.Flush()
 

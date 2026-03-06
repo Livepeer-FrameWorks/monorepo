@@ -38,6 +38,7 @@ var ServicePorts = map[string]int{
 	"privateer":        18012,
 	"redis":            6379,
 	"chatwoot":         18092,
+	"yugabyte":         5433,
 	"deckhand":         18015,
 }
 
@@ -66,6 +67,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewZookeeperProvisioner(pool)
 	case "clickhouse":
 		return NewClickHouseProvisioner(pool)
+	case "yugabyte":
+		return NewYugabyteProvisioner(pool)
 	case "redis":
 		return NewRedisProvisioner(pool)
 	case "privateer":

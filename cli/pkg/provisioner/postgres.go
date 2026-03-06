@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -11,6 +12,8 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	dbsql "frameworks/pkg/database/sql"
+
+	"github.com/lib/pq"
 )
 
 // PostgresProvisioner provisions PostgreSQL/YugabyteDB
@@ -129,9 +132,11 @@ func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Hos
 	}
 
 	// Create each database if it doesn't exist
+	var dbNames []string
 	for _, db := range dbList {
 		dbName := db["name"]
 		owner := db["owner"]
+		dbNames = append(dbNames, dbName)
 
 		// Create database
 		created, err := CreateDatabaseIfNotExists(ctx, connStr, dbName, owner)
@@ -148,6 +153,15 @@ func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		// Run initialization SQL for this database
 		if err := p.initializeDatabase(ctx, host, config.Port, dbName); err != nil {
 			return fmt.Errorf("failed to initialize database %s: %w", dbName, err)
+		}
+	}
+
+	// Create application user if credentials are provided.
+	pgUser, _ := config.Metadata["postgres_user"].(string)
+	pgPass, _ := config.Metadata["postgres_password"].(string)
+	if pgUser != "" && pgPass != "" {
+		if err := p.createApplicationUser(ctx, host, config.Port, pgUser, pgPass, dbNames); err != nil {
+			return fmt.Errorf("failed to create application user: %w", err)
 		}
 	}
 
@@ -192,6 +206,72 @@ func (p *PostgresProvisioner) initializeDatabase(ctx context.Context, host inven
 	// 3. Apply Demo Seeds (Skipped by default in this flow)
 
 	fmt.Printf("✓ Database %s initialized\n", dbName)
+	return nil
+}
+
+// createApplicationUser creates a Postgres role for application services.
+// Idempotent: creates the role if missing, updates the password on re-provision.
+func (p *PostgresProvisioner) createApplicationUser(ctx context.Context, host inventory.Host, port int, user, password string, databases []string) error {
+	connStr := fmt.Sprintf("host=%s port=%d user=postgres dbname=postgres sslmode=disable",
+		host.ExternalIP, port)
+
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return fmt.Errorf("connect as superuser: %w", err)
+	}
+	defer db.Close()
+
+	// CREATE ROLE IF NOT EXISTS — Postgres lacks this syntax before v14,
+	// so check pg_roles first.
+	var exists bool
+	err = db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", user).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check role existence: %w", err)
+	}
+
+	quotedUser := pq.QuoteIdentifier(user)
+	if !exists {
+		// Use parameterised password via ALTER below; CREATE ROLE doesn't support $1 for PASSWORD.
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE ROLE %s WITH LOGIN", quotedUser)); err != nil {
+			return fmt.Errorf("create role %s: %w", user, err)
+		}
+		fmt.Printf("Created Postgres role: %s\n", user)
+	}
+
+	// Always set/update the password (handles rotation on re-provision).
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s", quotedUser, pq.QuoteLiteral(password))); err != nil {
+		return fmt.Errorf("set password for %s: %w", user, err)
+	}
+
+	// Grant privileges on each database.
+	for _, dbName := range databases {
+		quotedDB := pq.QuoteIdentifier(dbName)
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO %s", quotedDB, quotedUser)); err != nil {
+			return fmt.Errorf("grant on %s: %w", dbName, err)
+		}
+
+		// Grant schema-level privileges so the role can use existing tables.
+		dbConn, err := sql.Open("postgres", fmt.Sprintf("host=%s port=%d user=postgres dbname=%s sslmode=disable", host.ExternalIP, port, dbName))
+		if err != nil {
+			return fmt.Errorf("connect to %s: %w", dbName, err)
+		}
+		schemaGrants := []string{
+			fmt.Sprintf("GRANT USAGE ON SCHEMA public TO %s", quotedUser),
+			fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO %s", quotedUser),
+			fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %s", quotedUser),
+			fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO %s", quotedUser),
+			fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO %s", quotedUser),
+		}
+		for _, stmt := range schemaGrants {
+			if _, err := dbConn.ExecContext(ctx, stmt); err != nil {
+				dbConn.Close()
+				return fmt.Errorf("schema grant on %s: %w", dbName, err)
+			}
+		}
+		dbConn.Close()
+	}
+
+	fmt.Printf("✓ Postgres role %s ready (grants on %d databases)\n", user, len(databases))
 	return nil
 }
 

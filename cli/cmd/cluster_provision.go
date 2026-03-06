@@ -10,6 +10,7 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/githubapp"
 	fwsops "frameworks/cli/pkg/sops"
 	"frameworks/pkg/clients/quartermaster"
@@ -585,13 +586,37 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					}
 				}
 			}
+		case "yugabyte":
+			if pg := manifest.Infrastructure.Postgres; pg != nil {
+				config.Port = pg.EffectivePort()
+				config.Version = pg.Version
+				config.Metadata["master_addresses"] = pg.MasterAddresses(manifest.Hosts)
+				config.Metadata["replication_factor"] = pg.EffectiveReplicationFactor()
+				// Resolve node ID from task name (yugabyte-node-N)
+				if nodeID, ok := resolveYugabyteNodeID(task.Name, pg); ok {
+					config.Metadata["node_id"] = nodeID
+				}
+				if len(pg.Databases) > 0 {
+					databases := make([]map[string]string, 0, len(pg.Databases))
+					for _, db := range pg.Databases {
+						databases = append(databases, map[string]string{
+							"name":  db.Name,
+							"owner": db.Owner,
+						})
+					}
+					config.Metadata["databases"] = databases
+				}
+			}
 		}
 	}
 
 	// Override for infrastructure (Redis uses manifest mode, not forced native)
 	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "zookeeper" && task.Type != "redis" {
 		config.Mode = "native"
-		config.Version = "latest"
+		// Keep manifest-specified version for yugabyte; default to "latest" for others
+		if task.Type != "yugabyte" || config.Version == "" {
+			config.Version = "latest"
+		}
 	}
 
 	// Native override for Privateer + inject mesh node identity
@@ -799,6 +824,53 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface
 	return metadata
 }
 
+// loadInfraCredentials reads the manifest env_file and extracts database credentials
+// needed by infrastructure Initialize/Configure steps.
+func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) map[string]interface{} {
+	result := make(map[string]interface{})
+	if manifest.EnvFile == "" {
+		return result
+	}
+
+	envPath := manifest.EnvFile
+	if manifestDir != "" && !filepath.IsAbs(envPath) {
+		envPath = filepath.Join(manifestDir, envPath)
+	}
+
+	env := make(map[string]string)
+	if err := loadEnvFile(envPath, env); err != nil {
+		return result
+	}
+
+	// Map env vars to metadata keys used by provisioners
+	if v := env["DATABASE_USER"]; v != "" {
+		result["postgres_user"] = v
+	}
+	if v := env["DATABASE_PASSWORD"]; v != "" {
+		result["postgres_password"] = v
+	}
+	if v := env["CLICKHOUSE_PASSWORD"]; v != "" {
+		result["clickhouse_password"] = v
+	}
+	if v := env["CLICKHOUSE_READONLY_PASSWORD"]; v != "" {
+		result["clickhouse_readonly_password"] = v
+	}
+
+	return result
+}
+
+// resolveYugabyteNodeID extracts the node ID from a "yugabyte-node-N" task name
+func resolveYugabyteNodeID(taskName string, pg *inventory.PostgresConfig) (int, bool) {
+	const prefix = "yugabyte-node-"
+	if strings.HasPrefix(taskName, prefix) {
+		id, err := strconv.Atoi(strings.TrimPrefix(taskName, prefix))
+		if err == nil {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
 func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interval time.Duration) func() {
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -910,6 +982,32 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 			fmt.Printf("    Warning: validation failed (ignored due to --ignore-validation): %v\n", err)
 		} else {
 			return fmt.Errorf("validation failed for %s: %w (use --ignore-validation to continue anyway)", task.Name, err)
+		}
+	}
+
+	// Infrastructure tasks: run Initialize + Configure after Provision/Validate.
+	// Load credentials from manifest env_file so Initialize can create app users.
+	if task.Phase == orchestrator.PhaseInfrastructure {
+		infraCreds := loadInfraCredentials(manifest, manifestDir)
+		for k, v := range infraCreds {
+			if config.Metadata == nil {
+				config.Metadata = make(map[string]interface{})
+			}
+			config.Metadata[k] = v
+		}
+
+		if err := prov.Initialize(ctx, host, config); err != nil {
+			return fmt.Errorf("initialization failed for %s: %w", task.Name, err)
+		}
+
+		// Configure deploys auth credentials (e.g. ClickHouse users.xml)
+		type configurer interface {
+			Configure(ctx context.Context, host inventory.Host, config provisioner.ServiceConfig) error
+		}
+		if c, ok := prov.(configurer); ok {
+			if err := c.Configure(ctx, host, config); err != nil {
+				return fmt.Errorf("configuration failed for %s: %w", task.Name, err)
+			}
 		}
 	}
 
@@ -1226,14 +1324,19 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 
 	// 1. Auto-generated infrastructure env vars
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
-		if pgHost, ok := manifest.GetHost(pg.Host); ok {
-			port := pg.Port
-			if port == 0 {
-				port = 5432
+		port := pg.EffectivePort()
+		var pgIP string
+		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
+			// Use first node for DATABASE_HOST (services need a single endpoint)
+			if h, ok := manifest.GetHost(pg.Nodes[0].Host); ok {
+				pgIP = h.ExternalIP
 			}
-			env["DATABASE_HOST"] = pgHost.ExternalIP
+		} else if h, ok := manifest.GetHost(pg.Host); ok {
+			pgIP = h.ExternalIP
+		}
+		if pgIP != "" {
+			env["DATABASE_HOST"] = pgIP
 			env["DATABASE_PORT"] = strconv.Itoa(port)
-			// DATABASE_URL constructed after env_file merges (see below)
 		}
 	}
 
@@ -1269,8 +1372,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			env["CLICKHOUSE_HOST"] = chHost.ExternalIP
 			env["CLICKHOUSE_PORT"] = strconv.Itoa(port)
 			env["CLICKHOUSE_DB"] = "periscope"
-			env["CLICKHOUSE_USER"] = "default"
-			env["CLICKHOUSE_PASSWORD"] = ""
+			env["CLICKHOUSE_USER"] = "frameworks"
 			if len(ch.Databases) > 0 {
 				env["CLICKHOUSE_DB"] = ch.Databases[0]
 			}
@@ -1404,13 +1506,23 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
+	// 5. Auto-generate missing secrets (SERVICE_TOKEN, JWT_SECRET, etc.)
+	if _, err := credentials.GenerateIfMissing(env); err != nil {
+		return nil, fmt.Errorf("auto-generate secrets: %w", err)
+	}
+
+	// 6. Derive COOKIE_DOMAIN from manifest root_domain
+	if manifest.RootDomain != "" && env["COOKIE_DOMAIN"] == "" {
+		env["COOKIE_DOMAIN"] = manifest.RootDomain
+	}
+
 	// Construct DATABASE_URL from merged credentials (operator may have set
 	// DATABASE_USER / DATABASE_PASSWORD in their env_file).
 	// Skip if operator explicitly provided DATABASE_URL.
 	if env["DATABASE_HOST"] != "" && env["DATABASE_URL"] == "" {
 		dbUser := env["DATABASE_USER"]
 		if dbUser == "" {
-			dbUser = "postgres"
+			dbUser = "frameworks"
 		}
 		dbPass := env["DATABASE_PASSWORD"]
 		dbHost := env["DATABASE_HOST"]

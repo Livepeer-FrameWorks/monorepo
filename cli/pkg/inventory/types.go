@@ -1,5 +1,10 @@
 package inventory
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Manifest represents the cluster.yaml configuration
 type Manifest struct {
 	Version    string `yaml:"version"`
@@ -63,13 +68,86 @@ type InfrastructureConfig struct {
 
 // PostgresConfig represents Postgres/YugabyteDB configuration
 type PostgresConfig struct {
-	Enabled   bool              `yaml:"enabled"`
-	Mode      string            `yaml:"mode"` // native (only supported mode for infrastructure)
-	Version   string            `yaml:"version"`
-	Host      string            `yaml:"host"` // Host name from Hosts map
-	Port      int               `yaml:"port"`
-	Databases []DatabaseConfig  `yaml:"databases,omitempty"`
-	Tuning    map[string]string `yaml:"tuning,omitempty"`
+	Enabled           bool              `yaml:"enabled"`
+	Engine            string            `yaml:"engine,omitempty"` // "postgres" (default) or "yugabyte"
+	Mode              string            `yaml:"mode"`             // native (only supported mode for infrastructure)
+	Version           string            `yaml:"version"`
+	Host              string            `yaml:"host,omitempty"`  // Single-host (vanilla Postgres)
+	Nodes             []PostgresNode    `yaml:"nodes,omitempty"` // Multi-node (YugabyteDB)
+	Port              int               `yaml:"port"`
+	ReplicationFactor int               `yaml:"replication_factor,omitempty"` // Default: len(Nodes)
+	Databases         []DatabaseConfig  `yaml:"databases,omitempty"`
+	Tuning            map[string]string `yaml:"tuning,omitempty"`
+}
+
+// PostgresNode represents a node in a multi-node Postgres/YugabyteDB cluster
+type PostgresNode struct {
+	Host    string `yaml:"host"`               // Host name from Hosts map
+	ID      int    `yaml:"id"`                 // Node ID (1-based)
+	RpcPort int    `yaml:"rpc_port,omitempty"` // yb-master RPC (default 7100)
+}
+
+// IsYugabyte returns true if this config uses YugabyteDB engine
+func (pg *PostgresConfig) IsYugabyte() bool {
+	return pg.Engine == "yugabyte"
+}
+
+// EffectivePort returns the configured port or the engine default (5433 for YB, 5432 for PG)
+func (pg *PostgresConfig) EffectivePort() int {
+	if pg.Port != 0 {
+		return pg.Port
+	}
+	if pg.IsYugabyte() {
+		return 5433
+	}
+	return 5432
+}
+
+// AllHosts returns all host names for this config (single Host or multi-node Nodes)
+func (pg *PostgresConfig) AllHosts() []string {
+	if len(pg.Nodes) > 0 {
+		hosts := make([]string, len(pg.Nodes))
+		for i, n := range pg.Nodes {
+			hosts[i] = n.Host
+		}
+		return hosts
+	}
+	if pg.Host != "" {
+		return []string{pg.Host}
+	}
+	return nil
+}
+
+// MasterAddresses builds the comma-separated master addresses string for YugabyteDB.
+// Resolves host names to IPs using the provided manifest hosts map.
+func (pg *PostgresConfig) MasterAddresses(hosts map[string]Host) string {
+	if len(pg.Nodes) == 0 {
+		return ""
+	}
+	addrs := make([]string, 0, len(pg.Nodes))
+	for _, node := range pg.Nodes {
+		rpcPort := node.RpcPort
+		if rpcPort == 0 {
+			rpcPort = 7100
+		}
+		h, ok := hosts[node.Host]
+		if !ok {
+			continue
+		}
+		addrs = append(addrs, fmt.Sprintf("%s:%d", h.ExternalIP, rpcPort))
+	}
+	return strings.Join(addrs, ",")
+}
+
+// EffectiveReplicationFactor returns the replication factor, defaulting to len(Nodes)
+func (pg *PostgresConfig) EffectiveReplicationFactor() int {
+	if pg.ReplicationFactor > 0 {
+		return pg.ReplicationFactor
+	}
+	if len(pg.Nodes) > 0 {
+		return len(pg.Nodes)
+	}
+	return 1
 }
 
 // DatabaseConfig represents a Postgres database

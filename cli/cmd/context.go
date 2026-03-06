@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	fwcfg "frameworks/cli/internal/config"
 	"github.com/spf13/cobra"
@@ -45,6 +46,19 @@ func newContextListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if output == "json" {
+			type contextEntry struct {
+				Name    string `json:"name"`
+				Current bool   `json:"current"`
+			}
+			var entries []contextEntry
+			for name := range cfg.Contexts {
+				entries = append(entries, contextEntry{Name: name, Current: name == cfg.Current})
+			}
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(entries)
+		}
 		for name := range cfg.Contexts {
 			cur := " "
 			if name == cfg.Current {
@@ -87,6 +101,11 @@ func newContextShowCmd() *cobra.Command {
 		c, ok := cfg.Contexts[name]
 		if !ok {
 			return fmt.Errorf("unknown context: %s", name)
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(c)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Context: %s\n", name)
 		if c.ClusterID != "" {
