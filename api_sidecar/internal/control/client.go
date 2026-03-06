@@ -636,6 +636,12 @@ func runClient(addr string, logger logging.Logger) error {
 				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets)
 			case *pb.ControlMessage_ValidateEdgeTokenResponse:
 				handleValidateEdgeTokenResponse(msg.GetRequestId(), x.ValidateEdgeTokenResponse)
+			case *pb.ControlMessage_ThumbnailUploadResponse:
+				go handleThumbnailUploadResponse(logger, x.ThumbnailUploadResponse, func(m *pb.ControlMessage) { _ = stream.Send(m) })
+			case *pb.ControlMessage_ProcessingJobRequest:
+				if processingJobHandler != nil {
+					go processingJobHandler(x.ProcessingJobRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
+				}
 			}
 		}
 	}()
@@ -1135,11 +1141,15 @@ type DefrostRequestHandler func(*pb.DefrostRequest)
 // DtshSyncRequestHandler is called when Foghorn sends a request to sync just the .dtsh file
 type DtshSyncRequestHandler func(*pb.DtshSyncRequest)
 
+// ProcessingJobHandler is called when Foghorn sends a VOD processing job request
+type ProcessingJobHandler func(*pb.ProcessingJobRequest, func(*pb.ControlMessage))
+
 var (
 	freezePermissionHandlers = make(map[string]chan *pb.FreezePermissionResponse)
 	freezePermissionMutex    = make(chan struct{}, 1)
 	defrostRequestHandler    DefrostRequestHandler
 	dtshSyncRequestHandler   DtshSyncRequestHandler
+	processingJobHandler     ProcessingJobHandler
 
 	// CanDelete request/response tracking
 	canDeleteHandlers = make(map[string]chan *pb.CanDeleteResponse)
@@ -1154,6 +1164,11 @@ func SetDefrostRequestHandler(handler DefrostRequestHandler) {
 // SetDtshSyncRequestHandler sets the callback for incremental .dtsh sync requests from Foghorn
 func SetDtshSyncRequestHandler(handler DtshSyncRequestHandler) {
 	dtshSyncRequestHandler = handler
+}
+
+// SetProcessingJobHandler sets the callback for processing job requests from Foghorn
+func SetProcessingJobHandler(handler ProcessingJobHandler) {
+	processingJobHandler = handler
 }
 
 // RequestFreezePermission asks Foghorn for permission and presigned URL to freeze an asset.
@@ -1709,4 +1724,82 @@ func parseRequestedMode(mode string) pb.NodeOperationalMode {
 	default:
 		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED
 	}
+}
+
+// SendThumbnailUploadRequest sends a thumbnail upload request to Foghorn.
+// Foghorn will resolve the internal_name to a playback_id and respond with presigned URLs.
+func SendThumbnailUploadRequest(internalName string, filePaths []string) error {
+	stream := getStream()
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	requestID := uuid.New().String()
+	req := &pb.ThumbnailUploadRequest{
+		InternalName: internalName,
+		FilePaths:    filePaths,
+	}
+
+	msg := &pb.ControlMessage{
+		RequestId: requestID,
+		SentAt:    timestamppb.Now(),
+		Payload:   &pb.ControlMessage_ThumbnailUploadRequest{ThumbnailUploadRequest: req},
+	}
+	return stream.Send(msg)
+}
+
+// handleThumbnailUploadResponse uploads thumbnail files to S3 using presigned URLs
+// from Foghorn, then sends a ThumbnailUploaded confirmation.
+func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUploadResponse, send func(*pb.ControlMessage)) {
+	playbackID := resp.GetPlaybackId()
+	uploads := resp.GetUploads()
+
+	logger.WithFields(logging.Fields{
+		"playback_id":  playbackID,
+		"upload_count": len(uploads),
+	}).Info("Received thumbnail presigned URLs from Foghorn")
+
+	presignedClient := storage.NewPresignedClient(logger)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var uploadedKeys []string
+	for _, upload := range uploads {
+		localPath := upload.GetLocalPath()
+		if localPath == "" {
+			logger.WithField("file_name", upload.GetFileName()).Warn("No local_path in thumbnail upload response")
+			continue
+		}
+
+		if err := presignedClient.UploadFileToPresignedURL(ctx, upload.GetPresignedUrl(), localPath, nil); err != nil {
+			logger.WithFields(logging.Fields{
+				"file_name":  upload.GetFileName(),
+				"local_path": localPath,
+				"s3_key":     upload.GetS3Key(),
+				"error":      err,
+			}).Error("Failed to upload thumbnail to S3")
+			continue
+		}
+
+		uploadedKeys = append(uploadedKeys, upload.GetS3Key())
+		logger.WithFields(logging.Fields{
+			"file_name": upload.GetFileName(),
+			"s3_key":    upload.GetS3Key(),
+		}).Info("Thumbnail uploaded to S3")
+	}
+
+	if len(uploadedKeys) == 0 {
+		logger.Warn("No thumbnails uploaded successfully")
+		return
+	}
+
+	// Notify Foghorn that upload is complete
+	uploaded := &pb.ThumbnailUploaded{
+		PlaybackId: playbackID,
+		S3Keys:     uploadedKeys,
+	}
+	send(&pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_ThumbnailUploaded{ThumbnailUploaded: uploaded},
+	})
 }

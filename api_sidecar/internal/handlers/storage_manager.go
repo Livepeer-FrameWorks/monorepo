@@ -175,6 +175,12 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		_ = storageManager.SyncDtshOnly(ctx, req)
 	})
 
+	// Register processing job handler
+	procHandler := NewProcessingJobHandler(logger, os.Getenv("MISTSERVER_URL"), basePath)
+	control.SetProcessingJobHandler(func(req *pb.ProcessingJobRequest, send func(*pb.ControlMessage)) {
+		procHandler.Handle(req, send)
+	})
+
 	logger.WithFields(logging.Fields{
 		"base_path":        basePath,
 		"node_id":          nodeID,
