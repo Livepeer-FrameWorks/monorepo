@@ -57,6 +57,8 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
   - Privateer (`api_mesh`): WireGuard mesh agent & local DNS
 - AI
   - Skipper (`api_consultant`): AI video consultant with RAG, tool-use, and SSE streaming
+- Data
+  - Chandler (`api_assets`): Static asset server — caches and serves thumbnails and media assets from S3
 - Realtime
   - Signalman (`api_realtime`): WebSocket hub for live updates
 - Interfaces
@@ -181,6 +183,7 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Support  | Deckhand (gRPC)             | 19006    | Support gRPC API                                                                                               |
 | AI       | Skipper                     | 18018    | AI video consultant HTTP                                                                                       |
 | AI       | Skipper (gRPC)              | 19007    | gRPC API                                                                                                       |
+| Data     | Chandler                    | 18020    | Static asset server (thumbnails, media assets)                                                                 |
 
 ## Documentation
 

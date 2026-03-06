@@ -103,6 +103,7 @@ api_realtime/signalman
 api_sidecar/helmsman
 api_tenants/quartermaster
 api_ticketing/deckhand
+api_assets/chandler
 
 # Security & Sensitive
 *.pem

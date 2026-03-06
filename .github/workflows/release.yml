@@ -45,6 +45,7 @@ jobs:
           - { name: deckhand, context: api_ticketing, dockerfile: api_ticketing/Dockerfile }
           - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
           - { name: skipper, context: api_consultant, dockerfile: api_consultant/Dockerfile }
+          - { name: chandler, context: api_assets, dockerfile: api_assets/Dockerfile }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -147,6 +148,7 @@ jobs:
           - { name: deckhand, context: api_ticketing, dockerfile: api_ticketing/Dockerfile }
           - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
           - { name: skipper, context: api_consultant, dockerfile: api_consultant/Dockerfile }
+          - { name: chandler, context: api_assets, dockerfile: api_assets/Dockerfile }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -246,6 +248,7 @@ jobs:
           - deckhand
           - navigator
           - skipper
+          - chandler
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -780,6 +783,7 @@ jobs:
           - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand, cgo: false }
           - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer, cgo: false }
           - { name: skipper, context: api_consultant, cmd_path: ./cmd/skipper, cgo: false }
+          - { name: chandler, context: api_assets, cmd_path: ./cmd/chandler, cgo: false }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -873,6 +877,7 @@ jobs:
           - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand, cgo: false }
           - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer, cgo: false }
           - { name: skipper, context: api_consultant, cmd_path: ./cmd/skipper, cgo: false }
+          - { name: chandler, context: api_assets, cmd_path: ./cmd/chandler, cgo: false }
     steps:
       - name: Checkout
         uses: actions/checkout@v6

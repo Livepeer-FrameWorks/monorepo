@@ -39,6 +39,7 @@ profiles:
     - signalman
     - periscope-ingest
     - periscope-query
+    - chandler
   media:
     - foghorn
   edge:
@@ -182,6 +183,16 @@ services:
       protocol: http
       path: /health
       port: 18018
+  chandler:
+    name: chandler
+    title: Chandler (Assets)
+    role: data
+    image: ghcr.io/livepeer-frameworks/frameworks-chandler:latest
+    ports: ["18020:18020"]
+    health:
+      protocol: http
+      path: /health
+      port: 18020
   chartroom:
     name: chartroom
     title: Chartroom (Dashboard)
