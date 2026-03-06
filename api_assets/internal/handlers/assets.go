@@ -97,6 +97,11 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 		return
 	}
 
+	if h.bucket == "" {
+		c.Status(http.StatusServiceUnavailable)
+		return
+	}
+
 	// Reject path traversal
 	if strings.Contains(playbackID, "/") || strings.Contains(playbackID, "..") {
 		c.Status(http.StatusBadRequest)

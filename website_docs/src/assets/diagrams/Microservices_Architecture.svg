@@ -357,7 +357,7 @@
                     <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:14px;fill:rgb(33,150,243);">Control Plane</text>
                 </g>
             </g>
-            <g id="Bridge" transform="matrix(30.8642,0,0,30.8642,327.238,876.13)">
+            <g id="Bridge" transform="matrix(30.8642,0,0,30.8642,260.061,-395.672)">
                 <g transform="matrix(0.554801,0,0,1.75131,432.666,16.6679)">
                     <path d="M730,105L730,135C730,137.76 727.76,140 725,140L595,140C592.24,140 590,137.76 590,135L590,105C590,102.24 592.24,100 595,100L725,100C727.76,100 730,102.24 730,105Z" style="fill:white;stroke:rgb(33,150,243);stroke-width:0.9px;"/>
                 </g>
@@ -375,6 +375,26 @@
                 <g transform="matrix(20,0,0,20,368.281,0)">
                 </g>
                 <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:20px;fill:white;">Multi-Plane Microservices <tspan x="250.469px 264.912px " y="0px 0px ">Ar</tspan>chitecture</text>
+            </g>
+            <g id="Chandler" transform="matrix(30.8642,0,0,30.8642,260.061,2260.75)">
+                <g transform="matrix(0.554801,0,0,1.75131,432.666,16.6679)">
+                    <path d="M730,105L730,135C730,137.76 727.76,140 725,140L595,140C592.24,140 590,137.76 590,135L590,105C590,102.24 592.24,100 595,100L725,100C727.76,100 730,102.24 730,105Z" style="fill:white;stroke:rgb(33,150,243);stroke-width:0.9px;"/>
+                </g>
+                <g transform="matrix(1,0,0,1,776.532,220.835)">
+                    <g transform="matrix(11,0,0,11,44.6392,0)">
+                    </g>
+                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Chandler</text>
+                </g>
+                <g transform="matrix(1,0,0,1,782.46,242.605)">
+                    <g transform="matrix(8,0,0,8,28.457,0)">
+                    </g>
+                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Buckets</text>
+                </g>
+                <g transform="matrix(1,0,0,1,782.933,233.39)">
+                    <g transform="matrix(8,0,0,8,24.0078,0)">
+                    </g>
+                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Assets</text>
+                </g>
             </g>
         </g>
     </g>

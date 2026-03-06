@@ -33,26 +33,19 @@ func NewLRU(maxBytes int64, ttl time.Duration) *LRU {
 }
 
 func (c *LRU) Get(key string) ([]byte, string, bool) {
-	c.mu.RLock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	elem, ok := c.items[key]
 	if !ok {
-		c.mu.RUnlock()
 		return nil, "", false
 	}
 	e := elem.Value.(*entry)
 	if time.Since(e.fetchedAt) > c.ttl {
-		c.mu.RUnlock()
-		c.mu.Lock()
 		c.removeElement(elem)
-		c.mu.Unlock()
 		return nil, "", false
 	}
-	c.mu.RUnlock()
-
-	c.mu.Lock()
 	c.order.MoveToFront(elem)
-	c.mu.Unlock()
-
 	return e.data, e.contentType, true
 }
 

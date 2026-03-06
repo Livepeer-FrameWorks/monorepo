@@ -22,7 +22,10 @@ func main() {
 	logger := logging.NewLoggerWithService("chandler")
 	config.LoadEnv(logger)
 
-	s3Bucket := config.RequireEnv("STORAGE_S3_BUCKET")
+	s3Bucket := config.GetEnv("STORAGE_S3_BUCKET", "")
+	if s3Bucket == "" {
+		logger.Warn("STORAGE_S3_BUCKET not set — asset requests will return 503 until configured")
+	}
 	s3Cfg := handlers.S3Config{
 		Bucket:    s3Bucket,
 		Prefix:    config.GetEnv("STORAGE_S3_PREFIX", ""),
