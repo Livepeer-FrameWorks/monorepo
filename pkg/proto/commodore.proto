@@ -96,6 +96,12 @@ service InternalService {
   rpc GetOrCreateWalletUser(GetOrCreateWalletUserRequest) returns (GetOrCreateWalletUserResponse);
 
   // ============================================================================
+  // THUMBNAIL METADATA (Foghorn → Commodore)
+  // Called when Helmsman uploads thumbnail assets to S3.
+  // ============================================================================
+  rpc UpdateStreamThumbnail(UpdateStreamThumbnailRequest) returns (UpdateStreamThumbnailResponse);
+
+  // ============================================================================
   // TENANT STREAM TERMINATION (Purser → Commodore → Foghorn)
   // Called when a tenant is suspended due to insufficient prepaid balance.
   // Commodore forwards to Foghorn which stops all sessions on affected nodes.
@@ -812,6 +818,7 @@ message Stream {
   google.protobuf.Timestamp updated_at = 16; // json:"updatedAt"
   int32 peak_viewers = 17;              // json:"peak_viewers" - enriched from Periscope
   string stream_id = 18;                // public UUID
+  optional string thumbnail_url = 19;   // Chandler asset URL (auto-generated from edge thumbnails)
 }
 
 message ListStreamsRequest {
@@ -1131,3 +1138,14 @@ service NodeManagementService {
   // Get real-time health and routing state for a node
   rpc GetNodeHealth(foghorn.GetNodeHealthRequest) returns (foghorn.GetNodeHealthResponse);
 }
+
+// ============================================================================
+// THUMBNAIL METADATA
+// ============================================================================
+
+message UpdateStreamThumbnailRequest {
+  string playback_id = 1;
+  string thumbnail_url = 2; // Full Chandler URL, e.g. https://assets.example.com/assets/{pk}/poster.jpg
+}
+
+message UpdateStreamThumbnailResponse {}

@@ -36,6 +36,7 @@ const (
 	InternalService_ResolveVodHash_FullMethodName              = "/commodore.InternalService/ResolveVodHash"
 	InternalService_ResolveVodID_FullMethodName                = "/commodore.InternalService/ResolveVodID"
 	InternalService_GetOrCreateWalletUser_FullMethodName       = "/commodore.InternalService/GetOrCreateWalletUser"
+	InternalService_UpdateStreamThumbnail_FullMethodName       = "/commodore.InternalService/UpdateStreamThumbnail"
 	InternalService_TerminateTenantStreams_FullMethodName      = "/commodore.InternalService/TerminateTenantStreams"
 	InternalService_InvalidateTenantCache_FullMethodName       = "/commodore.InternalService/InvalidateTenantCache"
 	InternalService_GetTenantUserCount_FullMethodName          = "/commodore.InternalService/GetTenantUserCount"
@@ -87,6 +88,11 @@ type InternalServiceClient interface {
 	// Called by x402 middleware after verifying ERC-3009 payment signature.
 	// If wallet is unknown, creates: tenant (prepaid) + user (email=NULL) + wallet_identity
 	GetOrCreateWalletUser(ctx context.Context, in *GetOrCreateWalletUserRequest, opts ...grpc.CallOption) (*GetOrCreateWalletUserResponse, error)
+	// ============================================================================
+	// THUMBNAIL METADATA (Foghorn → Commodore)
+	// Called when Helmsman uploads thumbnail assets to S3.
+	// ============================================================================
+	UpdateStreamThumbnail(ctx context.Context, in *UpdateStreamThumbnailRequest, opts ...grpc.CallOption) (*UpdateStreamThumbnailResponse, error)
 	// ============================================================================
 	// TENANT STREAM TERMINATION (Purser → Commodore → Foghorn)
 	// Called when a tenant is suspended due to insufficient prepaid balance.
@@ -273,6 +279,16 @@ func (c *internalServiceClient) GetOrCreateWalletUser(ctx context.Context, in *G
 	return out, nil
 }
 
+func (c *internalServiceClient) UpdateStreamThumbnail(ctx context.Context, in *UpdateStreamThumbnailRequest, opts ...grpc.CallOption) (*UpdateStreamThumbnailResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateStreamThumbnailResponse)
+	err := c.cc.Invoke(ctx, InternalService_UpdateStreamThumbnail_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *internalServiceClient) TerminateTenantStreams(ctx context.Context, in *TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*TerminateTenantStreamsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TerminateTenantStreamsResponse)
@@ -359,6 +375,11 @@ type InternalServiceServer interface {
 	// If wallet is unknown, creates: tenant (prepaid) + user (email=NULL) + wallet_identity
 	GetOrCreateWalletUser(context.Context, *GetOrCreateWalletUserRequest) (*GetOrCreateWalletUserResponse, error)
 	// ============================================================================
+	// THUMBNAIL METADATA (Foghorn → Commodore)
+	// Called when Helmsman uploads thumbnail assets to S3.
+	// ============================================================================
+	UpdateStreamThumbnail(context.Context, *UpdateStreamThumbnailRequest) (*UpdateStreamThumbnailResponse, error)
+	// ============================================================================
 	// TENANT STREAM TERMINATION (Purser → Commodore → Foghorn)
 	// Called when a tenant is suspended due to insufficient prepaid balance.
 	// Commodore forwards to Foghorn which stops all sessions on affected nodes.
@@ -431,6 +452,9 @@ func (UnimplementedInternalServiceServer) ResolveVodID(context.Context, *Resolve
 }
 func (UnimplementedInternalServiceServer) GetOrCreateWalletUser(context.Context, *GetOrCreateWalletUserRequest) (*GetOrCreateWalletUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetOrCreateWalletUser not implemented")
+}
+func (UnimplementedInternalServiceServer) UpdateStreamThumbnail(context.Context, *UpdateStreamThumbnailRequest) (*UpdateStreamThumbnailResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateStreamThumbnail not implemented")
 }
 func (UnimplementedInternalServiceServer) TerminateTenantStreams(context.Context, *TerminateTenantStreamsRequest) (*TerminateTenantStreamsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TerminateTenantStreams not implemented")
@@ -753,6 +777,24 @@ func _InternalService_GetOrCreateWalletUser_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_UpdateStreamThumbnail_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateStreamThumbnailRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).UpdateStreamThumbnail(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_UpdateStreamThumbnail_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).UpdateStreamThumbnail(ctx, req.(*UpdateStreamThumbnailRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _InternalService_TerminateTenantStreams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TerminateTenantStreamsRequest)
 	if err := dec(in); err != nil {
@@ -895,6 +937,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetOrCreateWalletUser",
 			Handler:    _InternalService_GetOrCreateWalletUser_Handler,
+		},
+		{
+			MethodName: "UpdateStreamThumbnail",
+			Handler:    _InternalService_UpdateStreamThumbnail_Handler,
 		},
 		{
 			MethodName: "TerminateTenantStreams",

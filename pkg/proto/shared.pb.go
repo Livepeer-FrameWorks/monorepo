@@ -2093,7 +2093,8 @@ type PlaybackMetadata struct {
 	RecordingSizeBytes *int64                 `protobuf:"varint,17,opt,name=recording_size_bytes,json=recordingSizeBytes,proto3,oneof" json:"recording_size_bytes,omitempty"`
 	ClipSource         *string                `protobuf:"bytes,18,opt,name=clip_source,json=clipSource,proto3,oneof" json:"clip_source,omitempty"`
 	CreatedAt          *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=created_at,json=createdAt,proto3,oneof" json:"created_at,omitempty"`
-	Format             *string                `protobuf:"bytes,20,opt,name=format,proto3,oneof" json:"format,omitempty"` // Native container format: mp4, m3u8, webm, etc.
+	Format             *string                `protobuf:"bytes,20,opt,name=format,proto3,oneof" json:"format,omitempty"`                                 // Native container format: mp4, m3u8, webm, etc.
+	ThumbnailUrl       *string                `protobuf:"bytes,22,opt,name=thumbnail_url,json=thumbnailUrl,proto3,oneof" json:"thumbnail_url,omitempty"` // Chandler asset URL for poster image
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2264,6 +2265,13 @@ func (x *PlaybackMetadata) GetCreatedAt() *timestamppb.Timestamp {
 func (x *PlaybackMetadata) GetFormat() string {
 	if x != nil && x.Format != nil {
 		return *x.Format
+	}
+	return ""
+}
+
+func (x *PlaybackMetadata) GetThumbnailUrl() string {
+	if x != nil && x.ThumbnailUrl != nil {
+		return *x.ThumbnailUrl
 	}
 	return ""
 }
@@ -4136,7 +4144,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x11total_connections\x18\x06 \x01(\x05R\x10totalConnections\x12\x16\n" +
 	"\x06inputs\x18\a \x01(\x05R\x06inputs\x12;\n" +
 	"\vlast_update\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastUpdate\"\x80\a\n" +
+	"lastUpdate\"\xbc\a\n" +
 	"\x10PlaybackMetadata\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x17\n" +
 	"\ais_live\x18\x02 \x01(\bR\x06isLive\x12\x18\n" +
@@ -4162,7 +4170,8 @@ const file_shared_proto_rawDesc = "" +
 	"clipSource\x88\x01\x01\x12>\n" +
 	"\n" +
 	"created_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampH\x06R\tcreatedAt\x88\x01\x01\x12\x1b\n" +
-	"\x06format\x18\x14 \x01(\tH\aR\x06format\x88\x01\x01B\f\n" +
+	"\x06format\x18\x14 \x01(\tH\aR\x06format\x88\x01\x01\x12(\n" +
+	"\rthumbnail_url\x18\x16 \x01(\tH\bR\fthumbnailUrl\x88\x01\x01B\f\n" +
 	"\n" +
 	"_stream_idB\b\n" +
 	"\x06_titleB\x0e\n" +
@@ -4171,7 +4180,8 @@ const file_shared_proto_rawDesc = "" +
 	"\x15_recording_size_bytesB\x0e\n" +
 	"\f_clip_sourceB\r\n" +
 	"\v_created_atB\t\n" +
-	"\a_format\"\xc8\x01\n" +
+	"\a_formatB\x10\n" +
+	"\x0e_thumbnail_url\"\xc8\x01\n" +
 	"\x16ViewerEndpointResponse\x120\n" +
 	"\aprimary\x18\x01 \x01(\v2\x16.shared.ViewerEndpointR\aprimary\x124\n" +
 	"\tfallbacks\x18\x02 \x03(\v2\x16.shared.ViewerEndpointR\tfallbacks\x129\n" +

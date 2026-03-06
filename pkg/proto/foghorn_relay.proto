@@ -30,6 +30,7 @@ message ForwardCommandRequest {
     helmsmancontrol.StopSessionsRequest stop_sessions = 19;
     helmsmancontrol.ActivatePushTargets activate_push_targets = 20;
     helmsmancontrol.DeactivatePushTargets deactivate_push_targets = 21;
+    helmsmancontrol.ProcessingJobRequest processing_job = 22;
   }
 }
 

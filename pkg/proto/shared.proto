@@ -293,6 +293,7 @@ message PlaybackMetadata {
   optional string clip_source = 18;
   optional google.protobuf.Timestamp created_at = 19;
   optional string format = 20;  // Native container format: mp4, m3u8, webm, etc.
+  optional string thumbnail_url = 22; // Chandler asset URL for poster image
 }
 
 // ViewerEndpointResponse - response with resolved endpoints

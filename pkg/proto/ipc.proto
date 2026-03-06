@@ -174,6 +174,9 @@ message ControlMessage {
     TranscodeJobRequest transcode_job_request = 60;
     TranscodeJobProgress transcode_job_progress = 61;
     TranscodeJobComplete transcode_job_complete = 62;
+    // VOD processing jobs (Foghorn <-> Helmsman)
+    ProcessingJobRequest processing_job_request = 63;
+    ProcessingJobResult processing_job_result = 64;
     // Session termination (Foghorn -> Helmsman for billing suspension)
     StopSessionsRequest stop_sessions_request = 70;
     // Node mode change request (Helmsman -> Foghorn, from local agent/CLI)
@@ -185,6 +188,10 @@ message ControlMessage {
     // Edge API token validation (Helmsman -> Foghorn -> Commodore/JWT)
     ValidateEdgeTokenRequest validate_edge_token_request = 90;
     ValidateEdgeTokenResponse validate_edge_token_response = 91;
+    // Thumbnail asset upload (Helmsman -> Foghorn -> S3)
+    ThumbnailUploadRequest thumbnail_upload_request = 100;
+    ThumbnailUploadResponse thumbnail_upload_response = 101;
+    ThumbnailUploaded thumbnail_uploaded = 102;
   }
 }
 
@@ -1520,6 +1527,27 @@ message TranscodeJobComplete {
   string error = 5;                // Error message if failed
 }
 
+// ==================== VOD Processing Jobs ====================
+// Generic processing job request (Foghorn → Helmsman)
+// Used for probe, process+, DTSH generation, etc.
+message ProcessingJobRequest {
+  string job_id = 1;
+  string tenant_id = 2;
+  string artifact_hash = 3;
+  string source_url = 4;          // Presigned HTTPS URL for source
+  string job_type = 5;            // "probe", "process"
+  string output_path = 6;         // Local disk path for output
+  map<string, string> params = 7; // realtime_speed, process config JSON, segment_urls (for HLS)
+}
+
+// Processing job result (Helmsman → Foghorn)
+message ProcessingJobResult {
+  string job_id = 1;
+  string status = 2;              // "completed", "failed"
+  string error = 3;
+  map<string, string> outputs = 4; // Metadata (codec, resolution, etc.) or completion info
+}
+
 // ==================== API Request Tracking ====================
 // Tracks GraphQL API requests for usage analytics (RFC: x402 Agent Access)
 // Gateway aggregates in-memory and flushes periodically (not per-request)
@@ -1557,4 +1585,28 @@ message ValidateEdgeTokenResponse {
   string tenant_id = 3;
   string role = 4;
   repeated string permissions = 5;
+}
+
+// Helmsman -> Foghorn: request presigned PUT URLs for thumbnail files
+message ThumbnailUploadRequest {
+  string internal_name = 1; // MistServer stream name
+  repeated string file_paths = 2; // Local paths (poster.jpg, sprite.jpg, sprite.vtt)
+}
+
+// Foghorn -> Helmsman: presigned PUT URLs for each file
+message ThumbnailUploadResponse {
+  message PresignedUpload {
+    string file_name = 1; // e.g. "poster.jpg"
+    string presigned_url = 2;
+    string s3_key = 3;
+    string local_path = 4; // echoed from request so Helmsman can find the file
+  }
+  string playback_id = 1;
+  repeated PresignedUpload uploads = 2;
+}
+
+// Helmsman -> Foghorn: confirm upload complete
+message ThumbnailUploaded {
+  string playback_id = 1;
+  repeated string s3_keys = 2;
 }

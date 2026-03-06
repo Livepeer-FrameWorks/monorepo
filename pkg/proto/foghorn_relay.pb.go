@@ -38,6 +38,7 @@ type ForwardCommandRequest struct {
 	//	*ForwardCommandRequest_StopSessions
 	//	*ForwardCommandRequest_ActivatePushTargets
 	//	*ForwardCommandRequest_DeactivatePushTargets
+	//	*ForwardCommandRequest_ProcessingJob
 	Command       isForwardCommandRequest_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -195,6 +196,15 @@ func (x *ForwardCommandRequest) GetDeactivatePushTargets() *DeactivatePushTarget
 	return nil
 }
 
+func (x *ForwardCommandRequest) GetProcessingJob() *ProcessingJobRequest {
+	if x != nil {
+		if x, ok := x.Command.(*ForwardCommandRequest_ProcessingJob); ok {
+			return x.ProcessingJob
+		}
+	}
+	return nil
+}
+
 type isForwardCommandRequest_Command interface {
 	isForwardCommandRequest_Command()
 }
@@ -247,6 +257,10 @@ type ForwardCommandRequest_DeactivatePushTargets struct {
 	DeactivatePushTargets *DeactivatePushTargets `protobuf:"bytes,21,opt,name=deactivate_push_targets,json=deactivatePushTargets,proto3,oneof"`
 }
 
+type ForwardCommandRequest_ProcessingJob struct {
+	ProcessingJob *ProcessingJobRequest `protobuf:"bytes,22,opt,name=processing_job,json=processingJob,proto3,oneof"`
+}
+
 func (*ForwardCommandRequest_ConfigSeed) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_ClipPull) isForwardCommandRequest_Command() {}
@@ -270,6 +284,8 @@ func (*ForwardCommandRequest_StopSessions) isForwardCommandRequest_Command() {}
 func (*ForwardCommandRequest_ActivatePushTargets) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_DeactivatePushTargets) isForwardCommandRequest_Command() {}
+
+func (*ForwardCommandRequest_ProcessingJob) isForwardCommandRequest_Command() {}
 
 type ForwardCommandResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -327,7 +343,7 @@ var File_foghorn_relay_proto protoreflect.FileDescriptor
 
 const file_foghorn_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\xa0\a\n" +
+	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\xf0\a\n" +
 	"\x15ForwardCommandRequest\x12$\n" +
 	"\x0etarget_node_id\x18\x01 \x01(\tR\ftargetNodeId\x12>\n" +
 	"\vconfig_seed\x18\n" +
@@ -346,7 +362,8 @@ const file_foghorn_relay_proto_rawDesc = "" +
 	"\tdtsh_sync\x18\x12 \x01(\v2 .helmsmancontrol.DtshSyncRequestH\x00R\bdtshSync\x12K\n" +
 	"\rstop_sessions\x18\x13 \x01(\v2$.helmsmancontrol.StopSessionsRequestH\x00R\fstopSessions\x12Z\n" +
 	"\x15activate_push_targets\x18\x14 \x01(\v2$.helmsmancontrol.ActivatePushTargetsH\x00R\x13activatePushTargets\x12`\n" +
-	"\x17deactivate_push_targets\x18\x15 \x01(\v2&.helmsmancontrol.DeactivatePushTargetsH\x00R\x15deactivatePushTargetsB\t\n" +
+	"\x17deactivate_push_targets\x18\x15 \x01(\v2&.helmsmancontrol.DeactivatePushTargetsH\x00R\x15deactivatePushTargets\x12N\n" +
+	"\x0eprocessing_job\x18\x16 \x01(\v2%.helmsmancontrol.ProcessingJobRequestH\x00R\rprocessingJobB\t\n" +
 	"\acommand\"L\n" +
 	"\x16ForwardCommandResponse\x12\x1c\n" +
 	"\tdelivered\x18\x01 \x01(\bR\tdelivered\x12\x14\n" +
@@ -382,6 +399,7 @@ var file_foghorn_relay_proto_goTypes = []any{
 	(*StopSessionsRequest)(nil),    // 11: helmsmancontrol.StopSessionsRequest
 	(*ActivatePushTargets)(nil),    // 12: helmsmancontrol.ActivatePushTargets
 	(*DeactivatePushTargets)(nil),  // 13: helmsmancontrol.DeactivatePushTargets
+	(*ProcessingJobRequest)(nil),   // 14: helmsmancontrol.ProcessingJobRequest
 }
 var file_foghorn_relay_proto_depIdxs = []int32{
 	2,  // 0: foghorn_relay.ForwardCommandRequest.config_seed:type_name -> helmsmancontrol.ConfigSeed
@@ -396,13 +414,14 @@ var file_foghorn_relay_proto_depIdxs = []int32{
 	11, // 9: foghorn_relay.ForwardCommandRequest.stop_sessions:type_name -> helmsmancontrol.StopSessionsRequest
 	12, // 10: foghorn_relay.ForwardCommandRequest.activate_push_targets:type_name -> helmsmancontrol.ActivatePushTargets
 	13, // 11: foghorn_relay.ForwardCommandRequest.deactivate_push_targets:type_name -> helmsmancontrol.DeactivatePushTargets
-	0,  // 12: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
-	1,  // 13: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
-	13, // [13:14] is the sub-list for method output_type
-	12, // [12:13] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	14, // 12: foghorn_relay.ForwardCommandRequest.processing_job:type_name -> helmsmancontrol.ProcessingJobRequest
+	0,  // 13: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
+	1,  // 14: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
+	14, // [14:15] is the sub-list for method output_type
+	13, // [13:14] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_relay_proto_init() }
@@ -424,6 +443,7 @@ func file_foghorn_relay_proto_init() {
 		(*ForwardCommandRequest_StopSessions)(nil),
 		(*ForwardCommandRequest_ActivatePushTargets)(nil),
 		(*ForwardCommandRequest_DeactivatePushTargets)(nil),
+		(*ForwardCommandRequest_ProcessingJob)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
