@@ -664,6 +664,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private metaTrackManager: MetaTrackManager | null = null;
   private thumbnailSpriteManager: ThumbnailSpriteManager | null = null;
   private _thumbnailVttUrl: string | null = null;
+  private _rawThumbnailCues: ThumbnailCue[] = [];
+  private _lastVttOffset: number = 0;
   private _previewUrl: string | null = null;
   private _playbackQuality: PlaybackQuality | null = null;
   private bootMs: number = Date.now();
@@ -807,6 +809,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     this.thumbnailSpriteManager?.destroy();
     this.thumbnailSpriteManager = null;
+    this._rawThumbnailCues = [];
+    this._lastVttOffset = 0;
     this.detach();
     this.setState("destroyed");
     this.emit("destroyed", undefined as never);
@@ -1982,6 +1986,23 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._seekableStart = seekableStart;
     this._liveEdge = liveEdge;
 
+    // Re-emit rebased thumbnail cues if the VTT offset changed significantly
+    if (seekableChanged && this._rawThumbnailCues.length > 0) {
+      const newOffset = this.getVttTimeOffsetSec();
+      if (Math.abs(newOffset - this._lastVttOffset) > 0.5) {
+        this._lastVttOffset = newOffset;
+        const rebased =
+          newOffset === 0
+            ? this._rawThumbnailCues
+            : this._rawThumbnailCues.map((c) => ({
+                ...c,
+                startTime: c.startTime - newOffset,
+                endTime: c.endTime - newOffset,
+              }));
+        this.emit("thumbnailCuesChange", { cues: rebased });
+      }
+    }
+
     // Update interaction controller live-only state (allow DVR shortcuts when seekable window exists)
     const hasDvrWindow =
       isLive &&
@@ -2962,7 +2983,20 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       vttUrl,
       baseUrl: mistBaseUrl.replace(/\/$/, ""),
       isLive: this.isEffectivelyLive(),
-      onCuesChange: (cues) => this.emit("thumbnailCuesChange", { cues }),
+      onCuesChange: (cues) => {
+        this._rawThumbnailCues = cues;
+        const offset = this.getVttTimeOffsetSec();
+        this._lastVttOffset = offset;
+        const rebased =
+          offset === 0
+            ? cues
+            : cues.map((c) => ({
+                ...c,
+                startTime: c.startTime - offset,
+                endTime: c.endTime - offset,
+              }));
+        this.emit("thumbnailCuesChange", { cues: rebased });
+      },
       log: (msg) => this.log(msg),
     });
   }
@@ -3748,6 +3782,20 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const start = typeof bw === "number" && bw > 0 ? end - bw : Math.min(...starts);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
     return { start, end };
+  }
+
+  /**
+   * Compute the offset (in seconds) between VTT absolute timestamps and player seekbar coordinates.
+   * For absolute-time players (WebRTC, WHEP, NativePlayer) this returns ~0.
+   * For browser-local players (HLS.js, VideoJS) this returns the difference so cues can be rebased.
+   */
+  private getVttTimeOffsetSec(): number {
+    const mistRange = this.getMistTrackSeekRange();
+    if (!mistRange || mistRange.end <= 0) return 0;
+    if (!Number.isFinite(this._liveEdge) || this._liveEdge <= 0) return 0;
+    // If seekbar coordinates are already close to absolute, no rebase needed
+    if (Math.abs(this._liveEdge - mistRange.end) < 5000) return 0;
+    return (mistRange.end - this._liveEdge) / 1000;
   }
 }
 

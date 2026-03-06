@@ -69,7 +69,7 @@ export class ThumbnailSpriteManager {
       const boundaryMarker = "--" + boundary;
 
       const reader = response.body.getReader();
-      let buffer = new Uint8Array(0);
+      let buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
       let receivedData = false;
 
       while (!this.destroyed) {
@@ -108,7 +108,10 @@ export class ThumbnailSpriteManager {
    * Parse multipart buffer for VTT + JPEG parts.
    * Returns remaining buffer after processing, or null if nothing was processed.
    */
-  private processMultipart(buffer: Uint8Array, boundaryMarker: string): Uint8Array | null {
+  private processMultipart(
+    buffer: Uint8Array<ArrayBufferLike>,
+    boundaryMarker: string
+  ): Uint8Array<ArrayBufferLike> | null {
     const encoder = new TextEncoder();
     const boundaryBytes = encoder.encode(boundaryMarker);
 
@@ -127,7 +130,7 @@ export class ThumbnailSpriteManager {
 
     const decoder = new TextDecoder();
     let pendingVtt: string | null = null;
-    let pendingJpeg: Uint8Array | null = null;
+    let pendingJpeg: Uint8Array<ArrayBufferLike> | null = null;
     let lastProcessedBoundary = -1;
 
     for (let i = 0; i < positions.length - 1; i++) {
@@ -157,7 +160,8 @@ export class ThumbnailSpriteManager {
         const rawCues = parseThumbnailVtt(pendingVtt);
         if (rawCues.length > 0) {
           if (this.spriteObjectUrl) URL.revokeObjectURL(this.spriteObjectUrl);
-          const blob = new Blob([pendingJpeg], { type: "image/jpeg" });
+          const jpegCopy = new Uint8Array(pendingJpeg);
+          const blob = new Blob([jpegCopy], { type: "image/jpeg" });
           this.spriteObjectUrl = URL.createObjectURL(blob);
 
           this.cues = rawCues.map((cue) => ({
