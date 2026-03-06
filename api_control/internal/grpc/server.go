@@ -3579,7 +3579,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	// Base query
 	query := `
 		SELECT id, internal_name, stream_key, playback_id, title, description,
-		       is_recording_enabled, created_at, updated_at
+		       is_recording_enabled, thumbnail_url, created_at, updated_at
 		FROM commodore.streams
 		WHERE user_id = $1 AND tenant_id = $2`
 	args := []interface{}{userID, tenantID}
@@ -4835,7 +4835,7 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, internal_name, stream_key, playback_id, title, description,
-		       is_recording_enabled, created_at, updated_at
+		       is_recording_enabled, thumbnail_url, created_at, updated_at
 		FROM commodore.streams
 		WHERE id = ANY($1) AND user_id = $2 AND tenant_id = $3
 	`, pq.Array(streamIDs), userID, tenantID)
@@ -4857,19 +4857,47 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 	return &pb.GetStreamsBatchResponse{Streams: streams}, nil
 }
 
+func (s *CommodoreServer) UpdateStreamThumbnail(ctx context.Context, req *pb.UpdateStreamThumbnailRequest) (*pb.UpdateStreamThumbnailResponse, error) {
+	if req.PlaybackId == "" || req.ThumbnailUrl == "" {
+		return nil, status.Error(codes.InvalidArgument, "playback_id and thumbnail_url are required")
+	}
+
+	var streamID, tenantID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id FROM commodore.streams WHERE playback_id = $1
+	`, req.PlaybackId).Scan(&streamID, &tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.NotFound, "stream not found for playback_id %s", req.PlaybackId)
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE commodore.streams SET thumbnail_url = $1, updated_at = NOW() WHERE id = $2
+	`, req.ThumbnailUrl, streamID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update thumbnail: %v", err)
+	}
+
+	s.emitStreamChangeEvent(ctx, "stream.thumbnail_updated", tenantID, "", streamID, []string{"thumbnail_url"})
+
+	return &pb.UpdateStreamThumbnailResponse{}, nil
+}
+
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
 	var stream pb.Stream
-	var description sql.NullString
+	var description, thumbnailURL sql.NullString
 	var createdAt, updatedAt time.Time
 
 	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, internal_name, stream_key, playback_id, title, description,
-		       is_recording_enabled, created_at, updated_at
+		       is_recording_enabled, thumbnail_url, created_at, updated_at
 		FROM commodore.streams
 		WHERE id = $1 AND user_id = $2 AND tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
-		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt)
+		&stream.Title, &description, &stream.IsRecordingEnabled, &thumbnailURL, &createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -4880,6 +4908,9 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 
 	if description.Valid {
 		stream.Description = description.String
+	}
+	if thumbnailURL.Valid {
+		stream.ThumbnailUrl = &thumbnailURL.String
 	}
 	stream.IsRecording = stream.IsRecordingEnabled
 	// Note: IsLive, Status, StartedAt, EndedAt are now set by Gateway from Periscope (Data Plane)
@@ -4892,17 +4923,20 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 // scanStream scans config-only stream data; operational state comes from Periscope Data Plane
 func scanStream(rows *sql.Rows) (*pb.Stream, error) {
 	var stream pb.Stream
-	var description sql.NullString
+	var description, thumbnailURL sql.NullString
 	var createdAt, updatedAt time.Time
 
 	err := rows.Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
-		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt)
+		&stream.Title, &description, &stream.IsRecordingEnabled, &thumbnailURL, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 
 	if description.Valid {
 		stream.Description = description.String
+	}
+	if thumbnailURL.Valid {
+		stream.ThumbnailUrl = &thumbnailURL.String
 	}
 	stream.IsRecording = stream.IsRecordingEnabled
 	// Note: IsLive, Status, StartedAt, EndedAt are now set by Gateway from Periscope (Data Plane)

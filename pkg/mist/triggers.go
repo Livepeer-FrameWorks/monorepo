@@ -30,6 +30,8 @@ const (
 	// Processing billing triggers (from MistProcLivepeer and MistProcAV)
 	TriggerLivepeerSegmentComplete  TriggerType = "LIVEPEER_SEGMENT_COMPLETE"
 	TriggerProcessAVSegmentComplete TriggerType = "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE"
+	// Thumbnail asset triggers (from process_thumbs)
+	TriggerThumbnailUpdated TriggerType = "THUMBNAIL_UPDATED"
 	// Polled-from-Helmsman trigger types.
 	TriggerStreamLifecycle TriggerType = "STREAM_LIFECYCLE_UPDATE"
 	TriggerClientLifecycle TriggerType = "CLIENT_LIFECYCLE_UPDATE"

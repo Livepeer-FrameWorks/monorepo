@@ -179,6 +179,7 @@ func (m *Manager) reconcile() {
 		// Processing billing triggers (for tracking transcoding usage)
 		"LIVEPEER_SEGMENT_COMPLETE":           []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/livepeer_segment_complete"), "sync": false}},
 		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
+		"THUMBNAIL_UPDATED":                   []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
 	}
 	desiredConfig["triggers"] = triggers
 

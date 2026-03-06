@@ -1768,3 +1768,45 @@ func modeToString(m pb.NodeOperationalMode) string {
 		return "normal"
 	}
 }
+
+// HandleThumbnailUpdated handles THUMBNAIL_UPDATED trigger from MistServer.
+// Payload format: streamName\npath1\npath2\npath3
+func HandleThumbnailUpdated(c *gin.Context) {
+	incMistWebhook("THUMBNAIL_UPDATED", "received")
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		incMistWebhook("THUMBNAIL_UPDATED", "read_error")
+		logger.WithError(err).Error("Failed to read THUMBNAIL_UPDATED body")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	payloadStr := strings.TrimSpace(string(body))
+	lines := strings.Split(payloadStr, "\n")
+	if len(lines) < 2 {
+		incMistWebhook("THUMBNAIL_UPDATED", "parse_error")
+		logger.WithField("payload", payloadStr).Warn("THUMBNAIL_UPDATED incomplete payload")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	streamName := strings.TrimSpace(lines[0])
+	var filePaths []string
+	for _, line := range lines[1:] {
+		if p := strings.TrimSpace(line); p != "" {
+			filePaths = append(filePaths, p)
+		}
+	}
+
+	logger.WithFields(logging.Fields{
+		"stream_name": streamName,
+		"file_count":  len(filePaths),
+	}).Info("Thumbnail updated, requesting upload URLs from Foghorn")
+
+	if err := control.SendThumbnailUploadRequest(streamName, filePaths); err != nil {
+		incMistWebhook("THUMBNAIL_UPDATED", "send_error")
+		logger.WithError(err).Error("Failed to send thumbnail upload request to Foghorn")
+	}
+
+	c.String(http.StatusOK, "OK")
+}

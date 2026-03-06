@@ -158,6 +158,9 @@ func main() {
 		// Processing billing triggers (for tracking transcoding usage)
 		webhooks.POST("/mist/livepeer_segment_complete", handlers.HandleLivepeerSegmentComplete)
 		webhooks.POST("/mist/process_av_segment_complete", handlers.HandleProcessAVSegmentComplete)
+
+		// Thumbnail triggers
+		webhooks.POST("/mist/thumbnail_updated", handlers.HandleThumbnailUpdated)
 	}
 
 	// Graceful shutdown handling
