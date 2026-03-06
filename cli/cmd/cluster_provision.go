@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/githubapp"
+	fwsops "frameworks/cli/pkg/sops"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
 	infra "frameworks/pkg/models"
@@ -39,6 +39,7 @@ func newClusterProvisionCmd() *cobra.Command {
 	var githubAppID int64
 	var githubInstallID int64
 	var githubKeyPath string
+	var ageKeyFile string
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -68,7 +69,7 @@ Use --repo to fetch manifests from a private GitHub repo via GitHub App credenti
   frameworks cluster provision --force --manifest cluster.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if repo != "" {
-				return runProvisionFromRepo(cmd, repo, githubAppID, githubInstallID, githubKeyPath, manifestPath, only, dryRun, force, ignoreValidation)
+				return runProvisionFromRepo(cmd, repo, githubAppID, githubInstallID, githubKeyPath, ageKeyFile, manifestPath, only, dryRun, force, ignoreValidation)
 			}
 			return runProvision(cmd, manifestPath, only, dryRun, force, ignoreValidation)
 		},
@@ -83,12 +84,13 @@ Use --repo to fetch manifests from a private GitHub repo via GitHub App credenti
 	cmd.Flags().Int64Var(&githubAppID, "github-app-id", 0, "GitHub App ID (overrides config)")
 	cmd.Flags().Int64Var(&githubInstallID, "github-installation-id", 0, "GitHub Installation ID (overrides config)")
 	cmd.Flags().StringVar(&githubKeyPath, "github-private-key", "", "Path to GitHub App private key PEM (overrides config)")
+	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted env files (default: $SOPS_AGE_KEY_FILE or ~/.config/sops/age/keys.txt)")
 
 	return cmd
 }
 
 // runProvisionFromRepo fetches the manifest from a GitHub repo and provisions.
-func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int64, keyPath, manifestFile, only string, dryRun, force, ignoreValidation bool) error {
+func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int64, keyPath, ageKeyFile, manifestFile, only string, dryRun, force, ignoreValidation bool) error {
 	cfg, _, err := fwcfg.Load()
 	if err != nil {
 		return err
@@ -181,6 +183,17 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not fetch %s: %v\n", name, fetchErr)
 			continue
 		}
+
+		// Decrypt SOPS-encrypted env files transparently
+		if fwsops.IsEncrypted(fileData) {
+			plain, decErr := fwsops.Decrypt(fileData, ageKeyFile)
+			if decErr != nil {
+				return fmt.Errorf("decrypt %s: %w", name, decErr)
+			}
+			fileData = plain
+			fmt.Fprintf(cmd.OutOrStdout(), "Decrypted %s (SOPS/age)\n", name)
+		}
+
 		localPath := filepath.Join(tmpDir, name)
 		if err := os.MkdirAll(filepath.Dir(localPath), 0o700); err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not create dir for %s: %v\n", name, err)
@@ -1417,16 +1430,15 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 
 // loadEnvFile reads a KEY=VALUE env file and merges values into the target map.
 // Lines starting with # and empty lines are skipped. Later values overwrite earlier ones.
+// SOPS-encrypted files are decrypted transparently using age keys.
 func loadEnvFile(path string, target map[string]string) error {
-	f, err := os.Open(path)
+	data, err := fwsops.DecryptFileIfEncrypted(path, "")
 	if err != nil {
-		return fmt.Errorf("env file not found: %s", path)
+		return fmt.Errorf("env file %s: %w", path, err)
 	}
-	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}

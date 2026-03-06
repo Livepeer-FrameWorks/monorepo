@@ -338,6 +338,15 @@ env:
 	@echo "Generating .env from config/env/*.env..."
 	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run .
 
+# SOPS encryption for secrets.env (requires: brew install sops age)
+encrypt:
+	@sops -e -i config/env/secrets.env
+	@echo "Encrypted config/env/secrets.env"
+
+decrypt:
+	@sops -d -i config/env/secrets.env
+	@echo "Decrypted config/env/secrets.env"
+
 # Tidy all Go modules
 tidy:
 	@echo "Running go mod tidy for all Go modules..."

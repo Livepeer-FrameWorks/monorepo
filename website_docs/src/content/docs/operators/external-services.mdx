@@ -27,18 +27,58 @@ The merged result is written to `/etc/frameworks/{service}.env` on each host.
 3. Reference it in your cluster manifest: `env_file: secrets/production.env`
 4. Run `frameworks cluster provision` — the CLI reads the file and pushes merged env vars to all hosts
 
-<Aside type="caution" title="Interim Solution">
-  Flat env files are a **bootstrap-stage approach**, not a production-grade secrets management
-  solution. Credentials are stored in plaintext on disk (both locally and on each host at
-  `/etc/frameworks/*.env`). This is acceptable for initial deployment but should be replaced with a
-  proper secrets manager (HashiCorp Vault, SOPS, or similar) once the cluster is stable. A Vault
-  integration RFC exists — future CLI versions will support fetching secrets from Vault at
-  provisioning time instead of reading flat files.
+### Encrypting secrets with SOPS + age
 
-In the meantime: keep the secrets file in a **private** repository, restrict file permissions
-(`chmod 600`) on remote hosts, and consider encrypting the file at rest with `git-crypt` or
-`sops`.
+The CLI supports [SOPS](https://github.com/getsops/sops)-encrypted env files using [age](https://github.com/FiloSottile/age) keys. This encrypts secrets at rest in your gitops repo — decryption happens transparently during provisioning.
 
+**One-time setup:**
+
+```bash
+# Install tools
+brew install sops age    # macOS
+# or: apt install age && go install github.com/getsops/sops/v3/cmd/sops@latest
+
+# Generate an age keypair
+age-keygen -o ~/.config/sops/age/keys.txt
+# Note the public key (age1...)
+```
+
+Create `.sops.yaml` in your gitops repo root:
+
+```yaml
+creation_rules:
+  - path_regex: secrets/.*\.env$
+    age: age1yourpublickeyhere
+```
+
+**Encrypt your secrets file:**
+
+```bash
+sops -e -i secrets/production.env
+git add secrets/production.env .sops.yaml
+git commit -m "Encrypt production secrets with SOPS/age"
+```
+
+**Provisioning** decrypts automatically — the CLI detects SOPS-encrypted files and decrypts using the age key at `~/.config/sops/age/keys.txt` (or `SOPS_AGE_KEY_FILE`):
+
+```bash
+frameworks cluster provision --repo org/gitops-private
+
+# Or explicitly specify the key file:
+frameworks cluster provision --repo org/gitops-private --age-key /path/to/keys.txt
+```
+
+**Local development** with an encrypted `config/env/secrets.env`:
+
+```bash
+make decrypt   # Decrypt in-place (requires sops CLI)
+make env       # Generate .env as usual
+make encrypt   # Re-encrypt before committing
+```
+
+<Aside type="note" title="Host-level secrets">
+  Decrypted env vars are written to `/etc/frameworks/*.env` on each host with `chmod 600`. For
+  runtime encryption at rest, consider full-disk encryption on your hosts.
 </Aside>
 
 ---
