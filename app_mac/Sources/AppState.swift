@@ -28,6 +28,14 @@ class AppState: ObservableObject {
 
   // Gateway
   var gatewayBaseURL = "https://bridge.frameworks.network"
+
+  // CLI Integration
+  @Published var cliAvailable = false
+  @Published var cliVersion: String?
+  @Published var currentContext: String = "local"
+  @Published var availableContexts: [String] = []
+  @Published var diagnosticOutput: String = ""
+  @Published var isDiagnosticRunning = false
 }
 
 struct StreamSummary: Identifiable, Codable {

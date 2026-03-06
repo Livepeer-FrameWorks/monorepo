@@ -14,6 +14,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     tryRestoreSession()
     startEdgeDetection()
     registerLoginItem()
+    detectCLI()
     MCPServer.shared.start()
   }
 
@@ -105,6 +106,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
       menu.addItem(NSMenuItem(title: "Dashboard", action: #selector(openDashboard), keyEquivalent: "d"))
       menu.addItem(NSMenuItem(title: "Ask Skipper...", action: #selector(openSkipper), keyEquivalent: "s"))
+
+      if appState.cliAvailable {
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Diagnostics...", action: #selector(openDiagnostics), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Provision Edge...", action: #selector(openProvision), keyEquivalent: ""))
+
+        let contextSubmenu = NSMenu()
+        for name in appState.availableContexts {
+          let item = NSMenuItem(title: name, action: #selector(switchContextFromMenu(_:)), keyEquivalent: "")
+          item.target = self
+          item.representedObject = name
+          if name == appState.currentContext {
+            item.state = .on
+          }
+          contextSubmenu.addItem(item)
+        }
+        if !appState.availableContexts.isEmpty {
+          contextSubmenu.addItem(NSMenuItem.separator())
+        }
+        contextSubmenu.addItem(NSMenuItem(title: "Manage...", action: #selector(openContextPicker), keyEquivalent: ""))
+        let contextItem = NSMenuItem(title: "Context", action: nil, keyEquivalent: "")
+        contextItem.submenu = contextSubmenu
+        menu.addItem(contextItem)
+      }
+
       menu.addItem(NSMenuItem.separator())
       menu.addItem(NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: ","))
       menu.addItem(NSMenuItem(title: "Log Out", action: #selector(logout), keyEquivalent: ""))
@@ -140,6 +166,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   @objc private func openLogin() {
     guard let button = statusItem.button else { return }
     panelManager.showView(.login, relativeTo: button)
+  }
+
+  @objc private func openDiagnostics() {
+    guard let button = statusItem.button else { return }
+    panelManager.showView(.diagnostics, relativeTo: button)
+  }
+
+  @objc private func openContextPicker() {
+    guard let button = statusItem.button else { return }
+    panelManager.showView(.contextPicker, relativeTo: button)
+  }
+
+  @objc private func openProvision() {
+    guard let button = statusItem.button else { return }
+    panelManager.showView(.provision, relativeTo: button)
+  }
+
+  @objc private func switchContextFromMenu(_ sender: NSMenuItem) {
+    guard let name = sender.representedObject as? String else { return }
+    Task {
+      let ok = await ConfigBridge.shared.switchContext(name)
+      if ok {
+        reloadCLIContext()
+      }
+    }
   }
 
   @objc private func logout() {
@@ -188,6 +239,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     guard edgePoller == nil else { return }
     edgePoller = EdgePoller(appState: appState)
     edgePoller?.start()
+  }
+
+  // MARK: - CLI Detection
+
+  private func detectCLI() {
+    Task {
+      let available = await CLIRunner.shared.isAvailable()
+      var version: String?
+      var contextName = "local"
+      var contextNames: [String] = []
+
+      if available {
+        version = await CLIRunner.shared.version()
+        let contexts = await ConfigBridge.shared.loadContexts()
+        contextNames = contexts.map(\.name)
+        if let current = contexts.first(where: \.current) {
+          contextName = current.name
+        }
+        if let ctx = await ConfigBridge.shared.loadCurrentContext() {
+          await MainActor.run {
+            appState.gatewayBaseURL = ctx.endpoints.bridgeURL
+            GatewayClient.shared.baseURL = ctx.endpoints.bridgeURL
+          }
+        }
+        await ConfigBridge.shared.startWatching { [weak self] in
+          self?.reloadCLIContext()
+        }
+      }
+
+      await MainActor.run {
+        appState.cliAvailable = available
+        appState.cliVersion = version
+        appState.currentContext = contextName
+        appState.availableContexts = contextNames
+      }
+    }
+  }
+
+  private func reloadCLIContext() {
+    Task {
+      guard let ctx = await ConfigBridge.shared.loadCurrentContext() else { return }
+      let contexts = await ConfigBridge.shared.loadContexts()
+      await MainActor.run {
+        appState.currentContext = ctx.name
+        appState.gatewayBaseURL = ctx.endpoints.bridgeURL
+        GatewayClient.shared.baseURL = ctx.endpoints.bridgeURL
+        appState.availableContexts = contexts.map(\.name)
+      }
+    }
   }
 
   // MARK: - Status Icon

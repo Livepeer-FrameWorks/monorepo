@@ -12,6 +12,14 @@ struct DashboardView: View {
           .fill(appState.edgeHealthy ? Color.tnGreen : Color.tnAccent)
           .frame(width: 8, height: 8)
         Text("FrameWorks").font(.headline)
+        if appState.cliAvailable {
+          Text(appState.currentContext)
+            .font(.caption2.bold())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.tnAccent.opacity(0.15))
+            .clipShape(Capsule())
+        }
         Spacer()
         if let email = appState.userEmail {
           Text(email).font(.caption).foregroundStyle(.secondary)

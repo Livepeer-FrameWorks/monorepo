@@ -7,6 +7,9 @@ enum PanelView {
   case settings
   case skipper
   case edgeStatus
+  case diagnostics
+  case contextPicker
+  case provision
 }
 
 private class KeyablePanel: NSPanel {
@@ -25,6 +28,7 @@ class PanelManager: NSObject, NSWindowDelegate {
   private let appState: AppState
   private let panelWidth: CGFloat = 420
   private let panelHeight: CGFloat = 560
+  private(set) weak var statusBarButton: NSStatusBarButton?
 
   init(appState: AppState) {
     self.appState = appState
@@ -41,6 +45,7 @@ class PanelManager: NSObject, NSWindowDelegate {
   }
 
   func showView(_ view: PanelView, relativeTo button: NSStatusBarButton) {
+    statusBarButton = button
     closePanel()
 
     let panel = makePanel()
@@ -79,7 +84,16 @@ class PanelManager: NSObject, NSWindowDelegate {
     case .skipper:
       SkipperChatView(appState: appState, closePanel: { [weak self] in self?.closePanel() })
     case .edgeStatus:
-      EdgeStatusView(appState: appState, closePanel: { [weak self] in self?.closePanel() })
+      EdgeStatusView(appState: appState, closePanel: { [weak self] in self?.closePanel() }) { [weak self] in
+        guard let self, let button = self.statusBarButton else { return }
+        self.showView(.diagnostics, relativeTo: button)
+      }
+    case .diagnostics:
+      DiagnosticsView(appState: appState, closePanel: { [weak self] in self?.closePanel() })
+    case .contextPicker:
+      ContextPickerView(appState: appState, closePanel: { [weak self] in self?.closePanel() })
+    case .provision:
+      ProvisionView(appState: appState, closePanel: { [weak self] in self?.closePanel() })
     }
   }
 

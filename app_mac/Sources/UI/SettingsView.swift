@@ -32,8 +32,17 @@ struct SettingsView: View {
         }
 
         Section("Connection") {
+          if appState.cliAvailable {
+            LabeledContent("Context", value: appState.currentContext)
+          }
           TextField("Gateway URL", text: $appState.gatewayBaseURL)
-          TextField("Edge URL", text: $appState.edgeBaseURL)
+        }
+
+        if appState.cliAvailable {
+          Section("CLI") {
+            LabeledContent("Version", value: appState.cliVersion ?? "unknown")
+            LabeledContent("Status", value: "Connected")
+          }
         }
 
         if appState.isAuthenticated {

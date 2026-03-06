@@ -3,6 +3,7 @@ import SwiftUI
 struct EdgeStatusView: View {
   @ObservedObject var appState: AppState
   var closePanel: () -> Void
+  var onDiagnostics: (() -> Void)?
 
   @State private var streams: [EdgeStream] = []
 
@@ -53,6 +54,14 @@ struct EdgeStatusView: View {
           // Active streams
           if !streams.isEmpty {
             activeStreamsSection
+          }
+
+          if appState.cliAvailable {
+            Button(action: { onDiagnostics?() }) {
+              Label("Run Diagnostics", systemImage: "stethoscope")
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
           }
         }
         .padding()
