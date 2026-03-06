@@ -1041,7 +1041,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		"node_id":     trigger.GetNodeId(),
 	}).Debug("Processing STREAM_SOURCE trigger")
 
-	// STREAM_SOURCE is for VOD artifacts only. Live streams have no static source -
+	// STREAM_SOURCE is for VOD/process artifacts only. Live streams have no static source -
 	// they're push streams that MistServer receives from encoders.
 	if strings.HasPrefix(streamName, "live+") {
 		p.logger.WithFields(logging.Fields{
@@ -1049,6 +1049,12 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 			"node_id":     trigger.GetNodeId(),
 		}).Debug("STREAM_SOURCE not applicable for live streams; aborting")
 		return "", true, nil
+	}
+
+	// process_ streams: resolve to presigned S3 URL for processing input
+	if strings.HasPrefix(streamName, "process_") {
+		artifactHash := strings.TrimPrefix(streamName, "process_")
+		return p.resolveProcessSource(artifactHash, trigger.GetNodeId())
 	}
 
 	// Extract artifact internal name (strips vod+ or any other prefix)
@@ -1170,6 +1176,41 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 
 	// Return empty to let MistServer use default source (will fail for VOD)
 	return "", true, nil
+}
+
+// resolveProcessSource returns a presigned HTTPS URL for a process+ stream's source.
+func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, bool, error) {
+	if artifactHash == "" {
+		return "", true, nil
+	}
+	db := control.GetDB()
+	if db == nil {
+		p.logger.Error("DB not available for process+ source resolution")
+		return "", true, nil
+	}
+
+	var s3URL string
+	err := db.QueryRowContext(context.Background(), `
+		SELECT s3_url FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND s3_url IS NOT NULL
+	`, artifactHash).Scan(&s3URL)
+	if err != nil {
+		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to look up S3 URL for process+ source")
+		return "", true, nil
+	}
+
+	presigned, err := control.GeneratePresignedGETForArtifact(context.Background(), s3URL)
+	if err != nil {
+		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to generate presigned URL for process+ source")
+		return "", true, nil
+	}
+
+	p.logger.WithFields(logging.Fields{
+		"artifact_hash": artifactHash,
+		"node_id":       nodeID,
+	}).Info("Resolved process+ source to presigned URL")
+
+	return presigned, false, nil
 }
 
 // handlePushEnd processes PUSH_END trigger (non-blocking)

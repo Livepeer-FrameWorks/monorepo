@@ -728,6 +728,20 @@ func main() {
 	purgeDeletedJob.Start()
 	defer purgeDeletedJob.Stop()
 
+	// Start processing job dispatcher (routes VOD processing jobs to edge nodes)
+	processingDispatcher := jobs.NewProcessingDispatcher(jobs.ProcessingDispatcherConfig{
+		DB:     db,
+		Logger: logger,
+	})
+	processingDispatcher.Start()
+	defer processingDispatcher.Stop()
+
+	// Initialize VOD processing pipeline and wire result handler
+	foghorngrpc.InitVodPipeline(db, logger, decklogClient)
+	control.SetProcessingJobResultHandler(func(ctx context.Context, jobID, status string, outputs map[string]string, errorMsg string) {
+		foghorngrpc.GetVodPipeline().HandleJobResult(ctx, jobID, status, outputs, errorMsg)
+	})
+
 	// Setup router with unified monitoring (health/metrics only - all API routes now gRPC)
 	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
 

@@ -2212,11 +2212,11 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		return nil, status.Errorf(codes.Internal, "failed to complete upload: %v", err)
 	}
 
-	// Update artifact status to 'ready' (no validation/transcoding for now)
-	// TODO: When we add ffprobe validation, change this to 'processing' and trigger async validation
+	// Update artifact: S3 upload done, start processing pipeline
+	s3URL := s.s3Client.BuildS3URL(s3Key)
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
-		SET status = 'ready',
+		SET status = 'processing',
 		    storage_location = 's3',
 		    sync_status = 'synced',
 		    sync_error = NULL,
@@ -2225,7 +2225,7 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		    s3_url = COALESCE(s3_url, $2),
 		    updated_at = NOW()
 		WHERE artifact_hash = $1
-	`, artifactHash, s.s3Client.BuildS3URL(s3Key))
+	`, artifactHash, s3URL)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to update artifact status")
 	}
@@ -2235,13 +2235,19 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		"upload_id":     req.UploadId,
 		"tenant_id":     req.TenantId,
 		"parts":         len(req.Parts),
-	}).Info("Completed VOD multipart upload")
+	}).Info("Completed VOD multipart upload, starting processing")
 
-	// Emit VOD lifecycle event (STATUS_COMPLETED)
+	// Queue processing job (metadata extraction + thumbnails + optional transcode)
+	if vodPipeline != nil {
+		if err := vodPipeline.StartPipeline(ctx, req.TenantId, artifactHash); err != nil {
+			s.logger.WithError(err).Error("Failed to start VOD processing pipeline")
+		}
+	}
+
+	// Emit VOD lifecycle event (STATUS_PROCESSING)
 	if s.decklogClient != nil {
-		s3URL := s.s3Client.BuildS3URL(s3Key)
 		vodData := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_COMPLETED,
+			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
 			VodHash:     artifactHash,
 			UploadId:    &req.UploadId,
 			S3Url:       &s3URL,
@@ -2260,14 +2266,11 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 	// Fetch and return the asset
 	asset, err := s.getVodAssetInfo(ctx, artifactHash)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to fetch completed asset")
-		// Return minimal response with READY status (no validation/transcoding yet)
-		// FUTURE: When validation is added, this will return PROCESSING and the
-		// Helmsman ffprobe handler will update to READY or FAILED after validation
+		s.logger.WithError(err).Error("Failed to fetch asset after upload completion")
 		return &pb.CompleteVodUploadResponse{
 			Asset: &pb.VodAssetInfo{
 				ArtifactHash: artifactHash,
-				Status:       pb.VodStatus_VOD_STATUS_READY,
+				Status:       pb.VodStatus_VOD_STATUS_PROCESSING,
 			},
 		}, nil
 	}

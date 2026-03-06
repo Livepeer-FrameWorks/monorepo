@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -440,6 +441,8 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 		return "dtsh_sync"
 	case *pb.ForwardCommandRequest_StopSessions:
 		return "stop_sessions"
+	case *pb.ForwardCommandRequest_ProcessingJob:
+		return "processing_job"
 	default:
 		return "unknown"
 	}
@@ -463,6 +466,8 @@ func RelayRequestID(req *pb.ForwardCommandRequest) string {
 		return cmd.Defrost.GetRequestId()
 	case *pb.ForwardCommandRequest_DtshSync:
 		return cmd.DtshSync.GetRequestId()
+	case *pb.ForwardCommandRequest_ProcessingJob:
+		return cmd.ProcessingJob.GetJobId()
 	default:
 		return ""
 	}
@@ -997,6 +1002,12 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processModeChangeRequest(x.ModeChangeRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ValidateEdgeTokenRequest:
 			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_ProcessingJobResult:
+			go processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+		case *pb.ControlMessage_ThumbnailUploadRequest:
+			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_ThumbnailUploaded:
+			go processThumbnailUploaded(x.ThumbnailUploaded, nodeID, registry.log)
 		}
 	}
 	if nodeID != "" {
@@ -3056,6 +3067,128 @@ func SendDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets) err
 	}))
 }
 
+// ProcessingJobResultHandler is called after a processing job result is persisted.
+// Set by the grpc package to avoid circular imports (control → grpc).
+type ProcessingJobResultHandler func(ctx context.Context, jobID, status string, outputs map[string]string, errorMsg string)
+
+var onProcessingJobResult ProcessingJobResultHandler
+
+// SetProcessingJobResultHandler registers a callback for processing job results.
+func SetProcessingJobResultHandler(h ProcessingJobResultHandler) {
+	onProcessingJobResult = h
+}
+
+// processProcessingJobResult handles job completion/failure results from Helmsman.
+func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, logger logging.Logger) {
+	fields := logging.Fields{
+		"job_id":  result.GetJobId(),
+		"status":  result.GetStatus(),
+		"node_id": nodeID,
+	}
+
+	if db == nil {
+		logger.WithFields(fields).Error("DB not configured for processing job result")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	jobStatus := result.GetStatus()
+	switch jobStatus {
+	case "completed":
+		var outputMeta *string
+		if len(result.GetOutputs()) > 0 {
+			b, _ := json.Marshal(result.GetOutputs())
+			s := string(b)
+			outputMeta = &s
+		}
+		_, err := db.ExecContext(ctx, `
+			UPDATE foghorn.processing_jobs
+			SET status = 'completed',
+			    output_metadata = $2,
+			    completed_at = NOW(),
+			    updated_at = NOW()
+			WHERE job_id = $1
+		`, result.GetJobId(), outputMeta)
+		if err != nil {
+			logger.WithError(err).WithFields(fields).Error("Failed to update processing job to completed")
+			return
+		}
+		logger.WithFields(fields).Info("Processing job completed")
+
+	case "failed":
+		_, err := db.ExecContext(ctx, `
+			UPDATE foghorn.processing_jobs
+			SET status = 'failed',
+			    error_message = $2,
+			    updated_at = NOW()
+			WHERE job_id = $1
+		`, result.GetJobId(), result.GetError())
+		if err != nil {
+			logger.WithError(err).WithFields(fields).Error("Failed to update processing job to failed")
+			return
+		}
+		logger.WithFields(fields).WithField("error", result.GetError()).Warn("Processing job failed")
+
+	default:
+		logger.WithFields(fields).Warn("Unknown processing job result status")
+		return
+	}
+
+	// Notify pipeline handler
+	if onProcessingJobResult != nil {
+		onProcessingJobResult(ctx, result.GetJobId(), jobStatus, result.GetOutputs(), result.GetError())
+	}
+}
+
+func SendLocalProcessingJob(nodeID string, req *pb.ProcessingJobRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_ProcessingJobRequest{ProcessingJobRequest: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
+// SendProcessingJob sends a ProcessingJobRequest to the given node, relaying via HA if needed.
+func SendProcessingJob(nodeID string, req *pb.ProcessingJobRequest) error {
+	err := SendLocalProcessingJob(nodeID, req)
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_ProcessingJob{ProcessingJob: req},
+	}))
+}
+
+// GeneratePresignedGETForArtifact generates a presigned GET URL for an artifact's S3 object.
+// The s3URL should be the full S3 URL (s3://bucket/key) stored in foghorn.artifacts.
+func GeneratePresignedGETForArtifact(_ context.Context, s3URL string) (string, error) {
+	if s3Client == nil {
+		return "", fmt.Errorf("s3 client not configured")
+	}
+	// Extract key from s3:// URL — the S3 client's GeneratePresignedGET expects a key
+	key := s3URL
+	if strings.HasPrefix(s3URL, "s3://") {
+		// s3://bucket/key -> key (bucket is configured on the client)
+		parts := strings.SplitN(s3URL[5:], "/", 2)
+		if len(parts) == 2 {
+			key = parts[1]
+		}
+	}
+	return s3Client.GeneratePresignedGET(key, 1*time.Hour)
+}
+
 // TriggerDtshSync is called when .dtsh appeared after the main asset was already synced
 // It generates presigned URLs and sends DtshSyncRequest to the node
 func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
@@ -4052,5 +4185,129 @@ func sendEdgeTokenResponse(requestID string, stream pb.HelmsmanControl_ConnectSe
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).Warn("Failed to send edge token validation response")
+	}
+}
+
+// processThumbnailUploadRequest resolves internal_name → playback_id, generates
+// presigned PUT URLs for each thumbnail file, and sends them back to Helmsman.
+func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	internalName := req.GetInternalName()
+	filePaths := req.GetFilePaths()
+
+	logger.WithFields(logging.Fields{
+		"internal_name": internalName,
+		"file_count":    len(filePaths),
+		"node_id":       nodeID,
+	}).Info("Processing thumbnail upload request")
+
+	if s3Client == nil {
+		logger.Warn("S3 client not configured, ignoring thumbnail upload request")
+		return
+	}
+
+	// Resolve internal_name → playback_id from in-memory stream state
+	ss := state.DefaultManager().GetStreamState(internalName)
+	if ss == nil || ss.PlaybackID == "" {
+		logger.WithField("internal_name", internalName).Warn("Stream not found or missing playback_id for thumbnail upload")
+		return
+	}
+	playbackID := ss.PlaybackID
+
+	expiry := 15 * time.Minute
+	resp := &pb.ThumbnailUploadResponse{
+		PlaybackId: playbackID,
+		Uploads:    make([]*pb.ThumbnailUploadResponse_PresignedUpload, 0, len(filePaths)),
+	}
+
+	allowedThumbnailFiles := map[string]bool{
+		"poster.jpg": true,
+		"sprite.jpg": true,
+		"sprite.vtt": true,
+	}
+
+	for _, fp := range filePaths {
+		fileName := filepath.Base(fp)
+		if !allowedThumbnailFiles[fileName] {
+			logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
+			continue
+		}
+		s3Key := "thumbnails/" + playbackID + "/" + fileName
+
+		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			logger.WithFields(logging.Fields{
+				"file_name": fileName,
+				"s3_key":    s3Key,
+				"error":     err,
+			}).Error("Failed to generate presigned PUT URL for thumbnail")
+			continue
+		}
+		resp.Uploads = append(resp.Uploads, &pb.ThumbnailUploadResponse_PresignedUpload{
+			FileName:     fileName,
+			PresignedUrl: presignedURL,
+			S3Key:        s3Key,
+			LocalPath:    fp,
+		})
+	}
+
+	if len(resp.Uploads) == 0 {
+		logger.Warn("No presigned URLs generated for thumbnail upload")
+		return
+	}
+
+	msg := &pb.ControlMessage{
+		RequestId: requestID,
+		SentAt:    timestamppb.Now(),
+		Payload:   &pb.ControlMessage_ThumbnailUploadResponse{ThumbnailUploadResponse: resp},
+	}
+	if err := stream.Send(msg); err != nil {
+		logger.WithError(err).Error("Failed to send thumbnail upload response")
+	}
+}
+
+// processThumbnailUploaded updates Commodore with the Chandler asset URL after
+// Helmsman successfully uploads thumbnail files to S3.
+func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger logging.Logger) {
+	playbackID := req.GetPlaybackId()
+	s3Keys := req.GetS3Keys()
+
+	logger.WithFields(logging.Fields{
+		"playback_id": playbackID,
+		"s3_keys":     s3Keys,
+		"node_id":     nodeID,
+	}).Info("Thumbnail upload confirmed")
+
+	// Construct Chandler URL — Chandler serves /assets/{playbackId}/poster.jpg deterministically
+	chandlerBase := strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL"))
+	if chandlerBase == "" {
+		chandlerHost := strings.TrimSpace(os.Getenv("CHANDLER_HOST"))
+		chandlerPort := strings.TrimSpace(os.Getenv("CHANDLER_PORT"))
+		if chandlerHost == "" {
+			chandlerHost = "chandler"
+		}
+		if chandlerPort == "" {
+			chandlerPort = "18020"
+		}
+		chandlerBase = "http://" + chandlerHost + ":" + chandlerPort
+	}
+	thumbnailURL := chandlerBase + "/assets/" + playbackID + "/poster.jpg"
+
+	if CommodoreClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := CommodoreClient.UpdateStreamThumbnail(ctx, playbackID, thumbnailURL); err != nil {
+			logger.WithFields(logging.Fields{
+				"playback_id":   playbackID,
+				"thumbnail_url": thumbnailURL,
+				"error":         err,
+			}).Error("Failed to update stream thumbnail in Commodore")
+			return
+		}
+		logger.WithFields(logging.Fields{
+			"playback_id":   playbackID,
+			"thumbnail_url": thumbnailURL,
+		}).Info("Stream thumbnail URL updated in Commodore")
+	} else {
+		logger.Warn("Commodore client not configured, cannot update stream thumbnail")
 	}
 }
