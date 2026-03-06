@@ -13,8 +13,11 @@ env:
   REGISTRY: ghcr.io/livepeer-frameworks
 
 jobs:
-  build-images:
-    name: Build & Push Images
+  # ---------------------------------------------------------------------------
+  # Service Docker images — split amd64 (ubuntu) + arm64 (native self-hosted)
+  # ---------------------------------------------------------------------------
+  build-images-amd64:
+    name: Build Images (amd64)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -46,8 +49,111 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Read service component version
+        id: svcver
+        run: |
+          VERSION_FILE="${{ matrix.service.context }}/VERSION"
+          PACKAGE_JSON="${{ matrix.service.context }}/package.json"
+          if [[ -f "$VERSION_FILE" ]]; then
+            echo "version=$(tr -d '\n' < "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
+          elif [[ -f "$PACKAGE_JSON" ]]; then
+            echo "version=$(jq -r .version "$PACKAGE_JSON")" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & push ${{ matrix.service.name }} (amd64)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.service.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          provenance: true
+          sbom: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            COMPONENT_NAME=${{ matrix.service.name }}
+            COMPONENT_VERSION=${{ steps.svcver.outputs.version }}
+          tags: |
+            ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-amd64
+            livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-amd64
+          cache-from: type=gha,scope=${{ matrix.service.name }}-amd64
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}-amd64
+
+      - name: Write digest artifact
+        run: |
+          mkdir -p dist
+          cat > dist/arch-digest-${{ matrix.service.name }}-amd64.json <<JSON
+          {
+            "name": "${{ matrix.service.name }}",
+            "digest": "${{ steps.build.outputs.digest }}",
+            "service_version": "${{ steps.svcver.outputs.version }}"
+          }
+          JSON
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: arch-digest-${{ matrix.service.name }}-amd64
+          path: dist/arch-digest-${{ matrix.service.name }}-amd64.json
+
+  build-images-arm64:
+    name: Build Images (arm64)
+    runs-on: macos-arm64-self-hosted
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        service:
+          - { name: bridge, context: api_gateway, dockerfile: api_gateway/Dockerfile }
+          - { name: quartermaster, context: api_tenants, dockerfile: api_tenants/Dockerfile }
+          - { name: commodore, context: api_control, dockerfile: api_control/Dockerfile }
+          - { name: purser, context: api_billing, dockerfile: api_billing/Dockerfile }
+          - { name: foghorn, context: api_balancing, dockerfile: api_balancing/Dockerfile }
+          - { name: decklog, context: api_firehose, dockerfile: api_firehose/Dockerfile }
+          - {
+              name: periscope-ingest,
+              context: api_analytics_ingest,
+              dockerfile: api_analytics_ingest/Dockerfile,
+            }
+          - {
+              name: periscope-query,
+              context: api_analytics_query,
+              dockerfile: api_analytics_query/Dockerfile,
+            }
+          - { name: signalman, context: api_realtime, dockerfile: api_realtime/Dockerfile }
+          - { name: helmsman, context: api_sidecar, dockerfile: api_sidecar/Dockerfile }
+          - { name: steward, context: api_forms, dockerfile: api_forms/Dockerfile }
+          - { name: deckhand, context: api_ticketing, dockerfile: api_ticketing/Dockerfile }
+          - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
+          - { name: skipper, context: api_consultant, dockerfile: api_consultant/Dockerfile }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Docker environment (Colima)
+        run: |
+          echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -65,7 +171,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Read service component version (optional)
+      - name: Read service component version
         id: svcver
         run: |
           VERSION_FILE="${{ matrix.service.context }}/VERSION"
@@ -78,13 +184,13 @@ jobs:
             echo "version=0.0.0" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build & push ${{ matrix.service.name }}
+      - name: Build & push ${{ matrix.service.name }} (arm64)
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.service.dockerfile }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64
           push: true
           provenance: true
           sbom: true
@@ -95,31 +201,124 @@ jobs:
             COMPONENT_NAME=${{ matrix.service.name }}
             COMPONENT_VERSION=${{ steps.svcver.outputs.version }}
           tags: |
-            ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}
-            livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}
-          cache-from: type=gha,scope=${{ matrix.service.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+            ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-arm64
+            livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-arm64
+          cache-from: type=gha,scope=${{ matrix.service.name }}-arm64
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}-arm64
 
       - name: Write digest artifact
         run: |
           mkdir -p dist
-          cat > dist/image-${{ matrix.service.name }}.json <<JSON
+          cat > dist/arch-digest-${{ matrix.service.name }}-arm64.json <<JSON
           {
             "name": "${{ matrix.service.name }}",
-            "image": "docker.io/livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}",
             "digest": "${{ steps.build.outputs.digest }}",
-            "service_version": "${{ steps.svcver.outputs.version }}",
-            "git_commit": "${{ github.sha }}"
+            "service_version": "${{ steps.svcver.outputs.version }}"
           }
           JSON
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: image-digest-${{ matrix.service.name }}
-          path: dist/image-${{ matrix.service.name }}.json
+          name: arch-digest-${{ matrix.service.name }}-arm64
+          path: dist/arch-digest-${{ matrix.service.name }}-arm64.json
 
-  build-webapps:
-    name: Build Web Applications
+  # Merge per-arch images into multi-arch manifests
+  merge-image-manifests:
+    name: Merge Image Manifests
+    needs: [build-images-amd64, build-images-arm64]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - bridge
+          - quartermaster
+          - commodore
+          - purser
+          - foghorn
+          - decklog
+          - periscope-ingest
+          - periscope-query
+          - signalman
+          - helmsman
+          - steward
+          - deckhand
+          - navigator
+          - skipper
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Download amd64 digest
+        uses: actions/download-artifact@v7
+        with:
+          name: arch-digest-${{ matrix.service }}-amd64
+          path: dist/
+
+      - name: Download arm64 digest
+        uses: actions/download-artifact@v7
+        with:
+          name: arch-digest-${{ matrix.service }}-arm64
+          path: dist/
+
+      - name: Create multi-arch manifest
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          SVC="${{ matrix.service }}"
+          GHCR="${{ env.REGISTRY }}/frameworks-${SVC}"
+          DH="livepeerframeworks/frameworks-${SVC}"
+
+          docker buildx imagetools create \
+            -t "${GHCR}:${TAG}" \
+            "${GHCR}:${TAG}-amd64" \
+            "${GHCR}:${TAG}-arm64"
+
+          docker buildx imagetools create \
+            -t "${DH}:${TAG}" \
+            "${DH}:${TAG}-amd64" \
+            "${DH}:${TAG}-arm64"
+
+          # Get the combined manifest digest
+          DIGEST=$(docker buildx imagetools inspect "${DH}:${TAG}" --format '{{.Manifest.Digest}}')
+          SVCVER=$(jq -r .service_version dist/arch-digest-${SVC}-amd64.json)
+
+          mkdir -p final
+          cat > final/image-${SVC}.json <<JSON
+          {
+            "name": "${SVC}",
+            "image": "docker.io/${DH}:${TAG}",
+            "digest": "${DIGEST}",
+            "service_version": "${SVCVER}",
+            "git_commit": "${{ github.sha }}"
+          }
+          JSON
+
+      - name: Upload merged digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-digest-${{ matrix.service }}
+          path: final/image-${{ matrix.service }}.json
+
+  # ---------------------------------------------------------------------------
+  # Webapp Docker images — split amd64 (ubuntu) + arm64 (native self-hosted)
+  # ---------------------------------------------------------------------------
+  build-webapps-amd64:
+    name: Build Webapps (amd64)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -157,7 +356,6 @@ jobs:
 
       - name: Build application
         env:
-          # chartroom (website_application) variables
           VITE_AUTH_URL: ${{ secrets.VITE_AUTH_URL }}
           VITE_GRAPHQL_HTTP_URL: ${{ secrets.VITE_GRAPHQL_HTTP_URL }}
           VITE_GRAPHQL_WS_URL: ${{ secrets.VITE_GRAPHQL_WS_URL }}
@@ -174,7 +372,6 @@ jobs:
           VITE_DOCS_SITE_URL: ${{ secrets.VITE_DOCS_SITE_URL }}
           VITE_TURNSTILE_AUTH_SITE_KEY: ${{ secrets.VITE_TURNSTILE_AUTH_SITE_KEY }}
           BASE_PATH: ${{ secrets.BASE_PATH }}
-          # foredeck (website_marketing) variables
           VITE_APP_URL: ${{ secrets.VITE_APP_URL }}
           VITE_CONTACT_API_URL: ${{ secrets.VITE_CONTACT_API_URL }}
           VITE_GATEWAY_URL: ${{ secrets.VITE_GATEWAY_URL }}
@@ -197,9 +394,6 @@ jobs:
           cd ${{ matrix.webapp.context }}
           tar czf ../${{ matrix.webapp.name }}-build.tar.gz ${{ matrix.webapp.build_dir }}/
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -216,13 +410,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image (amd64)
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.webapp.context }}/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           provenance: true
           sbom: true
@@ -258,34 +452,207 @@ jobs:
             VITE_DOMAIN=${{ secrets.VITE_DOMAIN }}
             VITE_TURNSTILE_FORMS_SITE_KEY=${{ secrets.VITE_TURNSTILE_FORMS_SITE_KEY }}
           tags: |
-            ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
-            livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
-          cache-from: type=gha,scope=${{ matrix.webapp.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.webapp.name }}
+            ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}-amd64
+            livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}-amd64
+          cache-from: type=gha,scope=${{ matrix.webapp.name }}-amd64
+          cache-to: type=gha,mode=max,scope=${{ matrix.webapp.name }}-amd64
 
       - name: Write digest artifact
         run: |
           mkdir -p dist
-          cat > dist/image-${{ matrix.webapp.name }}.json <<JSON
+          cat > dist/arch-digest-${{ matrix.webapp.name }}-amd64.json <<JSON
           {
             "name": "${{ matrix.webapp.name }}",
-            "image": "docker.io/livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}",
-            "digest": "${{ steps.build.outputs.digest }}",
-            "git_commit": "${{ github.sha }}"
+            "digest": "${{ steps.build.outputs.digest }}"
           }
           JSON
 
       - name: Upload digest artifact
         uses: actions/upload-artifact@v7
         with:
-          name: image-digest-${{ matrix.webapp.name }}
-          path: dist/image-${{ matrix.webapp.name }}.json
+          name: arch-digest-${{ matrix.webapp.name }}-amd64
+          path: dist/arch-digest-${{ matrix.webapp.name }}-amd64.json
 
       - name: Upload static bundle artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.webapp.name }}-bundle
           path: ${{ matrix.webapp.name }}-build.tar.gz
+
+  build-webapps-arm64:
+    name: Build Webapps (arm64)
+    runs-on: macos-arm64-self-hosted
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        webapp:
+          - { name: chartroom, context: website_application }
+          - { name: foredeck, context: website_marketing }
+          - { name: logbook, context: website_docs }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Docker environment (Colima)
+        run: |
+          echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image (arm64)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.webapp.context }}/Dockerfile
+          platforms: linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          build-args: |
+            BUILD_ENV=production
+            VITE_AUTH_URL=${{ secrets.VITE_AUTH_URL }}
+            VITE_GRAPHQL_HTTP_URL=${{ secrets.VITE_GRAPHQL_HTTP_URL }}
+            VITE_GRAPHQL_WS_URL=${{ secrets.VITE_GRAPHQL_WS_URL }}
+            VITE_STREAMING_INGEST_URL=${{ secrets.VITE_STREAMING_INGEST_URL }}
+            VITE_STREAMING_PLAY_URL=${{ secrets.VITE_STREAMING_PLAY_URL }}
+            VITE_STREAMING_EDGE_URL=${{ secrets.VITE_STREAMING_EDGE_URL }}
+            VITE_STREAMING_RTMP_PORT=${{ secrets.VITE_STREAMING_RTMP_PORT }}
+            VITE_STREAMING_SRT_PORT=${{ secrets.VITE_STREAMING_SRT_PORT }}
+            VITE_STREAMING_RTMP_PATH=${{ secrets.VITE_STREAMING_RTMP_PATH }}
+            VITE_STREAMING_HLS_PATH=${{ secrets.VITE_STREAMING_HLS_PATH }}
+            VITE_STREAMING_WEBRTC_PATH=${{ secrets.VITE_STREAMING_WEBRTC_PATH }}
+            VITE_STREAMING_EMBED_PATH=${{ secrets.VITE_STREAMING_EMBED_PATH }}
+            VITE_MARKETING_SITE_URL=${{ secrets.VITE_MARKETING_SITE_URL }}
+            VITE_DOCS_SITE_URL=${{ secrets.VITE_DOCS_SITE_URL }}
+            VITE_TURNSTILE_AUTH_SITE_KEY=${{ secrets.VITE_TURNSTILE_AUTH_SITE_KEY }}
+            BASE_PATH=${{ secrets.BASE_PATH }}
+            VITE_APP_URL=${{ secrets.VITE_APP_URL }}
+            VITE_CONTACT_API_URL=${{ secrets.VITE_CONTACT_API_URL }}
+            VITE_GATEWAY_URL=${{ secrets.VITE_GATEWAY_URL }}
+            VITE_GITHUB_URL=${{ secrets.VITE_GITHUB_URL }}
+            VITE_LIVEPEER_URL=${{ secrets.VITE_LIVEPEER_URL }}
+            VITE_LIVEPEER_EXPLORER_URL=${{ secrets.VITE_LIVEPEER_EXPLORER_URL }}
+            VITE_CONTACT_EMAIL=${{ secrets.VITE_CONTACT_EMAIL }}
+            VITE_FORUM_URL=${{ secrets.VITE_FORUM_URL }}
+            VITE_DISCORD_URL=${{ secrets.VITE_DISCORD_URL }}
+            VITE_DEMO_STREAM_NAME=${{ secrets.VITE_DEMO_STREAM_NAME }}
+            VITE_COMPANY_NAME=${{ secrets.VITE_COMPANY_NAME }}
+            VITE_DOMAIN=${{ secrets.VITE_DOMAIN }}
+            VITE_TURNSTILE_FORMS_SITE_KEY=${{ secrets.VITE_TURNSTILE_FORMS_SITE_KEY }}
+          tags: |
+            ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}-arm64
+            livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}-arm64
+          cache-from: type=gha,scope=${{ matrix.webapp.name }}-arm64
+          cache-to: type=gha,mode=max,scope=${{ matrix.webapp.name }}-arm64
+
+      - name: Write digest artifact
+        run: |
+          mkdir -p dist
+          cat > dist/arch-digest-${{ matrix.webapp.name }}-arm64.json <<JSON
+          {
+            "name": "${{ matrix.webapp.name }}",
+            "digest": "${{ steps.build.outputs.digest }}"
+          }
+          JSON
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: arch-digest-${{ matrix.webapp.name }}-arm64
+          path: dist/arch-digest-${{ matrix.webapp.name }}-arm64.json
+
+  # Merge per-arch webapp images into multi-arch manifests
+  merge-webapp-manifests:
+    name: Merge Webapp Manifests
+    needs: [build-webapps-amd64, build-webapps-arm64]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        webapp:
+          - chartroom
+          - foredeck
+          - logbook
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Download amd64 digest
+        uses: actions/download-artifact@v7
+        with:
+          name: arch-digest-${{ matrix.webapp }}-amd64
+          path: dist/
+
+      - name: Download arm64 digest
+        uses: actions/download-artifact@v7
+        with:
+          name: arch-digest-${{ matrix.webapp }}-arm64
+          path: dist/
+
+      - name: Create multi-arch manifest
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          APP="${{ matrix.webapp }}"
+          GHCR="${{ env.REGISTRY }}/frameworks-${APP}"
+          DH="livepeerframeworks/frameworks-${APP}"
+
+          docker buildx imagetools create \
+            -t "${GHCR}:${TAG}" \
+            "${GHCR}:${TAG}-amd64" \
+            "${GHCR}:${TAG}-arm64"
+
+          docker buildx imagetools create \
+            -t "${DH}:${TAG}" \
+            "${DH}:${TAG}-amd64" \
+            "${DH}:${TAG}-arm64"
+
+          DIGEST=$(docker buildx imagetools inspect "${DH}:${TAG}" --format '{{.Manifest.Digest}}')
+
+          mkdir -p final
+          cat > final/image-${APP}.json <<JSON
+          {
+            "name": "${APP}",
+            "image": "docker.io/${DH}:${TAG}",
+            "digest": "${DIGEST}",
+            "git_commit": "${{ github.sha }}"
+          }
+          JSON
+
+      - name: Upload merged digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-digest-${{ matrix.webapp }}
+          path: final/image-${{ matrix.webapp }}.json
 
   # CLI linux/amd64 — built on GitHub-hosted ubuntu runner
   build-cli:
@@ -821,8 +1188,8 @@ jobs:
   manifest:
     name: Generate & Publish Manifest
     needs:
-      - build-images
-      - build-webapps
+      - merge-image-manifests
+      - merge-webapp-manifests
       - build-cli
       - build-cli-arm64-darwin
       - build-service-binaries
