@@ -8,4 +8,5 @@ fragment StreamCoreFields on Stream {
   record
   createdAt
   updatedAt
+  thumbnailUrl
 }
