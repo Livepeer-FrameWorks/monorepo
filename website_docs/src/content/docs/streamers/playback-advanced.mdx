@@ -360,7 +360,11 @@ The player wraps multiple playback engines and selects the best one for each bro
 
 Protocol selection uses a scoring algorithm ported from MistServer's MistMetaPlayer, evaluating codec support, browser compatibility, and source priority.
 
-## Thumbnails / Poster
+## Thumbnails
+
+### Poster image
+
+`thumbnailUrl` sets a static image shown on the click-to-play overlay before playback starts. Typically the stream's `.jpg` endpoint (latest keyframe) or a custom image.
 
 ```tsx
 // React
@@ -380,6 +384,10 @@ const player = createPlayer({
   autoplay: false,
 });
 ```
+
+### Seek-bar sprite preview
+
+When the stream has thumbnail processing enabled, the player auto-detects the `thumbvtt` track from MistServer metadata and shows sprite thumbnails on the seek bar during hover. No configuration needed — this works automatically for both live and VOD content.
 
 ## Frame Stepping
 

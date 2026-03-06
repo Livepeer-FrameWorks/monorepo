@@ -199,3 +199,7 @@ export type { BreakpointConfig } from "./BreakpointObserver";
 // Thumbnail VTT sprite sheet parser
 export { parseThumbnailVtt, findCueAtTime, fetchThumbnailVtt } from "./ThumbnailVttParser";
 export type { ThumbnailCue } from "./ThumbnailVttParser";
+
+// Thumbnail sprite manager (auto-fetches and refreshes VTT cues)
+export { ThumbnailSpriteManager } from "./ThumbnailSpriteManager";
+export type { ThumbnailSpriteManagerOptions } from "./ThumbnailSpriteManager";

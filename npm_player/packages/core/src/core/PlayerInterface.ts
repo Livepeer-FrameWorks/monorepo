@@ -33,6 +33,7 @@ export interface StreamTrack {
   channels?: number;
   rate?: number; // sample rate
   size?: number; // bits per sample
+  lang?: string; // track language tag (e.g., "thumbnails" for sprite sheet tracks)
   // Timing (from MistServer metadata — defines seekable window for live)
   firstms?: number;
   lastms?: number;

@@ -233,6 +233,7 @@ In practice, the player can handle:
 ### Track-like side channels (not primary playback)
 
 - WebVTT/SRT subtitle sources are managed as tracks (not standalone transports).
+- Thumbnail sprite VTT (`thumbvtt` codec) is auto-detected from MistServer track metadata and drives seek-bar hover preview. The `thumbnailUrl` prop is separate — an embedder-supplied poster image for the click-to-play overlay. See `docs/architecture/thumbnails.md`.
 
 ### Legacy fallback
 

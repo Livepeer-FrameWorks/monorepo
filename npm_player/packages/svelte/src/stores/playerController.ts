@@ -13,6 +13,7 @@ import {
   type ContentEndpoints,
   type ContentMetadata,
   type ClassifiedError,
+  type ThumbnailCue,
 } from "@livepeer-frameworks/player-core";
 
 // ============================================================================
@@ -93,6 +94,8 @@ export interface PlayerControllerState {
   controllerCanSeek: boolean;
   /** Controller-derived hasAudio — reactively updated via seekingStateChange */
   controllerHasAudio: boolean;
+  /** Thumbnail sprite cues (auto-detected from MistServer tracks) */
+  thumbnailCues: ThumbnailCue[];
 }
 
 export interface PlayerControllerStore extends Readable<PlayerControllerState> {
@@ -196,6 +199,7 @@ const initialState: PlayerControllerState = {
   controllerLiveEdge: 0,
   controllerCanSeek: false,
   controllerHasAudio: true,
+  thumbnailCues: [],
 };
 
 // ============================================================================
@@ -433,6 +437,13 @@ export function createPlayerControllerStore(
           controllerCanSeek: data.canSeek,
           controllerHasAudio: data.hasAudio,
         }));
+      })
+    );
+
+    // Thumbnail sprite cues
+    unsubscribers.push(
+      controller.on("thumbnailCuesChange", ({ cues }) => {
+        store.update((prev) => ({ ...prev, thumbnailCues: cues }));
       })
     );
 

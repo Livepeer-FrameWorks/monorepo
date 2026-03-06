@@ -183,12 +183,12 @@ The context object from `getContext("fw-player-controller")` provides:
 
 ## Props Reference
 
-| Prop            | Type                                 | Description               |
-| --------------- | ------------------------------------ | ------------------------- |
-| `contentId`     | `string`                             | Playback ID               |
-| `contentType`   | `'live' \| 'dvr' \| 'clip' \| 'vod'` | Content type              |
-| `endpoints`     | `ContentEndpoints`                   | Pre-resolved endpoints    |
-| `thumbnailUrl`  | `string`                             | Poster image              |
-| `theme`         | `string`                             | Theme preset              |
-| `options`       | `PlayerOptions`                      | Configuration options     |
-| `onStateChange` | `function`                           | State transition callback |
+| Prop            | Type                                 | Description                                                              |
+| --------------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| `contentId`     | `string`                             | Playback ID                                                              |
+| `contentType`   | `'live' \| 'dvr' \| 'clip' \| 'vod'` | Content type                                                             |
+| `endpoints`     | `ContentEndpoints`                   | Pre-resolved endpoints                                                   |
+| `thumbnailUrl`  | `string`                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected. |
+| `theme`         | `string`                             | Theme preset                                                             |
+| `options`       | `PlayerOptions`                      | Configuration options                                                    |
+| `onStateChange` | `function`                           | State transition callback                                                |

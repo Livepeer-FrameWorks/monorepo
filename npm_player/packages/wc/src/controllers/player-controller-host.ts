@@ -16,6 +16,7 @@ import {
   type ClassifiedError,
   type TranslateFn,
   type I18nConfig,
+  type ThumbnailCue,
 } from "@livepeer-frameworks/player-core";
 
 export interface PlayerControllerHostState {
@@ -60,6 +61,7 @@ export interface PlayerControllerHostState {
   textTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
   streamInfo: StreamInfo | null;
   toast: { message: string; timestamp: number } | null;
+  thumbnailCues: ThumbnailCue[];
 }
 
 const initialState: PlayerControllerHostState = {
@@ -96,6 +98,7 @@ const initialState: PlayerControllerHostState = {
   textTracks: [],
   streamInfo: null,
   toast: null,
+  thumbnailCues: [],
 };
 
 type HostElement = ReactiveControllerHost & HTMLElement;
@@ -389,6 +392,12 @@ export class PlayerControllerHost implements ReactiveController {
           code: data.code,
           message: data.message,
         });
+      })
+    );
+
+    u.push(
+      controller.on("thumbnailCuesChange", ({ cues }) => {
+        this.update({ thumbnailCues: cues });
       })
     );
   }

@@ -252,18 +252,47 @@ export interface WebRTCCodecCompatibility {
 }
 
 /**
+ * Codec alias map: MistServer name → all mime-type variants to check in getCapabilities().
+ * Browsers may report HEVC as "video/H265" or "video/HEVC" depending on vendor.
+ */
+const VIDEO_CODEC_ALIASES: Record<string, string[]> = {
+  HEVC: ["hevc", "h265"],
+  H265: ["h265", "hevc"],
+  HEV1: ["hevc", "h265"],
+  HVC1: ["hevc", "h265"],
+  AVC: ["h264"],
+  AVC1: ["h264"],
+};
+
+const AUDIO_CODEC_ALIASES: Record<string, string[]> = {
+  MP4A: ["aac"],
+  G711: ["pcmu"],
+};
+
+function getCodecMimeVariants(type: "video" | "audio", codec: string): string[] {
+  const upper = codec.toUpperCase();
+  const aliasMap = type === "video" ? VIDEO_CODEC_ALIASES : AUDIO_CODEC_ALIASES;
+  const variants = aliasMap[upper] ?? [upper.toLowerCase()];
+  return variants.map((v) => `${type}/${v}`);
+}
+
+/**
  * Check if browser supports a codec via WebRTC
  * Uses RTCRtpReceiver.getCapabilities() for dynamic browser detection (reference: webrtc.js:38-46)
  * Falls back to static list if API unavailable
  */
 function isBrowserWebRTCCodecSupported(type: "video" | "audio", codec: string): boolean {
+  const mimeVariants = getCodecMimeVariants(type, codec);
+
   // Try dynamic browser API first (reference: webrtc.js:39)
   if (typeof RTCRtpReceiver !== "undefined" && RTCRtpReceiver.getCapabilities) {
     try {
       const capabilities = RTCRtpReceiver.getCapabilities(type);
       if (capabilities?.codecs) {
-        const targetMime = `${type}/${codec}`.toLowerCase();
-        return capabilities.codecs.some((c) => c.mimeType.toLowerCase() === targetMime);
+        return capabilities.codecs.some((c) => {
+          const reported = c.mimeType.toLowerCase();
+          return mimeVariants.includes(reported);
+        });
       }
     } catch {
       // Fall through to static list
@@ -272,7 +301,7 @@ function isBrowserWebRTCCodecSupported(type: "video" | "audio", codec: string): 
 
   // Fallback to static list for older browsers/SSR
   const compatibleCodecs = WEBRTC_COMPATIBLE_CODECS[type] as readonly string[];
-  return compatibleCodecs.includes(codec.toUpperCase());
+  return compatibleCodecs.some((c) => mimeVariants.includes(`${type}/${c.toLowerCase()}`));
 }
 
 /**

@@ -491,6 +491,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
                         onJumpToLive={jumpToLive}
                         activeLocale={activeLocale}
                         onLocaleChange={setActiveLocale}
+                        thumbnailCues={state.thumbnailCues}
                       />
                     )}
               </div>

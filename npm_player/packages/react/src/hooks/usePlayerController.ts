@@ -16,6 +16,7 @@ import {
   type ContentEndpoints,
   type ContentMetadata,
   type ClassifiedError,
+  type ThumbnailCue,
 } from "@livepeer-frameworks/player-core";
 
 // ============================================================================
@@ -124,6 +125,8 @@ export interface PlayerControllerState {
   streamInfo: StreamInfo | null;
   /** Toast message to display (auto-dismisses) */
   toast: { message: string; timestamp: number } | null;
+  /** Thumbnail sprite cues (auto-detected from MistServer tracks) */
+  thumbnailCues: ThumbnailCue[];
 }
 
 export interface UsePlayerControllerReturn {
@@ -224,6 +227,7 @@ const initialState: PlayerControllerState = {
   textTracks: [],
   streamInfo: null,
   toast: null,
+  thumbnailCues: [],
 };
 
 // ============================================================================
@@ -468,6 +472,12 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           message: data.message,
           details: data.details,
         });
+      })
+    );
+
+    unsubs.push(
+      controller.on("thumbnailCuesChange", ({ cues }) => {
+        setState((prev) => ({ ...prev, thumbnailCues: cues }));
       })
     );
 

@@ -18,6 +18,8 @@ import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
 import { QualityMonitor, type PlayerProtocol } from "./QualityMonitor";
 import { MetaTrackManager } from "./MetaTrackManager";
+import { ThumbnailSpriteManager } from "./ThumbnailSpriteManager";
+import type { ThumbnailCue } from "./ThumbnailVttParser";
 import { attemptAutoplay, type AutoplayResult } from "./AutoplayRecovery";
 import {
   calculateSeekableRange,
@@ -200,6 +202,9 @@ export interface PlayerControllerEvents {
   protocolSwapped: PlayerManagerEvents["protocolSwapped"];
   /** Playback failed after all recovery attempts - show error modal */
   playbackFailed: PlayerManagerEvents["playbackFailed"];
+
+  /** Thumbnail sprite cues changed (auto-detected from MistServer tracks) */
+  thumbnailCuesChange: { cues: ThumbnailCue[] };
 }
 
 // ============================================================================
@@ -657,6 +662,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private mistReporter: MistReporter | null = null;
   private qualityMonitor: QualityMonitor | null = null;
   private metaTrackManager: MetaTrackManager | null = null;
+  private thumbnailSpriteManager: ThumbnailSpriteManager | null = null;
+  private _thumbnailVttUrl: string | null = null;
+  private _previewUrl: string | null = null;
   private _playbackQuality: PlaybackQuality | null = null;
   private bootMs: number = Date.now();
   private playerManagerUnsubs: Array<() => void> = [];
@@ -797,6 +805,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.playerManagerUnsubs.forEach((fn) => fn());
     this.playerManagerUnsubs = [];
 
+    this.thumbnailSpriteManager?.destroy();
+    this.thumbnailSpriteManager = null;
     this.detach();
     this.setState("destroyed");
     this.emit("destroyed", undefined as never);
@@ -954,6 +964,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   /** Get stream info (sources + tracks for player selection) */
   getStreamInfo(): StreamInfo | null {
     return this.streamInfo;
+  }
+
+  /** Get current thumbnail sprite cues (empty if not available) */
+  getThumbnailCues(): ThumbnailCue[] {
+    return this.thumbnailSpriteManager?.getCues() ?? [];
+  }
+
+  /** Get auto-detected preview image URL (null if no preview track found or explicit poster set) */
+  getPreviewUrl(): string | null {
+    return this._previewUrl;
   }
 
   /** Get video element (null if not ready) */
@@ -2599,6 +2619,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         fallbacks: [],
       };
       this.setMetadataSeed(null);
+      this.detectThumbnailVttUrl();
+      this.detectPreviewUrl();
 
       this.setState("gateway_ready", { gatewayStatus: "ready" });
       this.log(`[resolveFromMistServer] ${rawSources.length} sources, ${tracks.length} tracks`);
@@ -2750,6 +2772,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           // Recalculate seeking state with new track data — video events may not
           // fire if the video is stalled, so we must trigger this explicitly
           this.updateSeekingState();
+          this.detectThumbnailVttUrl();
+          this.detectPreviewUrl();
         }
       }
 
@@ -2844,6 +2868,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         fallbacks: [],
       };
       this.setMetadataSeed(this.endpoints.metadata ?? null);
+      this.detectThumbnailVttUrl();
+      this.detectPreviewUrl();
 
       this.setState("gateway_ready", { gatewayStatus: "ready" });
       this.log(
@@ -2901,12 +2927,69 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           channels: t.channels as number | undefined,
           rate: t.rate as number | undefined,
           size: t.size as number | undefined,
+          lang: t.lang as string | undefined,
           firstms: t.firstms as number | undefined,
           lastms: t.lastms as number | undefined,
         });
       }
     }
     return tracks;
+  }
+
+  /**
+   * Detect thumbnail VTT URL from MistServer tracks.
+   * Looks for a track with codec "thumbvtt" (dedicated thumbnail sprite VTT output).
+   */
+  private detectThumbnailVttUrl(): void {
+    const tracks = this.streamInfo?.meta?.tracks;
+    if (!tracks || tracks.length === 0) return;
+
+    const thumbVttTrack = tracks.find((t) => t.codec === "thumbvtt");
+    if (!thumbVttTrack || thumbVttTrack.idx === undefined) return;
+
+    const mistBaseUrl = this.endpoints?.primary?.baseUrl || this.config.mistUrl;
+    if (!mistBaseUrl) return;
+
+    const streamName = this.metadata?.contentId || this.config.contentId;
+    const vttUrl = `${mistBaseUrl.replace(/\/$/, "")}/${streamName}.thumbvtt?track=${thumbVttTrack.idx}`;
+
+    if (vttUrl === this._thumbnailVttUrl && this.thumbnailSpriteManager) return;
+    this._thumbnailVttUrl = vttUrl;
+    this.log(`[detectThumbnailVttUrl] Found thumbnail VTT: ${vttUrl}`);
+
+    this.thumbnailSpriteManager?.destroy();
+    this.thumbnailSpriteManager = new ThumbnailSpriteManager({
+      vttUrl,
+      baseUrl: mistBaseUrl.replace(/\/$/, ""),
+      isLive: this.isEffectivelyLive(),
+      onCuesChange: (cues) => this.emit("thumbnailCuesChange", { cues }),
+      log: (msg) => this.log(msg),
+    });
+  }
+
+  /**
+   * Detect preview image URL from MistServer tracks.
+   * Looks for a JPEG track with lang "pre" (single-frame preview, distinct from sprite sheet).
+   * Sets _previewUrl which is used as poster when no explicit poster is configured.
+   */
+  private detectPreviewUrl(): void {
+    if (this.config.poster) return; // explicit poster takes precedence
+
+    const tracks = this.streamInfo?.meta?.tracks;
+    if (!tracks || tracks.length === 0) return;
+
+    const previewTrack = tracks.find((t) => t.codec === "JPEG" && t.lang === "pre");
+    if (!previewTrack || previewTrack.idx === undefined) return;
+
+    const mistBaseUrl = this.endpoints?.primary?.baseUrl || this.config.mistUrl;
+    if (!mistBaseUrl) return;
+
+    const streamName = this.metadata?.contentId || this.config.contentId;
+    const previewUrl = `${mistBaseUrl.replace(/\/$/, "")}/${streamName}.jpg?video=pre`;
+
+    if (previewUrl === this._previewUrl) return;
+    this._previewUrl = previewUrl;
+    this.log(`[detectPreviewUrl] Found preview image: ${previewUrl}`);
   }
 
   private async initializePlayer(): Promise<void> {
@@ -2929,7 +3012,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       `[initializePlayer] Tracks: ${streamInfo.meta.tracks.map((t) => `${t.type}:${t.codec}`).join(", ")}`
     );
 
-    const { autoplay, muted, controls, poster } = this.config;
+    const { autoplay, muted, controls } = this.config;
+    const poster = this.config.poster || this._previewUrl || undefined;
 
     // Clear container
     container.innerHTML = "";

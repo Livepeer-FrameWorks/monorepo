@@ -9,6 +9,7 @@
     type MistStreamInfo,
     type PlaybackMode,
     type TranslateFn,
+    type ThumbnailCue,
     // Seeking utilities from core
     SPEED_PRESETS,
     isMediaStreamSource,
@@ -69,6 +70,8 @@
     controllerSeekableStart?: number;
     /** Controller-derived live edge (ms) — preferred over player direct */
     controllerLiveEdge?: number;
+    /** Thumbnail sprite cues for seek bar preview */
+    thumbnailCues?: ThumbnailCue[];
   }
 
   let {
@@ -90,6 +93,7 @@
     onLocaleChange = undefined,
     controllerSeekableStart = undefined,
     controllerLiveEdge = undefined,
+    thumbnailCues = undefined,
   }: Props = $props();
 
   // Video element discovery
@@ -629,6 +633,8 @@
           {seekableStart}
           {liveEdge}
           {commitOnRelease}
+          {isPlaying}
+          {thumbnailCues}
           onseek={(time) => {
             if (onseek) {
               onseek(time);

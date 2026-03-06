@@ -358,6 +358,8 @@ export class FwPlayerControls extends LitElement {
                     .seekableStart=${context.seekableStart}
                     .liveEdge=${context.liveEdge}
                     .commitOnRelease=${context.commitOnRelease}
+                    .isPlaying=${state.isPlaying}
+                    .thumbnailCues=${state.thumbnailCues}
                     @fw-seek=${(event: CustomEvent<{ time: number }>) =>
                       this.pc.seek(event.detail.time)}
                   ></fw-seek-bar>

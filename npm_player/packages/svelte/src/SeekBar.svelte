@@ -3,7 +3,7 @@
   Port of src/components/SeekBar.tsx
 -->
 <script lang="ts">
-  import { cn } from "@livepeer-frameworks/player-core";
+  import { cn, findCueAtTime, type ThumbnailCue } from "@livepeer-frameworks/player-core";
 
   interface Props {
     /** Current playback time in milliseconds */
@@ -26,6 +26,10 @@
     liveEdge?: number;
     /** Defer seeking until drag release */
     commitOnRelease?: boolean;
+    /** Whether video is currently playing (enables RAF interpolation for smooth progress) */
+    isPlaying?: boolean;
+    /** Thumbnail sprite cues for hover preview */
+    thumbnailCues?: ThumbnailCue[];
   }
 
   let {
@@ -39,10 +43,15 @@
     seekableStart = 0,
     liveEdge = undefined,
     commitOnRelease = false,
+    isPlaying = false,
+    thumbnailCues = undefined,
   }: Props = $props();
+
+  import { onDestroy } from "svelte";
 
   // Refs
   let trackRef: HTMLDivElement | undefined = $state();
+  let progressRef: HTMLDivElement | undefined = $state();
 
   // Local state
   let isHovering = $state(false);
@@ -50,6 +59,50 @@
   let dragTime = $state<number | null>(null);
   let hoverPosition = $state(0);
   let hoverTime = $state(0);
+
+  // RAF smooth progress interpolation (matches React impl)
+  let rafId = 0;
+  let rafBase = { time: 0, stamp: 0 };
+
+  $effect(() => {
+    // Reset baseline when currentTime prop updates
+    rafBase = { time: currentTime, stamp: performance.now() };
+  });
+
+  $effect(() => {
+    const shouldAnimate = isPlaying && !isDragging && !disabled;
+
+    if (!shouldAnimate) {
+      cancelAnimationFrame(rafId);
+      if (progressRef) {
+        progressRef.style.transform = `scaleX(${progressPercent / 100})`;
+      }
+      return;
+    }
+
+    const rangeStart = isLive ? seekableStart : 0;
+    const rangeSize = isLive ? seekableWindow : duration;
+
+    const animate = () => {
+      if (!isPlaying || isDragging || disabled) return;
+      const interpolated = rafBase.time + (performance.now() - rafBase.stamp);
+      const relative = interpolated - rangeStart;
+      const pct =
+        Number.isFinite(rangeSize) && rangeSize > 0
+          ? Math.min(100, Math.max(0, (relative / rangeSize) * 100))
+          : 0;
+
+      if (progressRef) {
+        progressRef.style.transform = `scaleX(${pct / 100})`;
+      }
+      rafId = requestAnimationFrame(animate);
+    };
+
+    rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId);
+  });
+
+  onDestroy(() => cancelAnimationFrame(rafId));
 
   // Effective live edge (use provided or fall back to duration)
   let effectiveLiveEdge = $derived(liveEdge ?? duration);
@@ -163,14 +216,8 @@
     hoverTime = getTimeFromPosition(e.clientX);
   }
 
-  // Handle click to seek
-  function handleClick(e: MouseEvent) {
-    if (disabled) return;
-    if (!isLive && !Number.isFinite(duration)) return;
-    const time = getTimeFromPosition(e.clientX);
-    onseek?.(time);
-    dragTime = null;
-  }
+  // Track whether a drag-move occurred to prevent seek-twice on mouseup
+  let didDragMove = false;
 
   // Handle drag start
   function handleMouseDown(e: MouseEvent) {
@@ -178,8 +225,10 @@
     if (!isLive && !Number.isFinite(duration)) return;
     e.preventDefault();
     isDragging = true;
+    didDragMove = false;
 
     const handleDragMove = (moveEvent: MouseEvent) => {
+      didDragMove = true;
       const time = getTimeFromPosition(moveEvent.clientX);
       if (commitOnRelease) {
         dragTime = time;
@@ -196,12 +245,13 @@
         onseek?.(dragTime);
         dragTime = null;
       }
+      // Non-commitOnRelease: drag moves already emitted seeks, no need to re-seek
     };
 
     document.addEventListener("mousemove", handleDragMove);
     document.addEventListener("mouseup", handleDragEnd);
 
-    // Initial seek
+    // Initial seek on mousedown
     const time = getTimeFromPosition(e.clientX);
     if (commitOnRelease) {
       dragTime = time;
@@ -215,6 +265,20 @@
   let ariaValueText = $derived(
     isLive ? formatLiveTime(displayTime, effectiveLiveEdge) : formatTime(displayTime)
   );
+
+  let hoverCue = $derived.by(() => {
+    if (!thumbnailCues?.length || !isHovering || isDragging) return null;
+    return findCueAtTime(thumbnailCues, hoverTime / 1000);
+  });
+
+  let thumbnailStyle = $derived.by(() => {
+    if (!hoverCue || hoverCue.width === undefined || hoverCue.height === undefined) return null;
+    const w = hoverCue.width;
+    const h = hoverCue.height;
+    const x = hoverCue.x ?? 0;
+    const y = hoverCue.y ?? 0;
+    return `background-image: url(${hoverCue.url}); background-position: -${x}px -${y}px; background-size: auto; width: ${w}px; height: ${h}px;`;
+  });
 
   // Handle keyboard navigation for accessibility
   function handleKeyDown(e: KeyboardEvent) {
@@ -262,7 +326,6 @@
     isDragging = false;
   }}
   onmousemove={handleMouseMove}
-  onclick={handleClick}
   onmousedown={handleMouseDown}
   onkeydown={handleKeyDown}
   role="slider"
@@ -282,8 +345,12 @@
         style="left: {segment.startPercent}%; width: {segment.endPercent - segment.startPercent}%;"
       ></div>
     {/each}
-    <!-- Playback progress -->
-    <div class="fw-seek-progress" style="width: {progressPercent}%;"></div>
+    <!-- Playback progress — GPU-composited via scaleX, RAF-interpolated during playback -->
+    <div
+      bind:this={progressRef}
+      class="fw-seek-progress"
+      style="transform: scaleX({progressPercent / 100});"
+    ></div>
   </div>
 
   <!-- Thumb -->
@@ -291,6 +358,11 @@
     class={cn("fw-seek-thumb", showThumb ? "fw-seek-thumb--active" : "fw-seek-thumb--hidden")}
     style="left: {progressPercent}%;"
   ></div>
+
+  <!-- Thumbnail preview on hover -->
+  {#if isHovering && !isDragging && thumbnailStyle}
+    <div class="fw-seek-thumbnail" style="left: {hoverPosition}%; {thumbnailStyle}"></div>
+  {/if}
 
   <!-- Hover time tooltip -->
   {#if isHovering && !isDragging && canShowTooltip}

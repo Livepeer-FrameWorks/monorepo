@@ -7,6 +7,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { sharedStyles } from "../styles/shared-styles.js";
+import { findCueAtTime, type ThumbnailCue } from "@livepeer-frameworks/player-core";
 
 interface BufferedSegment {
   startPercent: number;
@@ -23,6 +24,8 @@ export class FwSeekBar extends LitElement {
   @property({ type: Number, attribute: "seekable-start" }) seekableStart = 0;
   @property({ type: Number, attribute: "live-edge" }) liveEdge?: number;
   @property({ type: Boolean, attribute: "commit-on-release" }) commitOnRelease = false;
+  @property({ type: Boolean, attribute: "is-playing" }) isPlaying = false;
+  @property({ attribute: false }) thumbnailCues: ThumbnailCue[] = [];
 
   @state() private _hovering = false;
   @state() private _dragging = false;
@@ -32,6 +35,8 @@ export class FwSeekBar extends LitElement {
 
   private _trackRect: DOMRect | null = null;
   private _activePointerId: number | null = null;
+  private _rafId = 0;
+  private _rafBase = { time: 0, stamp: 0 };
 
   static styles = [
     sharedStyles,
@@ -60,6 +65,56 @@ export class FwSeekBar extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     this._detachDragListeners();
+    cancelAnimationFrame(this._rafId);
+  }
+
+  updated(changed: Map<string, unknown>): void {
+    if (changed.has("currentTime")) {
+      this._rafBase = { time: this.currentTime, stamp: performance.now() };
+    }
+    if (
+      changed.has("isPlaying") ||
+      changed.has("disabled") ||
+      changed.has("currentTime") ||
+      changed.has("duration")
+    ) {
+      this._syncRaf();
+    }
+  }
+
+  private _syncRaf(): void {
+    const shouldAnimate = this.isPlaying && !this._dragging && !this.disabled;
+
+    if (!shouldAnimate) {
+      cancelAnimationFrame(this._rafId);
+      const el = this.renderRoot.querySelector(".fw-seek-progress") as HTMLElement | null;
+      if (el) {
+        el.style.transform = `scaleX(${this._progressPercent / 100})`;
+      }
+      return;
+    }
+
+    cancelAnimationFrame(this._rafId);
+    const rangeStart = this.isLive ? this.seekableStart : 0;
+    const rangeSize = this.isLive ? this._seekableWindow : this.duration;
+
+    const animate = () => {
+      if (!this.isPlaying || this._dragging || this.disabled) return;
+      const interpolated = this._rafBase.time + (performance.now() - this._rafBase.stamp);
+      const relative = interpolated - rangeStart;
+      const pct =
+        Number.isFinite(rangeSize) && rangeSize > 0
+          ? Math.min(100, Math.max(0, (relative / rangeSize) * 100))
+          : 0;
+
+      const el = this.renderRoot.querySelector(".fw-seek-progress") as HTMLElement | null;
+      if (el) {
+        el.style.transform = `scaleX(${pct / 100})`;
+      }
+      this._rafId = requestAnimationFrame(animate);
+    };
+
+    this._rafId = requestAnimationFrame(animate);
   }
 
   private get _effectiveLiveEdge(): number {
@@ -282,6 +337,7 @@ export class FwSeekBar extends LitElement {
     this._activePointerId = event.pointerId;
     this._dragging = true;
     this._hovering = true;
+    this._didDragMove = false;
 
     const initialTime = this._getTimeFromClientX(event.clientX);
     this._updateHover(event.clientX);
@@ -295,11 +351,14 @@ export class FwSeekBar extends LitElement {
     this._attachDragListeners();
   };
 
+  private _didDragMove = false;
+
   private _onGlobalPointerMove = (event: PointerEvent) => {
     if (!this._dragging || this._activePointerId !== event.pointerId) {
       return;
     }
 
+    this._didDragMove = true;
     const time = this._getTimeFromClientX(event.clientX);
     this._updateHover(event.clientX);
 
@@ -318,11 +377,14 @@ export class FwSeekBar extends LitElement {
     if (this.commitOnRelease && this._dragTime != null) {
       this._emitSeek(this._dragTime);
     }
+    // Non-commitOnRelease: drag moves already emitted seeks, no double-seek on release
 
     this._dragging = false;
     this._dragTime = null;
     this._activePointerId = null;
+    this._didDragMove = false;
     this._detachDragListeners();
+    this._syncRaf();
   };
 
   private _attachDragListeners(): void {
@@ -337,10 +399,25 @@ export class FwSeekBar extends LitElement {
     window.removeEventListener("pointercancel", this._onGlobalPointerUp);
   }
 
+  private get _thumbnailStyle(): Record<string, string> | null {
+    if (!this.thumbnailCues?.length || !this._hovering || this._dragging) return null;
+    const cue = findCueAtTime(this.thumbnailCues, this._hoverTime / 1000);
+    if (!cue || cue.width === undefined || cue.height === undefined) return null;
+    return {
+      backgroundImage: `url(${cue.url})`,
+      backgroundPosition: `-${cue.x ?? 0}px -${cue.y ?? 0}px`,
+      backgroundSize: "auto",
+      width: `${cue.width}px`,
+      height: `${cue.height}px`,
+      left: `${this._hoverPosition}%`,
+    };
+  }
+
   protected render() {
     const progressPercent = this._progressPercent;
     const showThumb = this._hovering || this._dragging;
     const canShowTooltip = this.isLive ? this._seekableWindow > 0 : Number.isFinite(this.duration);
+    const thumbStyle = this._thumbnailStyle;
 
     return html`
       <div
@@ -380,7 +457,10 @@ export class FwSeekBar extends LitElement {
               ></div>
             `
           )}
-          <div class="fw-seek-progress" style=${styleMap({ width: `${progressPercent}%` })}></div>
+          <div
+            class="fw-seek-progress"
+            style=${styleMap({ transform: `scaleX(${progressPercent / 100})` })}
+          ></div>
           ${this._hovering && !this._dragging
             ? html`<div
                 class="fw-seek-hover-line"
@@ -399,6 +479,9 @@ export class FwSeekBar extends LitElement {
           style=${styleMap({ left: `${progressPercent}%` })}
         ></div>
 
+        ${thumbStyle
+          ? html`<div class="fw-seek-thumbnail" style=${styleMap(thumbStyle)}></div>`
+          : nothing}
         ${this._hovering && !this._dragging && canShowTooltip
           ? html`
               <div class="fw-seek-tooltip" style=${styleMap({ left: `${this._hoverPosition}%` })}>

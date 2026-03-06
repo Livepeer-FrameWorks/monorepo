@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useMemo, useEffect } from "react";
-import { cn } from "@livepeer-frameworks/player-core";
+import { cn, findCueAtTime, type ThumbnailCue } from "@livepeer-frameworks/player-core";
 import { useTranslate } from "../context/i18n";
 
 interface SeekBarProps {
@@ -25,6 +25,8 @@ interface SeekBarProps {
   commitOnRelease?: boolean;
   /** Whether video is currently playing (enables RAF interpolation for smooth progress) */
   isPlaying?: boolean;
+  /** Thumbnail sprite cues for hover preview */
+  thumbnailCues?: ThumbnailCue[];
 }
 
 /**
@@ -47,6 +49,7 @@ const SeekBar: React.FC<SeekBarProps> = ({
   liveEdge,
   commitOnRelease = false,
   isPlaying = false,
+  thumbnailCues,
 }) => {
   const t = useTranslate();
   const trackRef = useRef<HTMLDivElement>(null);
@@ -95,9 +98,8 @@ const SeekBar: React.FC<SeekBarProps> = ({
 
     if (!shouldAnimate) {
       cancelAnimationFrame(rafIdRef.current);
-      // Sync DOM to React-computed value when RAF stops
       if (progressRef.current) {
-        progressRef.current.style.width = `${progressPercent}%`;
+        progressRef.current.style.transform = `scaleX(${progressPercent / 100})`;
       }
       return;
     }
@@ -116,7 +118,7 @@ const SeekBar: React.FC<SeekBarProps> = ({
           : 0;
 
       if (progressRef.current) {
-        progressRef.current.style.width = `${pct}%`;
+        progressRef.current.style.transform = `scaleX(${pct / 100})`;
       }
       rafIdRef.current = requestAnimationFrame(animate);
     };
@@ -246,8 +248,10 @@ const SeekBar: React.FC<SeekBarProps> = ({
       if (!isLive && !Number.isFinite(duration)) return;
       e.preventDefault();
       setIsDragging(true);
+      let didDragMove = false;
 
       const handleDragMove = (moveEvent: MouseEvent) => {
+        didDragMove = true;
         const time = getTimeFromPosition(moveEvent.clientX);
         if (commitOnRelease) {
           setDragTime(time);
@@ -261,22 +265,30 @@ const SeekBar: React.FC<SeekBarProps> = ({
         setIsDragging(false);
         document.removeEventListener("mousemove", handleDragMove);
         document.removeEventListener("mouseup", handleDragEnd);
-        const pending = dragTimeRef.current;
-        if (commitOnRelease && pending !== null) {
-          onSeek?.(pending);
+        if (commitOnRelease) {
+          const pending = dragTimeRef.current;
+          if (pending !== null) {
+            onSeek?.(pending);
+          }
           setDragTime(null);
           dragTimeRef.current = null;
+        } else if (!didDragMove) {
+          // Click without drag — seek to click position
+          // (drag moves already emitted seeks, so skip on drag end)
+          const time = dragTimeRef.current;
+          if (time !== null) onSeek?.(time);
         }
+        dragTimeRef.current = null;
       };
 
       document.addEventListener("mousemove", handleDragMove);
       document.addEventListener("mouseup", handleDragEnd);
 
-      // Initial seek
+      // Record initial position; emit seek immediately only if not commitOnRelease
       const time = getTimeFromPosition(e.clientX);
+      dragTimeRef.current = time;
       if (commitOnRelease) {
         setDragTime(time);
-        dragTimeRef.current = time;
       } else {
         onSeek?.(time);
       }
@@ -318,6 +330,23 @@ const SeekBar: React.FC<SeekBarProps> = ({
   const showThumb = isHovering || isDragging;
   const canShowTooltip = isLive ? seekableWindow > 0 : Number.isFinite(duration);
 
+  const hoverCue = useMemo(() => {
+    if (!thumbnailCues?.length || !isHovering || isDragging) return null;
+    return findCueAtTime(thumbnailCues, hoverTime / 1000);
+  }, [thumbnailCues, isHovering, isDragging, hoverTime]);
+
+  const thumbnailStyle = useMemo(() => {
+    if (!hoverCue || hoverCue.width === undefined || hoverCue.height === undefined) return null;
+    return {
+      backgroundImage: `url(${hoverCue.url})`,
+      backgroundPosition: `-${hoverCue.x ?? 0}px -${hoverCue.y ?? 0}px`,
+      backgroundSize: "auto",
+      width: `${hoverCue.width}px`,
+      height: `${hoverCue.height}px`,
+      left: `${hoverPosition}%`,
+    };
+  }, [hoverCue, hoverPosition]);
+
   return (
     <div
       ref={trackRef}
@@ -357,11 +386,11 @@ const SeekBar: React.FC<SeekBarProps> = ({
             }}
           />
         ))}
-        {/* Playback progress — RAF loop handles width during playback for smooth ~60fps updates */}
+        {/* Playback progress — RAF loop drives scaleX during playback for GPU-composited ~60fps updates */}
         <div
           ref={progressRef}
           className="fw-seek-progress"
-          style={{ width: `${progressPercent}%` }}
+          style={{ transform: `scaleX(${progressPercent / 100})` }}
         />
         {/* Hover scrub line */}
         {isHovering && !isDragging && (
@@ -379,6 +408,11 @@ const SeekBar: React.FC<SeekBarProps> = ({
         )}
         style={{ left: `${progressPercent}%` }}
       />
+
+      {/* Thumbnail preview on hover */}
+      {isHovering && !isDragging && thumbnailStyle && (
+        <div className="fw-seek-thumbnail" style={thumbnailStyle} />
+      )}
 
       {/* Hover time tooltip */}
       {isHovering && !isDragging && canShowTooltip && (

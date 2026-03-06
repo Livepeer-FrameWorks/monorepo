@@ -560,6 +560,7 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 // buildDefaultProcesses returns MistServer processes that should always be enabled:
 // - Audio transcode (AAC↔Opus) for WebRTC-HLS compatibility
 // - Livepeer ABR transcoding when Gateway is available
+// - Thumbnail sprite sheet generation for seek-bar preview
 func (m *Manager) buildDefaultProcesses(proc *pb.ProcessingConfig) []map[string]interface{} {
 	var procs []map[string]interface{}
 
@@ -618,6 +619,12 @@ func (m *Manager) buildDefaultProcesses(proc *pb.ProcessingConfig) []map[string]
 			"min_resolution": "850x480",
 		}).Info("Livepeer ABR transcoding enabled for streams")
 	}
+
+	// Thumbnail sprite sheets for seek-bar preview
+	procs = append(procs, map[string]interface{}{
+		"process":    "Thumbs",
+		"x-LSP-name": "Thumbnail Sprites",
+	})
 
 	return procs
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef, useCallback } from "react"
 import { usePlayerContextOptional } from "../context/player";
 import {
   cn,
+  type ThumbnailCue,
   // Seeking utilities from core
   SPEED_PRESETS,
   isMediaStreamSource,
@@ -92,6 +93,8 @@ interface PlayerControlsProps {
   activeLocale?: FwLocale;
   /** Callback when locale is changed */
   onLocaleChange?: (locale: FwLocale) => void;
+  /** Thumbnail sprite cues for seek bar preview */
+  thumbnailCues?: ThumbnailCue[];
 }
 
 const PlayerControls: React.FC<PlayerControlsProps> = ({
@@ -122,6 +125,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   onJumpToLive,
   activeLocale,
   onLocaleChange,
+  thumbnailCues,
 }) => {
   const t = useMemo(() => createTranslator({ locale: activeLocale ?? "en" }), [activeLocale]);
 
@@ -704,6 +708,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
               liveEdge={liveEdge}
               commitOnRelease={commitOnRelease}
               isPlaying={isPlaying}
+              thumbnailCues={thumbnailCues}
               onSeek={(time) => {
                 if (onSeek) {
                   onSeek(time);
