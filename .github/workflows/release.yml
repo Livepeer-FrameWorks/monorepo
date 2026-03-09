@@ -51,17 +51,17 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -81,7 +81,7 @@ jobs:
 
       - name: Build & push ${{ matrix.service.name }} (amd64)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.service.dockerfile }}
@@ -158,17 +158,17 @@ jobs:
           echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -188,7 +188,7 @@ jobs:
 
       - name: Build & push ${{ matrix.service.name }} (arm64)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.service.dockerfile }}
@@ -251,29 +251,29 @@ jobs:
           - chandler
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Download amd64 digest
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: arch-digest-${{ matrix.service }}-amd64
           path: dist/
 
       - name: Download arm64 digest
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: arch-digest-${{ matrix.service }}-arm64
           path: dist/
@@ -398,24 +398,24 @@ jobs:
           tar czf ../${{ matrix.webapp.name }}-build.tar.gz ${{ matrix.webapp.build_dir }}/
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image (amd64)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.webapp.context }}/Dockerfile
@@ -502,24 +502,24 @@ jobs:
           echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image (arm64)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.webapp.context }}/Dockerfile
@@ -594,29 +594,29 @@ jobs:
           - logbook
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Download amd64 digest
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: arch-digest-${{ matrix.webapp }}-amd64
           path: dist/
 
       - name: Download arm64 digest
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: arch-digest-${{ matrix.webapp }}-arm64
           path: dist/
@@ -721,7 +721,7 @@ jobs:
           done
 
       - name: Import Apple signing certificate
-        uses: apple-actions/import-codesign-certs@v2
+        uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -953,7 +953,7 @@ jobs:
 
       - name: Import Apple signing certificate
         if: ${{ !matrix.service.cgo }}
-        uses: apple-actions/import-codesign-certs@v2
+        uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -1017,7 +1017,7 @@ jobs:
         run: brew install xcodegen || true
 
       - name: Import signing certificate
-        uses: apple-actions/import-codesign-certs@v2
+        uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -1125,7 +1125,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download CLI darwin/arm64 binary
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: cli-arm64-darwin
           path: dist/cli
@@ -1137,20 +1137,20 @@ jobs:
           chmod 755 frameworks
 
       - name: Import Application signing certificate
-        uses: apple-actions/import-codesign-certs@v2
+        uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Import Installer signing certificate
-        uses: apple-actions/import-codesign-certs@v2
+        uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ secrets.APPLE_INSTALLER_P12 }}
           p12-password: ${{ secrets.APPLE_INSTALLER_PASSWORD }}
           create-keychain: false
 
       - name: Download tray app
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tray-app-darwin
           path: dist/tray
@@ -1205,7 +1205,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Download image digest artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: image-digest-*
           path: dist/digests
@@ -1410,7 +1410,7 @@ jobs:
           name: release-manifest
           path: dist/manifest.yaml
       - name: Download CLI artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: cli-*
           path: dist/cli
@@ -1429,34 +1429,34 @@ jobs:
             sha256sum "$tarball" > "${tarball}.sha256"
           done
       - name: Download service binary artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: binary-*
           path: dist/binaries
           merge-multiple: true
       - name: Download chartroom bundle
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: chartroom-bundle
           path: dist/
       - name: Download foredeck bundle
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: foredeck-bundle
           path: dist/
       - name: Download logbook bundle
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: logbook-bundle
           path: dist/
       - name: Download macOS .pkg
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: darwin-pkg
           path: dist/pkg
         continue-on-error: true
       - name: Download tray app artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: tray-app-darwin
           path: dist/tray
@@ -1517,7 +1517,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           path: env-repo
       - name: Download manifest artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-manifest
           path: dist
