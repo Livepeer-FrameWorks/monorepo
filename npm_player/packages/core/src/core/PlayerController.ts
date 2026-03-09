@@ -2963,17 +2963,27 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   private detectThumbnailVttUrl(): void {
     const tracks = this.streamInfo?.meta?.tracks;
-    if (!tracks || tracks.length === 0) return;
+    const thumbVttTrack = tracks?.find((t) => t.codec === "thumbvtt");
 
-    const thumbVttTrack = tracks.find((t) => t.codec === "thumbvtt");
-    if (!thumbVttTrack || thumbVttTrack.idx === undefined) return;
+    let vttUrl: string | undefined;
+    let baseUrl: string | undefined;
 
-    const mistBaseUrl = this.endpoints?.primary?.baseUrl || this.config.mistUrl;
-    if (!mistBaseUrl) return;
+    if (thumbVttTrack && thumbVttTrack.idx !== undefined) {
+      const mistBaseUrl = this.endpoints?.primary?.baseUrl || this.config.mistUrl;
+      if (!mistBaseUrl) return;
+      const streamName = this.metadata?.contentId || this.config.contentId;
+      vttUrl = `${mistBaseUrl.replace(/\/$/, "")}/${streamName}.thumbvtt?track=${thumbVttTrack.idx}`;
+      baseUrl = mistBaseUrl.replace(/\/$/, "");
+    } else {
+      // Fallback: pre-generated sprite VTT from bucket (DVR, post-defrost)
+      const bucketVttUrl =
+        this.endpoints?.metadata?.thumbnailSpriteVttUrl || this.metadata?.thumbnailSpriteVttUrl;
+      if (!bucketVttUrl) return;
+      vttUrl = bucketVttUrl;
+      baseUrl = bucketVttUrl.substring(0, bucketVttUrl.lastIndexOf("/"));
+    }
 
-    const streamName = this.metadata?.contentId || this.config.contentId;
-    const vttUrl = `${mistBaseUrl.replace(/\/$/, "")}/${streamName}.thumbvtt?track=${thumbVttTrack.idx}`;
-
+    if (!vttUrl || !baseUrl) return;
     if (vttUrl === this._thumbnailVttUrl && this.thumbnailSpriteManager) return;
     this._thumbnailVttUrl = vttUrl;
     this.log(`[detectThumbnailVttUrl] Found thumbnail VTT: ${vttUrl}`);
@@ -2981,7 +2991,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.thumbnailSpriteManager?.destroy();
     this.thumbnailSpriteManager = new ThumbnailSpriteManager({
       vttUrl,
-      baseUrl: mistBaseUrl.replace(/\/$/, ""),
+      baseUrl,
       isLive: this.isEffectivelyLive(),
       onCuesChange: (cues) => {
         this._rawThumbnailCues = cues;

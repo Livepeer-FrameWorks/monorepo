@@ -990,6 +990,13 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		)`
 	}
 
+	// Optional: scope to specific cluster
+	if clusterID := req.GetClusterId(); clusterID != "" {
+		whereClause += fmt.Sprintf(" AND si.cluster_id = $%d", argIdx)
+		args = append(args, clusterID)
+		argIdx++
+	}
+
 	// Direction-aware keyset condition
 	if params.Cursor != nil {
 		if params.Direction == pagination.Backward {

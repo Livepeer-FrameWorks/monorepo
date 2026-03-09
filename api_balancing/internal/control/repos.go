@@ -32,7 +32,7 @@ func (r *clipRepositoryDB) ListActiveClips(ctx context.Context) ([]state.ClipRec
 	}
 	// Query artifacts table with type='clip', join with artifact_nodes to get node info
 	rows, err := db.QueryContext(ctx, `
-		SELECT a.artifact_hash, '' as tenant_id, COALESCE(a.internal_name,''),
+		SELECT a.artifact_hash, '' as tenant_id, COALESCE(a.stream_internal_name,''),
 		       COALESCE(n.node_id,''), a.status, COALESCE(n.file_path,''),
 		       COALESCE(a.size_bytes,0), COALESCE(a.storage_location,'pending')
 		FROM foghorn.artifacts a
@@ -60,7 +60,7 @@ func (r *clipRepositoryDB) ResolveInternalNameByRequestID(ctx context.Context, r
 	}
 	var internalName string
 	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(internal_name,'') FROM foghorn.artifacts
+		SELECT COALESCE(stream_internal_name,'') FROM foghorn.artifacts
 		WHERE request_id = $1 AND artifact_type = 'clip'
 	`, requestID).Scan(&internalName)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -135,7 +135,7 @@ func (r *dvrRepositoryDB) ListAllDVR(ctx context.Context) ([]state.DVRRecord, er
 	}
 	// Query artifacts table with type='dvr', join with artifact_nodes for node info
 	rows, err := db.QueryContext(ctx, `
-		SELECT a.artifact_hash, '' as tenant_id, COALESCE(a.internal_name,''),
+		SELECT a.artifact_hash, '' as tenant_id, COALESCE(a.stream_internal_name,''),
 		       COALESCE(n.node_id,''), COALESCE(n.base_url,''), a.status,
 		       COALESCE(a.duration_seconds,0), COALESCE(a.size_bytes,0), COALESCE(a.manifest_path,'')
 		FROM foghorn.artifacts a
@@ -163,7 +163,7 @@ func (r *dvrRepositoryDB) ResolveInternalNameByHash(ctx context.Context, dvrHash
 	}
 	var internalName string
 	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(internal_name,'') FROM foghorn.artifacts
+		SELECT COALESCE(stream_internal_name,'') FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
 	`, dvrHash).Scan(&internalName)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -377,7 +377,7 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 		// Warm storage sync never creates lifecycle rows — it lacks tenant context.
 		_, _ = tx.ExecContext(ctx, `
 			UPDATE foghorn.artifacts SET
-				internal_name = COALESCE(internal_name, $2),
+				stream_internal_name = COALESCE(stream_internal_name, $2),
 				access_count = GREATEST(COALESCE(access_count, 0), $3),
 				last_accessed_at = CASE
 					WHEN $4 = 0 THEN last_accessed_at
@@ -589,7 +589,7 @@ func (r *artifactRepositoryDB) ListAllNodeArtifacts(ctx context.Context) (map[st
 			an.node_id,
 			an.artifact_hash,
 			COALESCE(a.artifact_type, 'clip'),
-			COALESCE(a.internal_name, ''),
+			COALESCE(a.stream_internal_name, ''),
 			COALESCE(an.file_path, ''),
 			COALESCE(an.size_bytes, 0),
 			COALESCE(EXTRACT(EPOCH FROM a.created_at)::bigint, 0),

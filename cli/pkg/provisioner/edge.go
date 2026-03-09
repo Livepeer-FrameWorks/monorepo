@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"crypto/rand"
+	"encoding/hex"
+
 	"frameworks/cli/internal/preflight"
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/pkg/detect"
@@ -67,6 +70,15 @@ type EdgeProvisionConfig struct {
 	Force        bool
 	Version      string       // Gitops version for binary resolution
 	DarwinDomain DarwinDomain // "system" (root) or "user" (no admin)
+}
+
+// generateEdgePassword returns a random 32-char hex string for edge-local auth.
+func generateEdgePassword() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "frameworks-edge-fallback"
+	}
+	return hex.EncodeToString(b)
 }
 
 func (c *EdgeProvisionConfig) primaryDomain() string {
@@ -404,6 +416,7 @@ func (e *EdgeProvisioner) stageCertificatesAt(ctx context.Context, host inventor
 func (e *EdgeProvisioner) installDocker(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	vars := e.buildEdgeVars(config, "linux") // Docker containers are always Linux
 	vars.Mode = "docker"
+	vars.MistAPIPassword = generateEdgePassword()
 	vars.SetModeDefaults()
 
 	// Write templates to local temp dir
@@ -578,19 +591,20 @@ mkdir -p %s/mistserver %s/helmsman %s/caddy %s %s/certs %s
 
 	// (b) MistServer
 	fmt.Println("  installing MistServer...")
-	if err := e.installDarwinMistServer(ctx, host, manifest, arch, dirs, runScript, uploadFile); err != nil {
+	mistPass, err := e.installDarwinMistServer(ctx, host, manifest, arch, dirs, runScript, uploadFile)
+	if err != nil {
 		return fmt.Errorf("mistserver install failed: %w", err)
 	}
 
 	// (c) Helmsman
 	fmt.Println("  installing Helmsman...")
-	if err := e.installDarwinHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch, dirs, runScript, uploadFile); err != nil {
+	if err = e.installDarwinHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch, dirs, runScript, uploadFile, mistPass); err != nil {
 		return fmt.Errorf("helmsman install failed: %w", err)
 	}
 
 	// (d) Caddy
 	fmt.Println("  installing Caddy...")
-	if err := e.installDarwinCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch, dirs, runScript, uploadFile); err != nil {
+	if err = e.installDarwinCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch, dirs, runScript, uploadFile); err != nil {
 		return fmt.Errorf("caddy install failed: %w", err)
 	}
 
@@ -658,7 +672,9 @@ echo "all services started (system domain)"
 type scriptRunner func(string) (*ssh.CommandResult, error)
 type fileUploader func(ssh.UploadOptions) error
 
-func (e *EdgeProvisioner) installDarwinMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader) error {
+func (e *EdgeProvisioner) installDarwinMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader) (string, error) {
+	mistPass := generateEdgePassword()
+
 	var binaryURL string
 	if manifest != nil {
 		dep := manifest.GetExternalDependency("mistserver")
@@ -667,7 +683,7 @@ func (e *EdgeProvisioner) installDarwinMistServer(ctx context.Context, host inve
 		}
 	}
 	if binaryURL == "" {
-		return fmt.Errorf("MistServer binary URL not available for %s (ensure darwin builds exist in mistserver releases)", arch)
+		return "", fmt.Errorf("MistServer binary URL not available for %s (ensure darwin builds exist in mistserver releases)", arch)
 	}
 
 	installScript := fmt.Sprintf(`#!/bin/bash
@@ -685,18 +701,19 @@ echo "MistServer installed"
 		if result != nil {
 			stderr = result.Stderr
 		}
-		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
+		return "", fmt.Errorf("install script failed: %w (%s)", err, stderr)
 	}
 
-	envContent := "# MistServer environment\nMIST_DEBUG=3\n"
-	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/mistserver.env", envContent, 0644); err != nil {
-		return err
+	envContent := fmt.Sprintf("# MistServer environment\nMIST_DEBUG=3\nMIST_PASSWORD=%s\n", mistPass)
+	if err = e.writeRemoteFile(ctx, host, dirs.confDir+"/mistserver.env", envContent, 0644); err != nil {
+		return "", err
 	}
 
-	return e.uploadLaunchdPlistTo(ctx, host, dirs, LaunchdPlistData{
+	err = e.uploadLaunchdPlistTo(ctx, host, dirs, LaunchdPlistData{
 		Label:       "com.livepeer.frameworks.mistserver",
 		Description: "FrameWorks MistServer (edge media server)",
 		Program:     dirs.baseDir + "/mistserver/MistServer",
+		ProgramArgs: []string{"-a", fmt.Sprintf("frameworks:%s", mistPass)},
 		WorkingDir:  dirs.baseDir + "/mistserver",
 		EnvFile:     dirs.confDir + "/mistserver.env",
 		RunAtLoad:   true,
@@ -704,9 +721,10 @@ echo "MistServer installed"
 		LogPath:     dirs.logDir + "/com.livepeer.frameworks.mistserver.log",
 		ErrorPath:   dirs.logDir + "/com.livepeer.frameworks.mistserver.err",
 	})
+	return mistPass, err
 }
 
-func (e *EdgeProvisioner) installDarwinHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader) error {
+func (e *EdgeProvisioner) installDarwinHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader, mistPass string) error {
 	var binaryURL string
 	if manifest != nil {
 		svcInfo, err := manifest.GetServiceInfo("helmsman")
@@ -752,6 +770,9 @@ echo "Helmsman installed"
 		fmt.Sprintf("MISTSERVER_URL=http://%s", vars.MistUpstream),
 		fmt.Sprintf("HELMSMAN_WEBHOOK_URL=http://%s", vars.HelmsmanUpstream),
 		"CADDY_ADMIN_URL=http://localhost:2019",
+		fmt.Sprintf("MIST_API_USERNAME=%s", "frameworks"),
+		fmt.Sprintf("MIST_API_PASSWORD=%s", mistPass),
+		fmt.Sprintf("MIST_PASSWORD=%s", mistPass),
 	}
 	envContent := strings.Join(envLines, "\n") + "\n"
 	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/helmsman.env", envContent, 0644); err != nil {
@@ -854,19 +875,20 @@ echo "Caddy installed"
 func (e *EdgeProvisioner) installNativeLinux(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
 	// (a) MistServer
 	fmt.Println("  installing MistServer...")
-	if err := e.installNativeMistServer(ctx, host, manifest, arch); err != nil {
+	mistPass, err := e.installNativeMistServer(ctx, host, manifest, arch)
+	if err != nil {
 		return fmt.Errorf("mistserver install failed: %w", err)
 	}
 
 	// (b) Helmsman
 	fmt.Println("  installing Helmsman...")
-	if err := e.installNativeHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch); err != nil {
+	if err = e.installNativeHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch, mistPass); err != nil {
 		return fmt.Errorf("helmsman install failed: %w", err)
 	}
 
 	// (c) Caddy
 	fmt.Println("  installing Caddy...")
-	if err := e.installNativeCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch); err != nil {
+	if err = e.installNativeCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch); err != nil {
 		return fmt.Errorf("caddy install failed: %w", err)
 	}
 
@@ -918,7 +940,9 @@ echo "all services started"
 	return nil
 }
 
-func (e *EdgeProvisioner) installNativeMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string) error {
+func (e *EdgeProvisioner) installNativeMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string) (string, error) {
+	mistPass := generateEdgePassword()
+
 	var binaryURL string
 	if manifest != nil {
 		dep := manifest.GetExternalDependency("mistserver")
@@ -927,7 +951,7 @@ func (e *EdgeProvisioner) installNativeMistServer(ctx context.Context, host inve
 		}
 	}
 	if binaryURL == "" {
-		return fmt.Errorf("MistServer binary URL not available (set --version to resolve from gitops, or provide binary URL in manifest)")
+		return "", fmt.Errorf("MistServer binary URL not available (set --version to resolve from gitops, or provide binary URL in manifest)")
 	}
 
 	installScript := fmt.Sprintf(`#!/bin/bash
@@ -946,31 +970,29 @@ echo "MistServer installed"
 		if result != nil {
 			stderr = result.Stderr
 		}
-		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
+		return "", fmt.Errorf("install script failed: %w (%s)", err, stderr)
 	}
 
-	// Generate env file
-	envContent := "# MistServer environment\nMIST_DEBUG=3\n"
+	envContent := fmt.Sprintf("# MistServer environment\nMIST_DEBUG=3\nMIST_PASSWORD=%s\n", mistPass)
 	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/mistserver.env", envContent, 0644); err != nil {
-		return err
+		return "", err
 	}
 
-	// Generate systemd unit
 	unitData := SystemdUnitData{
 		ServiceName: "frameworks-mistserver",
 		Description: "FrameWorks MistServer (edge media server)",
 		WorkingDir:  "/opt/frameworks/mistserver",
-		ExecStart:   "/opt/frameworks/mistserver/MistServer",
+		ExecStart:   fmt.Sprintf("/opt/frameworks/mistserver/MistServer -a frameworks:%s", mistPass),
 		User:        "frameworks",
 		EnvFile:     "/etc/frameworks/mistserver.env",
 		After:       []string{"network-online"},
 		LimitNOFILE: "1048576",
 	}
 
-	return e.uploadSystemdUnit(ctx, host, unitData)
+	return mistPass, e.uploadSystemdUnit(ctx, host, unitData)
 }
 
-func (e *EdgeProvisioner) installNativeHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
+func (e *EdgeProvisioner) installNativeHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch, mistPass string) error {
 	var binaryURL string
 	if manifest != nil {
 		svcInfo, err := manifest.GetServiceInfo("helmsman")
@@ -1019,6 +1041,9 @@ echo "Helmsman installed"
 		fmt.Sprintf("MISTSERVER_URL=http://%s", vars.MistUpstream),
 		fmt.Sprintf("HELMSMAN_WEBHOOK_URL=http://%s", vars.HelmsmanUpstream),
 		"CADDY_ADMIN_URL=http://localhost:2019",
+		fmt.Sprintf("MIST_API_USERNAME=%s", "frameworks"),
+		fmt.Sprintf("MIST_API_PASSWORD=%s", mistPass),
+		fmt.Sprintf("MIST_PASSWORD=%s", mistPass),
 	}
 	envContent := strings.Join(envLines, "\n") + "\n"
 	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/helmsman.env", envContent, 0644); err != nil {

@@ -555,6 +555,45 @@ func HandlePlayRewrite(c *gin.Context) {
 	c.String(http.StatusOK, result.Response)
 }
 
+// HandleStreamProcess handles the STREAM_PROCESS trigger from MistServer.
+// Returns a JSON array of process objects to override the wildcard's default processes.
+func HandleStreamProcess(c *gin.Context) {
+	incMistWebhook("STREAM_PROCESS", "received")
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		incMistWebhook("STREAM_PROCESS", "read_error")
+		logger.WithError(err).Error("Failed to read STREAM_PROCESS body")
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerStreamProcess, body, control.GetCurrentNodeID(), logger)
+	if err != nil {
+		incMistWebhook("STREAM_PROCESS", "parse_error")
+		logger.WithError(err).Error("Failed to parse STREAM_PROCESS trigger")
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	applyTenantContext(mistTrigger)
+	result, err := sendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		incMistWebhook("STREAM_PROCESS", "forward_error")
+		logger.WithError(err).Error("Failed to forward STREAM_PROCESS to Foghorn")
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	if result.Response != "" {
+		incMistWebhook("STREAM_PROCESS", "success")
+	} else {
+		incMistWebhook("STREAM_PROCESS", "default")
+	}
+
+	c.String(http.StatusOK, result.Response)
+}
+
 // HandleStreamSource handles the STREAM_SOURCE trigger from MistServer
 // This is a critical blocking trigger - resolves VOD stream names (vod+{artifact_hash}) to actual file paths for playback
 // Supports both clip hashes (mp4 files) and DVR hashes (m3u8 manifests)
@@ -602,6 +641,25 @@ func HandleStreamSource(c *gin.Context) {
 
 		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
 		return
+	}
+
+	// Resolve processing+ HLS sources locally if rewritten manifest exists
+	// and there's an active processing job (prevents serving stale manifests
+	// with expired presigned URLs from a previous failed job)
+	if ss := mistTrigger.GetStreamSource(); ss != nil && strings.HasPrefix(ss.GetStreamName(), "processing+") {
+		hash := strings.TrimPrefix(ss.GetStreamName(), "processing+")
+		if HasPendingJob(ss.GetStreamName()) {
+			localManifest := filepath.Join(config.GetStoragePath(), "processing", hash+".m3u8")
+			if _, statErr := os.Stat(localManifest); statErr == nil {
+				logger.WithFields(logging.Fields{
+					"stream_name":    ss.GetStreamName(),
+					"local_manifest": localManifest,
+				}).Info("STREAM_SOURCE resolved to local HLS manifest")
+				incMistWebhook("STREAM_SOURCE", "local_hls")
+				c.String(http.StatusOK, localManifest)
+				return
+			}
+		}
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
@@ -704,6 +762,13 @@ func HandlePushEnd(c *gin.Context) {
 		}).Error("Failed to parse PUSH_END trigger")
 		c.String(http.StatusOK, "OK")
 		return
+	}
+
+	// Signal local processing handler if this is a processing+ push
+	if pushEnd := mistTrigger.GetPushEnd(); pushEnd != nil {
+		if strings.HasPrefix(pushEnd.GetStreamName(), "processing+") {
+			SignalProcessingComplete(pushEnd.GetStreamName())
+		}
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)

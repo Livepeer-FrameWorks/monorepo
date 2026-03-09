@@ -46,7 +46,6 @@ func main() {
 	stripeSecretKey := config.GetEnv("STRIPE_SECRET_KEY", "")
 	stripeWebhookSecret := config.GetEnv("STRIPE_WEBHOOK_SECRET", "")
 	mollieAPIKey := config.GetEnv("MOLLIE_API_KEY", "")
-	mollieWebhookSecret := config.GetEnv("MOLLIE_WEBHOOK_SECRET", "")
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -164,9 +163,8 @@ func main() {
 	if mollieAPIKey != "" {
 		var err error
 		mollieClient, err = mollie.NewClient(mollie.Config{
-			APIKey:        mollieAPIKey,
-			WebhookSecret: mollieWebhookSecret,
-			Logger:        logger,
+			APIKey: mollieAPIKey,
+			Logger: logger,
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Mollie client - Mollie functionality disabled")
@@ -189,6 +187,14 @@ func main() {
 	defer jobManager.Stop()
 
 	logger.Info("JobManager started - background billing jobs active")
+
+	// Start Livepeer deposit monitor (optional - requires ARBITRUM_RPC_ENDPOINT)
+	if config.GetEnvBool("LIVEPEER_DEPOSIT_MONITOR_ENABLED", false) {
+		depositMonitor := handlers.NewLivepeerDepositMonitor(logger, qmGRPCClient)
+		go depositMonitor.Start(ctx)
+		defer depositMonitor.Stop()
+		logger.Info("Livepeer deposit monitor started")
+	}
 
 	// Setup router with unified monitoring (health/metrics only)
 	// NOTE: All billing/usage API routes removed - now handled via gRPC only.

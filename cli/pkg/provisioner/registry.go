@@ -40,6 +40,9 @@ var ServicePorts = map[string]int{
 	"chatwoot":         18092,
 	"yugabyte":         5433,
 	"deckhand":         18015,
+	"livepeer-gateway": 8935,
+	"livepeer-signer":  18016,
+	"chandler":         18020,
 }
 
 // GetProvisioner returns a provisioner for a given service
@@ -77,6 +80,10 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewChatwootProvisioner(pool), nil
 	case "deckhand":
 		return NewFlexibleProvisioner("deckhand", port, pool), nil
+	case "livepeer-gateway":
+		return NewLivepeerGatewayProvisioner(pool), nil
+	case "livepeer-signer":
+		return NewLivepeerSignerProvisioner(pool), nil
 
 	case "quartermaster":
 		return NewFlexibleProvisioner("quartermaster", port, pool), nil
@@ -123,6 +130,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewFlexibleProvisioner("logbook", port, pool), nil
 	case "skipper":
 		return NewFlexibleProvisioner("skipper", port, pool), nil
+	case "chandler":
+		return NewFlexibleProvisioner("chandler", port, pool), nil
 
 	default:
 		return nil, fmt.Errorf("provisioner not implemented for service: %s", serviceName)

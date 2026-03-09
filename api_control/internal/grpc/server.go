@@ -423,6 +423,71 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 	return route, nil
 }
 
+// resolveProcessesJSON returns the MistServer process config JSON for a tenant.
+// Resolution order: tenant override (if tier allows) → tier default.
+// streamType is "live" or "vod".
+func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, clusterID, streamType string) string {
+	if s.purserClient == nil {
+		return "[]"
+	}
+
+	// Get tenant's subscription → tier
+	subResp, err := s.purserClient.GetSubscription(ctx, tenantID)
+	if err != nil {
+		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get subscription for process config")
+		return "[]"
+	}
+	sub := subResp.GetSubscription()
+	if sub == nil {
+		return "[]"
+	}
+
+	tier, err := s.purserClient.GetBillingTier(ctx, sub.GetTierId())
+	if err != nil {
+		s.logger.WithError(err).WithField("tier_id", sub.GetTierId()).Warn("Failed to get billing tier for process config")
+		return "[]"
+	}
+
+	// Select processes JSON based on stream type
+	processesJSON := tier.GetProcessesLive()
+	if streamType == "vod" {
+		processesJSON = tier.GetProcessesVod()
+	}
+
+	// Check tenant override if tier allows customization
+	if tier.GetFeatures().GetProcessingCustomizable() {
+		override := s.getTenantProcessingOverride(ctx, tenantID, streamType)
+		if override != "" {
+			processesJSON = override
+		}
+	}
+
+	if processesJSON == "" || processesJSON == "[]" {
+		return "[]"
+	}
+
+	// {{gateway_url}} placeholder is left intact — Foghorn substitutes it
+	// with its local cluster's Livepeer gateway at cache/dispatch time.
+	return processesJSON
+}
+
+// getTenantProcessingOverride checks commodore.tenant_processing_config for a tenant override.
+func (s *CommodoreServer) getTenantProcessingOverride(ctx context.Context, tenantID, streamType string) string {
+	col := "processes_live"
+	if streamType == "vod" {
+		col = "processes_vod"
+	}
+	var override sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT `+col+` FROM commodore.tenant_processing_config WHERE tenant_id = $1`,
+		tenantID,
+	).Scan(&override)
+	if err != nil || !override.Valid {
+		return ""
+	}
+	return override.String
+}
+
 // resolveFoghornForTenant returns a Foghorn gRPC client for the tenant's cluster.
 // Delegates to resolveClusterRouteForTenant for routing, then dials via pool.
 // On any failure, evicts the cached route and retries once with a fresh lookup.
@@ -741,6 +806,13 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		}
 	}
 
+	// Resolve MistServer process config from tenant's billing tier
+	processClusterID := ""
+	if resp.OriginClusterId != nil {
+		processClusterID = *resp.OriginClusterId
+	}
+	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, processClusterID, "live")
+
 	// Track which cluster this stream is ingesting on (Foghorn reports its own cluster_id)
 	if ingestClusterID := req.GetClusterId(); ingestClusterID != "" {
 		res, updateErr := s.db.ExecContext(ctx, `
@@ -1026,7 +1098,7 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 	// Insert into business registry
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.clips (
-			id, tenant_id, user_id, stream_id, clip_hash, artifact_internal_name, playback_id,
+			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
 			origin_cluster_id, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
@@ -1057,10 +1129,10 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", expiresAt)
 
 	return &pb.RegisterClipResponse{
-		ClipHash:             clipHash,
-		ClipId:               clipID,
-		PlaybackId:           playbackID,
-		ArtifactInternalName: artifactInternalName,
+		ClipHash:     clipHash,
+		ClipId:       clipID,
+		PlaybackId:   playbackID,
+		InternalName: artifactInternalName,
 	}, nil
 }
 
@@ -1069,10 +1141,10 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRequest) (*pb.RegisterDVRResponse, error) {
 	tenantID := req.GetTenantId()
 	userID := req.GetUserId()
-	internalName := req.GetInternalName()
+	internalName := req.GetStreamInternalName()
 
 	if tenantID == "" || userID == "" || internalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id, user_id, and internal_name are required")
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, user_id, and stream_internal_name are required")
 	}
 
 	// Generate DVR hash
@@ -1111,7 +1183,7 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 	// Insert into business registry
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.dvr_recordings (
-			id, tenant_id, user_id, stream_id, dvr_hash, artifact_internal_name, playback_id, internal_name,
+			id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id, stream_internal_name,
 			origin_cluster_id, created_at, updated_at
 		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, NOW(), NOW())
 	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId())
@@ -1140,11 +1212,11 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, streamID, "registered", expiresAt)
 
 	return &pb.RegisterDVRResponse{
-		DvrHash:              dvrHash,
-		DvrId:                dvrID,
-		PlaybackId:           playbackID,
-		ArtifactInternalName: artifactInternalName,
-		StreamId:             streamID,
+		DvrHash:      dvrHash,
+		DvrId:        dvrID,
+		PlaybackId:   playbackID,
+		InternalName: artifactInternalName,
+		StreamId:     streamID,
 	}, nil
 }
 
@@ -1164,7 +1236,7 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 	err := s.db.QueryRowContext(ctx, `
 		SELECT c.tenant_id, c.user_id, c.stream_id, c.title, c.description,
 			   c.start_time, c.duration, c.clip_mode, s.internal_name,
-			   c.playback_id, c.artifact_internal_name, c.origin_cluster_id
+			   c.playback_id, c.internal_name, c.origin_cluster_id
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
 		WHERE c.clip_hash = $1
@@ -1186,19 +1258,19 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 	}
 
 	return &pb.ResolveClipHashResponse{
-		Found:                true,
-		TenantId:             tenantID,
-		UserId:               userID,
-		StreamId:             streamID,
-		InternalName:         internalName.String,
-		Title:                title,
-		Description:          description,
-		StartTime:            startTime,
-		Duration:             duration,
-		ClipMode:             clipMode,
-		PlaybackId:           playbackID,
-		ArtifactInternalName: artifactInternalName,
-		OriginClusterId:      originClusterID.String,
+		Found:              true,
+		TenantId:           tenantID,
+		UserId:             userID,
+		StreamId:           streamID,
+		StreamInternalName: internalName.String,
+		Title:              title,
+		Description:        description,
+		StartTime:          startTime,
+		Duration:           duration,
+		ClipMode:           clipMode,
+		PlaybackId:         playbackID,
+		InternalName:       artifactInternalName,
+		OriginClusterId:    originClusterID.String,
 	}, nil
 }
 
@@ -1215,7 +1287,7 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 	var streamID, originClusterID sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, stream_id, internal_name, playback_id, artifact_internal_name, origin_cluster_id
+		SELECT tenant_id, user_id, stream_id, stream_internal_name, playback_id, internal_name, origin_cluster_id
 		FROM commodore.dvr_recordings
 		WHERE dvr_hash = $1
 	`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName, &originClusterID)
@@ -1235,14 +1307,14 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 	}
 
 	return &pb.ResolveDVRHashResponse{
-		Found:                true,
-		TenantId:             tenantID,
-		UserId:               userID,
-		StreamId:             streamID.String,
-		InternalName:         internalName,
-		PlaybackId:           playbackID,
-		ArtifactInternalName: artifactInternalName,
-		OriginClusterId:      originClusterID.String,
+		Found:              true,
+		TenantId:           tenantID,
+		UserId:             userID,
+		StreamId:           streamID.String,
+		StreamInternalName: internalName,
+		PlaybackId:         playbackID,
+		InternalName:       artifactInternalName,
+		OriginClusterId:    originClusterID.String,
 	}, nil
 }
 
@@ -1279,7 +1351,7 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 	// Insert into business registry
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.vod_assets (
-			id, tenant_id, user_id, vod_hash, artifact_internal_name, playback_id,
+			id, tenant_id, user_id, vod_hash, internal_name, playback_id,
 			title, description, filename, content_type, size_bytes,
 			origin_cluster_id, retention_until, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
@@ -1307,10 +1379,10 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, vodHash, "", "registered", &expiresAt)
 
 	return &pb.RegisterVodResponse{
-		VodHash:              vodHash,
-		VodId:                vodID,
-		PlaybackId:           playbackID,
-		ArtifactInternalName: artifactInternalName,
+		VodHash:      vodHash,
+		VodId:        vodID,
+		PlaybackId:   playbackID,
+		InternalName: artifactInternalName,
 	}, nil
 }
 
@@ -1327,7 +1399,7 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 	var title, description, originClusterID sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, filename, title, description, playback_id, artifact_internal_name, origin_cluster_id
+		SELECT tenant_id, user_id, filename, title, description, playback_id, internal_name, origin_cluster_id
 		FROM commodore.vod_assets
 		WHERE vod_hash = $1
 	`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName, &originClusterID)
@@ -1347,15 +1419,15 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 	}
 
 	return &pb.ResolveVodHashResponse{
-		Found:                true,
-		TenantId:             tenantID,
-		UserId:               userID,
-		Filename:             filename,
-		Title:                title.String,
-		Description:          description.String,
-		PlaybackId:           playbackID,
-		ArtifactInternalName: artifactInternalName,
-		OriginClusterId:      originClusterID.String,
+		Found:           true,
+		TenantId:        tenantID,
+		UserId:          userID,
+		Filename:        filename,
+		Title:           title.String,
+		Description:     description.String,
+		PlaybackId:      playbackID,
+		InternalName:    artifactInternalName,
+		OriginClusterId: originClusterID.String,
 	}, nil
 }
 
@@ -1368,7 +1440,7 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodID
 
 	var tenantID, userID, vodHash, playbackID, artifactInternalName string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, vod_hash, playback_id, artifact_internal_name
+		SELECT tenant_id, user_id, vod_hash, playback_id, internal_name
 		FROM commodore.vod_assets
 		WHERE id = $1
 	`, vodID).Scan(&tenantID, &userID, &vodHash, &playbackID, &artifactInternalName)
@@ -1387,12 +1459,12 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodID
 	}
 
 	return &pb.ResolveVodIDResponse{
-		Found:                true,
-		TenantId:             tenantID,
-		UserId:               userID,
-		VodHash:              vodHash,
-		PlaybackId:           playbackID,
-		ArtifactInternalName: artifactInternalName,
+		Found:        true,
+		TenantId:     tenantID,
+		UserId:       userID,
+		VodHash:      vodHash,
+		PlaybackId:   playbackID,
+		InternalName: artifactInternalName,
 	}, nil
 }
 
@@ -1413,20 +1485,20 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		originClusterID      sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT clip_hash, artifact_internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
+		SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
 		FROM commodore.clips
 		WHERE playback_id = $1
 	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
 		resp := &pb.ResolveArtifactPlaybackIDResponse{
-			Found:                true,
-			ArtifactHash:         artifactHash,
-			ArtifactInternalName: artifactInternalName,
-			TenantId:             tenantID,
-			UserId:               userID,
-			StreamId:             streamID.String,
-			ContentType:          "clip",
-			OriginClusterId:      originClusterID.String,
+			Found:           true,
+			ArtifactHash:    artifactHash,
+			InternalName:    artifactInternalName,
+			TenantId:        tenantID,
+			UserId:          userID,
+			StreamId:        streamID.String,
+			ContentType:     "clip",
+			OriginClusterId: originClusterID.String,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1442,20 +1514,20 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 	// 2. DVR
 	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT dvr_hash, artifact_internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
+		SELECT dvr_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
 		FROM commodore.dvr_recordings
 		WHERE playback_id = $1
 	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
 		resp := &pb.ResolveArtifactPlaybackIDResponse{
-			Found:                true,
-			ArtifactHash:         artifactHash,
-			ArtifactInternalName: artifactInternalName,
-			TenantId:             tenantID,
-			UserId:               userID,
-			StreamId:             streamID.String,
-			ContentType:          "dvr",
-			OriginClusterId:      originClusterID.String,
+			Found:           true,
+			ArtifactHash:    artifactHash,
+			InternalName:    artifactInternalName,
+			TenantId:        tenantID,
+			UserId:          userID,
+			StreamId:        streamID.String,
+			ContentType:     "dvr",
+			OriginClusterId: originClusterID.String,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1472,19 +1544,19 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 	streamID = sql.NullString{}
 	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT vod_hash, artifact_internal_name, tenant_id, user_id, origin_cluster_id
+		SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id
 		FROM commodore.vod_assets
 		WHERE playback_id = $1
 	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID)
 	if err == nil {
 		resp := &pb.ResolveArtifactPlaybackIDResponse{
-			Found:                true,
-			ArtifactHash:         artifactHash,
-			ArtifactInternalName: artifactInternalName,
-			TenantId:             tenantID,
-			UserId:               userID,
-			ContentType:          "vod",
-			OriginClusterId:      originClusterID.String,
+			Found:           true,
+			ArtifactHash:    artifactHash,
+			InternalName:    artifactInternalName,
+			TenantId:        tenantID,
+			UserId:          userID,
+			ContentType:     "vod",
+			OriginClusterId: originClusterID.String,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
@@ -1511,9 +1583,9 @@ func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, te
 
 // ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity
 func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *pb.ResolveArtifactInternalNameRequest) (*pb.ResolveArtifactInternalNameResponse, error) {
-	internalName := req.GetArtifactInternalName()
+	internalName := req.GetInternalName()
 	if internalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "artifact_internal_name is required")
+		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
 
 	// 1. Clips
@@ -1526,58 +1598,58 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		originClusterID      sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT clip_hash, artifact_internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
+		SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
 		FROM commodore.clips
-		WHERE artifact_internal_name = $1
+		WHERE internal_name = $1
 	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
-			Found:                true,
-			ArtifactHash:         artifactHash,
-			ArtifactInternalName: artifactInternalName,
-			TenantId:             tenantID,
-			UserId:               userID,
-			StreamId:             streamID.String,
-			ContentType:          "clip",
-			OriginClusterId:      originClusterID.String,
+			Found:           true,
+			ArtifactHash:    artifactHash,
+			InternalName:    artifactInternalName,
+			TenantId:        tenantID,
+			UserId:          userID,
+			StreamId:        streamID.String,
+			ContentType:     "clip",
+			OriginClusterId: originClusterID.String,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
-			"artifact_internal_name": internalName,
-			"error":                  err,
-		}).Error("Database error resolving clip artifact_internal_name")
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Database error resolving clip internal_name")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
 	// 2. DVR
 	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT dvr_hash, artifact_internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
+		SELECT dvr_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
 		FROM commodore.dvr_recordings
-		WHERE artifact_internal_name = $1
+		WHERE internal_name = $1
 	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
-			Found:                true,
-			ArtifactHash:         artifactHash,
-			ArtifactInternalName: artifactInternalName,
-			TenantId:             tenantID,
-			UserId:               userID,
-			StreamId:             streamID.String,
-			ContentType:          "dvr",
-			OriginClusterId:      originClusterID.String,
+			Found:           true,
+			ArtifactHash:    artifactHash,
+			InternalName:    artifactInternalName,
+			TenantId:        tenantID,
+			UserId:          userID,
+			StreamId:        streamID.String,
+			ContentType:     "dvr",
+			OriginClusterId: originClusterID.String,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
-			"artifact_internal_name": internalName,
-			"error":                  err,
-		}).Error("Database error resolving DVR artifact_internal_name")
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Database error resolving DVR internal_name")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -1585,28 +1657,28 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	streamID = sql.NullString{}
 	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT vod_hash, artifact_internal_name, tenant_id, user_id, origin_cluster_id
+		SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id
 		FROM commodore.vod_assets
-		WHERE artifact_internal_name = $1
+		WHERE internal_name = $1
 	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID)
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
-			Found:                true,
-			ArtifactHash:         artifactHash,
-			ArtifactInternalName: artifactInternalName,
-			TenantId:             tenantID,
-			UserId:               userID,
-			ContentType:          "vod",
-			OriginClusterId:      originClusterID.String,
+			Found:           true,
+			ArtifactHash:    artifactHash,
+			InternalName:    artifactInternalName,
+			TenantId:        tenantID,
+			UserId:          userID,
+			ContentType:     "vod",
+			OriginClusterId: originClusterID.String,
 		}
 		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
-			"artifact_internal_name": internalName,
-			"error":                  err,
-		}).Error("Database error resolving VOD artifact_internal_name")
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Database error resolving VOD internal_name")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -1778,7 +1850,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.artifact_internal_name = $1
+		WHERE c.internal_name = $1
 	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
@@ -1790,14 +1862,14 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			StreamId:       streamID,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking clips by artifact_internal_name")
+		s.logger.WithError(err).Error("Database error checking clips by internal_name")
 	}
 
 	// 2f. Try artifact internal_name (DVR)
 	err = s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, user_id, internal_name, stream_id
 		FROM commodore.dvr_recordings
-		WHERE artifact_internal_name = $1
+		WHERE internal_name = $1
 	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
@@ -1809,14 +1881,14 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			StreamId:       streamID,
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking DVR by artifact_internal_name")
+		s.logger.WithError(err).Error("Database error checking DVR by internal_name")
 	}
 
 	// 2g. Try artifact internal_name (VOD)
 	err = s.db.QueryRowContext(ctx, `
 		SELECT tenant_id, user_id
 		FROM commodore.vod_assets
-		WHERE artifact_internal_name = $1
+		WHERE internal_name = $1
 	`, identifier).Scan(&tenantID, &userID)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
@@ -1826,7 +1898,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			IdentifierType: "vod_internal_name",
 		}, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking VOD by artifact_internal_name")
+		s.logger.WithError(err).Error("Database error checking VOD by internal_name")
 	}
 
 	// 3. Try clips by clip_hash
@@ -5042,11 +5114,11 @@ func (s *CommodoreServer) identifierExists(ctx context.Context, identifier strin
 		SELECT EXISTS(
 			SELECT 1 FROM commodore.streams WHERE internal_name = $1 OR playback_id = $1
 			UNION ALL
-			SELECT 1 FROM commodore.clips WHERE artifact_internal_name = $1 OR playback_id = $1 OR clip_hash = $1
+			SELECT 1 FROM commodore.clips WHERE internal_name = $1 OR playback_id = $1 OR clip_hash = $1
 			UNION ALL
-			SELECT 1 FROM commodore.dvr_recordings WHERE artifact_internal_name = $1 OR playback_id = $1 OR dvr_hash = $1
+			SELECT 1 FROM commodore.dvr_recordings WHERE internal_name = $1 OR playback_id = $1 OR dvr_hash = $1
 			UNION ALL
-			SELECT 1 FROM commodore.vod_assets WHERE artifact_internal_name = $1 OR playback_id = $1 OR vod_hash = $1
+			SELECT 1 FROM commodore.vod_assets WHERE internal_name = $1 OR playback_id = $1 OR vod_hash = $1
 		)
 	`, identifier).Scan(&exists)
 	if err != nil {
@@ -5227,7 +5299,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	// Register in commodore.clips (business registry)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.clips (
-			id, tenant_id, user_id, stream_id, clip_hash, artifact_internal_name, playback_id,
+			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
 			origin_cluster_id, retention_until, created_at, updated_at
 		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
@@ -5253,11 +5325,11 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 
 	// Build Foghorn request with pre-generated hash
 	foghornReq := &pb.CreateClipRequest{
-		TenantId:             tenantID,
-		InternalName:         internalName,
-		ClipHash:             &clipHash, // Pass the hash we generated
-		PlaybackId:           &playbackID,
-		ArtifactInternalName: &artifactInternalName,
+		TenantId:           tenantID,
+		StreamInternalName: internalName,
+		ClipHash:           &clipHash, // Pass the hash we generated
+		PlaybackId:         &playbackID,
+		InternalName:       &artifactInternalName,
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
@@ -6193,7 +6265,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	// Register in commodore.vod_assets (business registry)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.vod_assets (
-			id, tenant_id, user_id, vod_hash, artifact_internal_name, playback_id,
+			id, tenant_id, user_id, vod_hash, internal_name, playback_id,
 			title, description, filename, content_type, size_bytes,
 			origin_cluster_id, retention_until, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
@@ -6219,16 +6291,16 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 
 	// Build Foghorn request with pre-generated hash
 	foghornReq := &pb.CreateVodUploadRequest{
-		TenantId:             tenantID,
-		UserId:               userID,
-		Filename:             req.Filename,
-		SizeBytes:            req.SizeBytes,
-		ContentType:          req.ContentType,
-		Title:                req.Title,
-		Description:          req.Description,
-		VodHash:              &vodHash, // Pass the hash we generated
-		PlaybackId:           &playbackID,
-		ArtifactInternalName: &artifactInternalName,
+		TenantId:     tenantID,
+		UserId:       userID,
+		Filename:     req.Filename,
+		SizeBytes:    req.SizeBytes,
+		ContentType:  req.ContentType,
+		Title:        req.Title,
+		Description:  req.Description,
+		VodHash:      &vodHash, // Pass the hash we generated
+		PlaybackId:   &playbackID,
+		InternalName: &artifactInternalName,
 	}
 
 	// Call Foghorn for S3 multipart upload setup
@@ -6265,11 +6337,21 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to complete uploads")
 	}
 
+	// Resolve MistServer process config for VOD processing
+	var processesJSON string
+	if route, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID); routeErr == nil {
+		processesJSON = s.resolveProcessesJSON(ctx, tenantID, route.clusterID, "vod")
+	} else {
+		s.logger.WithError(routeErr).WithField("tenant_id", tenantID).Warn("Route lookup failed for VOD process config, resolving without cluster")
+		processesJSON = s.resolveProcessesJSON(ctx, tenantID, "", "vod")
+	}
+
 	// Forward to Foghorn (it manages S3 multipart completion and lifecycle state)
 	foghornReq := &pb.CompleteVodUploadRequest{
-		TenantId: tenantID,
-		UploadId: req.UploadId,
-		Parts:    req.Parts,
+		TenantId:      tenantID,
+		UploadId:      req.UploadId,
+		Parts:         req.Parts,
+		ProcessesJson: processesJSON,
 	}
 
 	resp, trailers, err := foghornClient.CompleteVodUpload(ctx, foghornReq)

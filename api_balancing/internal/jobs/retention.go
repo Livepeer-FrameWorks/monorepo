@@ -114,7 +114,7 @@ func (j *RetentionJob) scan() {
 			-- Fallback to created_at + default retention for legacy artifacts
 			(retention_until IS NULL AND created_at < NOW() - make_interval(days => $1))
 		  )
-		RETURNING artifact_hash, artifact_type, internal_name, tenant_id, user_id, size_bytes,
+		RETURNING artifact_hash, artifact_type, stream_internal_name, tenant_id, user_id, size_bytes,
 		          retention_until, started_at, ended_at, manifest_path
 	`, j.retentionDays)
 
@@ -234,8 +234,8 @@ func (j *RetentionJob) emitClipDeleted(
 			if resp.UserId != "" {
 				userIDStr = resp.UserId
 			}
-			if resp.InternalName != "" {
-				internalNameStr = resp.InternalName
+			if resp.StreamInternalName != "" {
+				internalNameStr = resp.StreamInternalName
 			}
 			if resp.StreamId != "" {
 				streamID = resp.StreamId
@@ -268,7 +268,7 @@ func (j *RetentionJob) emitClipDeleted(
 		clipData.UserId = &userIDStr
 	}
 	if internalNameStr != "" {
-		clipData.InternalName = &internalNameStr
+		clipData.StreamInternalName = &internalNameStr
 	}
 	if streamID != "" {
 		clipData.StreamId = &streamID
@@ -332,8 +332,8 @@ func (j *RetentionJob) emitDVRDeleted(
 			if resp.UserId != "" {
 				userIDStr = resp.UserId
 			}
-			if resp.InternalName != "" {
-				internalNameStr = resp.InternalName
+			if resp.StreamInternalName != "" {
+				internalNameStr = resp.StreamInternalName
 			}
 			if resp.StreamId != "" {
 				streamID = resp.StreamId
@@ -352,7 +352,7 @@ func (j *RetentionJob) emitDVRDeleted(
 		dvrData.UserId = &userIDStr
 	}
 	if internalNameStr != "" {
-		dvrData.InternalName = &internalNameStr
+		dvrData.StreamInternalName = &internalNameStr
 	}
 	if streamID != "" {
 		dvrData.StreamId = &streamID

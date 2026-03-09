@@ -958,9 +958,25 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 	// Send completion to Foghorn
 	_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "success", req.LocalPath, sizeBytes, "")
 
-	// TODO: Warm up the stream in MistServer to generate .dtsh file immediately.
-	// This avoids latency when the first viewer connects.
-	// We can do this by starting a push or requesting the stream header.
+	// Generate DTSH immediately so first viewer doesn't hit regen latency.
+	// Boot as vod+ (no processes) via the json endpoint which triggers input → DTSH.
+	mistServerURL := os.Getenv("MISTSERVER_URL")
+	if mistServerURL != "" && !strings.HasSuffix(req.LocalPath, ".dtsh") {
+		if req.InternalName == "" {
+			sm.logger.WithField("asset_hash", req.AssetHash).Warn("Defrost missing internal_name, skipping DTSH generation")
+		} else {
+			vodStreamName := "vod+" + req.InternalName
+			go func() {
+				dtshLog := sm.logger.WithFields(logging.Fields{
+					"asset_hash":  req.AssetHash,
+					"stream_name": vodStreamName,
+				})
+				if err := GenerateDTSH(mistServerURL, vodStreamName, dtshLog); err != nil {
+					dtshLog.WithError(err).Warn("Post-defrost DTSH generation failed")
+				}
+			}()
+		}
+	}
 
 	sm.logger.WithFields(logging.Fields{
 		"asset_hash": req.AssetHash,

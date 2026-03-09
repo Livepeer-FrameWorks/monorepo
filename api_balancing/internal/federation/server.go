@@ -352,10 +352,11 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		"artifact_type":      req.GetArtifactType(),
 	})
 
-	var internalName, artifactType, format, storageLocation, syncStatus string
+	var internalName, streamInternalName, artifactType, format, storageLocation, syncStatus string
 	var sizeBytes sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(internal_name, ''),
+		       COALESCE(stream_internal_name, ''),
 		       artifact_type,
 		       COALESCE(format, ''),
 		       COALESCE(storage_location, ''),
@@ -363,7 +364,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		       size_bytes
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND tenant_id = $2 AND status != 'deleted'
-	`, hash, tenantID).Scan(&internalName, &artifactType, &format, &storageLocation, &syncStatus, &sizeBytes)
+	`, hash, tenantID).Scan(&internalName, &streamInternalName, &artifactType, &format, &storageLocation, &syncStatus, &sizeBytes)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return &pb.PrepareArtifactResponse{Error: "artifact not found"}, nil
@@ -402,7 +403,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 
 	switch artType {
 	case "clip", "vod":
-		s3Key := s.buildArtifactS3Key(artType, tenantID, internalName, hash, format)
+		s3Key := s.buildArtifactS3Key(artType, tenantID, streamInternalName, hash, format)
 		presignedURL, err := s.s3Client.GeneratePresignedGET(s3Key, 15*time.Minute)
 		if err != nil {
 			log.WithError(err).Error("Failed to generate presigned GET for artifact")
@@ -414,15 +415,16 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		}
 		log.WithField("artifact_type", artType).Info("PrepareArtifact: presigned URL generated")
 		return &pb.PrepareArtifactResponse{
-			Url:          presignedURL,
-			SizeBytes:    size,
-			Ready:        true,
-			Format:       format,
-			InternalName: internalName,
+			Url:                presignedURL,
+			SizeBytes:          size,
+			Ready:              true,
+			Format:             format,
+			InternalName:       internalName,
+			StreamInternalName: streamInternalName,
 		}, nil
 
 	case "dvr":
-		dvrPrefix := s.s3Client.BuildDVRS3Key(tenantID, internalName, hash)
+		dvrPrefix := s.s3Client.BuildDVRS3Key(tenantID, streamInternalName, hash)
 		segmentURLs, err := s.s3Client.GeneratePresignedURLsForDVR(dvrPrefix, false, 30*time.Minute)
 		if err != nil {
 			log.WithError(err).Error("Failed to generate presigned DVR segment URLs")
@@ -437,11 +439,12 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		}
 		log.WithField("segment_count", len(segmentURLs)).Info("PrepareArtifact: DVR segment URLs generated")
 		return &pb.PrepareArtifactResponse{
-			SegmentUrls:  segmentURLs,
-			SizeBytes:    size,
-			Ready:        true,
-			Format:       format,
-			InternalName: internalName,
+			SegmentUrls:        segmentURLs,
+			SizeBytes:          size,
+			Ready:              true,
+			Format:             format,
+			InternalName:       internalName,
+			StreamInternalName: streamInternalName,
 		}, nil
 
 	default:
@@ -482,8 +485,8 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	if req.GetInternalName() == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name required")
+	if req.GetStreamInternalName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_internal_name required")
 	}
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -493,14 +496,14 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 	}
 
 	log := s.logger.WithFields(logging.Fields{
-		"internal_name":      req.GetInternalName(),
+		"internal_name":      req.GetStreamInternalName(),
 		"requesting_cluster": req.GetRequestingCluster(),
 		"clip_hash":          req.GetClipHash(),
 	})
 
 	// Verify stream exists locally
 	sm := state.DefaultManager()
-	ss := sm.GetStreamState(req.GetInternalName())
+	ss := sm.GetStreamState(req.GetStreamInternalName())
 	if ss == nil || ss.Status != "live" {
 		return &pb.RemoteClipResponse{Accepted: false, Reason: "stream not live on origin"}, nil
 	}
@@ -510,9 +513,9 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 
 	// Delegate to local clip creation — convert plain fields to optional pointers
 	clipReq := &pb.CreateClipRequest{
-		InternalName: req.GetInternalName(),
-		TenantId:     req.GetTenantId(),
-		Format:       req.GetFormat(),
+		StreamInternalName: req.GetStreamInternalName(),
+		TenantId:           req.GetTenantId(),
+		Format:             req.GetFormat(),
 	}
 	if uid := req.GetUserId(); uid != "" {
 		clipReq.UserId = &uid
@@ -555,8 +558,8 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	if req.GetInternalName() == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name required")
+	if req.GetStreamInternalName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_internal_name required")
 	}
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -566,14 +569,14 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 	}
 
 	log := s.logger.WithFields(logging.Fields{
-		"internal_name":      req.GetInternalName(),
+		"internal_name":      req.GetStreamInternalName(),
 		"requesting_cluster": req.GetRequestingCluster(),
 		"dvr_hash":           req.GetDvrHash(),
 	})
 
 	// Verify stream exists locally
 	sm := state.DefaultManager()
-	ss := sm.GetStreamState(req.GetInternalName())
+	ss := sm.GetStreamState(req.GetStreamInternalName())
 	if ss == nil || ss.Status != "live" {
 		return &pb.RemoteDVRResponse{Accepted: false, Reason: "stream not live on origin"}, nil
 	}
@@ -583,7 +586,7 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 
 	// Delegate to local DVR start
 	dvrReq := &pb.StartDVRRequest{
-		InternalName: req.GetInternalName(),
+		InternalName: req.GetStreamInternalName(),
 		TenantId:     req.GetTenantId(),
 	}
 	if uid := req.GetUserId(); uid != "" {
@@ -881,7 +884,8 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *pb.List
 		       COALESCE(sync_status, ''), COALESCE(s3_url, ''),
 		       COALESCE(size_bytes, 0),
 		       COALESCE(EXTRACT(EPOCH FROM created_at)::bigint, 0),
-		       COALESCE(EXTRACT(EPOCH FROM frozen_at)::bigint, 0)
+		       COALESCE(EXTRACT(EPOCH FROM frozen_at)::bigint, 0),
+		       COALESCE(stream_internal_name, '')
 		FROM foghorn.artifacts
 		WHERE tenant_id = $1 AND status != 'deleted'
 		ORDER BY created_at DESC
@@ -896,7 +900,7 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *pb.List
 		var a pb.ArtifactMetadata
 		if err := rows.Scan(&a.ArtifactHash, &a.ArtifactType, &a.InternalName,
 			&a.Format, &a.StorageLocation, &a.SyncStatus, &a.S3Url,
-			&a.SizeBytes, &a.CreatedAt, &a.FrozenAt); err != nil {
+			&a.SizeBytes, &a.CreatedAt, &a.FrozenAt, &a.StreamInternalName); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to scan artifact: %v", err)
 		}
 		artifacts = append(artifacts, &a)
@@ -977,11 +981,11 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *pb.
 
 func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, sourceClusterID string, a *pb.ArtifactMetadata) (bool, error) {
 	result, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id)
-		VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10)
-		ON CONFLICT (artifact_hash, artifact_type, tenant_id) DO NOTHING
+		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id)
+		VALUES ($1, $2, $3, $4, $11, $5, 'active', $6, $7, $8, $9, $10)
+		ON CONFLICT (artifact_hash) DO NOTHING
 	`, a.ArtifactHash, a.ArtifactType, tenantID, a.InternalName, a.Format,
-		a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID)
+		a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID, a.StreamInternalName)
 	if err != nil {
 		return false, err
 	}
@@ -995,6 +999,10 @@ func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, s
 		SET internal_name = CASE
 				WHEN COALESCE(internal_name, '') = '' AND $4 <> '' THEN $4
 				ELSE internal_name
+			END,
+			stream_internal_name = CASE
+				WHEN COALESCE(stream_internal_name, '') = '' AND $11 <> '' THEN $11
+				ELSE stream_internal_name
 			END,
 			format = CASE
 				WHEN COALESCE(format, '') = '' AND $5 <> '' THEN $5
@@ -1022,7 +1030,7 @@ func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, s
 			END
 		WHERE artifact_hash = $1 AND artifact_type = $2 AND tenant_id = $3
 	`, a.ArtifactHash, a.ArtifactType, tenantID, a.InternalName, a.Format,
-		a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID)
+		a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID, a.StreamInternalName)
 	if err != nil {
 		return false, err
 	}

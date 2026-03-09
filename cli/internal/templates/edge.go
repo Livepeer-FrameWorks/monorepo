@@ -27,6 +27,7 @@ type EdgeVars struct {
 	MistUpstream     string // Docker: "mistserver:8080", Native: "localhost:8080"
 	CaddyAdminAddr   string // Docker: "unix//run/caddy/admin.sock", Native: "localhost:2019"
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
+	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
 }
 
 // SetModeDefaults fills Mode-dependent fields if not explicitly set.
@@ -94,6 +95,7 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{CADDY_ADMIN_ADDR}}", vars.CaddyAdminAddr)
 		content = strings.ReplaceAll(content, "{{SITE_ADDRESS}}", vars.SiteAddress)
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
+		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
 		// TLS: use explicit cert paths if provided, otherwise auto-ACME (Caddy default).
 		// ConfigSeed will push wildcard certs to /etc/frameworks/certs/ at runtime;
 		// Caddy watches the files and hot-reloads when they appear.

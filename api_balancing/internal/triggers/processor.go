@@ -39,6 +39,7 @@ type streamContext struct {
 	OfficialClusterID string                  // billing-tier cluster for coverage routing (Phase 2)
 	OriginClusterID   string                  // cluster where stream was originally ingested (for federation attribution)
 	ClusterPeers      []*pb.TenantClusterPeer // tenant's full cluster context for demand-driven peering
+	ProcessesJSON     string                  // MistServer process config for STREAM_PROCESS trigger
 }
 
 // PeerNotifier is the single federation interface for the trigger processor.
@@ -88,6 +89,10 @@ type Processor struct {
 	nodeClusterCache  *cache.Cache // Cache node_id (logical) -> cluster_id
 	clusterOwnerCache *cache.Cache // Cache cluster_id -> owner_tenant_id
 	peerNotifier      PeerNotifier // demand-driven peer discovery (nil when federation disabled)
+
+	gatewayMu       sync.RWMutex
+	gatewayURL      string    // cached Livepeer gateway URL for this cluster ("" = no gateway)
+	gatewayResolved time.Time // zero = never resolved
 }
 
 // NewProcessor creates a new MistServer trigger processor
@@ -135,6 +140,67 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 	}, cache.MetricsHooks{})
 
 	return p
+}
+
+// CacheProcessConfig stores process config for STREAM_PROCESS trigger lookup.
+// Called by the ProcessingDispatcher before dispatching a job to a node.
+func (p *Processor) CacheProcessConfig(internalName, processesJSON string) {
+	if p.streamCache != nil && processesJSON != "" {
+		p.streamCache.Set("process:"+internalName, processesJSON, 30*time.Minute)
+	}
+}
+
+// getLivepeerGatewayURL returns the cached Livepeer gateway URL for this cluster.
+// Refreshes from Quartermaster every 5 minutes. Returns "" if no gateway is registered
+// (self-hosted without Livepeer). Negative results are also cached.
+func (p *Processor) getLivepeerGatewayURL() string {
+	p.gatewayMu.RLock()
+	if !p.gatewayResolved.IsZero() && time.Since(p.gatewayResolved) < 5*time.Minute {
+		url := p.gatewayURL
+		p.gatewayMu.RUnlock()
+		return url
+	}
+	p.gatewayMu.RUnlock()
+
+	if p.quartermasterClient == nil || p.clusterID == "" {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := p.quartermasterClient.DiscoverServices(ctx, "livepeer-gateway", p.clusterID, nil)
+
+	p.gatewayMu.Lock()
+	defer p.gatewayMu.Unlock()
+	p.gatewayResolved = time.Now()
+
+	if err != nil || len(resp.GetInstances()) == 0 {
+		p.gatewayURL = ""
+		return ""
+	}
+
+	inst := resp.GetInstances()[0]
+	scheme := inst.GetProtocol()
+	if scheme == "" {
+		scheme = "https"
+	}
+	p.gatewayURL = fmt.Sprintf("%s://%s:%d", scheme, inst.GetHost(), inst.GetPort())
+	return p.gatewayURL
+}
+
+// SubstituteGatewayURL replaces {{gateway_url}} in process config JSON with the
+// local cluster's Livepeer gateway URL. If no gateway is available, Livepeer
+// process entries are stripped entirely (audio transcode + thumbnails still work).
+func (p *Processor) SubstituteGatewayURL(processesJSON string) string {
+	if !strings.Contains(processesJSON, "{{gateway_url}}") {
+		return processesJSON
+	}
+	url := p.getLivepeerGatewayURL()
+	if url != "" {
+		return strings.ReplaceAll(processesJSON, "{{gateway_url}}", url)
+	}
+	return mist.StripLivepeerProcesses(processesJSON)
 }
 
 func streamCacheSWR() time.Duration {
@@ -506,6 +572,8 @@ func (p *Processor) ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, 
 		return p.handlePlayRewrite(trigger)
 	case *pb.MistTrigger_StreamSource:
 		return p.handleStreamSource(trigger)
+	case *pb.MistTrigger_StreamProcess:
+		return p.handleStreamProcess(trigger)
 	case *pb.MistTrigger_PushOutStart:
 		return p.handlePushOutStart(trigger)
 	case *pb.MistTrigger_PushEnd:
@@ -631,8 +699,8 @@ func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, boo
 	if dld.TenantId != nil && *dld.TenantId != "" {
 		trigger.TenantId = dld.TenantId
 	}
-	if dld.InternalName != nil && *dld.InternalName != "" {
-		normalizedName := mist.ExtractInternalName(*dld.InternalName)
+	if dld.StreamInternalName != nil && *dld.StreamInternalName != "" {
+		normalizedName := mist.ExtractInternalName(*dld.StreamInternalName)
 		p.applyStreamContext(trigger, normalizedName)
 	} else if dld.StreamId != nil && *dld.StreamId != "" {
 		// Fallback: resolve tenant/user context from stream_id (UUID)
@@ -732,6 +800,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			OfficialClusterID: streamValidation.GetOfficialClusterId(),
 			OriginClusterID:   streamValidation.GetOriginClusterId(),
 			ClusterPeers:      streamValidation.GetClusterPeers(),
+			ProcessesJSON:     streamValidation.GetProcessesJson(),
 		}
 		if p.peerNotifier != nil && len(info.ClusterPeers) > 0 {
 			p.peerNotifier.NotifyPeers(info.ClusterPeers, streamValidation.TenantId)
@@ -750,6 +819,12 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		if streamValidation.TenantId != "" {
 			cacheKey := streamValidation.TenantId + ":" + streamValidation.InternalName
 			p.streamCache.Set(cacheKey, info, cacheTTL)
+		}
+		// Secondary index for STREAM_PROCESS lookup (keyed by internal name only).
+		// Substitute {{gateway_url}} with this cluster's Livepeer gateway before caching.
+		if info.ProcessesJSON != "" {
+			info.ProcessesJSON = p.SubstituteGatewayURL(info.ProcessesJSON)
+			p.streamCache.Set("process:"+streamValidation.InternalName, info.ProcessesJSON, cacheTTL)
 		}
 		p.streamCacheMetaMu.Lock()
 		p.streamCacheLastAt = info.UpdatedAt
@@ -1051,9 +1126,9 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		return "", true, nil
 	}
 
-	// process_ streams: resolve to presigned S3 URL for processing input
-	if strings.HasPrefix(streamName, "process_") {
-		artifactHash := strings.TrimPrefix(streamName, "process_")
+	// processing+ streams: resolve to presigned S3 URL for processing input
+	if strings.HasPrefix(streamName, "processing+") {
+		artifactHash := strings.TrimPrefix(streamName, "processing+")
 		return p.resolveProcessSource(artifactHash, trigger.GetNodeId())
 	}
 
@@ -1074,8 +1149,8 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	}
 	if artifactHash == "" {
 		p.logger.WithFields(logging.Fields{
-			"artifact_internal_name": artifactInternal,
-			"stream_name":            streamName,
+			"internal_name": artifactInternal,
+			"stream_name":   streamName,
 		}).Warn("Artifact internal name not found; cannot resolve stream source")
 		return "", true, nil
 	}
@@ -1213,6 +1288,75 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 	return presigned, false, nil
 }
 
+// handleStreamProcess returns cached MistServer process config for STREAM_PROCESS trigger.
+// For live+: populated during PUSH_REWRITE from ValidateStreamKeyResponse.
+// For processing+: populated by ProcessingDispatcher before job dispatch.
+// For vod+: checks artifact_type — DVR artifacts without thumbnails get MistProcThumbs.
+func (p *Processor) handleStreamProcess(trigger *pb.MistTrigger) (string, bool, error) {
+	streamName := trigger.GetStreamProcess().GetStreamName()
+	internalName := mist.ExtractInternalName(streamName)
+
+	p.logger.WithFields(logging.Fields{
+		"stream_name":   streamName,
+		"internal_name": internalName,
+		"node_id":       trigger.GetNodeId(),
+	}).Debug("Processing STREAM_PROCESS trigger")
+
+	if p.streamCache == nil {
+		return "", false, nil
+	}
+
+	// Check cache first (handles live+, processing+, and previously resolved vod+ configs)
+	val, ok := p.streamCache.Peek("process:" + internalName)
+	if ok {
+		processesJSON, _ := val.(string)
+		return processesJSON, false, nil
+	}
+
+	// For vod+ streams: check if artifact is a DVR that needs thumbnail generation
+	if strings.HasPrefix(streamName, "vod+") {
+		return p.resolveVodProcessConfig(internalName)
+	}
+
+	p.logger.WithField("stream_name", streamName).Debug("STREAM_PROCESS: no cached config, using defaults")
+	return "", false, nil
+}
+
+// resolveVodProcessConfig checks if a vod+ artifact is a DVR without thumbnails.
+// DVR artifacts get MistProcThumbs to generate seek-bar sprites on first playback.
+// Processed VODs already have embedded JPEG tracks — no extra processes needed.
+// Note: artifactInternalName is the routing identifier (from vod+ stream name),
+// NOT artifact_hash (32-char hex). They are different columns in foghorn.artifacts.
+func (p *Processor) resolveVodProcessConfig(artifactInternalName string) (string, bool, error) {
+	db := control.GetDB()
+	if db == nil {
+		return "", false, nil
+	}
+
+	var artifactType string
+	var hasThumbnails bool
+	err := db.QueryRowContext(context.Background(),
+		`SELECT artifact_type, COALESCE(has_thumbnails, false) FROM foghorn.artifacts WHERE internal_name = $1`,
+		artifactInternalName,
+	).Scan(&artifactType, &hasThumbnails)
+	if err != nil {
+		return "", false, nil //nolint:nilerr // artifact not found = no extra processes
+	}
+
+	if artifactType != "dvr" || hasThumbnails {
+		p.streamCache.Set("process:"+artifactInternalName, "", 30*time.Minute)
+		return "", false, nil
+	}
+
+	thumbsConfig := `[{"process":"Thumbs"}]`
+	p.streamCache.Set("process:"+artifactInternalName, thumbsConfig, 30*time.Minute)
+	p.logger.WithFields(logging.Fields{
+		"internal_name": artifactInternalName,
+		"artifact_type": artifactType,
+	}).Info("STREAM_PROCESS: adding MistProcThumbs for DVR artifact")
+	return thumbsConfig, false, nil
+}
+
 // handlePushEnd processes PUSH_END trigger (non-blocking)
 func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error) {
 	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_PushEnd)
@@ -1221,6 +1365,11 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 	}
 	pushEnd := payload.PushEnd
 	internalName := mist.ExtractInternalName(pushEnd.GetStreamName())
+
+	// processing+ push completions are handled sidecar-side (signals job handler)
+	if strings.HasPrefix(pushEnd.GetStreamName(), "processing+") {
+		return "", false, nil
+	}
 
 	p.applyStreamContext(trigger, internalName)
 	if streamID := trigger.GetStreamId(); streamID != "" {

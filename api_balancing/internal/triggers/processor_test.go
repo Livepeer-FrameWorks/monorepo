@@ -649,8 +649,8 @@ func TestHandleDVRLifecycleData_NormalizesInternalName(t *testing.T) {
 		StreamId: &streamID,
 		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
 			DvrLifecycleData: &pb.DVRLifecycleData{
-				TenantId:     &tenantID,
-				InternalName: &wildcardName,
+				TenantId:           &tenantID,
+				StreamInternalName: &wildcardName,
 			},
 		},
 	}

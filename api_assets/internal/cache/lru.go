@@ -40,7 +40,10 @@ func (c *LRU) Get(key string) ([]byte, string, bool) {
 	if !ok {
 		return nil, "", false
 	}
-	e := elem.Value.(*entry)
+	e, ok := elem.Value.(*entry)
+	if !ok {
+		return nil, "", false
+	}
 	if time.Since(e.fetchedAt) > c.ttl {
 		c.removeElement(elem)
 		return nil, "", false
@@ -73,7 +76,11 @@ func (c *LRU) Put(key string, data []byte, contentType string) {
 }
 
 func (c *LRU) removeElement(elem *list.Element) {
-	e := elem.Value.(*entry)
+	e, ok := elem.Value.(*entry)
+	if !ok {
+		c.order.Remove(elem)
+		return
+	}
 	c.order.Remove(elem)
 	delete(c.items, e.key)
 	c.curBytes -= int64(len(e.data))

@@ -1,9 +1,14 @@
 package jobs
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,13 +29,27 @@ type ProcessingDispatcherConfig struct {
 }
 
 type ProcessingDispatcher struct {
-	db         *sql.DB
-	logger     logging.Logger
-	interval   time.Duration
-	maxRetries int
-	jobTTL     time.Duration
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
+	db              *sql.DB
+	logger          logging.Logger
+	interval        time.Duration
+	maxRetries      int
+	jobTTL          time.Duration
+	stopCh          chan struct{}
+	wg              sync.WaitGroup
+	configCacher    ProcessConfigCacher
+	gatewayResolver GatewayResolver
+}
+
+// ProcessConfigCacher caches process config for STREAM_PROCESS trigger lookup.
+// Implemented by triggers.Processor.
+type ProcessConfigCacher interface {
+	CacheProcessConfig(internalName, processesJSON string)
+}
+
+// GatewayResolver substitutes {{gateway_url}} placeholders in process config JSON.
+// Implemented by triggers.Processor.
+type GatewayResolver interface {
+	SubstituteGatewayURL(processesJSON string) string
 }
 
 type processingJob struct {
@@ -43,6 +62,8 @@ type processingJob struct {
 	Status         string
 	RetryCount     int
 	S3URL          sql.NullString
+	ProcessesJSON  sql.NullString
+	InternalName   sql.NullString
 }
 
 func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatcher {
@@ -66,6 +87,14 @@ func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatch
 		jobTTL:     jobTTL,
 		stopCh:     make(chan struct{}),
 	}
+}
+
+func (d *ProcessingDispatcher) SetProcessConfigCacher(c ProcessConfigCacher) {
+	d.configCacher = c
+}
+
+func (d *ProcessingDispatcher) SetGatewayResolver(r GatewayResolver) {
+	d.gatewayResolver = r
 }
 
 func (d *ProcessingDispatcher) Start() {
@@ -102,7 +131,8 @@ func (d *ProcessingDispatcher) dispatch() {
 
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT j.job_id, j.tenant_id, j.artifact_hash, j.job_type, j.input_codec,
-		       j.output_profiles, j.status, j.retry_count, a.s3_url
+		       j.output_profiles, j.status, j.retry_count, a.s3_url, j.processes_json,
+		       a.internal_name
 		FROM foghorn.processing_jobs j
 		LEFT JOIN foghorn.artifacts a ON j.artifact_hash = a.artifact_hash
 		WHERE j.status = 'queued'
@@ -120,7 +150,7 @@ func (d *ProcessingDispatcher) dispatch() {
 		if err := rows.Scan(
 			&job.JobID, &job.TenantID, &job.ArtifactHash, &job.JobType,
 			&job.InputCodec, &job.OutputProfiles, &job.Status, &job.RetryCount,
-			&job.S3URL,
+			&job.S3URL, &job.ProcessesJSON, &job.InternalName,
 		); err != nil {
 			d.logger.WithError(err).Warn("Failed to scan processing job")
 			continue
@@ -160,9 +190,23 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		params["input_codec"] = job.InputCodec.String
 	}
 
+	// For HLS sources, generate presigned URLs for each segment
+	if job.S3URL.Valid && strings.HasSuffix(strings.ToLower(job.S3URL.String), ".m3u8") && sourceURL != "" {
+		if segURLs, err := d.resolveHLSSegmentURLs(ctx, job.S3URL.String, sourceURL); err != nil {
+			d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to resolve HLS segment URLs")
+		} else if segURLs != "" {
+			params["segment_urls"] = segURLs
+		}
+	}
+
 	artifactHash := ""
 	if job.ArtifactHash.Valid {
 		artifactHash = job.ArtifactHash.String
+	}
+
+	internalName := ""
+	if job.InternalName.Valid {
+		internalName = job.InternalName.String
 	}
 
 	req := &pb.ProcessingJobRequest{
@@ -172,6 +216,19 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		SourceUrl:    sourceURL,
 		JobType:      job.JobType,
 		Params:       params,
+		InternalName: internalName,
+	}
+	if job.ProcessesJSON.Valid {
+		resolved := job.ProcessesJSON.String
+		if d.gatewayResolver != nil {
+			resolved = d.gatewayResolver.SubstituteGatewayURL(resolved)
+		}
+		req.ProcessesJson = resolved
+
+		// Cache process config for STREAM_PROCESS trigger before dispatching
+		if d.configCacher != nil && artifactHash != "" && resolved != "" {
+			d.configCacher.CacheProcessConfig(artifactHash, resolved)
+		}
 	}
 
 	if err := control.SendProcessingJob(nodeID, req); err != nil {
@@ -202,6 +259,65 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		"node_id":  nodeID,
 		"reason":   reason,
 	}).Info("Dispatched processing job")
+}
+
+// resolveHLSSegmentURLs fetches an HLS manifest, parses segment filenames,
+// and generates presigned GET URLs for each segment. Returns newline-separated
+// "filename=presignedURL" pairs for Helmsman's rewriteHLSManifest.
+func (d *ProcessingDispatcher) resolveHLSSegmentURLs(ctx context.Context, s3URL, manifestPresignedURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestPresignedURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch manifest: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("manifest returned %d", resp.StatusCode)
+	}
+
+	// S3 key base directory (e.g. "tenant/hash" from "s3://bucket/tenant/hash/index.m3u8")
+	s3Key := s3URL
+	if strings.HasPrefix(s3URL, "s3://") {
+		parts := strings.SplitN(s3URL[5:], "/", 2)
+		if len(parts) == 2 {
+			s3Key = parts[1]
+		}
+	}
+	s3Dir := path.Dir(s3Key)
+	bucket := ""
+	if strings.HasPrefix(s3URL, "s3://") {
+		parts := strings.SplitN(s3URL[5:], "/", 2)
+		if len(parts) >= 1 {
+			bucket = parts[0]
+		}
+	}
+
+	var pairs []string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		segS3URL := fmt.Sprintf("s3://%s/%s/%s", bucket, s3Dir, line)
+		presigned, err := control.GeneratePresignedGETForArtifact(ctx, segS3URL)
+		if err != nil {
+			d.logger.WithFields(logging.Fields{
+				"segment": line,
+				"error":   err,
+			}).Warn("Failed to presign HLS segment")
+			continue
+		}
+		pairs = append(pairs, line+"="+presigned)
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("reading manifest: %w", err)
+	}
+
+	return strings.Join(pairs, "\n"), nil
 }
 
 func (d *ProcessingDispatcher) recoverStale() {
@@ -250,15 +366,19 @@ func (d *ProcessingDispatcher) recoverStale() {
 }
 
 // InsertProcessingJob creates a new processing job. Exported for use by vod_pipeline.
-func InsertProcessingJob(ctx context.Context, db *sql.DB, tenantID, artifactHash, jobType string, parentJobID *string) (string, error) {
+func InsertProcessingJob(ctx context.Context, db *sql.DB, tenantID, artifactHash, jobType string, parentJobID *string, processesJSON string) (string, error) {
 	jobID := uuid.New().String()
 	var parentID *string
 	if parentJobID != nil && *parentJobID != "" {
 		parentID = parentJobID
 	}
+	var pJSON *string
+	if processesJSON != "" {
+		pJSON = &processesJSON
+	}
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id)
-		VALUES ($1, $2, $3, $4, 'queued', $5)
-	`, jobID, tenantID, artifactHash, jobType, parentID)
+		INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json)
+		VALUES ($1, $2, $3, $4, 'queued', $5, $6)
+	`, jobID, tenantID, artifactHash, jobType, parentID, pJSON)
 	return jobID, err
 }

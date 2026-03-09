@@ -287,7 +287,7 @@ func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalNa
 			cacheKey := tenantID + ":commodore:artifact:internal:" + internalName
 			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
 				resp, err := c.internal.ResolveArtifactInternalName(ctx, &pb.ResolveArtifactInternalNameRequest{
-					ArtifactInternalName: internalName,
+					InternalName: internalName,
 				})
 				if err != nil || !resp.Found {
 					return nil, false, err
@@ -300,7 +300,7 @@ func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalNa
 	}
 
 	return c.internal.ResolveArtifactInternalName(ctx, &pb.ResolveArtifactInternalNameRequest{
-		ArtifactInternalName: internalName,
+		InternalName: internalName,
 	})
 }
 

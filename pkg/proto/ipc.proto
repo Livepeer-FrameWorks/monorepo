@@ -368,6 +368,7 @@ message MistTrigger {
     APIRequestBatch api_request_batch = 34;
     MessageLifecycleData message_lifecycle_data = 35;
     FederationEventData federation_event_data = 36;
+    StreamProcessTrigger stream_process = 38;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier
@@ -568,7 +569,7 @@ message DefrostRequest {
   string asset_type = 2;         // "clip" or "dvr"
   string asset_hash = 3;         // clip_hash or dvr_hash
   string tenant_id = 4;          // Tenant owning the asset
-  string internal_name = 5;      // Stream internal name
+  string stream_internal_name = 5; // Source stream's MistServer routing name (for DVR path reconstruction)
   string presigned_get_url = 6;  // Presigned GET URL for download (time-limited, no creds needed)
   string local_path = 7;         // Target local file/directory path
   int32 timeout_seconds = 8;     // Max wait time for blocking defrost (0 = default 30s)
@@ -576,6 +577,7 @@ message DefrostRequest {
   int64 url_expiry_seconds = 10; // When the presigned URL expires
   // For DVR streaming defrost: map of segment filename -> presigned URL
   map<string, string> segment_urls = 11;
+  string internal_name = 12;          // Artifact routing name (for vod+ stream name construction)
 }
 
 // DefrostProgress reports download progress for defrosting operations
@@ -744,6 +746,10 @@ message ViewerResolveTrigger {
 message StreamSourceTrigger {
   string stream_name = 1;
   optional string stream_id = 2; // Public stream ID (UUID) if known
+}
+
+message StreamProcessTrigger {
+  string stream_name = 1;
 }
 
 message PushOutStartTrigger {
@@ -1120,7 +1126,7 @@ message ClipLifecycleData {
   optional string node_id = 11;
   // Enrichment fields added by Foghorn
   optional string tenant_id = 12;
-  optional string internal_name = 13;
+  optional string stream_internal_name = 13; // Source stream's MistServer routing name (for analytics attribution)
   // Clip time boundaries (enriched by Foghorn from original ClipPullRequest)
   optional int64 start_unix = 14;
   optional int64 stop_unix = 15;
@@ -1164,7 +1170,7 @@ message DVRLifecycleData {
   optional string node_id = 9;
   // Enrichment fields added by Foghorn
   optional string tenant_id = 10;
-  optional string internal_name = 11;
+  optional string stream_internal_name = 11; // Source stream's MistServer routing name (for analytics attribution)
   optional int64 expires_at = 12;
   optional string stream_id = 13;      // Public stream ID (UUID)
   optional string user_id = 14;        // User who initiated the DVR (if known)
@@ -1538,6 +1544,8 @@ message ProcessingJobRequest {
   string job_type = 5;            // "probe", "process"
   string output_path = 6;         // Local disk path for output
   map<string, string> params = 7; // realtime_speed, process config JSON, segment_urls (for HLS)
+  string processes_json = 8;      // Pre-computed MistServer process config from Commodore
+  string internal_name = 9;       // Artifact routing name (for vod+ stream name construction)
 }
 
 // Processing job result (Helmsman → Foghorn)
@@ -1546,6 +1554,8 @@ message ProcessingJobResult {
   string status = 2;              // "completed", "failed"
   string error = 3;
   map<string, string> outputs = 4; // Metadata (codec, resolution, etc.) or completion info
+  string output_path = 5;          // Local file path of processed output (for artifact registration)
+  int64 output_size_bytes = 6;     // Size of processed output file
 }
 
 // ==================== API Request Tracking ====================

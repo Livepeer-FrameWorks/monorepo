@@ -140,27 +140,27 @@ func (VodStatus) EnumDescriptor() ([]byte, []int) {
 // CreateClipRequest - request to create a clip from a stream
 // Source: pkg/api/foghorn/types.go:CreateClipRequest
 type CreateClipRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	TenantId             string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	InternalName         string                 `protobuf:"bytes,2,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	Format               string                 `protobuf:"bytes,3,opt,name=format,proto3" json:"format,omitempty"`
-	Title                string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
-	Description          string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
-	StartUnix            *int64                 `protobuf:"varint,6,opt,name=start_unix,json=startUnix,proto3,oneof" json:"start_unix,omitempty"`                                    // Unix timestamp (seconds), negative for relative-to-now
-	StopUnix             *int64                 `protobuf:"varint,7,opt,name=stop_unix,json=stopUnix,proto3,oneof" json:"stop_unix,omitempty"`                                       // Unix timestamp (seconds)
-	StartMs              *int64                 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`                                          // Media time (seconds from stream start) - legacy name, actually seconds
-	StopMs               *int64                 `protobuf:"varint,9,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`                                             // Media time (seconds from stream start) - legacy name, actually seconds
-	DurationSec          *int64                 `protobuf:"varint,10,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`                             // Duration (seconds)
-	Mode                 ClipMode               `protobuf:"varint,11,opt,name=mode,proto3,enum=shared.ClipMode" json:"mode,omitempty"`                                               // How to interpret the time fields
-	ExpiresAt            *int64                 `protobuf:"varint,12,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`                                   // Unix timestamp (seconds) for auto-deletion
-	ClipHash             *string                `protobuf:"bytes,13,opt,name=clip_hash,json=clipHash,proto3,oneof" json:"clip_hash,omitempty"`                                       // Pre-generated hash from Commodore (if provided, Foghorn uses it)
-	UserId               *string                `protobuf:"bytes,14,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`                                             // User who created the clip (for Decklog events)
-	StreamId             *string                `protobuf:"bytes,15,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`                                       // Public stream ID (UUID)
-	PlaybackId           *string                `protobuf:"bytes,16,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`                                 // Pre-generated playback ID (Commodore)
-	ArtifactInternalName *string                `protobuf:"bytes,17,opt,name=artifact_internal_name,json=artifactInternalName,proto3,oneof" json:"artifact_internal_name,omitempty"` // Pre-generated artifact routing name (Commodore)
-	ClusterId            string                 `protobuf:"bytes,18,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                                          // Cluster this stream belongs to (set by caller)
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TenantId           string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamInternalName string                 `protobuf:"bytes,2,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"` // Source stream's MistServer routing name
+	Format             string                 `protobuf:"bytes,3,opt,name=format,proto3" json:"format,omitempty"`
+	Title              string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
+	Description        string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	StartUnix          *int64                 `protobuf:"varint,6,opt,name=start_unix,json=startUnix,proto3,oneof" json:"start_unix,omitempty"`          // Unix timestamp (seconds), negative for relative-to-now
+	StopUnix           *int64                 `protobuf:"varint,7,opt,name=stop_unix,json=stopUnix,proto3,oneof" json:"stop_unix,omitempty"`             // Unix timestamp (seconds)
+	StartMs            *int64                 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`                // Media time (seconds from stream start) - legacy name, actually seconds
+	StopMs             *int64                 `protobuf:"varint,9,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`                   // Media time (seconds from stream start) - legacy name, actually seconds
+	DurationSec        *int64                 `protobuf:"varint,10,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`   // Duration (seconds)
+	Mode               ClipMode               `protobuf:"varint,11,opt,name=mode,proto3,enum=shared.ClipMode" json:"mode,omitempty"`                     // How to interpret the time fields
+	ExpiresAt          *int64                 `protobuf:"varint,12,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`         // Unix timestamp (seconds) for auto-deletion
+	ClipHash           *string                `protobuf:"bytes,13,opt,name=clip_hash,json=clipHash,proto3,oneof" json:"clip_hash,omitempty"`             // Pre-generated hash from Commodore (if provided, Foghorn uses it)
+	UserId             *string                `protobuf:"bytes,14,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`                   // User who created the clip (for Decklog events)
+	StreamId           *string                `protobuf:"bytes,15,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`             // Public stream ID (UUID)
+	PlaybackId         *string                `protobuf:"bytes,16,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`       // Pre-generated playback ID (Commodore)
+	InternalName       *string                `protobuf:"bytes,17,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"` // Pre-generated artifact routing name (Commodore)
+	ClusterId          string                 `protobuf:"bytes,18,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                // Cluster this stream belongs to (set by caller)
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *CreateClipRequest) Reset() {
@@ -200,9 +200,9 @@ func (x *CreateClipRequest) GetTenantId() string {
 	return ""
 }
 
-func (x *CreateClipRequest) GetInternalName() string {
+func (x *CreateClipRequest) GetStreamInternalName() string {
 	if x != nil {
-		return x.InternalName
+		return x.StreamInternalName
 	}
 	return ""
 }
@@ -305,9 +305,9 @@ func (x *CreateClipRequest) GetPlaybackId() string {
 	return ""
 }
 
-func (x *CreateClipRequest) GetArtifactInternalName() string {
-	if x != nil && x.ArtifactInternalName != nil {
-		return *x.ArtifactInternalName
+func (x *CreateClipRequest) GetInternalName() string {
+	if x != nil && x.InternalName != nil {
+		return *x.InternalName
 	}
 	return ""
 }
@@ -2078,25 +2078,26 @@ type PlaybackMetadata struct {
 	Viewers     int32                  `protobuf:"varint,3,opt,name=viewers,proto3" json:"viewers,omitempty"`
 	BufferState string                 `protobuf:"bytes,4,opt,name=buffer_state,json=bufferState,proto3" json:"buffer_state,omitempty"`
 	// REMOVED: health_score = 5 (derived metric)
-	Tracks             []*PlaybackTrack       `protobuf:"bytes,6,rep,name=tracks,proto3" json:"tracks,omitempty"`
-	ProtocolHints      []string               `protobuf:"bytes,7,rep,name=protocol_hints,json=protocolHints,proto3" json:"protocol_hints,omitempty"`
-	Instances          []*PlaybackInstance    `protobuf:"bytes,8,rep,name=instances,proto3" json:"instances,omitempty"`
-	DvrStatus          string                 `protobuf:"bytes,9,opt,name=dvr_status,json=dvrStatus,proto3" json:"dvr_status,omitempty"`
-	DvrSourceUri       string                 `protobuf:"bytes,10,opt,name=dvr_source_uri,json=dvrSourceUri,proto3" json:"dvr_source_uri,omitempty"`
-	TenantId           string                 `protobuf:"bytes,11,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	StreamId           *string                `protobuf:"bytes,21,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // Public stream ID (UUID)
-	ContentId          string                 `protobuf:"bytes,12,opt,name=content_id,json=contentId,proto3" json:"content_id,omitempty"`
-	ContentType        string                 `protobuf:"bytes,13,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	Title              *string                `protobuf:"bytes,14,opt,name=title,proto3,oneof" json:"title,omitempty"`
-	Description        *string                `protobuf:"bytes,15,opt,name=description,proto3,oneof" json:"description,omitempty"`
-	DurationSeconds    *int32                 `protobuf:"varint,16,opt,name=duration_seconds,json=durationSeconds,proto3,oneof" json:"duration_seconds,omitempty"`
-	RecordingSizeBytes *int64                 `protobuf:"varint,17,opt,name=recording_size_bytes,json=recordingSizeBytes,proto3,oneof" json:"recording_size_bytes,omitempty"`
-	ClipSource         *string                `protobuf:"bytes,18,opt,name=clip_source,json=clipSource,proto3,oneof" json:"clip_source,omitempty"`
-	CreatedAt          *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=created_at,json=createdAt,proto3,oneof" json:"created_at,omitempty"`
-	Format             *string                `protobuf:"bytes,20,opt,name=format,proto3,oneof" json:"format,omitempty"`                                 // Native container format: mp4, m3u8, webm, etc.
-	ThumbnailUrl       *string                `protobuf:"bytes,22,opt,name=thumbnail_url,json=thumbnailUrl,proto3,oneof" json:"thumbnail_url,omitempty"` // Chandler asset URL for poster image
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	Tracks                []*PlaybackTrack       `protobuf:"bytes,6,rep,name=tracks,proto3" json:"tracks,omitempty"`
+	ProtocolHints         []string               `protobuf:"bytes,7,rep,name=protocol_hints,json=protocolHints,proto3" json:"protocol_hints,omitempty"`
+	Instances             []*PlaybackInstance    `protobuf:"bytes,8,rep,name=instances,proto3" json:"instances,omitempty"`
+	DvrStatus             string                 `protobuf:"bytes,9,opt,name=dvr_status,json=dvrStatus,proto3" json:"dvr_status,omitempty"`
+	DvrSourceUri          string                 `protobuf:"bytes,10,opt,name=dvr_source_uri,json=dvrSourceUri,proto3" json:"dvr_source_uri,omitempty"`
+	TenantId              string                 `protobuf:"bytes,11,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamId              *string                `protobuf:"bytes,21,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // Public stream ID (UUID)
+	ContentId             string                 `protobuf:"bytes,12,opt,name=content_id,json=contentId,proto3" json:"content_id,omitempty"`
+	ContentType           string                 `protobuf:"bytes,13,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Title                 *string                `protobuf:"bytes,14,opt,name=title,proto3,oneof" json:"title,omitempty"`
+	Description           *string                `protobuf:"bytes,15,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	DurationSeconds       *int32                 `protobuf:"varint,16,opt,name=duration_seconds,json=durationSeconds,proto3,oneof" json:"duration_seconds,omitempty"`
+	RecordingSizeBytes    *int64                 `protobuf:"varint,17,opt,name=recording_size_bytes,json=recordingSizeBytes,proto3,oneof" json:"recording_size_bytes,omitempty"`
+	ClipSource            *string                `protobuf:"bytes,18,opt,name=clip_source,json=clipSource,proto3,oneof" json:"clip_source,omitempty"`
+	CreatedAt             *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=created_at,json=createdAt,proto3,oneof" json:"created_at,omitempty"`
+	Format                *string                `protobuf:"bytes,20,opt,name=format,proto3,oneof" json:"format,omitempty"`                                                                // Native container format: mp4, m3u8, webm, etc.
+	ThumbnailUrl          *string                `protobuf:"bytes,22,opt,name=thumbnail_url,json=thumbnailUrl,proto3,oneof" json:"thumbnail_url,omitempty"`                                // Chandler asset URL for poster image
+	ThumbnailSpriteVttUrl *string                `protobuf:"bytes,23,opt,name=thumbnail_sprite_vtt_url,json=thumbnailSpriteVttUrl,proto3,oneof" json:"thumbnail_sprite_vtt_url,omitempty"` // Chandler URL for sprite VTT (DVR/artifact thumbnail fallback)
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *PlaybackMetadata) Reset() {
@@ -2272,6 +2273,13 @@ func (x *PlaybackMetadata) GetFormat() string {
 func (x *PlaybackMetadata) GetThumbnailUrl() string {
 	if x != nil && x.ThumbnailUrl != nil {
 		return *x.ThumbnailUrl
+	}
+	return ""
+}
+
+func (x *PlaybackMetadata) GetThumbnailSpriteVttUrl() string {
+	if x != nil && x.ThumbnailSpriteVttUrl != nil {
+		return *x.ThumbnailSpriteVttUrl
 	}
 	return ""
 }
@@ -2631,20 +2639,20 @@ func (x *IngestEndpointResponse) GetMetadata() *IngestMetadata {
 
 // CreateVodUploadRequest - initiate a multipart upload
 type CreateVodUploadRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	TenantId             string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId               string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Filename             string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`                                // Original filename
-	SizeBytes            int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`            // Total file size (for part calculation)
-	ContentType          *string                `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"` // MIME type (video/mp4, etc.)
-	Title                *string                `protobuf:"bytes,6,opt,name=title,proto3,oneof" json:"title,omitempty"`
-	Description          *string                `protobuf:"bytes,7,opt,name=description,proto3,oneof" json:"description,omitempty"`
-	VodHash              *string                `protobuf:"bytes,8,opt,name=vod_hash,json=vodHash,proto3,oneof" json:"vod_hash,omitempty"`                                           // Pre-generated by Commodore (if provided, Foghorn uses it)
-	PlaybackId           *string                `protobuf:"bytes,9,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`                                  // Pre-generated playback ID (Commodore)
-	ArtifactInternalName *string                `protobuf:"bytes,10,opt,name=artifact_internal_name,json=artifactInternalName,proto3,oneof" json:"artifact_internal_name,omitempty"` // Pre-generated artifact routing name (Commodore)
-	ClusterId            string                 `protobuf:"bytes,11,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                                          // Cluster for this tenant's context (set by caller)
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Filename      string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`                                // Original filename
+	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`            // Total file size (for part calculation)
+	ContentType   *string                `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"` // MIME type (video/mp4, etc.)
+	Title         *string                `protobuf:"bytes,6,opt,name=title,proto3,oneof" json:"title,omitempty"`
+	Description   *string                `protobuf:"bytes,7,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	VodHash       *string                `protobuf:"bytes,8,opt,name=vod_hash,json=vodHash,proto3,oneof" json:"vod_hash,omitempty"`                 // Pre-generated by Commodore (if provided, Foghorn uses it)
+	PlaybackId    *string                `protobuf:"bytes,9,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`        // Pre-generated playback ID (Commodore)
+	InternalName  *string                `protobuf:"bytes,10,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"` // Pre-generated artifact routing name (Commodore)
+	ClusterId     string                 `protobuf:"bytes,11,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                // Cluster for this tenant's context (set by caller)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateVodUploadRequest) Reset() {
@@ -2740,9 +2748,9 @@ func (x *CreateVodUploadRequest) GetPlaybackId() string {
 	return ""
 }
 
-func (x *CreateVodUploadRequest) GetArtifactInternalName() string {
-	if x != nil && x.ArtifactInternalName != nil {
-		return *x.ArtifactInternalName
+func (x *CreateVodUploadRequest) GetInternalName() string {
+	if x != nil && x.InternalName != nil {
+		return *x.InternalName
 	}
 	return ""
 }
@@ -2904,8 +2912,9 @@ func (x *VodUploadPart) GetPresignedUrl() string {
 type CompleteVodUploadRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UploadId      string                 `protobuf:"bytes,2,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"` // S3 multipart upload ID
-	Parts         []*VodCompletedPart    `protobuf:"bytes,3,rep,name=parts,proto3" json:"parts,omitempty"`                       // ETags from uploaded parts
+	UploadId      string                 `protobuf:"bytes,2,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`                // S3 multipart upload ID
+	Parts         []*VodCompletedPart    `protobuf:"bytes,3,rep,name=parts,proto3" json:"parts,omitempty"`                                      // ETags from uploaded parts
+	ProcessesJson string                 `protobuf:"bytes,4,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"` // Pre-computed MistServer process config for VOD processing
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2959,6 +2968,13 @@ func (x *CompleteVodUploadRequest) GetParts() []*VodCompletedPart {
 		return x.Parts
 	}
 	return nil
+}
+
+func (x *CompleteVodUploadRequest) GetProcessesJson() string {
+	if x != nil {
+		return x.ProcessesJson
+	}
+	return ""
 }
 
 // VodCompletedPart - ETag from uploaded part
@@ -3892,10 +3908,10 @@ var File_shared_proto protoreflect.FileDescriptor
 
 const file_shared_proto_rawDesc = "" +
 	"\n" +
-	"\fshared.proto\x12\x06shared\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\xa6\x06\n" +
+	"\fshared.proto\x12\x06shared\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\x99\x06\n" +
 	"\x11CreateClipRequest\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
-	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12\x16\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x120\n" +
+	"\x14stream_internal_name\x18\x02 \x01(\tR\x12streamInternalName\x12\x16\n" +
 	"\x06format\x18\x03 \x01(\tR\x06format\x12\x14\n" +
 	"\x05title\x18\x04 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x05 \x01(\tR\vdescription\x12\"\n" +
@@ -3913,9 +3929,9 @@ const file_shared_proto_rawDesc = "" +
 	"\auser_id\x18\x0e \x01(\tH\aR\x06userId\x88\x01\x01\x12 \n" +
 	"\tstream_id\x18\x0f \x01(\tH\bR\bstreamId\x88\x01\x01\x12$\n" +
 	"\vplayback_id\x18\x10 \x01(\tH\tR\n" +
-	"playbackId\x88\x01\x01\x129\n" +
-	"\x16artifact_internal_name\x18\x11 \x01(\tH\n" +
-	"R\x14artifactInternalName\x88\x01\x01\x12\x1d\n" +
+	"playbackId\x88\x01\x01\x12(\n" +
+	"\rinternal_name\x18\x11 \x01(\tH\n" +
+	"R\finternalName\x88\x01\x01\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x12 \x01(\tR\tclusterIdB\r\n" +
 	"\v_start_unixB\f\n" +
@@ -3932,8 +3948,8 @@ const file_shared_proto_rawDesc = "" +
 	"\b_user_idB\f\n" +
 	"\n" +
 	"_stream_idB\x0e\n" +
-	"\f_playback_idB\x19\n" +
-	"\x17_artifact_internal_name\"\xe6\x01\n" +
+	"\f_playback_idB\x10\n" +
+	"\x0e_internal_name\"\xe6\x01\n" +
 	"\x12CreateClipResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1f\n" +
 	"\vingest_host\x18\x02 \x01(\tR\n" +
@@ -4144,7 +4160,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x11total_connections\x18\x06 \x01(\x05R\x10totalConnections\x12\x16\n" +
 	"\x06inputs\x18\a \x01(\x05R\x06inputs\x12;\n" +
 	"\vlast_update\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastUpdate\"\xbc\a\n" +
+	"lastUpdate\"\x97\b\n" +
 	"\x10PlaybackMetadata\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x17\n" +
 	"\ais_live\x18\x02 \x01(\bR\x06isLive\x12\x18\n" +
@@ -4171,7 +4187,8 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampH\x06R\tcreatedAt\x88\x01\x01\x12\x1b\n" +
 	"\x06format\x18\x14 \x01(\tH\aR\x06format\x88\x01\x01\x12(\n" +
-	"\rthumbnail_url\x18\x16 \x01(\tH\bR\fthumbnailUrl\x88\x01\x01B\f\n" +
+	"\rthumbnail_url\x18\x16 \x01(\tH\bR\fthumbnailUrl\x88\x01\x01\x12<\n" +
+	"\x18thumbnail_sprite_vtt_url\x18\x17 \x01(\tH\tR\x15thumbnailSpriteVttUrl\x88\x01\x01B\f\n" +
 	"\n" +
 	"_stream_idB\b\n" +
 	"\x06_titleB\x0e\n" +
@@ -4181,7 +4198,8 @@ const file_shared_proto_rawDesc = "" +
 	"\f_clip_sourceB\r\n" +
 	"\v_created_atB\t\n" +
 	"\a_formatB\x10\n" +
-	"\x0e_thumbnail_url\"\xc8\x01\n" +
+	"\x0e_thumbnail_urlB\x1b\n" +
+	"\x19_thumbnail_sprite_vtt_url\"\xc8\x01\n" +
 	"\x16ViewerEndpointResponse\x120\n" +
 	"\aprimary\x18\x01 \x01(\v2\x16.shared.ViewerEndpointR\aprimary\x124\n" +
 	"\tfallbacks\x18\x02 \x03(\v2\x16.shared.ViewerEndpointR\tfallbacks\x129\n" +
@@ -4222,7 +4240,7 @@ const file_shared_proto_rawDesc = "" +
 	"\aprimary\x18\x01 \x01(\v2\x16.shared.IngestEndpointR\aprimary\x124\n" +
 	"\tfallbacks\x18\x02 \x03(\v2\x16.shared.IngestEndpointR\tfallbacks\x127\n" +
 	"\bmetadata\x18\x03 \x01(\v2\x16.shared.IngestMetadataH\x00R\bmetadata\x88\x01\x01B\v\n" +
-	"\t_metadata\"\xf6\x03\n" +
+	"\t_metadata\"\xdc\x03\n" +
 	"\x16CreateVodUploadRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1a\n" +
@@ -4234,17 +4252,17 @@ const file_shared_proto_rawDesc = "" +
 	"\vdescription\x18\a \x01(\tH\x02R\vdescription\x88\x01\x01\x12\x1e\n" +
 	"\bvod_hash\x18\b \x01(\tH\x03R\avodHash\x88\x01\x01\x12$\n" +
 	"\vplayback_id\x18\t \x01(\tH\x04R\n" +
-	"playbackId\x88\x01\x01\x129\n" +
-	"\x16artifact_internal_name\x18\n" +
-	" \x01(\tH\x05R\x14artifactInternalName\x88\x01\x01\x12\x1d\n" +
+	"playbackId\x88\x01\x01\x12(\n" +
+	"\rinternal_name\x18\n" +
+	" \x01(\tH\x05R\finternalName\x88\x01\x01\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\v \x01(\tR\tclusterIdB\x0f\n" +
 	"\r_content_typeB\b\n" +
 	"\x06_titleB\x0e\n" +
 	"\f_descriptionB\v\n" +
 	"\t_vod_hashB\x0e\n" +
-	"\f_playback_idB\x19\n" +
-	"\x17_artifact_internal_name\"\xa2\x02\n" +
+	"\f_playback_idB\x10\n" +
+	"\x0e_internal_name\"\xa2\x02\n" +
 	"\x17CreateVodUploadResponse\x12\x1b\n" +
 	"\tupload_id\x18\x01 \x01(\tR\buploadId\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +
@@ -4259,17 +4277,18 @@ const file_shared_proto_rawDesc = "" +
 	"\rVodUploadPart\x12\x1f\n" +
 	"\vpart_number\x18\x01 \x01(\x05R\n" +
 	"partNumber\x12#\n" +
-	"\rpresigned_url\x18\x02 \x01(\tR\fpresignedUrl\"\x84\x01\n" +
+	"\rpresigned_url\x18\x02 \x01(\tR\fpresignedUrl\"\xab\x01\n" +
 	"\x18CompleteVodUploadRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tupload_id\x18\x02 \x01(\tR\buploadId\x12.\n" +
-	"\x05parts\x18\x03 \x03(\v2\x18.shared.VodCompletedPartR\x05parts\"G\n" +
+	"\x05parts\x18\x03 \x03(\v2\x18.shared.VodCompletedPartR\x05parts\x12%\n" +
+	"\x0eprocesses_json\x18\x04 \x01(\tR\rprocessesJson\"G\n" +
 	"\x10VodCompletedPart\x12\x1f\n" +
 	"\vpart_number\x18\x01 \x01(\x05R\n" +
 	"partNumber\x12\x12\n" +
-	"\x04etag\x18\x02 \x01(\tR\x04etag\"G\n" +
+	"\x04etag\x18\x02 \x01(\tR\x04etag\"M\n" +
 	"\x19CompleteVodUploadResponse\x12*\n" +
-	"\x05asset\x18\x01 \x01(\v2\x14.shared.VodAssetInfoR\x05asset\"Q\n" +
+	"\x05asset\x18\x01 \x01(\v2\x14.shared.VodAssetInfoR\x05assetJ\x04\b\x02\x10\x03\"Q\n" +
 	"\x15AbortVodUploadRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tupload_id\x18\x02 \x01(\tR\buploadId\"L\n" +

@@ -53,7 +53,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				ContentId:    input,
 				TenantId:     resp.TenantId,
 				StreamId:     resp.StreamId,
-				InternalName: resp.ArtifactInternalName,
+				InternalName: resp.InternalName,
 			}
 			if resp.ArtifactHash != "" {
 				if host, _ := state.DefaultManager().FindNodeByArtifactHash(resp.ArtifactHash); host != "" {
@@ -159,6 +159,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	var format sql.NullString
 	var storageLocation sql.NullString
 	var syncStatus sql.NullString
+	var hasThumbnails bool
 
 	err = deps.DB.QueryRowContext(ctx, `
 		SELECT COALESCE(internal_name, ''),
@@ -168,10 +169,11 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		       created_at,
 		       format,
 		       COALESCE(storage_location, ''),
-		       COALESCE(sync_status, '')
+		       COALESCE(sync_status, ''),
+		       COALESCE(has_thumbnails, false)
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2 AND status != 'deleted' AND tenant_id = $3
-	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus)
+	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus, &hasThumbnails)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
@@ -372,6 +374,12 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	}
 	if format.Valid && format.String != "" {
 		metadata.Format = &format.String
+	}
+	// DVR artifacts with pre-generated thumbnails: provide Chandler URL for player fallback
+	if hasThumbnails && (contentType == "dvr" || contentType == "clip") {
+		chandlerBase := getChandlerBaseURL()
+		vttURL := chandlerBase + "/assets/" + artifactResp.ArtifactHash + "/sprite.vtt"
+		metadata.ThumbnailSpriteVttUrl = &vttURL
 	}
 
 	return &pb.ViewerEndpointResponse{
@@ -884,15 +892,16 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 	// Adopt the artifact locally (INSERT ON CONFLICT DO NOTHING)
 	if deps.DB != nil {
 		_, _ = deps.DB.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, format, status, storage_location, sync_status, origin_cluster_id)
-			VALUES ($1, $2, $3, $4, $5, 'active', 's3', 'synced', $6)
-			ON CONFLICT (artifact_hash, artifact_type, tenant_id) DO UPDATE
+			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format, status, storage_location, sync_status, origin_cluster_id)
+			VALUES ($1, $2, $3, $4, $5, $6, 'active', 's3', 'synced', $7)
+			ON CONFLICT (artifact_hash) DO UPDATE
 			SET storage_location = 's3',
 			    sync_status = 'synced',
 			    internal_name = CASE WHEN COALESCE(foghorn.artifacts.internal_name, '') = '' AND EXCLUDED.internal_name <> '' THEN EXCLUDED.internal_name ELSE foghorn.artifacts.internal_name END,
+			    stream_internal_name = CASE WHEN COALESCE(foghorn.artifacts.stream_internal_name, '') = '' AND EXCLUDED.stream_internal_name <> '' THEN EXCLUDED.stream_internal_name ELSE foghorn.artifacts.stream_internal_name END,
 			    format = CASE WHEN COALESCE(foghorn.artifacts.format, '') = '' AND EXCLUDED.format <> '' THEN EXCLUDED.format ELSE foghorn.artifacts.format END,
 			    origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END
-		`, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetFormat(), originClusterID)
+		`, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetStreamInternalName(), resp.GetFormat(), originClusterID)
 	}
 
 	// Trigger local defrost using the origin cluster's presigned URLs

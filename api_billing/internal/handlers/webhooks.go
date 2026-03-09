@@ -710,22 +710,6 @@ func ProcessMollieWebhookGRPC(body []byte, headers map[string]string) (bool, str
 		return false, "Mollie not configured", 503
 	}
 
-	if mollieClient.HasWebhookSecret() {
-		signature := headerValue(headers, "X-Mollie-Signature")
-		if signature == "" {
-			logger.Warn("Mollie webhook signature missing")
-			recordWebhookSignatureFailure("mollie")
-			return false, "Invalid signature", 401
-		}
-		if !mollieClient.VerifyWebhook(body, signature) {
-			logger.Warn("Mollie webhook signature verification failed")
-			recordWebhookSignatureFailure("mollie")
-			return false, "Invalid signature", 401
-		}
-	} else {
-		logger.Debug("Mollie webhook secret not configured; using API fetch verification")
-	}
-
 	var payload MollieWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		logger.WithFields(logging.Fields{

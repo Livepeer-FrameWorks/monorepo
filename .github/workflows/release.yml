@@ -99,7 +99,7 @@ jobs:
             ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-amd64
             livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-amd64
           cache-from: type=gha,scope=${{ matrix.service.name }}-amd64
-          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}-amd64
+          cache-to: type=gha,mode=max,ignore-error=true,scope=${{ matrix.service.name }}-amd64
 
       - name: Write digest artifact
         run: |
@@ -206,7 +206,7 @@ jobs:
             ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-arm64
             livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-arm64
           cache-from: type=gha,scope=${{ matrix.service.name }}-arm64
-          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}-arm64
+          cache-to: type=gha,mode=max,ignore-error=true,scope=${{ matrix.service.name }}-arm64
 
       - name: Write digest artifact
         run: |
@@ -458,7 +458,7 @@ jobs:
             ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}-amd64
             livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}-amd64
           cache-from: type=gha,scope=${{ matrix.webapp.name }}-amd64
-          cache-to: type=gha,mode=max,scope=${{ matrix.webapp.name }}-amd64
+          cache-to: type=gha,mode=max,ignore-error=true,scope=${{ matrix.webapp.name }}-amd64
 
       - name: Write digest artifact
         run: |
@@ -562,7 +562,7 @@ jobs:
             ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}-arm64
             livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}-arm64
           cache-from: type=gha,scope=${{ matrix.webapp.name }}-arm64
-          cache-to: type=gha,mode=max,scope=${{ matrix.webapp.name }}-arm64
+          cache-to: type=gha,mode=max,ignore-error=true,scope=${{ matrix.webapp.name }}-arm64
 
       - name: Write digest artifact
         run: |
@@ -1211,6 +1211,29 @@ jobs:
           path: dist/digests
           merge-multiple: true
 
+      - name: Fetch go-livepeer metadata from latest release
+        id: golivepeer
+        run: |
+          set -euo pipefail
+
+          RELEASE=$(curl -sL https://api.github.com/repos/Livepeer-FrameWorks/go-livepeer/releases/latest)
+
+          TAG=$(echo "$RELEASE" | jq -r '.tag_name')
+          DIGEST_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-digest.txt") | .browser_download_url')
+          RELEASE_URL=$(echo "$RELEASE" | jq -r '.html_url')
+          ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size}]')
+
+          DIGEST=""
+          if [[ -n "$DIGEST_URL" && "$DIGEST_URL" != "null" ]]; then
+            DIGEST=$(curl -sL "$DIGEST_URL")
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "release_url=${RELEASE_URL}" >> "$GITHUB_OUTPUT"
+          echo "assets=${ASSETS}" >> "$GITHUB_OUTPUT"
+          echo "Fetched go-livepeer latest release: ${TAG}"
+
       - name: Fetch MistServer metadata from latest release
         id: mistserver
         run: |
@@ -1362,6 +1385,20 @@ jobs:
           if [[ -n "$mist_assets" && "$mist_assets" != "null" && "$mist_assets" != "[]" ]]; then
             echo "    binaries:" >> dist/manifest.yaml
             echo "$mist_assets" | jq -r '.[] | "      - name: \(.name)\n        url: \(.url)" + (if .size then "\n        size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
+          fi
+
+          cat >> dist/manifest.yaml <<YAML
+            - name: go-livepeer
+              image: ghcr.io/livepeer-frameworks/go-livepeer:${{ steps.golivepeer.outputs.tag }}
+              digest: "${{ steps.golivepeer.outputs.digest }}"
+              release_url: "${{ steps.golivepeer.outputs.release_url }}"
+              release_tag: "${{ steps.golivepeer.outputs.tag }}"
+          YAML
+
+          lp_assets='${{ steps.golivepeer.outputs.assets }}'
+          if [[ -n "$lp_assets" && "$lp_assets" != "null" && "$lp_assets" != "[]" ]]; then
+            echo "    binaries:" >> dist/manifest.yaml
+            echo "$lp_assets" | jq -r '.[] | select(.name | test("linux|darwin")) | "      - name: \(.name)\n        url: \(.url)" + (if .size then "\n        size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
           fi
 
           # Infrastructure Requirements (from config/infrastructure.yaml)

@@ -31,6 +31,7 @@ import (
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/version"
 
@@ -159,7 +160,6 @@ func (h *serverCertHolder) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificat
 // In production this calls quartermasterClient.ValidateBootstrapToken.
 var validateBootstrapTokenFn func(ctx context.Context, token string) (*pb.ValidateBootstrapTokenResponse, error)
 var getNodeOwnerFn func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error)
-var livepeerGatewayURL string // Set from main.go if LIVEPEER_GATEWAY_URL is configured
 var geoipCache *cache.Cache
 var decklogClient *decklog.BatchedClient
 var dvrStopRegistry DVRStopRegistry
@@ -167,9 +167,6 @@ var dvrStopRegistry DVRStopRegistry
 type DVRStopRegistry interface {
 	RegisterPendingDVRStop(internalName string)
 }
-
-// SetLivepeerGatewayURL sets the Livepeer Gateway URL for processing config
-func SetLivepeerGatewayURL(url string) { livepeerGatewayURL = url }
 
 // SetDVRStopRegistry sets the registry used for deferring DVR stop requests.
 func SetDVRStopRegistry(registry DVRStopRegistry) { dvrStopRegistry = registry }
@@ -1293,7 +1290,7 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
         SELECT a.artifact_hash, COALESCE(an.node_id,'')
         FROM foghorn.artifacts a
         LEFT JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
-        WHERE a.internal_name = $1 AND a.artifact_type = 'dvr'
+        WHERE a.stream_internal_name = $1 AND a.artifact_type = 'dvr'
               AND a.status IN ('requested','starting','recording')
         ORDER BY a.created_at DESC
         LIMIT 1`, internalName).Scan(&dvrHash, &storageNodeID)
@@ -1334,7 +1331,7 @@ func emitIngestDVRFailure(dvrHash, streamID, errorMsg string, req *pb.DVRStartRe
 		Error:   &errorMsg,
 	}
 	if internalName := req.GetInternalName(); internalName != "" {
-		dvrData.InternalName = &internalName
+		dvrData.StreamInternalName = &internalName
 	}
 	if tenantID := req.GetTenantId(); tenantID != "" {
 		dvrData.TenantId = &tenantID
@@ -1571,6 +1568,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	// Get DVR hash and stream_id from Commodore registration
 	dvrHash := req.GetDvrHash()
 	streamID := req.GetStreamId()
+	var artifactRoutingName string
 	if dvrHash == "" || streamID == "" {
 		if CommodoreClient == nil {
 			logger.Error("Commodore not available for DVR registration")
@@ -1579,9 +1577,9 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		regCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		regReq := &pb.RegisterDVRRequest{
-			TenantId:     req.GetTenantId(),
-			UserId:       req.GetUserId(),
-			InternalName: req.GetInternalName(),
+			TenantId:           req.GetTenantId(),
+			UserId:             req.GetUserId(),
+			StreamInternalName: req.GetInternalName(),
 		}
 		// Pass retention from DVR config if available
 		if cfg := req.GetConfig(); cfg != nil && cfg.RetentionDays > 0 {
@@ -1595,6 +1593,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		}
 		dvrHash = resp.DvrHash
 		streamID = resp.GetStreamId()
+		artifactRoutingName = resp.GetInternalName()
 	}
 
 	logger.WithFields(logging.Fields{
@@ -1612,16 +1611,18 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	// Store artifact lifecycle state in foghorn.artifacts with context for Decklog events
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
-			artifact_hash, artifact_type, internal_name, stream_id, tenant_id, user_id, status, request_id, format, created_at, updated_at
-		) VALUES ($1, 'dvr', $2, NULLIF($3,'')::uuid, NULLIF($4,'')::uuid, NULLIF($5,'')::uuid, 'requested', $6, 'm3u8', NOW(), NOW())
+			artifact_hash, artifact_type, stream_internal_name, internal_name, stream_id, tenant_id, user_id, status, request_id, format, created_at, updated_at
+		) VALUES ($1, 'dvr', $2, NULLIF($3,''), NULLIF($4,'')::uuid, NULLIF($5,'')::uuid, NULLIF($6,'')::uuid, 'requested', $7, 'm3u8', NOW(), NOW())
 		ON CONFLICT (artifact_hash) DO UPDATE SET
 			status = 'requested',
+			stream_internal_name = COALESCE(foghorn.artifacts.stream_internal_name, EXCLUDED.stream_internal_name),
+			internal_name = COALESCE(foghorn.artifacts.internal_name, EXCLUDED.internal_name),
 			stream_id = COALESCE(foghorn.artifacts.stream_id, EXCLUDED.stream_id),
 			tenant_id = COALESCE(foghorn.artifacts.tenant_id, EXCLUDED.tenant_id),
 			user_id = COALESCE(foghorn.artifacts.user_id, EXCLUDED.user_id),
 			format = COALESCE(foghorn.artifacts.format, EXCLUDED.format),
 			updated_at = NOW()`,
-		dvrHash, req.GetInternalName(), streamID, req.GetTenantId(), req.GetUserId(), dvrHash)
+		dvrHash, req.GetInternalName(), artifactRoutingName, streamID, req.GetTenantId(), req.GetUserId(), dvrHash)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -1904,10 +1905,10 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Look up the DVR artifact in database to get stream info
+	// Look up the DVR artifact in database to get source stream info
 	var internalName string
 	err := db.QueryRowContext(ctx, `
-		SELECT internal_name
+		SELECT stream_internal_name
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr'`,
 		dvrHash).Scan(&internalName)
@@ -2337,14 +2338,12 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"edge", "storage"},
 		},
-	}
-
-	// Processing configuration with Livepeer Gateway availability and codec support matrix
-	processingConfig := &pb.ProcessingConfig{
-		LivepeerGatewayAvailable: livepeerGatewayURL != "",
-		LivepeerGatewayUrl:       livepeerGatewayURL,
-		GatewayInputCodecs:       []string{"H264"},                       // Livepeer only supports H.264
-		LocalInputCodecs:         []string{"H264", "H265", "AV1", "VP9"}, // MistServer supports these locally
+		{
+			Id:    "processing",
+			Def:   &pb.StreamDef{Name: "processing+$", Realtime: true, StopSessions: false, Tags: []string{"processing"}},
+			Roles: []string{"edge", "storage"},
+			Caps:  []string{"processing"},
+		},
 	}
 
 	tlsBundle := resolveClusterTLSBundle(nodeID)
@@ -2355,7 +2354,6 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		Longitude:       lon,
 		LocationName:    loc,
 		Templates:       templates,
-		Processing:      processingConfig,
 		OperationalMode: operationalMode,
 		Tls:             tlsBundle,
 	}
@@ -2528,11 +2526,11 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Look up asset info from foghorn.artifacts for internal_name and origin
+	// Look up asset info from foghorn.artifacts for stream_internal_name and origin
 	var streamName string
 	var originCluster sql.NullString
 	err := db.QueryRowContext(ctx, `
-		SELECT internal_name, origin_cluster_id
+		SELECT stream_internal_name, origin_cluster_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2`,
 		assetHash, assetType).Scan(&streamName, &originCluster)
@@ -3117,6 +3115,33 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 		}
 		logger.WithFields(fields).Info("Processing job completed")
 
+		// Register processed output in warm cache + in-memory state so vod+
+		// STREAM_SOURCE resolves immediately (same pattern as defrost completion).
+		if outputPath := result.GetOutputPath(); outputPath != "" {
+			var artifactHash string
+			_ = db.QueryRowContext(ctx, `SELECT artifact_hash FROM foghorn.processing_jobs WHERE job_id = $1`, result.GetJobId()).Scan(&artifactHash)
+			if artifactHash != "" {
+				sizeBytes := result.GetOutputSizeBytes()
+				if artifactRepo != nil {
+					if err := artifactRepo.AddCachedNodeWithPath(ctx, artifactHash, nodeID, outputPath, sizeBytes); err != nil {
+						logger.WithError(err).WithFields(fields).Warn("Failed to register processed artifact in warm cache")
+					}
+				}
+				state.DefaultManager().AddNodeArtifact(nodeID, &pb.StoredArtifact{
+					ClipHash:  artifactHash,
+					FilePath:  outputPath,
+					SizeBytes: uint64(sizeBytes),
+					CreatedAt: time.Now().Unix(),
+					Format:    strings.TrimPrefix(filepath.Ext(outputPath), "."),
+				})
+				logger.WithFields(logging.Fields{
+					"artifact_hash": artifactHash,
+					"node_id":       nodeID,
+					"output_path":   outputPath,
+				}).Info("Registered processed artifact for immediate playback")
+			}
+		}
+
 	case "failed":
 		_, err := db.ExecContext(ctx, `
 			UPDATE foghorn.processing_jobs
@@ -3208,7 +3233,7 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 	// Look up stream info from foghorn.artifacts
 	var streamName string
 	err := db.QueryRowContext(ctx, `
-		SELECT internal_name
+		SELECT stream_internal_name
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1`,
 		assetHash).Scan(&streamName)
@@ -3397,19 +3422,20 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 
 	// Look up asset info from foghorn.artifacts
 	var streamName, storageLocation, format, tenantID string
-	var s3Key, filename, streamID sql.NullString
+	var s3Key, filename, streamID, artifactInternalName sql.NullString
 	err := db.QueryRowContext(ctx, `
-		SELECT a.internal_name,
+		SELECT a.stream_internal_name,
 		       COALESCE(a.storage_location, 'local'),
 		       COALESCE(a.format, ''),
 		       COALESCE(a.tenant_id::text, ''),
 		       COALESCE(v.s3_key, ''),
 		       COALESCE(v.filename, ''),
-		       a.stream_id::text
+		       a.stream_id::text,
+		       a.internal_name
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 		WHERE a.artifact_hash = $1 AND a.artifact_type = $2`,
-		assetHash, artifactType).Scan(&streamName, &storageLocation, &format, &tenantID, &s3Key, &filename, &streamID)
+		assetHash, artifactType).Scan(&streamName, &storageLocation, &format, &tenantID, &s3Key, &filename, &streamID, &artifactInternalName)
 	if err != nil {
 		return "", fmt.Errorf("asset not found: %w", err)
 	}
@@ -3508,13 +3534,14 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	requestID := fmt.Sprintf("defrost-%s-%d", assetHash, time.Now().UnixNano())
 
 	req := &pb.DefrostRequest{
-		RequestId:        requestID,
-		AssetType:        assetType,
-		AssetHash:        assetHash,
-		TenantId:         tenantID,
-		InternalName:     streamName,
-		TimeoutSeconds:   int32(timeout.Seconds()),
-		UrlExpirySeconds: int64(expiry.Seconds()),
+		RequestId:          requestID,
+		AssetType:          assetType,
+		AssetHash:          assetHash,
+		TenantId:           tenantID,
+		StreamInternalName: streamName,
+		InternalName:       artifactInternalName.String,
+		TimeoutSeconds:     int32(timeout.Seconds()),
+		UrlExpirySeconds:   int64(expiry.Seconds()),
 	}
 
 	storageBase := storageBasePathForNode(nodeID)
@@ -3814,7 +3841,7 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 		if s3URL == "" && s3Client != nil && db != nil {
 			var artifactType, internalName, format, tenantID string
 			_ = db.QueryRowContext(ctx, `
-				SELECT COALESCE(artifact_type,''), COALESCE(internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,'')
+				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,'')
 				FROM foghorn.artifacts
 				WHERE artifact_hash = $1
 			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID)
@@ -4206,12 +4233,39 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 	}
 
 	// Resolve internal_name → playback_id from in-memory stream state
+	var playbackID string
 	ss := state.DefaultManager().GetStreamState(internalName)
-	if ss == nil || ss.PlaybackID == "" {
+	if ss != nil && ss.PlaybackID != "" {
+		playbackID = ss.PlaybackID
+	} else if strings.Contains(internalName, "+") {
+		// Artifact thumbnail (e.g., vod+{artifactInternalName} from MistProcThumbs on DVR playback).
+		// Resolve internal_name → artifact_hash for S3 keying (matches Chandler URL construction).
+		artifactInternalName := mist.ExtractInternalName(internalName)
+		if conn := GetDB(); conn != nil {
+			err := conn.QueryRowContext(context.Background(),
+				`SELECT artifact_hash FROM foghorn.artifacts WHERE internal_name = $1`,
+				artifactInternalName,
+			).Scan(&playbackID)
+			if err != nil {
+				logger.WithFields(logging.Fields{
+					"stream_name":   internalName,
+					"internal_name": artifactInternalName,
+				}).Warn("Could not resolve internal_name to artifact_hash for thumbnail upload")
+				return
+			}
+		} else {
+			logger.Warn("DB not available for artifact hash resolution")
+			return
+		}
+		logger.WithFields(logging.Fields{
+			"stream_name":   internalName,
+			"internal_name": artifactInternalName,
+			"artifact_hash": playbackID,
+		}).Info("Resolved artifact hash for thumbnail S3 key")
+	} else {
 		logger.WithField("internal_name", internalName).Warn("Stream not found or missing playback_id for thumbnail upload")
 		return
 	}
-	playbackID := ss.PlaybackID
 
 	expiry := 15 * time.Minute
 	resp := &pb.ThumbnailUploadResponse{
@@ -4267,6 +4321,7 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 
 // processThumbnailUploaded updates Commodore with the Chandler asset URL after
 // Helmsman successfully uploads thumbnail files to S3.
+// For artifact thumbnails (DVR), marks has_thumbnails=true on the artifact instead.
 func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger logging.Logger) {
 	playbackID := req.GetPlaybackId()
 	s3Keys := req.GetS3Keys()
@@ -4277,19 +4332,14 @@ func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger l
 		"node_id":     nodeID,
 	}).Info("Thumbnail upload confirmed")
 
-	// Construct Chandler URL — Chandler serves /assets/{playbackId}/poster.jpg deterministically
-	chandlerBase := strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL"))
-	if chandlerBase == "" {
-		chandlerHost := strings.TrimSpace(os.Getenv("CHANDLER_HOST"))
-		chandlerPort := strings.TrimSpace(os.Getenv("CHANDLER_PORT"))
-		if chandlerHost == "" {
-			chandlerHost = "chandler"
-		}
-		if chandlerPort == "" {
-			chandlerPort = "18020"
-		}
-		chandlerBase = "http://" + chandlerHost + ":" + chandlerPort
+	// Check if this is an artifact thumbnail (playbackID is actually an artifact hash)
+	if isArtifactThumbnail(playbackID) {
+		markArtifactHasThumbnails(playbackID, logger)
+		return
 	}
+
+	// Construct Chandler URL — Chandler serves /assets/{playbackId}/poster.jpg deterministically
+	chandlerBase := getChandlerBaseURL()
 	thumbnailURL := chandlerBase + "/assets/" + playbackID + "/poster.jpg"
 
 	if CommodoreClient != nil {
@@ -4310,4 +4360,55 @@ func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger l
 	} else {
 		logger.Warn("Commodore client not configured, cannot update stream thumbnail")
 	}
+}
+
+// isArtifactThumbnail checks if the playbackID is actually an artifact hash.
+// Artifact hashes are 32-char hex strings (no dashes, unlike UUIDs).
+func isArtifactThumbnail(playbackID string) bool {
+	if len(playbackID) != 32 {
+		return false
+	}
+	for _, c := range playbackID {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// markArtifactHasThumbnails sets has_thumbnails=true on the artifact after sprite upload.
+func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
+	conn := GetDB()
+	if conn == nil {
+		logger.Warn("DB not available, cannot mark artifact thumbnails")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := conn.ExecContext(ctx, `UPDATE foghorn.artifacts SET has_thumbnails = true, updated_at = NOW() WHERE artifact_hash = $1`, artifactHash)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"error":         err,
+		}).Error("Failed to mark artifact has_thumbnails")
+		return
+	}
+	logger.WithField("artifact_hash", artifactHash).Info("Artifact thumbnails marked as uploaded")
+}
+
+// getChandlerBaseURL returns the Chandler base URL from environment.
+func getChandlerBaseURL() string {
+	chandlerBase := strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL"))
+	if chandlerBase == "" {
+		chandlerHost := strings.TrimSpace(os.Getenv("CHANDLER_HOST"))
+		chandlerPort := strings.TrimSpace(os.Getenv("CHANDLER_PORT"))
+		if chandlerHost == "" {
+			chandlerHost = "chandler"
+		}
+		if chandlerPort == "" {
+			chandlerPort = "18020"
+		}
+		chandlerBase = "http://" + chandlerHost + ":" + chandlerPort
+	}
+	return chandlerBase
 }

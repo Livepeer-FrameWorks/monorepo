@@ -593,7 +593,7 @@ ON CONFLICT (tenant_id) DO UPDATE SET
 -- These correspond to foghorn.artifacts entries for lifecycle state
 
 INSERT INTO commodore.clips (
-    id, tenant_id, user_id, stream_id, clip_hash, artifact_internal_name, playback_id,
+    id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
     title, description,
     start_time, duration, clip_mode,
     retention_until, created_at, updated_at
@@ -645,8 +645,8 @@ ON CONFLICT (clip_hash) DO UPDATE SET
 -- These correspond to foghorn.artifacts entries for lifecycle state
 
 INSERT INTO commodore.dvr_recordings (
-    id, tenant_id, user_id, stream_id, dvr_hash, artifact_internal_name, playback_id,
-    internal_name,
+    id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id,
+    stream_internal_name,
     retention_until, created_at, updated_at
 ) VALUES
 -- Demo DVR recording (completed) - matches foghorn.artifacts entry
@@ -688,7 +688,7 @@ ON CONFLICT (dvr_hash) DO UPDATE SET
 -- These correspond to foghorn.artifacts + foghorn.vod_metadata entries for lifecycle state
 
 INSERT INTO commodore.vod_assets (
-    id, tenant_id, user_id, vod_hash, artifact_internal_name, playback_id,
+    id, tenant_id, user_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type,
     size_bytes, retention_until, created_at, updated_at
 ) VALUES
@@ -809,7 +809,7 @@ ON CONFLICT (id) DO UPDATE SET
 -- The artifact_hash values MUST match the clip_hash/dvr_hash in commodore.clips/dvr_recordings above
 
 INSERT INTO foghorn.artifacts (
-    artifact_hash, artifact_type, internal_name, artifact_internal_name, tenant_id,
+    artifact_hash, artifact_type, stream_internal_name, internal_name, tenant_id,
     status, size_bytes, manifest_path, format,
     storage_location, sync_status, retention_until,
     created_at, updated_at
@@ -1137,7 +1137,9 @@ INSERT INTO quartermaster.services (service_id, name, plane, description, defaul
     ('skipper', 'Skipper', 'control', 'AI assistant service', 18018, '/health', 'frameworks/skipper', 'skipper', 'http'),
     ('signalman', 'Signalman', 'data', 'Real-time signaling service', 18009, '/health', 'frameworks/signalman', 'signalman', 'http'),
     ('decklog', 'Decklog', 'data', 'Service event firehose', 18006, '/health', 'frameworks/decklog', 'decklog', 'grpc'),
-    ('periscope-ingest', 'Periscope Ingest', 'data', 'Analytics ingest service', 18005, '/health', 'frameworks/periscope-ingest', 'periscope-ingest', 'http')
+    ('periscope-ingest', 'Periscope Ingest', 'data', 'Analytics ingest service', 18005, '/health', 'frameworks/periscope-ingest', 'periscope-ingest', 'http'),
+    ('livepeer-gateway', 'Livepeer Gateway', 'media', 'Livepeer network transcoding gateway', 8935, NULL, NULL, 'livepeer-gateway', 'https'),
+    ('livepeer-signer', 'Livepeer Signer', 'control', 'Livepeer remote transaction signer', 18016, NULL, NULL, 'livepeer-signer', 'http')
 ON CONFLICT (service_id) DO NOTHING;
 
 -- Assign control + data plane services to the platform cluster
@@ -1156,6 +1158,27 @@ ON CONFLICT (cluster_id, service_id) DO NOTHING;
 INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
     ('central-primary', 'foghorn', 'running', 2)
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
+
+-- Livepeer Gateway (external transcoding service, registered for discovery by Commodore)
+INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
+    ('central-primary', 'livepeer-gateway', 'running', 1)
+ON CONFLICT (cluster_id, service_id) DO NOTHING;
+
+INSERT INTO quartermaster.service_instances (
+    instance_id, cluster_id, service_id, protocol, advertise_host, port, status
+) VALUES (
+    'livepeer-gateway-1', 'central-primary', 'livepeer-gateway', 'https', 'livepeer-gateway', 8935, 'running'
+) ON CONFLICT (instance_id) DO UPDATE SET status = 'running';
+
+INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
+    ('central-primary', 'livepeer-signer', 'running', 1)
+ON CONFLICT (cluster_id, service_id) DO NOTHING;
+
+INSERT INTO quartermaster.service_instances (
+    instance_id, cluster_id, service_id, protocol, advertise_host, port, status
+) VALUES (
+    'livepeer-signer-1', 'central-primary', 'livepeer-signer', 'http', 'livepeer-signer', 18016, 'running'
+) ON CONFLICT (instance_id) DO UPDATE SET status = 'running';
 
 -- ============================================================================
 -- FOGHORN: Pre-seeded service instances for HA pair (gRPC only)

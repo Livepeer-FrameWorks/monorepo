@@ -102,7 +102,11 @@ type ValidateStreamKeyResponse struct {
 	// ===== MULTISTREAM PUSH TARGETS =====
 	// Enabled push targets for this stream (loaded during validation).
 	// Foghorn sends these to Helmsman as ActivatePushTargets when the stream goes live.
-	PushTargets   []*PushTargetInternal `protobuf:"bytes,15,rep,name=push_targets,json=pushTargets,proto3" json:"push_targets,omitempty"`
+	PushTargets []*PushTargetInternal `protobuf:"bytes,15,rep,name=push_targets,json=pushTargets,proto3" json:"push_targets,omitempty"`
+	// ===== PROCESSING CONFIG =====
+	// MistServer process config JSON array for STREAM_PROCESS trigger.
+	// Commodore determines this based on tenant's billing tier features.
+	ProcessesJson string `protobuf:"bytes,16,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -240,6 +244,13 @@ func (x *ValidateStreamKeyResponse) GetPushTargets() []*PushTargetInternal {
 		return x.PushTargets
 	}
 	return nil
+}
+
+func (x *ValidateStreamKeyResponse) GetProcessesJson() string {
+	if x != nil {
+		return x.ProcessesJson
+	}
+	return ""
 }
 
 type ResolvePlaybackIDRequest struct {
@@ -812,13 +823,13 @@ func (x *RegisterClipRequest) GetOriginClusterId() string {
 }
 
 type RegisterClipResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	ClipHash             string                 `protobuf:"bytes,1,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`                                       // Generated hash (use as artifact_hash in Foghorn)
-	ClipId               string                 `protobuf:"bytes,2,opt,name=clip_id,json=clipId,proto3" json:"clip_id,omitempty"`                                             // Commodore clips table UUID
-	PlaybackId           string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
-	ArtifactInternalName string                 `protobuf:"bytes,4,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClipHash      string                 `protobuf:"bytes,1,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`             // Generated hash (use as artifact_hash in Foghorn)
+	ClipId        string                 `protobuf:"bytes,2,opt,name=clip_id,json=clipId,proto3" json:"clip_id,omitempty"`                   // Commodore clips table UUID
+	PlaybackId    string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`       // Public playback key
+	InternalName  string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"` // Artifact routing name (internal)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterClipResponse) Reset() {
@@ -872,9 +883,9 @@ func (x *RegisterClipResponse) GetPlaybackId() string {
 	return ""
 }
 
-func (x *RegisterClipResponse) GetArtifactInternalName() string {
+func (x *RegisterClipResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -882,15 +893,15 @@ func (x *RegisterClipResponse) GetArtifactInternalName() string {
 // Register a new DVR recording in the business registry
 // Called by Foghorn during StartDVR flow
 type RegisterDVRRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	TenantId        string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                         // Tenant context
-	UserId          string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                               // User who owns the recording
-	StreamId        string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                         // Source stream UUID (optional for legacy)
-	InternalName    string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`             // MistServer stream name
-	RetentionUntil  *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=retention_until,json=retentionUntil,proto3,oneof" json:"retention_until,omitempty"` // Recording expiration
-	OriginClusterId string                 `protobuf:"bytes,6,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`  // Cluster where DVR recording started
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TenantId           string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                 // Tenant context
+	UserId             string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                       // User who owns the recording
+	StreamId           string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                 // Source stream UUID (optional for legacy)
+	StreamInternalName string                 `protobuf:"bytes,4,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"` // Source stream's MistServer routing name (for stream_id lookup)
+	RetentionUntil     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=retention_until,json=retentionUntil,proto3,oneof" json:"retention_until,omitempty"`         // Recording expiration
+	OriginClusterId    string                 `protobuf:"bytes,6,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`          // Cluster where DVR recording started
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RegisterDVRRequest) Reset() {
@@ -944,9 +955,9 @@ func (x *RegisterDVRRequest) GetStreamId() string {
 	return ""
 }
 
-func (x *RegisterDVRRequest) GetInternalName() string {
+func (x *RegisterDVRRequest) GetStreamInternalName() string {
 	if x != nil {
-		return x.InternalName
+		return x.StreamInternalName
 	}
 	return ""
 }
@@ -966,14 +977,14 @@ func (x *RegisterDVRRequest) GetOriginClusterId() string {
 }
 
 type RegisterDVRResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	DvrHash              string                 `protobuf:"bytes,1,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`                                          // Generated hash (use as artifact_hash in Foghorn)
-	DvrId                string                 `protobuf:"bytes,2,opt,name=dvr_id,json=dvrId,proto3" json:"dvr_id,omitempty"`                                                // Commodore dvr_recordings table UUID
-	PlaybackId           string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
-	ArtifactInternalName string                 `protobuf:"bytes,4,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
-	StreamId             string                 `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                       // Source stream UUID for storage path
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DvrHash       string                 `protobuf:"bytes,1,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`                // Generated hash (use as artifact_hash in Foghorn)
+	DvrId         string                 `protobuf:"bytes,2,opt,name=dvr_id,json=dvrId,proto3" json:"dvr_id,omitempty"`                      // Commodore dvr_recordings table UUID
+	PlaybackId    string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`       // Public playback key
+	InternalName  string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"` // Artifact routing name (internal)
+	StreamId      string                 `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`             // Source stream UUID for storage path
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterDVRResponse) Reset() {
@@ -1027,9 +1038,9 @@ func (x *RegisterDVRResponse) GetPlaybackId() string {
 	return ""
 }
 
-func (x *RegisterDVRResponse) GetArtifactInternalName() string {
+func (x *RegisterDVRResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -1088,22 +1099,22 @@ func (x *ResolveClipHashRequest) GetClipHash() string {
 }
 
 type ResolveClipHashResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Found                bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                                             // Whether clip was found
-	TenantId             string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                        // Tenant context for analytics
-	UserId               string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                              // Owner for authorization
-	StreamId             string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                        // Source stream UUID
-	InternalName         string                 `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                            // MistServer stream name (from stream lookup)
-	Title                string                 `protobuf:"bytes,6,opt,name=title,proto3" json:"title,omitempty"`                                                              // Clip title
-	Description          string                 `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`                                                  // Clip description
-	StartTime            int64                  `protobuf:"varint,8,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`                                    // Start timestamp (unix ms)
-	Duration             int64                  `protobuf:"varint,9,opt,name=duration,proto3" json:"duration,omitempty"`                                                       // Duration (ms)
-	ClipMode             string                 `protobuf:"bytes,10,opt,name=clip_mode,json=clipMode,proto3" json:"clip_mode,omitempty"`                                       // How clip was created
-	PlaybackId           string                 `protobuf:"bytes,11,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
-	ArtifactInternalName string                 `protobuf:"bytes,12,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
-	OriginClusterId      string                 `protobuf:"bytes,13,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`                // Cluster that originally created this clip
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Found              bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                                      // Whether clip was found
+	TenantId           string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                 // Tenant context for analytics
+	UserId             string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                       // Owner for authorization
+	StreamId           string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                 // Source stream UUID
+	StreamInternalName string                 `protobuf:"bytes,5,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"` // Source stream's MistServer routing name (via streams JOIN)
+	Title              string                 `protobuf:"bytes,6,opt,name=title,proto3" json:"title,omitempty"`                                                       // Clip title
+	Description        string                 `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`                                           // Clip description
+	StartTime          int64                  `protobuf:"varint,8,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`                             // Start timestamp (unix ms)
+	Duration           int64                  `protobuf:"varint,9,opt,name=duration,proto3" json:"duration,omitempty"`                                                // Duration (ms)
+	ClipMode           string                 `protobuf:"bytes,10,opt,name=clip_mode,json=clipMode,proto3" json:"clip_mode,omitempty"`                                // How clip was created
+	PlaybackId         string                 `protobuf:"bytes,11,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                          // Public playback key
+	InternalName       string                 `protobuf:"bytes,12,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                    // Artifact routing name (internal)
+	OriginClusterId    string                 `protobuf:"bytes,13,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`         // Cluster that originally created this clip
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ResolveClipHashResponse) Reset() {
@@ -1164,9 +1175,9 @@ func (x *ResolveClipHashResponse) GetStreamId() string {
 	return ""
 }
 
-func (x *ResolveClipHashResponse) GetInternalName() string {
+func (x *ResolveClipHashResponse) GetStreamInternalName() string {
 	if x != nil {
-		return x.InternalName
+		return x.StreamInternalName
 	}
 	return ""
 }
@@ -1213,9 +1224,9 @@ func (x *ResolveClipHashResponse) GetPlaybackId() string {
 	return ""
 }
 
-func (x *ResolveClipHashResponse) GetArtifactInternalName() string {
+func (x *ResolveClipHashResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -1274,17 +1285,17 @@ func (x *ResolveDVRHashRequest) GetDvrHash() string {
 }
 
 type ResolveDVRHashResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Found                bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                                            // Whether DVR was found
-	TenantId             string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                       // Tenant context for analytics
-	UserId               string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                             // Owner for authorization
-	StreamId             string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                       // Source stream UUID
-	InternalName         string                 `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                           // MistServer stream name
-	PlaybackId           string                 `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
-	ArtifactInternalName string                 `protobuf:"bytes,7,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
-	OriginClusterId      string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`                // Cluster that originally created this DVR
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Found              bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                                      // Whether DVR was found
+	TenantId           string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                 // Tenant context for analytics
+	UserId             string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                       // Owner for authorization
+	StreamId           string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                 // Source stream UUID
+	StreamInternalName string                 `protobuf:"bytes,5,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"` // Source stream's MistServer routing name
+	PlaybackId         string                 `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                           // Public playback key
+	InternalName       string                 `protobuf:"bytes,7,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                     // Artifact routing name
+	OriginClusterId    string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`          // Cluster that originally created this DVR
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ResolveDVRHashResponse) Reset() {
@@ -1345,9 +1356,9 @@ func (x *ResolveDVRHashResponse) GetStreamId() string {
 	return ""
 }
 
-func (x *ResolveDVRHashResponse) GetInternalName() string {
+func (x *ResolveDVRHashResponse) GetStreamInternalName() string {
 	if x != nil {
-		return x.InternalName
+		return x.StreamInternalName
 	}
 	return ""
 }
@@ -1359,9 +1370,9 @@ func (x *ResolveDVRHashResponse) GetPlaybackId() string {
 	return ""
 }
 
-func (x *ResolveDVRHashResponse) GetArtifactInternalName() string {
+func (x *ResolveDVRHashResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -1632,13 +1643,13 @@ func (x *RegisterVodRequest) GetOriginClusterId() string {
 }
 
 type RegisterVodResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	VodHash              string                 `protobuf:"bytes,1,opt,name=vod_hash,json=vodHash,proto3" json:"vod_hash,omitempty"`                                          // Generated hash (use as artifact_hash in Foghorn)
-	VodId                string                 `protobuf:"bytes,2,opt,name=vod_id,json=vodId,proto3" json:"vod_id,omitempty"`                                                // Commodore vod_assets table UUID
-	PlaybackId           string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
-	ArtifactInternalName string                 `protobuf:"bytes,4,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VodHash       string                 `protobuf:"bytes,1,opt,name=vod_hash,json=vodHash,proto3" json:"vod_hash,omitempty"`                // Generated hash (use as artifact_hash in Foghorn)
+	VodId         string                 `protobuf:"bytes,2,opt,name=vod_id,json=vodId,proto3" json:"vod_id,omitempty"`                      // Commodore vod_assets table UUID
+	PlaybackId    string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`       // Public playback key
+	InternalName  string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"` // Artifact routing name (internal)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterVodResponse) Reset() {
@@ -1692,9 +1703,9 @@ func (x *RegisterVodResponse) GetPlaybackId() string {
 	return ""
 }
 
-func (x *RegisterVodResponse) GetArtifactInternalName() string {
+func (x *RegisterVodResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -1746,18 +1757,18 @@ func (x *ResolveVodHashRequest) GetVodHash() string {
 }
 
 type ResolveVodHashResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Found                bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                                            // Whether VOD was found
-	TenantId             string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                       // Tenant context for analytics
-	UserId               string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                             // Owner for authorization
-	Filename             string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`                                                       // Original filename
-	Title                string                 `protobuf:"bytes,5,opt,name=title,proto3" json:"title,omitempty"`                                                             // VOD title (if set)
-	Description          string                 `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`                                                 // VOD description (if set)
-	PlaybackId           string                 `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
-	ArtifactInternalName string                 `protobuf:"bytes,8,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
-	OriginClusterId      string                 `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`                // Cluster where this VOD was uploaded
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Found           bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                             // Whether VOD was found
+	TenantId        string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                        // Tenant context for analytics
+	UserId          string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                              // Owner for authorization
+	Filename        string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`                                        // Original filename
+	Title           string                 `protobuf:"bytes,5,opt,name=title,proto3" json:"title,omitempty"`                                              // VOD title (if set)
+	Description     string                 `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`                                  // VOD description (if set)
+	PlaybackId      string                 `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                  // Public playback key
+	InternalName    string                 `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`            // Artifact routing name (internal)
+	OriginClusterId string                 `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster where this VOD was uploaded
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ResolveVodHashResponse) Reset() {
@@ -1839,9 +1850,9 @@ func (x *ResolveVodHashResponse) GetPlaybackId() string {
 	return ""
 }
 
-func (x *ResolveVodHashResponse) GetArtifactInternalName() string {
+func (x *ResolveVodHashResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -1899,15 +1910,15 @@ func (x *ResolveVodIDRequest) GetVodId() string {
 }
 
 type ResolveVodIDResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Found                bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
-	TenantId             string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId               string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	VodHash              string                 `protobuf:"bytes,4,opt,name=vod_hash,json=vodHash,proto3" json:"vod_hash,omitempty"`
-	PlaybackId           string                 `protobuf:"bytes,5,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
-	ArtifactInternalName string                 `protobuf:"bytes,6,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId        string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	VodHash       string                 `protobuf:"bytes,4,opt,name=vod_hash,json=vodHash,proto3" json:"vod_hash,omitempty"`
+	PlaybackId    string                 `protobuf:"bytes,5,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	InternalName  string                 `protobuf:"bytes,6,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResolveVodIDResponse) Reset() {
@@ -1975,9 +1986,9 @@ func (x *ResolveVodIDResponse) GetPlaybackId() string {
 	return ""
 }
 
-func (x *ResolveVodIDResponse) GetArtifactInternalName() string {
+func (x *ResolveVodIDResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -2028,18 +2039,18 @@ func (x *ResolveArtifactPlaybackIDRequest) GetPlaybackId() string {
 }
 
 type ResolveArtifactPlaybackIDResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Found                bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
-	ArtifactHash         string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
-	ArtifactInternalName string                 `protobuf:"bytes,3,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"`
-	TenantId             string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId               string                 `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	StreamId             string                 `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	ContentType          string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
-	OriginClusterId      string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
-	ClusterPeers         []*TenantClusterPeer   `protobuf:"bytes,9,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`            // Tenant cluster access envelope
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Found           bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	ArtifactHash    string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	InternalName    string                 `protobuf:"bytes,3,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	TenantId        string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId          string                 `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	StreamId        string                 `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	ContentType     string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
+	OriginClusterId string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
+	ClusterPeers    []*TenantClusterPeer   `protobuf:"bytes,9,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`            // Tenant cluster access envelope
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ResolveArtifactPlaybackIDResponse) Reset() {
@@ -2086,9 +2097,9 @@ func (x *ResolveArtifactPlaybackIDResponse) GetArtifactHash() string {
 	return ""
 }
 
-func (x *ResolveArtifactPlaybackIDResponse) GetArtifactInternalName() string {
+func (x *ResolveArtifactPlaybackIDResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -2137,10 +2148,10 @@ func (x *ResolveArtifactPlaybackIDResponse) GetClusterPeers() []*TenantClusterPe
 
 // Resolve artifact internal name to artifact identity
 type ResolveArtifactInternalNameRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	ArtifactInternalName string                 `protobuf:"bytes,1,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InternalName  string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResolveArtifactInternalNameRequest) Reset() {
@@ -2173,26 +2184,26 @@ func (*ResolveArtifactInternalNameRequest) Descriptor() ([]byte, []int) {
 	return file_commodore_proto_rawDescGZIP(), []int{26}
 }
 
-func (x *ResolveArtifactInternalNameRequest) GetArtifactInternalName() string {
+func (x *ResolveArtifactInternalNameRequest) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
 
 type ResolveArtifactInternalNameResponse struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	Found                bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
-	ArtifactHash         string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
-	ArtifactInternalName string                 `protobuf:"bytes,3,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"`
-	TenantId             string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId               string                 `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	StreamId             string                 `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	ContentType          string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
-	OriginClusterId      string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
-	ClusterPeers         []*TenantClusterPeer   `protobuf:"bytes,9,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`            // Tenant cluster access envelope
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Found           bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	ArtifactHash    string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	InternalName    string                 `protobuf:"bytes,3,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	TenantId        string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId          string                 `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	StreamId        string                 `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	ContentType     string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
+	OriginClusterId string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
+	ClusterPeers    []*TenantClusterPeer   `protobuf:"bytes,9,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`            // Tenant cluster access envelope
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ResolveArtifactInternalNameResponse) Reset() {
@@ -2239,9 +2250,9 @@ func (x *ResolveArtifactInternalNameResponse) GetArtifactHash() string {
 	return ""
 }
 
-func (x *ResolveArtifactInternalNameResponse) GetArtifactInternalName() string {
+func (x *ResolveArtifactInternalNameResponse) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -7228,7 +7239,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"stream_key\x18\x01 \x01(\tR\tstreamKey\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x02 \x01(\tR\tclusterId\"\xa7\x05\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\"\xce\x05\n" +
 	"\x19ValidateStreamKeyResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
@@ -7246,7 +7257,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\rcluster_peers\x18\r \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12\x1f\n" +
 	"\vplayback_id\x18\x0e \x01(\tR\n" +
 	"playbackId\x12@\n" +
-	"\fpush_targets\x18\x0f \x03(\v2\x1d.commodore.PushTargetInternalR\vpushTargetsB\x14\n" +
+	"\fpush_targets\x18\x0f \x03(\v2\x1d.commodore.PushTargetInternalR\vpushTargets\x12%\n" +
+	"\x0eprocesses_json\x18\x10 \x01(\tR\rprocessesJsonB\x14\n" +
 	"\x12_origin_cluster_idB\x16\n" +
 	"\x14_official_cluster_id\";\n" +
 	"\x18ResolvePlaybackIDRequest\x12\x1f\n" +
@@ -7302,36 +7314,36 @@ const file_commodore_proto_rawDesc = "" +
 	"\x0fretention_until\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01\x12*\n" +
 	"\x11origin_cluster_id\x18\v \x01(\tR\x0foriginClusterIdB\x12\n" +
-	"\x10_retention_until\"\xa3\x01\n" +
+	"\x10_retention_until\"\x92\x01\n" +
 	"\x14RegisterClipResponse\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\x12\x17\n" +
 	"\aclip_id\x18\x02 \x01(\tR\x06clipId\x12\x1f\n" +
 	"\vplayback_id\x18\x03 \x01(\tR\n" +
-	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\"\x96\x02\n" +
+	"playbackId\x12#\n" +
+	"\rinternal_name\x18\x04 \x01(\tR\finternalName\"\xa3\x02\n" +
 	"\x12RegisterDVRRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
-	"\tstream_id\x18\x03 \x01(\tR\bstreamId\x12#\n" +
-	"\rinternal_name\x18\x04 \x01(\tR\finternalName\x12H\n" +
+	"\tstream_id\x18\x03 \x01(\tR\bstreamId\x120\n" +
+	"\x14stream_internal_name\x18\x04 \x01(\tR\x12streamInternalName\x12H\n" +
 	"\x0fretention_until\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01\x12*\n" +
 	"\x11origin_cluster_id\x18\x06 \x01(\tR\x0foriginClusterIdB\x12\n" +
-	"\x10_retention_until\"\xbb\x01\n" +
+	"\x10_retention_until\"\xaa\x01\n" +
 	"\x13RegisterDVRResponse\x12\x19\n" +
 	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\x12\x15\n" +
 	"\x06dvr_id\x18\x02 \x01(\tR\x05dvrId\x12\x1f\n" +
 	"\vplayback_id\x18\x03 \x01(\tR\n" +
-	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\x12\x1b\n" +
+	"playbackId\x12#\n" +
+	"\rinternal_name\x18\x04 \x01(\tR\finternalName\x12\x1b\n" +
 	"\tstream_id\x18\x05 \x01(\tR\bstreamId\"5\n" +
 	"\x16ResolveClipHashRequest\x12\x1b\n" +
-	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\"\xba\x03\n" +
+	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\"\xb6\x03\n" +
 	"\x17ResolveClipHashResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x1b\n" +
-	"\tstream_id\x18\x04 \x01(\tR\bstreamId\x12#\n" +
-	"\rinternal_name\x18\x05 \x01(\tR\finternalName\x12\x14\n" +
+	"\tstream_id\x18\x04 \x01(\tR\bstreamId\x120\n" +
+	"\x14stream_internal_name\x18\x05 \x01(\tR\x12streamInternalName\x12\x14\n" +
 	"\x05title\x18\x06 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\a \x01(\tR\vdescription\x12\x1d\n" +
 	"\n" +
@@ -7340,20 +7352,20 @@ const file_commodore_proto_rawDesc = "" +
 	"\tclip_mode\x18\n" +
 	" \x01(\tR\bclipMode\x12\x1f\n" +
 	"\vplayback_id\x18\v \x01(\tR\n" +
-	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\f \x01(\tR\x14artifactInternalName\x12*\n" +
+	"playbackId\x12#\n" +
+	"\rinternal_name\x18\f \x01(\tR\finternalName\x12*\n" +
 	"\x11origin_cluster_id\x18\r \x01(\tR\x0foriginClusterId\"2\n" +
 	"\x15ResolveDVRHashRequest\x12\x19\n" +
-	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\"\xa9\x02\n" +
+	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\"\xa5\x02\n" +
 	"\x16ResolveDVRHashResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x1b\n" +
-	"\tstream_id\x18\x04 \x01(\tR\bstreamId\x12#\n" +
-	"\rinternal_name\x18\x05 \x01(\tR\finternalName\x12\x1f\n" +
+	"\tstream_id\x18\x04 \x01(\tR\bstreamId\x120\n" +
+	"\x14stream_internal_name\x18\x05 \x01(\tR\x12streamInternalName\x12\x1f\n" +
 	"\vplayback_id\x18\x06 \x01(\tR\n" +
-	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\a \x01(\tR\x14artifactInternalName\x12*\n" +
+	"playbackId\x12#\n" +
+	"\rinternal_name\x18\a \x01(\tR\finternalName\x12*\n" +
 	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\":\n" +
 	"\x18ResolveIdentifierRequest\x12\x1e\n" +
 	"\n" +
@@ -7382,15 +7394,15 @@ const file_commodore_proto_rawDesc = "" +
 	"\x06_titleB\x0e\n" +
 	"\f_descriptionB\x0f\n" +
 	"\r_content_typeB\r\n" +
-	"\v_size_bytes\"\x9e\x01\n" +
+	"\v_size_bytes\"\x8d\x01\n" +
 	"\x13RegisterVodResponse\x12\x19\n" +
 	"\bvod_hash\x18\x01 \x01(\tR\avodHash\x12\x15\n" +
 	"\x06vod_id\x18\x02 \x01(\tR\x05vodId\x12\x1f\n" +
 	"\vplayback_id\x18\x03 \x01(\tR\n" +
-	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\"2\n" +
+	"playbackId\x12#\n" +
+	"\rinternal_name\x18\x04 \x01(\tR\finternalName\"2\n" +
 	"\x15ResolveVodHashRequest\x12\x19\n" +
-	"\bvod_hash\x18\x01 \x01(\tR\avodHash\"\xbb\x02\n" +
+	"\bvod_hash\x18\x01 \x01(\tR\avodHash\"\xaa\x02\n" +
 	"\x16ResolveVodHashResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -7399,38 +7411,38 @@ const file_commodore_proto_rawDesc = "" +
 	"\x05title\x18\x05 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x06 \x01(\tR\vdescription\x12\x1f\n" +
 	"\vplayback_id\x18\a \x01(\tR\n" +
-	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\b \x01(\tR\x14artifactInternalName\x12*\n" +
+	"playbackId\x12#\n" +
+	"\rinternal_name\x18\b \x01(\tR\finternalName\x12*\n" +
 	"\x11origin_cluster_id\x18\t \x01(\tR\x0foriginClusterId\",\n" +
 	"\x13ResolveVodIDRequest\x12\x15\n" +
-	"\x06vod_id\x18\x01 \x01(\tR\x05vodId\"\xd4\x01\n" +
+	"\x06vod_id\x18\x01 \x01(\tR\x05vodId\"\xc3\x01\n" +
 	"\x14ResolveVodIDResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x19\n" +
 	"\bvod_hash\x18\x04 \x01(\tR\avodHash\x12\x1f\n" +
 	"\vplayback_id\x18\x05 \x01(\tR\n" +
-	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\x06 \x01(\tR\x14artifactInternalName\"C\n" +
+	"playbackId\x12#\n" +
+	"\rinternal_name\x18\x06 \x01(\tR\finternalName\"C\n" +
 	" ResolveArtifactPlaybackIDRequest\x12\x1f\n" +
 	"\vplayback_id\x18\x01 \x01(\tR\n" +
-	"playbackId\"\xfd\x02\n" +
+	"playbackId\"\xec\x02\n" +
 	"!ResolveArtifactPlaybackIDResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12#\n" +
-	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x124\n" +
-	"\x16artifact_internal_name\x18\x03 \x01(\tR\x14artifactInternalName\x12\x1b\n" +
+	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12#\n" +
+	"\rinternal_name\x18\x03 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x05 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tstream_id\x18\x06 \x01(\tR\bstreamId\x12!\n" +
 	"\fcontent_type\x18\a \x01(\tR\vcontentType\x12*\n" +
 	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\x12E\n" +
-	"\rcluster_peers\x18\t \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\"Z\n" +
-	"\"ResolveArtifactInternalNameRequest\x124\n" +
-	"\x16artifact_internal_name\x18\x01 \x01(\tR\x14artifactInternalName\"\xff\x02\n" +
+	"\rcluster_peers\x18\t \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\"I\n" +
+	"\"ResolveArtifactInternalNameRequest\x12#\n" +
+	"\rinternal_name\x18\x01 \x01(\tR\finternalName\"\xee\x02\n" +
 	"#ResolveArtifactInternalNameResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12#\n" +
-	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x124\n" +
-	"\x16artifact_internal_name\x18\x03 \x01(\tR\x14artifactInternalName\x12\x1b\n" +
+	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12#\n" +
+	"\rinternal_name\x18\x03 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x05 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tstream_id\x18\x06 \x01(\tR\bstreamId\x12!\n" +

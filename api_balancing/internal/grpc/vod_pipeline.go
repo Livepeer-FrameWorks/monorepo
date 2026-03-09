@@ -42,8 +42,8 @@ func GetVodPipeline() *VodPipeline {
 
 // StartPipeline queues a process job for a newly uploaded VOD.
 // Called from CompleteVodUpload after S3 multipart is finalized.
-func (p *VodPipeline) StartPipeline(ctx context.Context, tenantID, artifactHash string) error {
-	_, err := jobs.InsertProcessingJob(ctx, p.db, tenantID, artifactHash, "process", nil)
+func (p *VodPipeline) StartPipeline(ctx context.Context, tenantID, artifactHash, processesJSON string) error {
+	_, err := jobs.InsertProcessingJob(ctx, p.db, tenantID, artifactHash, "process", nil, processesJSON)
 	if err != nil {
 		p.logger.WithError(err).WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
@@ -147,30 +147,6 @@ func (p *VodPipeline) markArtifactReady(ctx context.Context, log *logrus.Entry, 
 		vodData := &pb.VodLifecycleData{
 			Status:      pb.VodLifecycleData_STATUS_COMPLETED,
 			VodHash:     artifactHash,
-			TenantId:    &tenantID,
-			CompletedAt: proto.Int64(time.Now().Unix()),
-		}
-		go func() { _ = p.decklogClient.SendVodLifecycle(vodData) }()
-	}
-}
-
-func (p *VodPipeline) failArtifact(ctx context.Context, artifactHash, tenantID, errorMsg string) {
-	_, err := p.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = 'failed',
-		    error_message = $2,
-		    updated_at = NOW()
-		WHERE artifact_hash = $1
-	`, artifactHash, errorMsg)
-	if err != nil {
-		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to mark artifact as failed")
-	}
-
-	if p.decklogClient != nil {
-		vodData := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_FAILED,
-			VodHash:     artifactHash,
-			Error:       &errorMsg,
 			TenantId:    &tenantID,
 			CompletedAt: proto.Int64(time.Now().Unix()),
 		}

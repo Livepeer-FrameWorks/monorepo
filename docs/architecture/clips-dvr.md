@@ -123,7 +123,7 @@ Helmsman (progress update)
 Foghorn (updates foghorn.artifacts)
     │
     ▼
-Decklog (Kafka event with tenant_id, user_id, internal_name)
+Decklog (Kafka event with tenant_id, user_id, stream_internal_name)
     │
     ├──▶ Periscope Ingest (writes to ClickHouse artifact_state_current)
     │
@@ -137,10 +137,10 @@ Foghorn stores denormalized context for event emission fallbacks:
 ```sql
 foghorn.artifacts (
   artifact_hash VARCHAR(32) PRIMARY KEY,
-  internal_name VARCHAR(255),  -- Stream identifier
-  artifact_internal_name VARCHAR(64), -- Artifact routing name (vod+<name>)
-  tenant_id UUID NOT NULL,     -- Required; denormalized for routing
-  user_id UUID,                -- Denormalized fallback
+  internal_name VARCHAR(255),          -- Artifact routing name (MistServer stream: vod+{this})
+  stream_internal_name VARCHAR(255),   -- Source stream routing name (the live stream this was clipped/recorded from)
+  tenant_id UUID NOT NULL,             -- Required; denormalized for routing
+  user_id UUID,                        -- Denormalized fallback
   ...
 )
 ```
@@ -188,7 +188,7 @@ Gateway -> Commodore.CreateClip(tenant_id, stream_id, timing)
   +-- 2. Generate clip_hash
   +-- 3. INSERT into commodore.clips
   |
-  +-> Foghorn.CreateClip(clip_hash, timing, internal_name)
+  +-> Foghorn.CreateClip(clip_hash, timing, stream_internal_name)
         +-- 4. INSERT into foghorn.artifacts (status='requested')
         +-- 5. Select storage node
         +-- 6. Send ClipPullRequest to Helmsman
@@ -217,7 +217,7 @@ Helmsman -> Foghorn (ClipLifecycle event with request_id + clip_hash)
   +-- 1. Lookup clip context by request_id in foghorn.artifacts
   +-- 2. Resolve canonical context via Commodore.ResolveClipHash(clip_hash)
   +-- 3. If Commodore unavailable, fall back to denormalized tenant_id/user_id
-  +-- 4. Emit enriched event to Decklog with tenant_id/user_id/internal_name
+  +-- 4. Emit enriched event to Decklog with tenant_id/user_id/stream_internal_name
 ```
 
 ### Freeze/Defrost Flow (S3 Sync)
@@ -279,7 +279,8 @@ message PrepareArtifactResponse {
   string error = 5;
   map<string, string> segment_urls = 6; // DVR: segment filename → presigned GET URL
   string format = 7;                  // mp4, m3u8, etc.
-  string internal_name = 8;           // Stream internal name for routing
+  string internal_name = 8;           // Artifact routing name (vod+{this})
+  string stream_internal_name = 9;   // Source stream routing name
 }
 ```
 

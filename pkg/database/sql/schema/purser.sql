@@ -217,6 +217,12 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
     is_default_prepaid BOOLEAN DEFAULT false,
     is_default_postpaid BOOLEAN DEFAULT false,
 
+    -- ===== MISTSERVER PROCESS DEFINITIONS =====
+    -- Raw JSON arrays of MistServer process objects per stream type.
+    -- Use {{gateway_url}} placeholder for Livepeer broadcaster address.
+    processes_live JSONB DEFAULT '[]',
+    processes_vod JSONB DEFAULT '[]',
+
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -707,3 +713,11 @@ CREATE TABLE IF NOT EXISTS purser.tenant_balance_rollups (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenant_balance_rollups_last_topup ON purser.tenant_balance_rollups(last_topup_at);
+
+-- ============================================================================
+-- MIGRATIONS (idempotent column additions for existing databases)
+-- ============================================================================
+
+ALTER TABLE purser.billing_tiers
+  ADD COLUMN IF NOT EXISTS processes_live JSONB DEFAULT '[]',
+  ADD COLUMN IF NOT EXISTS processes_vod JSONB DEFAULT '[]';

@@ -151,7 +151,7 @@ func getClipLifecycleContextByRequestID(requestID string) clipLifecycleContext {
 	var fallbackTenantID sql.NullString
 	var fallbackUserID sql.NullString
 	err := db.QueryRowContext(queryCtx, `
-		SELECT artifact_hash, internal_name, tenant_id, user_id
+		SELECT artifact_hash, COALESCE(stream_internal_name, ''), tenant_id, user_id
 		FROM foghorn.artifacts
 		WHERE request_id = $1 AND artifact_type = 'clip'
 	`, requestID).Scan(&clipHash, &internalName, &fallbackTenantID, &fallbackUserID)
@@ -188,8 +188,8 @@ func getClipLifecycleContextByRequestID(requestID string) clipLifecycleContext {
 	if resp.UserId != "" {
 		ctx.UserID = resp.UserId
 	}
-	if resp.InternalName != "" {
-		ctx.InternalName = resp.InternalName
+	if resp.StreamInternalName != "" {
+		ctx.InternalName = resp.StreamInternalName
 	}
 	if resp.StreamId != "" {
 		ctx.StreamID = resp.StreamId
@@ -292,7 +292,7 @@ func Init(
 						return nil
 					}
 				}(),
-				InternalName: func() *string {
+				StreamInternalName: func() *string {
 					if cctx.InternalName != "" {
 						return &cctx.InternalName
 					} else {
@@ -350,7 +350,7 @@ func Init(
 						return nil
 					}
 				}(),
-				InternalName: func() *string {
+				StreamInternalName: func() *string {
 					if cctx.InternalName != "" {
 						return &cctx.InternalName
 					} else {
@@ -479,7 +479,7 @@ func Init(
 			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
 				tenantIDStr = resp.TenantId
 				userIDStr = resp.UserId
-				internalNameStr = resp.InternalName
+				internalNameStr = resp.StreamInternalName
 				streamID = resp.StreamId
 			}
 		}
@@ -503,7 +503,7 @@ func Init(
 			dvrData.TenantId = &tenantIDStr
 		}
 		if internalNameStr != "" {
-			dvrData.InternalName = &internalNameStr
+			dvrData.StreamInternalName = &internalNameStr
 		}
 		if streamID != "" {
 			dvrData.StreamId = &streamID
@@ -561,7 +561,7 @@ func Init(
 			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
 				tenantIDStr = resp.TenantId
 				userIDStr = resp.UserId
-				internalNameStr = resp.InternalName
+				internalNameStr = resp.StreamInternalName
 				streamID = resp.StreamId
 			}
 		}
@@ -585,7 +585,7 @@ func Init(
 			dvrData.TenantId = &tenantIDStr
 		}
 		if internalNameStr != "" {
-			dvrData.InternalName = &internalNameStr
+			dvrData.StreamInternalName = &internalNameStr
 		}
 		if streamID != "" {
 			dvrData.StreamId = &streamID
@@ -631,12 +631,12 @@ func Init(
 
 		// Try clip first
 		if resp, err := commodoreClient.ResolveClipHash(ctx, clipHash); err == nil && resp.Found {
-			return resp.TenantId, resp.InternalName, nil
+			return resp.TenantId, resp.StreamInternalName, nil
 		}
 
 		// Fallback to DVR
 		if resp, err := commodoreClient.ResolveDVRHash(ctx, clipHash); err == nil && resp.Found {
-			return resp.TenantId, resp.InternalName, nil
+			return resp.TenantId, resp.StreamInternalName, nil
 		}
 
 		return "", "", nil

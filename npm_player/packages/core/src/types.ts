@@ -216,6 +216,8 @@ export interface ContentMetadata {
   dvrStatus?: "recording" | "completed";
   /** Native container format: mp4, m3u8, webm, etc. */
   format?: string;
+  /** Chandler URL for pre-generated sprite VTT (DVR/defrost fallback when no embedded thumbvtt track) */
+  thumbnailSpriteVttUrl?: string;
   /** MistServer authoritative snapshot (merged into this metadata) */
   mist?: MistStreamInfo;
   /** Parsed track summary (derived from Mist metadata when available) */

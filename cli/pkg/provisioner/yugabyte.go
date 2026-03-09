@@ -29,7 +29,7 @@ func NewYugabyteProvisioner(pool *ssh.Pool) (Provisioner, error) {
 // Detect checks if YugabyteDB is installed and running
 func (y *YugabyteProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
 	result, err := y.RunCommand(ctx, host, "pgrep -x yb-master && pgrep -x yb-tserver && echo RUNNING || echo NOT_RUNNING")
-	if err != nil {
+	if err != nil { //nolint:nilerr // pgrep failure means service not running, not an error
 		return &detect.ServiceState{Exists: false, Running: false}, nil
 	}
 
@@ -273,7 +273,7 @@ func (y *YugabyteProvisioner) Validate(ctx context.Context, host inventory.Host,
 	defer db.Close()
 
 	var version string
-	if err := db.QueryRow("SELECT version()").Scan(&version); err != nil {
+	if err = db.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
 		return fmt.Errorf("yugabyte YSQL query failed: %w", err)
 	}
 

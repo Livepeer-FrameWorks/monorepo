@@ -30,6 +30,8 @@ const (
 	// Processing billing triggers (from MistProcLivepeer and MistProcAV)
 	TriggerLivepeerSegmentComplete  TriggerType = "LIVEPEER_SEGMENT_COMPLETE"
 	TriggerProcessAVSegmentComplete TriggerType = "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE"
+	// Dynamic process configuration trigger (blocking)
+	TriggerStreamProcess TriggerType = "STREAM_PROCESS"
 	// Thumbnail asset triggers (from process_thumbs)
 	TriggerThumbnailUpdated TriggerType = "THUMBNAIL_UPDATED"
 	// Polled-from-Helmsman trigger types.
@@ -92,6 +94,16 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		}
 		mistTrigger.TriggerPayload = &pb.MistTrigger_StreamSource{
 			StreamSource: &pb.StreamSourceTrigger{
+				StreamName: params[0],
+			},
+		}
+
+	case TriggerStreamProcess:
+		if len(params) < 1 {
+			return nil, fmt.Errorf("STREAM_PROCESS requires at least 1 parameter, got %d", len(params))
+		}
+		mistTrigger.TriggerPayload = &pb.MistTrigger_StreamProcess{
+			StreamProcess: &pb.StreamProcessTrigger{
 				StreamName: params[0],
 			},
 		}
@@ -365,7 +377,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 
 // ExtractInternalName extracts internal name from stream name (handles wildcard format)
 func ExtractInternalName(streamName string) string {
-	for _, prefix := range []string{"live+", "vod+"} {
+	for _, prefix := range []string{"live+", "vod+", "processing+"} {
 		if strings.HasPrefix(streamName, prefix) {
 			return strings.TrimPrefix(streamName, prefix)
 		}
@@ -377,7 +389,7 @@ func ExtractInternalName(streamName string) string {
 // IsBlocking returns whether the trigger type requires a blocking response
 func (t TriggerType) IsBlocking() bool {
 	switch t {
-	case TriggerPushRewrite, TriggerPlayRewrite, TriggerStreamSource, TriggerPushOutStart, TriggerUserNew:
+	case TriggerPushRewrite, TriggerPlayRewrite, TriggerStreamSource, TriggerStreamProcess, TriggerPushOutStart, TriggerUserNew:
 		return true
 	default:
 		return false

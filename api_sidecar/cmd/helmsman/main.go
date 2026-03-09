@@ -143,6 +143,7 @@ func main() {
 		webhooks.POST("/mist/push_rewrite", handlers.HandlePushRewrite)
 		webhooks.POST("/mist/play_rewrite", handlers.HandlePlayRewrite)
 		webhooks.POST("/mist/stream_source", handlers.HandleStreamSource)
+		webhooks.POST("/mist/stream_process", handlers.HandleStreamProcess)
 
 		// MistServer Webhooks (for event forwarding)
 		webhooks.POST("/mist/push_end", handlers.HandlePushEnd)

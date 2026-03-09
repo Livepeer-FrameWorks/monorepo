@@ -102,7 +102,7 @@ func (j *PurgeDeletedJob) purge() {
 	// 1. Purge deleted artifacts (clips and DVRs)
 	// Find artifacts ready for hard deletion (deleted status, no active node copies)
 	rows, err := j.db.QueryContext(ctx, `
-		SELECT artifact_hash, artifact_type, internal_name, manifest_path, COALESCE(s3_url, '')
+		SELECT artifact_hash, artifact_type, stream_internal_name, manifest_path, COALESCE(s3_url, '')
 		FROM foghorn.artifacts
 		WHERE status = 'deleted'
 		  AND updated_at < NOW() - $1::interval

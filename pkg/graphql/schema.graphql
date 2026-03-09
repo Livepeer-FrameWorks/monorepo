@@ -5664,6 +5664,7 @@ type PlaybackMetadata {
   recordingSizeBytes: Float
   clipSource: String
   createdAt: Time
+  thumbnailSpriteVttUrl: String
 }
 
 # Track information for playback (matches proto PlaybackTrack)

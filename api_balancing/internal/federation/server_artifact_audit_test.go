@@ -37,8 +37,8 @@ func TestPrepareArtifactRejectsInconsistentS3Metadata(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
-		AddRow("stream-a", "clip", "mp4", "s3", "failed", 1024)
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "failed", 1024)
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
@@ -69,8 +69,8 @@ func TestPrepareArtifactRejectsTypeMismatch(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
-		AddRow("stream-a", "clip", "mp4", "s3", "synced", 1024)
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("stream-a", "source-stream-a", "clip", "mp4", "s3", "synced", 1024)
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
@@ -107,8 +107,8 @@ func TestCreateRemoteClipRejectsTenantMismatch(t *testing.T) {
 	cc := &clipCreatorSpy{}
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), ClipCreator: cc})
 	resp, err := srv.CreateRemoteClip(serviceAuthContext(), &pb.RemoteClipRequest{
-		InternalName: "stream-a",
-		TenantId:     "tenant-other",
+		StreamInternalName: "stream-a",
+		TenantId:           "tenant-other",
 	})
 	if err != nil {
 		t.Fatalf("CreateRemoteClip() err = %v", err)
@@ -133,8 +133,8 @@ func TestCreateRemoteDVRRejectsTenantMismatch(t *testing.T) {
 	dc := &dvrCreatorSpy{}
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), DVRCreator: dc})
 	resp, err := srv.CreateRemoteDVR(serviceAuthContext(), &pb.RemoteDVRRequest{
-		InternalName: "stream-a",
-		TenantId:     "tenant-other",
+		StreamInternalName: "stream-a",
+		TenantId:           "tenant-other",
 	})
 	if err != nil {
 		t.Fatalf("CreateRemoteDVR() err = %v", err)

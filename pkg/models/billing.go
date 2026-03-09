@@ -11,12 +11,13 @@ import (
 // NOTE: Enforcement limits (max_streams, max_viewers, bandwidth caps) belong
 // in quartermaster.tenant_cluster_assignments, not here. This is billing only.
 type BillingFeatures struct {
-	Recording      bool   `json:"recording"`
-	Analytics      bool   `json:"analytics"`
-	CustomBranding bool   `json:"custom_branding,omitempty"`
-	APIAccess      bool   `json:"api_access,omitempty"`
-	SupportLevel   string `json:"support_level"` // "community", "basic", "priority", "enterprise", "dedicated"
-	SLA            bool   `json:"sla,omitempty"`
+	Recording              bool   `json:"recording"`
+	Analytics              bool   `json:"analytics"`
+	CustomBranding         bool   `json:"custom_branding,omitempty"`
+	APIAccess              bool   `json:"api_access,omitempty"`
+	SupportLevel           string `json:"support_level"` // "community", "basic", "priority", "enterprise", "dedicated"
+	SLA                    bool   `json:"sla,omitempty"`
+	ProcessingCustomizable bool   `json:"processing_customizable,omitempty"`
 }
 
 // AllocationDetails represents resource allocation for a billing tier
@@ -244,6 +245,10 @@ type BillingTier struct {
 	// Default tier flags
 	IsDefaultPrepaid  bool `json:"is_default_prepaid" db:"is_default_prepaid"`
 	IsDefaultPostpaid bool `json:"is_default_postpaid" db:"is_default_postpaid"`
+
+	// MistServer process definitions (raw JSON arrays with {{gateway_url}} placeholder)
+	ProcessesLive json.RawMessage `json:"processes_live" db:"processes_live"`
+	ProcessesVod  json.RawMessage `json:"processes_vod" db:"processes_vod"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`

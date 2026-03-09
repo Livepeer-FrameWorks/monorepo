@@ -460,14 +460,6 @@ func main() {
 		logger.Info("S3 cold storage disabled (no STORAGE_S3_BUCKET configured)")
 	}
 
-	// Livepeer Gateway URL (optional - enables H.264 transcoding via Livepeer network)
-	if livepeerGatewayURL := config.GetEnv("LIVEPEER_GATEWAY_URL", ""); livepeerGatewayURL != "" {
-		control.SetLivepeerGatewayURL(livepeerGatewayURL)
-		logger.WithField("gateway_url", livepeerGatewayURL).Info("Livepeer Gateway enabled for H.264 transcoding")
-	} else {
-		logger.Info("Livepeer Gateway disabled (no LIVEPEER_GATEWAY_URL configured)")
-	}
-
 	// --- Federation (cross-cluster stream routing) ---
 	federationEnabled := config.GetEnv("FEDERATION_ENABLED", "false") == "true"
 	var federationServer *federation.FederationServer
@@ -733,6 +725,8 @@ func main() {
 		DB:     db,
 		Logger: logger,
 	})
+	processingDispatcher.SetProcessConfigCacher(triggerProcessor)
+	processingDispatcher.SetGatewayResolver(triggerProcessor)
 	processingDispatcher.Start()
 	defer processingDispatcher.Stop()
 
@@ -758,6 +752,9 @@ func main() {
 	// Viewer playback routes - generic player redirects via foghorn.* domain
 	router.GET("/play/*path", handlers.HandleGenericViewerPlayback)
 	router.GET("/resolve/*path", handlers.HandleGenericViewerPlayback)
+
+	// Livepeer gateway auth webhook — validates incoming segments against active streams
+	router.POST("/webhooks/livepeer/auth", handlers.HandleLivepeerAuth)
 
 	// MistServer Compatibility - stream key routing for Helmsman/MistServer
 	router.NoRoute(handlers.MistServerCompatibilityHandler)

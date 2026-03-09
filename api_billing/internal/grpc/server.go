@@ -75,23 +75,25 @@ func scanBillingFeatures(data []byte) *pb.BillingFeatures {
 		return nil
 	}
 	var raw struct {
-		Recording      bool   `json:"recording"`
-		Analytics      bool   `json:"analytics"`
-		CustomBranding bool   `json:"custom_branding"`
-		APIAccess      bool   `json:"api_access"`
-		SupportLevel   string `json:"support_level"`
-		SLA            bool   `json:"sla"`
+		Recording              bool   `json:"recording"`
+		Analytics              bool   `json:"analytics"`
+		CustomBranding         bool   `json:"custom_branding"`
+		APIAccess              bool   `json:"api_access"`
+		SupportLevel           string `json:"support_level"`
+		SLA                    bool   `json:"sla"`
+		ProcessingCustomizable bool   `json:"processing_customizable"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
 	return &pb.BillingFeatures{
-		Recording:      raw.Recording,
-		Analytics:      raw.Analytics,
-		CustomBranding: raw.CustomBranding,
-		ApiAccess:      raw.APIAccess,
-		SupportLevel:   raw.SupportLevel,
-		Sla:            raw.SLA,
+		Recording:              raw.Recording,
+		Analytics:              raw.Analytics,
+		CustomBranding:         raw.CustomBranding,
+		ApiAccess:              raw.APIAccess,
+		SupportLevel:           raw.SupportLevel,
+		Sla:                    raw.SLA,
+		ProcessingCustomizable: raw.ProcessingCustomizable,
 	}
 }
 
@@ -304,7 +306,8 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 		       support_level, sla_level, metering_enabled, overage_rates,
 		       is_active, tier_level, is_enterprise,
 		       created_at, updated_at,
-		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false)
+		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false),
+		       processes_live, processes_vod
 		FROM purser.billing_tiers
 		%s
 		ORDER BY tier_level %s, id %s
@@ -323,6 +326,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 		var tier pb.BillingTier
 		var createdAt, updatedAt time.Time
 		var bandwidthAlloc, storageAlloc, computeAlloc, features, overageRates []byte
+		var processesLive, processesVod sql.NullString
 
 		err := rows.Scan(
 			&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
@@ -332,6 +336,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 			&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
 			&createdAt, &updatedAt,
 			&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
+			&processesLive, &processesVod,
 		)
 		if err != nil {
 			s.logger.WithError(err).Warn("Failed to scan billing tier")
@@ -345,6 +350,12 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 		tier.OverageRates = scanOverageRates(overageRates)
 		tier.CreatedAt = timestamppb.New(createdAt)
 		tier.UpdatedAt = timestamppb.New(updatedAt)
+		if processesLive.Valid {
+			tier.ProcessesLive = processesLive.String
+		}
+		if processesVod.Valid {
+			tier.ProcessesVod = processesVod.String
+		}
 		tiers = append(tiers, &tier)
 	}
 
@@ -391,6 +402,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 	var tier pb.BillingTier
 	var createdAt, updatedAt time.Time
 	var bandwidthAlloc, storageAlloc, computeAlloc, features, overageRates []byte
+	var processesLive, processesVod sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, tier_name, display_name, description, base_price, currency, billing_period,
@@ -398,7 +410,8 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 		       support_level, sla_level, metering_enabled, overage_rates,
 		       is_active, tier_level, is_enterprise,
 		       created_at, updated_at,
-		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false)
+		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false),
+		       processes_live, processes_vod
 		FROM purser.billing_tiers
 		WHERE id = $1
 	`, tierID).Scan(
@@ -409,6 +422,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 		&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
 		&createdAt, &updatedAt,
 		&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
+		&processesLive, &processesVod,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -426,6 +440,12 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 	tier.OverageRates = scanOverageRates(overageRates)
 	tier.CreatedAt = timestamppb.New(createdAt)
 	tier.UpdatedAt = timestamppb.New(updatedAt)
+	if processesLive.Valid {
+		tier.ProcessesLive = processesLive.String
+	}
+	if processesVod.Valid {
+		tier.ProcessesVod = processesVod.String
+	}
 
 	return &tier, nil
 }
@@ -1946,6 +1966,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	// JSONB fields
 	var customPricing, customFeatures, customAllocations, billingAddress []byte
 	var bandwidthAlloc, storageAlloc, computeAlloc, features, overageRates []byte
+	var processesLive, processesVod sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
@@ -1964,7 +1985,8 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 			bt.bandwidth_allocation, bt.storage_allocation, bt.compute_allocation,
 			bt.features, bt.support_level, bt.sla_level,
 			bt.metering_enabled, bt.overage_rates, bt.is_active,
-			bt.tier_level, bt.is_enterprise, bt.created_at, bt.updated_at
+			bt.tier_level, bt.is_enterprise, bt.created_at, bt.updated_at,
+			bt.processes_live, bt.processes_vod
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 		WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
@@ -1986,7 +2008,8 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		&bandwidthAlloc, &storageAlloc, &computeAlloc,
 		&features, &tier.SupportLevel, &tier.SlaLevel,
 		&tier.MeteringEnabled, &overageRates, &tier.IsActive,
-		&tier.TierLevel, &tier.IsEnterprise, &tierCreatedAt, &tierUpdatedAt)
+		&tier.TierLevel, &tier.IsEnterprise, &tierCreatedAt, &tierUpdatedAt,
+		&processesLive, &processesVod)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithField("tenant_id", tenantID).Warn("getSubscriptionAndTier: NO SUBSCRIPTION FOUND - returning free tier fallback")
@@ -2080,6 +2103,12 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	tier.ComputeAllocation = scanAllocationDetails(computeAlloc)
 	tier.Features = scanBillingFeatures(features)
 	tier.OverageRates = scanOverageRates(overageRates)
+	if processesLive.Valid {
+		tier.ProcessesLive = processesLive.String
+	}
+	if processesVod.Valid {
+		tier.ProcessesVod = processesVod.String
+	}
 
 	return &subscription, &tier, nil
 }

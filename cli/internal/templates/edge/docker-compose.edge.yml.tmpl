@@ -20,6 +20,7 @@ services:
   mistserver:
     image: mistserver:latest
     container_name: mistserver
+    command: ["MistController", "-c", "/etc/mistserver.conf", "-a", "frameworks:{{MIST_API_PASSWORD}}"]
     shm_size: "1g"
     ulimits:
       nofile:
@@ -27,6 +28,7 @@ services:
         hard: 1048576
     environment:
       - MIST_DEBUG=3
+      - MIST_PASSWORD={{MIST_API_PASSWORD}}
     expose:
       - "8080"
     restart: unless-stopped
@@ -44,6 +46,9 @@ services:
       - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
       - MISTSERVER_URL=http://mistserver:8080
       - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
+      - MIST_API_USERNAME=frameworks
+      - MIST_API_PASSWORD={{MIST_API_PASSWORD}}
+      - MIST_PASSWORD={{MIST_API_PASSWORD}}
     volumes:
       - ./certs:/etc/frameworks/certs
       - caddy_admin:/run/caddy

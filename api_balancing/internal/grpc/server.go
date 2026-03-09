@@ -310,7 +310,7 @@ func (s *FoghornGRPCServer) emitDVRStartFailure(req *pb.StartDVRRequest, reason 
 	dvrData := &pb.DVRLifecycleData{
 		Status: pb.DVRLifecycleData_STATUS_FAILED,
 		Error:  &reason,
-		InternalName: func() *string {
+		StreamInternalName: func() *string {
 			if req.InternalName != "" {
 				return &req.InternalName
 			}
@@ -420,8 +420,8 @@ func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClip
 	if req.TenantId != "" {
 		data.TenantId = &req.TenantId
 	}
-	if req.InternalName != "" {
-		data.InternalName = &req.InternalName
+	if req.StreamInternalName != "" {
+		data.StreamInternalName = &req.StreamInternalName
 	}
 	if req.StreamId != nil && *req.StreamId != "" {
 		data.StreamId = req.StreamId
@@ -458,14 +458,14 @@ func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClip
 
 // CreateClip creates a new clip from a stream
 func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
-	if req.InternalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
+	if req.StreamInternalName == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_internal_name is required")
 	}
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	if req.GetArtifactInternalName() == "" {
-		return nil, status.Error(codes.InvalidArgument, "artifact_internal_name is required")
+	if req.GetInternalName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
 
 	format := req.GetFormat()
@@ -475,7 +475,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 
 	// Select ingest node (cap=ingest)
 	ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
-	ingestHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(ictx, req.InternalName, 0, 0, map[string]int{}, "", true)
+	ingestHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(ictx, req.StreamInternalName, 0, 0, map[string]int{}, "", true)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "no ingest node available: %v", err)
 	}
@@ -519,7 +519,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	} else {
 		// Fallback: generate locally (legacy, should not happen with Commodore integration)
 		var errHash error
-		clipHash, errHash = clips.GenerateClipHash(req.InternalName, startMs, durationMs)
+		clipHash, errHash = clips.GenerateClipHash(req.StreamInternalName, startMs, durationMs)
 		if errHash != nil {
 			s.logger.WithError(errHash).Error("Failed to generate clip hash")
 			return nil, status.Error(codes.Internal, "failed to generate clip hash")
@@ -527,7 +527,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 
 	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
-	clipCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId())
+	clipCluster := s.enrichClusterID(req.GetClusterId(), req.StreamInternalName, req.GetTenantId())
 	if s.decklogClient != nil {
 		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
 		if clipCluster != "" {
@@ -563,11 +563,11 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	// NOTE: Business registry (tenant, user, title, etc.) is stored in commodore.clips
 	// tenant_id and user_id are denormalized here for Decklog events and fallback when Commodore is unavailable
 	// retention_until defaults to 30 days (system default, not user-configured yet)
-	storagePath := clips.BuildClipStoragePath(req.InternalName, clipHash, format)
+	storagePath := clips.BuildClipStoragePath(req.StreamInternalName, clipHash, format)
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, internal_name, artifact_internal_name, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
+		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, internal_name, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
 		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'requested', $6, $7, $8, $9, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, clipHash, req.InternalName, req.GetArtifactInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster)
+	`, clipHash, req.StreamInternalName, req.GetInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster)
 
 	if err != nil {
 		// Commodore registration succeeded (clip_hash provided) but Foghorn insert failed
@@ -575,7 +575,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		// RetentionJob will eventually clean up orphan artifacts
 		s.logger.WithFields(logging.Fields{
 			"clip_hash":     clipHash,
-			"internal_name": req.InternalName,
+			"internal_name": req.StreamInternalName,
 			"error":         err,
 		}).Error("Failed to store clip artifact in database (Commodore record persists)")
 		return nil, status.Error(codes.Internal, "failed to store artifact")
@@ -595,7 +595,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	// Send gRPC message to storage Helmsman
 	clipReq := &pb.ClipPullRequest{
 		ClipHash:      clipHash,
-		StreamName:    req.InternalName,
+		StreamName:    req.StreamInternalName,
 		Format:        format,
 		OutputName:    clipHash,
 		SourceBaseUrl: control.DeriveMistHTTPBase(ingestHost),
@@ -651,7 +651,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 
 	// Update stream state
-	state.DefaultManager().UpdateStreamInstanceInfo(req.InternalName, storageNodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(req.StreamInternalName, storageNodeID, map[string]interface{}{
 		"clip_status":     "requested",
 		"clip_request_id": reqID,
 		"clip_format":     format,
@@ -685,7 +685,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 		denormUserID   sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT status, size_bytes, retention_until, internal_name, tenant_id, user_id
+		SELECT status, size_bytes, retention_until, stream_internal_name, tenant_id, user_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
 	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID)
@@ -807,7 +807,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	var existingHash string
 	_ = s.db.QueryRowContext(ctx, `
 		SELECT artifact_hash FROM foghorn.artifacts
-		WHERE internal_name=$1 AND artifact_type='dvr' AND status IN ('requested','starting','recording')
+		WHERE stream_internal_name=$1 AND artifact_type='dvr' AND status IN ('requested','starting','recording')
 		ORDER BY created_at DESC LIMIT 1
 	`, req.InternalName).Scan(&existingHash)
 
@@ -835,11 +835,11 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	var streamID string
 	if control.CommodoreClient != nil {
 		regReq := &pb.RegisterDVRRequest{
-			TenantId:        req.TenantId,
-			UserId:          req.GetUserId(),
-			StreamId:        req.GetStreamId(),
-			InternalName:    req.InternalName,
-			OriginClusterId: s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId()),
+			TenantId:           req.TenantId,
+			UserId:             req.GetUserId(),
+			StreamId:           req.GetStreamId(),
+			StreamInternalName: req.InternalName,
+			OriginClusterId:    s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId()),
 		}
 		// Pass retention from request if provided
 		if req.GetExpiresAt() > 0 {
@@ -852,7 +852,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			return nil, status.Errorf(codes.Internal, "failed to register DVR: %v", err)
 		}
 		dvrHash = regResp.DvrHash
-		artifactInternalName = regResp.GetArtifactInternalName()
+		artifactInternalName = regResp.GetInternalName()
 		playbackID = regResp.GetPlaybackId()
 		streamID = regResp.GetStreamId()
 	} else {
@@ -868,7 +868,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	// retention_until defaults to 30 days (system default, not user-configured yet)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
-			artifact_hash, artifact_type, internal_name, artifact_internal_name,
+			artifact_hash, artifact_type, stream_internal_name, internal_name,
 			stream_id, tenant_id, user_id,
 			status, request_id, format, origin_cluster_id,
 			retention_until, created_at, updated_at
@@ -915,7 +915,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 					}
 					return nil
 				}(),
-				InternalName: func() *string {
+				StreamInternalName: func() *string {
 					if req.InternalName != "" {
 						return &req.InternalName
 					}
@@ -1000,7 +1000,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 					}
 					return nil
 				}(),
-				InternalName: func() *string {
+				StreamInternalName: func() *string {
 					if req.InternalName != "" {
 						return &req.InternalName
 					}
@@ -1048,7 +1048,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 				}
 				return nil
 			}(),
-			InternalName: func() *string {
+			StreamInternalName: func() *string {
 				if req.InternalName != "" {
 					return &req.InternalName
 				}
@@ -1102,7 +1102,7 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 		denormUserID   sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT status, COALESCE(internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
+		SELECT status, COALESCE(stream_internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
 	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
@@ -1185,7 +1185,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	)
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT status, COALESCE(internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
+		SELECT status, COALESCE(stream_internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
 	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
@@ -1997,8 +1997,8 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	if req.SizeBytes <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "size_bytes must be positive")
 	}
-	if req.GetArtifactInternalName() == "" {
-		return nil, status.Error(codes.InvalidArgument, "artifact_internal_name is required")
+	if req.GetInternalName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
 	if s.s3Client == nil {
 		return nil, status.Error(codes.FailedPrecondition, "S3 storage not configured")
@@ -2053,13 +2053,13 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	// Store artifact in foghorn.artifacts with status='uploading'
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
-			id, artifact_hash, artifact_type, artifact_internal_name,
+			id, artifact_hash, artifact_type, internal_name,
 			tenant_id, user_id, status,
 			sync_status, size_bytes, s3_url, format, origin_cluster_id, retention_until, created_at, updated_at
 		)
 		VALUES ($1, $2, 'vod', $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'uploading',
 		        'in_progress', $6, $7, $8, $9, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, artifactID, artifactHash, req.GetArtifactInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId())
+	`, artifactID, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId())
 
 	if err != nil {
 		// Abort S3 upload since we can't track it
@@ -2239,8 +2239,8 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 
 	// Queue processing job (metadata extraction + thumbnails + optional transcode)
 	if vodPipeline != nil {
-		if err := vodPipeline.StartPipeline(ctx, req.TenantId, artifactHash); err != nil {
-			s.logger.WithError(err).Error("Failed to start VOD processing pipeline")
+		if startErr := vodPipeline.StartPipeline(ctx, req.TenantId, artifactHash, req.ProcessesJson); startErr != nil {
+			s.logger.WithError(startErr).Error("Failed to start VOD processing pipeline")
 		}
 	}
 
@@ -2830,8 +2830,8 @@ func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
 			if resp.UserId != "" {
 				userIDStr = resp.UserId
 			}
-			if resp.InternalName != "" {
-				internalNameStr = resp.InternalName
+			if resp.StreamInternalName != "" {
+				internalNameStr = resp.StreamInternalName
 			}
 			if resp.StreamId != "" {
 				streamID = resp.StreamId
@@ -2867,7 +2867,7 @@ func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
 		clipData.TenantId = &tenantIDStr
 	}
 	if internalNameStr != "" {
-		clipData.InternalName = &internalNameStr
+		clipData.StreamInternalName = &internalNameStr
 	}
 	if streamID != "" {
 		clipData.StreamId = &streamID
@@ -2937,8 +2937,8 @@ func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
 			if resp.UserId != "" {
 				userIDStr = resp.UserId
 			}
-			if resp.InternalName != "" {
-				internalNameStr = resp.InternalName
+			if resp.StreamInternalName != "" {
+				internalNameStr = resp.StreamInternalName
 			}
 			if resp.StreamId != "" {
 				streamID = resp.StreamId
@@ -2960,7 +2960,7 @@ func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
 		dvrData.TenantId = &tenantIDStr
 	}
 	if internalNameStr != "" {
-		dvrData.InternalName = &internalNameStr
+		dvrData.StreamInternalName = &internalNameStr
 	}
 	if streamID != "" {
 		dvrData.StreamId = &streamID

@@ -368,6 +368,7 @@ enum GQL {
     recordingSizeBytes
     clipSource
     createdAt
+    thumbnailSpriteVttUrl
   }
   """
 

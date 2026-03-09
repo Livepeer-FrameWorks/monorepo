@@ -1415,10 +1415,41 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
 			env["REDIS_URL"] = fmt.Sprintf("redis://%s", addr)
 		}
+		// Chandler host/port for asset management
+		if chandler, ok := manifest.Services["chandler"]; ok && chandler.Enabled {
+			chHost := chandler.Host
+			if chHost == "" && len(chandler.Hosts) > 0 {
+				chHost = chandler.Hosts[0]
+			}
+			if h, ok := manifest.GetHost(chHost); ok {
+				chPort := chandler.Port
+				if chPort == 0 {
+					chPort = 18020
+				}
+				env["CHANDLER_HOST"] = h.ExternalIP
+				env["CHANDLER_PORT"] = strconv.Itoa(chPort)
+			}
+		}
+		// Instance ID for HA state sync — stable across restarts
+		if env["FOGHORN_INSTANCE_ID"] == "" {
+			if task.Host != "" {
+				env["FOGHORN_INSTANCE_ID"] = fmt.Sprintf("foghorn-%s", task.Host)
+			} else {
+				env["FOGHORN_INSTANCE_ID"] = "foghorn-1"
+			}
+		}
+		// Default storage base — must match helmsman's HELMSMAN_STORAGE_LOCAL_PATH
+		if env["FOGHORN_DEFAULT_STORAGE_BASE"] == "" {
+			env["FOGHORN_DEFAULT_STORAGE_BASE"] = "/var/lib/mistserver/recordings"
+		}
 	}
 	if baseName == "navigator" {
 		env["NAVIGATOR_PORT"] = "18010"
 		env["NAVIGATOR_GRPC_PORT"] = "18011"
+		if manifest.RootDomain != "" && env["NAVIGATOR_ROOT_DOMAIN"] == "" {
+			env["NAVIGATOR_ROOT_DOMAIN"] = manifest.RootDomain
+		}
+		// BRAND_CONTACT_EMAIL comes from env_file (FROM_EMAIL in production.env)
 	}
 
 	// Listmonk URL — self-hosted, address from manifest

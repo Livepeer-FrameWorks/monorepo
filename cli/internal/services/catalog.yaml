@@ -42,6 +42,7 @@ profiles:
     - chandler
   media:
     - foghorn
+    - livepeer-gateway
   edge:
     - helmsman
   interfaces:
@@ -193,6 +194,26 @@ services:
       protocol: http
       path: /health
       port: 18020
+  livepeer-gateway:
+    name: livepeer-gateway
+    title: Livepeer Gateway (Transcoding)
+    role: media
+    image: ghcr.io/livepeer-frameworks/go-livepeer:latest
+    ports: ["8935:8935"]
+    health:
+      protocol: http
+      path: /status
+      port: 8935
+  livepeer-signer:
+    name: livepeer-signer
+    title: Livepeer Signer (Remote TX Signer)
+    role: control
+    image: ghcr.io/livepeer-frameworks/go-livepeer:latest
+    ports: ["18016:18016"]
+    health:
+      protocol: http
+      path: /status
+      port: 18016
   chartroom:
     name: chartroom
     title: Chartroom (Dashboard)

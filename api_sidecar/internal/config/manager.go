@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"math"
 	"net"
 	"net/http"
@@ -68,19 +67,6 @@ func GetTenantID() string {
 	return manager.lastSeed.GetTenantId()
 }
 
-// GetProcessingConfig returns the processing configuration from the last applied ConfigSeed
-func GetProcessingConfig() *pb.ProcessingConfig {
-	if manager == nil {
-		return nil
-	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if manager.lastSeed == nil {
-		return nil
-	}
-	return manager.lastSeed.GetProcessing()
-}
-
 // GetOperationalMode returns the authoritative operational mode from the last applied ConfigSeed.
 // Foghorn is the authority; this is what Helmsman should report in heartbeats.
 func GetOperationalMode() pb.NodeOperationalMode {
@@ -99,21 +85,6 @@ func GetOperationalMode() pb.NodeOperationalMode {
 	return mode
 }
 
-// IsLivepeerGatewayAvailable returns true if Livepeer Gateway is configured and available
-func IsLivepeerGatewayAvailable() bool {
-	cfg := GetProcessingConfig()
-	return cfg != nil && cfg.GetLivepeerGatewayAvailable()
-}
-
-// GetLivepeerGatewayURL returns the Livepeer Gateway URL if available
-func GetLivepeerGatewayURL() string {
-	cfg := GetProcessingConfig()
-	if cfg == nil {
-		return ""
-	}
-	return cfg.GetLivepeerGatewayUrl()
-}
-
 // reconcile computes desired config from seed + env and applies minimal changes idempotently.
 func (m *Manager) reconcile() {
 	m.mu.Lock()
@@ -128,15 +99,6 @@ func (m *Manager) reconcile() {
 	} else {
 		m.removeTLSBundle()
 	}
-	// Log processing config if present
-	if proc := seed.GetProcessing(); proc != nil {
-		if proc.GetLivepeerGatewayAvailable() {
-			m.logger.WithField("gateway_url", proc.GetLivepeerGatewayUrl()).Info("Livepeer Gateway available for H.264 transcoding")
-		} else {
-			m.logger.Debug("No Livepeer Gateway configured, using local processing only")
-		}
-	}
-
 	current, _ := m.mistClient.ConfigBackup()
 	desiredConfig := map[string]interface{}{}
 
@@ -180,6 +142,7 @@ func (m *Manager) reconcile() {
 		"LIVEPEER_SEGMENT_COMPLETE":           []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/livepeer_segment_complete"), "sync": false}},
 		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
 		"THUMBNAIL_UPDATED":                   []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
+		"STREAM_PROCESS":                      []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+"}}},
 	}
 	desiredConfig["triggers"] = triggers
 
@@ -497,9 +460,6 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 	}
 	source := "balance:" + base + "?fallback=push://"
 
-	// Build default processes based on ProcessingConfig
-	defaultProcs := m.buildDefaultProcesses(seed.GetProcessing())
-
 	streams := map[string]map[string]interface{}{}
 	for _, t := range seed.GetTemplates() {
 		def := t.GetDef()
@@ -514,120 +474,19 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 			"tags":          def.GetTags(),
 		}
 
-		// Start with default processes (audio transcode, Livepeer if available)
-		processes := make([]map[string]interface{}, len(defaultProcs))
-		copy(processes, defaultProcs)
-
-		// Append any template-defined processes
-		if procs := def.GetProcesses(); len(procs) > 0 {
-			for _, p := range procs {
-				pm := map[string]interface{}{"process": p.GetProcess()}
-				if c := strings.TrimSpace(p.GetCodec()); c != "" {
-					pm["codec"] = c
-				}
-				if b := p.GetBitrate(); b > 0 {
-					pm["bitrate"] = b
-				}
-				if s := strings.TrimSpace(p.GetTrackSelect()); s != "" {
-					pm["track_select"] = s
-				}
-				if s := strings.TrimSpace(p.GetTrackInhibit()); s != "" {
-					pm["track_inhibit"] = s
-				}
-				if r := strings.TrimSpace(p.GetRestartType()); r != "" {
-					pm["restart_type"] = r
-				}
-				if p.GetInconsequential() {
-					pm["inconsequential"] = true
-				}
-				if p.GetExitUnmask() {
-					pm["exit_unmask"] = true
-				}
-				processes = append(processes, pm)
-			}
+		// processing+ source is resolved dynamically via STREAM_SOURCE trigger
+		if strings.HasPrefix(def.GetName(), "processing+") {
+			entry["source"] = ""
 		}
 
-		if len(processes) > 0 {
-			entry["processes"] = processes
-		}
+		// All stream types use STREAM_PROCESS trigger for per-instance process config.
+		// No static processes in wildcard definitions.
 		streams[def.GetName()] = entry
 	}
 	if len(streams) == 0 {
 		return nil
 	}
 	return m.mistClient.AddStreams(streams)
-}
-
-// buildDefaultProcesses returns MistServer processes that should always be enabled:
-// - Audio transcode (AAC↔Opus) for WebRTC-HLS compatibility
-// - Livepeer ABR transcoding when Gateway is available
-// - Thumbnail sprite sheet generation for seek-bar preview
-func (m *Manager) buildDefaultProcesses(proc *pb.ProcessingConfig) []map[string]interface{} {
-	var procs []map[string]interface{}
-
-	// Always add audio transcode processes for WebRTC-HLS compatibility
-	// AAC → Opus (for WebRTC viewers)
-	procs = append(procs, map[string]interface{}{
-		"process":       "AV",
-		"codec":         "opus",
-		"track_inhibit": "audio=opus",
-		"track_select":  "video=none",
-		"x-LSP-name":    "Audio to Opus",
-	})
-	// Opus → AAC (for HLS/native viewers)
-	procs = append(procs, map[string]interface{}{
-		"process":       "AV",
-		"codec":         "AAC",
-		"track_inhibit": "audio=aac",
-		"track_select":  "video=none",
-		"x-LSP-name":    "Audio to AAC",
-	})
-
-	// Add Livepeer process if Gateway is available
-	if proc != nil && proc.GetLivepeerGatewayAvailable() {
-		gatewayURL := proc.GetLivepeerGatewayUrl()
-		// Format for MistProcLivepeer: hardcoded_broadcasters JSON array
-		broadcasters := fmt.Sprintf(`[{"address":"%s"}]`, gatewayURL)
-
-		procs = append(procs, map[string]interface{}{
-			"process":                "Livepeer",
-			"hardcoded_broadcasters": broadcasters,
-			"target_profiles": []map[string]interface{}{
-				{
-					"name":          "480p",
-					"bitrate":       512000,
-					"fps":           15,
-					"height":        480,
-					"profile":       "H264ConstrainedHigh",
-					"track_inhibit": "video=<850x480",
-				},
-				{
-					"name":          "720p",
-					"bitrate":       1024000,
-					"fps":           25,
-					"height":        720,
-					"profile":       "H264ConstrainedHigh",
-					"track_inhibit": "video=<1281x720",
-				},
-			},
-			"track_inhibit": "video=<850x480", // Only run for streams >= 850x480
-			"x-LSP-name":    "ABR Transcode",
-		})
-
-		m.logger.WithFields(logging.Fields{
-			"gateway_url":    gatewayURL,
-			"profiles":       2,
-			"min_resolution": "850x480",
-		}).Info("Livepeer ABR transcoding enabled for streams")
-	}
-
-	// Thumbnail sprite sheets for seek-bar preview
-	procs = append(procs, map[string]interface{}{
-		"process":    "Thumbs",
-		"x-LSP-name": "Thumbnail Sprites",
-	})
-
-	return procs
 }
 
 func join(base, path string) string {

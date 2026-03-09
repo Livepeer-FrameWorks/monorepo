@@ -379,8 +379,11 @@ type BillingTier struct {
 	StripePriceIdYearly  *string `protobuf:"bytes,23,opt,name=stripe_price_id_yearly,json=stripePriceIdYearly,proto3,oneof" json:"stripe_price_id_yearly,omitempty"`    // Stripe Price ID for yearly billing
 	IsDefaultPrepaid     bool    `protobuf:"varint,24,opt,name=is_default_prepaid,json=isDefaultPrepaid,proto3" json:"is_default_prepaid,omitempty"`
 	IsDefaultPostpaid    bool    `protobuf:"varint,25,opt,name=is_default_postpaid,json=isDefaultPostpaid,proto3" json:"is_default_postpaid,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// MistServer process definitions per stream type (raw JSON arrays with {{gateway_url}} placeholder)
+	ProcessesLive string `protobuf:"bytes,26,opt,name=processes_live,json=processesLive,proto3" json:"processes_live,omitempty"` // Process config for live streams
+	ProcessesVod  string `protobuf:"bytes,27,opt,name=processes_vod,json=processesVod,proto3" json:"processes_vod,omitempty"`    // Process config for VOD processing
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BillingTier) Reset() {
@@ -588,17 +591,32 @@ func (x *BillingTier) GetIsDefaultPostpaid() bool {
 	return false
 }
 
+func (x *BillingTier) GetProcessesLive() string {
+	if x != nil {
+		return x.ProcessesLive
+	}
+	return ""
+}
+
+func (x *BillingTier) GetProcessesVod() string {
+	if x != nil {
+		return x.ProcessesVod
+	}
+	return ""
+}
+
 // Matches pkg/models/billing.go:BillingFeatures (lines 12-19)
 type BillingFeatures struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Recording      bool                   `protobuf:"varint,1,opt,name=recording,proto3" json:"recording,omitempty"`                                 // json:"recording"
-	Analytics      bool                   `protobuf:"varint,2,opt,name=analytics,proto3" json:"analytics,omitempty"`                                 // json:"analytics"
-	CustomBranding bool                   `protobuf:"varint,3,opt,name=custom_branding,json=customBranding,proto3" json:"custom_branding,omitempty"` // json:"custom_branding,omitempty"
-	ApiAccess      bool                   `protobuf:"varint,4,opt,name=api_access,json=apiAccess,proto3" json:"api_access,omitempty"`                // json:"api_access,omitempty"
-	SupportLevel   string                 `protobuf:"bytes,5,opt,name=support_level,json=supportLevel,proto3" json:"support_level,omitempty"`        // json:"support_level"
-	Sla            bool                   `protobuf:"varint,6,opt,name=sla,proto3" json:"sla,omitempty"`                                             // json:"sla,omitempty"
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Recording              bool                   `protobuf:"varint,1,opt,name=recording,proto3" json:"recording,omitempty"`                                                         // json:"recording"
+	Analytics              bool                   `protobuf:"varint,2,opt,name=analytics,proto3" json:"analytics,omitempty"`                                                         // json:"analytics"
+	CustomBranding         bool                   `protobuf:"varint,3,opt,name=custom_branding,json=customBranding,proto3" json:"custom_branding,omitempty"`                         // json:"custom_branding,omitempty"
+	ApiAccess              bool                   `protobuf:"varint,4,opt,name=api_access,json=apiAccess,proto3" json:"api_access,omitempty"`                                        // json:"api_access,omitempty"
+	SupportLevel           string                 `protobuf:"bytes,5,opt,name=support_level,json=supportLevel,proto3" json:"support_level,omitempty"`                                // json:"support_level"
+	Sla                    bool                   `protobuf:"varint,6,opt,name=sla,proto3" json:"sla,omitempty"`                                                                     // json:"sla,omitempty"
+	ProcessingCustomizable bool                   `protobuf:"varint,7,opt,name=processing_customizable,json=processingCustomizable,proto3" json:"processing_customizable,omitempty"` // json:"processing_customizable,omitempty" - tenant can override tier process config
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *BillingFeatures) Reset() {
@@ -669,6 +687,13 @@ func (x *BillingFeatures) GetSupportLevel() string {
 func (x *BillingFeatures) GetSla() bool {
 	if x != nil {
 		return x.Sla
+	}
+	return false
+}
+
+func (x *BillingFeatures) GetProcessingCustomizable() bool {
+	if x != nil {
+		return x.ProcessingCustomizable
 	}
 	return false
 }
@@ -9326,7 +9351,8 @@ const file_purser_proto_rawDesc = "" +
 	"pagination\x18\x03 \x01(\v2 .common.CursorPaginationResponseR\n" +
 	"pagination\"0\n" +
 	"\x15GetBillingTierRequest\x12\x17\n" +
-	"\atier_id\x18\x01 \x01(\tR\x06tierId\"\xc9\t\n" +
+	"\atier_id\x18\x01 \x01(\tR\x06tierId\"\x95\n" +
+	"\n" +
 	"\vBillingTier\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttier_name\x18\x02 \x01(\tR\btierName\x12!\n" +
@@ -9357,10 +9383,12 @@ const file_purser_proto_rawDesc = "" +
 	"\x17stripe_price_id_monthly\x18\x16 \x01(\tH\x01R\x14stripePriceIdMonthly\x88\x01\x01\x128\n" +
 	"\x16stripe_price_id_yearly\x18\x17 \x01(\tH\x02R\x13stripePriceIdYearly\x88\x01\x01\x12,\n" +
 	"\x12is_default_prepaid\x18\x18 \x01(\bR\x10isDefaultPrepaid\x12.\n" +
-	"\x13is_default_postpaid\x18\x19 \x01(\bR\x11isDefaultPostpaidB\x14\n" +
+	"\x13is_default_postpaid\x18\x19 \x01(\bR\x11isDefaultPostpaid\x12%\n" +
+	"\x0eprocesses_live\x18\x1a \x01(\tR\rprocessesLive\x12#\n" +
+	"\rprocesses_vod\x18\x1b \x01(\tR\fprocessesVodB\x14\n" +
 	"\x12_stripe_product_idB\x1a\n" +
 	"\x18_stripe_price_id_monthlyB\x19\n" +
-	"\x17_stripe_price_id_yearly\"\xcc\x01\n" +
+	"\x17_stripe_price_id_yearly\"\x85\x02\n" +
 	"\x0fBillingFeatures\x12\x1c\n" +
 	"\trecording\x18\x01 \x01(\bR\trecording\x12\x1c\n" +
 	"\tanalytics\x18\x02 \x01(\bR\tanalytics\x12'\n" +
@@ -9368,7 +9396,8 @@ const file_purser_proto_rawDesc = "" +
 	"\n" +
 	"api_access\x18\x04 \x01(\bR\tapiAccess\x12#\n" +
 	"\rsupport_level\x18\x05 \x01(\tR\fsupportLevel\x12\x10\n" +
-	"\x03sla\x18\x06 \x01(\bR\x03sla\"k\n" +
+	"\x03sla\x18\x06 \x01(\bR\x03sla\x127\n" +
+	"\x17processing_customizable\x18\a \x01(\bR\x16processingCustomizable\"k\n" +
 	"\x11AllocationDetails\x12\x19\n" +
 	"\x05limit\x18\x01 \x01(\x01H\x00R\x05limit\x88\x01\x01\x12\x1d\n" +
 	"\n" +

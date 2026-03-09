@@ -374,7 +374,7 @@ func (s stubPeerResolver) GetPeerAddr(clusterID string) string { return "foghorn
 type stubFedClient struct{}
 
 func (s stubFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
-	return &pb.PrepareArtifactResponse{Ready: true, InternalName: "stream-a", Format: "mp4"}, nil
+	return &pb.PrepareArtifactResponse{Ready: true, InternalName: "stream-a", StreamInternalName: "source-stream-a", Format: "mp4"}, nil
 }
 
 func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
@@ -417,7 +417,7 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 	defer mockDB.Close()
 
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
-		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "mp4", "cluster-origin").
+		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "source-stream-a", "mp4", "cluster-origin").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	deps := &PlaybackDependencies{

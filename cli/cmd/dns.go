@@ -141,11 +141,14 @@ func newDNSDoctorCmd() *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "\nDOMAIN\tEXPECTED IPs\tACTUAL IPs\tSTATUS")
 			for _, r := range results {
-				statusIcon := "✅ OK"
-				if r.Status == "NXDOMAIN" {
+				var statusIcon string
+				switch r.Status {
+				case "NXDOMAIN":
 					statusIcon = "❌ NXDOMAIN"
-				} else if r.Status == "MISMATCH" {
+				case "MISMATCH":
 					statusIcon = "⚠️  MISMATCH"
+				default:
+					statusIcon = "✅ OK"
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 					r.Domain,

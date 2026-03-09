@@ -2042,7 +2042,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	cl := tp.ClipLifecycleData
 
 	// Required - normalize internal name by stripping any prefix for consistent analytics keys
-	internalName := mist.ExtractInternalName(cl.GetInternalName())
+	internalName := mist.ExtractInternalName(cl.GetStreamInternalName())
 	tenantID := event.TenantID
 
 	// Prefer clip_hash as the canonical artifact identifier; fall back to request_id if missing.
@@ -2237,9 +2237,9 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	if dvrData.TenantId != nil && *dvrData.TenantId != "" {
 		tenantID = *dvrData.TenantId
 	}
-	if dvrData.InternalName != nil {
+	if dvrData.StreamInternalName != nil {
 		// Normalize internal name by stripping any prefix for consistent analytics keys
-		internalName = mist.ExtractInternalName(*dvrData.InternalName)
+		internalName = mist.ExtractInternalName(*dvrData.StreamInternalName)
 	}
 
 	// Map status to stage (normalize proto enum to lowercase for ClickHouse)

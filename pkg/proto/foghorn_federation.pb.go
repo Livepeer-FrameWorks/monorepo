@@ -526,17 +526,18 @@ func (x *PrepareArtifactRequest) GetTenantId() string {
 }
 
 type PrepareArtifactResponse struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Url             string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"` // Presigned S3 GET URL (clip/vod single file)
-	SizeBytes       uint64                 `protobuf:"varint,2,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	Ready           bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"`                                              // True if artifact is immediately available
-	EstReadySeconds uint32                 `protobuf:"varint,4,opt,name=est_ready_seconds,json=estReadySeconds,proto3" json:"est_ready_seconds,omitempty"` // Estimated time until ready (for async prep)
-	Error           string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
-	SegmentUrls     map[string]string      `protobuf:"bytes,6,rep,name=segment_urls,json=segmentUrls,proto3" json:"segment_urls,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // DVR: segment filename -> presigned GET URL
-	Format          string                 `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`                                                                                                        // Container format (mp4, m3u8, etc.)
-	InternalName    string                 `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                                                                        // Stream internal name for routing
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Url                string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"` // Presigned S3 GET URL (clip/vod single file)
+	SizeBytes          uint64                 `protobuf:"varint,2,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Ready              bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"`                                              // True if artifact is immediately available
+	EstReadySeconds    uint32                 `protobuf:"varint,4,opt,name=est_ready_seconds,json=estReadySeconds,proto3" json:"est_ready_seconds,omitempty"` // Estimated time until ready (for async prep)
+	Error              string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	SegmentUrls        map[string]string      `protobuf:"bytes,6,rep,name=segment_urls,json=segmentUrls,proto3" json:"segment_urls,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // DVR: segment filename -> presigned GET URL
+	Format             string                 `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`                                                                                                        // Container format (mp4, m3u8, etc.)
+	InternalName       string                 `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                                                                        // Artifact routing name (vod+{this})
+	StreamInternalName string                 `protobuf:"bytes,9,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"`                                                    // Source stream routing name (for S3 key construction)
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PrepareArtifactResponse) Reset() {
@@ -625,23 +626,30 @@ func (x *PrepareArtifactResponse) GetInternalName() string {
 	return ""
 }
 
+func (x *PrepareArtifactResponse) GetStreamInternalName() string {
+	if x != nil {
+		return x.StreamInternalName
+	}
+	return ""
+}
+
 type RemoteClipRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	InternalName         string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	TenantId             string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId               string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	ClipHash             string                 `protobuf:"bytes,4,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`
-	ArtifactInternalName string                 `protobuf:"bytes,5,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"`
-	PlaybackId           string                 `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
-	Format               string                 `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`
-	StartUnix            int64                  `protobuf:"varint,8,opt,name=start_unix,json=startUnix,proto3" json:"start_unix,omitempty"`
-	StopUnix             int64                  `protobuf:"varint,9,opt,name=stop_unix,json=stopUnix,proto3" json:"stop_unix,omitempty"`
-	StartMs              int64                  `protobuf:"varint,10,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
-	StopMs               int64                  `protobuf:"varint,11,opt,name=stop_ms,json=stopMs,proto3" json:"stop_ms,omitempty"`
-	DurationSec          int64                  `protobuf:"varint,12,opt,name=duration_sec,json=durationSec,proto3" json:"duration_sec,omitempty"`
-	RequestingCluster    string                 `protobuf:"bytes,13,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	StreamInternalName string                 `protobuf:"bytes,1,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"` // Source stream's MistServer routing name
+	TenantId           string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId             string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	ClipHash           string                 `protobuf:"bytes,4,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`
+	InternalName       string                 `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"` // Artifact routing name
+	PlaybackId         string                 `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	Format             string                 `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`
+	StartUnix          int64                  `protobuf:"varint,8,opt,name=start_unix,json=startUnix,proto3" json:"start_unix,omitempty"`
+	StopUnix           int64                  `protobuf:"varint,9,opt,name=stop_unix,json=stopUnix,proto3" json:"stop_unix,omitempty"`
+	StartMs            int64                  `protobuf:"varint,10,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	StopMs             int64                  `protobuf:"varint,11,opt,name=stop_ms,json=stopMs,proto3" json:"stop_ms,omitempty"`
+	DurationSec        int64                  `protobuf:"varint,12,opt,name=duration_sec,json=durationSec,proto3" json:"duration_sec,omitempty"`
+	RequestingCluster  string                 `protobuf:"bytes,13,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RemoteClipRequest) Reset() {
@@ -674,9 +682,9 @@ func (*RemoteClipRequest) Descriptor() ([]byte, []int) {
 	return file_foghorn_federation_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *RemoteClipRequest) GetInternalName() string {
+func (x *RemoteClipRequest) GetStreamInternalName() string {
 	if x != nil {
-		return x.InternalName
+		return x.StreamInternalName
 	}
 	return ""
 }
@@ -702,9 +710,9 @@ func (x *RemoteClipRequest) GetClipHash() string {
 	return ""
 }
 
-func (x *RemoteClipRequest) GetArtifactInternalName() string {
+func (x *RemoteClipRequest) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -834,16 +842,16 @@ func (x *RemoteClipResponse) GetStorageNodeId() string {
 }
 
 type RemoteDVRRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	InternalName         string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	TenantId             string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId               string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	DvrHash              string                 `protobuf:"bytes,4,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`
-	ArtifactInternalName string                 `protobuf:"bytes,5,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"`
-	PlaybackId           string                 `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
-	RequestingCluster    string                 `protobuf:"bytes,7,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	StreamInternalName string                 `protobuf:"bytes,1,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"` // Source stream's MistServer routing name
+	TenantId           string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId             string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	DvrHash            string                 `protobuf:"bytes,4,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`
+	InternalName       string                 `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"` // Artifact routing name
+	PlaybackId         string                 `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	RequestingCluster  string                 `protobuf:"bytes,7,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RemoteDVRRequest) Reset() {
@@ -876,9 +884,9 @@ func (*RemoteDVRRequest) Descriptor() ([]byte, []int) {
 	return file_foghorn_federation_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *RemoteDVRRequest) GetInternalName() string {
+func (x *RemoteDVRRequest) GetStreamInternalName() string {
 	if x != nil {
-		return x.InternalName
+		return x.StreamInternalName
 	}
 	return ""
 }
@@ -904,9 +912,9 @@ func (x *RemoteDVRRequest) GetDvrHash() string {
 	return ""
 }
 
-func (x *RemoteDVRRequest) GetArtifactInternalName() string {
+func (x *RemoteDVRRequest) GetInternalName() string {
 	if x != nil {
-		return x.ArtifactInternalName
+		return x.InternalName
 	}
 	return ""
 }
@@ -2331,19 +2339,20 @@ func (x *ListTenantArtifactsResponse) GetArtifacts() []*ArtifactMetadata {
 
 // ArtifactMetadata is the cold-storage record for a single artifact.
 type ArtifactMetadata struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ArtifactHash    string                 `protobuf:"bytes,1,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
-	ArtifactType    string                 `protobuf:"bytes,2,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
-	InternalName    string                 `protobuf:"bytes,3,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	Format          string                 `protobuf:"bytes,4,opt,name=format,proto3" json:"format,omitempty"`
-	StorageLocation string                 `protobuf:"bytes,5,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
-	SyncStatus      string                 `protobuf:"bytes,6,opt,name=sync_status,json=syncStatus,proto3" json:"sync_status,omitempty"`
-	S3Url           string                 `protobuf:"bytes,7,opt,name=s3_url,json=s3Url,proto3" json:"s3_url,omitempty"`
-	SizeBytes       uint64                 `protobuf:"varint,8,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	CreatedAt       int64                  `protobuf:"varint,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // Unix seconds
-	FrozenAt        int64                  `protobuf:"varint,10,opt,name=frozen_at,json=frozenAt,proto3" json:"frozen_at,omitempty"`   // Unix seconds
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	ArtifactHash       string                 `protobuf:"bytes,1,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	ArtifactType       string                 `protobuf:"bytes,2,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
+	InternalName       string                 `protobuf:"bytes,3,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"` // Artifact routing name
+	Format             string                 `protobuf:"bytes,4,opt,name=format,proto3" json:"format,omitempty"`
+	StorageLocation    string                 `protobuf:"bytes,5,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
+	SyncStatus         string                 `protobuf:"bytes,6,opt,name=sync_status,json=syncStatus,proto3" json:"sync_status,omitempty"`
+	S3Url              string                 `protobuf:"bytes,7,opt,name=s3_url,json=s3Url,proto3" json:"s3_url,omitempty"`
+	SizeBytes          uint64                 `protobuf:"varint,8,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	CreatedAt          int64                  `protobuf:"varint,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                              // Unix seconds
+	FrozenAt           int64                  `protobuf:"varint,10,opt,name=frozen_at,json=frozenAt,proto3" json:"frozen_at,omitempty"`                                // Unix seconds
+	StreamInternalName string                 `protobuf:"bytes,11,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"` // Source stream routing name
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ArtifactMetadata) Reset() {
@@ -2444,6 +2453,13 @@ func (x *ArtifactMetadata) GetFrozenAt() int64 {
 		return x.FrozenAt
 	}
 	return 0
+}
+
+func (x *ArtifactMetadata) GetStreamInternalName() string {
+	if x != nil {
+		return x.StreamInternalName
+	}
+	return ""
 }
 
 // MigrateArtifactMetadataRequest triggers a bulk copy of artifact records
@@ -2739,7 +2755,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12-\n" +
 	"\x12requesting_cluster\x18\x03 \x01(\tR\x11requestingCluster\x12#\n" +
 	"\rartifact_type\x18\x04 \x01(\tR\fartifactType\x12\x1b\n" +
-	"\ttenant_id\x18\x05 \x01(\tR\btenantId\"\x80\x03\n" +
+	"\ttenant_id\x18\x05 \x01(\tR\btenantId\"\xb2\x03\n" +
 	"\x17PrepareArtifactResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
@@ -2749,16 +2765,17 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x05error\x18\x05 \x01(\tR\x05error\x12_\n" +
 	"\fsegment_urls\x18\x06 \x03(\v2<.foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntryR\vsegmentUrls\x12\x16\n" +
 	"\x06format\x18\a \x01(\tR\x06format\x12#\n" +
-	"\rinternal_name\x18\b \x01(\tR\finternalName\x1a>\n" +
+	"\rinternal_name\x18\b \x01(\tR\finternalName\x120\n" +
+	"\x14stream_internal_name\x18\t \x01(\tR\x12streamInternalName\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbc\x03\n" +
-	"\x11RemoteClipRequest\x12#\n" +
-	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb8\x03\n" +
+	"\x11RemoteClipRequest\x120\n" +
+	"\x14stream_internal_name\x18\x01 \x01(\tR\x12streamInternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x1b\n" +
-	"\tclip_hash\x18\x04 \x01(\tR\bclipHash\x124\n" +
-	"\x16artifact_internal_name\x18\x05 \x01(\tR\x14artifactInternalName\x12\x1f\n" +
+	"\tclip_hash\x18\x04 \x01(\tR\bclipHash\x12#\n" +
+	"\rinternal_name\x18\x05 \x01(\tR\finternalName\x12\x1f\n" +
 	"\vplayback_id\x18\x06 \x01(\tR\n" +
 	"playbackId\x12\x16\n" +
 	"\x06format\x18\a \x01(\tR\x06format\x12\x1d\n" +
@@ -2774,13 +2791,13 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1b\n" +
 	"\tclip_hash\x18\x03 \x01(\tR\bclipHash\x12&\n" +
-	"\x0fstorage_node_id\x18\x04 \x01(\tR\rstorageNodeId\"\x8e\x02\n" +
-	"\x10RemoteDVRRequest\x12#\n" +
-	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
+	"\x0fstorage_node_id\x18\x04 \x01(\tR\rstorageNodeId\"\x8a\x02\n" +
+	"\x10RemoteDVRRequest\x120\n" +
+	"\x14stream_internal_name\x18\x01 \x01(\tR\x12streamInternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x19\n" +
-	"\bdvr_hash\x18\x04 \x01(\tR\advrHash\x124\n" +
-	"\x16artifact_internal_name\x18\x05 \x01(\tR\x14artifactInternalName\x12\x1f\n" +
+	"\bdvr_hash\x18\x04 \x01(\tR\advrHash\x12#\n" +
+	"\rinternal_name\x18\x05 \x01(\tR\finternalName\x12\x1f\n" +
 	"\vplayback_id\x18\x06 \x01(\tR\n" +
 	"playbackId\x12-\n" +
 	"\x12requesting_cluster\x18\a \x01(\tR\x11requestingCluster\"b\n" +
@@ -2912,7 +2929,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12-\n" +
 	"\x12requesting_cluster\x18\x02 \x01(\tR\x11requestingCluster\"a\n" +
 	"\x1bListTenantArtifactsResponse\x12B\n" +
-	"\tartifacts\x18\x01 \x03(\v2$.foghorn_federation.ArtifactMetadataR\tartifacts\"\xd7\x02\n" +
+	"\tartifacts\x18\x01 \x03(\v2$.foghorn_federation.ArtifactMetadataR\tartifacts\"\x89\x03\n" +
 	"\x10ArtifactMetadata\x12#\n" +
 	"\rartifact_hash\x18\x01 \x01(\tR\fartifactHash\x12#\n" +
 	"\rartifact_type\x18\x02 \x01(\tR\fartifactType\x12#\n" +
@@ -2927,7 +2944,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\t \x01(\x03R\tcreatedAt\x12\x1b\n" +
 	"\tfrozen_at\x18\n" +
-	" \x01(\x03R\bfrozenAt\"i\n" +
+	" \x01(\x03R\bfrozenAt\x120\n" +
+	"\x14stream_internal_name\x18\v \x01(\tR\x12streamInternalName\"i\n" +
 	"\x1eMigrateArtifactMetadataRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12*\n" +
 	"\x11source_cluster_id\x18\x02 \x01(\tR\x0fsourceClusterId\"\x85\x01\n" +

@@ -186,6 +186,10 @@ message BillingTier {
 
   bool is_default_prepaid = 24;
   bool is_default_postpaid = 25;
+
+  // MistServer process definitions per stream type (raw JSON arrays with {{gateway_url}} placeholder)
+  string processes_live = 26;   // Process config for live streams
+  string processes_vod = 27;    // Process config for VOD processing
 }
 
 // Matches pkg/models/billing.go:BillingFeatures (lines 12-19)
@@ -196,6 +200,7 @@ message BillingFeatures {
   bool api_access = 4;                  // json:"api_access,omitempty"
   string support_level = 5;             // json:"support_level"
   bool sla = 6;                         // json:"sla,omitempty"
+  bool processing_customizable = 7;     // json:"processing_customizable,omitempty" - tenant can override tier process config
 }
 
 // Matches pkg/models/billing.go:AllocationDetails (lines 24-28)

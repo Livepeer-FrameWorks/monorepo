@@ -2,9 +2,6 @@ package mollie
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -16,16 +13,14 @@ import (
 // Client wraps Mollie API operations for subscription management.
 // Uses the first-payment flow: iDEAL/card → SEPA DD mandate → recurring subscriptions.
 type Client struct {
-	client        *mollie.Client
-	webhookSecret string // For webhook signature verification (if enabled)
-	logger        logging.Logger
+	client *mollie.Client
+	logger logging.Logger
 }
 
 // Config for creating a new Mollie client
 type Config struct {
-	APIKey        string // MOLLIE_API_KEY (live_xxx or test_xxx)
-	WebhookSecret string // Optional: for webhook signature verification
-	Logger        logging.Logger
+	APIKey string // MOLLIE_API_KEY (live_xxx or test_xxx)
+	Logger logging.Logger
 }
 
 // NewClient creates a new Mollie client
@@ -46,15 +41,9 @@ func NewClient(config Config) (*Client, error) {
 	}
 
 	return &Client{
-		client:        client,
-		webhookSecret: config.WebhookSecret,
-		logger:        config.Logger,
+		client: client,
+		logger: config.Logger,
 	}, nil
-}
-
-// HasWebhookSecret returns true when webhook signature verification is configured.
-func (c *Client) HasWebhookSecret() bool {
-	return c.webhookSecret != ""
 }
 
 // CustomerInfo for Mollie customer creation
@@ -249,24 +238,6 @@ func (c *Client) CancelSubscription(ctx context.Context, customerID, subscriptio
 	}).Info("Cancelled Mollie subscription")
 
 	return nil
-}
-
-// VerifyWebhook verifies the webhook signature (if webhook secret is configured)
-// Mollie doesn't sign webhooks by default - they recommend IP allowlisting or
-// fetching the payment/subscription from their API to verify authenticity.
-// This method provides optional HMAC verification if configured.
-func (c *Client) VerifyWebhook(payload []byte, signature string) bool {
-	if c.webhookSecret == "" {
-		// No secret configured, skip verification
-		// Caller should verify by fetching from Mollie API
-		return true
-	}
-
-	mac := hmac.New(sha256.New, []byte(c.webhookSecret))
-	mac.Write(payload)
-	expected := hex.EncodeToString(mac.Sum(nil))
-
-	return hmac.Equal([]byte(signature), []byte(expected))
 }
 
 // MandateInfo contains extracted mandate details for database storage

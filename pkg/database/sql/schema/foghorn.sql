@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
 
     -- ===== DENORMALIZED FIELDS (authoritative source: Commodore) =====
     -- Cached here for operational efficiency (stream routing, rehydration, Decklog events)
-    internal_name VARCHAR(255),             -- Stream identifier for routing
-    artifact_internal_name VARCHAR(64),     -- Artifact routing name (vod+<artifact_internal_name>)
+    stream_internal_name VARCHAR(255),      -- Source stream identifier (denormalized from Commodore)
+    internal_name VARCHAR(64),              -- Artifact routing name (vod+<internal_name>)
     stream_id UUID,                         -- Public stream ID (for DVR local path reconstruction)
     tenant_id UUID NOT NULL,                -- Tenant owning the artifact (required)
     user_id UUID,                           -- User who created the artifact (for Decklog events)
@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     ended_at TIMESTAMP,
     duration_seconds INTEGER,
 
+    -- ===== THUMBNAIL STATE =====
+    has_thumbnails BOOLEAN DEFAULT FALSE,   -- True after THUMBNAIL_UPDATED upload completes (DVR sprite sheets)
+
     -- ===== ACCESS TRACKING =====
     access_count INTEGER DEFAULT 0,
     last_accessed_at TIMESTAMP,
@@ -99,8 +102,8 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_created ON foghorn.artifacts(cr
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_request_id ON foghorn.artifacts(request_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_frozen ON foghorn.artifacts(frozen_at) WHERE frozen_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_defrosting ON foghorn.artifacts(defrost_started_at) WHERE storage_location = 'defrosting';
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_stream_internal ON foghorn.artifacts(stream_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_internal_name ON foghorn.artifacts(internal_name);
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_artifact_internal ON foghorn.artifacts(artifact_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_tenant ON foghorn.artifacts(tenant_id) WHERE tenant_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_user ON foghorn.artifacts(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_retention ON foghorn.artifacts(retention_until) WHERE retention_until IS NOT NULL;
@@ -286,7 +289,8 @@ CREATE TABLE IF NOT EXISTS foghorn.processing_jobs (
 -- ===== DEPENDENCY TRACKING =====
 ALTER TABLE foghorn.processing_jobs
   ADD COLUMN IF NOT EXISTS parent_job_id UUID REFERENCES foghorn.processing_jobs(job_id),
-  ADD COLUMN IF NOT EXISTS output_metadata JSONB;
+  ADD COLUMN IF NOT EXISTS output_metadata JSONB,
+  ADD COLUMN IF NOT EXISTS processes_json TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_tenant ON foghorn.processing_jobs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_status ON foghorn.processing_jobs(status);

@@ -105,15 +105,16 @@ message PrepareArtifactResponse {
   string error = 5;
   map<string, string> segment_urls = 6; // DVR: segment filename -> presigned GET URL
   string format = 7;            // Container format (mp4, m3u8, etc.)
-  string internal_name = 8;     // Stream internal name for routing
+  string internal_name = 8;     // Artifact routing name (vod+{this})
+  string stream_internal_name = 9; // Source stream routing name (for S3 key construction)
 }
 
 message RemoteClipRequest {
-  string internal_name = 1;
+  string stream_internal_name = 1;    // Source stream's MistServer routing name
   string tenant_id = 2;
   string user_id = 3;
   string clip_hash = 4;
-  string artifact_internal_name = 5;
+  string internal_name = 5;           // Artifact routing name
   string playback_id = 6;
   string format = 7;
   int64 start_unix = 8;
@@ -132,11 +133,11 @@ message RemoteClipResponse {
 }
 
 message RemoteDVRRequest {
-  string internal_name = 1;
+  string stream_internal_name = 1;    // Source stream's MistServer routing name
   string tenant_id = 2;
   string user_id = 3;
   string dvr_hash = 4;
-  string artifact_internal_name = 5;
+  string internal_name = 5;           // Artifact routing name
   string playback_id = 6;
   string requesting_cluster = 7;
 }
@@ -321,7 +322,7 @@ message ListTenantArtifactsResponse {
 message ArtifactMetadata {
   string artifact_hash = 1;
   string artifact_type = 2;
-  string internal_name = 3;
+  string internal_name = 3;      // Artifact routing name
   string format = 4;
   string storage_location = 5;
   string sync_status = 6;
@@ -329,6 +330,7 @@ message ArtifactMetadata {
   uint64 size_bytes = 8;
   int64 created_at = 9;       // Unix seconds
   int64 frozen_at = 10;       // Unix seconds
+  string stream_internal_name = 11; // Source stream routing name
 }
 
 // MigrateArtifactMetadataRequest triggers a bulk copy of artifact records

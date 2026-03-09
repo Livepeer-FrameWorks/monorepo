@@ -2,15 +2,18 @@ package handlers
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
@@ -20,13 +23,40 @@ import (
 )
 
 // ProcessingJobHandler handles VOD processing jobs from Foghorn.
-// Creates a temporary non-wildcard stream (process_{hash}) in MistServer
-// with the source and MistProc* processes configured per-job.
-// Global triggers (STREAM_SOURCE, PUSH_END) fire for it; Foghorn prefix-matches "process_".
+// Activates the processing+{hash} wildcard stream in MistServer.
+// STREAM_SOURCE provides the presigned S3 URL for the source.
+// STREAM_PROCESS provides the MistProc* config (VP9/thumbs/audio) from Commodore.
 type ProcessingJobHandler struct {
 	logger        logging.Logger
 	mistServerURL string
 	storagePath   string
+}
+
+// pendingJobs tracks in-flight processing jobs, signaled by PUSH_END.
+var (
+	pendingJobs   = map[string]chan struct{}{}
+	pendingJobsMu sync.Mutex
+)
+
+// HasPendingJob returns true if a processing job is currently in-flight for the stream.
+func HasPendingJob(streamName string) bool {
+	pendingJobsMu.Lock()
+	_, ok := pendingJobs[streamName]
+	pendingJobsMu.Unlock()
+	return ok
+}
+
+// SignalProcessingComplete is called from HandlePushEnd when a processing+ push ends.
+func SignalProcessingComplete(streamName string) {
+	pendingJobsMu.Lock()
+	ch, ok := pendingJobs[streamName]
+	pendingJobsMu.Unlock()
+	if ok {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath string) *ProcessingJobHandler {
@@ -37,7 +67,8 @@ func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath s
 	}
 }
 
-// Handle executes a processing job: creates temp stream, polls metadata, reports result.
+// Handle executes a processing job: activates the processing+ wildcard stream,
+// starts a push to local disk as MKV, waits for PUSH_END, reports result.
 func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*pb.ControlMessage)) {
 	log := h.logger.WithFields(logging.Fields{
 		"job_id":        req.GetJobId(),
@@ -46,133 +77,97 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	})
 
 	log.Info("Processing job received")
+	streamName := "processing+" + req.GetArtifactHash()
 
-	sourceURL := req.GetSourceUrl()
-	if sourceURL == "" {
-		h.sendResult(send, req.GetJobId(), "failed", "no source URL provided", nil)
-		return
-	}
-
-	// Detect segmented (HLS) sources and rewrite manifest with presigned segment URLs
-	isSegmented := isHLSSource(sourceURL, req.GetParams())
-	if isSegmented {
-		localManifest, err := h.rewriteHLSManifest(log, req)
+	// For segmented (HLS) sources, rewrite manifest with presigned segment URLs
+	var hlsManifestPath string
+	if isHLSSource(req.GetSourceUrl(), req.GetParams()) {
+		var err error
+		hlsManifestPath, err = h.rewriteHLSManifest(log, req)
 		if err != nil {
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("HLS manifest rewrite failed: %v", err), nil)
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("HLS manifest rewrite failed: %v", err), nil, "", 0)
 			return
 		}
-		sourceURL = localManifest
+		log.WithField("local_manifest", hlsManifestPath).Info("Rewrote HLS manifest for processing")
 	}
+
+	// Register completion channel BEFORE activating stream
+	doneCh := make(chan struct{}, 1)
+	pendingJobsMu.Lock()
+	pendingJobs[streamName] = doneCh
+	pendingJobsMu.Unlock()
+
+	defer func() {
+		pendingJobsMu.Lock()
+		delete(pendingJobs, streamName)
+		pendingJobsMu.Unlock()
+	}()
 
 	mistClient := mist.NewClient(h.logger)
 	if h.mistServerURL != "" {
 		mistClient.BaseURL = h.mistServerURL
 	}
 
-	streamName := "process_" + req.GetArtifactHash()
-
-	// Build processes from current seed config (same as live streams get)
-	processes := h.buildProcesses(req.GetParams())
-
-	streamConfig := map[string]map[string]interface{}{
-		streamName: {
-			"source":        sourceURL,
-			"realtime":      true,
-			"stop_sessions": 0,
-		},
-	}
-	if len(processes) > 0 {
-		streamConfig[streamName]["processes"] = processes
-	}
-
-	if err := mistClient.AddStreams(streamConfig); err != nil {
-		log.WithError(err).Error("Failed to configure processing stream")
-		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stream config failed: %v", err), nil)
+	// MKV: only container MistServer can push to AND re-ingest that supports
+	// the full codec set (H264/VP9/JPEG/AAC/opus). Raw absolute path — MistServer
+	// matches against push_urls pattern "/*.mkv" → MistOutEBML.
+	// Output goes to vod/ so the artifact poller discovers it for Foghorn registration.
+	vodDir := filepath.Join(h.storagePath, "vod")
+	if err := os.MkdirAll(vodDir, 0755); err != nil {
+		log.WithError(err).Error("Failed to create vod directory")
+		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("mkdir failed: %v", err), nil, "", 0)
 		return
 	}
-	log.Info("Configured temp processing stream in MistServer")
+	outputPath := filepath.Join(vodDir, req.GetArtifactHash()+".mkv")
+	if err := mistClient.PushStart(streamName, outputPath); err != nil {
+		log.WithError(err).Error("Failed to start push")
+		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", err), nil, "", 0)
+		return
+	}
+	log.WithField("output_path", outputPath).Info("Started push for processing stream")
 
-	// Poll for stream metadata — MistServer parses container headers when the stream boots
+	// Poll for stream metadata while processing runs
 	outputs := h.pollStreamMetadata(log, mistClient, streamName)
 
-	// Send result with metadata. When the speed multiplier lands, this will instead
-	// wait for PUSH_END to signal full processing completion.
-	h.sendResult(send, req.GetJobId(), "completed", "", outputs)
-
-	// Cleanup temp stream
-	if err := mistClient.DeleteStream(streamName); err != nil {
-		log.WithError(err).Warn("Failed to clean up processing stream")
+	// Wait for PUSH_END or timeout
+	select {
+	case <-doneCh:
+		log.Info("Processing completed (PUSH_END received)")
+	case <-time.After(30 * time.Minute):
+		log.Warn("Processing timed out")
+		h.sendResult(send, req.GetJobId(), "failed", "processing timed out", nil, outputPath, 0)
+		return
 	}
 
-	if isSegmented {
-		localPath := filepath.Join(h.storagePath, "processing", req.GetArtifactHash()+".m3u8")
-		_ = os.Remove(localPath)
+	// Get output file size for artifact registration
+	var outputSizeBytes int64
+	if fi, err := os.Stat(outputPath); err == nil {
+		outputSizeBytes = fi.Size()
 	}
 
-	log.Info("Processing job completed")
-}
+	// Send result with output path so Foghorn can register the artifact
+	// in the warm cache immediately (same pattern as defrost completion).
+	// This must happen BEFORE DTSH generation because vod+ STREAM_SOURCE
+	// resolves via Foghorn's in-memory state.
+	h.sendResult(send, req.GetJobId(), "completed", "", outputs, outputPath, outputSizeBytes)
+	log.Info("Processing job result sent, artifact registered with Foghorn")
 
-// buildProcesses returns MistProc* config for the processing stream.
-// Uses the same ProcessingConfig from the current seed (Livepeer, thumbnails, audio transcode).
-func (h *ProcessingJobHandler) buildProcesses(params map[string]string) []map[string]interface{} {
-	var procs []map[string]interface{}
-
-	proc := sidecarcfg.GetProcessingConfig()
-
-	// Audio transcode (same as live)
-	procs = append(procs, map[string]interface{}{
-		"process":       "AV",
-		"codec":         "opus",
-		"track_inhibit": "audio=opus",
-		"track_select":  "video=none",
-	})
-	procs = append(procs, map[string]interface{}{
-		"process":       "AV",
-		"codec":         "AAC",
-		"track_inhibit": "audio=aac",
-		"track_select":  "video=none",
-	})
-
-	// Livepeer transcoding — VP9 output for VOD
-	if proc != nil && proc.GetLivepeerGatewayAvailable() {
-		gatewayURL := proc.GetLivepeerGatewayUrl()
-		broadcasters := fmt.Sprintf(`[{"address":"%s"}]`, gatewayURL)
-
-		procs = append(procs, map[string]interface{}{
-			"process":                "Livepeer",
-			"hardcoded_broadcasters": broadcasters,
-			"target_profiles": []map[string]interface{}{
-				{
-					"name":          "480p",
-					"bitrate":       512000,
-					"fps":           15,
-					"height":        480,
-					"profile":       "VP9Profile0",
-					"track_inhibit": "video=<850x480",
-				},
-				{
-					"name":          "720p",
-					"bitrate":       1024000,
-					"fps":           25,
-					"height":        720,
-					"profile":       "VP9Profile0",
-					"track_inhibit": "video=<1281x720",
-				},
-			},
-			"track_inhibit": "video=<850x480",
-		})
+	// Generate DTSH by booting the output as vod+ (no MistProc* re-trigger).
+	// Foghorn now has the artifact registered, so vod+ STREAM_SOURCE resolves.
+	vodStreamName := "vod+" + req.GetInternalName()
+	if err := GenerateDTSH(h.mistServerURL, vodStreamName, log); err != nil {
+		log.WithError(err).Warn("DTSH generation failed (will be generated on first playback)")
 	}
 
-	// Thumbnail sprite generation
-	procs = append(procs, map[string]interface{}{
-		"process":         "Thumbs",
-		"track_select":    "video=maxbps",
-		"track_inhibit":   "subtitle=all",
-		"inconsequential": true,
-		"exit_unmask":     true,
-	})
+	// Clean up rewritten HLS manifest (contains presigned URLs that expire)
+	if hlsManifestPath != "" {
+		if err := os.Remove(hlsManifestPath); err != nil && !os.IsNotExist(err) {
+			log.WithError(err).Warn("Failed to remove rewritten HLS manifest")
+		}
+	}
 
-	return procs
+	// Trigger storage check so the .mkv + .dtsh freeze to S3 promptly
+	TriggerStorageCheck()
 }
 
 // pollStreamMetadata waits for MistServer to parse the stream headers and
@@ -271,6 +266,47 @@ func extractTrackMetadata(meta map[string]interface{}) map[string]string {
 	return outputs
 }
 
+// GenerateDTSH boots a stream via the /json_{streamName}.js endpoint to trigger
+// DTSH generation. MistServer's input module reads headers and writes the .dtsh
+// file as a side effect. Works for any stream type (vod+, processing+, etc.)
+// because our fork boots offline streams on HTTP GET.
+func GenerateDTSH(mistServerURL, streamName string, log *logrus.Entry) error {
+	if mistServerURL == "" {
+		return fmt.Errorf("MISTSERVER_URL not configured")
+	}
+	url := strings.TrimRight(mistServerURL, "/") + "/json_" + streamName + ".js"
+
+	for i := 0; i < 15; i++ {
+		if i > 0 {
+			time.Sleep(2 * time.Second)
+		}
+		httpReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			log.WithError(err).Debug("DTSH generation: json endpoint not ready")
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			log.WithField("status", resp.StatusCode).Debug("DTSH generation: json endpoint returned error")
+			continue
+		}
+
+		var data map[string]interface{}
+		if err := json.Unmarshal(body, &data); err != nil {
+			continue
+		}
+		if _, hasError := data["error"]; hasError {
+			log.WithField("error", data["error"]).Debug("DTSH generation: stream not ready")
+			continue
+		}
+		log.Info("DTSH generation completed via json endpoint")
+		return nil
+	}
+	return fmt.Errorf("timed out waiting for DTSH generation")
+}
+
 // isHLSSource detects if the source is an HLS manifest (segmented).
 func isHLSSource(sourceURL string, params map[string]string) bool {
 	if strings.HasSuffix(strings.ToLower(sourceURL), ".m3u8") {
@@ -286,7 +322,8 @@ func (h *ProcessingJobHandler) rewriteHLSManifest(log *logrus.Entry, req *pb.Pro
 	params := req.GetParams()
 	manifestURL := req.GetSourceUrl()
 
-	resp, err := http.Get(manifestURL) //nolint:gosec // presigned URL from Foghorn
+	httpReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, manifestURL, nil)
+	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("download manifest: %w", err)
 	}
@@ -344,16 +381,18 @@ func (h *ProcessingJobHandler) rewriteHLSManifest(log *logrus.Entry, req *pb.Pro
 	return localPath, nil
 }
 
-func (h *ProcessingJobHandler) sendResult(send func(*pb.ControlMessage), jobID, status, errMsg string, outputs map[string]string) {
+func (h *ProcessingJobHandler) sendResult(send func(*pb.ControlMessage), jobID, status, errMsg string, outputs map[string]string, outputPath string, outputSizeBytes int64) {
 	if send == nil {
 		return
 	}
 	send(&pb.ControlMessage{
 		Payload: &pb.ControlMessage_ProcessingJobResult{ProcessingJobResult: &pb.ProcessingJobResult{
-			JobId:   jobID,
-			Status:  status,
-			Error:   errMsg,
-			Outputs: outputs,
+			JobId:           jobID,
+			Status:          status,
+			Error:           errMsg,
+			Outputs:         outputs,
+			OutputPath:      outputPath,
+			OutputSizeBytes: outputSizeBytes,
 		}},
 		SentAt: timestamppb.Now(),
 	})

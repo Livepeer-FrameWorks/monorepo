@@ -82,7 +82,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, input); err == nil && resp.Found {
 			target := &StreamTarget{
-				InternalName: "vod+" + resp.ArtifactInternalName,
+				InternalName: "vod+" + resp.InternalName,
 				IsVod:        true,
 				TenantID:     resp.TenantId,
 				StreamID:     resp.StreamId,
@@ -120,8 +120,7 @@ func ResolveArtifactByHash(ctx context.Context, artifactHash string) (*StreamTar
 	}
 
 	target := &StreamTarget{
-		InternalName: "vod+" + artifactHash,
-		IsVod:        true,
+		IsVod: true,
 	}
 
 	applyArtifactPlacement(ctx, artifactHash, target)
@@ -132,17 +131,26 @@ func ResolveArtifactByHash(ctx context.Context, artifactHash string) (*StreamTar
 			target.TenantID = resp.TenantId
 			target.StreamID = resp.StreamId
 			target.ContentType = "clip"
+			if resp.InternalName != "" {
+				target.InternalName = "vod+" + resp.InternalName
+			}
 			return target, nil
 		}
 		if resp, err := CommodoreClient.ResolveDVRHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
 			target.StreamID = resp.StreamId
 			target.ContentType = "dvr"
+			if resp.InternalName != "" {
+				target.InternalName = "vod+" + resp.InternalName
+			}
 			return target, nil
 		}
 		if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
 			target.ContentType = "vod"
+			if resp.InternalName != "" {
+				target.InternalName = "vod+" + resp.InternalName
+			}
 			return target, nil
 		}
 	}

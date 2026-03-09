@@ -51,6 +51,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newDNSCmd())
 	rootCmd.AddCommand(newMeshCmd())
 	rootCmd.AddCommand(newUpdateCmd())
+	rootCmd.AddCommand(newLivepeerCmd())
 	return rootCmd
 }
 

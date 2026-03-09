@@ -1245,10 +1245,10 @@ func TestClipLifecyclePersistsServingAndOriginClusterAttribution(t *testing.T) {
 		OriginClusterId: &originClusterID,
 		TriggerPayload: &pb.MistTrigger_ClipLifecycleData{
 			ClipLifecycleData: &pb.ClipLifecycleData{
-				InternalName: stringPtr("live+demo-stream"),
-				RequestId:    stringPtr("clip-request"),
-				ClipHash:     "clip-hash-1",
-				Stage:        pb.ClipLifecycleData_STAGE_DONE,
+				StreamInternalName: stringPtr("live+demo-stream"),
+				RequestId:          stringPtr("clip-request"),
+				ClipHash:           "clip-hash-1",
+				Stage:              pb.ClipLifecycleData_STAGE_DONE,
 			},
 		},
 	})
