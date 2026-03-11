@@ -22,10 +22,13 @@ jobs:
           filters: |
             go:
               - '**/*.go'
+              - '**/*.proto'
               - '**/go.mod'
               - '**/go.sum'
               - 'Makefile'
               - 'pkg/proto/**'
+              - '.golangci.yml'
+              - '.golangci-baseline'
             frontend:
               - '**/*.ts'
               - '**/*.tsx'
@@ -45,13 +48,24 @@ jobs:
         with:
           go-version: "1.25"
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.0/protoc-34.0-linux-x86_64.zip -o /tmp/protoc.zip
+          sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
+          rm /tmp/protoc.zip
       - name: Install Go protoc plugins
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
       - name: Install gqlgen
         run: go install github.com/99designs/gqlgen@v0.17.86
+      - name: Check proto codegen is up to date
+        run: |
+          make proto
+          if ! git diff --quiet pkg/proto/; then
+            echo "ERROR: generated proto files are out of date. Run 'make proto' and commit the result."
+            git diff --stat pkg/proto/
+            exit 1
+          fi
       - run: make build
         env:
           CGO_ENABLED: "1"
@@ -67,7 +81,10 @@ jobs:
         with:
           go-version: "1.25"
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.0/protoc-34.0-linux-x86_64.zip -o /tmp/protoc.zip
+          sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
+          rm /tmp/protoc.zip
       - name: Install Go protoc plugins
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11

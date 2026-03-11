@@ -720,11 +720,8 @@ jobs:
             mv "$out" "../dist/cli/$out"
           done
 
-      - name: Import Apple signing certificate
-        uses: apple-actions/import-codesign-certs@v2
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      - name: Unlock keychain
+        run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
 
       - name: Sign and notarize darwin CLI binaries
         run: |
@@ -951,12 +948,9 @@ jobs:
           mkdir -p ../dist/binaries/${{ matrix.service.name }}
           tar czf "../dist/binaries/${{ matrix.service.name }}/${OUTPUT}.tar.gz" "${BINARY_NAME}"
 
-      - name: Import Apple signing certificate
+      - name: Unlock keychain
         if: ${{ !matrix.service.cgo }}
-        uses: apple-actions/import-codesign-certs@v2
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
 
       - name: Sign darwin binaries
         if: ${{ !matrix.service.cgo }}
@@ -1016,11 +1010,8 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen || true
 
-      - name: Import signing certificate
-        uses: apple-actions/import-codesign-certs@v2
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      - name: Unlock keychain
+        run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
 
       - name: Generate GQL Swift constants
         run: ./scripts/generate-swift-gql.sh
@@ -1086,6 +1077,10 @@ jobs:
             --wait
           xcrun stapler staple build/export/FrameWorks.app
 
+      - name: Verify Gatekeeper acceptance
+        working-directory: app_mac
+        run: spctl -a -vvv build/export/FrameWorks.app
+
       - name: Package artifacts
         working-directory: app_mac
         run: |
@@ -1101,8 +1096,16 @@ jobs:
           ln -s /Applications build/dmg-staging/Applications
           hdiutil create -volname "FrameWorks" -srcfolder build/dmg-staging \
             -ov -format UDZO "build/FrameWorks-v${VERSION}.dmg"
-          codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" --timestamp \
+          codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" --timestamp --options runtime \
             "build/FrameWorks-v${VERSION}.dmg"
+
+          xcrun notarytool submit "build/FrameWorks-v${VERSION}.dmg" \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --wait
+          xcrun stapler staple "build/FrameWorks-v${VERSION}.dmg"
+
           shasum -a 256 "build/FrameWorks-v${VERSION}.dmg" > "build/FrameWorks-v${VERSION}.dmg.sha256"
 
       - name: Upload tray app artifacts
@@ -1136,18 +1139,8 @@ jobs:
           cp frameworks-darwin-arm64 frameworks
           chmod 755 frameworks
 
-      - name: Import Application signing certificate
-        uses: apple-actions/import-codesign-certs@v2
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-
-      - name: Import Installer signing certificate
-        uses: apple-actions/import-codesign-certs@v2
-        with:
-          p12-file-base64: ${{ secrets.APPLE_INSTALLER_P12 }}
-          p12-password: ${{ secrets.APPLE_INSTALLER_PASSWORD }}
-          create-keychain: false
+      - name: Unlock keychain
+        run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
 
       - name: Download tray app
         uses: actions/download-artifact@v7
@@ -1216,16 +1209,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          RELEASE=$(curl -sL https://api.github.com/repos/Livepeer-FrameWorks/go-livepeer/releases/latest)
+          RELEASE=$(curl -fsSL https://api.github.com/repos/Livepeer-FrameWorks/go-livepeer/releases/latest)
 
-          TAG=$(echo "$RELEASE" | jq -r '.tag_name')
+          TAG=$(echo "$RELEASE" | jq -re '.tag_name')
           DIGEST_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-digest.txt") | .browser_download_url')
-          RELEASE_URL=$(echo "$RELEASE" | jq -r '.html_url')
+          RELEASE_URL=$(echo "$RELEASE" | jq -re '.html_url')
           ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size}]')
 
           DIGEST=""
           if [[ -n "$DIGEST_URL" && "$DIGEST_URL" != "null" ]]; then
-            DIGEST=$(curl -sL "$DIGEST_URL")
+            DIGEST=$(curl -fsSL "$DIGEST_URL")
           fi
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -1239,19 +1232,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Get latest MistServer release info via GitHub API
-          RELEASE=$(curl -sL https://api.github.com/repos/Livepeer-FrameWorks/mistserver/releases/latest)
+          RELEASE=$(curl -fsSL https://api.github.com/repos/Livepeer-FrameWorks/mistserver/releases/latest)
 
-          # Extract tag_name and asset download URLs
-          TAG=$(echo "$RELEASE" | jq -r '.tag_name')
-          DIGEST_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-digest.txt") | .browser_download_url')
-          TAG_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-tag.txt") | .browser_download_url')
-          RELEASE_URL=$(echo "$RELEASE" | jq -r '.html_url')
+          TAG=$(echo "$RELEASE" | jq -re '.tag_name')
+          DIGEST_URL=$(echo "$RELEASE" | jq -re '.assets[] | select(.name=="docker-digest.txt") | .browser_download_url')
+          TAG_URL=$(echo "$RELEASE" | jq -re '.assets[] | select(.name=="docker-tag.txt") | .browser_download_url')
+          RELEASE_URL=$(echo "$RELEASE" | jq -re '.html_url')
           ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size}]')
 
-          # Download the metadata files
-          DIGEST=$(curl -sL "$DIGEST_URL")
-          DOCKER_TAG=$(curl -sL "$TAG_URL")
+          DIGEST=$(curl -fsSL "$DIGEST_URL")
+          DOCKER_TAG=$(curl -fsSL "$TAG_URL")
 
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "tag=${DOCKER_TAG}" >> "$GITHUB_OUTPUT"
@@ -1434,6 +1424,13 @@ jobs:
           pattern: binary-*
           path: dist/binaries
           merge-multiple: true
+      - name: Generate SHA256 checksums for service binaries
+        run: |
+          cd dist/binaries
+          for tarball in *.tar.gz; do
+            [ -f "$tarball" ] || continue
+            sha256sum "$tarball" > "${tarball}.sha256"
+          done
       - name: Download chartroom bundle
         uses: actions/download-artifact@v7
         with:
@@ -1449,6 +1446,13 @@ jobs:
         with:
           name: logbook-bundle
           path: dist/
+      - name: Generate SHA256 checksums for webapp bundles
+        run: |
+          cd dist
+          for bundle in chartroom-build.tar.gz foredeck-build.tar.gz logbook-build.tar.gz; do
+            [ -f "$bundle" ] || continue
+            sha256sum "$bundle" > "${bundle}.sha256"
+          done
       - name: Download macOS .pkg
         uses: actions/download-artifact@v7
         with:
@@ -1471,11 +1475,15 @@ jobs:
             dist/manifest.yaml
             dist/cli/*
             dist/binaries/*.tar.gz
+            dist/binaries/*.tar.gz.sha256
             dist/pkg/*
             dist/tray/*
             dist/chartroom-build.tar.gz
+            dist/chartroom-build.tar.gz.sha256
             dist/foredeck-build.tar.gz
+            dist/foredeck-build.tar.gz.sha256
             dist/logbook-build.tar.gz
+            dist/logbook-build.tar.gz.sha256
             scripts/install.sh
 
       - name: Generate Homebrew tap token

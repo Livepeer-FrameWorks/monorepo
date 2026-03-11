@@ -14,8 +14,10 @@ updates:
     directories:
       - /api_analytics_ingest
       - /api_analytics_query
+      - /api_assets
       - /api_balancing
       - /api_billing
+      - /api_consultant
       - /api_control
       - /api_dns
       - /api_firehose
