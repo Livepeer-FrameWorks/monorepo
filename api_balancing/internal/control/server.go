@@ -4215,8 +4215,10 @@ func sendEdgeTokenResponse(requestID string, stream pb.HelmsmanControl_ConnectSe
 	}
 }
 
-// processThumbnailUploadRequest resolves internal_name → playback_id, generates
+// processThumbnailUploadRequest resolves internal_name → stable ID, generates
 // presigned PUT URLs for each thumbnail file, and sends them back to Helmsman.
+// S3 keys use stable identifiers: stream_id (UUID) for live streams,
+// artifact_hash (32-char hex) for artifacts. Never playback_id (rotatable).
 func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	internalName := req.GetInternalName()
 	filePaths := req.GetFilePaths()
@@ -4232,20 +4234,21 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		return
 	}
 
-	// Resolve internal_name → playback_id from in-memory stream state
-	var playbackID string
+	// Resolve internal_name → stable S3 key identifier.
+	// Live streams: stream_id (UUID, never rotated).
+	// Artifacts: artifact_hash (32-char hex, immutable PK).
+	var thumbnailKey string
 	ss := state.DefaultManager().GetStreamState(internalName)
-	if ss != nil && ss.PlaybackID != "" {
-		playbackID = ss.PlaybackID
+	if ss != nil && ss.StreamID != "" {
+		thumbnailKey = ss.StreamID
 	} else if strings.Contains(internalName, "+") {
 		// Artifact thumbnail (e.g., vod+{artifactInternalName} from MistProcThumbs on DVR playback).
-		// Resolve internal_name → artifact_hash for S3 keying (matches Chandler URL construction).
 		artifactInternalName := mist.ExtractInternalName(internalName)
 		if conn := GetDB(); conn != nil {
 			err := conn.QueryRowContext(context.Background(),
 				`SELECT artifact_hash FROM foghorn.artifacts WHERE internal_name = $1`,
 				artifactInternalName,
-			).Scan(&playbackID)
+			).Scan(&thumbnailKey)
 			if err != nil {
 				logger.WithFields(logging.Fields{
 					"stream_name":   internalName,
@@ -4260,17 +4263,17 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		logger.WithFields(logging.Fields{
 			"stream_name":   internalName,
 			"internal_name": artifactInternalName,
-			"artifact_hash": playbackID,
+			"artifact_hash": thumbnailKey,
 		}).Info("Resolved artifact hash for thumbnail S3 key")
 	} else {
-		logger.WithField("internal_name", internalName).Warn("Stream not found or missing playback_id for thumbnail upload")
+		logger.WithField("internal_name", internalName).Warn("Stream not found or missing stream_id for thumbnail upload")
 		return
 	}
 
 	expiry := 15 * time.Minute
 	resp := &pb.ThumbnailUploadResponse{
-		PlaybackId: playbackID,
-		Uploads:    make([]*pb.ThumbnailUploadResponse_PresignedUpload, 0, len(filePaths)),
+		ThumbnailKey: thumbnailKey,
+		Uploads:      make([]*pb.ThumbnailUploadResponse_PresignedUpload, 0, len(filePaths)),
 	}
 
 	allowedThumbnailFiles := map[string]bool{
@@ -4285,7 +4288,7 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 			logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
 			continue
 		}
-		s3Key := "thumbnails/" + playbackID + "/" + fileName
+		s3Key := "thumbnails/" + thumbnailKey + "/" + fileName
 
 		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
 		if err != nil {
@@ -4319,56 +4322,32 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 	}
 }
 
-// processThumbnailUploaded updates Commodore with the Chandler asset URL after
-// Helmsman successfully uploads thumbnail files to S3.
-// For artifact thumbnails (DVR), marks has_thumbnails=true on the artifact instead.
+// processThumbnailUploaded handles confirmation after Helmsman uploads thumbnail
+// files to S3. For artifact thumbnails (DVR/clip), marks has_thumbnails=true.
+// Stream thumbnails need no DB update — the frontend resolves them via
+// deterministic Chandler URL from assetsDomain + stream_id.
 func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger logging.Logger) {
-	playbackID := req.GetPlaybackId()
+	thumbnailKey := req.GetThumbnailKey()
 	s3Keys := req.GetS3Keys()
 
 	logger.WithFields(logging.Fields{
-		"playback_id": playbackID,
-		"s3_keys":     s3Keys,
-		"node_id":     nodeID,
+		"thumbnail_key": thumbnailKey,
+		"s3_keys":       s3Keys,
+		"node_id":       nodeID,
 	}).Info("Thumbnail upload confirmed")
 
-	// Check if this is an artifact thumbnail (playbackID is actually an artifact hash)
-	if isArtifactThumbnail(playbackID) {
-		markArtifactHasThumbnails(playbackID, logger)
-		return
-	}
-
-	// Construct Chandler URL — Chandler serves /assets/{playbackId}/poster.jpg deterministically
-	chandlerBase := getChandlerBaseURL()
-	thumbnailURL := chandlerBase + "/assets/" + playbackID + "/poster.jpg"
-
-	if CommodoreClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := CommodoreClient.UpdateStreamThumbnail(ctx, playbackID, thumbnailURL); err != nil {
-			logger.WithFields(logging.Fields{
-				"playback_id":   playbackID,
-				"thumbnail_url": thumbnailURL,
-				"error":         err,
-			}).Error("Failed to update stream thumbnail in Commodore")
-			return
-		}
-		logger.WithFields(logging.Fields{
-			"playback_id":   playbackID,
-			"thumbnail_url": thumbnailURL,
-		}).Info("Stream thumbnail URL updated in Commodore")
-	} else {
-		logger.Warn("Commodore client not configured, cannot update stream thumbnail")
+	if isArtifactThumbnail(thumbnailKey) {
+		markArtifactHasThumbnails(thumbnailKey, logger)
 	}
 }
 
-// isArtifactThumbnail checks if the playbackID is actually an artifact hash.
-// Artifact hashes are 32-char hex strings (no dashes, unlike UUIDs).
-func isArtifactThumbnail(playbackID string) bool {
-	if len(playbackID) != 32 {
+// isArtifactThumbnail checks if the thumbnail key is an artifact hash.
+// Artifact hashes are 32-char hex strings. Stream IDs are UUIDs (36 chars with dashes).
+func isArtifactThumbnail(thumbnailKey string) bool {
+	if len(thumbnailKey) != 32 {
 		return false
 	}
-	for _, c := range playbackID {
+	for _, c := range thumbnailKey {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}

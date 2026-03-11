@@ -8,7 +8,7 @@ Two systems. Single-frame preview images (poster, stream cards) and sprite sheet
 - Sprite sheet generator: `mistserver/src/process/process_thumbs.cpp`
 - ThumbVTT output: `mistserver/src/output/output_thumbvtt.cpp`
 - Connector provisioning: `api_sidecar/internal/config/manager.go` (ThumbVTT protocol)
-- Process provisioning: `api_sidecar/internal/config/manager.go` (`buildDefaultProcesses`)
+- Process provisioning: `api_sidecar/internal/config/manager.go` (STREAM_PROCESS trigger for live+/processing+, static config for vod+)
 - Player sprite manager: `npm_player/packages/core/src/core/ThumbnailSpriteManager.ts`
 - VTT parser: `npm_player/packages/core/src/core/ThumbnailVttParser.ts`
 - Track detection: `npm_player/packages/core/src/core/PlayerController.ts` (`detectThumbnailVttUrl`, `detectPreviewUrl`)
@@ -36,7 +36,7 @@ The player auto-detects the preview track: `PlayerController.detectPreviewUrl()`
 
 ## Sprite Sheets
 
-`process_thumbs.cpp` decodes video keyframes, scales them, and composes a grid as a JPEG sprite sheet plus a WebVTT timing manifest. Both are buffered as new tracks on the stream. Helmsman provisions this as a default process on every stream via `buildDefaultProcesses`.
+`process_thumbs.cpp` decodes video keyframes, scales them, and composes a grid as a JPEG sprite sheet plus a WebVTT timing manifest. Both are buffered as new tracks on the stream. For live+ and processing+ streams, MistProcThumbs is provisioned dynamically via the STREAM_PROCESS trigger (Foghorn returns per-stream process config). For DVR artifacts played back as vod+, STREAM_PROCESS adds MistProcThumbs on first playback if thumbnails haven't been generated yet.
 
 The source video track is selected via MistServer's [track selector](https://docs.mistserver.org/mistserver/concepts/track_selectors) syntax (default: `video=lowres` — picks the lowest resolution track to minimize CPU).
 
@@ -175,7 +175,9 @@ Helmsman (webhook handler)
   → sends ThumbnailUploadRequest to Foghorn via gRPC control stream
 
 Foghorn
-  → resolves internal_name → playback_id from StreamStateManager
+  → resolves identity to stable S3 key:
+    - Live streams: internal_name → stream_id (UUID) from StreamStateManager
+    - Artifacts (DVR/VOD): artifact_internal_name → artifact_hash from foghorn.artifacts
   → generates presigned PUT URLs via S3 client
   → returns ThumbnailUploadResponse with presigned URLs + local paths
 
@@ -184,27 +186,31 @@ Helmsman
   → sends ThumbnailUploaded confirmation to Foghorn
 
 Foghorn
-  → constructs Chandler URL: {CHANDLER_BASE_URL}/assets/{playbackId}/poster.jpg
-  → calls Commodore UpdateStreamThumbnail(playbackId, thumbnailUrl)
-
-Commodore
-  → stores thumbnail_url on streams table
-  → exposed via GetStream/ListStreams RPCs → GraphQL thumbnailUrl field
+  → Live streams: no DB update (frontend resolves via deterministic Chandler URL)
+  → Artifacts: marks has_thumbnails=true on foghorn.artifacts
 ```
 
 ### S3 Key Layout
 
+All keys use stable, immutable identifiers — never `playback_id` (which can be rotated).
+
 ```
-thumbnails/{playbackId}/poster.jpg     # latest preview frame
-thumbnails/{playbackId}/sprite.jpg     # 10x10 grid
-thumbnails/{playbackId}/sprite.vtt     # WebVTT manifest
+thumbnails/{streamId}/poster.jpg       # live stream (keyed by stream_id UUID)
+thumbnails/{streamId}/sprite.jpg
+thumbnails/{streamId}/sprite.vtt
+
+thumbnails/{artifactHash}/poster.jpg   # artifact (keyed by artifact_hash, 32-char hex)
+thumbnails/{artifactHash}/sprite.jpg
+thumbnails/{artifactHash}/sprite.vtt
 ```
+
+Chandler treats the key as an opaque path component — no format validation.
 
 ### Chandler (Static Asset Server)
 
 `api_assets/` — HTTP-only service (port 18020) that caches and serves thumbnail assets from S3.
 
-Deterministic URL-to-S3 mapping: `/assets/{playbackId}/poster.jpg` → S3 key `thumbnails/{playbackId}/poster.jpg`. No database or Commodore contact needed.
+Deterministic URL-to-S3 mapping: `/assets/{key}/poster.jpg` → S3 key `thumbnails/{key}/poster.jpg`. No database or Commodore contact needed.
 
 - In-memory LRU cache (~50MB, 30s TTL)
 - `Cache-Control: public, max-age=30` on responses
@@ -218,12 +224,10 @@ Config: reuses `STORAGE_S3_*` env vars (same bucket as clips/DVR/VOD). Read-only
 | File                                        | Purpose                                                   |
 | ------------------------------------------- | --------------------------------------------------------- |
 | `api_assets/cmd/chandler/main.go`           | HTTP server, S3 client, LRU cache                         |
-| `api_assets/internal/handlers/assets.go`    | GET /assets/{pk}/{file} handler                           |
+| `api_assets/internal/handlers/assets.go`    | GET /assets/{assetKey}/{file} handler                     |
 | `api_assets/internal/cache/lru.go`          | Thread-safe size-bounded LRU cache                        |
 | `api_sidecar/internal/config/manager.go`    | THUMBNAIL_UPDATED trigger registration                    |
 | `api_sidecar/internal/handlers/handlers.go` | HandleThumbnailUpdated webhook                            |
 | `api_sidecar/internal/control/client.go`    | SendThumbnailUploadRequest, handleThumbnailUploadResponse |
 | `api_balancing/internal/control/server.go`  | processThumbnailUploadRequest, processThumbnailUploaded   |
-| `api_control/internal/grpc/server.go`       | UpdateStreamThumbnail RPC                                 |
 | `pkg/proto/ipc.proto`                       | ThumbnailUpload\* control messages                        |
-| `pkg/proto/commodore.proto`                 | UpdateStreamThumbnailRequest, thumbnail_url on Stream     |

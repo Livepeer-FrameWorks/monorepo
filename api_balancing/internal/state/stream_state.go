@@ -61,6 +61,7 @@ type StreamState struct {
 	StreamName       string                 `json:"stream_name"`
 	InternalName     string                 `json:"internal_name"`
 	PlaybackID       string                 `json:"playback_id,omitempty"`
+	StreamID         string                 `json:"stream_id,omitempty"`
 	NodeID           string                 `json:"node_id"`
 	TenantID         string                 `json:"tenant_id"`
 	Status           string                 `json:"status"`       // "live", "offline", etc.
@@ -769,6 +770,18 @@ func (sm *StreamStateManager) SetStreamPlaybackID(internalName, playbackID strin
 	}
 }
 
+// SetStreamStreamID sets the stream_id (UUID) on an existing stream for thumbnail S3 keying.
+func (sm *StreamStateManager) SetStreamStreamID(internalName, streamID string) {
+	if streamID == "" {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if ss := sm.streams[internalName]; ss != nil {
+		ss.StreamID = streamID
+	}
+}
+
 func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	sm.mu.Lock()
 	union := sm.streams[internalName]
@@ -1428,6 +1441,39 @@ func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.S
 	}
 
 	return best.Host, best.Artifact
+}
+
+// FindNodeByArtifactInternalName searches for a node hosting an artifact by its routing name.
+// StoredArtifact.StreamName is "vod+{internal_name}" — this matches the suffix after "+".
+func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string) (string, *pb.StoredArtifact) {
+	snapshot := sm.GetBalancerSnapshotAtomic()
+	if snapshot == nil || internalName == "" {
+		return "", nil
+	}
+
+	var bestHost string
+	var bestArtifact *pb.StoredArtifact
+	bestScore := int64(1<<63 - 1)
+
+	for _, node := range snapshot.Nodes {
+		if !node.IsActive {
+			continue
+		}
+		for _, artifact := range node.Artifacts {
+			sn := artifact.GetStreamName()
+			if idx := strings.IndexByte(sn, '+'); idx >= 0 && sn[idx+1:] == internalName {
+				score := int64(node.CPUScore + node.RAMScore)
+				if score < bestScore {
+					bestScore = score
+					bestHost = node.Host
+					bestArtifact = artifact
+				}
+				break
+			}
+		}
+	}
+
+	return bestHost, bestArtifact
 }
 
 // UpdateAddBandwidth updates the bandwidth penalty for a node

@@ -974,9 +974,12 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		)
 	}
 
-	// Set playback_id on stream state for federation advertisement
+	// Set playback_id and stream_id on stream state for federation and thumbnail S3 keying
 	if streamValidation.PlaybackId != "" {
 		state.DefaultManager().SetStreamPlaybackID(streamValidation.InternalName, streamValidation.PlaybackId)
+	}
+	if streamValidation.StreamId != "" {
+		state.DefaultManager().SetStreamStreamID(streamValidation.InternalName, streamValidation.StreamId)
 	}
 
 	// Broadcast stream-live to federated peers for cross-cluster dedup
@@ -2422,10 +2425,14 @@ func stringPtr(s string) *string {
 }
 
 func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint string, allowCache bool) (streamContext, bool, error) {
-	// For artifact hashes (VOD playback), check in-memory state first.
+	// For artifacts (VOD playback), check in-memory state first.
 	// This avoids Commodore calls for artifacts we already know about.
+	// Key may be artifact_hash (from processing+) or artifact_internal_name (from vod+).
 	if tenantIDHint != "" && p.streamCache != nil {
 		_, artifactInfo := state.DefaultManager().FindNodeByArtifactHash(key)
+		if artifactInfo == nil {
+			_, artifactInfo = state.DefaultManager().FindNodeByArtifactInternalName(key)
+		}
 		if artifactInfo != nil && artifactInfo.GetStreamName() != "" {
 			parentInternal := mist.ExtractInternalName(artifactInfo.GetStreamName())
 			cacheKey := tenantIDHint + ":" + parentInternal

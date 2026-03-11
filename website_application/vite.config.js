@@ -44,6 +44,10 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           ws: true,
         },
+        "/assets": {
+          target: "http://localhost:18020",
+          changeOrigin: true,
+        },
       },
       fs: {
         // Allow serving files from the monorepo root (for pkg/graphql/operations/)

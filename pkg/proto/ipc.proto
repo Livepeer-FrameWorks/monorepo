@@ -1611,12 +1611,12 @@ message ThumbnailUploadResponse {
     string s3_key = 3;
     string local_path = 4; // echoed from request so Helmsman can find the file
   }
-  string playback_id = 1;
+  string thumbnail_key = 1; // stream_id (UUID) for live, artifact_hash for artifacts
   repeated PresignedUpload uploads = 2;
 }
 
 // Helmsman -> Foghorn: confirm upload complete
 message ThumbnailUploaded {
-  string playback_id = 1;
+  string thumbnail_key = 1; // echoed from ThumbnailUploadResponse
   repeated string s3_keys = 2;
 }

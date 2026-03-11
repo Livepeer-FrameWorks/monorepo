@@ -1727,7 +1727,7 @@ func parseRequestedMode(mode string) pb.NodeOperationalMode {
 }
 
 // SendThumbnailUploadRequest sends a thumbnail upload request to Foghorn.
-// Foghorn will resolve the internal_name to a playback_id and respond with presigned URLs.
+// Foghorn resolves internal_name to a stable S3 key and responds with presigned URLs.
 func SendThumbnailUploadRequest(internalName string, filePaths []string) error {
 	stream := getStream()
 	if stream == nil {
@@ -1751,12 +1751,12 @@ func SendThumbnailUploadRequest(internalName string, filePaths []string) error {
 // handleThumbnailUploadResponse uploads thumbnail files to S3 using presigned URLs
 // from Foghorn, then sends a ThumbnailUploaded confirmation.
 func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUploadResponse, send func(*pb.ControlMessage)) {
-	playbackID := resp.GetPlaybackId()
+	thumbnailKey := resp.GetThumbnailKey()
 	uploads := resp.GetUploads()
 
 	logger.WithFields(logging.Fields{
-		"playback_id":  playbackID,
-		"upload_count": len(uploads),
+		"thumbnail_key": thumbnailKey,
+		"upload_count":  len(uploads),
 	}).Info("Received thumbnail presigned URLs from Foghorn")
 
 	presignedClient := storage.NewPresignedClient(logger)
@@ -1795,8 +1795,8 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUplo
 
 	// Notify Foghorn that upload is complete
 	uploaded := &pb.ThumbnailUploaded{
-		PlaybackId: playbackID,
-		S3Keys:     uploadedKeys,
+		ThumbnailKey: thumbnailKey,
+		S3Keys:       uploadedKeys,
 	}
 	send(&pb.ControlMessage{
 		SentAt:  timestamppb.Now(),

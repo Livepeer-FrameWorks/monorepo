@@ -11,6 +11,7 @@ services:
       - ACME_AGREE=true
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./maintenance.html:/etc/caddy/maintenance.html:ro
       - caddy_data:/data
       - caddy_config:/config
       - ./certs:/etc/frameworks/certs:ro

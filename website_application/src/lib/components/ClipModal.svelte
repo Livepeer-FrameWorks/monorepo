@@ -11,7 +11,7 @@
   import { Input } from "$lib/components/ui/input";
   import Player from "./Player.svelte";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getContentDeliveryUrls, type PrimaryProtocolUrls } from "$lib/config";
+  import { getContentDeliveryUrls, getAssetUrl, type PrimaryProtocolUrls } from "$lib/config";
   import { toast } from "$lib/stores/toast";
 
   // Clip type matching Houdini schema
@@ -47,6 +47,9 @@
   let clipUrls = $derived(
     clip?.playbackId ? getContentDeliveryUrls(clip.playbackId, "clip") : null
   );
+
+  // Poster from Chandler — artifacts are keyed by clipHash (artifact_hash), not playbackId
+  let posterUrl = $derived(clip?.clipHash ? getAssetUrl(clip.clipHash, "poster.jpg") : undefined);
 
   // Primary protocols to show for clips
   const clipProtocols: Array<{
@@ -130,7 +133,7 @@
           <Player
             contentId={clip.playbackId}
             contentType="clip"
-            thumbnailUrl={undefined}
+            thumbnailUrl={posterUrl}
             options={{
               autoplay: true,
               muted: false,

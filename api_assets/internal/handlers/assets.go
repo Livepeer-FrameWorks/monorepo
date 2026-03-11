@@ -84,11 +84,11 @@ func NewAssetHandler(cfg S3Config, lru *cache.LRU, logger logging.Logger, cacheH
 }
 
 func (h *AssetHandler) RegisterRoutes(router *gin.Engine) {
-	router.GET("/assets/:playbackId/:file", h.handleGetAsset)
+	router.GET("/assets/:assetKey/:file", h.handleGetAsset)
 }
 
 func (h *AssetHandler) handleGetAsset(c *gin.Context) {
-	playbackID := c.Param("playbackId")
+	assetKey := c.Param("assetKey")
 	file := c.Param("file")
 
 	contentType, ok := allowedFiles[file]
@@ -103,12 +103,12 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 	}
 
 	// Reject path traversal
-	if strings.Contains(playbackID, "/") || strings.Contains(playbackID, "..") {
+	if strings.Contains(assetKey, "/") || strings.Contains(assetKey, "..") {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 
-	s3Key := h.fullKey(path.Join("thumbnails", playbackID, file))
+	s3Key := h.fullKey(path.Join("thumbnails", assetKey, file))
 
 	// Check cache
 	if data, ct, hit := h.cache.Get(s3Key); hit {

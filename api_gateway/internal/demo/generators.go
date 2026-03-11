@@ -4759,16 +4759,18 @@ func GenerateStreamingConfig() *model.StreamingConfig {
 	srtPort := 8889
 	rtmpPort := 1935
 	return &model.StreamingConfig{
-		PreferredClusterLabel: stringPtr("Central Primary"),
-		IngestDomain:          stringPtr("edge-ingest.central.demo.frameworks.live"),
-		EdgeDomain:            stringPtr("edge-egress.central.demo.frameworks.live"),
-		PlayDomain:            stringPtr("foghorn.central.demo.frameworks.live"),
-		OfficialClusterLabel:  stringPtr("US East Edge"),
-		OfficialIngestDomain:  stringPtr("edge-ingest.us-east.demo.frameworks.live"),
-		OfficialEdgeDomain:    stringPtr("edge-egress.us-east.demo.frameworks.live"),
-		OfficialPlayDomain:    stringPtr("foghorn.us-east.demo.frameworks.live"),
-		SrtPort:               &srtPort,
-		RtmpPort:              &rtmpPort,
+		PreferredClusterLabel:  stringPtr("Central Primary"),
+		IngestDomain:           stringPtr("edge-ingest.central.demo.frameworks.live"),
+		EdgeDomain:             stringPtr("edge-egress.central.demo.frameworks.live"),
+		PlayDomain:             stringPtr("foghorn.central.demo.frameworks.live"),
+		ChandlerDomain:         stringPtr("chandler.central.demo.frameworks.live"),
+		OfficialClusterLabel:   stringPtr("US East Edge"),
+		OfficialIngestDomain:   stringPtr("edge-ingest.us-east.demo.frameworks.live"),
+		OfficialEdgeDomain:     stringPtr("edge-egress.us-east.demo.frameworks.live"),
+		OfficialPlayDomain:     stringPtr("foghorn.us-east.demo.frameworks.live"),
+		OfficialChandlerDomain: stringPtr("chandler.us-east.demo.frameworks.live"),
+		SrtPort:                &srtPort,
+		RtmpPort:               &rtmpPort,
 	}
 }
 

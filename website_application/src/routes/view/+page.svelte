@@ -12,7 +12,6 @@
   interface PlayerConfig {
     contentType?: "live" | "clip" | "dvr" | "vod";
     contentId: string;
-    thumbnailUrl?: string | null;
     options: {
       autoplay: boolean;
       muted: boolean;
@@ -95,11 +94,6 @@
         },
       };
 
-      // Add thumbnails for clips/dvr
-      if (contentType !== "live") {
-        playerConfig.thumbnailUrl = null; // Will be resolved by the player
-      }
-
       loading = false;
     } catch (err) {
       console.error("Error setting up player:", err);
@@ -175,7 +169,6 @@
               <Player
                 contentId={playerConfig.contentId}
                 contentType={playerConfig.contentType}
-                thumbnailUrl={playerConfig.thumbnailUrl}
                 options={playerConfig.options}
                 onMetadata={handleMetadata}
               />

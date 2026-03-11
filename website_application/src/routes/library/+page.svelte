@@ -55,7 +55,8 @@
     TableCell,
   } from "$lib/components/ui/table";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getContentDeliveryUrls, getShareUrl } from "$lib/config";
+  import { getAssetUrl, getContentDeliveryUrls, getShareUrl } from "$lib/config";
+  import SpriteThumbnail from "$lib/components/shared/SpriteThumbnail.svelte";
   import { formatBytes, formatExpiry, formatTimestamp, isExpired } from "$lib/utils/formatters.js";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
@@ -1220,15 +1221,23 @@
 
                           <!-- Title -->
                           <TableCell class="px-4 py-2">
-                            <div class="flex flex-col">
-                              <div
-                                class="text-sm font-medium text-foreground truncate max-w-xs group-hover:text-primary transition-colors"
-                                title={artifact.title}
-                              >
-                                {artifact.title}
-                              </div>
-                              <div class="text-[10px] text-muted-foreground font-mono">
-                                {artifact.hash?.slice(0, 8) || "N/A"}...
+                            <div class="flex items-center gap-3">
+                              <SpriteThumbnail
+                                assetId={artifact.hash}
+                                posterUrl={artifact.hash
+                                  ? getAssetUrl(artifact.hash, "poster.jpg")
+                                  : null}
+                              />
+                              <div class="flex flex-col min-w-0">
+                                <div
+                                  class="text-sm font-medium text-foreground truncate max-w-xs group-hover:text-primary transition-colors"
+                                  title={artifact.title}
+                                >
+                                  {artifact.title}
+                                </div>
+                                <div class="text-[10px] text-muted-foreground font-mono">
+                                  {artifact.hash?.slice(0, 8) || "N/A"}...
+                                </div>
                               </div>
                             </div>
                           </TableCell>

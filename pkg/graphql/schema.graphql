@@ -2932,9 +2932,6 @@ type Stream implements Node {
   """
   metrics: StreamMetrics
 
-  "URL to preview thumbnail image (auto-generated from live stream, served via asset service)."
-  thumbnailUrl: String
-
   "Configured multistream push targets for this stream."
   pushTargets: [PushTarget!]!
 }
@@ -5213,10 +5210,12 @@ type StreamingConfig {
   ingestDomain: String
   edgeDomain: String
   playDomain: String
+  chandlerDomain: String
   officialClusterLabel: String
   officialIngestDomain: String
   officialEdgeDomain: String
   officialPlayDomain: String
+  officialChandlerDomain: String
   srtPort: Int
   rtmpPort: Int
 }

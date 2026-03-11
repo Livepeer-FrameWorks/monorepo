@@ -626,6 +626,7 @@ Deploy per region. Each region needs its own set of these services.
 | Decklog          | 18026 | 18006 | decklog          |
 | Periscope Ingest | 18005 | -     | periscope-ingest |
 | Signalman        | 18009 | 19005 | signalman        |
+| Chandler         | 18020 | -     | chandler         |
 
 **Notes:**
 
@@ -641,9 +642,10 @@ make build-bin-foghorn
 make build-bin-decklog
 make build-bin-periscope-ingest
 make build-bin-signalman
+make build-bin-chandler
 
 install -d /opt/frameworks/bin
-cp bin/{bridge,foghorn,decklog,periscope-ingest,signalman} /opt/frameworks/bin/
+cp bin/{bridge,foghorn,decklog,periscope-ingest,signalman,chandler} /opt/frameworks/bin/
 ```
 
 ### Environment Configuration
@@ -854,6 +856,37 @@ KAFKA_CLUSTER_ID=frameworks
 QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 
 ````
+</TabItem>
+<TabItem label="Chandler">
+```bash
+# /etc/frameworks/chandler.env
+PORT=18020
+LOG_LEVEL=info
+BUILD_ENV=production
+
+# Auth
+
+SERVICE_TOKEN=<your-service-token>
+CLUSTER_ID=<cluster-id>
+
+# S3 (serves thumbnails, sprites, VOD metadata)
+
+STORAGE_S3_BUCKET=<your-bucket>
+STORAGE_S3_REGION=<region>
+STORAGE_S3_ENDPOINT=<s3-compatible-endpoint>
+STORAGE_S3_ACCESS_KEY=<access-key>
+STORAGE_S3_SECRET_KEY=<secret-key>
+STORAGE_S3_PREFIX=
+
+# Cache
+
+CACHE_MAX_BYTES=52428800
+CACHE_TTL_SECONDS=30
+
+# Dependencies
+
+QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
+```
 </TabItem>
 </Tabs>
 

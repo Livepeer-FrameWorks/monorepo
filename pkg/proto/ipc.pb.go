@@ -12405,7 +12405,7 @@ func (x *ThumbnailUploadRequest) GetFilePaths() []string {
 // Foghorn -> Helmsman: presigned PUT URLs for each file
 type ThumbnailUploadResponse struct {
 	state         protoimpl.MessageState                     `protogen:"open.v1"`
-	PlaybackId    string                                     `protobuf:"bytes,1,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	ThumbnailKey  string                                     `protobuf:"bytes,1,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"` // stream_id (UUID) for live, artifact_hash for artifacts
 	Uploads       []*ThumbnailUploadResponse_PresignedUpload `protobuf:"bytes,2,rep,name=uploads,proto3" json:"uploads,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -12441,9 +12441,9 @@ func (*ThumbnailUploadResponse) Descriptor() ([]byte, []int) {
 	return file_ipc_proto_rawDescGZIP(), []int{99}
 }
 
-func (x *ThumbnailUploadResponse) GetPlaybackId() string {
+func (x *ThumbnailUploadResponse) GetThumbnailKey() string {
 	if x != nil {
-		return x.PlaybackId
+		return x.ThumbnailKey
 	}
 	return ""
 }
@@ -12458,7 +12458,7 @@ func (x *ThumbnailUploadResponse) GetUploads() []*ThumbnailUploadResponse_Presig
 // Helmsman -> Foghorn: confirm upload complete
 type ThumbnailUploaded struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PlaybackId    string                 `protobuf:"bytes,1,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	ThumbnailKey  string                 `protobuf:"bytes,1,opt,name=thumbnail_key,json=thumbnailKey,proto3" json:"thumbnail_key,omitempty"` // echoed from ThumbnailUploadResponse
 	S3Keys        []string               `protobuf:"bytes,2,rep,name=s3_keys,json=s3Keys,proto3" json:"s3_keys,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -12494,9 +12494,9 @@ func (*ThumbnailUploaded) Descriptor() ([]byte, []int) {
 	return file_ipc_proto_rawDescGZIP(), []int{100}
 }
 
-func (x *ThumbnailUploaded) GetPlaybackId() string {
+func (x *ThumbnailUploaded) GetThumbnailKey() string {
 	if x != nil {
-		return x.PlaybackId
+		return x.ThumbnailKey
 	}
 	return ""
 }
@@ -14325,20 +14325,18 @@ const file_ipc_proto_rawDesc = "" +
 	"\x16ThumbnailUploadRequest\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1d\n" +
 	"\n" +
-	"file_paths\x18\x02 \x03(\tR\tfilePaths\"\x9a\x02\n" +
-	"\x17ThumbnailUploadResponse\x12\x1f\n" +
-	"\vplayback_id\x18\x01 \x01(\tR\n" +
-	"playbackId\x12R\n" +
+	"file_paths\x18\x02 \x03(\tR\tfilePaths\"\x9e\x02\n" +
+	"\x17ThumbnailUploadResponse\x12#\n" +
+	"\rthumbnail_key\x18\x01 \x01(\tR\fthumbnailKey\x12R\n" +
 	"\auploads\x18\x02 \x03(\v28.helmsmancontrol.ThumbnailUploadResponse.PresignedUploadR\auploads\x1a\x89\x01\n" +
 	"\x0fPresignedUpload\x12\x1b\n" +
 	"\tfile_name\x18\x01 \x01(\tR\bfileName\x12#\n" +
 	"\rpresigned_url\x18\x02 \x01(\tR\fpresignedUrl\x12\x15\n" +
 	"\x06s3_key\x18\x03 \x01(\tR\x05s3Key\x12\x1d\n" +
 	"\n" +
-	"local_path\x18\x04 \x01(\tR\tlocalPath\"M\n" +
-	"\x11ThumbnailUploaded\x12\x1f\n" +
-	"\vplayback_id\x18\x01 \x01(\tR\n" +
-	"playbackId\x12\x17\n" +
+	"local_path\x18\x04 \x01(\tR\tlocalPath\"Q\n" +
+	"\x11ThumbnailUploaded\x12#\n" +
+	"\rthumbnail_key\x18\x01 \x01(\tR\fthumbnailKey\x12\x17\n" +
 	"\as3_keys\x18\x02 \x03(\tR\x06s3Keys*\x94\x02\n" +
 	"\x13ClusterRejectReason\x12%\n" +
 	"!CLUSTER_REJECT_REASON_UNSPECIFIED\x10\x00\x12\"\n" +

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"frameworks/pkg/maintenance"
 )
 
 //go:embed edge/*
@@ -28,6 +30,7 @@ type EdgeVars struct {
 	CaddyAdminAddr   string // Docker: "unix//run/caddy/admin.sock", Native: "localhost:2019"
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
 	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
+	ChandlerUpstream string // Docker: "chandler:18020", Native: "localhost:18020"
 }
 
 // SetModeDefaults fills Mode-dependent fields if not explicitly set.
@@ -56,6 +59,13 @@ func (v *EdgeVars) SetModeDefaults() {
 			v.CaddyAdminAddr = "unix//run/caddy/admin.sock"
 		}
 	}
+	if v.ChandlerUpstream == "" {
+		if v.Mode == "native" {
+			v.ChandlerUpstream = "localhost:18020"
+		} else {
+			v.ChandlerUpstream = "chandler:18020"
+		}
+	}
 }
 
 // WriteEdgeTemplates writes edge stack templates into target directory.
@@ -66,6 +76,14 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return err
 	}
+	// Write shared maintenance page (embedded via pkg/maintenance)
+	maintPath := filepath.Join(targetDir, "maintenance.html")
+	if _, err := os.Stat(maintPath); err != nil || overwrite {
+		if err := os.WriteFile(maintPath, maintenance.HTML, 0o644); err != nil {
+			return err
+		}
+	}
+
 	// files to render — native mode skips docker-compose
 	files := []struct{ in, out string }{
 		{"edge/Caddyfile.tmpl", "Caddyfile"},
@@ -96,6 +114,7 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{SITE_ADDRESS}}", vars.SiteAddress)
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
+		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)
 		// TLS: use explicit cert paths if provided, otherwise auto-ACME (Caddy default).
 		// ConfigSeed will push wildcard certs to /etc/frameworks/certs/ at runtime;
 		// Caddy watches the files and hot-reloads when they appear.

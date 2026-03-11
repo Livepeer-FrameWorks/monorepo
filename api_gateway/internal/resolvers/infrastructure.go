@@ -2526,11 +2526,12 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 	rtmpPort := config.GetEnvInt("STREAMING_RTMP_PORT", 1935)
 
 	cfg := &model.StreamingConfig{
-		IngestDomain: strPtr(fmt.Sprintf("edge-ingest.%s.%s", slug, baseURL)),
-		EdgeDomain:   strPtr(fmt.Sprintf("edge-egress.%s.%s", slug, baseURL)),
-		PlayDomain:   strPtr(fmt.Sprintf("foghorn.%s.%s", slug, baseURL)),
-		SrtPort:      &srtPort,
-		RtmpPort:     &rtmpPort,
+		IngestDomain:   strPtr(fmt.Sprintf("edge-ingest.%s.%s", slug, baseURL)),
+		EdgeDomain:     strPtr(fmt.Sprintf("edge-egress.%s.%s", slug, baseURL)),
+		PlayDomain:     strPtr(fmt.Sprintf("foghorn.%s.%s", slug, baseURL)),
+		ChandlerDomain: strPtr(fmt.Sprintf("chandler.%s.%s", slug, baseURL)),
+		SrtPort:        &srtPort,
+		RtmpPort:       &rtmpPort,
 	}
 
 	if name := resp.GetClusterName(); name != "" {
@@ -2543,6 +2544,7 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 		cfg.OfficialIngestDomain = strPtr(fmt.Sprintf("edge-ingest.%s.%s", offSlug, offBase))
 		cfg.OfficialEdgeDomain = strPtr(fmt.Sprintf("edge-egress.%s.%s", offSlug, offBase))
 		cfg.OfficialPlayDomain = strPtr(fmt.Sprintf("foghorn.%s.%s", offSlug, offBase))
+		cfg.OfficialChandlerDomain = strPtr(fmt.Sprintf("chandler.%s.%s", offSlug, offBase))
 		if name := resp.GetOfficialClusterName(); name != "" {
 			cfg.OfficialClusterLabel = strPtr(name)
 		}

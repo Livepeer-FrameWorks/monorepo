@@ -1,4 +1,4 @@
-import { getStreamingConfig } from "$lib/stores/streaming-config";
+import { getStreamingConfig } from "$lib/stores/streaming-config.svelte";
 
 // Parse a URL and extract components for building protocol-specific URLs
 interface ParsedStreamingUrl {
@@ -34,6 +34,8 @@ interface ResolvedEndpoints {
   playUseTls: boolean;
   edgeHostname: string;
   edgeUseTls: boolean;
+  chandlerHostname: string;
+  chandlerUseTls: boolean;
   srtPort: string;
   rtmpPort: string;
 }
@@ -48,6 +50,8 @@ function resolveEndpoints(): ResolvedEndpoints {
       playUseTls: true,
       edgeHostname: sc.edgeDomain ?? config.edgeHostname,
       edgeUseTls: true,
+      chandlerHostname: sc.chandlerDomain ?? "",
+      chandlerUseTls: true,
       srtPort: sc.srtPort != null ? String(sc.srtPort) : config.srtPort,
       rtmpPort: sc.rtmpPort != null ? String(sc.rtmpPort) : config.rtmpPort,
     };
@@ -59,6 +63,8 @@ function resolveEndpoints(): ResolvedEndpoints {
     playUseTls: config.playUseTls,
     edgeHostname: config.edgeHostname,
     edgeUseTls: config.edgeUseTls,
+    chandlerHostname: "",
+    chandlerUseTls: false,
     srtPort: config.srtPort,
     rtmpPort: config.rtmpPort,
   };
@@ -158,6 +164,21 @@ interface DeliveryUrls {
   mkv: string;
   mp4: string;
   embed: string;
+}
+
+/**
+ * Build a public Chandler URL for a thumbnail asset.
+ * In dev, falls back to relative /assets/ path (proxied by Vite).
+ */
+export function getAssetUrl(assetId: string, file: string): string {
+  if (!assetId) return "";
+  const ep = resolveEndpoints();
+  if (ep.chandlerHostname) {
+    const proto = ep.chandlerUseTls ? "https" : "http";
+    return `${proto}://${ep.chandlerHostname}/assets/${assetId}/${file}`;
+  }
+  if (isDev) return `/assets/${assetId}/${file}`;
+  return "";
 }
 
 export function getIngestUrls(streamKey: string): Partial<IngestUrls> {

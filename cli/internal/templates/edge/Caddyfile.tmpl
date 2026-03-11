@@ -26,6 +26,10 @@
     reverse_proxy {{HELMSMAN_UPSTREAM}}
   }
 
+  handle /assets/* {
+    reverse_proxy {{CHANDLER_UPSTREAM}}
+  }
+
   handle /view/* {
     reverse_proxy {{MIST_UPSTREAM}} {
       flush_interval -1
@@ -40,6 +44,15 @@
   }
 
   reverse_proxy {{MIST_UPSTREAM}}
+
+  handle_errors {
+    @upstream_down expression `{err.status_code} in [502, 503, 504]`
+    handle @upstream_down {
+      root * /etc/caddy
+      rewrite * /maintenance.html
+      file_server
+    }
+  }
 
   log {
     output stdout

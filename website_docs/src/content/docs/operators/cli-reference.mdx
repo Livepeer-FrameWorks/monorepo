@@ -1251,6 +1251,84 @@ frameworks edge doctor --domain edge1.example.com
 
 ---
 
+## Livepeer Commands
+
+Livepeer gateway management. Uses Quartermaster service discovery by default; override with `--gateway host:port`.
+
+### frameworks livepeer status
+
+Show gateway status (version, ETH address, deposit info).
+
+```bash
+frameworks livepeer status
+frameworks livepeer status --gateway 10.0.1.5:8935
+frameworks livepeer status --cluster edge-us-east
+```
+
+**Flags:**
+
+- `--gateway` - Gateway address (host:port), bypasses discovery
+- `--cluster` - Cluster ID for discovery
+
+### frameworks livepeer deposit fund
+
+Fund the TicketBroker deposit.
+
+```bash
+frameworks livepeer deposit fund --amount 1000000000000000000
+```
+
+**Flags:**
+
+- `--amount` (required) - Amount in wei
+
+### frameworks livepeer deposit reserve
+
+Fund both deposit and reserve.
+
+```bash
+frameworks livepeer deposit reserve --deposit 1000000000000000000 --reserve 500000000000000000
+```
+
+**Flags:**
+
+- `--deposit` (required) - Deposit amount in wei
+- `--reserve` (required) - Reserve amount in wei
+
+### frameworks livepeer deposit unlock
+
+Start the unlock period for deposit and reserve.
+
+```bash
+frameworks livepeer deposit unlock
+```
+
+### frameworks livepeer deposit withdraw
+
+Withdraw unlocked deposit and reserve.
+
+```bash
+frameworks livepeer deposit withdraw
+```
+
+### frameworks livepeer wallet address
+
+Show the gateway's ETH address.
+
+```bash
+frameworks livepeer wallet address
+```
+
+### frameworks livepeer wallet balance
+
+Show the gateway's ETH balance.
+
+```bash
+frameworks livepeer wallet balance
+```
+
+---
+
 ## Services Commands
 
 Central-tier service operations (for single-host or development deployments).

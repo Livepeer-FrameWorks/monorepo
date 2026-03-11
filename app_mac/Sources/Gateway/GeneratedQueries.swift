@@ -407,7 +407,6 @@ enum GQL {
     record
     createdAt
     updatedAt
-    thumbnailUrl
   }
   """
 
@@ -2891,10 +2890,12 @@ enum GQL {
       ingestDomain
       edgeDomain
       playDomain
+      chandlerDomain
       officialClusterLabel
       officialIngestDomain
       officialEdgeDomain
       officialPlayDomain
+      officialChandlerDomain
       srtPort
       rtmpPort
     }

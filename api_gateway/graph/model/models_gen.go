@@ -1430,16 +1430,18 @@ type StreamValidation struct {
 }
 
 type StreamingConfig struct {
-	PreferredClusterLabel *string `json:"preferredClusterLabel,omitempty"`
-	IngestDomain          *string `json:"ingestDomain,omitempty"`
-	EdgeDomain            *string `json:"edgeDomain,omitempty"`
-	PlayDomain            *string `json:"playDomain,omitempty"`
-	OfficialClusterLabel  *string `json:"officialClusterLabel,omitempty"`
-	OfficialIngestDomain  *string `json:"officialIngestDomain,omitempty"`
-	OfficialEdgeDomain    *string `json:"officialEdgeDomain,omitempty"`
-	OfficialPlayDomain    *string `json:"officialPlayDomain,omitempty"`
-	SrtPort               *int    `json:"srtPort,omitempty"`
-	RtmpPort              *int    `json:"rtmpPort,omitempty"`
+	PreferredClusterLabel  *string `json:"preferredClusterLabel,omitempty"`
+	IngestDomain           *string `json:"ingestDomain,omitempty"`
+	EdgeDomain             *string `json:"edgeDomain,omitempty"`
+	PlayDomain             *string `json:"playDomain,omitempty"`
+	ChandlerDomain         *string `json:"chandlerDomain,omitempty"`
+	OfficialClusterLabel   *string `json:"officialClusterLabel,omitempty"`
+	OfficialIngestDomain   *string `json:"officialIngestDomain,omitempty"`
+	OfficialEdgeDomain     *string `json:"officialEdgeDomain,omitempty"`
+	OfficialPlayDomain     *string `json:"officialPlayDomain,omitempty"`
+	OfficialChandlerDomain *string `json:"officialChandlerDomain,omitempty"`
+	SrtPort                *int    `json:"srtPort,omitempty"`
+	RtmpPort               *int    `json:"rtmpPort,omitempty"`
 }
 
 type StreamsConnection struct {
