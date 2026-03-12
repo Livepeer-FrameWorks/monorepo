@@ -34,8 +34,13 @@ type S3Config struct {
 	SecretKey string
 }
 
+// S3Getter abstracts the S3 GetObject call for testability.
+type S3Getter interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
 type AssetHandler struct {
-	s3     *s3.Client
+	s3     S3Getter
 	bucket string
 	prefix string
 	cache  *cache.LRU
