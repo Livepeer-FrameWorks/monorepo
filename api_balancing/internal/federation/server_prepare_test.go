@@ -228,6 +228,353 @@ func TestPrepareArtifact_ClipSynced_HappyPath(t *testing.T) {
 	}
 }
 
+func TestPrepareArtifact_VodSynced_HappyPath(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("vod-x", "", "vod", "mp4", "s3", "synced", 65536)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/vod/hash-vod.mp4?sig=xyz"}
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: fake,
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-vod",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if !resp.GetReady() {
+		t.Fatal("expected Ready=true for synced VOD")
+	}
+	if resp.GetUrl() != "https://s3.example.com/vod/hash-vod.mp4?sig=xyz" {
+		t.Fatalf("unexpected URL: %s", resp.GetUrl())
+	}
+	if resp.GetSizeBytes() != 65536 {
+		t.Fatalf("expected 65536, got %d", resp.GetSizeBytes())
+	}
+	if resp.GetFormat() != "mp4" {
+		t.Fatalf("expected mp4, got %q", resp.GetFormat())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPrepareArtifact_VodSynced_PresignError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("vod-y", "", "vod", "mkv", "s3", "synced", 4096)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	fake := &fakeS3Client{presignedGETErr: fmt.Errorf("S3 unavailable")}
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: fake,
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-vod-err",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetError() != "failed to generate download URL" {
+		t.Fatalf("expected download URL error, got %q", resp.GetError())
+	}
+}
+
+func TestPrepareArtifact_DVRSynced_HappyPath(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("dvr-b", "stream-b", "dvr", "m3u8", "s3", "synced", 20480)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	fake := &fakeS3Client{
+		dvrSegmentURLs: map[string]string{
+			"manifest.m3u8": "https://s3.example.com/manifest?sig=a",
+			"chunk000.ts":   "https://s3.example.com/chunk000?sig=b",
+			"chunk001.ts":   "https://s3.example.com/chunk001?sig=c",
+		},
+	}
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: fake,
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-dvr-ok",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if !resp.GetReady() {
+		t.Fatal("expected Ready=true for synced DVR")
+	}
+	if len(resp.GetSegmentUrls()) != 3 {
+		t.Fatalf("expected 3 segment URLs, got %d", len(resp.GetSegmentUrls()))
+	}
+	if resp.GetSizeBytes() != 20480 {
+		t.Fatalf("expected 20480, got %d", resp.GetSizeBytes())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPrepareArtifact_DVRSynced_PresignError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("dvr-c", "stream-c", "dvr", "m3u8", "s3", "synced", 1024)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	fake := &fakeS3Client{dvrSegmentErr: fmt.Errorf("S3 list failed")}
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: fake,
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-dvr-err",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetError() != "failed to generate DVR segment URLs" {
+		t.Fatalf("expected DVR URL error, got %q", resp.GetError())
+	}
+}
+
+func TestPrepareArtifact_FreezingState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("clip-f", "stream-f", "clip", "mp4", "freezing", "", 4096)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: &fakeS3Client{},
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-freezing",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetReady() {
+		t.Fatal("expected Ready=false for freezing artifact")
+	}
+	if resp.GetEstReadySeconds() != 30 {
+		t.Fatalf("expected 30 seconds, got %d", resp.GetEstReadySeconds())
+	}
+}
+
+func TestPrepareArtifact_LegacyClipHash(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("clip-legacy", "stream-l", "clip", "mp4", "s3", "synced", 2048)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/legacy.mp4?sig=legacy"}
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: fake,
+	})
+
+	// Use ClipHash instead of ArtifactId
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ClipHash: "hash-legacy",
+		TenantId: "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if !resp.GetReady() {
+		t.Fatal("expected Ready=true for legacy clip hash")
+	}
+}
+
+func TestPrepareArtifact_DBError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnError(fmt.Errorf("connection refused"))
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: &fakeS3Client{},
+	})
+
+	_, err = srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-db-err",
+		TenantId:   "tenant-a",
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal error, got %v", err)
+	}
+}
+
+func TestPrepareArtifact_SyncingState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("clip-s", "stream-s", "clip", "mp4", "local", "syncing", 4096)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: &fakeS3Client{},
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-syncing",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetReady() {
+		t.Fatal("expected Ready=false for syncing artifact")
+	}
+	if resp.GetEstReadySeconds() != 30 {
+		t.Fatalf("expected 30 seconds, got %d", resp.GetEstReadySeconds())
+	}
+}
+
+func TestPrepareArtifact_UnknownArtifactType(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("unknown-a", "stream-u", "thumbnail", "png", "s3", "synced", 256)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: &fakeS3Client{},
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-unknown",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetError() == "" {
+		t.Fatal("expected error for unknown artifact type")
+	}
+}
+
+func TestPrepareArtifact_MetadataDrift(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	// storage_location=s3 but sync_status NOT "synced" — metadata drift
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes"}).
+		AddRow("clip-d", "stream-d", "clip", "mp4", "s3", "pending", 1024)
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:   logging.NewLogger(),
+		DB:       db,
+		S3Client: &fakeS3Client{},
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-drift",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetError() == "" {
+		t.Fatal("expected error for metadata drift")
+	}
+}
+
+func TestPrepareArtifact_NilDBAndS3(t *testing.T) {
+	srv := NewFederationServer(FederationServerConfig{
+		Logger: logging.NewLogger(),
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+		ArtifactId: "hash-no-storage",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetError() != "origin storage not configured" {
+		t.Fatalf("expected 'origin storage not configured', got %q", resp.GetError())
+	}
+}
+
 func TestPrepareArtifact_EmptyDVRSegments(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

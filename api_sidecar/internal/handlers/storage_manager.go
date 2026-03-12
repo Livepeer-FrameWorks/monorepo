@@ -113,6 +113,8 @@ type StorageManager struct {
 	sendStorageLifecycle    func(data *pb.StorageLifecycleData) error
 	sendDefrostComplete     func(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error
 	sendDefrostProgress     func(requestID, assetHash string, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) error
+	requestCanDelete        func(ctx context.Context, assetHash string) (bool, string, int64, error)
+	sendArtifactDeleted     func(assetHash, filePath, reason, assetType string, sizeBytes uint64) error
 
 	// Thresholds
 	freezeThreshold   float64       // Start freezing at this % (default: 85%)
@@ -178,6 +180,8 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		sendStorageLifecycle:    control.SendStorageLifecycle,
 		sendDefrostComplete:     control.SendDefrostComplete,
 		sendDefrostProgress:     control.SendDefrostProgress,
+		requestCanDelete:        control.RequestCanDelete,
+		sendArtifactDeleted:     control.SendArtifactDeleted,
 	}
 
 	storageManager.defrostTracker.inFlight = make(map[string]*DefrostJob)
@@ -917,14 +921,14 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 		if info, statErr := os.Stat(req.LocalPath); statErr == nil {
 			sizeBytes = uint64(info.Size())
 		}
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHED,
 			AssetType: string(assetType),
 			AssetHash: req.AssetHash,
 			SizeBytes: sizeBytes,
 			LocalPath: &req.LocalPath,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "success", req.LocalPath, sizeBytes, "")
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", req.LocalPath, sizeBytes, "")
 		sm.markDefrostJobDone(req.AssetHash, nil, req.LocalPath, sizeBytes)
 		return &pb.DefrostComplete{
 			RequestId: req.RequestId,
@@ -941,13 +945,13 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 		err := fmt.Errorf("no presigned GET URL provided for defrost")
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(assetType),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, err
 	}
 
@@ -955,18 +959,18 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 	if err := os.MkdirAll(filepath.Dir(req.LocalPath), 0755); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(assetType),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	// Notify cache refill started
-	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:    pb.StorageLifecycleData_ACTION_CACHE_STARTED,
 		AssetType: string(assetType),
 		AssetHash: req.AssetHash,
@@ -989,7 +993,7 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 
 	// Download from S3 using presigned URL
 	err := sm.presignedClient.DownloadToFileFromPresignedURL(ctx, presignedURL, req.LocalPath, func(downloaded int64) {
-		_ = control.SendDefrostProgress(req.RequestId, req.AssetHash, 0, uint64(downloaded), 0, 0, "downloading")
+		_ = sm.sendDefrostProgress(req.RequestId, req.AssetHash, 0, uint64(downloaded), 0, 0, "downloading")
 	})
 
 	duration := time.Since(startTime)
@@ -997,13 +1001,13 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 	if err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(assetType),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 		return nil, fmt.Errorf("failed to download from S3: %w", err)
 	}
 
@@ -1016,7 +1020,7 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 
 	// Notify completion (asset now cached locally from S3)
 	durationMs := duration.Milliseconds()
-	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:     pb.StorageLifecycleData_ACTION_CACHED,
 		AssetType:  string(assetType),
 		AssetHash:  req.AssetHash,
@@ -1028,7 +1032,7 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 	sm.markDefrostJobDone(req.AssetHash, nil, req.LocalPath, sizeBytes)
 
 	// Send completion to Foghorn
-	_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "success", req.LocalPath, sizeBytes, "")
+	_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", req.LocalPath, sizeBytes, "")
 
 	// Generate DTSH immediately so first viewer doesn't hit regen latency.
 	// Boot as vod+ (no processes) via the json endpoint which triggers input → DTSH.
@@ -1114,14 +1118,14 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 			totalBytes += uint64(info.Size())
 			return nil
 		})
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHED,
 			AssetType: string(AssetTypeDVR),
 			AssetHash: req.AssetHash,
 			SizeBytes: totalBytes,
 			LocalPath: &manifestPath,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, "")
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, "")
 		sm.markDefrostJobDone(req.AssetHash, nil, manifestPath, totalBytes)
 		return &pb.DefrostComplete{
 			RequestId: req.RequestId,
@@ -1138,13 +1142,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 		err := fmt.Errorf("no segment URLs provided for DVR defrost")
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(AssetTypeDVR),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, err
 	}
 
@@ -1155,13 +1159,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 		err := fmt.Errorf("no manifest URL provided for DVR defrost")
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(AssetTypeDVR),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, err
 	}
 
@@ -1170,13 +1174,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	if err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(AssetTypeDVR),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, fmt.Errorf("failed to download original manifest: %w", err)
 	}
 
@@ -1193,7 +1197,7 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	}
 
 	// Notify cache refill started
-	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:    pb.StorageLifecycleData_ACTION_CACHE_STARTED,
 		AssetType: string(AssetTypeDVR),
 		AssetHash: req.AssetHash,
@@ -1205,13 +1209,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	if err := os.MkdirAll(req.LocalPath, 0755); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(AssetTypeDVR),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -1267,13 +1271,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	if err := os.MkdirAll(localSegmentsDir, 0755); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(AssetTypeDVR),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 		return nil, err
 	}
 
@@ -1282,18 +1286,18 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 		errStr := err.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 			AssetType: string(AssetTypeDVR),
 			AssetHash: req.AssetHash,
 			Error:     &errStr,
 		})
-		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
+		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 		return nil, err
 	}
 
 	// Signal ready for playback (manifest exists)
-	_ = control.SendDefrostProgress(req.RequestId, req.AssetHash, 0, 0, 0, int32(totalSegments), "ready")
+	_ = sm.sendDefrostProgress(req.RequestId, req.AssetHash, 0, 0, 0, int32(totalSegments), "ready")
 
 	// Download segments in order using presigned URLs, appending to manifest
 	var totalBytes uint64
@@ -1316,13 +1320,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 			sm.saveDefrostProgress(progress, req.LocalPath)
 			sm.markDefrostJobDone(req.AssetHash, err, "", 0)
 			errStr := err.Error()
-			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 				Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
 				AssetType: string(AssetTypeDVR),
 				AssetHash: req.AssetHash,
 				Error:     &errStr,
 			})
-			_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
+			_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 			return nil, fmt.Errorf("failed to download segment %s: %w", segName, err)
 		}
 
@@ -1345,7 +1349,7 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 
 		// Send progress
 		percent := uint32(((i + 1) * 100) / totalSegments)
-		_ = control.SendDefrostProgress(req.RequestId, req.AssetHash, percent, totalBytes, int32(i+1), int32(totalSegments), "downloading")
+		_ = sm.sendDefrostProgress(req.RequestId, req.AssetHash, percent, totalBytes, int32(i+1), int32(totalSegments), "downloading")
 	}
 
 	// Finalize manifest with #EXT-X-ENDLIST (becomes VOD)
@@ -1358,7 +1362,7 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	durationMs := duration.Milliseconds()
 
 	// Notify completion (DVR now cached locally from S3)
-	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:     pb.StorageLifecycleData_ACTION_CACHED,
 		AssetType:  string(AssetTypeDVR),
 		AssetHash:  req.AssetHash,
@@ -1370,7 +1374,7 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	sm.markDefrostJobDone(req.AssetHash, nil, manifestPath, totalBytes)
 
 	// Send completion to Foghorn
-	_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, "")
+	_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, "")
 
 	sm.logger.WithFields(logging.Fields{
 		"asset_hash":     req.AssetHash,
@@ -1643,7 +1647,7 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 
 		// Dual-storage: Ask Foghorn if it's safe to delete (i.e., synced to S3)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		safeToDelete, reason, warmDurationMs, err := control.RequestCanDelete(ctx, candidate.AssetHash)
+		safeToDelete, reason, warmDurationMs, err := sm.requestCanDelete(ctx, candidate.AssetHash)
 		cancel()
 
 		if err != nil {
@@ -1670,7 +1674,7 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 			if deleteErr != nil {
 				sm.logger.WithError(deleteErr).WithField("asset_hash", candidate.AssetHash).Warn("Failed to delete local copy")
 				errStr := deleteErr.Error()
-				_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+				_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 					Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
 					AssetType: string(candidate.AssetType),
 					AssetHash: candidate.AssetHash,
@@ -1681,14 +1685,14 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 			}
 
 			// Notify deletion (eviction from local cache) with warm duration metric
-			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 				Action:         pb.StorageLifecycleData_ACTION_EVICTED,
 				AssetType:      string(candidate.AssetType),
 				AssetHash:      candidate.AssetHash,
 				SizeBytes:      candidate.SizeBytes,
 				WarmDurationMs: &warmDurationMs,
 			})
-			_ = control.SendArtifactDeleted(candidate.AssetHash, candidate.FilePath, "eviction", string(candidate.AssetType), candidate.SizeBytes)
+			_ = sm.sendArtifactDeleted(candidate.AssetHash, candidate.FilePath, "eviction", string(candidate.AssetType), candidate.SizeBytes)
 
 			totalFreed += candidate.SizeBytes
 			sm.logger.WithFields(logging.Fields{
@@ -1815,12 +1819,12 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequ
 
 	if uploadErr != nil {
 		// Send failure notification
-		_ = control.SendSyncComplete(requestID, assetHash, "failed", "", 0, uploadErr.Error(), false)
+		_ = sm.sendSyncComplete(requestID, assetHash, "failed", "", 0, uploadErr.Error(), false)
 		return uploadErr
 	}
 
 	// Send success notification with dtsh_included=true
-	_ = control.SendSyncComplete(requestID, assetHash, "success", "", 0, "", dtshUploaded)
+	_ = sm.sendSyncComplete(requestID, assetHash, "success", "", 0, "", dtshUploaded)
 
 	sm.logger.WithFields(logging.Fields{
 		"request_id": requestID,
