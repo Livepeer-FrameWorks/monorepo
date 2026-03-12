@@ -134,7 +134,7 @@ func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 		JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
 		WHERE a.sync_status = 'failed'
 		  AND a.updated_at < NOW() - INTERVAL '5 minutes'
-		  AND a.deleted_at IS NULL
+		  AND a.status != 'deleted'
 		  AND an.is_orphaned = false
 		ORDER BY a.updated_at ASC
 		LIMIT $1
@@ -172,7 +172,7 @@ func (r *ArtifactReconciler) advancePending(ctx context.Context) int {
 		JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
 		WHERE a.sync_status = 'pending'
 		  AND a.storage_location = 'local'
-		  AND a.deleted_at IS NULL
+		  AND a.status != 'deleted'
 		  AND an.is_orphaned = false
 		ORDER BY a.created_at ASC
 		LIMIT $1
