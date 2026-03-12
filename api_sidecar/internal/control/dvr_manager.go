@@ -73,13 +73,20 @@ type DVRJob struct {
 	syncMutex      sync.Mutex      // Protects SyncedSegments
 }
 
+// DVRMistClient abstracts MistServer push operations so tests can inject fakes.
+type DVRMistClient interface {
+	PushStart(streamName, targetURI string) error
+	PushStop(pushID int) error
+	PushList() ([]mist.PushInfo, error)
+}
+
 // DVRManager manages active DVR recording sessions
 type DVRManager struct {
 	logger      logging.Logger
 	jobs        map[string]*DVRJob // DVR hash -> job
 	mutex       sync.RWMutex
 	storagePath string
-	mistClient  *mist.Client
+	mistClient  DVRMistClient
 }
 
 // Global DVR manager instance
