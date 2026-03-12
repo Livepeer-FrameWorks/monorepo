@@ -662,15 +662,17 @@ func (p *Processor) handleStorageLifecycleData(trigger *pb.MistTrigger) (string,
 		return "", false, fmt.Errorf("unexpected payload type for StorageLifecycleData: %T", trigger.GetTriggerPayload())
 	}
 	sld := payload.StorageLifecycleData
-	// Enrich tenant context if available in the payload
 	if sld.TenantId != nil {
 		trigger.TenantId = sld.TenantId
 	}
 	if sld.InternalName != nil && *sld.InternalName != "" {
 		p.applyStreamContext(trigger, *sld.InternalName)
 	} else if sld.StreamId != nil && *sld.StreamId != "" {
-		// Fallback: resolve tenant/user context from stream_id (UUID)
 		p.applyStreamContext(trigger, *sld.StreamId)
+	} else if sld.AssetHash != "" {
+		// Helmsman doesn't have platform context — resolve via Commodore's
+		// unified resolver which accepts clip_hash/dvr_hash/vod_hash.
+		p.applyStreamContext(trigger, sld.AssetHash)
 	}
 	if sld.StreamId == nil || *sld.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
@@ -705,6 +707,9 @@ func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, boo
 	} else if dld.StreamId != nil && *dld.StreamId != "" {
 		// Fallback: resolve tenant/user context from stream_id (UUID)
 		p.applyStreamContext(trigger, *dld.StreamId)
+	} else if dld.DvrHash != "" {
+		// Helmsman may only know the DVR artifact hash at this point.
+		p.applyStreamContext(trigger, dld.DvrHash)
 	}
 	if dld.StreamId == nil || *dld.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
@@ -2077,10 +2082,10 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 		state.DefaultManager().UpdateNodeStats(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), s.GetReplicated())
 	}
 
-	// Update artifacts directly from protobuf - this is critical for VOD playback
-	if artifacts := nu.GetArtifacts(); len(artifacts) > 0 {
-		state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), artifacts)
-	}
+	// Update artifacts directly from protobuf - this is critical for VOD playback.
+	// Called unconditionally: an empty slice clears stale artifacts from a node
+	// that has lost all local files (prevents ghost artifacts in routing).
+	state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), nu.GetArtifacts())
 
 	// Enrich with database UUID for subscription lookups (frontend uses UUID, not logical name)
 	if uuid := p.resolveNodeUUID(nu.GetNodeId()); uuid != "" {

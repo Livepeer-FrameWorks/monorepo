@@ -432,6 +432,7 @@ func main() {
 	// different interface types (foghorngrpc.S3ClientInterface vs jobs.S3Client).
 	var s3ForGRPC foghorngrpc.S3ClientInterface
 	var s3ForJobs jobs.S3Client
+	var s3ForReconciler jobs.ReconcilerS3Client
 	var s3ForFederation *storage.S3Client
 	if s3Bucket := config.GetEnv("STORAGE_S3_BUCKET", ""); s3Bucket != "" {
 		s3Config := storage.S3Config{
@@ -449,6 +450,7 @@ func main() {
 			// Only assign to interfaces if successfully created (avoids typed nil issue)
 			s3ForGRPC = client
 			s3ForJobs = client
+			s3ForReconciler = client
 			s3ForFederation = client
 			control.SetS3Client(client)
 			logger.WithFields(logging.Fields{
@@ -699,6 +701,16 @@ func main() {
 	staleDefrostJob.Start()
 	defer staleDefrostJob.Stop()
 
+	// Start stale freeze cleanup job (resets stuck freezing artifacts)
+	staleFreezeJob := jobs.NewStaleFreezeCleanupJob(jobs.StaleFreezeCleanupConfig{
+		DB:         db,
+		Logger:     logger,
+		Interval:   1 * time.Minute,
+		StaleAfter: 30 * time.Minute,
+	})
+	staleFreezeJob.Start()
+	defer staleFreezeJob.Stop()
+
 	// Start orphan reconciliation job (retries failed deletions)
 	orphanCleanupJob := jobs.NewOrphanCleanupJob(jobs.OrphanCleanupConfig{
 		DB:       db,
@@ -719,6 +731,18 @@ func main() {
 	})
 	purgeDeletedJob.Start()
 	defer purgeDeletedJob.Stop()
+
+	// Start artifact reconciler (retries failed syncs, advances pending, onboards orphaned)
+	artifactReconciler := jobs.NewArtifactReconciler(jobs.ArtifactReconcilerConfig{
+		DB:              db,
+		S3Client:        s3ForReconciler,
+		CommodoreClient: commodoreClient,
+		SendFreeze:      control.SendFreezeRequest,
+		Logger:          logger,
+		Interval:        5 * time.Minute,
+	})
+	artifactReconciler.Start()
+	defer artifactReconciler.Stop()
 
 	// Start processing job dispatcher (routes VOD processing jobs to edge nodes)
 	processingDispatcher := jobs.NewProcessingDispatcher(jobs.ProcessingDispatcherConfig{

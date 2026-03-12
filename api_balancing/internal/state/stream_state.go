@@ -1522,11 +1522,18 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	if redisStore != nil {
 		artifactStates := make([]*NodeArtifactState, 0, len(artifacts))
 		for _, artifact := range artifacts {
+			aType := artifactTypeToString(artifact.GetArtifactType())
+			if aType == "" {
+				aType = inferArtifactType(artifact.GetFilePath())
+			}
 			artifactStates = append(artifactStates, &NodeArtifactState{
-				NodeID:    nodeID,
-				ClipHash:  artifact.GetClipHash(),
-				FilePath:  artifact.GetFilePath(),
-				SizeBytes: artifact.GetSizeBytes(),
+				NodeID:       nodeID,
+				ClipHash:     artifact.GetClipHash(),
+				FilePath:     artifact.GetFilePath(),
+				SizeBytes:    artifact.GetSizeBytes(),
+				StreamName:   artifact.GetStreamName(),
+				ArtifactType: aType,
+				Format:       artifact.GetFormat(),
 			})
 		}
 		if err := redisStore.SetNodeArtifacts(nodeID, artifactStates); err != nil {
@@ -1539,29 +1546,35 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	}
 
 	// Persist to database (outside lock to avoid blocking)
-	if artifactRepo != nil && len(artifacts) > 0 {
-		records := make([]ArtifactRecord, 0, len(artifacts))
-		for _, a := range artifacts {
-			artifactType := artifactTypeToString(a.GetArtifactType())
-			if artifactType == "" {
-				artifactType = inferArtifactType(a.GetFilePath())
+	if artifactRepo != nil {
+		if len(artifacts) > 0 {
+			records := make([]ArtifactRecord, 0, len(artifacts))
+			for _, a := range artifacts {
+				artifactType := artifactTypeToString(a.GetArtifactType())
+				if artifactType == "" {
+					artifactType = inferArtifactType(a.GetFilePath())
+				}
+				records = append(records, ArtifactRecord{
+					ArtifactHash: a.GetClipHash(),
+					ArtifactType: artifactType,
+					StreamName:   a.GetStreamName(),
+					FilePath:     a.GetFilePath(),
+					SizeBytes:    int64(a.GetSizeBytes()),
+					CreatedAt:    a.GetCreatedAt(),
+					HasDtsh:      a.GetHasDtsh(),
+					AccessCount:  int64(a.GetAccessCount()),
+					LastAccessed: a.GetLastAccessed(),
+				})
 			}
-			records = append(records, ArtifactRecord{
-				ArtifactHash: a.GetClipHash(),
-				ArtifactType: artifactType,
-				StreamName:   a.GetStreamName(),
-				FilePath:     a.GetFilePath(),
-				SizeBytes:    int64(a.GetSizeBytes()),
-				CreatedAt:    a.GetCreatedAt(),
-				HasDtsh:      a.GetHasDtsh(),
-				AccessCount:  int64(a.GetAccessCount()),
-				LastAccessed: a.GetLastAccessed(),
-			})
+			go func() {
+				_ = artifactRepo.UpsertArtifacts(context.Background(), nodeID, records)
+			}()
+		} else {
+			// Node reports zero artifacts — mark all its DB rows as orphaned
+			go func() {
+				_ = artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nodeID)
+			}()
 		}
-		// Fire-and-forget persistence (errors logged in repository)
-		go func() {
-			_ = artifactRepo.UpsertArtifacts(context.Background(), nodeID, records)
-		}()
 	}
 
 	// Check for .dtsh files that appeared after initial sync
@@ -1639,6 +1652,19 @@ func artifactTypeToString(artifactType pb.ArtifactEvent_ArtifactType) string {
 		return "vod"
 	default:
 		return ""
+	}
+}
+
+func artifactTypeFromString(s string) pb.ArtifactEvent_ArtifactType {
+	switch s {
+	case "clip":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_CLIP
+	case "dvr":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_DVR
+	case "vod":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_VOD
+	default:
+		return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
 	}
 }
 
@@ -2187,13 +2213,19 @@ func (sm *StreamStateManager) checkStaleNodes() {
 	}
 	sm.mu.Unlock()
 
-	// Delete from Redis outside the lock
+	// Delete from Redis and mark DB artifacts orphaned outside the lock
+	artifactRepo := sm.repos.Artifacts
 	for _, nodeID := range toRemove {
 		if sm.redisStore != nil {
 			if err := sm.redisStore.DeleteNode(nodeID); err != nil && stateLogger != nil {
 				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete stale node from Redis")
 			}
 			_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
+		}
+		if artifactRepo != nil {
+			go func(nid string) {
+				_ = artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nid)
+			}(nodeID)
 		}
 		if stateLogger != nil {
 			stateLogger.WithField("node_id", nodeID).Info("Evicted disconnected node from state")
@@ -2829,6 +2861,8 @@ type ArtifactRepository interface {
 	GetCachedAt(ctx context.Context, artifactHash string) (int64, error)
 	// ListAllNodeArtifacts returns all non-orphaned artifacts grouped by node ID (for rehydration)
 	ListAllNodeArtifacts(ctx context.Context) (map[string][]ArtifactRecord, error)
+	// MarkNodeArtifactsOrphaned sets is_orphaned=true for all artifacts on a node
+	MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string) error
 }
 
 // ArtifactRecord represents an artifact (clip or DVR) stored on a node

@@ -493,12 +493,18 @@ func TestPayloadTypeAssertions_ValidTypes(t *testing.T) {
 
 type stubCommodoreInternalService struct {
 	pb.UnimplementedInternalServiceServer
-	response *pb.ValidateStreamKeyResponse
-	err      error
+	validateResponse          *pb.ValidateStreamKeyResponse
+	validateErr               error
+	resolveIdentifierResponse *pb.ResolveIdentifierResponse
+	resolveIdentifierErr      error
 }
 
 func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, req *pb.ValidateStreamKeyRequest) (*pb.ValidateStreamKeyResponse, error) {
-	return s.response, s.err
+	return s.validateResponse, s.validateErr
+}
+
+func (s *stubCommodoreInternalService) ResolveIdentifier(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
+	return s.resolveIdentifierResponse, s.resolveIdentifierErr
 }
 
 func newTestProcessor(t *testing.T) *Processor {
@@ -524,8 +530,45 @@ func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, 
 
 	server := grpc.NewServer()
 	pb.RegisterInternalServiceServer(server, &stubCommodoreInternalService{
-		response: response,
-		err:      responseErr,
+		validateResponse: response,
+		validateErr:      responseErr,
+	})
+
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
+		GRPCAddr: listener.Addr().String(),
+		Logger:   logging.Logger(logrus.New()),
+	})
+	if err != nil {
+		server.Stop()
+		_ = listener.Close()
+		t.Fatalf("failed to create commodore client: %v", err)
+	}
+
+	cleanup := func() {
+		_ = client.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+
+	return client, cleanup
+}
+
+func setupCommodoreResolveIdentifierClient(t *testing.T, response *pb.ResolveIdentifierResponse, responseErr error) (*commodore.GRPCClient, func()) {
+	t.Helper()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	server := grpc.NewServer()
+	pb.RegisterInternalServiceServer(server, &stubCommodoreInternalService{
+		resolveIdentifierResponse: response,
+		resolveIdentifierErr:      responseErr,
 	})
 
 	go func() {
@@ -631,6 +674,45 @@ func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 	}
 }
 
+func TestHandleStorageLifecycleData_UsesAssetHashFallback(t *testing.T) {
+	commodoreClient, cleanup := setupCommodoreResolveIdentifierClient(t, &pb.ResolveIdentifierResponse{
+		Found:          true,
+		TenantId:       "tenant-storage",
+		UserId:         "user-storage",
+		StreamId:       "stream-storage",
+		IdentifierType: "clip_hash",
+	}, nil)
+	t.Cleanup(cleanup)
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+
+	trigger := &pb.MistTrigger{
+		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
+			StorageLifecycleData: &pb.StorageLifecycleData{
+				AssetHash: "clip-hash-1",
+			},
+		},
+	}
+
+	_, blocking, err := processor.handleStorageLifecycleData(trigger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blocking {
+		t.Fatalf("expected non-blocking response")
+	}
+	if trigger.GetTenantId() != "tenant-storage" {
+		t.Fatalf("expected tenant ID to be enriched, got %q", trigger.GetTenantId())
+	}
+	if trigger.GetUserId() != "user-storage" {
+		t.Fatalf("expected user ID to be enriched, got %q", trigger.GetUserId())
+	}
+	if got := trigger.GetStorageLifecycleData().GetStreamId(); got != "stream-storage" {
+		t.Fatalf("expected stream ID %q, got %q", "stream-storage", got)
+	}
+}
+
 func TestHandleDVRLifecycleData_NormalizesInternalName(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-3"
@@ -669,6 +751,45 @@ func TestHandleDVRLifecycleData_NormalizesInternalName(t *testing.T) {
 	payload := trigger.GetDvrLifecycleData()
 	if payload.GetStreamId() != streamID {
 		t.Fatalf("expected stream ID %q, got %q", streamID, payload.GetStreamId())
+	}
+}
+
+func TestHandleDVRLifecycleData_UsesDVRHashFallback(t *testing.T) {
+	commodoreClient, cleanup := setupCommodoreResolveIdentifierClient(t, &pb.ResolveIdentifierResponse{
+		Found:          true,
+		TenantId:       "tenant-dvr",
+		UserId:         "user-dvr",
+		StreamId:       "stream-dvr",
+		IdentifierType: "dvr_hash",
+	}, nil)
+	t.Cleanup(cleanup)
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+
+	trigger := &pb.MistTrigger{
+		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
+			DvrLifecycleData: &pb.DVRLifecycleData{
+				DvrHash: "dvr-hash-1",
+			},
+		},
+	}
+
+	_, blocking, err := processor.handleDVRLifecycleData(trigger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blocking {
+		t.Fatalf("expected non-blocking response")
+	}
+	if trigger.GetTenantId() != "tenant-dvr" {
+		t.Fatalf("expected tenant ID to be enriched, got %q", trigger.GetTenantId())
+	}
+	if trigger.GetUserId() != "user-dvr" {
+		t.Fatalf("expected user ID to be enriched, got %q", trigger.GetUserId())
+	}
+	if got := trigger.GetDvrLifecycleData().GetStreamId(); got != "stream-dvr" {
+		t.Fatalf("expected stream ID %q, got %q", "stream-dvr", got)
 	}
 }
 

@@ -110,6 +110,12 @@ var (
 
 	jitterRandMu sync.Mutex
 	jitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// Outbox for messages that failed to send during disconnect.
+	// Drained on reconnect after successful re-registration.
+	outboxMu  sync.Mutex
+	outbox    []*pb.ControlMessage
+	maxOutbox = 100
 )
 
 const (
@@ -380,6 +386,48 @@ func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient
 	}
 }
 
+// enqueueOutbox saves a message for retry on reconnect.
+func enqueueOutbox(msg *pb.ControlMessage) {
+	outboxMu.Lock()
+	defer outboxMu.Unlock()
+	if len(outbox) >= maxOutbox {
+		// Drop oldest to prevent unbounded growth
+		outbox = outbox[1:]
+	}
+	outbox = append(outbox, msg)
+}
+
+// drainOutbox re-sends all queued messages on the current stream.
+func drainOutbox(stream pb.HelmsmanControl_ConnectClient) {
+	outboxMu.Lock()
+	pending := outbox
+	outbox = nil
+	outboxMu.Unlock()
+
+	for _, msg := range pending {
+		msg.SentAt = timestamppb.Now()
+		if err := stream.Send(msg); err != nil {
+			// Re-enqueue if send fails again
+			enqueueOutbox(msg)
+		}
+	}
+}
+
+// sendOrEnqueue attempts to send a message on the active stream.
+// If the stream is disconnected, the message is saved to the outbox for retry on reconnect.
+func sendOrEnqueue(msg *pb.ControlMessage) error {
+	stream := getStream()
+	if stream == nil {
+		enqueueOutbox(msg)
+		return fmt.Errorf("gRPC control stream not connected (queued for retry)")
+	}
+	if err := stream.Send(msg); err != nil {
+		enqueueOutbox(msg)
+		return err
+	}
+	return nil
+}
+
 func applyJitter(backoff time.Duration, jitterPct int) time.Duration {
 	if jitterPct <= 0 {
 		return backoff
@@ -541,6 +589,9 @@ func runClient(addr string, logger logging.Logger) error {
 	close(streamReconnected)
 	streamReconnected = make(chan struct{})
 	streamReconnectedM.Unlock()
+
+	// Re-send any messages queued during disconnect
+	drainOutbox(stream)
 	defer func() {
 		clearConn()
 		ControlStreamStatus.Set(0)
@@ -618,6 +669,10 @@ func runClient(addr string, logger logging.Logger) error {
 				// Handle defrost request from Foghorn
 				if defrostRequestHandler != nil {
 					go defrostRequestHandler(x.DefrostRequest)
+				}
+			case *pb.ControlMessage_FreezeRequest:
+				if freezeRequestHandler != nil {
+					go freezeRequestHandler(x.FreezeRequest)
 				}
 			case *pb.ControlMessage_CanDeleteResponse:
 				// Handle can-delete response from Foghorn
@@ -1138,6 +1193,9 @@ type FreezePermissionHandler func(*pb.FreezePermissionResponse)
 // DefrostRequestHandler is called when Foghorn sends a defrost request
 type DefrostRequestHandler func(*pb.DefrostRequest)
 
+// FreezeRequestHandler is called when Foghorn proactively requests a freeze/sync
+type FreezeRequestHandler func(*pb.FreezeRequest)
+
 // DtshSyncRequestHandler is called when Foghorn sends a request to sync just the .dtsh file
 type DtshSyncRequestHandler func(*pb.DtshSyncRequest)
 
@@ -1148,6 +1206,7 @@ var (
 	freezePermissionHandlers = make(map[string]chan *pb.FreezePermissionResponse)
 	freezePermissionMutex    = make(chan struct{}, 1)
 	defrostRequestHandler    DefrostRequestHandler
+	freezeRequestHandler     FreezeRequestHandler
 	dtshSyncRequestHandler   DtshSyncRequestHandler
 	processingJobHandler     ProcessingJobHandler
 
@@ -1159,6 +1218,11 @@ var (
 // SetDefrostRequestHandler sets the callback for defrost requests from Foghorn
 func SetDefrostRequestHandler(handler DefrostRequestHandler) {
 	defrostRequestHandler = handler
+}
+
+// SetFreezeRequestHandler sets the callback for proactive freeze requests from Foghorn
+func SetFreezeRequestHandler(handler FreezeRequestHandler) {
+	freezeRequestHandler = handler
 }
 
 // SetDtshSyncRequestHandler sets the callback for incremental .dtsh sync requests from Foghorn
@@ -1261,11 +1325,6 @@ func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUpload
 
 // SendFreezeComplete sends freeze completion status to Foghorn
 func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
 	complete := &pb.FreezeComplete{
 		RequestId: requestID,
 		AssetHash: assetHash,
@@ -1276,7 +1335,7 @@ func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes ui
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezeComplete{FreezeComplete: complete}}
-	return stream.Send(msg)
+	return sendOrEnqueue(msg)
 }
 
 // SendDefrostProgress sends download progress to Foghorn
@@ -1302,11 +1361,6 @@ func SendDefrostProgress(requestID, assetHash string, percent uint32, bytesDownl
 
 // SendDefrostComplete sends defrost completion status to Foghorn
 func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
 	complete := &pb.DefrostComplete{
 		RequestId: requestID,
 		AssetHash: assetHash,
@@ -1318,18 +1372,12 @@ func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeByt
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostComplete{DefrostComplete: complete}}
-	return stream.Send(msg)
+	return sendOrEnqueue(msg)
 }
 
-// SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics)
-// StorageLifecycleData is sent via MistTrigger payload
+// SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics).
+// Queued for retry on disconnect since these feed ClickHouse storage_events.
 func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
-	// StorageLifecycleData is sent as a MistTrigger with storage_lifecycle_data payload
 	trigger := &pb.MistTrigger{
 		TriggerType: "storage_lifecycle",
 		RequestId:   uuid.New().String(),
@@ -1341,7 +1389,7 @@ func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger}}
-	return stream.Send(msg)
+	return sendOrEnqueue(msg)
 }
 
 // SendProcessBillingEvent sends a process billing event to Foghorn (for analytics/billing)
@@ -1458,11 +1506,6 @@ func handleCanDeleteResponse(response *pb.CanDeleteResponse) {
 // Called after successfully uploading an artifact to S3 (while keeping the local copy).
 // dtshIncluded indicates whether the .dtsh index file was included in the sync.
 func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
 	complete := &pb.SyncComplete{
 		RequestId:    requestID,
 		AssetHash:    assetHash,
@@ -1475,7 +1518,7 @@ func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_SyncComplete{SyncComplete: complete}}
-	return stream.Send(msg)
+	return sendOrEnqueue(msg)
 }
 
 // handleStopSessions terminates all sessions for the given streams on this node

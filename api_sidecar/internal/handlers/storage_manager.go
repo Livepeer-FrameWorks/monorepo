@@ -170,6 +170,8 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		}
 	})
 
+	control.SetFreezeRequestHandler(storageManager.HandleFreezeRequest)
+
 	control.SetDtshSyncRequestHandler(func(req *pb.DtshSyncRequest) {
 		ctx := context.Background()
 		_ = storageManager.SyncDtshOnly(ctx, req)
@@ -498,8 +500,64 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 	return candidates, nil
 }
 
-// freezeAsset uploads an asset to S3 via presigned URLs and deletes local copy
-// Flow: Helmsman requests presigned URL from Foghorn → uploads directly → notifies completion
+// HandleFreezeRequest processes a proactive freeze command from Foghorn.
+// For clip/vod, Foghorn already generated presigned URLs so we upload directly.
+// For DVR without segment_urls, this is a "nudge" — we fall through to the
+// normal Helmsman-initiated flow which collects filenames and requests
+// permission (and segment URLs) from Foghorn.
+func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
+	ctx := context.Background()
+
+	info, err := os.Stat(req.LocalPath)
+	if err != nil {
+		sm.logger.WithError(err).WithField("path", req.LocalPath).Error("Freeze request: local path not found")
+		_ = control.SendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, "local file not found: "+err.Error(), false)
+		return
+	}
+
+	var sizeBytes uint64
+	if info.IsDir() {
+		sizeBytes = sm.calculateDirSize(req.LocalPath)
+	} else {
+		sizeBytes = uint64(info.Size())
+	}
+
+	asset := FreezeCandidate{
+		AssetType: AssetType(req.AssetType),
+		AssetHash: req.AssetHash,
+		FilePath:  req.LocalPath,
+		StreamID:  req.InternalName, // needed for DVR path construction only
+		SizeBytes: sizeBytes,
+	}
+
+	// DVR without pre-generated segment URLs: Foghorn can't generate them
+	// without knowing the segment list, so this is a nudge to start the
+	// Helmsman-initiated flow (collect filenames → request permission → upload).
+	if req.AssetType == "dvr" && len(req.SegmentUrls) == 0 {
+		sm.logger.WithField("asset_hash", req.AssetHash).Info("DVR freeze nudge — initiating permission flow")
+		if err := sm.freezeAsset(ctx, asset); err != nil {
+			sm.logger.WithError(err).WithField("asset_hash", req.AssetHash).Error("DVR freeze via permission flow failed")
+		}
+		return
+	}
+
+	permResp := &pb.FreezePermissionResponse{
+		RequestId:        req.RequestId,
+		AssetHash:        req.AssetHash,
+		Approved:         true,
+		PresignedPutUrl:  req.PresignedPutUrl,
+		UrlExpirySeconds: req.UrlExpirySeconds,
+		SegmentUrls:      req.SegmentUrls,
+	}
+
+	if err := sm.uploadAsset(ctx, asset, permResp); err != nil {
+		sm.logger.WithError(err).WithField("asset_hash", req.AssetHash).Error("Proactive freeze failed")
+	}
+}
+
+// freezeAsset handles Helmsman-initiated freezes: collects filenames, requests
+// permission from Foghorn, handles remote-artifact eviction, then delegates
+// the actual upload to uploadAsset.
 func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate) error {
 	// Mark as freezing
 	sm.freezeTracker.mu.Lock()
@@ -552,7 +610,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 	}
 
 	// Request permission and presigned URL from Foghorn
-	// This is a blocking call that waits for Foghorn's response
 	permResp, err := control.RequestFreezePermission(ctx, string(asset.AssetType), asset.AssetHash, asset.FilePath, asset.SizeBytes, filenames)
 	if err != nil {
 		return fmt.Errorf("failed to get freeze permission: %w", err)
@@ -565,8 +622,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		}
 		return fmt.Errorf("freeze not approved: %s", reason)
 	}
-
-	requestID := permResp.RequestId
 
 	// Remote artifact: origin S3 has the authoritative copy — skip upload, just evict locally
 	if permResp.GetSkipUpload() {
@@ -591,38 +646,49 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			Action:    pb.StorageLifecycleData_ACTION_EVICTED,
 			AssetType: string(asset.AssetType),
 			AssetHash: asset.AssetHash,
-			TenantId:  &asset.TenantID,
-			StreamId:  &asset.StreamID,
 			SizeBytes: asset.SizeBytes,
 		})
-		_ = control.SendSyncComplete(requestID, asset.AssetHash, "evicted_remote", "", asset.SizeBytes, "", false)
+		_ = control.SendSyncComplete(permResp.RequestId, asset.AssetHash, "evicted_remote", "", asset.SizeBytes, "", false)
 		return nil
 	}
 
-	// Notify sync started
+	return sm.uploadAsset(ctx, asset, permResp)
+}
+
+// uploadAsset performs the actual S3 upload using presigned URLs from the
+// permission response and reports completion/failure back to Foghorn.
+// Shared by both Helmsman-initiated (freezeAsset) and Foghorn-initiated (HandleFreezeRequest) paths.
+func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate, permResp *pb.FreezePermissionResponse) error {
+	// Track in-flight (idempotent if already tracked by freezeAsset)
+	sm.freezeTracker.mu.Lock()
+	sm.freezeTracker.inFlight[asset.AssetHash] = true
+	sm.freezeTracker.mu.Unlock()
+
+	defer func() {
+		sm.freezeTracker.mu.Lock()
+		delete(sm.freezeTracker.inFlight, asset.AssetHash)
+		sm.freezeTracker.mu.Unlock()
+	}()
+
+	requestID := permResp.RequestId
+
 	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:    pb.StorageLifecycleData_ACTION_SYNC_STARTED,
 		AssetType: string(asset.AssetType),
 		AssetHash: asset.AssetHash,
-		TenantId:  &asset.TenantID,
-		StreamId:  &asset.StreamID,
 		SizeBytes: asset.SizeBytes,
 	})
 
 	startTime := time.Now()
 	var uploadErr error
-	dtshIncluded := false // Track whether .dtsh was successfully uploaded
+	dtshIncluded := false
 
 	if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
-		// Clip and VOD are single-file uploads
-		// Check for SegmentUrls first (multi-file support for clip/vod + dtsh)
 		if len(permResp.SegmentUrls) > 0 {
 			baseName := filepath.Base(asset.FilePath)
 
-			// Upload main file
 			if url, ok := permResp.SegmentUrls[baseName]; ok {
 				err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, asset.FilePath, func(uploaded int64) {
-					// Only track main file progress for now
 					percent := uint32((uploaded * 100) / int64(asset.SizeBytes))
 					_ = control.SendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
 				})
@@ -633,19 +699,16 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				uploadErr = fmt.Errorf("no URL provided for main %s file", asset.AssetType)
 			}
 
-			// Upload .dtsh if exists and URL provided
 			dtshName := baseName + ".dtsh"
 			if url, ok := permResp.SegmentUrls[dtshName]; ok && uploadErr == nil {
 				dtshPath := asset.FilePath + ".dtsh"
 				if err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, dtshPath, nil); err != nil {
 					sm.logger.WithError(err).Warn("Failed to upload .dtsh file")
-					// Non-fatal - dtshIncluded stays false
 				} else {
 					dtshIncluded = true
 				}
 			}
 		} else {
-			// Legacy/Single file fallback using presigned PUT URL
 			presignedURL := permResp.PresignedPutUrl
 			if presignedURL == "" {
 				return fmt.Errorf("no presigned URL provided for %s freeze", asset.AssetType)
@@ -657,14 +720,11 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			})
 		}
 	} else if asset.AssetType == AssetTypeDVR {
-		// DVR: Stream upload with progressive manifest updates
-		// This allows playback to begin from S3 before freeze completes
 		segmentURLs := permResp.SegmentUrls
 		if len(segmentURLs) == 0 {
 			return fmt.Errorf("no segment URLs provided for DVR freeze")
 		}
 
-		// Parse local manifest for segment order and durations
 		manifestName := asset.AssetHash + ".m3u8"
 		localManifestPath := filepath.Join(asset.FilePath, manifestName)
 		localManifestContent, err := os.ReadFile(localManifestPath)
@@ -682,7 +742,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			return fmt.Errorf("no presigned URL for manifest")
 		}
 
-		// Upload initial EVENT manifest (empty, no ENDLIST)
 		initialManifest := sm.createLiveManifest(asset.AssetHash, parsedManifest.TargetDuration)
 		manifestBytes := []byte(initialManifest)
 		if err := sm.presignedClient.UploadToPresignedURL(ctx, manifestURL,
@@ -690,7 +749,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			return fmt.Errorf("failed to upload initial manifest: %w", err)
 		}
 
-		// Upload segments in manifest order, updating manifest after each
 		var totalUploaded int64
 		var uploadedManifest strings.Builder
 		uploadedManifest.WriteString(initialManifest)
@@ -705,7 +763,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				continue
 			}
 
-			// Upload segment
 			if err := sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, segPath, nil); err != nil {
 				uploadErr = fmt.Errorf("failed to upload segment %s: %w", seg.Name, err)
 				break
@@ -716,10 +773,8 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				totalUploaded += info.Size()
 			}
 
-			// Append to manifest buffer
 			uploadedManifest.WriteString(fmt.Sprintf("#EXTINF:%.3f,\nsegments/%s\n", seg.Duration, seg.Name))
 
-			// Re-upload updated manifest
 			manifestData := []byte(uploadedManifest.String())
 			if err := sm.presignedClient.UploadToPresignedURL(ctx, manifestURL,
 				bytes.NewReader(manifestData), int64(len(manifestData)), nil); err != nil {
@@ -730,7 +785,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			_ = control.SendFreezeProgress(requestID, asset.AssetHash, percent, uint64(totalUploaded))
 		}
 
-		// After segments, check for and upload any .dtsh files in the DVR directory
 		if uploadErr == nil {
 			entries, _ := os.ReadDir(asset.FilePath)
 			for _, entry := range entries {
@@ -748,7 +802,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			}
 		}
 
-		// Finalize manifest with ENDLIST (converts EVENT -> VOD)
 		uploadedManifest.WriteString("#EXT-X-ENDLIST\n")
 		finalManifest := []byte(uploadedManifest.String())
 		if err := sm.presignedClient.UploadToPresignedURL(ctx, manifestURL,
@@ -771,16 +824,10 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			Error:      &errStr,
 			DurationMs: &durationMs,
 		})
-		// Notify Foghorn of failure
 		_ = control.SendFreezeComplete(requestID, asset.AssetHash, "failed", "", 0, uploadErr.Error())
 		return fmt.Errorf("failed to upload to S3: %w", uploadErr)
 	}
 
-	// Dual-storage model: Keep local copy after sync (deletion handled separately by cleanup)
-	// Local copy is retained as cache; S3 is authoritative backup
-	// Old model deleted here; new model only evicts during cleanup when disk pressure requires it
-
-	// Notify completion via lifecycle event (synced, not frozen - local copy retained)
 	actualSizeBytes := asset.SizeBytes
 	switch asset.AssetType {
 	case AssetTypeClip, AssetTypeVOD:
@@ -796,13 +843,10 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		Action:     pb.StorageLifecycleData_ACTION_SYNCED,
 		AssetType:  string(asset.AssetType),
 		AssetHash:  asset.AssetHash,
-		TenantId:   &asset.TenantID,
-		StreamId:   &asset.StreamID,
 		SizeBytes:  actualSizeBytes,
 		DurationMs: &durationMs,
 	})
 
-	// Send SyncComplete to Foghorn (it will mark asset as synced and track this node as cached)
 	_ = control.SendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded)
 
 	sm.logger.WithFields(logging.Fields{

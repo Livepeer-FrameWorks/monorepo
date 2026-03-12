@@ -440,6 +440,8 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 		return "stop_sessions"
 	case *pb.ForwardCommandRequest_ProcessingJob:
 		return "processing_job"
+	case *pb.ForwardCommandRequest_Freeze:
+		return "freeze"
 	default:
 		return "unknown"
 	}
@@ -465,6 +467,8 @@ func RelayRequestID(req *pb.ForwardCommandRequest) string {
 		return cmd.DtshSync.GetRequestId()
 	case *pb.ForwardCommandRequest_ProcessingJob:
 		return cmd.ProcessingJob.GetJobId()
+	case *pb.ForwardCommandRequest_Freeze:
+		return cmd.Freeze.GetRequestId()
 	default:
 		return ""
 	}
@@ -2481,6 +2485,9 @@ type S3ClientInterface interface {
 	GeneratePresignedPUT(key string, expiry time.Duration) (string, error)
 	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
 	ListPrefix(ctx context.Context, prefix string) ([]string, error)
+	Delete(ctx context.Context, key string) error
+	DeleteByURL(ctx context.Context, s3URL string) error
+	DeletePrefix(ctx context.Context, prefix string) (int, error)
 	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
 	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
@@ -2526,20 +2533,89 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Look up asset info from foghorn.artifacts for stream_internal_name and origin
+	// For DVR segment/manifest incremental sync, resolve to the parent DVR artifact.
+	// The artifacts table stores one row per DVR with artifact_type='dvr', but Helmsman
+	// sends dvr_segment/dvr_manifest with compound hashes like "dvrHash/filename".
+	lookupHash := assetHash
+	lookupType := assetType
+	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
+		lookupType = "dvr"
+		if idx := strings.Index(assetHash, "/"); idx != -1 {
+			lookupHash = assetHash[:idx]
+		}
+	}
+
 	var streamName string
 	var originCluster sql.NullString
 	err := db.QueryRowContext(ctx, `
 		SELECT stream_internal_name, origin_cluster_id
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2`,
-		assetHash, assetType).Scan(&streamName, &originCluster)
+		lookupHash, lookupType).Scan(&streamName, &originCluster)
+
+	// For DVR segment/manifest incremental sync, assetHash is "{dvr_hash}/{filename}"
+	dvrHash := assetHash
+	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
+		if idx := strings.Index(assetHash, "/"); idx != -1 {
+			dvrHash = assetHash[:idx]
+		}
+	}
+
+	// Resolve tenant (and stream name if DB row was missing) via Commodore
+	var tenantID string
+	if CommodoreClient != nil {
+		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer resolveCancel()
+		switch assetType {
+		case "clip":
+			if resp, resolveErr := CommodoreClient.ResolveClipHash(resolveCtx, assetHash); resolveErr == nil && resp.Found {
+				tenantID = resp.TenantId
+				if streamName == "" {
+					streamName = resp.StreamInternalName
+				}
+			}
+		case "dvr", "dvr_segment", "dvr_manifest":
+			if resp, resolveErr := CommodoreClient.ResolveDVRHash(resolveCtx, dvrHash); resolveErr == nil && resp.Found {
+				tenantID = resp.TenantId
+				if streamName == "" {
+					streamName = resp.StreamInternalName
+				}
+			}
+		case "vod":
+			if resp, resolveErr := CommodoreClient.ResolveVodHash(resolveCtx, assetHash); resolveErr == nil && resp.Found {
+				tenantID = resp.TenantId
+				if streamName == "" {
+					streamName = resp.InternalName
+				}
+			}
+		}
+	}
+
+	// If DB row was missing but Commodore resolved the artifact, create the lifecycle row
+	if err != nil && tenantID != "" && streamName != "" {
+		_, _ = db.ExecContext(ctx, `
+			INSERT INTO foghorn.artifacts
+				(artifact_hash, artifact_type, stream_internal_name, tenant_id,
+				 storage_location, sync_status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 'local', 'pending', NOW(), NOW())
+			ON CONFLICT (artifact_hash) DO NOTHING`,
+			lookupHash, lookupType, streamName, tenantID)
+		logger.WithFields(logging.Fields{
+			"asset_hash": lookupHash,
+			"asset_type": lookupType,
+			"tenant_id":  tenantID,
+		}).Info("Created lifecycle row from Commodore during freeze permission")
+		err = nil
+	}
+
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"asset_type": assetType,
-			"error":      err,
-		}).Error("Asset not found in database")
+			"asset_hash":  assetHash,
+			"asset_type":  assetType,
+			"lookup_hash": lookupHash,
+			"lookup_type": lookupType,
+			"error":       err,
+		}).Error("Asset not found in database or Commodore")
 		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
 			RequestId: requestID,
 			AssetHash: assetHash,
@@ -2549,33 +2625,6 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		return
 	}
 
-	// Get tenant_id from Commodore (business registry owner)
-	var tenantID string
-	// For DVR segment/manifest incremental sync, assetHash is "{dvr_hash}/{filename}"
-	dvrHash := assetHash
-	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
-		if idx := strings.Index(assetHash, "/"); idx != -1 {
-			dvrHash = assetHash[:idx]
-		}
-	}
-	if CommodoreClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		switch assetType {
-		case "clip":
-			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-			}
-		case "dvr", "dvr_segment", "dvr_manifest":
-			if resp, err := CommodoreClient.ResolveDVRHash(ctx, dvrHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-			}
-		case "vod":
-			if resp, err := CommodoreClient.ResolveVodHash(ctx, assetHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-			}
-		}
-	}
 	if tenantID == "" {
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,
@@ -2722,7 +2771,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 
 	// Update artifact to mark as freezing (skip for incremental segment sync)
 	if assetType != "dvr_segment" && assetType != "dvr_manifest" {
-		_, _ = db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+		_, _ = db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
 	}
 
 	sendFreezePermissionResponse(stream, response, logger)
@@ -2803,6 +2852,47 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 			    updated_at = NOW()
 			WHERE artifact_hash = $2
 		`, errorMsg, assetHash)
+
+		// Clean up partial S3 uploads to avoid storage garbage
+		if s3Client != nil {
+			var artifactType, streamName, tenantID string
+			_ = db.QueryRowContext(ctx, `
+				SELECT artifact_type, COALESCE(stream_internal_name,''), COALESCE(tenant_id::text,'')
+				FROM foghorn.artifacts WHERE artifact_hash = $1`, assetHash).Scan(&artifactType, &streamName, &tenantID)
+			if tenantID != "" {
+				go func() {
+					cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanCancel()
+					var prefix string
+					switch artifactType {
+					case "dvr":
+						prefix = s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
+					case "clip":
+						prefix = s3Client.BuildClipS3Key(tenantID, streamName, assetHash, "")
+						// Clip key includes format extension — strip it to get the prefix
+						if idx := strings.LastIndex(prefix, "."); idx != -1 {
+							prefix = prefix[:idx]
+						}
+					case "vod":
+						prefix = s3Client.BuildVodS3Key(tenantID, assetHash, assetHash)
+						if idx := strings.LastIndex(prefix, "/"); idx != -1 {
+							prefix = prefix[:idx+1] + assetHash
+						}
+					}
+					if prefix != "" {
+						deleted, err := s3Client.DeletePrefix(cleanCtx, prefix)
+						if err != nil {
+							logger.WithError(err).WithField("prefix", prefix).Warn("Failed to clean up partial S3 uploads")
+						} else if deleted > 0 {
+							logger.WithFields(logging.Fields{
+								"prefix":  prefix,
+								"deleted": deleted,
+							}).Info("Cleaned up partial S3 uploads after freeze failure")
+						}
+					}
+				}()
+			}
+		}
 	}
 }
 
@@ -2945,6 +3035,36 @@ func SendDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_Defrost{Defrost: req},
 	}))
+}
+
+// SendFreezeRequest sends a proactive FreezeRequest to the given node, relaying via HA if needed.
+func SendFreezeRequest(nodeID string, req *pb.FreezeRequest) error {
+	err := SendLocalFreezeRequest(nodeID, req)
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_Freeze{Freeze: req},
+	}))
+}
+
+func SendLocalFreezeRequest(nodeID string, req *pb.FreezeRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		RequestId: req.RequestId,
+		Payload:   &pb.ControlMessage_FreezeRequest{FreezeRequest: req},
+		SentAt:    timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
 }
 
 func SendLocalDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
@@ -3118,10 +3238,16 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 		// Register processed output in warm cache + in-memory state so vod+
 		// STREAM_SOURCE resolves immediately (same pattern as defrost completion).
 		if outputPath := result.GetOutputPath(); outputPath != "" {
-			var artifactHash string
-			_ = db.QueryRowContext(ctx, `SELECT artifact_hash FROM foghorn.processing_jobs WHERE job_id = $1`, result.GetJobId()).Scan(&artifactHash)
+			var artifactHash, oldS3URL, oldFormat string
+			_ = db.QueryRowContext(ctx, `
+				SELECT artifact_hash, COALESCE(s3_url,''), COALESCE(format,'')
+				FROM foghorn.processing_jobs pj
+				JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
+				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &oldS3URL, &oldFormat)
 			if artifactHash != "" {
 				sizeBytes := result.GetOutputSizeBytes()
+				newFormat := strings.TrimPrefix(filepath.Ext(outputPath), ".")
+
 				if artifactRepo != nil {
 					if err := artifactRepo.AddCachedNodeWithPath(ctx, artifactHash, nodeID, outputPath, sizeBytes); err != nil {
 						logger.WithError(err).WithFields(fields).Warn("Failed to register processed artifact in warm cache")
@@ -3132,12 +3258,41 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 					FilePath:  outputPath,
 					SizeBytes: uint64(sizeBytes),
 					CreatedAt: time.Now().Unix(),
-					Format:    strings.TrimPrefix(filepath.Ext(outputPath), "."),
+					Format:    newFormat,
 				})
+
+				// Update artifact format to match processed output and reset sync
+				// status so the processed file gets synced to S3.
+				_, _ = db.ExecContext(ctx, `
+					UPDATE foghorn.artifacts
+					SET format = $1,
+					    sync_status = 'pending',
+					    storage_location = 'local',
+					    s3_url = NULL,
+					    updated_at = NOW()
+					WHERE artifact_hash = $2`, newFormat, artifactHash)
+
+				// Delete the original user upload from S3 — the processed version replaces it.
+				if oldS3URL != "" && s3Client != nil {
+					if err := s3Client.DeleteByURL(ctx, oldS3URL); err != nil {
+						logger.WithError(err).WithFields(logging.Fields{
+							"artifact_hash": artifactHash,
+							"old_s3_url":    oldS3URL,
+						}).Warn("Failed to delete original upload from S3 after processing")
+					} else {
+						logger.WithFields(logging.Fields{
+							"artifact_hash": artifactHash,
+							"old_s3_url":    oldS3URL,
+						}).Info("Deleted original upload from S3 after processing")
+					}
+				}
+
 				logger.WithFields(logging.Fields{
 					"artifact_hash": artifactHash,
 					"node_id":       nodeID,
 					"output_path":   outputPath,
+					"old_format":    oldFormat,
+					"new_format":    newFormat,
 				}).Info("Registered processed artifact for immediate playback")
 			}
 		}
@@ -3856,6 +4011,9 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 				case "dvr":
 					s3Prefix := s3Client.BuildDVRS3Key(tenantID, internalName, assetHash)
 					s3URL = s3Client.BuildS3URL(s3Prefix)
+				case "vod":
+					s3Key := s3Client.BuildVodS3Key(tenantID, assetHash, assetHash+"."+format)
+					s3URL = s3Client.BuildS3URL(s3Key)
 				}
 			}
 		}
@@ -3889,6 +4047,33 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			"node_id":       reportingNodeID,
 			"dtsh_included": dtshIncluded,
 		}).Info("Asset synced to S3, local copy retained")
+	} else if status == "evicted_remote" {
+		// Remote-origin artifact: local copy was deleted, original lives on origin S3.
+		// Mark as synced on S3 and remove this node from warm cache.
+		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "synced", ""); err != nil {
+			logger.WithError(err).Error("Failed to update sync status for evicted remote")
+		}
+
+		_, _ = db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET storage_location = 's3',
+			    sync_status = 'synced',
+			    last_sync_attempt = NOW(),
+			    sync_error = NULL,
+			    updated_at = NOW()
+			WHERE artifact_hash = $1`, assetHash)
+
+		_, _ = db.ExecContext(ctx, `
+			DELETE FROM foghorn.artifact_nodes
+			WHERE artifact_hash = $1 AND node_id = $2`, assetHash, reportingNodeID)
+
+		// Remove from in-memory + Redis so routing stops directing to this node
+		state.DefaultManager().RemoveNodeArtifact(reportingNodeID, assetHash)
+
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"node_id":    reportingNodeID,
+		}).Info("Remote artifact evicted locally, marked as S3-resident")
 	} else {
 		// Sync failed
 		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "failed", ""); err != nil {

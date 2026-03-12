@@ -31,6 +31,7 @@ message ForwardCommandRequest {
     helmsmancontrol.ActivatePushTargets activate_push_targets = 20;
     helmsmancontrol.DeactivatePushTargets deactivate_push_targets = 21;
     helmsmancontrol.ProcessingJobRequest processing_job = 22;
+    helmsmancontrol.FreezeRequest freeze = 23;
   }
 }
 

@@ -2586,7 +2586,8 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		INSERT INTO storage_events (
 			timestamp, tenant_id, stream_id, internal_name, asset_hash,
 			action, asset_type, size_bytes, s3_url, local_path,
-			node_id, duration_ms, warm_duration_ms, error
+			node_id, duration_ms, warm_duration_ms, error,
+			cluster_id, origin_cluster_id
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -2608,6 +2609,8 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		nilIfZeroInt64(sld.GetDurationMs()),
 		nilIfZeroInt64(sld.GetWarmDurationMs()),
 		nilIfEmptyString(sld.GetError()),
+		sld.GetClusterId(),
+		sld.GetOriginClusterId(),
 	); err != nil {
 		h.logger.Errorf("Failed to append to storage_events batch: %v", err)
 		return err

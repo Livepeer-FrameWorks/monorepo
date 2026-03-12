@@ -661,6 +661,7 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		"activate_push_targets":   func() error { return SendActivatePushTargets("node-1", &pb.ActivatePushTargets{}) },
 		"deactivate_push_targets": func() error { return SendDeactivatePushTargets("node-1", &pb.DeactivatePushTargets{}) },
 		"processing_job":          func() error { return SendProcessingJob("node-1", &pb.ProcessingJobRequest{}) },
+		"freeze":                  func() error { return SendFreezeRequest("node-1", &pb.FreezeRequest{}) },
 	}
 
 	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()

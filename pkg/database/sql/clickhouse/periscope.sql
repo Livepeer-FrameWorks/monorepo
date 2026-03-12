@@ -1138,7 +1138,9 @@ CREATE TABLE IF NOT EXISTS storage_events (
     node_id LowCardinality(String),
     duration_ms Nullable(Int64),
     warm_duration_ms Nullable(Int64),
-    error Nullable(String)
+    error Nullable(String),
+    cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT ''
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, asset_hash)
