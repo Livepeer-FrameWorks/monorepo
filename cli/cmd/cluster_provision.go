@@ -72,7 +72,7 @@ Use --repo to fetch manifests from a private GitHub repo via GitHub App credenti
 			if repo != "" {
 				return runProvisionFromRepo(cmd, repo, githubAppID, githubInstallID, githubKeyPath, ageKeyFile, manifestPath, only, dryRun, force, ignoreValidation)
 			}
-			return runProvision(cmd, manifestPath, only, dryRun, force, ignoreValidation)
+			return runProvision(cmd, manifestPath, ageKeyFile, only, dryRun, force, ignoreValidation)
 		},
 	}
 
@@ -139,8 +139,8 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 		return fmt.Errorf("failed to fetch %s from %s: %w", manifestFile, repo, err)
 	}
 
-	// Validate the manifest parses correctly
-	manifest, err := inventory.LoadFromBytes(data)
+	// Parse manifest structure (validation happens after host inventory merge in runProvision)
+	manifest, err := inventory.ParseManifest(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse manifest from %s: %w", repo, err)
 	}
@@ -152,10 +152,13 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Collect all referenced env_file paths (top-level + per-service + per-interface)
+	// Collect all referenced file paths (env files + host inventory)
 	filesToFetch := []string{}
 	if manifest.EnvFile != "" {
 		filesToFetch = append(filesToFetch, manifest.EnvFile)
+	}
+	if manifest.HostsFile != "" {
+		filesToFetch = append(filesToFetch, manifest.HostsFile)
 	}
 	for _, svc := range manifest.Services {
 		if svc.EnvFile != "" {
@@ -185,9 +188,9 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 			continue
 		}
 
-		// Decrypt SOPS-encrypted env files transparently
+		// Decrypt SOPS-encrypted files transparently (format inferred from extension)
 		if fwsops.IsEncrypted(fileData) {
-			plain, decErr := fwsops.Decrypt(fileData, ageKeyFile)
+			plain, decErr := fwsops.DecryptData(fileData, fwsops.FormatFromPath(name), ageKeyFile)
 			if decErr != nil {
 				return fmt.Errorf("decrypt %s: %w", name, decErr)
 			}
@@ -214,13 +217,13 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning cluster from %s/%s\n", repo, manifestFile)
-	return runProvision(cmd, tmpManifest, only, dryRun, force, ignoreValidation)
+	return runProvision(cmd, tmpManifest, ageKeyFile, only, dryRun, force, ignoreValidation)
 }
 
 // runProvision executes the provision command
-func runProvision(cmd *cobra.Command, manifestPath, only string, dryRun, force, ignoreValidation bool) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
+func runProvision(cmd *cobra.Command, manifestPath, ageKeyFile, only string, dryRun, force, ignoreValidation bool) error {
+	// Load manifest (merges host inventory from hosts_file if set)
+	manifest, err := inventory.LoadWithHosts(manifestPath, ageKeyFile)
 	if err != nil {
 		return fmt.Errorf("failed to load manifest: %w", err)
 	}

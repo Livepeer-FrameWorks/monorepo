@@ -13,6 +13,7 @@ type Manifest struct {
 	Channel    string `yaml:"channel,omitempty"`     // release channel: "stable" (default), "rc"
 	RootDomain string `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
 	EnvFile    string `yaml:"env_file,omitempty"`    // shared env file for all services (relative to manifest dir)
+	HostsFile  string `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
 
 	Hosts          map[string]Host          `yaml:"hosts,omitempty"`
 	Clusters       map[string]ClusterConfig `yaml:"clusters,omitempty"`
@@ -251,6 +252,7 @@ type EdgeManifest struct {
 	Email           string     `yaml:"email"`       // ACME email
 	ClusterID       string     `yaml:"cluster_id,omitempty"`
 	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
+	HostsFile       string     `yaml:"hosts_file,omitempty"`       // SOPS-encrypted host inventory
 	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
 	Mode            string     `yaml:"mode,omitempty"`             // "docker" (default) or "native"
 	Nodes           []EdgeNode `yaml:"nodes"`
@@ -275,6 +277,24 @@ func (m *Manifest) ResolvedChannel() string {
 		return m.Channel
 	}
 	return "stable"
+}
+
+// HostInventory holds connection details loaded from a SOPS-encrypted hosts file.
+type HostInventory struct {
+	Hosts     map[string]HostConnection `yaml:"hosts"`
+	EdgeNodes map[string]EdgeConnection `yaml:"edge_nodes,omitempty"`
+}
+
+// HostConnection holds the sensitive connection details for a cluster host.
+type HostConnection struct {
+	ExternalIP string `yaml:"external_ip"`
+	User       string `yaml:"user,omitempty"`
+	SSHKey     string `yaml:"ssh_key,omitempty"`
+}
+
+// EdgeConnection holds the sensitive SSH target for an edge node.
+type EdgeConnection struct {
+	SSH string `yaml:"ssh"`
 }
 
 // ResolvedMode returns the effective mode for this node, falling back to the
