@@ -120,10 +120,9 @@ jobs:
 
   build-images-arm64:
     name: Build Images (arm64)
-    runs-on: macos-arm64-self-hosted
+    runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix:
         service:
           - { name: bridge, context: api_gateway, dockerfile: api_gateway/Dockerfile }
@@ -152,13 +151,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Add Homebrew to PATH
-        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-
-      - name: Setup Docker environment (Colima)
-        run: |
-          echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -487,10 +479,9 @@ jobs:
 
   build-webapps-arm64:
     name: Build Webapps (arm64)
-    runs-on: macos-arm64-self-hosted
+    runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix:
         webapp:
           - { name: chartroom, context: website_application }
@@ -499,13 +490,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Add Homebrew to PATH
-        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-
-      - name: Setup Docker environment (Colima)
-        run: |
-          echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -678,28 +662,27 @@ jobs:
         with:
           go-version: "1.25"
           cache-dependency-path: cli/go.sum
-      - name: Build CLI linux/amd64
-        env:
-          GOOS: linux
-          GOARCH: amd64
-          CGO_ENABLED: 0
+      - name: Build CLI linux binaries
         run: |
           set -euo pipefail
-          cd cli
-          out="frameworks-linux-amd64"
-          go build -ldflags "-X frameworks/pkg/version.Version=${{ github.ref_name }} -X frameworks/pkg/version.GitCommit=${{ github.sha }} -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X frameworks/pkg/version.ComponentName=cli -X frameworks/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}" -o "$out" .
-          cd ..
           mkdir -p dist/cli
-          mv "cli/$out" "dist/cli/$out"
+          cd cli
+          LDFLAGS="-X frameworks/pkg/version.Version=${{ github.ref_name }} -X frameworks/pkg/version.GitCommit=${{ github.sha }} -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X frameworks/pkg/version.ComponentName=cli -X frameworks/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}"
+          for target in linux-amd64 linux-arm64; do
+            IFS='-' read -r os arch <<< "$target"
+            out="frameworks-${os}-${arch}"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$out" .
+            mv "$out" "../dist/cli/$out"
+          done
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v7
         with:
-          name: cli-linux-amd64
+          name: cli-linux
           path: dist/cli/*
 
-  # CLI arm64 + darwin — built on self-hosted Mac Mini, signed and notarized
-  build-cli-arm64-darwin:
-    name: Build CLI (arm64 + darwin)
+  # CLI darwin — built on self-hosted Mac Mini, signed and notarized
+  build-cli-darwin:
+    name: Build CLI (darwin)
     runs-on: macos-arm64-self-hosted
     steps:
       - uses: actions/checkout@v6
@@ -715,23 +698,19 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: cli/go.sum
 
-      - name: Build CLI binaries
+      - name: Build CLI darwin/arm64
         run: |
           set -euo pipefail
           mkdir -p dist/cli
           cd cli
-          for target in linux-arm64 darwin-arm64; do
-            IFS='-' read -r os arch <<< "$target"
-            out="frameworks-${os}-${arch}"
-            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
-              go build -ldflags "-X frameworks/pkg/version.Version=${{ github.ref_name }} -X frameworks/pkg/version.GitCommit=${{ github.sha }} -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X frameworks/pkg/version.ComponentName=cli -X frameworks/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}" -o "$out" .
-            mv "$out" "../dist/cli/$out"
-          done
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
+            go build -ldflags "-X frameworks/pkg/version.Version=${{ github.ref_name }} -X frameworks/pkg/version.GitCommit=${{ github.sha }} -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X frameworks/pkg/version.ComponentName=cli -X frameworks/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}" -o "frameworks-darwin-arm64" .
+          mv "frameworks-darwin-arm64" "../dist/cli/frameworks-darwin-arm64"
 
       - name: Unlock keychain
         run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
 
-      - name: Sign and notarize darwin CLI binaries
+      - name: Sign and notarize darwin CLI binary
         run: |
           set -euo pipefail
           binary="dist/cli/frameworks-darwin-arm64"
@@ -749,46 +728,16 @@ jobs:
             --wait
           rm "${binary}.zip"
 
-      - name: Upload CLI artifacts
+      - name: Upload CLI artifact
         uses: actions/upload-artifact@v7
         with:
-          name: cli-arm64-darwin
+          name: cli-darwin-arm64
           path: dist/cli/*
 
   # Linux/amd64 service binaries — built on GitHub-hosted ubuntu runner
-  build-service-binaries:
+  build-service-binaries-amd64:
     name: Build Service Binaries (linux/amd64)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service:
-          - { name: bridge, context: api_gateway, cmd_path: ./cmd/bridge, cgo: false }
-          - { name: quartermaster, context: api_tenants, cmd_path: ./cmd/quartermaster, cgo: true }
-          - { name: commodore, context: api_control, cmd_path: ./cmd/commodore, cgo: false }
-          - { name: purser, context: api_billing, cmd_path: ./cmd/purser, cgo: false }
-          - { name: foghorn, context: api_balancing, cmd_path: ./cmd/foghorn, cgo: true }
-          - { name: decklog, context: api_firehose, cmd_path: cmd/decklog/main.go, cgo: false }
-          - {
-              name: periscope-ingest,
-              context: api_analytics_ingest,
-              cmd_path: ./cmd/periscope,
-              cgo: false,
-            }
-          - {
-              name: periscope-query,
-              context: api_analytics_query,
-              cmd_path: ./cmd/periscope,
-              cgo: false,
-            }
-          - { name: signalman, context: api_realtime, cmd_path: ./cmd/signalman, cgo: false }
-          - { name: helmsman, context: api_sidecar, cmd_path: ./cmd/helmsman, cgo: false }
-          - { name: steward, context: api_forms, cmd_path: ./cmd/steward, cgo: false }
-          - { name: navigator, context: api_dns, cmd_path: ./cmd/navigator, cgo: false }
-          - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand, cgo: false }
-          - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer, cgo: false }
-          - { name: skipper, context: api_consultant, cmd_path: ./cmd/skipper, cgo: false }
-          - { name: chandler, context: api_assets, cmd_path: ./cmd/chandler, cgo: false }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -797,92 +746,181 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.25"
-          cache-dependency-path: ${{ matrix.service.context }}/go.sum
 
       - name: Install zig (for CGO cross-compilation)
-        if: matrix.service.cgo
         uses: mlugg/setup-zig@v2
 
-      - name: Read service version
-        id: svcver
-        run: |
-          VERSION_FILE="${{ matrix.service.context }}/VERSION"
-          if [[ -f "$VERSION_FILE" ]]; then
-            echo "version=$(tr -d '\n' < "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build binary
+      - name: Build all service binaries
         env:
           GOOS: linux
           GOARCH: amd64
-          CGO_ENABLED: ${{ matrix.service.cgo && '1' || '0' }}
-          CC: ${{ matrix.service.cgo && 'zig cc -target x86_64-linux-musl' || '' }}
-          CXX: ${{ matrix.service.cgo && 'zig c++ -target x86_64-linux-musl' || '' }}
         run: |
           set -euo pipefail
-          cd ${{ matrix.service.context }}
+          VERSION="${{ github.ref_name }}"
+          BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          mkdir -p dist/binaries
 
-          BINARY_NAME="frameworks-${{ matrix.service.name }}-linux-amd64"
-          OUTPUT="frameworks-${{ matrix.service.name }}-${{ github.ref_name }}-linux-amd64"
+          SERVICES='[
+            {"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge","cgo":false},
+            {"name":"quartermaster","context":"api_tenants","cmd":"./cmd/quartermaster","cgo":true},
+            {"name":"commodore","context":"api_control","cmd":"./cmd/commodore","cgo":false},
+            {"name":"purser","context":"api_billing","cmd":"./cmd/purser","cgo":false},
+            {"name":"foghorn","context":"api_balancing","cmd":"./cmd/foghorn","cgo":true},
+            {"name":"decklog","context":"api_firehose","cmd":"cmd/decklog/main.go","cgo":false},
+            {"name":"periscope-ingest","context":"api_analytics_ingest","cmd":"./cmd/periscope","cgo":false},
+            {"name":"periscope-query","context":"api_analytics_query","cmd":"./cmd/periscope","cgo":false},
+            {"name":"signalman","context":"api_realtime","cmd":"./cmd/signalman","cgo":false},
+            {"name":"helmsman","context":"api_sidecar","cmd":"./cmd/helmsman","cgo":false},
+            {"name":"steward","context":"api_forms","cmd":"./cmd/steward","cgo":false},
+            {"name":"navigator","context":"api_dns","cmd":"./cmd/navigator","cgo":false},
+            {"name":"deckhand","context":"api_ticketing","cmd":"./cmd/deckhand","cgo":false},
+            {"name":"privateer","context":"api_mesh","cmd":"./cmd/privateer","cgo":false},
+            {"name":"skipper","context":"api_consultant","cmd":"./cmd/skipper","cgo":false},
+            {"name":"chandler","context":"api_assets","cmd":"./cmd/chandler","cgo":false}
+          ]'
 
-          go build -ldflags "\
-            -X frameworks/pkg/version.Version=${{ github.ref_name }} \
-            -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
-            -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-            -X frameworks/pkg/version.ComponentName=${{ matrix.service.name }} \
-            -X frameworks/pkg/version.ComponentVersion=${{ steps.svcver.outputs.version }} \
-            -s -w" \
-            -o "${BINARY_NAME}" \
-            ${{ matrix.service.cmd_path }}
+          echo "$SERVICES" | jq -c '.[]' | while read -r svc; do
+            name=$(echo "$svc" | jq -r .name)
+            context=$(echo "$svc" | jq -r .context)
+            cmd=$(echo "$svc" | jq -r .cmd)
+            cgo=$(echo "$svc" | jq -r .cgo)
 
-          mkdir -p ../dist/binaries/${{ matrix.service.name }}
-          tar czf "../dist/binaries/${{ matrix.service.name }}/${OUTPUT}.tar.gz" "${BINARY_NAME}"
+            echo "==> Building ${name} (linux/amd64)"
+
+            if [[ -f "${context}/VERSION" ]]; then
+              svcver=$(tr -d '\n' < "${context}/VERSION")
+            else
+              svcver="0.0.0"
+            fi
+
+            BINARY="frameworks-${name}-linux-amd64"
+            OUTPUT="frameworks-${name}-${VERSION}-linux-amd64"
+
+            if [[ "$cgo" == "true" ]]; then
+              export CGO_ENABLED=1
+              export CC="zig cc -target x86_64-linux-musl"
+              export CXX="zig c++ -target x86_64-linux-musl"
+            else
+              export CGO_ENABLED=0
+              unset CC CXX 2>/dev/null || true
+            fi
+
+            (cd "$context" && go build -ldflags "\
+              -X frameworks/pkg/version.Version=${VERSION} \
+              -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
+              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
+              -X frameworks/pkg/version.ComponentName=${name} \
+              -X frameworks/pkg/version.ComponentVersion=${svcver} \
+              -s -w" \
+              -o "${BINARY}" \
+              "${cmd}")
+
+            tar czf "dist/binaries/${OUTPUT}.tar.gz" -C "${context}" "${BINARY}"
+            rm "${context}/${BINARY}"
+          done
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
         with:
-          name: binary-${{ matrix.service.name }}-linux-amd64
-          path: dist/binaries/${{ matrix.service.name }}/*.tar.gz
+          name: binary-all-linux-amd64
+          path: dist/binaries/*.tar.gz
 
-  # arm64 + darwin service binaries — built on self-hosted Mac Mini (native ARM, no QEMU).
-  # Handles code signing and notarization for darwin binaries.
-  # Requires on runner: Go, musl-cross (brew install filosottile/musl-cross/musl-cross),
-  # and Apple Developer certificate imported via secrets.
-  build-arm64-and-darwin:
-    name: Build arm64 + darwin Binaries
+  # Linux/arm64 service binaries — built on GitHub-hosted ARM runner (native, no QEMU)
+  build-service-binaries-arm64:
+    name: Build Service Binaries (linux/arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Install zig (for CGO cross-compilation)
+        uses: mlugg/setup-zig@v2
+
+      - name: Build all service binaries
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.ref_name }}"
+          BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          mkdir -p dist/binaries
+
+          SERVICES='[
+            {"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge","cgo":false},
+            {"name":"quartermaster","context":"api_tenants","cmd":"./cmd/quartermaster","cgo":true},
+            {"name":"commodore","context":"api_control","cmd":"./cmd/commodore","cgo":false},
+            {"name":"purser","context":"api_billing","cmd":"./cmd/purser","cgo":false},
+            {"name":"foghorn","context":"api_balancing","cmd":"./cmd/foghorn","cgo":true},
+            {"name":"decklog","context":"api_firehose","cmd":"cmd/decklog/main.go","cgo":false},
+            {"name":"periscope-ingest","context":"api_analytics_ingest","cmd":"./cmd/periscope","cgo":false},
+            {"name":"periscope-query","context":"api_analytics_query","cmd":"./cmd/periscope","cgo":false},
+            {"name":"signalman","context":"api_realtime","cmd":"./cmd/signalman","cgo":false},
+            {"name":"helmsman","context":"api_sidecar","cmd":"./cmd/helmsman","cgo":false},
+            {"name":"steward","context":"api_forms","cmd":"./cmd/steward","cgo":false},
+            {"name":"navigator","context":"api_dns","cmd":"./cmd/navigator","cgo":false},
+            {"name":"deckhand","context":"api_ticketing","cmd":"./cmd/deckhand","cgo":false},
+            {"name":"privateer","context":"api_mesh","cmd":"./cmd/privateer","cgo":false},
+            {"name":"skipper","context":"api_consultant","cmd":"./cmd/skipper","cgo":false},
+            {"name":"chandler","context":"api_assets","cmd":"./cmd/chandler","cgo":false}
+          ]'
+
+          echo "$SERVICES" | jq -c '.[]' | while read -r svc; do
+            name=$(echo "$svc" | jq -r .name)
+            context=$(echo "$svc" | jq -r .context)
+            cmd=$(echo "$svc" | jq -r .cmd)
+            cgo=$(echo "$svc" | jq -r .cgo)
+
+            echo "==> Building ${name} (linux/arm64)"
+
+            if [[ -f "${context}/VERSION" ]]; then
+              svcver=$(tr -d '\n' < "${context}/VERSION")
+            else
+              svcver="0.0.0"
+            fi
+
+            BINARY="frameworks-${name}-linux-arm64"
+            OUTPUT="frameworks-${name}-${VERSION}-linux-arm64"
+
+            if [[ "$cgo" == "true" ]]; then
+              export CGO_ENABLED=1
+              export CC="zig cc -target aarch64-linux-musl"
+              export CXX="zig c++ -target aarch64-linux-musl"
+            else
+              export CGO_ENABLED=0
+              unset CC CXX 2>/dev/null || true
+            fi
+
+            (cd "$context" && go build -ldflags "\
+              -X frameworks/pkg/version.Version=${VERSION} \
+              -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
+              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
+              -X frameworks/pkg/version.ComponentName=${name} \
+              -X frameworks/pkg/version.ComponentVersion=${svcver} \
+              -s -w" \
+              -o "${BINARY}" \
+              "${cmd}")
+
+            tar czf "dist/binaries/${OUTPUT}.tar.gz" -C "${context}" "${BINARY}"
+            rm "${context}/${BINARY}"
+          done
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: binary-all-linux-arm64
+          path: dist/binaries/*.tar.gz
+
+  # Darwin/arm64 service binaries — built on self-hosted Mac, signed and notarized.
+  # CGO services (quartermaster, foghorn) are skipped — no darwin binary for those.
+  build-service-binaries-darwin:
+    name: Build Service Binaries (darwin/arm64)
     runs-on: macos-arm64-self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        service:
-          - { name: bridge, context: api_gateway, cmd_path: ./cmd/bridge, cgo: false }
-          - { name: quartermaster, context: api_tenants, cmd_path: ./cmd/quartermaster, cgo: true }
-          - { name: commodore, context: api_control, cmd_path: ./cmd/commodore, cgo: false }
-          - { name: purser, context: api_billing, cmd_path: ./cmd/purser, cgo: false }
-          - { name: foghorn, context: api_balancing, cmd_path: ./cmd/foghorn, cgo: true }
-          - { name: decklog, context: api_firehose, cmd_path: cmd/decklog/main.go, cgo: false }
-          - {
-              name: periscope-ingest,
-              context: api_analytics_ingest,
-              cmd_path: ./cmd/periscope,
-              cgo: false,
-            }
-          - {
-              name: periscope-query,
-              context: api_analytics_query,
-              cmd_path: ./cmd/periscope,
-              cgo: false,
-            }
-          - { name: signalman, context: api_realtime, cmd_path: ./cmd/signalman, cgo: false }
-          - { name: helmsman, context: api_sidecar, cmd_path: ./cmd/helmsman, cgo: false }
-          - { name: steward, context: api_forms, cmd_path: ./cmd/steward, cgo: false }
-          - { name: navigator, context: api_dns, cmd_path: ./cmd/navigator, cgo: false }
-          - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand, cgo: false }
-          - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer, cgo: false }
-          - { name: skipper, context: api_consultant, cmd_path: ./cmd/skipper, cgo: false }
-          - { name: chandler, context: api_assets, cmd_path: ./cmd/chandler, cgo: false }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -894,120 +932,86 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.25"
-          cache-dependency-path: ${{ matrix.service.context }}/go.sum
-
-      - name: Read service version
-        id: svcver
-        run: |
-          VERSION_FILE="${{ matrix.service.context }}/VERSION"
-          if [[ -f "$VERSION_FILE" ]]; then
-            echo "version=$(tr -d '\n' < "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build linux/arm64 binary
-        env:
-          GOOS: linux
-          GOARCH: arm64
-          CGO_ENABLED: ${{ matrix.service.cgo && '1' || '0' }}
-          CC: ${{ matrix.service.cgo && 'aarch64-linux-musl-gcc' || '' }}
-          CXX: ${{ matrix.service.cgo && 'aarch64-linux-musl-g++' || '' }}
-        run: |
-          set -euo pipefail
-          cd ${{ matrix.service.context }}
-
-          BINARY_NAME="frameworks-${{ matrix.service.name }}-linux-arm64"
-          OUTPUT="frameworks-${{ matrix.service.name }}-${{ github.ref_name }}-linux-arm64"
-
-          go build -ldflags "\
-            -X frameworks/pkg/version.Version=${{ github.ref_name }} \
-            -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
-            -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-            -X frameworks/pkg/version.ComponentName=${{ matrix.service.name }} \
-            -X frameworks/pkg/version.ComponentVersion=${{ steps.svcver.outputs.version }} \
-            -s -w" \
-            -o "${BINARY_NAME}" \
-            ${{ matrix.service.cmd_path }}
-
-          mkdir -p ../dist/binaries/${{ matrix.service.name }}
-          tar czf "../dist/binaries/${{ matrix.service.name }}/${OUTPUT}.tar.gz" "${BINARY_NAME}"
-
-      - name: Build darwin/arm64 binary
-        if: ${{ !matrix.service.cgo }}
-        env:
-          GOOS: darwin
-          GOARCH: arm64
-          CGO_ENABLED: 0
-        run: |
-          set -euo pipefail
-          cd ${{ matrix.service.context }}
-
-          BINARY_NAME="frameworks-${{ matrix.service.name }}-darwin-arm64"
-          OUTPUT="frameworks-${{ matrix.service.name }}-${{ github.ref_name }}-darwin-arm64"
-
-          go build -ldflags "\
-            -X frameworks/pkg/version.Version=${{ github.ref_name }} \
-            -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
-            -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-            -X frameworks/pkg/version.ComponentName=${{ matrix.service.name }} \
-            -X frameworks/pkg/version.ComponentVersion=${{ steps.svcver.outputs.version }} \
-            -s -w" \
-            -o "${BINARY_NAME}" \
-            ${{ matrix.service.cmd_path }}
-
-          mkdir -p ../dist/binaries/${{ matrix.service.name }}
-          tar czf "../dist/binaries/${{ matrix.service.name }}/${OUTPUT}.tar.gz" "${BINARY_NAME}"
 
       - name: Unlock keychain
-        if: ${{ !matrix.service.cgo }}
         run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
 
-      - name: Sign darwin binaries
-        if: ${{ !matrix.service.cgo }}
+      - name: Build, sign, and notarize all darwin binaries
         run: |
           set -euo pipefail
-          cd ${{ matrix.service.context }}
-          binary="frameworks-${{ matrix.service.name }}-darwin-arm64"
-          if [[ -f "$binary" ]]; then
+          VERSION="${{ github.ref_name }}"
+          BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          mkdir -p dist/binaries
+
+          # Non-CGO services only (CGO services have no darwin binary)
+          SERVICES='[
+            {"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge"},
+            {"name":"commodore","context":"api_control","cmd":"./cmd/commodore"},
+            {"name":"purser","context":"api_billing","cmd":"./cmd/purser"},
+            {"name":"decklog","context":"api_firehose","cmd":"cmd/decklog/main.go"},
+            {"name":"periscope-ingest","context":"api_analytics_ingest","cmd":"./cmd/periscope"},
+            {"name":"periscope-query","context":"api_analytics_query","cmd":"./cmd/periscope"},
+            {"name":"signalman","context":"api_realtime","cmd":"./cmd/signalman"},
+            {"name":"helmsman","context":"api_sidecar","cmd":"./cmd/helmsman"},
+            {"name":"steward","context":"api_forms","cmd":"./cmd/steward"},
+            {"name":"navigator","context":"api_dns","cmd":"./cmd/navigator"},
+            {"name":"deckhand","context":"api_ticketing","cmd":"./cmd/deckhand"},
+            {"name":"privateer","context":"api_mesh","cmd":"./cmd/privateer"},
+            {"name":"skipper","context":"api_consultant","cmd":"./cmd/skipper"},
+            {"name":"chandler","context":"api_assets","cmd":"./cmd/chandler"}
+          ]'
+
+          echo "$SERVICES" | jq -c '.[]' | while read -r svc; do
+            name=$(echo "$svc" | jq -r .name)
+            context=$(echo "$svc" | jq -r .context)
+            cmd=$(echo "$svc" | jq -r .cmd)
+
+            echo "==> Building ${name} (darwin/arm64)"
+
+            if [[ -f "${context}/VERSION" ]]; then
+              svcver=$(tr -d '\n' < "${context}/VERSION")
+            else
+              svcver="0.0.0"
+            fi
+
+            BINARY="frameworks-${name}-darwin-arm64"
+            OUTPUT="frameworks-${name}-${VERSION}-darwin-arm64"
+
+            (cd "$context" && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "\
+              -X frameworks/pkg/version.Version=${VERSION} \
+              -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
+              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
+              -X frameworks/pkg/version.ComponentName=${name} \
+              -X frameworks/pkg/version.ComponentVersion=${svcver} \
+              -s -w" \
+              -o "${BINARY}" \
+              "${cmd}")
+
+            # Sign
             codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
                      --timestamp --options runtime \
-                     "$binary"
-            codesign --verify --verbose=2 "$binary"
-          fi
+                     "${context}/${BINARY}"
+            codesign --verify --verbose=2 "${context}/${BINARY}"
 
-      - name: Notarize darwin binaries
-        if: ${{ !matrix.service.cgo }}
-        run: |
-          set -euo pipefail
-          cd ${{ matrix.service.context }}
-          binary="frameworks-${{ matrix.service.name }}-darwin-arm64"
-          if [[ -f "$binary" ]]; then
-            ditto -c -k --keepParent "$binary" "${binary}.zip"
-            xcrun notarytool submit "${binary}.zip" \
+            # Notarize
+            ditto -c -k --keepParent "${context}/${BINARY}" "${context}/${BINARY}.zip"
+            xcrun notarytool submit "${context}/${BINARY}.zip" \
               --apple-id "${{ secrets.APPLE_ID }}" \
               --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
               --team-id "${{ secrets.APPLE_TEAM_ID }}" \
               --wait
-            rm "${binary}.zip"
-          fi
+            rm "${context}/${BINARY}.zip"
 
-      - name: Re-package signed darwin binaries
-        if: ${{ !matrix.service.cgo }}
-        run: |
-          set -euo pipefail
-          cd ${{ matrix.service.context }}
-          binary="frameworks-${{ matrix.service.name }}-darwin-arm64"
-          output="frameworks-${{ matrix.service.name }}-${{ github.ref_name }}-darwin-arm64"
-          if [[ -f "$binary" ]]; then
-            tar czf "../dist/binaries/${{ matrix.service.name }}/${output}.tar.gz" "${binary}"
-          fi
+            # Package signed binary
+            tar czf "dist/binaries/${OUTPUT}.tar.gz" -C "${context}" "${BINARY}"
+            rm "${context}/${BINARY}"
+          done
 
-      - name: Upload binary artifacts
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v7
         with:
-          name: binary-${{ matrix.service.name }}-arm64-darwin
-          path: dist/binaries/${{ matrix.service.name }}/*.tar.gz
+          name: binary-all-darwin-arm64
+          path: dist/binaries/*.tar.gz
 
   # macOS tray app — FrameWorks desktop client (menu bar app).
   # Built with Xcode via XcodeGen, signed and notarized on the Mac runner.
@@ -1132,7 +1136,7 @@ jobs:
   # macOS .pkg installer — bundles CLI + optional tray app.
   build-darwin-pkg:
     name: Build macOS .pkg
-    needs: [build-cli-arm64-darwin, build-tray-app]
+    needs: [build-cli-darwin, build-tray-app]
     runs-on: macos-arm64-self-hosted
     steps:
       - name: Checkout
@@ -1144,7 +1148,7 @@ jobs:
       - name: Download CLI darwin/arm64 binary
         uses: actions/download-artifact@v7
         with:
-          name: cli-arm64-darwin
+          name: cli-darwin-arm64
           path: dist/cli
 
       - name: Prepare CLI binary
@@ -1203,9 +1207,10 @@ jobs:
       - merge-image-manifests
       - merge-webapp-manifests
       - build-cli
-      - build-cli-arm64-darwin
-      - build-service-binaries
-      - build-arm64-and-darwin
+      - build-cli-darwin
+      - build-service-binaries-amd64
+      - build-service-binaries-arm64
+      - build-service-binaries-darwin
       - build-tray-app
       - build-darwin-pkg
     runs-on: ubuntu-latest
