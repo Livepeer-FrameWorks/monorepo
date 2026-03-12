@@ -96,7 +96,7 @@ COPY scripts/copy-agent-files.sh scripts/copy-agent-files.sh
 RUN cd website_application && ../scripts/copy-agent-files.sh static
 
 # build the app (increase memory for Houdini codegen + Vite SSR + adapter-node)
-RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter frameworks-frontend... run build
+RUN NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter frameworks-frontend... run build
 
 # deploy with production dependencies only into an isolated directory
 RUN pnpm --filter frameworks-frontend --prod deploy /app/deployed
