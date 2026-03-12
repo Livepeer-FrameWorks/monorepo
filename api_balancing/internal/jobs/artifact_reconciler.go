@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 )
@@ -25,11 +24,18 @@ type ReconcilerS3Client interface {
 // FreezeRequestSender sends a FreezeRequest to a specific node.
 type FreezeRequestSender func(nodeID string, req *pb.FreezeRequest) error
 
+// ReconcilerCommodoreClient defines Commodore operations needed by the reconciler.
+type ReconcilerCommodoreClient interface {
+	ResolveClipHash(ctx context.Context, hash string) (*pb.ResolveClipHashResponse, error)
+	ResolveDVRHash(ctx context.Context, hash string) (*pb.ResolveDVRHashResponse, error)
+	ResolveVodHash(ctx context.Context, hash string) (*pb.ResolveVodHashResponse, error)
+}
+
 // ArtifactReconcilerConfig holds configuration for the reconciler job.
 type ArtifactReconcilerConfig struct {
 	DB              *sql.DB
 	S3Client        ReconcilerS3Client
-	CommodoreClient *commodore.GRPCClient
+	CommodoreClient ReconcilerCommodoreClient
 	SendFreeze      FreezeRequestSender
 	Logger          logging.Logger
 	Interval        time.Duration // How often to run (default: 5 minutes)
@@ -41,7 +47,7 @@ type ArtifactReconcilerConfig struct {
 type ArtifactReconciler struct {
 	db         *sql.DB
 	s3Client   ReconcilerS3Client
-	commodore  *commodore.GRPCClient
+	commodore  ReconcilerCommodoreClient
 	sendFreeze FreezeRequestSender
 	logger     logging.Logger
 	interval   time.Duration
@@ -253,13 +259,13 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 		r.logger.WithError(err).Warn("Failed to batch-check artifact lifecycle rows")
 		return 0
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var h string
 		if rows.Scan(&h) == nil {
 			existing[h] = true
 		}
 	}
-	rows.Close()
 
 	count := 0
 	for _, c := range candidates {
