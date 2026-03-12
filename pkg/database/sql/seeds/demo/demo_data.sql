@@ -604,7 +604,7 @@ INSERT INTO commodore.clips (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     '5eedface-5e1f-da7a-face-5e1fda7a0001',  -- Demo user
     '5eedfeed-11fe-ca57-feed-11feca570001',  -- Demo stream
-    '20240101120000a1b2c3d4e5f67890',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
+    'a1b2c3d4e5f6789012345678901234ab',      -- Must match foghorn.artifacts + on-disk filename
     'clip_int_001',
     'clp1a2b3c4d5e6fg',
     'Demo Highlight Reel',
@@ -655,7 +655,7 @@ INSERT INTO commodore.dvr_recordings (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     '5eedface-5e1f-da7a-face-5e1fda7a0001',  -- Demo user
     '5eedfeed-11fe-ca57-feed-11feca570001',  -- Demo stream
-    '20240101120200fedcba9876543210',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
+    'fedcba98765432109876543210fedcba',      -- Must match foghorn.artifacts + on-disk filename
     'dvr_int_001',
     'dvr1a2b3c4d5e6fg',
     'demo_live_stream_001',
@@ -697,7 +697,7 @@ INSERT INTO commodore.vod_assets (
     '5eedb0d5-1e55-da7a-b0d5-1e55da7a0001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     '5eedface-5e1f-da7a-face-5e1fda7a0001',  -- Demo user
-    '20240101120400c3d4e5f678901234',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
+    'c3d4e5f678901234567890123456abcd',      -- Must match foghorn.artifacts + on-disk filename
     'vod_int_001',
     'vod1a2b3c4d5e6fg',
     'Product Demo 2024',
@@ -816,14 +816,14 @@ INSERT INTO foghorn.artifacts (
 ) VALUES
 -- Demo clip (ready)
 (
-    '20240101120000a1b2c3d4e5f67890',        -- 30-char: timestamp(14) + hex(16)
+    'a1b2c3d4e5f6789012345678901234ab',      -- Must match on-disk filename
     'clip',
     'demo_live_stream_001',
     'clip_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant (denormalized for fallback)
     'ready',
     140795,         -- Actual file size: ~137KB
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/20240101120000a1b2c3d4e5f67890.mp4',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
     'mp4',
     'local',
     'pending',
@@ -850,14 +850,14 @@ INSERT INTO foghorn.artifacts (
 ),
 -- Demo DVR recording (completed)
 (
-    '20240101120200fedcba9876543210',        -- 30-char: timestamp(14) + hex(16)
+    'fedcba98765432109876543210fedcba',      -- Must match on-disk directory/filename
     'dvr',
     'demo_live_stream_001',
     'dvr_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'completed',
     513176,         -- Actual total size: ~501KB (2 segments + manifest)
-    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/20240101120200fedcba9876543210/20240101120200fedcba9876543210.m3u8',
+    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba/fedcba98765432109876543210fedcba.m3u8',
     'm3u8',
     'local',
     'pending',
@@ -884,7 +884,7 @@ INSERT INTO foghorn.artifacts (
 ),
 -- Demo VOD asset (ready, warmed to edge)
 (
-    '20240101120400c3d4e5f678901234',        -- 30-char: timestamp(14) + hex(16)
+    'c3d4e5f678901234567890123456abcd',      -- Must match on-disk filename
     'vod',
     NULL,                                     -- No stream association
     'vod_int_001',
@@ -951,13 +951,13 @@ INSERT INTO foghorn.vod_metadata (
 ) VALUES
 -- Demo VOD (ready) - Product demo video
 (
-    '20240101120400c3d4e5f678901234',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
+    'c3d4e5f678901234567890123456abcd',      -- Must match foghorn.artifacts + on-disk filename
     'product_demo_2024.webm',
     'Product Demo 2024',
     'Annual product demonstration showcasing new streaming features',
     'video/webm',
     NULL,            -- Upload completed
-    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/20240101120400c3d4e5f678901234/20240101120400c3d4e5f678901234.webm',
+    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.webm',
     4000,            -- 4 seconds
     '640x360',
     'vp9',
@@ -1017,9 +1017,9 @@ INSERT INTO foghorn.artifact_nodes (
 ) VALUES
 -- Demo clip on edge-node-1
 (
-    '20240101120000a1b2c3d4e5f67890',
+    'a1b2c3d4e5f6789012345678901234ab',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/20240101120000a1b2c3d4e5f67890.mp4',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
     140795,
     42,
     NOW() - INTERVAL '3 hours',
@@ -1028,9 +1028,9 @@ INSERT INTO foghorn.artifact_nodes (
 ),
 -- Demo DVR on edge-node-1
 (
-    '20240101120200fedcba9876543210',
+    'fedcba98765432109876543210fedcba',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/20240101120200fedcba9876543210/20240101120200fedcba9876543210.m3u8',
+    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba/fedcba98765432109876543210fedcba.m3u8',
     513176,
     7,
     NOW() - INTERVAL '1 day',
@@ -1039,9 +1039,9 @@ INSERT INTO foghorn.artifact_nodes (
 ),
 -- Demo VOD on edge-node-1 (warmed from S3)
 (
-    '20240101120400c3d4e5f678901234',
+    'c3d4e5f678901234567890123456abcd',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/vod/20240101120400c3d4e5f678901234.webm',
+    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.webm',
     149099,
     128,
     NOW() - INTERVAL '2 hours',
@@ -1159,26 +1159,8 @@ INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_stat
     ('central-primary', 'foghorn', 'running', 2)
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
 
--- Livepeer Gateway (external transcoding service, registered for discovery by Commodore)
-INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
-    ('central-primary', 'livepeer-gateway', 'running', 1)
-ON CONFLICT (cluster_id, service_id) DO NOTHING;
-
-INSERT INTO quartermaster.service_instances (
-    instance_id, cluster_id, service_id, protocol, advertise_host, port, status
-) VALUES (
-    'livepeer-gateway-1', 'central-primary', 'livepeer-gateway', 'https', 'livepeer-gateway', 8935, 'running'
-) ON CONFLICT (instance_id) DO UPDATE SET status = 'running';
-
-INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas) VALUES
-    ('central-primary', 'livepeer-signer', 'running', 1)
-ON CONFLICT (cluster_id, service_id) DO NOTHING;
-
-INSERT INTO quartermaster.service_instances (
-    instance_id, cluster_id, service_id, protocol, advertise_host, port, status
-) VALUES (
-    'livepeer-signer-1', 'central-primary', 'livepeer-signer', 'http', 'livepeer-signer', 18016, 'running'
-) ON CONFLICT (instance_id) DO UPDATE SET status = 'running';
+-- Livepeer Gateway + Signer are prod-only services (not in docker-compose).
+-- Cluster services and service instances are provisioned by the CLI at deploy time.
 
 -- ============================================================================
 -- FOGHORN: Pre-seeded service instances for HA pair (gRPC only)
