@@ -15,11 +15,22 @@ import (
 	"syscall"
 	"time"
 
+	"io"
+
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/storage"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 )
+
+// PresignedTransfer abstracts presigned-URL upload/download so tests can
+// inject fakes without hitting the network.
+type PresignedTransfer interface {
+	UploadFileToPresignedURL(ctx context.Context, url, localPath string, onProgress storage.ProgressCallback) error
+	UploadToPresignedURL(ctx context.Context, url string, reader io.Reader, size int64, onProgress storage.ProgressCallback) error
+	DownloadToFileFromPresignedURL(ctx context.Context, url, localPath string, onProgress storage.ProgressCallback) error
+	DownloadFromPresignedURL(ctx context.Context, url string, writer io.Writer, onProgress storage.ProgressCallback) (int64, error)
+}
 
 // NOTE: This storage manager uses presigned URLs for S3 operations.
 // S3 credentials are held by Foghorn (trusted infrastructure) only.
@@ -92,7 +103,16 @@ type StorageManager struct {
 	stopCh   chan struct{}
 
 	// Presigned URL client (NO S3 credentials - uses presigned URLs from Foghorn)
-	presignedClient *storage.PresignedClient
+	presignedClient PresignedTransfer
+
+	// Control IPC — function fields so tests can inject fakes
+	requestFreezePermission func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error)
+	sendSyncComplete        func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool) error
+	sendFreezeComplete      func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string) error
+	sendFreezeProgress      func(requestID, assetHash string, percent uint32, bytesUploaded uint64) error
+	sendStorageLifecycle    func(data *pb.StorageLifecycleData) error
+	sendDefrostComplete     func(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error
+	sendDefrostProgress     func(requestID, assetHash string, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) error
 
 	// Thresholds
 	freezeThreshold   float64       // Start freezing at this % (default: 85%)
@@ -150,6 +170,14 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		checkInterval:     5 * time.Minute,
 		urgentFreezeCh:    make(chan struct{}, 1),
 		urgentDebounce:    2 * time.Second,
+
+		requestFreezePermission: control.RequestFreezePermission,
+		sendSyncComplete:        control.SendSyncComplete,
+		sendFreezeComplete:      control.SendFreezeComplete,
+		sendFreezeProgress:      control.SendFreezeProgress,
+		sendStorageLifecycle:    control.SendStorageLifecycle,
+		sendDefrostComplete:     control.SendDefrostComplete,
+		sendDefrostProgress:     control.SendDefrostProgress,
 	}
 
 	storageManager.defrostTracker.inFlight = make(map[string]*DefrostJob)
@@ -511,7 +539,7 @@ func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
 	info, err := os.Stat(req.LocalPath)
 	if err != nil {
 		sm.logger.WithError(err).WithField("path", req.LocalPath).Error("Freeze request: local path not found")
-		_ = control.SendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, "local file not found: "+err.Error(), false)
+		_ = sm.sendSyncComplete(req.RequestId, req.AssetHash, "failed", "", 0, "local file not found: "+err.Error(), false)
 		return
 	}
 
@@ -610,7 +638,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 	}
 
 	// Request permission and presigned URL from Foghorn
-	permResp, err := control.RequestFreezePermission(ctx, string(asset.AssetType), asset.AssetHash, asset.FilePath, asset.SizeBytes, filenames)
+	permResp, err := sm.requestFreezePermission(ctx, string(asset.AssetType), asset.AssetHash, asset.FilePath, asset.SizeBytes, filenames)
 	if err != nil {
 		return fmt.Errorf("failed to get freeze permission: %w", err)
 	}
@@ -642,13 +670,13 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				sm.logger.WithError(err).Warn("Failed to delete local DVR directory of remote artifact")
 			}
 		}
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:    pb.StorageLifecycleData_ACTION_EVICTED,
 			AssetType: string(asset.AssetType),
 			AssetHash: asset.AssetHash,
 			SizeBytes: asset.SizeBytes,
 		})
-		_ = control.SendSyncComplete(permResp.RequestId, asset.AssetHash, "evicted_remote", "", asset.SizeBytes, "", false)
+		_ = sm.sendSyncComplete(permResp.RequestId, asset.AssetHash, "evicted_remote", "", asset.SizeBytes, "", false)
 		return nil
 	}
 
@@ -672,7 +700,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 
 	requestID := permResp.RequestId
 
-	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:    pb.StorageLifecycleData_ACTION_SYNC_STARTED,
 		AssetType: string(asset.AssetType),
 		AssetHash: asset.AssetHash,
@@ -690,7 +718,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 			if url, ok := permResp.SegmentUrls[baseName]; ok {
 				err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, asset.FilePath, func(uploaded int64) {
 					percent := uint32((uploaded * 100) / int64(asset.SizeBytes))
-					_ = control.SendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
+					_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
 				})
 				if err != nil {
 					uploadErr = fmt.Errorf("failed to upload %s: %w", asset.AssetType, err)
@@ -716,7 +744,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 
 			uploadErr = sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, asset.FilePath, func(uploaded int64) {
 				percent := uint32((uploaded * 100) / int64(asset.SizeBytes))
-				_ = control.SendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
+				_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
 			})
 		}
 	} else if asset.AssetType == AssetTypeDVR {
@@ -782,7 +810,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 			}
 
 			percent := uint32((totalUploaded * 100) / int64(asset.SizeBytes))
-			_ = control.SendFreezeProgress(requestID, asset.AssetHash, percent, uint64(totalUploaded))
+			_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(totalUploaded))
 		}
 
 		if uploadErr == nil {
@@ -817,14 +845,14 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	if uploadErr != nil {
 		durationMs := duration.Milliseconds()
 		errStr := uploadErr.Error()
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:     pb.StorageLifecycleData_ACTION_SYNC_FAILED,
 			AssetType:  string(asset.AssetType),
 			AssetHash:  asset.AssetHash,
 			Error:      &errStr,
 			DurationMs: &durationMs,
 		})
-		_ = control.SendFreezeComplete(requestID, asset.AssetHash, "failed", "", 0, uploadErr.Error())
+		_ = sm.sendFreezeComplete(requestID, asset.AssetHash, "failed", "", 0, uploadErr.Error())
 		return fmt.Errorf("failed to upload to S3: %w", uploadErr)
 	}
 
@@ -839,7 +867,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	}
 
 	durationMs := duration.Milliseconds()
-	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:     pb.StorageLifecycleData_ACTION_SYNCED,
 		AssetType:  string(asset.AssetType),
 		AssetHash:  asset.AssetHash,
@@ -847,7 +875,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		DurationMs: &durationMs,
 	})
 
-	_ = control.SendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded)
+	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded)
 
 	sm.logger.WithFields(logging.Fields{
 		"asset_hash": asset.AssetHash,
