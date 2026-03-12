@@ -196,6 +196,29 @@ func TestGetActiveJobs(t *testing.T) {
 	}
 }
 
+func TestSyncSpecificSegment_AlreadySynced(t *testing.T) {
+	storeConn(&fakeControlStream{}, "dvr-node")
+	t.Cleanup(func() { clearConn() })
+
+	job := &DVRJob{
+		DVRHash:        "hash-sync",
+		StreamName:     "live+test",
+		OutputDir:      t.TempDir(),
+		SyncedSegments: map[string]bool{"chunk000.ts": true},
+		Logger:         logging.NewLogger(),
+	}
+
+	dm := &DVRManager{logger: logging.NewLogger()}
+
+	// syncSpecificSegment should return early for already-synced segment
+	// without calling RequestFreezePermission (which would fail)
+	dm.syncSpecificSegment(job, filepath.Join(job.OutputDir, "segments", "chunk000.ts"))
+
+	if len(job.SyncedSegments) != 1 {
+		t.Fatalf("expected SyncedSegments to be unchanged, got %v", job.SyncedSegments)
+	}
+}
+
 func TestStartRecording_AlreadyActive(t *testing.T) {
 	dm := &DVRManager{
 		logger:      logging.NewLogger(),
