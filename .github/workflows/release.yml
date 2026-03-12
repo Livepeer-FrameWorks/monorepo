@@ -292,14 +292,14 @@ jobs:
             "${DH}:${TAG}-arm64"
 
           # Get the combined manifest digest
-          DIGEST=$(docker buildx imagetools inspect "${DH}:${TAG}" --format '{{.Manifest.Digest}}')
+          DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
           SVCVER=$(jq -r .service_version dist/arch-digest-${SVC}-amd64.json)
 
           mkdir -p final
           cat > final/image-${SVC}.json <<JSON
           {
             "name": "${SVC}",
-            "image": "docker.io/${DH}:${TAG}",
+            "image": "${GHCR}:${TAG}",
             "digest": "${DIGEST}",
             "service_version": "${SVCVER}",
             "git_commit": "${{ github.sha }}"
@@ -629,13 +629,13 @@ jobs:
             "${DH}:${TAG}-amd64" \
             "${DH}:${TAG}-arm64"
 
-          DIGEST=$(docker buildx imagetools inspect "${DH}:${TAG}" --format '{{.Manifest.Digest}}')
+          DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
 
           mkdir -p final
           cat > final/image-${APP}.json <<JSON
           {
             "name": "${APP}",
-            "image": "docker.io/${DH}:${TAG}",
+            "image": "${GHCR}:${TAG}",
             "digest": "${DIGEST}",
             "git_commit": "${{ github.sha }}"
           }
@@ -1217,6 +1217,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - name: Download image digest artifacts
         uses: actions/download-artifact@v7
         with:
@@ -1232,20 +1239,20 @@ jobs:
           RELEASE=$(curl -fsSL https://api.github.com/repos/Livepeer-FrameWorks/go-livepeer/releases/latest)
 
           TAG=$(echo "$RELEASE" | jq -re '.tag_name')
-          DIGEST_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-digest.txt") | .browser_download_url')
           RELEASE_URL=$(echo "$RELEASE" | jq -re '.html_url')
           ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size}]')
 
-          DIGEST=""
-          if [[ -n "$DIGEST_URL" && "$DIGEST_URL" != "null" ]]; then
-            DIGEST=$(curl -fsSL "$DIGEST_URL")
-          fi
+          # go-livepeer docker tags match git tags (metadata-action type=ref,event=tag)
+          # Fetch digest directly from registry — no dependency on release assets
+          DIGEST="sha256:$(docker buildx imagetools inspect "ghcr.io/livepeer-frameworks/go-livepeer:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "release_url=${RELEASE_URL}" >> "$GITHUB_OUTPUT"
           echo "assets=${ASSETS}" >> "$GITHUB_OUTPUT"
           echo "Fetched go-livepeer latest release: ${TAG}"
+          echo "Docker tag: ${TAG}, Digest: ${DIGEST}"
 
       - name: Fetch MistServer metadata from latest release
         id: mistserver
@@ -1255,13 +1262,12 @@ jobs:
           RELEASE=$(curl -fsSL https://api.github.com/repos/Livepeer-FrameWorks/mistserver/releases/latest)
 
           TAG=$(echo "$RELEASE" | jq -re '.tag_name')
-          DIGEST_URL=$(echo "$RELEASE" | jq -re '.assets[] | select(.name=="docker-digest.txt") | .browser_download_url')
           TAG_URL=$(echo "$RELEASE" | jq -re '.assets[] | select(.name=="docker-tag.txt") | .browser_download_url')
           RELEASE_URL=$(echo "$RELEASE" | jq -re '.html_url')
           ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size}]')
 
-          DIGEST=$(curl -fsSL "$DIGEST_URL")
           DOCKER_TAG=$(curl -fsSL "$TAG_URL")
+          DIGEST="sha256:$(docker buildx imagetools inspect "ghcr.io/livepeer-frameworks/mistserver:${DOCKER_TAG}" --raw | sha256sum | cut -d' ' -f1)"
 
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "tag=${DOCKER_TAG}" >> "$GITHUB_OUTPUT"
@@ -1385,7 +1391,7 @@ jobs:
           cat >> dist/manifest.yaml <<YAML
           external_dependencies:
             - name: mistserver
-              image: docker.io/livepeerframeworks/mistserver:${{ steps.mistserver.outputs.tag }}
+              image: ghcr.io/livepeer-frameworks/mistserver:${{ steps.mistserver.outputs.tag }}
               digest: "${{ steps.mistserver.outputs.digest }}"
               release_url: "${{ steps.mistserver.outputs.release_url }}"
               release_tag: "${{ steps.mistserver.outputs.release_tag }}"
@@ -1402,7 +1408,7 @@ jobs:
               image: ghcr.io/livepeer-frameworks/go-livepeer:${{ steps.golivepeer.outputs.tag }}
               digest: "${{ steps.golivepeer.outputs.digest }}"
               release_url: "${{ steps.golivepeer.outputs.release_url }}"
-              release_tag: "${{ steps.golivepeer.outputs.tag }}"
+              release_tag: "${{ steps.golivepeer.outputs.release_tag }}"
           YAML
 
           lp_assets='${{ steps.golivepeer.outputs.assets }}'
@@ -1446,6 +1452,7 @@ jobs:
           merge-multiple: true
       - name: Generate SHA256 checksums for service binaries
         run: |
+          set -euo pipefail
           cd dist/binaries
           for tarball in *.tar.gz; do
             [ -f "$tarball" ] || continue
@@ -1468,6 +1475,7 @@ jobs:
           path: dist/
       - name: Generate SHA256 checksums for webapp bundles
         run: |
+          set -euo pipefail
           cd dist
           for bundle in chartroom-build.tar.gz foredeck-build.tar.gz logbook-build.tar.gz; do
             [ -f "$bundle" ] || continue
