@@ -153,6 +153,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Add Homebrew to PATH
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
       - name: Setup Docker environment (Colima)
         run: |
           echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
@@ -497,6 +500,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Add Homebrew to PATH
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
       - name: Setup Docker environment (Colima)
         run: |
           echo "DOCKER_HOST=unix://$HOME/.colima/default/docker.sock" >> "$GITHUB_ENV"
@@ -697,6 +703,8 @@ jobs:
     runs-on: macos-arm64-self-hosted
     steps:
       - uses: actions/checkout@v6
+      - name: Add Homebrew to PATH
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
       - name: Sanitize platform tag to component version
         id: compver
         run: |
@@ -879,6 +887,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Add Homebrew to PATH
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
@@ -1007,8 +1018,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install XcodeGen
-        run: brew install xcodegen || true
+      - name: Add Homebrew to PATH
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
 
       - name: Unlock keychain
         run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
@@ -1126,6 +1137,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Add Homebrew to PATH
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
 
       - name: Download CLI darwin/arm64 binary
         uses: actions/download-artifact@v7
