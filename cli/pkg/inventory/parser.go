@@ -3,11 +3,24 @@ package inventory
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 
+	fwsops "frameworks/cli/pkg/sops"
 	"frameworks/pkg/servicedefs"
 	"gopkg.in/yaml.v3"
 )
+
+// ParseManifest parses a cluster manifest from raw YAML bytes without validation.
+// Use this when you need the parsed structure (e.g. to inspect HostsFile or EnvFile)
+// before full validation.
+func ParseManifest(data []byte) (*Manifest, error) {
+	var manifest Manifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse manifest YAML: %w", err)
+	}
+	return &manifest, nil
+}
 
 // Load reads and parses a cluster manifest file
 func Load(path string) (*Manifest, error) {
@@ -16,28 +29,149 @@ func Load(path string) (*Manifest, error) {
 		return nil, fmt.Errorf("failed to read manifest file: %w", err)
 	}
 
-	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest YAML: %w", err)
+	manifest, err := ParseManifest(data)
+	if err != nil {
+		return nil, err
 	}
 
-	// Validate
 	if err := manifest.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid manifest: %w", err)
 	}
 
-	return &manifest, nil
+	return manifest, nil
 }
 
-// LoadFromBytes parses a cluster manifest from raw YAML bytes.
+// LoadFromBytes parses and validates a cluster manifest from raw YAML bytes.
 func LoadFromBytes(data []byte) (*Manifest, error) {
-	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest YAML: %w", err)
+	manifest, err := ParseManifest(data)
+	if err != nil {
+		return nil, err
 	}
 	if err := manifest.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid manifest: %w", err)
 	}
+	return manifest, nil
+}
+
+// LoadWithHosts reads a manifest, merges host inventory from hosts_file if set,
+// and validates the fully-resolved result. For manifests without hosts_file,
+// this behaves identically to Load.
+func LoadWithHosts(path, ageKeyFile string) (*Manifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read manifest file: %w", err)
+	}
+
+	manifest, err := ParseManifest(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if manifest.HostsFile != "" {
+		hostsPath := manifest.HostsFile
+		if !filepath.IsAbs(hostsPath) {
+			hostsPath = filepath.Join(filepath.Dir(path), hostsPath)
+		}
+		inv, err := LoadHostInventory(hostsPath, ageKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load host inventory: %w", err)
+		}
+		if err := manifest.MergeHostInventory(inv); err != nil {
+			return nil, fmt.Errorf("merge host inventory: %w", err)
+		}
+	}
+
+	if err := manifest.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid manifest: %w", err)
+	}
+
+	return manifest, nil
+}
+
+// LoadHostInventory reads and decrypts a SOPS-encrypted host inventory YAML file.
+func LoadHostInventory(path, ageKeyFile string) (*HostInventory, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read host inventory: %w", err)
+	}
+
+	if fwsops.IsEncrypted(data) {
+		data, err = fwsops.DecryptData(data, "yaml", ageKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt host inventory: %w", err)
+		}
+	}
+
+	var inv HostInventory
+	if err := yaml.Unmarshal(data, &inv); err != nil {
+		return nil, fmt.Errorf("failed to parse host inventory YAML: %w", err)
+	}
+	return &inv, nil
+}
+
+// MergeHostInventory populates ExternalIP, User, and SSHKey on manifest hosts
+// from the given host inventory.
+func (m *Manifest) MergeHostInventory(inv *HostInventory) error {
+	for name, host := range m.Hosts {
+		conn, ok := inv.Hosts[name]
+		if !ok {
+			return fmt.Errorf("host '%s' not found in host inventory", name)
+		}
+		host.ExternalIP = conn.ExternalIP
+		if conn.User != "" {
+			host.User = conn.User
+		}
+		if conn.SSHKey != "" {
+			host.SSHKey = conn.SSHKey
+		}
+		m.Hosts[name] = host
+	}
+	return nil
+}
+
+// MergeEdgeHosts populates SSH targets on edge nodes from the host inventory.
+func (m *EdgeManifest) MergeEdgeHosts(inv *HostInventory) error {
+	for i, node := range m.Nodes {
+		conn, ok := inv.EdgeNodes[node.Name]
+		if !ok {
+			return fmt.Errorf("edge node '%s' not found in host inventory", node.Name)
+		}
+		m.Nodes[i].SSH = conn.SSH
+	}
+	return nil
+}
+
+// LoadEdgeWithHosts reads an edge manifest, merges host inventory if hosts_file
+// is set, and validates the result.
+func LoadEdgeWithHosts(path, ageKeyFile string) (*EdgeManifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read edge manifest file: %w", err)
+	}
+
+	var manifest EdgeManifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse edge manifest YAML: %w", err)
+	}
+
+	if manifest.HostsFile != "" {
+		hostsPath := manifest.HostsFile
+		if !filepath.IsAbs(hostsPath) {
+			hostsPath = filepath.Join(filepath.Dir(path), hostsPath)
+		}
+		inv, err := LoadHostInventory(hostsPath, ageKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load host inventory: %w", err)
+		}
+		if err := manifest.MergeEdgeHosts(inv); err != nil {
+			return nil, fmt.Errorf("merge edge hosts: %w", err)
+		}
+	}
+
+	if err := manifest.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid edge manifest: %w", err)
+	}
+
 	return &manifest, nil
 }
 

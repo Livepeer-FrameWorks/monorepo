@@ -27,7 +27,7 @@ curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/downl
 
 # 3. Create cluster manifest + secrets file
 # See: /operators/cluster-manifest
-# Copy config/env/secrets.env.example → gitops-private/secrets/production.env
+# Copy config/env/secrets.env.example → gitops/secrets/production.env
 
 # 4. Detect hosts (verify SSH connectivity)
 frameworks cluster detect --manifest cluster.yaml
@@ -39,25 +39,25 @@ frameworks cluster provision --manifest cluster.yaml
 frameworks cluster doctor --manifest cluster.yaml
 ```
 
-**GitOps Deployment (from a private GitHub repo):**
+**GitOps Deployment (from a GitHub repo):**
 
-If your manifests are in a private repo managed by a GitHub App:
+If your manifests are in a gitops repo managed by a GitHub App:
 
 ```bash
 # Configure GitHub App credentials (once)
 frameworks config set github.app-id 12345
 frameworks config set github.installation-id 67890
 frameworks config set github.private-key /path/to/key.pem
-frameworks config set github.repo org/infra-repo
+frameworks config set github.repo org/gitops
 
-# Provision from the repo (fetches cluster.yaml, .env, etc.)
-frameworks cluster provision --repo org/infra-repo
+# Provision from the repo (fetches cluster.yaml, hosts, .env, etc.)
+frameworks cluster provision --repo org/gitops
 
-# If env files are SOPS-encrypted (recommended), specify an age key:
-frameworks cluster provision --repo org/infra-repo --age-key ~/.config/sops/age/keys.txt
+# If secrets are SOPS-encrypted (recommended), specify an age key:
+frameworks cluster provision --repo org/gitops --age-key ~/.config/sops/age/keys.txt
 ```
 
-This fetches the cluster manifest and referenced files from the repo, then runs the standard provision pipeline. SOPS-encrypted env files are decrypted automatically if an age key is available (see [External Services](/operators/external-services#encrypting-secrets-with-sops--age)). Operators manage config changes via pull requests.
+This fetches the cluster manifest and referenced files (env files, host inventory) from the repo, then runs the standard provision pipeline. SOPS-encrypted files — both env files and host inventory YAML — are decrypted automatically if an age key is available (see [External Services](/operators/external-services#encrypting-secrets-with-sops--age)). Operators manage config changes via pull requests.
 
 <Aside type="note" title="Provisioning Phases">
 The CLI provisions in dependency order:

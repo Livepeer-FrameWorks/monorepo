@@ -72,8 +72,12 @@ A shared static token cannot carry trustworthy identity or cluster claims. Multi
 
 ## Open Questions
 
-- Should issuance be centralized in Quartermaster or separate auth service?
+- ~~Should issuance be centralized in Quartermaster or separate auth service?~~ Quartermaster issues service JWTs. Vault stores the signing key set (see `RFC_vault_secrets_management.md`). No separate auth service needed.
 - Long-term: migrate to mTLS/SPIFFE?
+
+## Relationship to Vault RFC
+
+Vault and service identity are complementary. Vault replaces `SERVICE_TOKEN` as a stored secret (runtime secret management). This RFC replaces `SERVICE_TOKEN` as an auth mechanism (verifiable identity with cluster claims). With both implemented, Quartermaster issues service JWTs signed with keys from Vault, and `SERVICE_TOKEN` is fully retired.
 
 ## References, Sources & Evidence
 
@@ -81,3 +85,4 @@ A shared static token cannot carry trustworthy identity or cluster claims. Multi
 - `pkg/auth`
 - `api_tenants/`
 - `pkg/proto`
+- `docs/rfcs/RFC_vault_secrets_management.md`

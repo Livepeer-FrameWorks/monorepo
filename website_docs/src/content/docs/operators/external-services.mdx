@@ -43,7 +43,7 @@ This ensures runtime services can connect with the same credentials the CLI prov
 
 **Setup:**
 
-1. Copy the template: `cp config/env/secrets.env.example gitops-private/secrets/production.env`
+1. Copy the template: `cp config/env/secrets.env.example gitops/secrets/production.env`
 2. Set at minimum: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD` (security secrets can be left as `change-me`)
 3. Reference it in your cluster manifest: `env_file: secrets/production.env`
 4. Run `frameworks cluster provision` — the CLI creates database users, generates missing secrets, and pushes merged env vars to all hosts
@@ -70,7 +70,11 @@ Create `.sops.yaml` in your gitops repo root:
 creation_rules:
   - path_regex: secrets/.*\.env$
     age: age1yourpublickeyhere
+  - path_regex: clusters/.*/hosts\.enc\.yaml$
+    age: age1yourpublickeyhere
 ```
+
+The second rule encrypts host inventory files (`hosts.enc.yaml`) that contain server IPs and SSH targets. See `hosts_file` below.
 
 **Encrypt your secrets file:**
 
@@ -83,10 +87,10 @@ git commit -m "Encrypt production secrets with SOPS/age"
 **Provisioning** decrypts automatically — the CLI detects SOPS-encrypted files and decrypts using the age key at `~/.config/sops/age/keys.txt` (or `SOPS_AGE_KEY_FILE`):
 
 ```bash
-frameworks cluster provision --repo org/gitops-private
+frameworks cluster provision --repo org/gitops
 
 # Or explicitly specify the key file:
-frameworks cluster provision --repo org/gitops-private --age-key /path/to/keys.txt
+frameworks cluster provision --repo org/gitops --age-key /path/to/keys.txt
 ```
 
 **Local development** with an encrypted `config/env/secrets.env`:
@@ -101,6 +105,41 @@ make encrypt   # Re-encrypt before committing
   Decrypted env vars are written to `/etc/frameworks/*.env` on each host with `chmod 600`. For
   runtime encryption at rest, consider full-disk encryption on your hosts.
 </Aside>
+
+### Separating host IPs from architecture (`hosts_file`)
+
+For public gitops repos, you can keep your cluster architecture in plaintext while encrypting server IPs and SSH targets in a separate SOPS-encrypted file. Set `hosts_file` in your cluster manifest:
+
+```yaml
+# cluster.yaml — plaintext architecture (safe to publish)
+version: v1
+type: cluster
+env_file: secrets/production.env
+hosts_file: clusters/production/hosts.enc.yaml
+
+hosts:
+  central-eu-1:
+    cluster: core
+    roles: [infrastructure, services]
+  # No external_ip or user here — they come from hosts_file
+```
+
+The hosts file contains connection details:
+
+```yaml
+# clusters/production/hosts.enc.yaml — SOPS-encrypted
+hosts:
+  central-eu-1:
+    external_ip: "203.0.113.10"
+    user: root
+edge_nodes:
+  edge-eu-1:
+    ssh: "root@203.0.113.20"
+```
+
+Encrypt it: `sops -e -i clusters/production/hosts.enc.yaml`
+
+During provisioning, the CLI decrypts the hosts file, merges IPs and SSH targets into the manifest, then proceeds normally. Manifests with inline `external_ip` continue to work — `hosts_file` is optional.
 
 ---
 

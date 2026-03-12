@@ -18,7 +18,20 @@ func IsEncrypted(data []byte) bool {
 	return strings.Contains(s, "sops_version=") || strings.Contains(s, "ENC[AES256_GCM,")
 }
 
+// IsEncryptedYAML returns true if data looks like a SOPS-encrypted YAML file.
+// SOPS YAML files contain a top-level "sops:" metadata key.
+func IsEncryptedYAML(data []byte) bool {
+	s := string(data)
+	return strings.Contains(s, "ENC[AES256_GCM,") && (strings.Contains(s, "\nsops:") || strings.HasPrefix(s, "sops:"))
+}
+
 // Decrypt decrypts SOPS-encrypted data in dotenv format.
+// See DecryptData for details on key resolution.
+func Decrypt(data []byte, ageKeyFile string) ([]byte, error) {
+	return DecryptData(data, "dotenv", ageKeyFile)
+}
+
+// DecryptData decrypts SOPS-encrypted data in the given format ("dotenv", "yaml", "json").
 // The age private key is resolved from (in order):
 //  1. ageKeyFile argument (if non-empty)
 //  2. SOPS_AGE_KEY_FILE env var
@@ -26,7 +39,7 @@ func IsEncrypted(data []byte) bool {
 //
 // If ageKeyFile is set, it's exported as SOPS_AGE_KEY_FILE so the sops library
 // picks it up. The original env value is restored after decryption.
-func Decrypt(data []byte, ageKeyFile string) ([]byte, error) {
+func DecryptData(data []byte, format string, ageKeyFile string) ([]byte, error) {
 	if ageKeyFile != "" {
 		abs, err := filepath.Abs(ageKeyFile)
 		if err != nil {
@@ -40,7 +53,7 @@ func Decrypt(data []byte, ageKeyFile string) ([]byte, error) {
 		defer os.Setenv("SOPS_AGE_KEY_FILE", prev)
 	}
 
-	plaintext, err := decrypt.Data(data, "dotenv")
+	plaintext, err := decrypt.Data(data, format)
 	if err != nil {
 		return nil, fmt.Errorf("sops decrypt: %w", err)
 	}
@@ -49,6 +62,7 @@ func Decrypt(data []byte, ageKeyFile string) ([]byte, error) {
 
 // DecryptFileIfEncrypted reads a file, decrypts it if SOPS-encrypted, and returns
 // the plaintext content. Non-encrypted files are returned as-is.
+// The format is inferred from the file extension (.yaml/.yml → yaml, otherwise dotenv).
 func DecryptFileIfEncrypted(path string, ageKeyFile string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -57,5 +71,18 @@ func DecryptFileIfEncrypted(path string, ageKeyFile string) ([]byte, error) {
 	if !IsEncrypted(data) {
 		return data, nil
 	}
-	return Decrypt(data, ageKeyFile)
+	return DecryptData(data, FormatFromPath(path), ageKeyFile)
+}
+
+// FormatFromPath returns the SOPS format string for a file path based on its extension.
+func FormatFromPath(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".json":
+		return "json"
+	default:
+		return "dotenv"
+	}
 }
