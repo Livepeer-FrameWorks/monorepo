@@ -281,13 +281,28 @@ jobs:
           GHCR="${{ env.REGISTRY }}/frameworks-${SVC}"
           DH="livepeerframeworks/frameworks-${SVC}"
 
+          # Determine track tag from version suffix
+          TRACK=""
+          case "${TAG}" in
+            *-beta*) TRACK="beta" ;;
+            *-rc*)   TRACK="rc" ;;
+            v[0-9]*) TRACK="latest" ;;
+          esac
+
+          GHCR_TAGS=("-t" "${GHCR}:${TAG}")
+          DH_TAGS=("-t" "${DH}:${TAG}")
+          if [[ -n "${TRACK}" ]]; then
+            GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
+            DH_TAGS+=("-t" "${DH}:${TRACK}")
+          fi
+
           docker buildx imagetools create \
-            -t "${GHCR}:${TAG}" \
+            "${GHCR_TAGS[@]}" \
             "${GHCR}:${TAG}-amd64" \
             "${GHCR}:${TAG}-arm64"
 
           docker buildx imagetools create \
-            -t "${DH}:${TAG}" \
+            "${DH_TAGS[@]}" \
             "${DH}:${TAG}-amd64" \
             "${DH}:${TAG}-arm64"
 
@@ -619,13 +634,28 @@ jobs:
           GHCR="${{ env.REGISTRY }}/frameworks-${APP}"
           DH="livepeerframeworks/frameworks-${APP}"
 
+          # Determine track tag from version suffix
+          TRACK=""
+          case "${TAG}" in
+            *-beta*) TRACK="beta" ;;
+            *-rc*)   TRACK="rc" ;;
+            v[0-9]*) TRACK="latest" ;;
+          esac
+
+          GHCR_TAGS=("-t" "${GHCR}:${TAG}")
+          DH_TAGS=("-t" "${DH}:${TAG}")
+          if [[ -n "${TRACK}" ]]; then
+            GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
+            DH_TAGS+=("-t" "${DH}:${TRACK}")
+          fi
+
           docker buildx imagetools create \
-            -t "${GHCR}:${TAG}" \
+            "${GHCR_TAGS[@]}" \
             "${GHCR}:${TAG}-amd64" \
             "${GHCR}:${TAG}-arm64"
 
           docker buildx imagetools create \
-            -t "${DH}:${TAG}" \
+            "${DH_TAGS[@]}" \
             "${DH}:${TAG}-amd64" \
             "${DH}:${TAG}-arm64"
 
