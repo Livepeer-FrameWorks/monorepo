@@ -60,7 +60,7 @@ func setupContactHandler(turnstileEnabled bool) *contactHandlerHarness {
 	router := gin.New()
 	sender := &emailSenderStub{}
 	logger, _ := test.NewNullLogger()
-	handler := NewContactHandler(sender, nil, "contact@example.com", turnstileEnabled, logger, nil)
+	handler := NewContactHandler(sender, nil, "contact@example.com", "Contact Form", "Thank you!", turnstileEnabled, logger, nil)
 	router.POST("/api/contact", handler.Handle)
 	return &contactHandlerHarness{router: router, sender: sender}
 }
@@ -188,7 +188,7 @@ func TestContactHandlerRedactsLogsAndMetrics(t *testing.T) {
 		),
 	}
 
-	handler := NewContactHandler(&emailSenderStub{}, nil, "to@example.com", false, logger, metrics)
+	handler := NewContactHandler(&emailSenderStub{}, nil, "to@example.com", "Contact Form", "Thank you!", false, logger, metrics)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/api/contact", handler.Handle)
@@ -251,6 +251,8 @@ func TestContactHandlerTurnstileErrorMapsToBadGateway(t *testing.T) {
 		&emailSenderStub{},
 		&fakeTurnstile{err: errors.New("turnstile down")},
 		"to@example.com",
+		"Contact Form",
+		"Thank you!",
 		true,
 		logger,
 		metrics,
@@ -355,6 +357,8 @@ func TestContactHandlerEmailErrorMapsToBadGateway(t *testing.T) {
 		&emailSenderStub{err: errors.New("smtp down")},
 		nil,
 		"to@example.com",
+		"Contact Form",
+		"Thank you!",
 		false,
 		logger,
 		metrics,
