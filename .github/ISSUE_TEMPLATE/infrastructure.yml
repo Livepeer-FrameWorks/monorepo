@@ -1,0 +1,40 @@
+name: Infrastructure Issue
+description: Report an infrastructure, capacity, or operational issue
+labels: ["infrastructure"]
+body:
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Edge node
+        - Network / Connectivity
+        - Database
+        - Kafka / Events
+        - Storage (S3 / MinIO)
+        - DNS / Certificates
+        - WireGuard Mesh
+        - Monitoring / Alerting
+        - Capacity Planning
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is the issue?
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: How does this affect operations?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Cluster, node, region, or other relevant details
