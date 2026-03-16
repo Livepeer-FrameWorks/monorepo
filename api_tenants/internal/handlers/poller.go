@@ -160,7 +160,9 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if err != nil {
 					status = "unhealthy"
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check request failed")
-					_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
+						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
+					}
 					return
 				}
 				resp, err := client.Do(req)
@@ -199,7 +201,9 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if err != nil {
 					status = "unhealthy"
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check dial failed")
-					_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
+						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
+					}
 					return
 				}
 				defer func() { _ = conn.Close() }()
@@ -388,7 +392,9 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 			return
 		}
 		statusStr := mapGrpcHealthStatus(resp.GetStatus())
-		_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, statusStr, inst.id)
+		if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, statusStr, inst.id); dbErr != nil {
+			logger.WithError(dbErr).WithField("instance_id", inst.id).Warn("Failed to persist health status")
+		}
 	}
 }
 

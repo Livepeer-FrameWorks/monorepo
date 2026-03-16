@@ -2413,7 +2413,9 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 		countArgs = append(countArgs, eventType)
 	}
 	var totalCount int32
-	_ = s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount)
+	if countErr := s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount); countErr != nil {
+		s.logger.WithError(countErr).Warn("Failed to get federation events total count")
+	}
 
 	query := `
 		SELECT
@@ -3971,7 +3973,9 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 		FROM periscope.stream_analytics_daily
 		WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
 	`, tenantID, startTime, endTime)
-	_ = countRow.Scan(&totalCount)
+	if err := countRow.Scan(&totalCount); err != nil {
+		s.logger.WithError(err).Warn("Failed to get stream analytics summaries total count")
+	}
 
 	// Build keyset cursors using raw integer sort keys from proto fields
 	var startCursor, endCursor string

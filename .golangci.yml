@@ -24,7 +24,7 @@ linters:
   settings:
     errcheck:
       check-type-assertions: true
-      check-blank: false # Allow _ = fn() for intentional ignores
+      check-blank: true
     errorlint:
       errorf: true
       asserts: true

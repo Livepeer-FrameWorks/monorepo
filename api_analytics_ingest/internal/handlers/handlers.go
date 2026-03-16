@@ -3148,7 +3148,9 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		"aggregate_count": rowCount,
 	}).Debug("Successfully processed service API request batch")
 
-	_ = h.processServiceAPIRequestBatchAudit(ctx, event, aggregatesSlice, sourceNode, timestamp)
+	if err := h.processServiceAPIRequestBatchAudit(ctx, event, aggregatesSlice, sourceNode, timestamp); err != nil {
+		h.logger.WithError(err).Warn("Failed to write API request batch audit to ClickHouse")
+	}
 
 	return nil
 }

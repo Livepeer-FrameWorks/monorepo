@@ -509,7 +509,9 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 	}).Info("Updated subscription status from Stripe webhook")
 
 	subscriptionID := ""
-	_ = db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&subscriptionID)
+	if err := db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&subscriptionID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to look up internal subscription ID, falling back to Stripe ID")
+	}
 	if subscriptionID == "" {
 		subscriptionID = obj.ID
 	}
@@ -869,7 +871,9 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 
 	if newStatus == "confirmed" || newStatus == "failed" {
 		if tenantID == "" && invoiceID != "" {
-			_ = db.QueryRowContext(ctx, `SELECT tenant_id FROM purser.billing_invoices WHERE id = $1`, invoiceID).Scan(&tenantID)
+			if err := db.QueryRowContext(ctx, `SELECT tenant_id FROM purser.billing_invoices WHERE id = $1`, invoiceID).Scan(&tenantID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				logger.WithError(err).WithField("invoice_id", invoiceID).Warn("Failed to resolve tenant from invoice, billing event will be skipped")
+			}
 		}
 		if tenantID != "" {
 			amountCents, currency, err := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)

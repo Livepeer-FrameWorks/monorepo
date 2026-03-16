@@ -159,7 +159,7 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 		upstreamDNS = strings.TrimSpace(captureResult.Stdout)
 	}
 
-	nodeID, _ := config.Metadata["node_id"].(string)
+	nodeID, _ := config.Metadata["node_id"].(string) //nolint:errcheck // type assertion, not error
 
 	envContent := fmt.Sprintf(`QUARTERMASTER_GRPC_ADDR=%s
 SERVICE_TOKEN=%s

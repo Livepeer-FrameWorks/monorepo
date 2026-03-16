@@ -63,7 +63,7 @@ func (s *InstallState) Save() error {
 
 // RecordInstall creates or updates state for a fresh install.
 func RecordInstall(version, installPath string) error {
-	existing, _ := Load()
+	existing, _ := Load() //nolint:errcheck // missing state file is expected on first install
 	s := &InstallState{
 		Version:     version,
 		InstalledAt: time.Now(),
