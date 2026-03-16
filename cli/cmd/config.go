@@ -11,10 +11,30 @@ import (
 
 func newConfigCmd() *cobra.Command {
 	cfg := &cobra.Command{Use: "config", Short: "Configuration helpers"}
+	cfg.AddCommand(newConfigInitCmd())
 	cfg.AddCommand(newConfigEnvCmd())
 	cfg.AddCommand(newConfigSetCmd())
 	cfg.AddCommand(newConfigGetCmd())
 	return cfg
+}
+
+func newConfigInitCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Create default configuration file",
+		Long:  `Create ~/.frameworks/config.yaml with default settings if it does not exist.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, cfgPath, err := fwcfg.Load()
+			if err != nil {
+				return err
+			}
+			if err := fwcfg.Save(cfg, cfgPath); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Config ready at %s\n", cfgPath)
+			return nil
+		},
+	}
 }
 
 func newConfigSetCmd() *cobra.Command {

@@ -236,9 +236,13 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 
 		svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
 		if len(ips) == 0 {
-			if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
-				partialErrors[svcFQDN] = err.Error()
-			}
+			m.logger.WithFields(logging.Fields{
+				"service_type": serviceType,
+				"cluster":      clusterSlug,
+				"fqdn":         svcFQDN,
+			}).Warn("No healthy nodes for cluster; preserving existing DNS")
+			// Don't continue — edge cleanup below still needs to run so
+			// stale per-node records are removed when nodes are drained.
 		} else {
 			svcPartial, syncErr := m.syncClusterService(ctx, svcFQDN, serviceType, ips)
 			if syncErr != nil {
@@ -401,8 +405,11 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 
 	// 4. Apply "Smart Record" Logic
 	if len(activeIPs) == 0 {
-		log.Warn("No active nodes found, removing DNS records")
-		return m.clearDNSConfig(ctx, fqdn)
+		// Fail-open: preserve existing DNS records during empty inventory windows
+		// (transient QM failures, first-deploy race). Records will be updated
+		// when positive inventory data arrives.
+		log.Warn("No active nodes found, preserving existing DNS records")
+		return nil, nil
 	}
 
 	if len(activeIPs) == 1 {
@@ -613,6 +620,15 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+// ClearServiceDNS is the explicit decommission path for removing all DNS
+// configuration for a service FQDN. Call this when a service is intentionally
+// drained — the periodic sync paths preserve existing records on empty
+// inventory to avoid accidental deletions during transient outages.
+func (m *DNSManager) ClearServiceDNS(ctx context.Context, fqdn string) (map[string]string, error) {
+	m.logger.WithField("fqdn", fqdn).Info("Explicit DNS teardown requested")
+	return m.clearDNSConfig(ctx, fqdn)
 }
 
 // clearDNSConfig removes all DNS configuration for a given FQDN (LB, A, CNAME records)

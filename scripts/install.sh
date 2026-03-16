@@ -121,6 +121,16 @@ main() {
   else
     err "Installation verification failed"
   fi
+
+  # Initialize configuration
+  "${INSTALL_DIR}/frameworks" config init 2>/dev/null || true
+
+  # Check for common dependencies
+  for dep in ssh git; do
+    if ! command -v "$dep" >/dev/null 2>&1; then
+      log "Warning: ${dep} not found (required for cluster provisioning)"
+    fi
+  done
 }
 
 main

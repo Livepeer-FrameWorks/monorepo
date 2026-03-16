@@ -1643,7 +1643,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 			rawInternal = internalName
 		}
 		if peers := triggerProcessor.GetClusterPeers(rawInternal, target.TenantID); len(peers) > 0 {
-			remoteEdges := collectRemoteEdges(context.Background(), peers)
+			remoteEdges := collectRemoteEdges(ctx, peers)
 			if len(remoteEdges) > 0 {
 				remoteNodes := lb.ScoreRemoteEdges(remoteEdges, lat, lon)
 				bestRemote := findBestRemoteNode(remoteNodes)

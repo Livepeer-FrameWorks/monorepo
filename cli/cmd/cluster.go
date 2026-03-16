@@ -37,6 +37,9 @@ func newClusterCmd() *cobra.Command {
 	cluster.AddCommand(newClusterDiagnoseCmd())
 	cluster.AddCommand(newClusterSyncGeoIPCmd())
 	cluster.AddCommand(newClusterSetChannelCmd())
+	cluster.AddCommand(newClusterPreflightCmd())
+	cluster.AddCommand(newClusterMigrateCmd())
+	cluster.AddCommand(newClusterSeedCmd())
 
 	// Future commands
 	// cluster.AddCommand(newClusterPlanCmd())

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"frameworks/cli/pkg/detect"
@@ -150,6 +151,16 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 
 	dnsPort := strconv.Itoa(parseDNSPort(config.Metadata["dns_port"]))
 
+	// Capture the host's current upstream nameservers before we overwrite resolv.conf,
+	// so Privateer can forward non-.internal queries to them.
+	var upstreamDNS string
+	captureResult, captureErr := p.RunCommand(ctx, host, system.CaptureUpstreamNameservers())
+	if captureErr == nil && captureResult.ExitCode == 0 {
+		upstreamDNS = strings.TrimSpace(captureResult.Stdout)
+	}
+
+	nodeID, _ := config.Metadata["node_id"].(string)
+
 	envContent := fmt.Sprintf(`QUARTERMASTER_GRPC_ADDR=%s
 SERVICE_TOKEN=%s
 ENROLLMENT_TOKEN=%s
@@ -158,7 +169,12 @@ MESH_INTERFACE=wg0
 MESH_NODE_TYPE=%s
 MESH_NODE_NAME=%s
 MESH_EXTERNAL_IP=%s
-`, qmGRPCAddr, serviceToken, token, dnsPort, nodeType, nodeName, host.ExternalIP)
+NODE_ID=%s
+`, qmGRPCAddr, serviceToken, token, dnsPort, nodeType, nodeName, host.ExternalIP, nodeID)
+
+	if upstreamDNS != "" {
+		envContent += fmt.Sprintf("UPSTREAM_DNS=%s\n", upstreamDNS)
+	}
 
 	// Upload Env File
 	tmpEnv := filepath.Join(os.TempDir(), "privateer.env")

@@ -74,6 +74,7 @@ type Config struct {
 	ServiceToken          string // Or EnrollmentToken
 	EnrollmentToken       string // Bootstrap token for initial registration (optional)
 	NodeIDPath            string
+	NodeID                string // Explicit identity from env; skips file-based generation when set
 	InterfaceName         string
 	NodeType              string
 	NodeName              string
@@ -83,6 +84,7 @@ type Config struct {
 	SyncInterval          time.Duration
 	SyncTimeout           time.Duration
 	DNSPort               int
+	DNSUpstreams          []string // Upstream resolver addresses for non-.internal queries
 	Logger                logging.Logger
 	Metrics               *Metrics
 	MeshClient            meshClient
@@ -146,7 +148,7 @@ func New(cfg Config) (*Agent, error) {
 	// Initialize DNS Server
 	dnsSrv := cfg.DNSService
 	if dnsSrv == nil {
-		dnsSrv = dns.NewServer(cfg.Logger, cfg.DNSPort)
+		dnsSrv = dns.NewServer(cfg.Logger, cfg.DNSPort, cfg.DNSUpstreams...)
 	}
 
 	return &Agent{
@@ -164,7 +166,7 @@ func New(cfg Config) (*Agent, error) {
 		syncInterval:    cfg.SyncInterval,
 		syncTimeout:     cfg.SyncTimeout,
 		stopChan:        make(chan struct{}),
-		nodeID:          loadOrGenerateNodeID(cfg.NodeIDPath, cfg.Logger),
+		nodeID:          resolveNodeID(cfg),
 		metrics:         cfg.Metrics,
 	}, nil
 }
@@ -474,6 +476,38 @@ func (a *Agent) bootstrapNode(ctx context.Context) error {
 	}).Info("Node bootstrapped successfully")
 
 	return nil
+}
+
+func resolveNodeID(cfg Config) string {
+	if cfg.NodeID != "" {
+		if cfg.Logger != nil {
+			cfg.Logger.WithField("node_id", cfg.NodeID).Info("Using explicit Node ID from config")
+		}
+		// Persist so restarts are stable even if the env var disappears
+		persistNodeID(cfg.NodeIDPath, cfg.NodeID, cfg.Logger)
+		return cfg.NodeID
+	}
+	return loadOrGenerateNodeID(cfg.NodeIDPath, cfg.Logger)
+}
+
+func persistNodeID(path, id string, logger logging.Logger) {
+	if path == "" {
+		return
+	}
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			if logger != nil {
+				logger.WithError(err).Warn("Failed to create node_id directory for persistence")
+			}
+			return
+		}
+	}
+	if err := os.WriteFile(path, []byte(id), 0600); err != nil {
+		if logger != nil {
+			logger.WithError(err).Warn("Failed to persist explicit Node ID to disk")
+		}
+	}
 }
 
 func loadOrGenerateNodeID(path string, logger logging.Logger) string {

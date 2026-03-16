@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"frameworks/api_mesh/internal/agent"
@@ -63,8 +65,29 @@ func main() {
 
 	nodeType := os.Getenv("MESH_NODE_TYPE")
 	nodeName := os.Getenv("MESH_NODE_NAME")
+	nodeID := os.Getenv("NODE_ID")
 	externalIP := os.Getenv("MESH_EXTERNAL_IP")
 	internalIP := os.Getenv("MESH_INTERNAL_IP")
+
+	var dnsUpstreams []string
+	if raw := os.Getenv("UPSTREAM_DNS"); raw != "" {
+		for _, s := range strings.Split(raw, ",") {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			_, _, err := net.SplitHostPort(s)
+			if err != nil {
+				// No port: could be IPv4 (1.1.1.1) or IPv6 (2001:db8::1).
+				if net.ParseIP(s) != nil && strings.Contains(s, ":") {
+					s = "[" + s + "]:53"
+				} else {
+					s += ":53"
+				}
+			}
+			dnsUpstreams = append(dnsUpstreams, s)
+		}
+	}
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("privateer", version.Version)
@@ -88,10 +111,12 @@ func main() {
 		InterfaceName:         os.Getenv("MESH_INTERFACE"), // Defaults to wg0
 		NodeType:              nodeType,
 		NodeName:              nodeName,
+		NodeID:                nodeID,
 		ExternalIP:            externalIP,
 		InternalIP:            internalIP,
 		ListenPort:            listenPort,
 		DNSPort:               dnsPort,
+		DNSUpstreams:          dnsUpstreams,
 		Logger:                logger,
 		Metrics:               agentMetrics,
 	}

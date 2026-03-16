@@ -308,6 +308,37 @@ echo "ClickHouse configured with application credentials"
 }
 
 // initializePeriscopeDatabase runs ClickHouse schema for periscope
+// ApplyDemoSeeds applies ClickHouse demo data for development.
+// Uses the "frameworks" user when a password is provided in config.Metadata["clickhouse_password"],
+// falling back to "default" (unauthenticated) for local/unconfigured clusters.
+func (c *ClickHouseProvisioner) ApplyDemoSeeds(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	sqlContent, err := dbsql.Content.ReadFile("seeds/demo/clickhouse_demo_data.sql")
+	if err != nil {
+		return fmt.Errorf("read clickhouse demo seed: %w", err)
+	}
+
+	username := "default"
+	password := ""
+	if pw, ok := config.Metadata["clickhouse_password"].(string); ok && pw != "" {
+		username = "frameworks"
+		password = pw
+	}
+
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr: []string{fmt.Sprintf("%s:%d", host.ExternalIP, config.Port)},
+		Auth: clickhouse.Auth{Database: "periscope", Username: username, Password: password},
+	})
+	if err != nil {
+		return fmt.Errorf("connect to clickhouse: %w", err)
+	}
+	defer conn.Close()
+
+	if err := conn.Exec(ctx, string(sqlContent)); err != nil {
+		return fmt.Errorf("apply clickhouse demo seed: %w", err)
+	}
+	return nil
+}
+
 func (c *ClickHouseProvisioner) initializePeriscopeDatabase(ctx context.Context, conn clickhouse.Conn) error {
 	sqlContent, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
 	if err != nil {

@@ -199,16 +199,26 @@ func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {
 	}
 }
 
-func TestSyncService_NoActiveNodesLogsWarning(t *testing.T) {
+func TestSyncService_NoActiveNodesPreservesDNS(t *testing.T) {
 	qm := &fakeQuartermasterClient{
 		response: &proto.ListHealthyNodesForDNSResponse{},
 	}
 	cf := &fakeCloudflareClient{
 		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			t.Fatal("listLoadBalancers should not be called when preserving DNS")
 			return nil, nil
 		},
 		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			t.Fatal("listDNSRecords should not be called when preserving DNS")
 			return nil, nil
+		},
+		deleteLoadBalancer: func(id string) error {
+			t.Fatal("deleteLoadBalancer should not be called when preserving DNS")
+			return nil
+		},
+		deleteDNSRecord: func(id string) error {
+			t.Fatal("deleteDNSRecord should not be called when preserving DNS")
+			return nil
 		},
 	}
 	logger := logrus.New()
@@ -223,7 +233,7 @@ func TestSyncService_NoActiveNodesLogsWarning(t *testing.T) {
 
 	var warnEntry *logrus.Entry
 	for _, entry := range hook.AllEntries() {
-		if entry.Message == "No active nodes found, removing DNS records" {
+		if entry.Message == "No active nodes found, preserving existing DNS records" {
 			warnEntry = entry
 			break
 		}

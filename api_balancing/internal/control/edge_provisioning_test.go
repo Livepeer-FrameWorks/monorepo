@@ -62,8 +62,8 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 		t.Errorf("expected pool_domain %q, got %q", "edge.us-west-1.example.com", resp.PoolDomain)
 	}
 
-	if resp.FoghornGrpcAddr != "foghorn.us-west-1.example.com:18008" {
-		t.Errorf("expected foghorn_grpc_addr %q, got %q", "foghorn.us-west-1.example.com:18008", resp.FoghornGrpcAddr)
+	if resp.FoghornGrpcAddr != "foghorn.us-west-1.example.com:18019" {
+		t.Errorf("expected foghorn_grpc_addr %q, got %q", "foghorn.us-west-1.example.com:18019", resp.FoghornGrpcAddr)
 	}
 }
 
@@ -239,7 +239,7 @@ func TestPreRegisterEdge_EmptySanitizedClusterSlugFallsBackToDefault(t *testing.
 	if resp.ClusterSlug != "default" {
 		t.Fatalf("expected default cluster slug, got %q", resp.ClusterSlug)
 	}
-	if !strings.Contains(resp.FoghornGrpcAddr, "foghorn.default.example.com:18008") {
+	if !strings.Contains(resp.FoghornGrpcAddr, "foghorn.default.example.com:18019") {
 		t.Fatalf("expected fallback foghorn addr with default slug, got %q", resp.FoghornGrpcAddr)
 	}
 }

@@ -99,7 +99,11 @@ func (m *Manager) reconcile() {
 	} else {
 		m.removeTLSBundle()
 	}
-	current, _ := m.mistClient.ConfigBackup()
+	current, err := m.mistClient.ConfigBackup()
+	if err != nil {
+		m.logger.WithError(err).Warn("ConfigBackup failed, skipping reconcile")
+		return
+	}
 	desiredConfig := map[string]interface{}{}
 
 	// Location (from seed)
@@ -146,8 +150,12 @@ func (m *Manager) reconcile() {
 	}
 	desiredConfig["triggers"] = triggers
 
-	_ = m.ensureProtocols(current)
-	_ = m.ensureStreams(seed)
+	if err := m.ensureProtocols(current); err != nil {
+		m.logger.WithError(err).Warn("ensureProtocols failed")
+	}
+	if err := m.ensureStreams(seed); err != nil {
+		m.logger.WithError(err).Warn("ensureStreams failed")
+	}
 
 	if len(desiredConfig) > 0 {
 		if _, err := m.mistClient.UpdateConfig(desiredConfig); err != nil {
@@ -155,7 +163,9 @@ func (m *Manager) reconcile() {
 		}
 	}
 
-	_ = m.mistClient.Save()
+	if err := m.mistClient.Save(); err != nil {
+		m.logger.WithError(err).Warn("Mist config save failed")
+	}
 
 	// Record applied signature
 	if sum := hashSeed(seed); sum != "" {

@@ -4328,7 +4328,11 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 		}
 	}
 
-	// Validate + consume token via Quartermaster before returning sensitive material.
+	// Validate token without consuming. PreRegisterEdge is advisory only — it
+	// previews edge identity and stages TLS certs but creates no database
+	// records. Consumption is deferred to BootstrapEdgeNode, which creates
+	// the infrastructure_nodes record. Consuming here would burn single-use
+	// tokens before Helmsman can enroll via BootstrapEdgeNode.
 	validateFn := validateBootstrapTokenFn
 	if validateFn == nil {
 		if quartermasterClient == nil {
@@ -4380,7 +4384,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 
 	edgeDomain := fmt.Sprintf("edge-%s.%s.%s", nodeID, clusterSlug, rootDomain)
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
-	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18008", clusterSlug, rootDomain)
+	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18019", clusterSlug, rootDomain)
 
 	resp := &pb.PreRegisterEdgeResponse{
 		NodeId:          nodeID,

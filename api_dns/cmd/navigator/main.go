@@ -197,6 +197,8 @@ func main() {
 			},
 		})
 
+		logger.Warn("Navigator gRPC is running without TLS; certificate private keys will traverse plaintext. Ensure network-level encryption (e.g. WireGuard mesh) is in place.")
+
 		grpcServer := grpc.NewServer(
 			grpc.Creds(insecure.NewCredentials()),
 			grpc.ChainUnaryInterceptor(

@@ -276,15 +276,64 @@ func (p *PostgresProvisioner) createApplicationUser(ctx context.Context, host in
 }
 
 func (p *PostgresProvisioner) executeEmbeddedSQL(ctx context.Context, host inventory.Host, port int, dbName, relativePath string) error {
+	return p.executeEmbeddedSQLAs(ctx, host, port, "postgres", dbName, relativePath)
+}
+
+func (p *PostgresProvisioner) executeEmbeddedSQLAs(ctx context.Context, host inventory.Host, port int, user, dbName, relativePath string) error {
 	sqlContent, err := dbsql.Content.ReadFile(relativePath)
 	if err != nil {
 		return fmt.Errorf("failed to read embedded SQL file %s: %w", relativePath, err)
 	}
 
-	connStr := fmt.Sprintf("host=%s port=%d user=postgres dbname=%s sslmode=disable",
-		host.ExternalIP, port, dbName)
+	connStr := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable",
+		host.ExternalIP, port, user, dbName)
 
 	return ExecuteSQLFile(ctx, connStr, string(sqlContent))
+}
+
+// ApplyStaticSeeds applies production reference data (billing tiers, etc.).
+// Only databases present in manifestDBs are seeded; others are skipped so
+// partial profiles (e.g. analytics-only without purser) don't fail.
+func (p *PostgresProvisioner) ApplyStaticSeeds(ctx context.Context, host inventory.Host, port int, user string, manifestDBs []string) error {
+	seeds := map[string]string{
+		"purser": "seeds/static/purser_tiers.sql",
+	}
+	have := dbSet(manifestDBs)
+	for db, path := range seeds {
+		if _, ok := have[db]; !ok {
+			continue
+		}
+		if err := p.executeEmbeddedSQLAs(ctx, host, port, user, db, path); err != nil {
+			return fmt.Errorf("static seed %s: %w", db, err)
+		}
+	}
+	return nil
+}
+
+// ApplyDemoSeeds applies demo data (sample tenant, user, stream) for development.
+// Only databases present in manifestDBs are seeded.
+func (p *PostgresProvisioner) ApplyDemoSeeds(ctx context.Context, host inventory.Host, port int, user string, manifestDBs []string) error {
+	demos := map[string]string{
+		"quartermaster": "seeds/demo/demo_data.sql",
+	}
+	have := dbSet(manifestDBs)
+	for db, path := range demos {
+		if _, ok := have[db]; !ok {
+			continue
+		}
+		if err := p.executeEmbeddedSQLAs(ctx, host, port, user, db, path); err != nil {
+			return fmt.Errorf("demo seed %s: %w", db, err)
+		}
+	}
+	return nil
+}
+
+func dbSet(names []string) map[string]struct{} {
+	s := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		s[n] = struct{}{}
+	}
+	return s
 }
 
 func databaseNamesFromMetadata(metadata map[string]interface{}) []string {

@@ -57,6 +57,69 @@ func (f *fakeMeshClient) BootstrapInfrastructureNode(_ context.Context, req *pb.
 	return result.resp, result.err
 }
 
+func TestResolveNodeID_ExplicitTakesPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	idPath := filepath.Join(dir, "node_id")
+	os.WriteFile(idPath, []byte("file-based-id"), 0600)
+
+	cfg := Config{
+		NodeID:     "explicit-id",
+		NodeIDPath: idPath,
+		Logger:     logging.NewLogger(),
+	}
+	got := resolveNodeID(cfg)
+	if got != "explicit-id" {
+		t.Fatalf("expected explicit-id, got %q", got)
+	}
+
+	// Explicit ID should also be persisted to disk for restart stability
+	data, err := os.ReadFile(idPath)
+	if err != nil {
+		t.Fatalf("expected persisted file, got error: %v", err)
+	}
+	if string(data) != "explicit-id" {
+		t.Fatalf("expected persisted explicit-id, got %q", string(data))
+	}
+}
+
+func TestResolveNodeID_FallsBackToFile(t *testing.T) {
+	dir := t.TempDir()
+	idPath := filepath.Join(dir, "node_id")
+	os.WriteFile(idPath, []byte("file-based-id"), 0600)
+
+	cfg := Config{
+		NodeIDPath: idPath,
+		Logger:     logging.NewLogger(),
+	}
+	got := resolveNodeID(cfg)
+	if got != "file-based-id" {
+		t.Fatalf("expected file-based-id, got %q", got)
+	}
+}
+
+func TestResolveNodeID_GeneratesWhenNoExplicitOrFile(t *testing.T) {
+	dir := t.TempDir()
+	idPath := filepath.Join(dir, "node_id")
+
+	cfg := Config{
+		NodeIDPath: idPath,
+		Logger:     logging.NewLogger(),
+	}
+	got := resolveNodeID(cfg)
+	if got == "" {
+		t.Fatal("expected generated node ID, got empty string")
+	}
+
+	// Should be persisted
+	data, err := os.ReadFile(idPath)
+	if err != nil {
+		t.Fatalf("expected persisted file, got error: %v", err)
+	}
+	if string(data) != got {
+		t.Fatalf("persisted value %q doesn't match returned %q", string(data), got)
+	}
+}
+
 type fakeWireguard struct {
 	mu       sync.Mutex
 	applyErr error
