@@ -211,8 +211,8 @@ func GetStreamSource(internalName string) (nodeID string, baseURL string, ok boo
 type NodeOutputs struct {
 	NodeID      string
 	BaseURL     string
-	OutputsJSON string                 // Raw outputs JSON from MistServer
-	Outputs     map[string]interface{} // Parsed outputs map
+	OutputsJSON string         // Raw outputs JSON from MistServer
+	Outputs     map[string]any // Parsed outputs map
 	LastUpdate  time.Time
 }
 
@@ -222,6 +222,7 @@ var clipDoneHandler func(*pb.ClipDone)
 var artifactDeletedHandler func(context.Context, *pb.ArtifactDeleted)
 var dvrDeletedHandler func(dvrHash string, sizeBytes uint64, nodeID string)
 var dvrStoppedHandler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)
+var artifactMapUpdatedHandler func(nodeID string)
 
 // SetClipHandlers registers callbacks for analytics emission
 func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone), onDeleted func(context.Context, *pb.ArtifactDeleted)) {
@@ -238,6 +239,19 @@ func SetDVRDeletedHandler(handler func(dvrHash string, sizeBytes uint64, nodeID 
 // SetDVRStoppedHandler registers callback for DVR stopped analytics
 func SetDVRStoppedHandler(handler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)) {
 	dvrStoppedHandler = handler
+}
+
+// SetOnArtifactMapUpdated registers a callback invoked when Helmsman reports a real artifact-map change.
+func SetOnArtifactMapUpdated(handler func(nodeID string)) {
+	artifactMapUpdatedHandler = handler
+}
+
+// NotifyArtifactMapUpdated notifies the registered callback about an artifact-map change.
+func NotifyArtifactMapUpdated(nodeID string) {
+	if artifactMapUpdatedHandler == nil || strings.TrimSpace(nodeID) == "" {
+		return
+	}
+	artifactMapUpdatedHandler(nodeID)
 }
 
 // Init initializes the global registry
@@ -1607,7 +1621,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	}).Info("Processing DVR start request")
 
 	// Tag ingest node stream instance with DVR requested
-	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), nodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), nodeID, map[string]any{
 		"dvr_status": "requested",
 		"dvr_hash":   dvrHash,
 	})
@@ -1708,7 +1722,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	}).Info("DVR start request forwarded to storage node")
 
 	// Tag storage node stream instance with start info
-	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), storageNodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), storageNodeID, map[string]any{
 		"dvr_status":     "starting",
 		"dvr_hash":       dvrHash,
 		"dvr_source_uri": sourceDTSCURL,
@@ -2002,7 +2016,7 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	sourceURI := BuildDTSCURI(sourceNodeID, internalName, true, logger)
 
 	// Tag storage node (requesting node) instance as ready with source URI
-	state.DefaultManager().UpdateStreamInstanceInfo(internalName, requestingNodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(internalName, requestingNodeID, map[string]any{
 		"dvr_status":     "ready",
 		"dvr_source_uri": sourceURI,
 	})
@@ -2441,7 +2455,7 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 
 // processModeChangeRequest handles an upstream mode change request from Helmsman.
 // Validates the mode and applies it via the existing SetNodeOperationalMode + PushOperationalMode path.
-func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, log logging.Logger) {
+func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, _ pb.HelmsmanControl_ConnectServer, log logging.Logger) {
 	if req == nil {
 		return
 	}
@@ -2540,8 +2554,8 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	lookupType := assetType
 	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
 		lookupType = "dvr"
-		if idx := strings.Index(assetHash, "/"); idx != -1 {
-			lookupHash = assetHash[:idx]
+		if before, _, ok := strings.Cut(assetHash, "/"); ok {
+			lookupHash = before
 		}
 	}
 
@@ -2556,8 +2570,8 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	// For DVR segment/manifest incremental sync, assetHash is "{dvr_hash}/{filename}"
 	dvrHash := assetHash
 	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
-		if idx := strings.Index(assetHash, "/"); idx != -1 {
-			dvrHash = assetHash[:idx]
+		if before, _, ok := strings.Cut(assetHash, "/"); ok {
+			dvrHash = before
 		}
 	}
 
@@ -2593,13 +2607,15 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 
 	// If DB row was missing but Commodore resolved the artifact, create the lifecycle row
 	if err != nil && tenantID != "" && streamName != "" {
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			INSERT INTO foghorn.artifacts
 				(artifact_hash, artifact_type, stream_internal_name, tenant_id,
 				 storage_location, sync_status, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, 'local', 'pending', NOW(), NOW())
 			ON CONFLICT (artifact_hash) DO NOTHING`,
-			lookupHash, lookupType, streamName, tenantID)
+			lookupHash, lookupType, streamName, tenantID); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", lookupHash).Error("failed to create lifecycle row from Commodore")
+		}
 		logger.WithFields(logging.Fields{
 			"asset_hash": lookupHash,
 			"asset_type": lookupType,
@@ -2713,8 +2729,8 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		// Incremental DVR sync - single segment or manifest file
 		// assetHash is "{dvr_hash}/{filename}", extract filename
 		filename := ""
-		if idx := strings.Index(assetHash, "/"); idx != -1 {
-			filename = assetHash[idx+1:]
+		if _, after, ok := strings.Cut(assetHash, "/"); ok {
+			filename = after
 		}
 		if filename == "" && len(req.GetFilenames()) > 0 {
 			filename = req.GetFilenames()[0]
@@ -2771,7 +2787,9 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 
 	// Update artifact to mark as freezing (skip for incremental segment sync)
 	if assetType != "dvr_segment" && assetType != "dvr_manifest" {
-		_, _ = db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+		if _, dbErr := db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW() WHERE artifact_hash = $1`, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as freezing")
+		}
 	}
 
 	sendFreezePermissionResponse(stream, response, logger)
@@ -2830,7 +2848,7 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 
 	if status == "success" {
 		// Update artifact storage location in database
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 				UPDATE foghorn.artifacts
 				SET storage_location = 'local',
 				    sync_status = 'synced',
@@ -2840,10 +2858,12 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 			    sync_error = NULL,
 			    updated_at = NOW()
 			WHERE artifact_hash = $2`,
-			s3URL, assetHash)
+			s3URL, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to update artifact after successful freeze")
+		}
 	} else {
 		// Revert storage location on failure
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    sync_status = 'failed',
@@ -2851,7 +2871,9 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 			    last_sync_attempt = NOW(),
 			    updated_at = NOW()
 			WHERE artifact_hash = $2
-		`, errorMsg, assetHash)
+		`, errorMsg, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after freeze failure")
+		}
 
 		// Clean up partial S3 uploads to avoid storage garbage
 		if s3Client != nil {
@@ -2988,7 +3010,7 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		if reportingNodeID == "" {
 			reportingNodeID = nodeID
 		}
-		_, _ = db.ExecContext(context.Background(), `
+		if _, dbErr := db.ExecContext(context.Background(), `
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    defrost_node_id = NULL,
@@ -2997,7 +3019,9 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 			WHERE artifact_hash = $1
 			  AND storage_location = 'defrosting'
 			  AND (defrost_node_id = $2 OR defrost_node_id IS NULL)
-		`, assetHash, reportingNodeID)
+		`, assetHash, reportingNodeID); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after defrost failure")
+		}
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,
 			"error":      errorMsg,
@@ -3263,14 +3287,16 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 
 				// Update artifact format to match processed output and reset sync
 				// status so the processed file gets synced to S3.
-				_, _ = db.ExecContext(ctx, `
+				if _, dbErr := db.ExecContext(ctx, `
 					UPDATE foghorn.artifacts
 					SET format = $1,
 					    sync_status = 'pending',
 					    storage_location = 'local',
 					    s3_url = NULL,
 					    updated_at = NOW()
-					WHERE artifact_hash = $2`, newFormat, artifactHash)
+					WHERE artifact_hash = $2`, newFormat, artifactHash); dbErr != nil {
+					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format after processing")
+				}
 
 				// Delete the original user upload from S3 — the processed version replaces it.
 				if oldS3URL != "" && s3Client != nil {
@@ -3815,7 +3841,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	// Send defrost request to node
 	if err := SendDefrostRequest(nodeID, req); err != nil {
 		// Revert storage location
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    defrost_node_id = NULL,
@@ -3824,7 +3850,9 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 			WHERE artifact_hash = $1
 			  AND storage_location = 'defrosting'
 			  AND defrost_node_id = $2
-		`, assetHash, nodeID)
+		`, assetHash, nodeID); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after defrost send failure")
+		}
 		return "", fmt.Errorf("failed to send defrost request: %w", err)
 	}
 
@@ -3991,7 +4019,8 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 
 	dtshIncluded := complete.GetDtshIncluded()
 
-	if status == "success" {
+	switch status {
+	case "success":
 		// If Helmsman didn't provide s3_url (typical), compute it from stored artifact metadata.
 		if s3URL == "" && s3Client != nil && db != nil {
 			var artifactType, internalName, format, tenantID string
@@ -4000,18 +4029,25 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 				FROM foghorn.artifacts
 				WHERE artifact_hash = $1
 			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID)
-			if tenantID != "" && internalName != "" {
+			if tenantID != "" {
 				switch artifactType {
 				case "clip":
 					if format == "" {
 						format = "mp4"
 					}
-					s3Key := s3Client.BuildClipS3Key(tenantID, internalName, assetHash, format)
-					s3URL = s3Client.BuildS3URL(s3Key)
+					if internalName != "" {
+						s3Key := s3Client.BuildClipS3Key(tenantID, internalName, assetHash, format)
+						s3URL = s3Client.BuildS3URL(s3Key)
+					}
 				case "dvr":
-					s3Prefix := s3Client.BuildDVRS3Key(tenantID, internalName, assetHash)
-					s3URL = s3Client.BuildS3URL(s3Prefix)
+					if internalName != "" {
+						s3Prefix := s3Client.BuildDVRS3Key(tenantID, internalName, assetHash)
+						s3URL = s3Client.BuildS3URL(s3Prefix)
+					}
 				case "vod":
+					if format == "" {
+						format = "mp4"
+					}
 					s3Key := s3Client.BuildVodS3Key(tenantID, assetHash, assetHash+"."+format)
 					s3URL = s3Client.BuildS3URL(s3Key)
 				}
@@ -4028,18 +4064,20 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			logger.WithError(err).Error("Failed to add cached node")
 		}
 
-		// Update foghorn.artifacts with sync status
-		_, _ = db.ExecContext(ctx, `
+		// Update foghorn.artifacts with storage_location and dtsh_synced
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
-			    sync_status = 'synced',
 			    s3_url = COALESCE(NULLIF($1,''), s3_url),
 			    dtsh_synced = $2,
 			    last_sync_attempt = NOW(),
 			    sync_error = NULL,
 			    updated_at = NOW()
-			WHERE artifact_hash = $3`,
-			s3URL, dtshIncluded, assetHash)
+			WHERE artifact_hash = $3
+			  AND sync_status = 'synced'`,
+			s3URL, dtshIncluded, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as synced")
+		}
 
 		logger.WithFields(logging.Fields{
 			"asset_hash":    assetHash,
@@ -4047,25 +4085,30 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			"node_id":       reportingNodeID,
 			"dtsh_included": dtshIncluded,
 		}).Info("Asset synced to S3, local copy retained")
-	} else if status == "evicted_remote" {
+
+	case "evicted_remote":
 		// Remote-origin artifact: local copy was deleted, original lives on origin S3.
 		// Mark as synced on S3 and remove this node from warm cache.
 		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "synced", ""); err != nil {
 			logger.WithError(err).Error("Failed to update sync status for evicted remote")
 		}
 
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    sync_status = 'synced',
 			    last_sync_attempt = NOW(),
 			    sync_error = NULL,
 			    updated_at = NOW()
-			WHERE artifact_hash = $1`, assetHash)
+			WHERE artifact_hash = $1`, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark evicted artifact as s3-resident")
+		}
 
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			DELETE FROM foghorn.artifact_nodes
-			WHERE artifact_hash = $1 AND node_id = $2`, assetHash, reportingNodeID)
+			WHERE artifact_hash = $1 AND node_id = $2`, assetHash, reportingNodeID); dbErr != nil {
+			logger.WithError(dbErr).WithFields(logging.Fields{"asset_hash": assetHash, "node_id": reportingNodeID}).Error("failed to remove cached node after eviction")
+		}
 
 		// Remove from in-memory + Redis so routing stops directing to this node
 		state.DefaultManager().RemoveNodeArtifact(reportingNodeID, assetHash)
@@ -4074,14 +4117,14 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			"asset_hash": assetHash,
 			"node_id":    reportingNodeID,
 		}).Info("Remote artifact evicted locally, marked as S3-resident")
-	} else {
+
+	default:
 		// Sync failed
 		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "failed", ""); err != nil {
 			logger.WithError(err).Error("Failed to update sync status to failed")
 		}
 
-		// Update error in foghorn.artifacts
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    sync_status = 'failed',
@@ -4089,7 +4132,9 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			    last_sync_attempt = NOW(),
 			    updated_at = NOW()
 			WHERE artifact_hash = $2`,
-			errorMsg, assetHash)
+			errorMsg, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to record sync failure")
+		}
 
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,

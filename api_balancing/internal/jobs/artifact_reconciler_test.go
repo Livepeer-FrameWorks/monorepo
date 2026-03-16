@@ -26,6 +26,7 @@ func newTestReconciler(t *testing.T, db *sql.DB, s3 ReconcilerS3Client, commodor
 		interval:   time.Minute,
 		batchSize:  50,
 		stopCh:     make(chan struct{}),
+		triggerCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -52,6 +53,17 @@ func TestNewArtifactReconciler_CustomValues(t *testing.T) {
 	}
 	if r.batchSize != 5 {
 		t.Fatalf("expected batchSize 5, got %d", r.batchSize)
+	}
+}
+
+func TestArtifactReconciler_TriggerCoalesces(t *testing.T) {
+	r := NewArtifactReconciler(ArtifactReconcilerConfig{Logger: logging.NewLogger()})
+
+	r.Trigger()
+	r.Trigger()
+
+	if got := len(r.triggerCh); got != 1 {
+		t.Fatalf("expected 1 queued trigger, got %d", got)
 	}
 }
 
@@ -698,26 +710,6 @@ func TestInferAssetType(t *testing.T) {
 		got := r.inferAssetType(tc.path)
 		if got != tc.want {
 			t.Errorf("inferAssetType(%q) = %q, want %q", tc.path, got, tc.want)
-		}
-	}
-}
-
-// --- pqStringArray ---
-
-func TestPqStringArray(t *testing.T) {
-	tests := []struct {
-		input []string
-		want  string
-	}{
-		{nil, "{}"},
-		{[]string{}, "{}"},
-		{[]string{"a"}, "{a}"},
-		{[]string{"a", "b", "c"}, "{a,b,c}"},
-	}
-	for _, tc := range tests {
-		got := pqStringArray(tc.input)
-		if got != tc.want {
-			t.Errorf("pqStringArray(%v) = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }

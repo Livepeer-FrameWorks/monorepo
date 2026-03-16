@@ -2082,10 +2082,21 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 		state.DefaultManager().UpdateNodeStats(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), s.GetReplicated())
 	}
 
+	previousArtifacts := func() []*pb.StoredArtifact {
+		nodeState := state.DefaultManager().GetNodeState(nu.GetNodeId())
+		if nodeState == nil {
+			return nil
+		}
+		return nodeState.Artifacts
+	}()
+
 	// Update artifacts directly from protobuf - this is critical for VOD playback.
 	// Called unconditionally: an empty slice clears stale artifacts from a node
 	// that has lost all local files (prevents ghost artifacts in routing).
 	state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), nu.GetArtifacts())
+	if !artifactMapsEqual(previousArtifacts, nu.GetArtifacts()) {
+		control.NotifyArtifactMapUpdated(nu.GetNodeId())
+	}
 
 	// Enrich with database UUID for subscription lookups (frontend uses UUID, not logical name)
 	if uuid := p.resolveNodeUUID(nu.GetNodeId()); uuid != "" {
@@ -2132,6 +2143,50 @@ func mapOperationalMode(mode pb.NodeOperationalMode) (state.NodeOperationalMode,
 	default:
 		return "", false
 	}
+}
+
+func artifactMapsEqual(current, incoming []*pb.StoredArtifact) bool {
+	if len(current) != len(incoming) {
+		return false
+	}
+	if len(current) == 0 {
+		return true
+	}
+
+	counts := make(map[string]int, len(current))
+	for _, artifact := range current {
+		counts[artifactMapKey(artifact)]++
+	}
+
+	for _, artifact := range incoming {
+		key := artifactMapKey(artifact)
+		if counts[key] == 0 {
+			return false
+		}
+		counts[key]--
+		if counts[key] == 0 {
+			delete(counts, key)
+		}
+	}
+
+	return len(counts) == 0
+}
+
+func artifactMapKey(artifact *pb.StoredArtifact) string {
+	if artifact == nil {
+		return "<nil>"
+	}
+
+	return fmt.Sprintf("%s|%s|%s|%d|%d|%s|%t|%d",
+		artifact.GetClipHash(),
+		artifact.GetStreamName(),
+		artifact.GetFilePath(),
+		artifact.GetSizeBytes(),
+		artifact.GetCreatedAt(),
+		artifact.GetFormat(),
+		artifact.GetHasDtsh(),
+		artifact.GetArtifactType(),
+	)
 }
 
 // resolveNodeUUID resolves a node's logical name (e.g., "edge-node-1") to its database UUID.

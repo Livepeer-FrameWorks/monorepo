@@ -5,10 +5,13 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/ingesterrors"
+	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/logging"
@@ -324,6 +327,95 @@ func TestPayloadTypeAssertions(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %q", tc.expectedErr, err.Error())
 			}
 		})
+	}
+}
+
+func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapChange(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+
+	var callbackCount atomic.Int32
+	control.SetOnArtifactMapUpdated(func(_ string) {
+		callbackCount.Add(1)
+	})
+	t.Cleanup(func() {
+		control.SetOnArtifactMapUpdated(nil)
+	})
+
+	p := &Processor{logger: logging.NewLogger()}
+
+	newTrigger := func(artifacts ...*pb.StoredArtifact) *pb.MistTrigger {
+		return &pb.MistTrigger{
+			TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
+				NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{
+					NodeId:    "node-1",
+					Artifacts: artifacts,
+				},
+			},
+		}
+	}
+
+	artifactA := &pb.StoredArtifact{
+		ClipHash:     "hash-a",
+		StreamName:   "stream-a",
+		FilePath:     "/data/hash-a.mp4",
+		SizeBytes:    100,
+		CreatedAt:    1700000000,
+		Format:       "mp4",
+		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		AccessCount:  1,
+		LastAccessed: 1700000001,
+	}
+	artifactASamePlacement := &pb.StoredArtifact{
+		ClipHash:     "hash-a",
+		StreamName:   "stream-a",
+		FilePath:     "/data/hash-a.mp4",
+		SizeBytes:    100,
+		CreatedAt:    1700000000,
+		Format:       "mp4",
+		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		AccessCount:  99,
+		LastAccessed: 1700000900,
+	}
+	artifactB := &pb.StoredArtifact{
+		ClipHash:     "hash-b",
+		StreamName:   "stream-b",
+		FilePath:     "/data/hash-b.mp4",
+		SizeBytes:    200,
+		CreatedAt:    1700000100,
+		Format:       "mp4",
+		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+	}
+
+	if _, _, err := p.handleNodeLifecycleUpdate(newTrigger(artifactA, artifactB)); err != nil {
+		t.Fatalf("first lifecycle update failed: %v", err)
+	}
+	if got := callbackCount.Load(); got != 1 {
+		t.Fatalf("expected first artifact map to trigger callback once, got %d", got)
+	}
+
+	if _, _, err := p.handleNodeLifecycleUpdate(newTrigger(artifactB, artifactASamePlacement)); err != nil {
+		t.Fatalf("reordered lifecycle update failed: %v", err)
+	}
+	if got := callbackCount.Load(); got != 1 {
+		t.Fatalf("expected reordered/noisy artifact map to avoid callback, got %d", got)
+	}
+
+	artifactAWithDtsh := &pb.StoredArtifact{
+		ClipHash:     "hash-a",
+		StreamName:   "stream-a",
+		FilePath:     "/data/hash-a.mp4",
+		SizeBytes:    100,
+		CreatedAt:    1700000000,
+		Format:       "mp4",
+		HasDtsh:      true,
+		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+	}
+	if _, _, err := p.handleNodeLifecycleUpdate(newTrigger(artifactAWithDtsh, artifactB)); err != nil {
+		t.Fatalf("dtsh lifecycle update failed: %v", err)
+	}
+	if got := callbackCount.Load(); got != 2 {
+		t.Fatalf("expected dtsh change to trigger callback, got %d", got)
 	}
 }
 

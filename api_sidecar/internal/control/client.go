@@ -91,6 +91,7 @@ func clearConn() {
 
 // Global state for metrics streaming
 var (
+	pkgLogger      logging.Logger
 	currentConfig  *sidecarcfg.HelmsmanConfig
 	onSeed         func()
 	onStorageWrite func()
@@ -151,6 +152,7 @@ func SetDeleteVodHandler(fn DeleteVodFunc) {
 
 // Start launches the Helmsman control client and maintains the stream to Foghorn
 func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
+	pkgLogger = logger
 	currentConfig = cfg
 	blockingGraceMs = cfg.BlockingGraceMs
 	if blockingGraceMs > 0 {
@@ -197,10 +199,7 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 		return &MistTriggerResult{}, nil
 	}
 
-	attempts := maxBlockingAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(maxBlockingAttempts, 1)
 	deadline := time.Now().Add(blockingTriggerTimeout)
 
 	var lastErr error
@@ -215,10 +214,7 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 			if remaining <= 0 {
 				break
 			}
-			grace := time.Duration(blockingGraceMs) * time.Millisecond
-			if grace > remaining {
-				grace = remaining
-			}
+			grace := min(time.Duration(blockingGraceMs)*time.Millisecond, remaining)
 			stream = waitForReconnection(grace)
 		}
 		if time.Now().After(deadline) {
@@ -391,7 +387,9 @@ func enqueueOutbox(msg *pb.ControlMessage) {
 	outboxMu.Lock()
 	defer outboxMu.Unlock()
 	if len(outbox) >= maxOutbox {
-		// Drop oldest to prevent unbounded growth
+		if pkgLogger != nil {
+			pkgLogger.WithField("outbox_size", maxOutbox).Warn("Outbox full, dropping oldest message")
+		}
 		outbox = outbox[1:]
 	}
 	outbox = append(outbox, msg)
@@ -1416,10 +1414,6 @@ func SendProcessBillingEvent(event *pb.ProcessBillingEvent) error {
 			ProcessBilling: event,
 		},
 	}
-
-	// TRACE: Log what we're sending
-	fmt.Printf("[HELMSMAN TRACE] Sending process_billing trigger: payload_type=%T, payload_nil=%v\n",
-		trigger.GetTriggerPayload(), trigger.GetTriggerPayload() == nil)
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger}}
 	if err := stream.Send(msg); err != nil {

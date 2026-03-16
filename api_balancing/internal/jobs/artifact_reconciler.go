@@ -4,9 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/lib/pq"
 
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/logging"
@@ -53,6 +54,7 @@ type ArtifactReconciler struct {
 	interval   time.Duration
 	batchSize  int
 	stopCh     chan struct{}
+	triggerCh  chan struct{}
 	wg         sync.WaitGroup
 }
 
@@ -74,6 +76,7 @@ func NewArtifactReconciler(cfg ArtifactReconcilerConfig) *ArtifactReconciler {
 		interval:   interval,
 		batchSize:  batchSize,
 		stopCh:     make(chan struct{}),
+		triggerCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -89,6 +92,18 @@ func (r *ArtifactReconciler) Stop() {
 	r.logger.Info("Artifact reconciler stopped")
 }
 
+// Trigger requests an immediate reconciliation pass. Multiple concurrent
+// triggers are coalesced into a single pending pass.
+func (r *ArtifactReconciler) Trigger() {
+	if r == nil || r.triggerCh == nil {
+		return
+	}
+	select {
+	case r.triggerCh <- struct{}{}:
+	default:
+	}
+}
+
 func (r *ArtifactReconciler) run() {
 	defer r.wg.Done()
 	ticker := time.NewTicker(r.interval)
@@ -96,6 +111,8 @@ func (r *ArtifactReconciler) run() {
 
 	for {
 		select {
+		case <-r.triggerCh:
+			r.reconcile()
 		case <-ticker.C:
 			r.reconcile()
 		case <-r.stopCh:
@@ -112,9 +129,23 @@ func (r *ArtifactReconciler) reconcile() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		r.logger.WithError(err).Warn("Failed to acquire DB connection for reconciler lock")
+		return
+	}
+	defer conn.Close()
+
+	var acquired bool
+	err = conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext('artifact_reconciler'))").Scan(&acquired)
+	if err != nil || !acquired {
+		return
+	}
+	defer conn.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext('artifact_reconciler'))") //nolint:errcheck
+
+	reconciled := r.reconcileOrphaned(ctx)
 	retried := r.retryFailed(ctx)
 	advanced := r.advancePending(ctx)
-	reconciled := r.reconcileOrphaned(ctx)
 
 	if retried+advanced+reconciled > 0 {
 		r.logger.WithFields(logging.Fields{
@@ -128,7 +159,7 @@ func (r *ArtifactReconciler) reconcile() {
 // retryFailed re-sends FreezeRequests for artifacts with sync_status='failed'.
 func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.artifact_hash, a.artifact_type, a.stream_internal_name, a.tenant_id, a.format,
+		SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
 		       an.node_id, an.file_path
 		FROM foghorn.artifacts a
 		JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
@@ -166,7 +197,7 @@ func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 // advancePending sends FreezeRequests for pending artifacts that have never been synced.
 func (r *ArtifactReconciler) advancePending(ctx context.Context) int {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.artifact_hash, a.artifact_type, a.stream_internal_name, a.tenant_id, a.format,
+		SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
 		       an.node_id, an.file_path
 		FROM foghorn.artifacts a
 		JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
@@ -219,6 +250,7 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 		filePath  string
 		sizeBytes uint64
 		assetType string
+		format    string
 	}
 	seen := make(map[string]bool)
 	var candidates []candidate
@@ -238,6 +270,7 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 				filePath:  a.FilePath,
 				sizeBytes: a.SizeBytes,
 				assetType: aType,
+				format:    a.Format,
 			})
 		}
 	}
@@ -254,7 +287,7 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT artifact_hash FROM foghorn.artifacts
 		WHERE artifact_hash = ANY($1::text[])
-	`, pqStringArray(hashes))
+	`, pq.Array(hashes))
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to batch-check artifact lifecycle rows")
 		return 0
@@ -291,10 +324,10 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifacts
 				(artifact_hash, artifact_type, stream_internal_name, tenant_id,
-				 storage_location, sync_status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, 'local', 'pending', NOW(), NOW())
+				 format, storage_location, sync_status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, NULLIF($5,''), 'local', 'pending', NOW(), NOW())
 			ON CONFLICT (artifact_hash) DO NOTHING
-		`, c.hash, c.assetType, internalName, tenantID)
+		`, c.hash, c.assetType, internalName, tenantID, c.format)
 		if err != nil {
 			tx.Rollback() //nolint:errcheck
 			continue
@@ -343,14 +376,6 @@ func artifactTypeFromProto(t pb.ArtifactEvent_ArtifactType) string {
 	}
 }
 
-// pqStringArray formats a string slice as a PostgreSQL text array literal.
-func pqStringArray(ss []string) string {
-	if len(ss) == 0 {
-		return "{}"
-	}
-	return "{" + strings.Join(ss, ",") + "}"
-}
-
 // sendFreezeForArtifact generates presigned URLs and sends a FreezeRequest to the node.
 func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, assetType, streamName, tenantID, format, nodeID, filePath string) error {
 	expiry := 30 * time.Minute
@@ -367,6 +392,9 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 
 	switch assetType {
 	case "clip":
+		if streamName == "" {
+			return fmt.Errorf("clip %s missing stream_internal_name", hash)
+		}
 		if format == "" {
 			format = "mp4"
 		}
@@ -389,17 +417,15 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 		req.PresignedPutUrl = url
 
 	case "dvr":
-		// DVR requires a full set of segment URLs. We can't generate these
-		// without knowing the segment list, which only Helmsman has.
-		// Mark as freezing and let Helmsman initiate the permission flow.
-		_, _ = r.db.ExecContext(ctx, `
+		if streamName == "" {
+			return fmt.Errorf("dvr %s missing stream_internal_name", hash)
+		}
+		if _, dbErr := r.db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET sync_status = 'in_progress', updated_at = NOW()
-			WHERE artifact_hash = $1`, hash)
-		// For DVR we fall through to a simple FreezeRequest with no URLs.
-		// Helmsman's HandleFreezeRequest will see no segment_urls and
-		// fall back to requesting permission (which generates the URLs).
-		// This effectively just "nudges" the node to start the flow.
+			WHERE artifact_hash = $1`, hash); dbErr != nil {
+			r.logger.WithError(dbErr).WithField("artifact_hash", hash).Warn("Failed to mark DVR as in_progress")
+		}
 		req.SegmentUrls = nil
 
 	default:
@@ -407,10 +433,12 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 	}
 
 	// Mark as in_progress before sending
-	_, _ = r.db.ExecContext(ctx, `
+	if _, dbErr := r.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW()
-		WHERE artifact_hash = $1`, hash)
+		WHERE artifact_hash = $1`, hash); dbErr != nil {
+		r.logger.WithError(dbErr).WithField("artifact_hash", hash).Warn("Failed to mark artifact as freezing")
+	}
 
 	return r.sendFreeze(nodeID, req)
 }

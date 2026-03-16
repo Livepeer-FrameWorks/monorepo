@@ -609,8 +609,15 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		manifestName := asset.AssetHash + ".m3u8"
 		filenames = append(filenames, manifestName)
 
+		// If the DB stores the full manifest path rather than the directory,
+		// strip the filename so we don't produce ".../hash.m3u8/hash.m3u8".
+		basePath := asset.FilePath
+		if strings.HasSuffix(basePath, ".m3u8") {
+			basePath = filepath.Dir(basePath)
+		}
+
 		// Parse manifest to get segment names
-		localManifestPath := filepath.Join(asset.FilePath, manifestName)
+		localManifestPath := filepath.Join(basePath, manifestName)
 		localManifestContent, err := os.ReadFile(localManifestPath)
 		if err == nil {
 			parsedManifest, parseErr := parseHLSManifest(string(localManifestContent))
@@ -626,7 +633,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		}
 
 		// Also check for any .dtsh files in the DVR directory
-		entries, _ := os.ReadDir(asset.FilePath)
+		entries, _ := os.ReadDir(basePath)
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".dtsh") {
 				filenames = append(filenames, entry.Name())
@@ -670,7 +677,11 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				_ = os.Remove(asset.FilePath + ".gop")
 			}
 		} else {
-			if err := os.RemoveAll(asset.FilePath); err != nil {
+			dvrDir := asset.FilePath
+			if strings.HasSuffix(dvrDir, ".m3u8") {
+				dvrDir = filepath.Dir(dvrDir)
+			}
+			if err := os.RemoveAll(dvrDir); err != nil {
 				sm.logger.WithError(err).Warn("Failed to delete local DVR directory of remote artifact")
 			}
 		}
@@ -758,7 +769,11 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		}
 
 		manifestName := asset.AssetHash + ".m3u8"
-		localManifestPath := filepath.Join(asset.FilePath, manifestName)
+		basePath := asset.FilePath
+		if strings.HasSuffix(basePath, ".m3u8") {
+			basePath = filepath.Dir(basePath)
+		}
+		localManifestPath := filepath.Join(basePath, manifestName)
 		localManifestContent, err := os.ReadFile(localManifestPath)
 		if err != nil {
 			return fmt.Errorf("failed to read local DVR manifest: %w", err)
@@ -785,7 +800,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		var uploadedManifest strings.Builder
 		uploadedManifest.WriteString(initialManifest)
 
-		segmentsDir := filepath.Join(asset.FilePath, "segments")
+		segmentsDir := filepath.Join(basePath, "segments")
 
 		for _, seg := range parsedManifest.Segments {
 			segPath := filepath.Join(segmentsDir, seg.Name)
@@ -805,7 +820,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 				totalUploaded += info.Size()
 			}
 
-			uploadedManifest.WriteString(fmt.Sprintf("#EXTINF:%.3f,\nsegments/%s\n", seg.Duration, seg.Name))
+			fmt.Fprintf(&uploadedManifest, "#EXTINF:%.3f,\nsegments/%s\n", seg.Duration, seg.Name)
 
 			manifestData := []byte(uploadedManifest.String())
 			if err := sm.presignedClient.UploadToPresignedURL(ctx, manifestURL,
@@ -818,12 +833,12 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		}
 
 		if uploadErr == nil {
-			entries, _ := os.ReadDir(asset.FilePath)
+			entries, _ := os.ReadDir(basePath)
 			for _, entry := range entries {
 				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".dtsh") {
 					dtshName := entry.Name()
 					if url, ok := segmentURLs[dtshName]; ok {
-						dtshPath := filepath.Join(asset.FilePath, dtshName)
+						dtshPath := filepath.Join(basePath, dtshName)
 						if err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, dtshPath, nil); err != nil {
 							sm.logger.WithError(err).WithField("file", dtshName).Warn("Failed to upload DVR .dtsh file")
 						} else {
@@ -867,7 +882,11 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 			actualSizeBytes = uint64(info.Size())
 		}
 	case AssetTypeDVR:
-		actualSizeBytes = sm.calculateDirSize(asset.FilePath)
+		dvrDir := asset.FilePath
+		if strings.HasSuffix(dvrDir, ".m3u8") {
+			dvrDir = filepath.Dir(dvrDir)
+		}
+		actualSizeBytes = sm.calculateDirSize(dvrDir)
 	}
 
 	durationMs := duration.Milliseconds()
@@ -1437,7 +1456,7 @@ func (sm *StorageManager) completeDefrostJob(assetHash string) {
 
 // HLS manifest helpers
 
-func (sm *StorageManager) createLiveManifest(dvrHash string, targetDuration int) string {
+func (sm *StorageManager) createLiveManifest(_ string, targetDuration int) string {
 	return fmt.Sprintf(`#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:%d
@@ -1486,14 +1505,12 @@ func parseHLSManifest(content string) (*ParsedManifest, error) {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 
-		if strings.HasPrefix(line, "#EXT-X-TARGETDURATION:") {
-			val := strings.TrimPrefix(line, "#EXT-X-TARGETDURATION:")
+		if val, ok := strings.CutPrefix(line, "#EXT-X-TARGETDURATION:"); ok {
 			if d, err := strconv.Atoi(strings.TrimSpace(val)); err == nil {
 				result.TargetDuration = d
 			}
-		} else if strings.HasPrefix(line, "#EXTINF:") {
+		} else if val, ok := strings.CutPrefix(line, "#EXTINF:"); ok {
 			// Parse duration from "#EXTINF:6.000," or "#EXTINF:6,"
-			val := strings.TrimPrefix(line, "#EXTINF:")
 			val = strings.Split(val, ",")[0] // Remove trailing comma and title
 			if d, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil {
 				pendingDuration = d
@@ -1518,7 +1535,7 @@ func parseHLSManifest(content string) (*ParsedManifest, error) {
 
 // Progress file helpers for resume
 
-func (sm *StorageManager) loadDefrostProgress(dvrHash, localPath string) (*DefrostProgress, error) {
+func (sm *StorageManager) loadDefrostProgress(_, localPath string) (*DefrostProgress, error) {
 	progressFile := filepath.Join(localPath, ".defrost.json")
 	data, err := os.ReadFile(progressFile)
 	if err != nil {

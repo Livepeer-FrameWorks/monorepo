@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -242,9 +243,7 @@ func (cm *CleanupMonitor) getCleanupCandidates(dir string, assetType string) ([]
 	if prometheusMonitor != nil {
 		prometheusMonitor.mutex.RLock()
 		artifactIndex = make(map[string]*ClipInfo)
-		for k, v := range prometheusMonitor.artifactIndex {
-			artifactIndex[k] = v
-		}
+		maps.Copy(artifactIndex, prometheusMonitor.artifactIndex)
 		prometheusMonitor.mutex.RUnlock()
 	}
 
@@ -276,9 +275,13 @@ func (cm *CleanupMonitor) getCleanupCandidates(dir string, assetType string) ([]
 		}
 
 		// Build candidate info
+		candidatePath := path
+		if assetType == "dvr" {
+			candidatePath = filepath.Dir(path)
+		}
 		candidate := ClipCleanupInfo{
 			ClipHash:     artifactHash,
-			FilePath:     path,
+			FilePath:     candidatePath,
 			SizeBytes:    uint64(info.Size()),
 			CreatedAt:    info.ModTime(),
 			AccessCount:  0,
@@ -328,7 +331,7 @@ func (cm *CleanupMonitor) isArtifactFile(path string, assetType string) bool {
 }
 
 // extractArtifactHashFromPath extracts artifact hash from file path based on asset type
-func (cm *CleanupMonitor) extractArtifactHashFromPath(path string, assetType string) string {
+func (cm *CleanupMonitor) extractArtifactHashFromPath(path string, _assetType string) string {
 	filename := filepath.Base(path)
 	ext := filepath.Ext(filename)
 
@@ -417,9 +420,8 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 	// Remove based on asset type
 	switch artifact.AssetType {
 	case "dvr":
-		// DVR is a directory - remove the entire directory
-		dvrDir := filepath.Dir(artifact.FilePath)
-		if err := os.RemoveAll(dvrDir); err != nil {
+		// DVR is a directory - remove the entire recording directory
+		if err := os.RemoveAll(artifact.FilePath); err != nil {
 			errStr := err.Error()
 			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,

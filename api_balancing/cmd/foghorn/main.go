@@ -743,6 +743,10 @@ func main() {
 	})
 	artifactReconciler.Start()
 	defer artifactReconciler.Stop()
+	control.SetOnArtifactMapUpdated(func(nodeID string) {
+		logger.WithField("node_id", nodeID).Debug("Triggering immediate artifact reconciliation after artifact map update")
+		artifactReconciler.Trigger()
+	})
 
 	// Start processing job dispatcher (routes VOD processing jobs to edge nodes)
 	processingDispatcher := jobs.NewProcessingDispatcher(jobs.ProcessingDispatcherConfig{

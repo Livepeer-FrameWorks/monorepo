@@ -857,7 +857,7 @@ INSERT INTO foghorn.artifacts (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'completed',
     513176,         -- Actual total size: ~501KB (2 segments + manifest)
-    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba/fedcba98765432109876543210fedcba.m3u8',
+    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba',
     'm3u8',
     'local',
     'pending',
@@ -874,7 +874,7 @@ INSERT INTO foghorn.artifacts (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'deleted',
     1024000,
-    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/20240101120300fedcba9876543211/20240101120300fedcba9876543211.m3u8',
+    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/20240101120300fedcba9876543211',
     'm3u8',
     'local',
     'pending',
@@ -893,8 +893,8 @@ INSERT INTO foghorn.artifacts (
     149099,         -- Actual file size: ~146KB
     NULL,            -- No manifest for VOD (direct file playback)
     'webm',
-    's3',            -- Stored in S3
-    'synced',
+    'local',         -- On disk, pending sync to S3
+    'pending',
     NOW() + INTERVAL '30 days',   -- 30-day retention for VOD
     NOW() - INTERVAL '1 day',
     NOW() - INTERVAL '1 day'
@@ -1030,7 +1030,7 @@ INSERT INTO foghorn.artifact_nodes (
 (
     'fedcba98765432109876543210fedcba',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba/fedcba98765432109876543210fedcba.m3u8',
+    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/fedcba98765432109876543210fedcba',
     513176,
     7,
     NOW() - INTERVAL '1 day',

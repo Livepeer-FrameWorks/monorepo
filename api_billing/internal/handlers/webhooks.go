@@ -399,9 +399,9 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 
 	_, err := db.ExecContext(ctx, `
 		UPDATE purser.billing_payments
-		SET status = $1, updated_at = NOW(), confirmed_at = CASE WHEN $1 = 'confirmed' THEN NOW() ELSE confirmed_at END
+		SET status = $1, updated_at = NOW(), confirmed_at = CASE WHEN $3 = 'confirmed' THEN NOW() ELSE confirmed_at END
 		WHERE invoice_id = $2 AND method = 'stripe'
-	`, status, invoiceID)
+	`, status, invoiceID, status)
 	if err != nil {
 		return fmt.Errorf("failed to update payment status: %w", err)
 	}
@@ -971,7 +971,7 @@ func mollieEventID(resource, id, status string) string {
 
 func mollieMetadataString(meta any, key string) string {
 	switch m := meta.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		if val, ok := m[key]; ok {
 			return fmt.Sprint(val)
 		}
@@ -980,7 +980,7 @@ func mollieMetadataString(meta any, key string) string {
 			return val
 		}
 	case string:
-		var parsed map[string]interface{}
+		var parsed map[string]any
 		if err := json.Unmarshal([]byte(m), &parsed); err == nil {
 			if val, ok := parsed[key]; ok {
 				return fmt.Sprint(val)
