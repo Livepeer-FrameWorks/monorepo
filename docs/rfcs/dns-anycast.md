@@ -68,8 +68,47 @@ Managed DNS limits routing flexibility and introduces vendor lock-in. Anycast co
 - What latency/cost thresholds justify Anycast ownership?
 - Who owns 24/7 ops for BGP/DNS?
 
+## Glue Records
+
+DNS autonomy requires glue records — A/AAAA records held at the TLD registry that point to your nameservers' IPs. Without glue records, DNS resolution for your domain depends on another provider's nameservers resolving first. Configure glue records at the registrar level for each authoritative nameserver.
+
+## Multi-Registrar, Multi-TLD Strategy
+
+No single registrar should be a SPOF. Distribute domains across at least 2 registrars and use multiple TLDs. If a registrar makes an opaque policy decision (as documented in the General Research "How to Seed a Cloud" case with Amazon Business Prime), operations continue on alternate domains.
+
+## RIR Strategy
+
+Acquire IP blocks from multiple Regional Internet Registries:
+
+- ARIN (North America): IPv4 waiting list + IPv6 allocation
+- RIPE NCC (Europe): Direct allocation for European presence
+- APNIC (Asia-Pacific): For SE Asian edge locations
+
+Ethical acquisition: avoid extractivist practices in IP space markets. Purchase clean IPv4 blocks with documented transfer history. Reference: General Research AS13362 as a real-world implementation of multi-RIR strategy.
+
+## RPKI & IRR
+
+Route Origin Validation prevents BGP hijacking. Publish ROA records for all announced prefixes. Register routes in Internet Routing Registry (IRR) databases. Require RPKI validation from transit providers.
+
+## BGP Failover as Complement to Foghorn Federation
+
+Foghorn federation handles cross-cluster routing at the application layer (gRPC). BGP handles failover at the network layer — if a facility goes offline (power failure, physical attack, network partition), BGP reroutes traffic automatically before any application-layer health check fires.
+
+These are complementary, not competing:
+
+- BGP: Fast failover (seconds), coarse-grained (entire prefix), no application awareness
+- Foghorn federation: Slower failover (depends on PeerHeartbeat 10s interval), fine-grained (per-stream, per-viewer), full application awareness
+
+Both are needed for production resilience.
+
+## Cloudflare Dependency Risk
+
+Navigator currently depends on Cloudflare API for DNS record management and certificate issuance. Cloudflare could restrict API access, change pricing, or enforce policy decisions with no recourse — the same class of risk documented in General Research's Amazon Business Prime incident. The PowerDNS self-hosted path (Phase 4) is the mitigation. Until then, Cloudflare is the remaining managed dependency.
+
 ## References, Sources & Evidence
 
 - [Evidence] `api_dns/`
 - [Evidence] dev compose service definitions
 - [Source] External DNS/BGP/Anycast research (TBD)
+- [Source] General Research AS13362 — real-world multi-RIR, self-hosted DNS implementation
+- [Source] "How to Seed a Cloud" (generalresearch.com/detail-oriented/how-to-seed-a-cloud/)
