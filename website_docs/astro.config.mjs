@@ -137,6 +137,9 @@ export default defineConfig({
     rehypePlugins: [rehypeBaseLinks],
   },
   vite: {
+    resolve: {
+      noExternal: ["svelte-turnstile"],
+    },
     plugins: [
       codecovVitePlugin({
         enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
