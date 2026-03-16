@@ -527,7 +527,7 @@ func TestReconcileOrphaned_CreatesLifecycleRow(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
-		WithArgs("new-hash", "clip", "stream-1", "tenant-1").
+		WithArgs("new-hash", "clip", "stream-1", "tenant-1", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes").
 		WithArgs("new-hash", "node-1", "/data/new.mp4", uint64(200)).

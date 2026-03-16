@@ -100,7 +100,7 @@ func TestSetSyncStatus_Updates(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*SET sync_status.*s3_url.*WHERE artifact_hash").
-		WithArgs("hash-1", "synced", "s3://bucket/key").
+		WithArgs("hash-1", "s3://bucket/key").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err := repo.SetSyncStatus(context.Background(), "hash-1", "synced", "s3://bucket/key")
