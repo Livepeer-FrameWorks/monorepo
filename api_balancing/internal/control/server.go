@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -847,11 +849,37 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 
 			// Determine operational mode: DB-persisted wins over Helmsman's request
 			operationalMode := resolveOperationalMode(canonicalNodeID, x.Register.GetRequestedMode())
-			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr, operationalMode)
+			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr, operationalMode, clusterID)
 			if tenantID != "" {
 				seed.TenantId = tenantID
 			}
+			// Wildcard site without TLS cert is unusable — Caddy would attempt
+			// auto-ACME DNS-01 which isn't configured. Stay on bootstrap until
+			// Navigator provisions the cert.
+			if seed.GetTls() == nil && seed.GetSite() != nil && strings.HasPrefix(seed.GetSite().GetSiteAddress(), "*.") {
+				seed.Site = nil
+			}
 			_ = SendConfigSeed(nodeID, seed)
+
+			// Fresh enrollments without a usable site are not routable.
+			if !fingerprintResolved && (seed.GetSite() == nil || seed.GetSite().GetEdgeDomain() == "") {
+				state.DefaultManager().SetProbeVerified(canonicalNodeID, false)
+				if canonicalNodeID != nodeID {
+					state.DefaultManager().SetProbeVerified(nodeID, false)
+				}
+				registry.log.WithField("node_id", canonicalNodeID).Warn("Fresh enrollment produced no site config; node marked unverified")
+			}
+
+			// Activation: reconnecting nodes (fingerprint resolved) are already verified
+			// (ProbeVerified defaults to true in newNodeState). Fresh enrollments get
+			// probed — Foghorn verifies the HTTPS endpoint before routing traffic.
+			if !fingerprintResolved && seed.GetSite() != nil && seed.GetSite().GetEdgeDomain() != "" {
+				state.DefaultManager().SetProbeVerified(canonicalNodeID, false)
+				if canonicalNodeID != nodeID {
+					state.DefaultManager().SetProbeVerified(nodeID, false)
+				}
+				go probeEdgeActivation(canonicalNodeID, seed.GetSite().GetEdgeDomain(), nodeID)
+			}
 
 			// Forward hardware specs to Quartermaster if present
 			if quartermasterClient != nil && (x.Register.CpuCores != nil || x.Register.MemoryGb != nil || x.Register.DiskGb != nil) {
@@ -945,14 +973,18 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			if nodeID != "" {
 				canonicalNodeID := nodeID
 				registry.mu.Lock()
-				if c := registry.conns[nodeID]; c != nil {
+				c := registry.conns[nodeID]
+				if c != nil {
 					c.last = time.Now()
 					if c.canonicalID != "" {
 						canonicalNodeID = c.canonicalID
 					}
 				}
 				registry.mu.Unlock()
-				// Refresh node health/last update
+				if c == nil {
+					// Connection was removed (e.g. activation failed) — terminate stream
+					return nil
+				}
 				state.DefaultManager().TouchNode(nodeID, true)
 				if canonicalNodeID != nodeID {
 					state.DefaultManager().TouchNode(canonicalNodeID, true)
@@ -2323,7 +2355,7 @@ func resolveOperationalMode(nodeID string, requestedMode pb.NodeOperationalMode)
 var geoOnce sync.Once
 var geoipReader *geoip.Reader
 
-func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode pb.NodeOperationalMode) *pb.ConfigSeed {
+func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode pb.NodeOperationalMode, clusterID string) *pb.ConfigSeed {
 	var lat, lon float64
 	var loc string
 
@@ -2364,7 +2396,47 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		},
 	}
 
-	tlsBundle := resolveClusterTLSBundle(nodeID)
+	var tlsBundle *pb.TLSCertBundle
+	var siteConfig *pb.SiteConfig
+
+	resolvedClusterID := clusterID
+	if resolvedClusterID == "" && quartermasterClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		node, err := quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
+		cancel()
+		if err == nil && node != nil {
+			resolvedClusterID = strings.TrimSpace(node.GetClusterId())
+		}
+	}
+	if resolvedClusterID != "" {
+		rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
+		if rootDomain == "" {
+			rootDomain = "frameworks.network"
+		}
+		slug := pkgdns.SanitizeLabel(resolvedClusterID)
+
+		siteConfig = &pb.SiteConfig{
+			SiteAddress: fmt.Sprintf("*.%s.%s", slug, rootDomain),
+			EdgeDomain:  fmt.Sprintf("edge-%s.%s.%s", nodeID, slug, rootDomain),
+			PoolDomain:  fmt.Sprintf("edge.%s.%s", slug, rootDomain),
+			AcmeEmail:   os.Getenv("ACME_EMAIL"),
+		}
+
+		if navigatorClient != nil {
+			wildcardDomain := fmt.Sprintf("*.%s.%s", slug, rootDomain)
+			certCtx, certCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			certResp, certErr := navigatorClient.GetCertificate(certCtx, &pb.GetCertificateRequest{Domain: wildcardDomain})
+			certCancel()
+			if certErr == nil && certResp != nil && certResp.GetFound() {
+				tlsBundle = &pb.TLSCertBundle{
+					CertPem:   certResp.GetCertPem(),
+					KeyPem:    certResp.GetKeyPem(),
+					Domain:    certResp.GetDomain(),
+					ExpiresAt: certResp.GetExpiresAt(),
+				}
+			}
+		}
+	}
 
 	return &pb.ConfigSeed{
 		NodeId:          nodeID,
@@ -2374,6 +2446,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		Templates:       templates,
 		OperationalMode: operationalMode,
 		Tls:             tlsBundle,
+		Site:            siteConfig,
 	}
 }
 
@@ -2427,7 +2500,7 @@ func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) er
 
 	// Helmsman sidecar does NOT merge ConfigSeeds; ApplySeed overwrites lastSeed.
 	// Send a full seed to avoid wiping previously seeded fields.
-	seed := composeConfigSeed(nodeID, nil, c.peerAddr, mode)
+	seed := composeConfigSeed(nodeID, nil, c.peerAddr, mode, "")
 	msg := &pb.ControlMessage{
 		Payload: &pb.ControlMessage_ConfigSeed{ConfigSeed: seed},
 		SentAt:  timestamppb.Now(),
@@ -2446,7 +2519,7 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 		return ErrNotConnected
 	}
 	// For relay: compose a full ConfigSeed (without peer addr, since we don't hold the conn)
-	seed := composeConfigSeed(nodeID, nil, "", mode)
+	seed := composeConfigSeed(nodeID, nil, "", mode, "")
 	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
@@ -4226,11 +4299,11 @@ func refreshTLSBundles(log logging.Logger) {
 		}
 
 		mode := resolveOperationalMode(n.canonicalID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
-		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode)
+		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode, "")
 		// Override TLS with the bundle we already resolved above.
-		// composeConfigSeed calls resolveClusterTLSBundle internally, which
-		// can fail transiently on the second call; using the pre-resolved
-		// bundle avoids pushing a seed that silently drops TLS.
+		// composeConfigSeed resolves TLS internally, which can fail
+		// transiently on a second call; using the pre-resolved bundle
+		// avoids pushing a seed that silently drops TLS.
 		seed.Tls = bundle
 		if err := SendConfigSeed(n.connID, seed); err != nil {
 			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to push renewed TLS certificate")
@@ -4252,6 +4325,97 @@ func refreshTLSBundles(log logging.Logger) {
 			"domain":     bundle.GetDomain(),
 			"expires_at": bundle.GetExpiresAt(),
 		}).Info("Pushed renewed TLS certificate to edge")
+	}
+}
+
+// probeEdgeActivation verifies an edge node's HTTPS endpoint is serving with a valid
+// TLS certificate after ConfigSeed delivery. Retries every 5s for up to 60s.
+// On success, marks the node as probe-verified so the load balancer includes it.
+// On failure, closes the gRPC stream to force re-enrollment.
+func probeEdgeActivation(nodeID, edgeDomain, connID string) {
+	if edgeDomain == "" {
+		registry.log.WithField("node_id", nodeID).Warn("No edge domain for activation probe, auto-verifying")
+		state.DefaultManager().SetProbeVerified(nodeID, true)
+		return
+	}
+
+	systemRoots, err := x509.SystemCertPool()
+	if err != nil {
+		registry.log.WithError(err).Warn("Failed to load system cert pool for activation probe, auto-verifying")
+		state.DefaultManager().SetProbeVerified(nodeID, true)
+		return
+	}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    systemRoots,
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+	}
+
+	probeURL := "https://" + edgeDomain + "/"
+	maxAttempts := 12
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		time.Sleep(5 * time.Second)
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			registry.log.WithFields(logging.Fields{
+				"node_id": nodeID, "domain": edgeDomain,
+				"attempt": attempt, "error": err,
+			}).Debug("Activation probe failed")
+			continue
+		}
+		resp.Body.Close()
+
+		// 503 = still serving bootstrap page, not activated yet
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			registry.log.WithFields(logging.Fields{
+				"node_id": nodeID, "domain": edgeDomain, "attempt": attempt,
+			}).Debug("Activation probe got 503 (bootstrap), retrying")
+			continue
+		}
+
+		// Any non-503 response with valid TLS = activated
+		state.DefaultManager().SetProbeVerified(nodeID, true)
+		registry.log.WithFields(logging.Fields{
+			"node_id": nodeID, "domain": edgeDomain, "attempt": attempt,
+		}).Info("Edge activation probe succeeded")
+		return
+	}
+
+	// All attempts exhausted — disconnect the node so Helmsman re-enrolls
+	registry.log.WithFields(logging.Fields{
+		"node_id": nodeID, "domain": edgeDomain,
+	}).Warn("Edge activation probe failed after all attempts, disconnecting node")
+
+	registry.mu.Lock()
+	c := registry.conns[connID]
+	if c != nil {
+		// Send error before removing so Helmsman knows why it was disconnected
+		if err := sendControlError(c.stream, "ACTIVATION_FAILED", "edge proxy did not activate within timeout"); err != nil {
+			registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to send activation failure to node")
+		}
+		delete(registry.conns, connID)
+		if nodeID != connID {
+			if cc, ok := registry.conns[nodeID]; ok && cc.stream == c.stream {
+				delete(registry.conns, nodeID)
+			}
+		}
+	}
+	registry.mu.Unlock()
+
+	if c != nil {
+		state.DefaultManager().MarkNodeDisconnected(connID)
+		if nodeID != connID {
+			state.DefaultManager().MarkNodeDisconnected(nodeID)
+		}
 	}
 }
 
@@ -4393,18 +4557,6 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 		ClusterSlug:     clusterSlug,
 		ClusterId:       clusterID,
 		FoghornGrpcAddr: foghornAddr,
-	}
-
-	// Attach the cluster wildcard cert so CLI can stage TLS before Caddy starts.
-	if navigatorClient != nil {
-		wildcardDomain := fmt.Sprintf("*.%s.%s", clusterSlug, rootDomain)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: wildcardDomain})
-		if certErr == nil && certResp != nil && certResp.GetFound() {
-			resp.CertPem = certResp.GetCertPem()
-			resp.KeyPem = certResp.GetKeyPem()
-		}
 	}
 
 	return resp, nil

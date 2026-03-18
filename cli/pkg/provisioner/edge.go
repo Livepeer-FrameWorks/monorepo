@@ -215,19 +215,8 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	// [3/7] Registration (caller handles QM registration externally — same as before)
 	fmt.Println("[3/7] Registration handled by caller")
 
-	// [4/7] Stage certificates
-	if config.CertPEM != "" && config.KeyPEM != "" {
-		fmt.Println("[4/7] Staging TLS certificates...")
-		certDir := "/etc/frameworks/certs"
-		if remoteOS == "darwin" {
-			certDir = darwinPaths(config.DarwinDomain).confDir + "/certs"
-		}
-		if err := e.stageCertificatesAt(ctx, host, config.CertPEM, config.KeyPEM, certDir); err != nil {
-			return fmt.Errorf("certificate staging failed: %w", err)
-		}
-	} else {
-		fmt.Println("[4/7] No TLS certificates to stage (Caddy will auto-ACME)")
-	}
+	// [4/7] TLS certs are now delivered via ConfigSeed after enrollment
+	fmt.Println("[4/7] TLS certificates will be delivered after enrollment via ConfigSeed")
 
 	// [5-6/7] Install + start (mode-dependent)
 	switch mode {
@@ -1273,27 +1262,9 @@ func (e *EdgeProvisioner) buildEdgeVars(config EdgeProvisionConfig, remoteOS str
 		EnrollmentToken: config.EnrollmentToken,
 		Mode:            config.resolvedMode(),
 	}
-	if config.CertPEM != "" && config.KeyPEM != "" {
-		certDir := "/etc/frameworks/certs"
-		if remoteOS == "darwin" {
-			certDir = darwinConfDir + "/certs"
-		}
-		vars.CertPath = certDir + "/cert.pem"
-		vars.KeyPath = certDir + "/key.pem"
-	}
-
-	// Wildcard Caddyfile: when a wildcard cert is available and we know the pool domain,
-	// derive the cluster domain and use *.{cluster}.{root} so Caddy handles all
-	// service-specific subdomains (edge-egress, edge-ingest, etc.).
-	// Without a wildcard cert, fall back to the single primary domain (auto-ACME).
-	if vars.CertPath != "" && config.PoolDomain != "" {
-		if idx := strings.Index(config.PoolDomain, "."); idx >= 0 {
-			vars.SiteAddress = "*." + config.PoolDomain[idx+1:]
-		}
-	}
-	if vars.SiteAddress == "" {
-		vars.SiteAddress = domain
-	}
+	// Bootstrap Caddyfile: no wildcard site address needed.
+	// Helmsman renders the production Caddyfile after enrollment via ConfigSeed.
+	vars.SiteAddress = domain
 	return vars
 }
 

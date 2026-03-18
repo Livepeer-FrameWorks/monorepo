@@ -188,6 +188,9 @@ type NodeState struct {
 	PendingRedirects    int       `json:"pending_redirects"` // Count of redirects awaiting USER_NEW
 	EstBandwidthPerUser uint64    `json:"-"`                 // Cached per-viewer bandwidth estimate (bytes/sec)
 	LastPollTime        time.Time `json:"-"`                 // When real metrics arrived from Helmsman
+
+	// Activation probe: Foghorn verified this node's HTTPS endpoint is serving with valid TLS.
+	ProbeVerified bool `json:"probe_verified"`
 }
 
 type NodeOperationalMode string
@@ -298,6 +301,7 @@ func newNodeState(nodeID string) *NodeState {
 	return &NodeState{
 		NodeID:          nodeID,
 		OperationalMode: NodeModeNormal,
+		ProbeVerified:   true, // default true; freshly enrolled nodes are set false until Foghorn probes
 	}
 }
 
@@ -902,6 +906,18 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+}
+
+// SetProbeVerified marks whether Foghorn has verified the node's HTTPS endpoint.
+func (sm *StreamStateManager) SetProbeVerified(nodeID string, verified bool) {
+	sm.mu.Lock()
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = newNodeState(nodeID)
+		sm.nodes[nodeID] = n
+	}
+	n.ProbeVerified = verified
+	sm.mu.Unlock()
 }
 
 // SetNodeInfo updates per-node info
@@ -2000,7 +2016,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 		if mode == "" {
 			mode = NodeModeNormal
 		}
-		isActive := n.IsHealthy && mode != NodeModeMaintenance
+		isActive := n.IsHealthy && n.ProbeVerified && mode != NodeModeMaintenance
 		snapshot := EnhancedBalancerNodeSnapshot{
 			Host:   n.BaseURL,
 			NodeID: nodeID,

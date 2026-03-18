@@ -76,11 +76,13 @@ func TestBuildEdgeVars_Docker(t *testing.T) {
 	if vars.EdgeDomain != "edge.example.com" {
 		t.Errorf("EdgeDomain = %q, want edge.example.com", vars.EdgeDomain)
 	}
-	if vars.CertPath == "" || vars.KeyPath == "" {
-		t.Error("CertPath/KeyPath should be set when CertPEM/KeyPEM are provided")
+	// Certs are no longer staged by CLI — delivered via ConfigSeed after enrollment
+	if vars.CertPath != "" || vars.KeyPath != "" {
+		t.Error("CertPath/KeyPath should be empty (certs delivered via ConfigSeed)")
 	}
-	if vars.SiteAddress != "*.example.com" {
-		t.Errorf("SiteAddress = %q, want *.example.com (wildcard when cert + pool domain set)", vars.SiteAddress)
+	// SiteAddress is the primary domain; wildcard is now Helmsman's job
+	if vars.SiteAddress != "edge.example.com" {
+		t.Errorf("SiteAddress = %q, want edge.example.com (bootstrap uses primary domain)", vars.SiteAddress)
 	}
 }
 
@@ -141,20 +143,20 @@ func TestWriteEdgeTemplates_DockerMode(t *testing.T) {
 		}
 	}
 
-	// Verify Caddyfile has docker upstreams
+	// Bootstrap Caddyfile: maintenance mode with tls internal
 	caddyfile, err := os.ReadFile(filepath.Join(tmpDir, "Caddyfile"))
 	if err != nil {
 		t.Fatalf("failed to read Caddyfile: %v", err)
 	}
 	content := string(caddyfile)
+	if !strings.Contains(content, "tls internal") {
+		t.Error("Bootstrap Caddyfile should contain 'tls internal'")
+	}
 	if !strings.Contains(content, "helmsman:18007") {
-		t.Error("Caddyfile should contain Docker upstream helmsman:18007")
+		t.Error("Bootstrap Caddyfile should contain Docker upstream helmsman:18007 for webhooks")
 	}
-	if !strings.Contains(content, "mistserver:8080") {
-		t.Error("Caddyfile should contain Docker upstream mistserver:8080")
-	}
-	if !strings.Contains(content, "unix//run/caddy/admin.sock") {
-		t.Error("Caddyfile should contain Docker admin socket path")
+	if !strings.Contains(content, "503") {
+		t.Error("Bootstrap Caddyfile should serve 503 during bootstrap")
 	}
 
 	// Verify .edge.env has DEPLOY_MODE=docker
@@ -195,20 +197,20 @@ func TestWriteEdgeTemplates_NativeMode(t *testing.T) {
 		}
 	}
 
-	// Verify Caddyfile has native upstreams (localhost)
+	// Bootstrap Caddyfile: maintenance mode with native upstream for webhooks
 	caddyfile, err := os.ReadFile(filepath.Join(tmpDir, "Caddyfile"))
 	if err != nil {
 		t.Fatalf("failed to read Caddyfile: %v", err)
 	}
 	content := string(caddyfile)
-	if !strings.Contains(content, "localhost:18007") {
-		t.Error("Caddyfile should contain native upstream localhost:18007")
+	if !strings.Contains(content, "tls internal") {
+		t.Error("Bootstrap Caddyfile should contain 'tls internal'")
 	}
-	if !strings.Contains(content, "localhost:8080") {
-		t.Error("Caddyfile should contain native upstream localhost:8080")
+	if !strings.Contains(content, "localhost:18007") {
+		t.Error("Bootstrap Caddyfile should contain native upstream localhost:18007 for webhooks")
 	}
 	if !strings.Contains(content, "localhost:2019") {
-		t.Error("Caddyfile should contain native admin localhost:2019")
+		t.Error("Bootstrap Caddyfile should contain native admin localhost:2019")
 	}
 
 	// Verify .edge.env has DEPLOY_MODE=native
@@ -218,39 +220,13 @@ func TestWriteEdgeTemplates_NativeMode(t *testing.T) {
 	}
 }
 
-func TestWriteEdgeTemplates_TLSDirective(t *testing.T) {
-	tmpDir := t.TempDir()
-	vars := templates.EdgeVars{
-		EdgeDomain:  "edge-1.example.com",
-		SiteAddress: "*.us-west.example.com",
-		AcmeEmail:   "ops@example.com",
-		Mode:        "docker",
-		CertPath:    "/etc/frameworks/certs/cert.pem",
-		KeyPath:     "/etc/frameworks/certs/key.pem",
-	}
-
-	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
-		t.Fatalf("WriteEdgeTemplates failed: %v", err)
-	}
-
-	caddyfile, _ := os.ReadFile(filepath.Join(tmpDir, "Caddyfile"))
-	content := string(caddyfile)
-	if !strings.Contains(content, "tls /etc/frameworks/certs/cert.pem /etc/frameworks/certs/key.pem") {
-		t.Error("Caddyfile should contain TLS directive with cert paths")
-	}
-	if !strings.Contains(content, "*.us-west.example.com {") {
-		t.Error("Caddyfile should use wildcard site address when cert is available")
-	}
-}
-
-func TestWriteEdgeTemplates_NoTLSDirective(t *testing.T) {
+func TestWriteEdgeTemplates_BootstrapCaddyfile(t *testing.T) {
 	tmpDir := t.TempDir()
 	vars := templates.EdgeVars{
 		EdgeDomain:  "edge-1.example.com",
 		SiteAddress: "edge-1.example.com",
 		AcmeEmail:   "ops@example.com",
 		Mode:        "docker",
-		// No CertPath/KeyPath — single domain, auto-ACME
 	}
 
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
@@ -259,11 +235,16 @@ func TestWriteEdgeTemplates_NoTLSDirective(t *testing.T) {
 
 	caddyfile, _ := os.ReadFile(filepath.Join(tmpDir, "Caddyfile"))
 	content := string(caddyfile)
-	if strings.Contains(content, "tls /etc") {
-		t.Error("Caddyfile should NOT contain TLS directive when no cert paths provided")
+	// Bootstrap Caddyfile uses tls internal, not file-based TLS or ACME
+	if !strings.Contains(content, "tls internal") {
+		t.Error("Bootstrap Caddyfile should use 'tls internal'")
 	}
-	if !strings.Contains(content, "edge-1.example.com {") {
-		t.Error("Caddyfile should use single domain when no cert (auto-ACME)")
+	if strings.Contains(content, "tls /etc") {
+		t.Error("Bootstrap Caddyfile should NOT contain file-based TLS directive")
+	}
+	// Should serve 503 bootstrap page, not proxy to upstreams
+	if !strings.Contains(content, "503") {
+		t.Error("Bootstrap Caddyfile should serve 503")
 	}
 }
 

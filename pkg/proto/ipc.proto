@@ -1494,6 +1494,17 @@ message ConfigSeed {
   // Authoritative operational mode set by Foghorn. Helmsman must apply this.
   NodeOperationalMode operational_mode = 12;
   TLSCertBundle tls = 20;
+  // Public site configuration for Helmsman Caddyfile rendering (populated by Foghorn)
+  SiteConfig site = 21;
+}
+
+// SiteConfig carries the public-facing site parameters that Helmsman uses to
+// render the production Caddyfile after enrollment. Foghorn is the authority.
+message SiteConfig {
+  string site_address = 1;   // Caddy site block address, e.g. "*.us-west-1.frameworks.network"
+  string edge_domain = 2;    // e.g. "edge-abc123.us-west-1.frameworks.network"
+  string pool_domain = 3;    // e.g. "edge.us-west-1.frameworks.network"
+  string acme_email = 4;     // ACME email for auto-TLS fallback
 }
 
 // ==================== Transcode Job Messages ====================

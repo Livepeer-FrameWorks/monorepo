@@ -14,7 +14,7 @@ services:
       - ./maintenance.html:/etc/caddy/maintenance.html:ro
       - caddy_data:/data
       - caddy_config:/config
-      - ./certs:/etc/frameworks/certs:ro
+      - ./certs:/etc/frameworks/certs
       - caddy_admin:/run/caddy
     restart: unless-stopped
 

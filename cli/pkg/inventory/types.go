@@ -79,6 +79,8 @@ type PostgresConfig struct {
 	ReplicationFactor int               `yaml:"replication_factor,omitempty"` // Default: len(Nodes)
 	Databases         []DatabaseConfig  `yaml:"databases,omitempty"`
 	Tuning            map[string]string `yaml:"tuning,omitempty"`
+	SQLAccess         string            `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
+	Password          string            `yaml:"password,omitempty"`
 }
 
 // PostgresNode represents a node in a multi-node Postgres/YugabyteDB cluster
@@ -205,6 +207,7 @@ type ClickHouseConfig struct {
 	Host      string   `yaml:"host"` // Host name from Hosts map
 	Port      int      `yaml:"port"`
 	Databases []string `yaml:"databases,omitempty"`
+	SQLAccess string   `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
 }
 
 // RedisConfig represents Redis instance configuration

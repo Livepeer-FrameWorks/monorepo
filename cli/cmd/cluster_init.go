@@ -137,16 +137,21 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory.M
 		},
 	}
 
-	// Use the appropriate provisioner
+	sqlExec, execErr := newSQLExecutor(pg.SQLAccess, host, pool, pg.IsYugabyte(), resolveYugabytePassword(pg))
+	if execErr != nil {
+		return fmt.Errorf("create sql executor: %w", execErr)
+	}
+	opt := provisioner.WithSQLExecutor(sqlExec)
+
 	if pg.IsYugabyte() {
-		prov, err := provisioner.NewYugabyteProvisioner(pool)
+		prov, err := provisioner.NewYugabyteProvisioner(pool, opt)
 		if err != nil {
 			return err
 		}
 		return prov.Initialize(ctx, host, config)
 	}
 
-	prov, err := provisioner.NewPostgresProvisioner(pool)
+	prov, err := provisioner.NewPostgresProvisioner(pool, opt)
 	if err != nil {
 		return err
 	}
@@ -225,17 +230,21 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, manifest *inventory
 		return fmt.Errorf("clickhouse host %s not found", manifest.Infrastructure.ClickHouse.Host)
 	}
 
-	// Create provisioner
-	prov, err := provisioner.NewClickHouseProvisioner(pool)
+	ch := manifest.Infrastructure.ClickHouse
+	chExec, chExecErr := newCHExecutor(ch.SQLAccess, host, pool)
+	if chExecErr != nil {
+		return fmt.Errorf("create ch executor: %w", chExecErr)
+	}
+
+	prov, err := provisioner.NewClickHouseProvisioner(pool, provisioner.WithCHExecutor(chExec))
 	if err != nil {
 		return err
 	}
 
-	// Build config
 	config := provisioner.ServiceConfig{
-		Port: manifest.Infrastructure.ClickHouse.Port,
-		Metadata: map[string]interface{}{
-			"databases": manifest.Infrastructure.ClickHouse.Databases,
+		Port: ch.Port,
+		Metadata: map[string]any{
+			"databases": ch.Databases,
 		},
 	}
 

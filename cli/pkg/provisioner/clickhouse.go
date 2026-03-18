@@ -9,20 +9,24 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	dbsql "frameworks/pkg/database/sql"
-
-	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
 // ClickHouseProvisioner provisions ClickHouse
 type ClickHouseProvisioner struct {
 	*BaseProvisioner
+	ch CHExecutor
 }
 
 // NewClickHouseProvisioner creates a new ClickHouse provisioner
-func NewClickHouseProvisioner(pool *ssh.Pool) (*ClickHouseProvisioner, error) {
-	return &ClickHouseProvisioner{
+func NewClickHouseProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (*ClickHouseProvisioner, error) {
+	p := &ClickHouseProvisioner{
 		BaseProvisioner: NewBaseProvisioner("clickhouse", pool),
-	}, nil
+		ch:              &DirectCHExecutor{},
+	}
+	for _, opt := range opts {
+		opt.applyClickHouse(p)
+	}
+	return p, nil
 }
 
 // Detect checks if ClickHouse is installed and running
@@ -127,41 +131,28 @@ func (c *ClickHouseProvisioner) Validate(ctx context.Context, host inventory.Hos
 
 // Initialize creates databases and tables
 func (c *ClickHouseProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Get databases from config
 	databases, ok := config.Metadata["databases"].([]string)
 	if !ok {
 		databases = []string{"periscope"}
 	}
 
-	// Connect to ClickHouse
-	conn, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{fmt.Sprintf("%s:%d", host.ExternalIP, config.Port)},
-		Auth: clickhouse.Auth{
-			Database: "default",
-			Username: "default",
-			Password: "",
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to connect to ClickHouse: %w", err)
-	}
-	defer conn.Close()
-
-	// Create each database
 	for _, dbName := range databases {
-		// Create database if not exists
 		query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName)
-		if err := conn.Exec(ctx, query); err != nil {
+		if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, "default", "", "default", query); err != nil {
 			return fmt.Errorf("failed to create database %s: %w", dbName, err)
 		}
 
 		fmt.Printf("✓ Database %s ready\n", dbName)
 
-		// Run initialization SQL for periscope database
 		if dbName == "periscope" {
-			if err := c.initializePeriscopeDatabase(ctx, conn); err != nil {
+			sqlContent, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+			if err != nil {
+				return fmt.Errorf("failed to read embedded ClickHouse schema: %w", err)
+			}
+			if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, "default", "", "periscope", string(sqlContent)); err != nil {
 				return fmt.Errorf("failed to initialize periscope database: %w", err)
 			}
+			fmt.Println("✓ ClickHouse periscope schema initialized")
 		}
 	}
 
@@ -307,7 +298,6 @@ echo "ClickHouse configured with application credentials"
 	return nil
 }
 
-// initializePeriscopeDatabase runs ClickHouse schema for periscope
 // ApplyDemoSeeds applies ClickHouse demo data for development.
 // Uses the "frameworks" user when a password is provided in config.Metadata["clickhouse_password"],
 // falling back to "default" (unauthenticated) for local/unconfigured clusters.
@@ -324,33 +314,8 @@ func (c *ClickHouseProvisioner) ApplyDemoSeeds(ctx context.Context, host invento
 		password = pw
 	}
 
-	conn, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{fmt.Sprintf("%s:%d", host.ExternalIP, config.Port)},
-		Auth: clickhouse.Auth{Database: "periscope", Username: username, Password: password},
-	})
-	if err != nil {
-		return fmt.Errorf("connect to clickhouse: %w", err)
-	}
-	defer conn.Close()
-
-	if err := conn.Exec(ctx, string(sqlContent)); err != nil {
+	if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, username, password, "periscope", string(sqlContent)); err != nil {
 		return fmt.Errorf("apply clickhouse demo seed: %w", err)
 	}
-	return nil
-}
-
-func (c *ClickHouseProvisioner) initializePeriscopeDatabase(ctx context.Context, conn clickhouse.Conn) error {
-	sqlContent, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
-	if err != nil {
-		return fmt.Errorf("failed to read embedded ClickHouse schema: %w", err)
-	}
-
-	// Execute SQL (ClickHouse Go driver requires splitting statements)
-	// For simplicity, execute as single multi-statement (may need splitting for complex schemas)
-	if err := conn.Exec(ctx, string(sqlContent)); err != nil {
-		return fmt.Errorf("failed to execute SQL: %w", err)
-	}
-
-	fmt.Println("✓ ClickHouse periscope schema initialized")
 	return nil
 }

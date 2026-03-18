@@ -3,7 +3,6 @@ package provisioner
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"fmt"
 	"io/fs"
 	"path"
@@ -13,8 +12,6 @@ import (
 	"time"
 
 	dbsql "frameworks/pkg/database/sql"
-
-	_ "github.com/lib/pq"
 )
 
 // Migration represents a single versioned SQL migration file.
@@ -45,7 +42,7 @@ const migrationsTrackingDDL = `CREATE TABLE IF NOT EXISTS _migrations (
 // RunPostgresMigrations applies any pending versioned migrations from the
 // embedded filesystem to the target Postgres database.
 // If dryRun is true it returns the list of pending migrations without applying.
-func RunPostgresMigrations(ctx context.Context, connStr string, dryRun bool) ([]MigrationResult, error) {
+func RunPostgresMigrations(ctx context.Context, exec SQLExecutor, conn ConnParams, dryRun bool) ([]MigrationResult, error) {
 	all, err := discoverMigrations("migrations")
 	if err != nil {
 		return nil, fmt.Errorf("discover migrations: %w", err)
@@ -54,17 +51,11 @@ func RunPostgresMigrations(ctx context.Context, connStr string, dryRun bool) ([]
 		return nil, nil
 	}
 
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
-	}
-	defer db.Close()
-
-	if _, execErr := db.ExecContext(ctx, migrationsTrackingDDL); execErr != nil {
+	if execErr := exec.Exec(ctx, conn, migrationsTrackingDDL); execErr != nil {
 		return nil, fmt.Errorf("ensure tracking table: %w", execErr)
 	}
 
-	applied, err := loadApplied(ctx, db)
+	applied, err := loadApplied(ctx, exec, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -80,27 +71,17 @@ func RunPostgresMigrations(ctx context.Context, connStr string, dryRun bool) ([]
 
 	var results []MigrationResult
 	for _, m := range pending {
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return results, fmt.Errorf("begin tx for %s/%s: %w", m.Version, m.Filename, err)
-		}
-		if _, err := tx.ExecContext(ctx, m.content); err != nil {
-			if rbErr := tx.Rollback(); rbErr != nil {
-				return results, fmt.Errorf("apply %s/%s: %w (rollback also failed: %w)", m.Version, m.Filename, err, rbErr)
+		if err := exec.ExecTx(ctx, conn, func(tx TxExecutor) error {
+			if err := tx.Exec(ctx, m.content); err != nil {
+				return fmt.Errorf("apply %s/%s: %w", m.Version, m.Filename, err)
 			}
-			return results, fmt.Errorf("apply %s/%s: %w", m.Version, m.Filename, err)
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO _migrations (version, seq, filename, checksum) VALUES ($1, $2, $3, $4)`,
-			m.Version, m.Sequence, m.Filename, m.Checksum,
-		); err != nil {
-			if rbErr := tx.Rollback(); rbErr != nil {
-				return results, fmt.Errorf("record %s/%s: %w (rollback also failed: %w)", m.Version, m.Filename, err, rbErr)
-			}
-			return results, fmt.Errorf("record %s/%s: %w", m.Version, m.Filename, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return results, fmt.Errorf("commit %s/%s: %w", m.Version, m.Filename, err)
+			insert := fmt.Sprintf(
+				"INSERT INTO _migrations (version, seq, filename, checksum) VALUES (%s, %d, %s, %s)",
+				quoteLiteral(m.Version), m.Sequence, quoteLiteral(m.Filename), quoteLiteral(m.Checksum),
+			)
+			return tx.Exec(ctx, insert)
+		}); err != nil {
+			return results, err
 		}
 		results = append(results, MigrationResult{Migration: m, AppliedAt: time.Now()})
 	}
@@ -158,28 +139,25 @@ func parseSequence(filename string) int {
 	if idx <= 0 {
 		return 0
 	}
-	var n int
-	n, _ = strconv.Atoi(filename[:idx]) //nolint:errcheck // best-effort parse, returns 0 on failure
+	n, _ := strconv.Atoi(filename[:idx]) //nolint:errcheck // best-effort parse, returns 0 on failure
 	return n
 }
 
-func loadApplied(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
-	rows, err := db.QueryContext(ctx, `SELECT version, seq FROM _migrations`)
+func loadApplied(ctx context.Context, exec SQLExecutor, conn ConnParams) (map[string]struct{}, error) {
+	set := make(map[string]struct{})
+	err := exec.QueryRows(ctx, conn, "SELECT version, seq FROM _migrations", nil, func(scan func(dest ...any) error) error {
+		var v string
+		var s int
+		if err := scan(&v, &s); err != nil {
+			return err
+		}
+		set[fmt.Sprintf("%s:%d", v, s)] = struct{}{}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("load applied: %w", err)
 	}
-	defer rows.Close()
-
-	set := make(map[string]struct{})
-	for rows.Next() {
-		var v string
-		var s int
-		if err := rows.Scan(&v, &s); err != nil {
-			return nil, err
-		}
-		set[fmt.Sprintf("%s:%d", v, s)] = struct{}{}
-	}
-	return set, rows.Err()
+	return set, nil
 }
 
 func filterPending(all []Migration, applied map[string]struct{}) []Migration {

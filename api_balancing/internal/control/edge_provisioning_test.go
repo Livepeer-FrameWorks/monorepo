@@ -65,6 +65,14 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 	if resp.FoghornGrpcAddr != "foghorn.us-west-1.example.com:18019" {
 		t.Errorf("expected foghorn_grpc_addr %q, got %q", "foghorn.us-west-1.example.com:18019", resp.FoghornGrpcAddr)
 	}
+
+	// Certs must NOT be returned from PreRegisterEdge (security: delivered via ConfigSeed only)
+	if resp.GetCertPem() != "" { //nolint:staticcheck // intentionally testing deprecated field is empty
+		t.Errorf("expected empty cert_pem, got %d bytes", len(resp.GetCertPem())) //nolint:staticcheck
+	}
+	if resp.GetKeyPem() != "" { //nolint:staticcheck // intentionally testing deprecated field is empty
+		t.Errorf("expected empty key_pem, got %d bytes", len(resp.GetKeyPem())) //nolint:staticcheck
+	}
 }
 
 func TestPreRegisterEdge_EmptyToken(t *testing.T) {

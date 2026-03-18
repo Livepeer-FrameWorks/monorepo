@@ -208,11 +208,38 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 	})
 
 	for _, cluster := range clustersResp.Clusters {
-		if !cluster.GetIsActive() {
-			continue
-		}
 		clusterSlug := m.clusterSlug(cluster)
 		rootDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
+
+		// Inactive clusters: tear down their DNS records instead of syncing.
+		if !cluster.GetIsActive() {
+			svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
+			if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
+				partialErrors[svcFQDN] = err.Error()
+			} else {
+				m.logger.WithFields(logging.Fields{
+					"service_type": serviceType,
+					"cluster":      clusterSlug,
+					"fqdn":         svcFQDN,
+				}).Info("Cleared DNS for inactive cluster")
+			}
+			// Also clean up per-node edge-<node_id> A records for this cluster.
+			if serviceType == "edge-egress" {
+				aRecords, listErr := m.cfClient.ListDNSRecords("A", "")
+				if listErr == nil {
+					prefix := "edge-"
+					suffix := "." + rootDomain
+					for _, rec := range aRecords {
+						if isEdgeNodeRecord(rec.Name, prefix, suffix) {
+							if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
+								partialErrors[rec.Name] = err.Error()
+							}
+						}
+					}
+				}
+			}
+			continue
+		}
 
 		// Granular edge services (edge-egress, edge-ingest, etc.) require a wildcard
 		// cert on the edge for TLS termination. Skip DNS records if no cert exists.

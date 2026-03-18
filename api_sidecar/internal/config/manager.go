@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net"
 	"net/http"
@@ -28,6 +29,8 @@ type Manager struct {
 	logger         logging.Logger
 	lastSeed       *pb.ConfigSeed
 	lastAppliedSum string
+	lastCaddyHash  string
+	caddyActivated bool
 }
 
 var manager *Manager
@@ -94,10 +97,17 @@ func (m *Manager) reconcile() {
 		return
 	}
 
+	certChanged := false
 	if tls := seed.GetTls(); tls != nil {
-		m.applyTLSBundle(tls)
+		certChanged = m.applyTLSBundle(tls)
 	} else {
 		m.removeTLSBundle()
+	}
+
+	if site := seed.GetSite(); site != nil {
+		m.activateCaddy(seed, certChanged)
+	} else if certChanged {
+		m.reloadCaddy(nil)
 	}
 	current, err := m.mistClient.ConfigBackup()
 	if err != nil {
@@ -175,35 +185,36 @@ func (m *Manager) reconcile() {
 	}
 }
 
-func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) {
+// applyTLSBundle writes cert/key files to disk. Returns true if files were changed.
+func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) bool {
 	certPath := "/etc/frameworks/certs/cert.pem"
 	keyPath := "/etc/frameworks/certs/key.pem"
 
 	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
 		m.logger.WithError(err).Warn("Failed to create TLS certificate directory")
-		return
+		return false
 	}
 
 	certBytes := []byte(bundle.GetCertPem())
 	keyBytes := []byte(bundle.GetKeyPem())
 	if len(certBytes) == 0 || len(keyBytes) == 0 {
 		m.logger.Warn("Received empty TLS bundle in ConfigSeed")
-		return
+		return false
 	}
 
 	if existing, err := os.ReadFile(certPath); err == nil && bytes.Equal(existing, certBytes) {
 		if existingKey, keyErr := os.ReadFile(keyPath); keyErr == nil && bytes.Equal(existingKey, keyBytes) {
-			return
+			return false
 		}
 	}
 
 	if err := os.WriteFile(certPath, certBytes, 0o600); err != nil {
 		m.logger.WithError(err).Warn("Failed to write TLS certificate file")
-		return
+		return false
 	}
 	if err := os.WriteFile(keyPath, keyBytes, 0o600); err != nil {
 		m.logger.WithError(err).Warn("Failed to write TLS key file")
-		return
+		return false
 	}
 
 	m.logger.WithFields(logging.Fields{
@@ -211,7 +222,7 @@ func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) {
 		"expires_at": bundle.GetExpiresAt(),
 	}).Info("Applied TLS certificate bundle from ConfigSeed")
 
-	m.reloadCaddy()
+	return true
 }
 
 func (m *Manager) removeTLSBundle() {
@@ -234,15 +245,79 @@ func (m *Manager) removeTLSBundle() {
 
 	if certGone {
 		m.logger.Info("Removed TLS certificate files")
-		m.reloadCaddy()
+		m.reloadCaddy(nil)
 	}
 }
 
+// activateCaddy renders the production Caddyfile from ConfigSeed and pushes it to Caddy.
+func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) {
+	site := seed.GetSite()
+	if site == nil || site.GetSiteAddress() == "" {
+		if certChanged {
+			m.reloadCaddy(nil)
+		}
+		return
+	}
+
+	params := CaddyfileParams{
+		SiteAddress:      site.GetSiteAddress(),
+		AcmeEmail:        site.GetAcmeEmail(),
+		CaddyAdminAddr:   caddyAdminAddr(),
+		HelmsmanUpstream: envDefault("HELMSMAN_WEBHOOK_URL", "http://localhost:18007"),
+		ChandlerUpstream: envDefault("CHANDLER_URL", "chandler:18020"),
+		MistUpstream:     envDefault("MISTSERVER_URL", "http://mistserver:8080"),
+	}
+	// Strip http:// prefix for Caddy reverse_proxy upstream
+	params.HelmsmanUpstream = strings.TrimPrefix(params.HelmsmanUpstream, "http://")
+	params.MistUpstream = strings.TrimPrefix(params.MistUpstream, "http://")
+
+	if seed.GetTls() != nil {
+		params.TLSCertPath = "/etc/frameworks/certs/cert.pem"
+		params.TLSKeyPath = "/etc/frameworks/certs/key.pem"
+	}
+
+	rendered, err := RenderCaddyfile(params)
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to render production Caddyfile")
+		return
+	}
+
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(rendered)))
+	if hash == m.lastCaddyHash && !certChanged {
+		return
+	}
+
+	if m.reloadCaddy([]byte(rendered)) {
+		m.lastCaddyHash = hash
+		m.caddyActivated = true
+		m.logger.WithField("site_address", site.GetSiteAddress()).Info("Activated production Caddyfile via ConfigSeed")
+	}
+}
+
+func caddyAdminAddr() string {
+	if sock := os.Getenv("CADDY_ADMIN_SOCKET"); sock != "" {
+		return "unix/" + sock
+	}
+	if url := os.Getenv("CADDY_ADMIN_URL"); url != "" {
+		return url
+	}
+	return "localhost:2019"
+}
+
+func envDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 // reloadCaddy triggers a Caddy config reload via the admin API.
+// If content is provided, it is POSTed directly. Otherwise reads from /etc/caddy/Caddyfile.
 //
 // Docker: CADDY_ADMIN_SOCKET=/run/caddy/admin.sock (Unix socket, no network exposure)
 // Bare metal: CADDY_ADMIN_URL=http://localhost:2019 (loopback only)
-func (m *Manager) reloadCaddy() {
+// reloadCaddy returns true on success.
+func (m *Manager) reloadCaddy(content []byte) bool {
 	socketPath := os.Getenv("CADDY_ADMIN_SOCKET")
 	adminURL := os.Getenv("CADDY_ADMIN_URL")
 
@@ -264,34 +339,39 @@ func (m *Manager) reloadCaddy() {
 		client = &http.Client{Timeout: 5 * time.Second}
 		baseURL = strings.TrimRight(adminURL, "/")
 	default:
-		return
+		return false
 	}
 
-	body, err := os.ReadFile("/etc/caddy/Caddyfile")
-	if err != nil {
-		m.logger.WithError(err).Warn("Failed to read Caddyfile for reload")
-		return
+	body := content
+	if body == nil {
+		var err error
+		body, err = os.ReadFile("/etc/caddy/Caddyfile")
+		if err != nil {
+			m.logger.WithError(err).Warn("Failed to read Caddyfile for reload")
+			return false
+		}
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+"/load", bytes.NewReader(body))
 	if err != nil {
 		m.logger.WithError(err).Warn("Failed to create Caddy reload request")
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "text/caddyfile")
 
 	resp, err := client.Do(req)
 	if err != nil {
 		m.logger.WithError(err).Warn("Failed to reload Caddy configuration")
-		return
+		return false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		m.logger.Info("Caddy configuration reloaded after TLS certificate update")
-	} else {
-		m.logger.WithField("status", resp.StatusCode).Warn("Caddy reload returned non-200")
+		m.logger.Info("Caddy configuration reloaded")
+		return true
 	}
+	m.logger.WithField("status", resp.StatusCode).Warn("Caddy reload returned non-200")
+	return false
 }
 
 func (m *Manager) ensureProtocols(current map[string]interface{}) error {

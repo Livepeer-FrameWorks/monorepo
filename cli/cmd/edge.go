@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -181,7 +180,6 @@ func newEdgeInitCmd() *cobra.Command {
 		// call Foghorn to get an assigned domain.
 		var preRegNodeID string
 		var preRegFoghornAddr string
-		var preRegCertPEM, preRegKeyPEM string
 		if enrollmentToken != "" && domain == "" {
 			addr := foghornAddr
 			if addr == "" {
@@ -198,8 +196,6 @@ func newEdgeInitCmd() *cobra.Command {
 			domain = resp.GetEdgeDomain()
 			preRegNodeID = resp.GetNodeId()
 			preRegFoghornAddr = resp.GetFoghornGrpcAddr()
-			preRegCertPEM = resp.GetCertPem()
-			preRegKeyPEM = resp.GetKeyPem()
 			fmt.Fprintf(cmd.OutOrStdout(), "  Assigned domain: %s\n", domain)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node ID: %s\n", preRegNodeID)
 		}
@@ -219,25 +215,6 @@ func newEdgeInitCmd() *cobra.Command {
 			Mode:            initMode,
 		}
 
-		// Stage TLS certs from PreRegisterEdge so Caddy starts with valid TLS
-		if preRegCertPEM != "" && preRegKeyPEM != "" {
-			certDir := filepath.Join(target, "certs")
-			if err := os.MkdirAll(certDir, 0o755); err != nil {
-				return fmt.Errorf("creating cert directory: %w", err)
-			}
-			certPath := filepath.Join(certDir, "cert.pem")
-			keyPath := filepath.Join(certDir, "key.pem")
-			if err := os.WriteFile(certPath, []byte(preRegCertPEM), 0o600); err != nil {
-				return fmt.Errorf("writing cert.pem: %w", err)
-			}
-			if err := os.WriteFile(keyPath, []byte(preRegKeyPEM), 0o600); err != nil {
-				return fmt.Errorf("writing key.pem: %w", err)
-			}
-			// Container path — docker-compose mounts ./certs -> /etc/frameworks/certs
-			vars.CertPath = "/etc/frameworks/certs/cert.pem"
-			vars.KeyPath = "/etc/frameworks/certs/key.pem"
-			fmt.Fprintln(cmd.OutOrStdout(), "  TLS certificate staged for Caddy")
-		}
 		if err := templates.WriteEdgeTemplates(target, vars, overwrite); err != nil {
 			return err
 		}
@@ -455,7 +432,6 @@ Multi-node manifest example:
 			// call Foghorn to validate the token and get an assigned domain.
 			var preRegNodeID string
 			var preRegFoghornAddr string
-			var preRegCertPEM, preRegKeyPEM string
 			if enrollmentToken != "" && nodeDomain == "" && poolDomain == "" {
 				addr := foghornAddr
 				if addr == "" {
@@ -478,8 +454,6 @@ Multi-node manifest example:
 				poolDomain = preRegResp.GetPoolDomain()
 				preRegNodeID = preRegResp.GetNodeId()
 				preRegFoghornAddr = preRegResp.GetFoghornGrpcAddr()
-				preRegCertPEM = preRegResp.GetCertPem()
-				preRegKeyPEM = preRegResp.GetKeyPem()
 				if nodeName == "" {
 					nodeName = "edge-" + preRegNodeID
 				}
@@ -553,9 +527,6 @@ Multi-node manifest example:
 				if err != nil {
 					return fmt.Errorf("certificate fetch failed: %w", err)
 				}
-			} else if preRegCertPEM != "" && preRegKeyPEM != "" {
-				certPEM = preRegCertPEM
-				keyPEM = preRegKeyPEM
 			}
 
 			// Build EdgeProvisionConfig and delegate to EdgeProvisioner

@@ -86,7 +86,12 @@ func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
 			return fmt.Errorf("postgres host not found in manifest")
 		}
 
-		pgProv, provErr := provisioner.NewPostgresProvisioner(sshPool)
+		sqlExec, execErr := newSQLExecutor(pg.SQLAccess, pgHost, sshPool, pg.IsYugabyte(), resolveYugabytePassword(pg))
+		if execErr != nil {
+			return fmt.Errorf("create sql executor: %w", execErr)
+		}
+
+		pgProv, provErr := provisioner.NewPostgresProvisioner(sshPool, provisioner.WithSQLExecutor(sqlExec))
 		if provErr != nil {
 			return fmt.Errorf("create postgres provisioner: %w", provErr)
 		}
@@ -96,13 +101,11 @@ func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
 			dbUser = "yugabyte"
 		}
 
-		// Build database name list from manifest
 		var dbNames []string
 		for _, d := range pg.Databases {
 			dbNames = append(dbNames, d.Name)
 		}
 
-		// Static seeds are always applied
 		fmt.Fprintln(cmd.OutOrStdout(), "Applying Postgres static seeds...")
 		if err := pgProv.ApplyStaticSeeds(ctx, pgHost, port, dbUser, dbNames); err != nil {
 			return fmt.Errorf("postgres static seeds: %w", err)
@@ -127,7 +130,12 @@ func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
 				return fmt.Errorf("clickhouse host not found in manifest")
 			}
 
-			chProv, chErr := provisioner.NewClickHouseProvisioner(sshPool)
+			chExec, chExecErr := newCHExecutor(ch.SQLAccess, chHost, sshPool)
+			if chExecErr != nil {
+				return fmt.Errorf("create ch executor: %w", chExecErr)
+			}
+
+			chProv, chErr := provisioner.NewClickHouseProvisioner(sshPool, provisioner.WithCHExecutor(chExec))
 			if chErr != nil {
 				return fmt.Errorf("create clickhouse provisioner: %w", chErr)
 			}
@@ -135,7 +143,6 @@ func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
 			if chPort == 0 {
 				chPort = 9000
 			}
-			// Resolve ClickHouse password: env file (same as provisioning), then os env.
 			chPassword := os.Getenv("CLICKHOUSE_PASSWORD")
 			if chPassword == "" {
 				if envMap, envErr := internalconfig.LoadEnvFile(); envErr == nil {
@@ -144,10 +151,9 @@ func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
 			}
 			config := provisioner.ServiceConfig{
 				Port:     chPort,
-				Metadata: map[string]interface{}{"clickhouse_password": chPassword},
+				Metadata: map[string]any{"clickhouse_password": chPassword},
 			}
 
-			// Only seed if periscope is in the manifest's database list
 			chDBs := ch.Databases
 			if len(chDBs) == 0 {
 				chDBs = []string{"periscope"}

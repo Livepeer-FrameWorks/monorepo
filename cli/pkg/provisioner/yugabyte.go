@@ -2,28 +2,30 @@ package provisioner
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
-	dbsql "frameworks/pkg/database/sql"
-
-	"github.com/lib/pq"
 )
 
 // YugabyteProvisioner provisions YugabyteDB nodes (yb-master + yb-tserver)
 type YugabyteProvisioner struct {
 	*BaseProvisioner
+	sql SQLExecutor
 }
 
 // NewYugabyteProvisioner creates a new YugabyteDB provisioner
-func NewYugabyteProvisioner(pool *ssh.Pool) (Provisioner, error) {
-	return &YugabyteProvisioner{
+func NewYugabyteProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (Provisioner, error) {
+	p := &YugabyteProvisioner{
 		BaseProvisioner: NewBaseProvisioner("yugabyte", pool),
-	}, nil
+		sql:             &DirectExecutor{},
+	}
+	for _, opt := range opts {
+		opt.applyYugabyte(p)
+	}
+	return p, nil
 }
 
 // Detect checks if YugabyteDB is installed and running
@@ -262,18 +264,10 @@ func (y *YugabyteProvisioner) Validate(ctx context.Context, host inventory.Host,
 		port = 5433
 	}
 
-	// YSQL connectivity check — connect as yugabyte superuser
-	connStr := fmt.Sprintf("host=%s port=%d user=yugabyte dbname=yugabyte sslmode=disable",
-		host.ExternalIP, port)
-
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return fmt.Errorf("yugabyte YSQL connection failed: %w", err)
-	}
-	defer db.Close()
+	conn := ConnParams{Host: host.ExternalIP, Port: port, User: "yugabyte", Database: "yugabyte"}
 
 	var version string
-	if err = db.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
+	if err := y.sql.QueryRow(ctx, conn, "SELECT version()", nil, &version); err != nil {
 		return fmt.Errorf("yugabyte YSQL query failed: %w", err)
 	}
 
@@ -300,17 +294,8 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		port = 5433
 	}
 
-	// Connect as yugabyte superuser
-	connStr := fmt.Sprintf("host=%s port=%d user=yugabyte dbname=yugabyte sslmode=disable",
-		host.ExternalIP, port)
+	conn := ConnParams{Host: host.ExternalIP, Port: port, User: "yugabyte", Database: "yugabyte"}
 
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to YugabyteDB: %w", err)
-	}
-	defer db.Close()
-
-	// Get databases from config
 	databases, ok := config.Metadata["databases"].([]map[string]string)
 	if !ok {
 		databases = []map[string]string{{"name": "periscope"}}
@@ -321,32 +306,27 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		dbName := dbEntry["name"]
 		dbNames = append(dbNames, dbName)
 
-		// CREATE DATABASE IF NOT EXISTS
-		var exists bool
-		err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", dbName).Scan(&exists)
+		created, err := CreateDatabaseIfNotExists(ctx, y.sql, conn, dbName, "")
 		if err != nil {
-			return fmt.Errorf("check database %s: %w", dbName, err)
+			return fmt.Errorf("failed to create database %s: %w", dbName, err)
 		}
-		if !exists {
-			if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s", pq.QuoteIdentifier(dbName))); err != nil {
-				return fmt.Errorf("create database %s: %w", dbName, err)
-			}
+
+		if created {
 			fmt.Printf("Created database: %s\n", dbName)
 		} else {
 			fmt.Printf("Database %s already exists\n", dbName)
 		}
 
-		// Run embedded schema if available
-		if err := y.initializeDatabase(ctx, host, port, dbName); err != nil {
+		dbConn := ConnParams{Host: host.ExternalIP, Port: port, User: "yugabyte", Database: dbName}
+		if err := pgInitializeDatabase(ctx, y.sql, dbConn, dbName); err != nil {
 			return fmt.Errorf("failed to initialize database %s: %w", dbName, err)
 		}
 	}
 
-	// Create application user
 	pgUser, _ := config.Metadata["postgres_user"].(string)
 	pgPass, _ := config.Metadata["postgres_password"].(string)
 	if pgUser != "" && pgPass != "" {
-		if err := y.createApplicationUser(ctx, host, port, pgUser, pgPass, dbNames); err != nil {
+		if err := pgCreateApplicationUser(ctx, y.sql, conn, pgUser, pgPass, dbNames); err != nil {
 			return fmt.Errorf("failed to create application user: %w", err)
 		}
 	}
@@ -356,95 +336,5 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 
 // Configure is a no-op for YugabyteDB — auth is configured via gflags during Provision
 func (y *YugabyteProvisioner) Configure(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	return nil
-}
-
-// initializeDatabase runs embedded SQL schema for a specific database
-func (y *YugabyteProvisioner) initializeDatabase(ctx context.Context, host inventory.Host, port int, dbName string) error {
-	schemaFiles := map[string]string{
-		"quartermaster": "schema/quartermaster.sql",
-		"commodore":     "schema/commodore.sql",
-		"foghorn":       "schema/foghorn.sql",
-		"periscope":     "schema/periscope.sql",
-		"purser":        "schema/purser.sql",
-		"listmonk":      "schema/listmonk.sql",
-		"navigator":     "schema/navigator.sql",
-		"skipper":       "schema/skipper.sql",
-	}
-
-	schemaFile, ok := schemaFiles[dbName]
-	if !ok {
-		return nil
-	}
-
-	sqlContent, err := dbsql.Content.ReadFile(schemaFile)
-	if err != nil {
-		return fmt.Errorf("failed to read embedded SQL file %s: %w", schemaFile, err)
-	}
-
-	connStr := fmt.Sprintf("host=%s port=%d user=yugabyte dbname=%s sslmode=disable",
-		host.ExternalIP, port, dbName)
-
-	fmt.Printf("Applying schema for %s...\n", dbName)
-	return ExecuteSQLFile(ctx, connStr, string(sqlContent))
-}
-
-// createApplicationUser creates a YSQL role for application services (same SQL as Postgres)
-func (y *YugabyteProvisioner) createApplicationUser(ctx context.Context, host inventory.Host, port int, user, password string, databases []string) error {
-	connStr := fmt.Sprintf("host=%s port=%d user=yugabyte dbname=yugabyte sslmode=disable",
-		host.ExternalIP, port)
-
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return fmt.Errorf("connect as superuser: %w", err)
-	}
-	defer db.Close()
-
-	var exists bool
-	err = db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)", user).Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("check role existence: %w", err)
-	}
-
-	quotedUser := pq.QuoteIdentifier(user)
-	if !exists {
-		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE ROLE %s WITH LOGIN", quotedUser)); err != nil {
-			return fmt.Errorf("create role %s: %w", user, err)
-		}
-		fmt.Printf("Created YSQL role: %s\n", user)
-	}
-
-	// Set password (handles rotation on re-provision)
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER ROLE %s WITH PASSWORD %s", quotedUser, pq.QuoteLiteral(password))); err != nil {
-		return fmt.Errorf("set password for %s: %w", user, err)
-	}
-
-	for _, dbName := range databases {
-		quotedDB := pq.QuoteIdentifier(dbName)
-		if _, err := db.ExecContext(ctx, fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO %s", quotedDB, quotedUser)); err != nil {
-			return fmt.Errorf("grant on %s: %w", dbName, err)
-		}
-
-		dbConn, err := sql.Open("postgres", fmt.Sprintf("host=%s port=%d user=yugabyte dbname=%s sslmode=disable", host.ExternalIP, port, dbName))
-		if err != nil {
-			return fmt.Errorf("connect to %s: %w", dbName, err)
-		}
-		schemaGrants := []string{
-			fmt.Sprintf("GRANT USAGE ON SCHEMA public TO %s", quotedUser),
-			fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO %s", quotedUser),
-			fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %s", quotedUser),
-			fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO %s", quotedUser),
-			fmt.Sprintf("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO %s", quotedUser),
-		}
-		for _, stmt := range schemaGrants {
-			if _, err := dbConn.ExecContext(ctx, stmt); err != nil {
-				dbConn.Close()
-				return fmt.Errorf("schema grant on %s: %w", dbName, err)
-			}
-		}
-		dbConn.Close()
-	}
-
-	fmt.Printf("✓ YSQL role %s ready (grants on %d databases)\n", user, len(databases))
 	return nil
 }

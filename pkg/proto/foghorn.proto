@@ -72,8 +72,8 @@ message PreRegisterEdgeResponse {
   string pool_domain = 3;       // e.g., edge.{cluster_slug}.{root_domain}
   string cluster_slug = 4;
   string foghorn_grpc_addr = 5; // Address for Helmsman's FOGHORN_CONTROL_ADDR
-  string cert_pem = 6;          // Wildcard TLS certificate (PEM) for the cluster
-  string key_pem = 7;           // Corresponding private key (PEM)
+  string cert_pem = 6 [deprecated = true];  // Deprecated: certs now delivered via ConfigSeed only
+  string key_pem = 7 [deprecated = true];   // Deprecated: certs now delivered via ConfigSeed only
   string cluster_id = 8;        // Raw cluster ID (may differ from DNS-safe cluster_slug)
 }
 

@@ -2,12 +2,11 @@ package provisioner
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
 	"github.com/IBM/sarama"
-	"github.com/lib/pq" // Postgres driver
+	"github.com/lib/pq"
 )
 
 func buildCreateDatabaseQuery(dbName, owner string) string {
@@ -19,60 +18,37 @@ func buildCreateDatabaseQuery(dbName, owner string) string {
 }
 
 // DatabaseExists checks if a Postgres database exists
-func DatabaseExists(ctx context.Context, connStr, dbName string) (bool, error) {
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return false, fmt.Errorf("failed to connect to postgres: %w", err)
-	}
-	defer db.Close()
-
+func DatabaseExists(ctx context.Context, exec SQLExecutor, conn ConnParams, dbName string) (bool, error) {
 	var exists bool
 	query := "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
-	err = db.QueryRowContext(ctx, query, dbName).Scan(&exists)
+	err := exec.QueryRow(ctx, conn, query, []any{dbName}, &exists)
 	if err != nil {
 		return false, fmt.Errorf("failed to check database existence: %w", err)
 	}
-
 	return exists, nil
 }
 
 // CreateDatabaseIfNotExists creates a Postgres database if it doesn't exist
-func CreateDatabaseIfNotExists(ctx context.Context, connStr, dbName, owner string) (bool, error) {
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return false, fmt.Errorf("failed to connect to postgres: %w", err)
-	}
-	defer db.Close()
-
-	// Check if database exists
-	exists, err := DatabaseExists(ctx, connStr, dbName)
+func CreateDatabaseIfNotExists(ctx context.Context, exec SQLExecutor, conn ConnParams, dbName, owner string) (bool, error) {
+	exists, err := DatabaseExists(ctx, exec, conn, dbName)
 	if err != nil {
 		return false, err
 	}
 
 	if exists {
-		return false, nil // Already exists, no changes made
+		return false, nil
 	}
 
-	// Create database
 	query := buildCreateDatabaseQuery(dbName, owner)
-
-	if _, err := db.ExecContext(ctx, query); err != nil {
+	if err := exec.Exec(ctx, conn, query); err != nil {
 		return false, fmt.Errorf("failed to create database: %w", err)
 	}
 
-	return true, nil // Database created
+	return true, nil
 }
 
 // TableExists checks if a table exists in a Postgres database
-func TableExists(ctx context.Context, connStr, tableName string) (bool, error) {
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return false, fmt.Errorf("failed to connect to postgres: %w", err)
-	}
-	defer db.Close()
-
-	// Parse schema.table if provided
+func TableExists(ctx context.Context, exec SQLExecutor, conn ConnParams, tableName string) (bool, error) {
 	parts := strings.Split(tableName, ".")
 	var schema, table string
 
@@ -86,7 +62,7 @@ func TableExists(ctx context.Context, connStr, tableName string) (bool, error) {
 
 	var exists bool
 	query := "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)"
-	err = db.QueryRowContext(ctx, query, schema, table).Scan(&exists)
+	err := exec.QueryRow(ctx, conn, query, []any{schema, table}, &exists)
 	if err != nil {
 		return false, fmt.Errorf("failed to check table existence: %w", err)
 	}
@@ -95,18 +71,10 @@ func TableExists(ctx context.Context, connStr, tableName string) (bool, error) {
 }
 
 // ExecuteSQLFile executes a SQL file (idempotent - safe to run multiple times)
-func ExecuteSQLFile(ctx context.Context, connStr, sqlContent string) error {
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to postgres: %w", err)
-	}
-	defer db.Close()
-
-	// Execute SQL (may contain multiple statements)
-	if _, err := db.ExecContext(ctx, sqlContent); err != nil {
+func ExecuteSQLFile(ctx context.Context, exec SQLExecutor, conn ConnParams, sqlContent string) error {
+	if err := exec.Exec(ctx, conn, sqlContent); err != nil {
 		return fmt.Errorf("failed to execute SQL: %w", err)
 	}
-
 	return nil
 }
 
@@ -132,17 +100,15 @@ func KafkaTopicExists(brokers []string, topic string) (bool, error) {
 
 // CreateKafkaTopicIfNotExists creates a Kafka topic if it doesn't exist
 func CreateKafkaTopicIfNotExists(brokers []string, topic string, partitions int32, replication int16, config map[string]*string) (bool, error) {
-	// Check if topic exists
 	exists, err := KafkaTopicExists(brokers, topic)
 	if err != nil {
 		return false, err
 	}
 
 	if exists {
-		return false, nil // Already exists
+		return false, nil
 	}
 
-	// Create admin client
 	adminConfig := sarama.NewConfig()
 	adminConfig.Version = sarama.V2_6_0_0
 
@@ -152,7 +118,6 @@ func CreateKafkaTopicIfNotExists(brokers []string, topic string, partitions int3
 	}
 	defer admin.Close()
 
-	// Create topic
 	topicDetail := &sarama.TopicDetail{
 		NumPartitions:     partitions,
 		ReplicationFactor: replication,
@@ -163,10 +128,10 @@ func CreateKafkaTopicIfNotExists(brokers []string, topic string, partitions int3
 		return false, fmt.Errorf("failed to create topic: %w", err)
 	}
 
-	return true, nil // Topic created
+	return true, nil
 }
 
-// FileExists checks if a file exists on a remote host via command
+// FileExistsCommand checks if a file exists on a remote host via command
 func FileExistsCommand(remotePath string) string {
 	return fmt.Sprintf("test -f %s && echo 'exists' || echo 'notfound'", remotePath)
 }

@@ -7,6 +7,7 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
+	"frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
 )
@@ -53,25 +54,32 @@ func runMigrate(cmd *cobra.Command, manifestPath string, dryRun bool) error {
 		return nil
 	}
 
-	var pgHost string
+	var pgHost inventory.Host
+	var ok bool
 	if pg.IsYugabyte() && len(pg.Nodes) > 0 {
-		host, ok := manifest.GetHost(pg.Nodes[0].Host)
+		pgHost, ok = manifest.GetHost(pg.Nodes[0].Host)
 		if !ok {
 			return fmt.Errorf("yugabyte node host %s not found", pg.Nodes[0].Host)
 		}
-		pgHost = host.ExternalIP
 	} else {
-		host, ok := manifest.GetHost(pg.Host)
+		pgHost, ok = manifest.GetHost(pg.Host)
 		if !ok {
 			return fmt.Errorf("postgres host %s not found", pg.Host)
 		}
-		pgHost = host.ExternalIP
 	}
 
 	port := pg.EffectivePort()
 	dbUser := "postgres"
 	if pg.IsYugabyte() {
 		dbUser = "yugabyte"
+	}
+
+	sshPool := ssh.NewPool(30 * time.Second)
+	defer sshPool.Close()
+
+	exec, err := newSQLExecutor(pg.SQLAccess, pgHost, sshPool, pg.IsYugabyte(), resolveYugabytePassword(pg))
+	if err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -85,9 +93,9 @@ func runMigrate(cmd *cobra.Command, manifestPath string, dryRun bool) error {
 
 	totalApplied := 0
 	for _, db := range databases {
-		connStr := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable", pgHost, port, dbUser, db.Name)
+		conn := provisioner.ConnParams{Host: pgHost.ExternalIP, Port: port, User: dbUser, Database: db.Name}
 
-		results, err := provisioner.RunPostgresMigrations(ctx, connStr, dryRun)
+		results, err := provisioner.RunPostgresMigrations(ctx, exec, conn, dryRun)
 		if err != nil {
 			return fmt.Errorf("migrate %s: %w", db.Name, err)
 		}
