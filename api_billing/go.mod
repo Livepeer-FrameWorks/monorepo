@@ -15,7 +15,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stripe/stripe-go/v82 v82.5.1
 	golang.org/x/crypto v0.48.0
-	google.golang.org/grpc v1.79.1
+	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
 )
 
