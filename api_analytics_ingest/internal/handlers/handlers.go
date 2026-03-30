@@ -2435,7 +2435,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		filename,
 		"vod",    // content_type
 		stageStr, // stage
-		uint8(0), // progress_percent - not tracked for VOD
+		vodProgressPercent(vodData),
 		nilIfEmptyStringPtr(vodData.Error),
 		event.Timestamp,                        // requested_at
 		nilIfZeroInt64Ptr(vodData.StartedAt),   // started_at
@@ -2549,6 +2549,20 @@ func normalizeVodStage(status pb.VodLifecycleData_Status) string {
 	default:
 		return "unknown"
 	}
+}
+
+func vodProgressPercent(vodData *pb.VodLifecycleData) uint8 {
+	if vodData == nil {
+		return 0
+	}
+	progress := vodData.GetProgressPct()
+	if progress < 0 {
+		return 0
+	}
+	if progress > 100 {
+		return 100
+	}
+	return uint8(progress)
 }
 
 // processStorageLifecycle handles storage lifecycle events

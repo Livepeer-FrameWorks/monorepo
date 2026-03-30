@@ -22,6 +22,13 @@
   let hovering = $state(false);
   let intervalId: ReturnType<typeof setInterval> | null = null;
   let spriteLoaded = $state(false);
+  let posterError = $state(false);
+
+  $effect(() => {
+    if (posterUrl !== undefined) {
+      posterError = false;
+    }
+  });
 
   function startAnimation() {
     hovering = true;
@@ -82,8 +89,16 @@
         cues[frameIndex]
       )}; background-size: {getBackgroundSize()}; background-repeat: no-repeat;"
     ></div>
-  {:else if posterUrl}
-    <img src={posterUrl} alt="" loading="lazy" class="w-full h-full object-cover" />
+  {:else if posterUrl && !posterError}
+    <img
+      src={posterUrl}
+      alt=""
+      loading="lazy"
+      class="w-full h-full object-cover"
+      onerror={() => {
+        posterError = true;
+      }}
+    />
   {:else}
     <div class="w-full h-full flex items-center justify-center">
       <VideoIcon class="w-4 h-4 text-muted-foreground/50" />

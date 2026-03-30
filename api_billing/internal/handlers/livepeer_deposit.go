@@ -16,6 +16,8 @@ import (
 
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
+	"frameworks/pkg/servicedefs"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -32,7 +34,7 @@ import (
 // Follows the GasWalletMonitor pattern.
 type LivepeerDepositMonitor struct {
 	logger logging.Logger
-	qm     *qmclient.GRPCClient
+	qm     livepeerServiceDiscoveryClient
 
 	// Funding wallet (same as x402 gas wallet)
 	gasWalletPrivKey string
@@ -68,6 +70,10 @@ type GatewayDepositState struct {
 	BalanceETH float64   `json:"balance_eth"`
 	DepositLow bool      `json:"deposit_low"` // TicketBroker deposit below threshold
 	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type livepeerServiceDiscoveryClient interface {
+	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *pb.CursorPaginationRequest) (*pb.ServiceDiscoveryResponse, error)
 }
 
 // TicketBroker contract on Arbitrum One (Livepeer protocol)
@@ -230,7 +236,7 @@ func (m *LivepeerDepositMonitor) checkAll(ctx context.Context) {
 
 		state.Host = gw.host
 		state.Port = gw.port
-		label := fmt.Sprintf("%s:%d", gw.host, gw.port)
+		label := state.Address
 
 		m.mu.Lock()
 		m.gateways[label] = state
@@ -265,37 +271,53 @@ func (m *LivepeerDepositMonitor) checkAll(ctx context.Context) {
 type discoveredGateway struct {
 	host    string
 	port    int32
-	address string // ETH address from /status
+	address string
 }
 
 // discoverGatewayAddresses finds livepeer-gateway instances via Quartermaster
-// and queries each one's /status to get its ETH address.
+// and resolves the shared wallet address from service instance metadata.
 func (m *LivepeerDepositMonitor) discoverGatewayAddresses(ctx context.Context) []discoveredGateway {
+	if m.qm == nil {
+		return nil
+	}
+
 	resp, err := m.qm.DiscoverServices(ctx, "livepeer-gateway", m.clusterID, nil)
 	if err != nil {
 		m.logger.WithError(err).Error("Failed to discover livepeer-gateway instances")
 		return nil
 	}
 
+	seen := make(map[string]bool)
 	var gateways []discoveredGateway
 	for _, inst := range resp.Instances {
 		if inst.Status != "running" {
 			continue
 		}
-		host := inst.GetHost()
+		host := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataAdminHost])
+		if host == "" {
+			host = inst.GetHost()
+		}
 		port := inst.GetPort()
+		if rawPort := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataAdminPort]); rawPort != "" {
+			if parsed, convErr := strconv.Atoi(rawPort); convErr == nil && parsed > 0 {
+				port = int32(parsed)
+			}
+		}
 		if host == "" || port == 0 {
 			continue
 		}
-
-		addr, err := m.getGatewayETHAddress(ctx, host, port)
-		if err != nil {
+		addr := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataWalletAddress])
+		if addr == "" {
 			m.logger.WithFields(logging.Fields{
-				"error":   err,
 				"gateway": fmt.Sprintf("%s:%d", host, port),
-			}).Warn("Could not get gateway ETH address from /status")
+			}).Warn("Livepeer gateway missing wallet_address metadata")
 			continue
 		}
+		addr = strings.ToLower(addr)
+		if seen[addr] {
+			continue
+		}
+		seen[addr] = true
 
 		gateways = append(gateways, discoveredGateway{
 			host:    host,
@@ -305,40 +327,6 @@ func (m *LivepeerDepositMonitor) discoverGatewayAddresses(ctx context.Context) [
 	}
 
 	return gateways
-}
-
-// getGatewayETHAddress queries the gateway's CLI/management port for its ETH address.
-// go-livepeer's /status returns JSON with EthereumAddr field.
-func (m *LivepeerDepositMonitor) getGatewayETHAddress(ctx context.Context, host string, port int32) (string, error) {
-	url := fmt.Sprintf("http://%s:%d/status", host, port)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	var status struct {
-		EthereumAddr string `json:"EthereumAddr"`
-	}
-	if err := json.Unmarshal(body, &status); err != nil {
-		return "", err
-	}
-	if status.EthereumAddr == "" {
-		return "", fmt.Errorf("empty EthereumAddr in /status response")
-	}
-
-	return status.EthereumAddr, nil
 }
 
 // queryGatewayState reads on-chain balance and TicketBroker deposit/reserve.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/servicedefs"
 )
 
 // streamContext holds cached tenant and user information for a stream
@@ -185,7 +187,17 @@ func (p *Processor) getLivepeerGatewayURL() string {
 	if scheme == "" {
 		scheme = "https"
 	}
-	p.gatewayURL = fmt.Sprintf("%s://%s:%d", scheme, inst.GetHost(), inst.GetPort())
+	host := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataPublicHost])
+	if host == "" {
+		host = inst.GetHost()
+	}
+	port := inst.GetPort()
+	if rawPort := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataPublicPort]); rawPort != "" {
+		if parsed, convErr := strconv.Atoi(rawPort); convErr == nil && parsed > 0 {
+			port = int32(parsed)
+		}
+	}
+	p.gatewayURL = fmt.Sprintf("%s://%s:%d", scheme, host, port)
 	return p.gatewayURL
 }
 

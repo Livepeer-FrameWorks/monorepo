@@ -659,6 +659,10 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		if reason == "" {
 			reason = "unknown"
 		}
+		if reason == "already_synced" {
+			sm.logger.WithField("asset_hash", asset.AssetHash).Debug("Skipping freeze — asset already synced to S3")
+			return nil
+		}
 		return fmt.Errorf("freeze not approved: %s", reason)
 	}
 

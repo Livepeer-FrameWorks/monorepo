@@ -569,6 +569,27 @@ func TestNormalizeVodStage(t *testing.T) {
 	}
 }
 
+func TestVodProgressPercent(t *testing.T) {
+	cases := []struct {
+		name     string
+		data     *pb.VodLifecycleData
+		expected uint8
+	}{
+		{name: "nil", data: nil, expected: 0},
+		{name: "negative", data: &pb.VodLifecycleData{ProgressPct: int32Ptr(-5)}, expected: 0},
+		{name: "in range", data: &pb.VodLifecycleData{ProgressPct: int32Ptr(42)}, expected: 42},
+		{name: "capped", data: &pb.VodLifecycleData{ProgressPct: int32Ptr(150)}, expected: 100},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := vodProgressPercent(tc.data); got != tc.expected {
+				t.Fatalf("vodProgressPercent(%v) = %d, want %d", tc.data, got, tc.expected)
+			}
+		})
+	}
+}
+
 func TestNormalizeDVRStage(t *testing.T) {
 	cases := []struct {
 		name     string

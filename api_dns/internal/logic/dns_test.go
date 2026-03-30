@@ -1228,6 +1228,7 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 		{"edge-storage", "edge-storage.example.com"},
 		{"edge-processing", "edge-processing.example.com"},
 		{"foghorn", "foghorn.example.com"},
+		{"livepeer-gateway", "livepeer.example.com"},
 		{"bridge", "bridge.example.com"},
 		{"chartroom", "chartroom.example.com"},
 		{"foredeck", "example.com"},
@@ -1348,6 +1349,7 @@ func TestClusterServiceFQDN(t *testing.T) {
 		{"edge-storage", "c1.example.com", "edge-storage.c1.example.com"},
 		{"edge-processing", "c1.example.com", "edge-processing.c1.example.com"},
 		{"foghorn", "c1.example.com", "foghorn.c1.example.com"},
+		{"livepeer-gateway", "c1.example.com", "livepeer.c1.example.com"},
 		{"bridge", "c1.example.com", "bridge.c1.example.com"},
 		{"chartroom", "c1.example.com", "chartroom.c1.example.com"},
 		{"foredeck", "c1.example.com", "c1.example.com"},
@@ -1563,12 +1565,13 @@ func TestDefaultServicePorts_MatchServicedefs(t *testing.T) {
 		servicedefsName string
 		wantPort        int
 	}{
-		"bridge":    {"bridge", 0},
-		"foghorn":   {"foghorn", 0},
-		"chartroom": {"chartroom", 0},
-		"foredeck":  {"foredeck", 0},
-		"logbook":   {"logbook", 0},
-		"steward":   {"steward", 0},
+		"bridge":           {"bridge", 0},
+		"foghorn":          {"foghorn", 0},
+		"livepeer-gateway": {"livepeer-gateway", 0},
+		"chartroom":        {"chartroom", 0},
+		"foredeck":         {"foredeck", 0},
+		"logbook":          {"logbook", 0},
+		"steward":          {"steward", 0},
 	}
 
 	for key, check := range checks {
@@ -1601,7 +1604,7 @@ func TestDefaultServicePorts_EdgeServicesUse18008(t *testing.T) {
 func TestDefaultServiceHealthPaths_MatchServicedefs(t *testing.T) {
 	paths := defaultServiceHealthPaths()
 
-	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward"} {
+	for _, name := range []string{"bridge", "foghorn", "livepeer-gateway", "chartroom", "foredeck", "logbook", "steward"} {
 		svc, ok := servicedefs.Lookup(name)
 		if !ok {
 			t.Fatalf("servicedefs missing entry for %q", name)
@@ -1634,6 +1637,18 @@ func TestSyncService_FoghornUsesServiceType(t *testing.T) {
 	_, _ = manager.SyncService(context.Background(), "foghorn", "")
 	if qm.serviceType != "foghorn" {
 		t.Fatalf("expected serviceType='foghorn', got %q", qm.serviceType)
+	}
+}
+
+func TestSyncService_LivepeerGatewayUsesServiceType(t *testing.T) {
+	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
+	cf := &fakeCloudflareClient{}
+	logger := logrus.New()
+	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
+
+	_, _ = manager.SyncService(context.Background(), "livepeer-gateway", "")
+	if qm.serviceType != "livepeer-gateway" {
+		t.Fatalf("expected serviceType='livepeer-gateway', got %q", qm.serviceType)
 	}
 }
 

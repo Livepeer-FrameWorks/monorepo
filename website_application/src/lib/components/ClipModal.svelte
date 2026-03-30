@@ -28,6 +28,7 @@
     manifestPath?: string | null;
     createdAt?: string | null;
     streamId?: string;
+    sourceStreamId?: string | null;
     stream?: {
       streamId: string;
     } | null;
@@ -173,8 +174,8 @@
           </div>
         </div>
 
-        {#if clip.stream?.streamId || clip.streamId}
-          {@const displayStreamId = clip.stream?.streamId ?? clip.streamId}
+        {#if clip.sourceStreamId || clip.stream?.streamId || clip.streamId}
+          {@const displayStreamId = clip.sourceStreamId ?? clip.stream?.streamId ?? clip.streamId}
           <div class="border border-border p-4">
             <p class="text-sm text-foreground/80">
               From stream: <span class="font-medium text-foreground">{displayStreamId}</span>

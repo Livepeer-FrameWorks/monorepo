@@ -44,7 +44,7 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 		WithArgs("bridge", "cluster-1", "http", int32(18000), "10.0.0.1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
 	mock.ExpectExec("UPDATE quartermaster.service_instances").
-		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, "uuid-1").
+		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, nil, "uuid-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
@@ -138,7 +138,7 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 		WithArgs("bridge", "cluster-1", "http", int32(18000), "10.0.0.1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
 	mock.ExpectExec("UPDATE quartermaster.service_instances").
-		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, "uuid-1").
+		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, nil, "uuid-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
@@ -189,6 +189,58 @@ func TestBootstrapServiceRejectsMissingNodeReference(t *testing.T) {
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestBootstrapServiceClearMetadataReplacesExistingMetadataWithEmptyObject(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
+		WithArgs("bridge").
+		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
+	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
+		WithArgs("cluster-1", "10.0.0.1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
+		WithArgs("bridge", "cluster-1", "http", int32(18000), "10.0.0.1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
+	mock.ExpectExec("UPDATE quartermaster.service_instances").
+		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, "{}", "uuid-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
+		WithArgs("cluster-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
+		WithArgs("bridge", "cluster-1", "inst-bridge-1234", "10.0.0.1", "http", int32(18000)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:          "bridge",
+		ClusterId:     strPtr("cluster-1"),
+		Port:          18000,
+		Host:          "10.0.0.1",
+		Protocol:      "http",
+		Version:       "v1.0.0",
+		Metadata:      map[string]string{"foo": "bar"},
+		ClearMetadata: true,
+	})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
@@ -254,7 +306,7 @@ func TestBootstrapServiceFormatsIPv6AdvertiseAddr(t *testing.T) {
 		WithArgs("bridge", "cluster-1", "http", int32(443), "2001:db8::10").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("INSERT INTO quartermaster.service_instances").
-		WithArgs(sqlmock.AnyArg(), "cluster-1", nil, "bridge", "http", "2001:db8::10", (*string)(nil), "", int32(443)).
+		WithArgs(sqlmock.AnyArg(), "cluster-1", nil, "bridge", "http", "2001:db8::10", (*string)(nil), "", int32(443), nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
@@ -307,7 +359,7 @@ func TestBootstrapServiceReRegistrationClearsStoppedAt(t *testing.T) {
 		WithArgs("bridge", "cluster-1", "http", int32(18000), "10.0.0.1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-1", "inst-bridge-1234"))
 	mock.ExpectExec("(?s)UPDATE quartermaster.service_instances.*stopped_at = NULL").
-		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, "uuid-1").
+		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", nil, nil, "uuid-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
@@ -356,7 +408,7 @@ func TestBootstrapServiceSkipsIPLookupForHostname(t *testing.T) {
 		WithArgs("quartermaster", "cluster-1", "http", int32(18002), "quartermaster").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("INSERT INTO quartermaster.service_instances").
-		WithArgs(sqlmock.AnyArg(), "cluster-1", nil, "quartermaster", "http", "quartermaster", "/health", "v1.0.0", int32(18002)).
+		WithArgs(sqlmock.AnyArg(), "cluster-1", nil, "quartermaster", "http", "quartermaster", "/health", "v1.0.0", int32(18002), nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
@@ -411,7 +463,7 @@ func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
 		WithArgs("foghorn", "cluster-1", "http", int32(9000), "10.0.0.2").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "instance_id"}).AddRow("uuid-2", "inst-foghorn-1234"))
 	mock.ExpectExec("UPDATE quartermaster.service_instances").
-		WithArgs("10.0.0.2", sqlmock.AnyArg(), "v2.0.0", nil, "uuid-2").
+		WithArgs("10.0.0.2", sqlmock.AnyArg(), "v2.0.0", nil, nil, "uuid-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
@@ -433,6 +485,69 @@ func TestBootstrapServiceFoghornRemovesGhostAssignments(t *testing.T) {
 		Protocol:       "http",
 		HealthEndpoint: strPtr(""),
 		Version:        "v2.0.0",
+	})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestBootstrapServiceStoresMetadataOnInsert(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("livepeer-gateway").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
+		WithArgs("livepeer-gateway").
+		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("livepeer-gateway"))
+	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
+		WithArgs("cluster-1", "10.0.0.9").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
+		WithArgs("livepeer-gateway", "cluster-1", "http", int32(8935), "10.0.0.9").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO quartermaster.service_instances").
+		WithArgs(
+			sqlmock.AnyArg(),
+			"cluster-1",
+			nil,
+			"livepeer-gateway",
+			"http",
+			"10.0.0.9",
+			"/status",
+			"cli-provisioned",
+			int32(8935),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
+		WithArgs("cluster-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(`UPDATE quartermaster.service_instances\s+SET status = 'stopped', stopped_at = NOW\(\)`).
+		WithArgs("livepeer-gateway", "cluster-1", sqlmock.AnyArg(), "10.0.0.9", "http", int32(8935)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:           "livepeer-gateway",
+		Port:           8935,
+		Host:           "10.0.0.9",
+		Protocol:       "http",
+		HealthEndpoint: strPtr("/status"),
+		Version:        "cli-provisioned",
+		Metadata: map[string]string{
+			"wallet_address": "0xabc123",
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)

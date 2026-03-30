@@ -282,6 +282,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     started_at TIMESTAMP,
     stopped_at TIMESTAMP,
     last_health_check TIMESTAMP,
+    metadata JSONB DEFAULT '{}',
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
@@ -290,6 +291,9 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
         FOREIGN KEY (node_id, cluster_id)
         REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id)
 );
+
+ALTER TABLE IF EXISTS quartermaster.service_instances
+    ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
 
 -- ============================================================================
 -- FOGHORN-CLUSTER ASSIGNMENTS (many-to-many)

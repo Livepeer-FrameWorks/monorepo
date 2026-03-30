@@ -15,6 +15,8 @@ Every cluster — official or community — uses the same domain naming pattern.
 | --------------------------- | ------- | ------------------------------------------------ |
 | `foghorn.{base}`            | Root    | GeoDNS across official cluster Foghorn instances |
 | `foghorn.{slug}.{base}`     | Cluster | Points to this cluster's Foghorn instance(s)     |
+| `livepeer.{base}`           | Root    | GeoDNS across official cluster Livepeer gateways |
+| `livepeer.{slug}.{base}`    | Cluster | Points to this cluster's Livepeer gateway(s)     |
 | `edge-ingest.{base}`        | Root    | GeoDNS across official cluster ingest nodes      |
 | `edge-ingest.{slug}.{base}` | Cluster | Points to this cluster's ingest nodes            |
 | `edge-egress.{base}`        | Root    | GeoDNS across official cluster edge nodes        |
@@ -29,6 +31,7 @@ HTTP-based protocols (HLS, DASH, WHEP, MP4) go through Foghorn, which issues 307
 | Protocol                   | Domain                      | Transport                 |
 | -------------------------- | --------------------------- | ------------------------- |
 | HLS, DASH, WHEP, MP4, WebM | `foghorn.{slug}.{base}`     | HTTP 307 redirect to edge |
+| Livepeer gateway API       | `livepeer.{slug}.{base}`    | HTTP status/API endpoint  |
 | SRT (ingest)               | `edge-ingest.{slug}.{base}` | Direct UDP                |
 | RTMP (ingest)              | `edge-ingest.{slug}.{base}` | Direct TCP                |
 | SRT (playback)             | `edge-egress.{slug}.{base}` | Direct UDP                |
@@ -62,7 +65,7 @@ Use wildcard certificates issued via DNS-01 challenge (Let's Encrypt or equivale
 
 Use latency-based routing (Route53 latency records or Cloudflare Load Balancing) as the initial strategy:
 
-1. Each official cluster registers its Foghorn, ingest, and egress IPs in the DNS provider
+1. Each official cluster registers its Foghorn, Livepeer gateway, ingest, and egress IPs in the DNS provider
 2. The provider routes queries to the closest healthy cluster based on measured latency
 3. Health checks remove unhealthy clusters from the pool automatically
 

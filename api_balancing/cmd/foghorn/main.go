@@ -755,14 +755,21 @@ func main() {
 	})
 	processingDispatcher.SetProcessConfigCacher(triggerProcessor)
 	processingDispatcher.SetGatewayResolver(triggerProcessor)
-	processingDispatcher.Start()
-	defer processingDispatcher.Stop()
 
 	// Initialize VOD processing pipeline and wire result handler
 	foghorngrpc.InitVodPipeline(db, logger, decklogClient)
 	control.SetProcessingJobResultHandler(func(ctx context.Context, jobID, status string, outputs map[string]string, errorMsg string) {
 		foghorngrpc.GetVodPipeline().HandleJobResult(ctx, jobID, status, outputs, errorMsg)
 	})
+	control.SetProcessConfigCacheUpdater(triggerProcessor.CacheProcessConfig)
+
+	// When stale recovery exhausts a job's retries, reconcile the artifact
+	// so it doesn't stay stuck in 'processing' forever.
+	processingDispatcher.SetJobExhaustedHandler(func(ctx context.Context, jobID, artifactHash string) {
+		foghorngrpc.GetVodPipeline().HandleJobResult(ctx, jobID, "failed", nil, "max retries exceeded")
+	})
+	processingDispatcher.Start()
+	defer processingDispatcher.Stop()
 
 	// Setup router with unified monitoring (health/metrics only - all API routes now gRPC)
 	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)

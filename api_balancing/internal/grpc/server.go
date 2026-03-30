@@ -2237,17 +2237,35 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		"parts":         len(req.Parts),
 	}).Info("Completed VOD multipart upload, starting processing")
 
-	// Queue processing job (metadata extraction + thumbnails + optional transcode)
+	// Queue processing job (metadata extraction + thumbnails + optional transcode).
+	// Retry once with a fresh context — the INSERT can fail transiently (connection
+	// loss, context timeout from the upload RPC). If both attempts fail, mark the
+	// artifact as failed and emit STATUS_FAILED. We don't serve unprocessed VODs.
+	pipelineFailed := false
 	if vodPipeline != nil {
-		if startErr := vodPipeline.StartPipeline(ctx, req.TenantId, artifactHash, req.ProcessesJson); startErr != nil {
-			s.logger.WithError(startErr).Error("Failed to start VOD processing pipeline")
+		startErr := vodPipeline.StartPipeline(ctx, req.TenantId, artifactHash, req.ProcessesJson)
+		if startErr != nil {
+			s.logger.WithError(startErr).Warn("Processing pipeline INSERT failed, retrying")
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			startErr = vodPipeline.StartPipeline(retryCtx, req.TenantId, artifactHash, req.ProcessesJson)
+			retryCancel()
+		}
+		if startErr != nil {
+			s.logger.WithError(startErr).Error("Processing pipeline INSERT failed after retry")
+			pipelineFailed = true
+			if revertErr := s.markVodArtifactFailed(artifactHash); revertErr != nil {
+				s.logger.WithError(revertErr).Error("Failed to mark artifact as failed")
+			}
 		}
 	}
 
-	// Emit VOD lifecycle event (STATUS_PROCESSING)
 	if s.decklogClient != nil {
+		lifecycleStatus := pb.VodLifecycleData_STATUS_PROCESSING
+		if pipelineFailed {
+			lifecycleStatus = pb.VodLifecycleData_STATUS_FAILED
+		}
 		vodData := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+			Status:      lifecycleStatus,
 			VodHash:     artifactHash,
 			UploadId:    &req.UploadId,
 			S3Url:       &s3URL,
@@ -2264,15 +2282,17 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 	}
 
 	// Fetch and return the asset
-	asset, err := s.getVodAssetInfo(ctx, artifactHash)
+	asset, err := s.lookupCompletedUploadAsset(artifactHash, pipelineFailed)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch asset after upload completion")
-		return &pb.CompleteVodUploadResponse{
-			Asset: &pb.VodAssetInfo{
-				ArtifactHash: artifactHash,
-				Status:       pb.VodStatus_VOD_STATUS_PROCESSING,
-			},
-		}, nil
+		status := pb.VodStatus_VOD_STATUS_PROCESSING
+		if pipelineFailed {
+			status = pb.VodStatus_VOD_STATUS_FAILED
+		}
+		return &pb.CompleteVodUploadResponse{Asset: &pb.VodAssetInfo{
+			ArtifactHash: artifactHash,
+			Status:       status,
+		}}, nil
 	}
 
 	return &pb.CompleteVodUploadResponse{Asset: asset}, nil
@@ -2655,6 +2675,35 @@ func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash st
 	`
 	row := s.db.QueryRowContext(ctx, query, artifactHash)
 	return s.scanVodAssetRow(row)
+}
+
+func (s *FoghornGRPCServer) markVodArtifactFailed(artifactHash string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET status = 'failed', updated_at = NOW()
+		WHERE artifact_hash = $1
+	`, artifactHash)
+	return err
+}
+
+func (s *FoghornGRPCServer) lookupCompletedUploadAsset(artifactHash string, pipelineFailed bool) (*pb.VodAssetInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	asset, err := s.getVodAssetInfo(ctx, artifactHash)
+	if err == nil {
+		return asset, nil
+	}
+	if pipelineFailed {
+		return &pb.VodAssetInfo{
+			ArtifactHash: artifactHash,
+			Status:       pb.VodStatus_VOD_STATUS_FAILED,
+		}, nil
+	}
+	return nil, err
 }
 
 func (s *FoghornGRPCServer) scanVodAsset(rows *sql.Rows) (*pb.VodAssetInfo, error) {

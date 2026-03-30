@@ -37,9 +37,18 @@ func (c *ChatwootProvisioner) Detect(ctx context.Context, host inventory.Host) (
 func (c *ChatwootProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	fmt.Println("Provisioning chatwoot (app + worker) in Docker mode...")
 
+	state, err := c.Detect(ctx, host)
+	if err != nil {
+		state = nil
+	}
+
 	image := config.Image
 	if image == "" {
 		image = defaultChatwootImage
+	}
+	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
+		fmt.Printf("Service %s already running (%s), skipping...\n", c.name, reason)
+		return nil
 	}
 
 	// Generate SECRET_KEY_BASE if not already set on the remote host

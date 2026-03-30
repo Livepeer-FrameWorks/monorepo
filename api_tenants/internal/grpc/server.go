@@ -86,6 +86,35 @@ func mapToStruct(m map[string]interface{}) *structpb.Struct {
 	return s
 }
 
+func marshalStringMapJSON(m map[string]string) (*string, error) {
+	if len(m) == 0 {
+		return nil, nil
+	}
+
+	encoded, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	value := string(encoded)
+	return &value, nil
+}
+
+func unmarshalStringMapJSON(raw []byte) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var metadata map[string]string
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
+}
+
 func buildAdvertiseAddr(host sql.NullString, port sql.NullInt32) (string, bool) {
 	if !host.Valid || !port.Valid {
 		return "", false
@@ -723,6 +752,14 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 
 	healthEndpoint := req.HealthEndpoint
 	port := req.GetPort()
+	metadataJSON, err := marshalStringMapJSON(req.GetMetadata())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid metadata: %v", err)
+	}
+	if req.GetClearMetadata() {
+		emptyMetadata := "{}"
+		metadataJSON = &emptyMetadata
+	}
 
 	// 5a. Auto-associate with node by IP when no explicit node_id provided.
 	// If advHost is a hostname, resolve it to an IP first.
@@ -779,14 +816,15 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			    health_endpoint_override = $2,
 			    version = $3,
 			    node_id = COALESCE($4, node_id),
+			    metadata = COALESCE($5::jsonb, metadata),
 			    status = 'running',
 			    health_status = 'unknown',
 			    started_at = COALESCE(started_at, NOW()),
 			    stopped_at = NULL,
 			    last_health_check = NULL,
 			    updated_at = NOW()
-			WHERE id = $5::uuid
-		`, advHost, healthEndpoint, req.GetVersion(), resolvedNodeID, existingID)
+			WHERE id = $6::uuid
+		`, advHost, healthEndpoint, req.GetVersion(), resolvedNodeID, metadataJSON, existingID)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to update service instance")
 			return nil, status.Errorf(codes.Internal, "failed to update service instance: %v", err)
@@ -796,9 +834,9 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		// Insert new row
 		_, err = exec.ExecContext(ctx, `
 			INSERT INTO quartermaster.service_instances
-				(instance_id, cluster_id, node_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, status, health_status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', 'unknown', NOW(), NOW())
-		`, instanceID, clusterID, resolvedNodeID, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port)
+				(instance_id, cluster_id, node_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, metadata, status, health_status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::jsonb, '{}'::jsonb), 'running', 'unknown', NOW(), NOW())
+		`, instanceID, clusterID, resolvedNodeID, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port, metadataJSON)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to create service instance")
 			return nil, status.Errorf(codes.Internal, "failed to create service instance: %v", err)
@@ -1016,7 +1054,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 
 	query := fmt.Sprintf(`
 		SELECT si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id,
-		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status,
+		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, COALESCE(si.metadata, '{}'::jsonb),
 		       si.last_health_check, si.created_at, si.updated_at
 		FROM quartermaster.service_instances si
 		JOIN quartermaster.services s ON si.service_id = s.service_id
@@ -1037,11 +1075,12 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		var inst pb.ServiceInstance
 		var nodeID, host, healthEndpoint sql.NullString
 		var lastHealthCheck sql.NullTime
+		var metadataJSON []byte
 		var createdAt, updatedAt time.Time
 
 		err := rows.Scan(
 			&inst.Id, &inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &nodeID,
-			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &inst.Status,
+			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &inst.Status, &metadataJSON,
 			&lastHealthCheck, &createdAt, &updatedAt,
 		)
 		if err != nil {
@@ -1060,6 +1099,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		if lastHealthCheck.Valid {
 			inst.LastHealthCheck = timestamppb.New(lastHealthCheck.Time)
 		}
+		inst.Metadata = unmarshalStringMapJSON(metadataJSON)
 		inst.CreatedAt = timestamppb.New(createdAt)
 		inst.UpdatedAt = timestamppb.New(updatedAt)
 
@@ -1288,21 +1328,26 @@ func (s *QuartermasterServer) AssignFoghornToCluster(ctx context.Context, req *p
 	if ids := req.GetFoghornInstanceIds(); len(ids) > 0 {
 		// Assign specific Foghorn instances
 		for _, instID := range ids {
-			_, err := s.db.ExecContext(ctx, `
+			res, err := s.db.ExecContext(ctx, `
 				INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
 				SELECT si.id, $1
 				FROM quartermaster.service_instances si
 				JOIN quartermaster.services svc ON svc.service_id = si.service_id
-				WHERE si.id = $2::uuid AND svc.type = 'foghorn'
+				WHERE si.id = $2::uuid AND svc.type = 'foghorn' AND si.status = 'running'
 				ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
 			`, clusterID, instID)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to assign instance %s: %v", instID, err)
 			}
+			if affected, rowsErr := res.RowsAffected(); rowsErr != nil {
+				return nil, status.Errorf(codes.Internal, "failed to confirm assignment for instance %s: %v", instID, rowsErr)
+			} else if affected == 0 {
+				return nil, status.Errorf(codes.NotFound, "foghorn instance %s not found or not running", instID)
+			}
 		}
 	} else if count := req.GetCount(); count > 0 {
 		// Pick N Foghorns with fewest active assignments
-		_, err := s.db.ExecContext(ctx, `
+		res, err := s.db.ExecContext(ctx, `
 			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
 			SELECT si.id, $1
 			FROM quartermaster.service_instances si
@@ -1317,6 +1362,11 @@ func (s *QuartermasterServer) AssignFoghornToCluster(ctx context.Context, req *p
 		`, clusterID, count)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to assign foghorns: %v", err)
+		}
+		if affected, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to confirm foghorn assignment: %v", rowsErr)
+		} else if affected < int64(count) {
+			return nil, status.Errorf(codes.FailedPrecondition, "assigned %d foghorns, requested %d", affected, count)
 		}
 	} else {
 		return nil, status.Error(codes.InvalidArgument, "provide foghorn_instance_ids or count")
@@ -4904,7 +4954,7 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 
 	query := fmt.Sprintf(`
 		SELECT id, instance_id, service_id, cluster_id, node_id, protocol, advertise_host, port,
-		       health_endpoint_override, version, process_id, container_id, status, health_status,
+		       health_endpoint_override, version, process_id, container_id, status, health_status, COALESCE(metadata, '{}'::jsonb),
 		       started_at, stopped_at, last_health_check, created_at, updated_at
 		FROM quartermaster.service_instances
 		%s
@@ -4924,11 +4974,12 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 		var nodeID, host, healthEndpoint, version, containerID sql.NullString
 		var processID sql.NullInt32
 		var startedAt, stoppedAt, lastHealthCheck sql.NullTime
+		var metadataJSON []byte
 		var createdAt, updatedAt time.Time
 
 		err := rows.Scan(&inst.Id, &inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &nodeID,
 			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &version, &processID, &containerID,
-			&inst.Status, &inst.HealthStatus, &startedAt, &stoppedAt, &lastHealthCheck, &createdAt, &updatedAt)
+			&inst.Status, &inst.HealthStatus, &metadataJSON, &startedAt, &stoppedAt, &lastHealthCheck, &createdAt, &updatedAt)
 		if err != nil {
 			s.logger.WithError(err).Warn("Failed to scan service instance row")
 			continue
@@ -4949,6 +5000,7 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 		if processID.Valid {
 			inst.ProcessId = &processID.Int32
 		}
+		inst.Metadata = unmarshalStringMapJSON(metadataJSON)
 		if containerID.Valid {
 			inst.ContainerId = &containerID.String
 		}

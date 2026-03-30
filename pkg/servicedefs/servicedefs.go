@@ -29,7 +29,7 @@ var Services = map[string]Service{
 	// Media plane
 	"foghorn":          {ID: "foghorn", DefaultPort: 18008, HealthPath: "/health", HealthProtocol: "http", Role: "media"},
 	"helmsman":         {ID: "helmsman", DefaultPort: 18007, HealthPath: "/health", HealthProtocol: "http", Role: "media"},
-	"livepeer-gateway": {ID: "livepeer-gateway", DefaultPort: 8935, HealthPath: "/status", HealthProtocol: "http", Role: "media"},
+	"livepeer-gateway": {ID: "livepeer-gateway", DefaultPort: 8935, HealthPath: "/healthz", HealthProtocol: "http", Role: "media"},
 	"livepeer-signer":  {ID: "livepeer-signer", DefaultPort: 18016, HealthPath: "/status", HealthProtocol: "http", Role: "control"},
 
 	// Infra services
@@ -159,6 +159,12 @@ var requiredExternalEnv = map[string][]RequiredEnvVar{
 	},
 	"listmonk": {
 		{Key: "DATABASE_HOST", SetupGuide: "Enable postgres in infrastructure config"},
+	},
+	"livepeer-gateway": {
+		{Key: "eth_url", SetupGuide: "Set the network RPC in env_file (for example ARBITRUM_RPC_ENDPOINT or LIVEPEER_ETH_URL)"},
+	},
+	"livepeer-signer": {
+		{Key: "eth_url", SetupGuide: "Set the network RPC in env_file (for example ARBITRUM_RPC_ENDPOINT or LIVEPEER_ETH_URL)"},
 	},
 }
 

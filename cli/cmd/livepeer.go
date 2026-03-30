@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"frameworks/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 )
@@ -51,8 +54,23 @@ func resolveGatewayAddr(cmd *cobra.Command) (string, error) {
 	}
 
 	for _, inst := range resp.Instances {
-		if inst.Status == "running" && inst.GetHost() != "" && inst.GetPort() != 0 {
-			return fmt.Sprintf("%s:%d", inst.GetHost(), inst.GetPort()), nil
+		if inst.Status != "running" {
+			continue
+		}
+		host := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataAdminHost])
+		if host == "" {
+			host = inst.GetHost()
+		}
+		port := inst.GetPort()
+		if rawPort := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataAdminPort]); rawPort != "" {
+			if parsed, convErr := strconv.Atoi(rawPort); convErr == nil && parsed > 0 {
+				port = int32(parsed)
+			}
+		} else if port == 8935 {
+			port = 7935
+		}
+		if host != "" && port != 0 {
+			return fmt.Sprintf("%s:%d", host, port), nil
 		}
 	}
 

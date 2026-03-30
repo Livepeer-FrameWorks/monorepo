@@ -302,10 +302,9 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceURL 
 // StopRecording stops a DVR recording job
 func (dm *DVRManager) StopRecording(dvrHash string) error {
 	dm.mutex.Lock()
-	defer dm.mutex.Unlock()
-
 	job, exists := dm.jobs[dvrHash]
 	if !exists {
+		dm.mutex.Unlock()
 		return fmt.Errorf("DVR recording not found for hash %s", dvrHash)
 	}
 
@@ -316,14 +315,21 @@ func (dm *DVRManager) StopRecording(dvrHash string) error {
 		}
 	}
 
-	// Update status
 	job.Status = "stopped"
+	dm.mutex.Unlock()
 
-	// Send completion notification
+	// Final sync: flush remaining segments and manifest to S3.
+	// Mutex released during network I/O to avoid blocking other DVR operations.
+	// Safe: syncNewSegments/syncManifest use job.syncMutex internally and are
+	// idempotent (SyncedSegments tracks what's already uploaded). monitorJob may
+	// run concurrently but will exit once the job is deleted below.
+	dm.syncNewSegments(job)
+	dm.syncManifest(job)
+
+	dm.mutex.Lock()
 	dm.sendCompletion(job, "stopped", "")
-
-	// Remove from active jobs
 	delete(dm.jobs, dvrHash)
+	dm.mutex.Unlock()
 
 	job.Logger.Info("DVR recording job stopped")
 	return nil

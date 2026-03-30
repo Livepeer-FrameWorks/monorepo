@@ -8,6 +8,7 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -79,5 +80,36 @@ func TestInvalidateTenantCacheUsesInvalidator(t *testing.T) {
 	}
 	if invalidator.lastTenant != "tenant-2" {
 		t.Fatalf("expected tenant-2 to be invalidated, got %s", invalidator.lastTenant)
+	}
+}
+
+func TestLookupCompletedUploadAssetReturnsFailedAssetWhenPipelineFailed(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	server := NewFoghornGRPCServer(db, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT a.id, a.artifact_hash, a.status").
+		WithArgs("art-1").
+		WillReturnError(context.DeadlineExceeded)
+
+	asset, err := server.lookupCompletedUploadAsset("art-1", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if asset.GetArtifactHash() != "art-1" {
+		t.Fatalf("expected artifact hash art-1, got %s", asset.GetArtifactHash())
+	}
+	if asset.GetStatus() != pb.VodStatus_VOD_STATUS_FAILED {
+		t.Fatalf("expected failed status, got %v", asset.GetStatus())
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

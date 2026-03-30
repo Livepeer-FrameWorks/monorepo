@@ -727,6 +727,11 @@ func (r *clipResolver) StreamID(ctx context.Context, obj *proto.ClipInfo) (strin
 	return encodeStreamID(obj.GetStreamId())
 }
 
+// SourceStreamID is the resolver for the sourceStreamId field.
+func (r *clipResolver) SourceStreamID(ctx context.Context, obj *proto.ClipInfo) (string, error) {
+	return obj.GetStreamId(), nil
+}
+
 // Stream is the resolver for the stream field.
 func (r *clipResolver) Stream(ctx context.Context, obj *proto.ClipInfo) (*proto.Stream, error) {
 	return r.resolveStreamByID(ctx, obj.GetStreamId())
@@ -1128,6 +1133,15 @@ func (r *dVREventResolver) Stream(ctx context.Context, obj *proto.DVRLifecycleDa
 // StreamID is the resolver for the streamId field.
 func (r *dVRRequestResolver) StreamID(ctx context.Context, obj *proto.DVRInfo) (string, error) {
 	return encodeStreamID(obj.GetStreamId())
+}
+
+// SourceStreamID is the resolver for the sourceStreamId field.
+func (r *dVRRequestResolver) SourceStreamID(ctx context.Context, obj *proto.DVRInfo) (*string, error) {
+	if obj.GetStreamId() == "" {
+		return nil, nil
+	}
+	sourceStreamID := obj.GetStreamId()
+	return &sourceStreamID, nil
 }
 
 // Stream is the resolver for the stream field.

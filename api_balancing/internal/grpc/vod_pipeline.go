@@ -81,9 +81,8 @@ func (p *VodPipeline) HandleJobResult(ctx context.Context, jobID, resultStatus s
 	})
 
 	if resultStatus == "failed" {
-		// Processing failure is non-critical — serve the raw upload
-		log.WithField("error", errorMsg).Warn("Processing failed, falling back to raw (marking ready)")
-		p.markArtifactReady(ctx, log, artifactHash, tenantID)
+		log.WithField("error", errorMsg).Error("Processing failed")
+		p.markArtifactFailed(ctx, log, artifactHash, tenantID, errorMsg)
 		return
 	}
 
@@ -151,6 +150,36 @@ func (p *VodPipeline) markArtifactReady(ctx context.Context, log *logrus.Entry, 
 			CompletedAt: proto.Int64(time.Now().Unix()),
 		}
 		go func() { _ = p.decklogClient.SendVodLifecycle(vodData) }()
+	}
+}
+
+func (p *VodPipeline) markArtifactFailed(ctx context.Context, log *logrus.Entry, artifactHash, tenantID, errorMsg string) {
+	_, err := p.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET status = 'failed',
+		    updated_at = NOW()
+		WHERE artifact_hash = $1
+	`, artifactHash)
+	if err != nil {
+		log.WithError(err).Error("Failed to mark artifact as failed")
+		return
+	}
+
+	log.Error("Artifact marked failed")
+
+	if p.decklogClient != nil {
+		errStr := errorMsg
+		vodData := &pb.VodLifecycleData{
+			Status:   pb.VodLifecycleData_STATUS_FAILED,
+			VodHash:  artifactHash,
+			TenantId: &tenantID,
+			Error:    &errStr,
+		}
+		go func() {
+			if err := p.decklogClient.SendVodLifecycle(vodData); err != nil {
+				p.logger.WithError(err).Warn("Failed to send VOD failed lifecycle event")
+			}
+		}()
 	}
 }
 

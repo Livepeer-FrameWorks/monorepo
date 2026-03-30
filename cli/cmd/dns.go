@@ -11,7 +11,9 @@ import (
 
 	"frameworks/cli/internal/config"
 	"frameworks/pkg/clients/quartermaster"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
 
 	"github.com/spf13/cobra"
 )
@@ -51,55 +53,68 @@ func newDNSDoctorCmd() *cobra.Command {
 			if !isJSON {
 				fmt.Fprintln(cmd.OutOrStdout(), "🏥 DNS Health Check")
 				fmt.Fprintln(cmd.OutOrStdout(), "===================")
-				fmt.Fprint(cmd.OutOrStdout(), "• Fetching inventory from Quartermaster... ")
+				fmt.Fprint(cmd.OutOrStdout(), "• Fetching service inventory from Quartermaster... ")
 			}
 
-			// 2. Fetch Inventory
-			nodesResp, err := qmClient.ListNodes(context.Background(), "", "", "", nil)
+			// 2. Fetch expected service-backed IPs using the same Quartermaster
+			// query path Navigator relies on.
+			expectedIPs := make(map[string][]string)
+			serviceTypes := pkgdns.ManagedServiceTypes()
+			staleThresholdSeconds := 300
+			clustersResp, err := qmClient.ListClusters(context.Background(), nil)
 			if err != nil {
 				if !isJSON {
 					fmt.Fprintln(cmd.OutOrStdout(), "❌")
 				}
-				return fmt.Errorf("failed to get nodes: %w", err)
+				return fmt.Errorf("failed to list clusters: %w", err)
 			}
-			if !isJSON {
-				fmt.Fprintf(cmd.OutOrStdout(), "✓ (%d active nodes)\n", len(nodesResp.Nodes))
-			}
-
-			// 3. Group Expected IPs by Role
-			expectedIPs := make(map[string][]string)
-
-			// Define mapping of role -> subdomain
-			// This mirrors the logic in api_dns (Navigator)
-			serviceMap := map[string]string{
-				"edge-egress": "edge-egress",
-				"edge-ingest": "edge-ingest",
-				"foghorn":     "foghorn",
-				"chandler":    "chandler",
-				"bridge":      "bridge",
-				"chartroom":   "chartroom",
-				"foredeck":    "@",
-				"logbook":     "logbook",
-				"steward":     "steward",
-			}
-
-			for _, node := range nodesResp.Nodes {
-				if node.ExternalIp == nil || *node.ExternalIp == "" {
+			clusterSlugs := make(map[string]string, len(clustersResp.Clusters))
+			for _, cluster := range clustersResp.Clusters {
+				if !cluster.GetIsActive() {
 					continue
 				}
+				clusterSlugs[cluster.GetClusterId()] = pkgdns.ClusterSlug(cluster.GetClusterId(), cluster.GetClusterName())
+			}
 
-				// Check node type/role against map
-				// Assuming node.NodeType maps roughly to our service roles
-				if subdomain, ok := serviceMap[node.NodeType]; ok {
-					fqdn := fmt.Sprintf("%s.%s", subdomain, domain)
-					if subdomain == "" || subdomain == "@" {
-						fqdn = domain
+			for _, serviceType := range serviceTypes {
+				nodesResp, err := qmClient.ListHealthyNodesForDNS(context.Background(), staleThresholdSeconds, serviceType)
+				if err != nil {
+					if !isJSON {
+						fmt.Fprintln(cmd.OutOrStdout(), "❌")
 					}
-					expectedIPs[fqdn] = append(expectedIPs[fqdn], *node.ExternalIp)
+					return fmt.Errorf("failed to get healthy nodes for %s: %w", serviceType, err)
+				}
+				fqdn, ok := pkgdns.ServiceFQDN(serviceType, domain)
+				if !ok {
+					continue
+				}
+				wantIPs := uniqueExternalIPs(nodesResp.Nodes)
+				if len(wantIPs) == 0 {
+					continue
+				}
+				expectedIPs[fqdn] = wantIPs
+
+				if !pkgdns.IsClusterScopedServiceType(serviceType) {
+					continue
+				}
+				for clusterID, clusterIPs := range clusterExternalIPs(nodesResp.Nodes) {
+					clusterSlug := clusterSlugs[clusterID]
+					if clusterSlug == "" {
+						continue
+					}
+					clusterFQDN, ok := pkgdns.ServiceFQDN(serviceType, clusterSlug+"."+domain)
+					if !ok || len(clusterIPs) == 0 {
+						continue
+					}
+					expectedIPs[clusterFQDN] = clusterIPs
 				}
 			}
 
-			// 4. Verify Records
+			if !isJSON {
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ (%d service types checked)\n", len(serviceTypes))
+			}
+
+			// 3. Verify Records
 			type dnsResult struct {
 				Domain      string   `json:"domain"`
 				ExpectedIPs []string `json:"expected_ips"`
@@ -202,4 +217,48 @@ func slicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func uniqueExternalIPs(nodes []*pb.InfrastructureNode) []string {
+	seen := make(map[string]struct{}, len(nodes))
+	out := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		ip := node.GetExternalIp()
+		if ip == "" {
+			continue
+		}
+		if _, exists := seen[ip]; exists {
+			continue
+		}
+		seen[ip] = struct{}{}
+		out = append(out, ip)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func clusterExternalIPs(nodes []*pb.InfrastructureNode) map[string][]string {
+	clusterSets := make(map[string]map[string]struct{})
+	for _, node := range nodes {
+		clusterID := node.GetClusterId()
+		ip := node.GetExternalIp()
+		if clusterID == "" || ip == "" {
+			continue
+		}
+		if _, ok := clusterSets[clusterID]; !ok {
+			clusterSets[clusterID] = make(map[string]struct{})
+		}
+		clusterSets[clusterID][ip] = struct{}{}
+	}
+
+	out := make(map[string][]string, len(clusterSets))
+	for clusterID, ips := range clusterSets {
+		clusterIPs := make([]string, 0, len(ips))
+		for ip := range ips {
+			clusterIPs = append(clusterIPs, ip)
+		}
+		sort.Strings(clusterIPs)
+		out[clusterID] = clusterIPs
+	}
+	return out
 }

@@ -326,16 +326,16 @@ services:
 
   # Foghorn HA state store
   foghorn-redis:
-    image: redis:7-alpine
+    image: valkey/valkey:8.1-alpine
     container_name: frameworks-foghorn-redis
     hostname: foghorn-redis
-    command: redis-server --appendonly yes
+    command: valkey-server --appendonly yes
     volumes:
       - foghorn_redis_data:/data
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -1494,10 +1494,10 @@ services:
         max-file: "3"
 
   platform-redis:
-    image: redis:7-alpine
+    image: valkey/valkey:8.1-alpine
     container_name: frameworks-platform-redis
     hostname: platform-redis
-    command: redis-server --appendonly yes
+    command: valkey-server --appendonly yes
     volumes:
       - platform_redis_data:/data
     networks:
@@ -1511,7 +1511,7 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3

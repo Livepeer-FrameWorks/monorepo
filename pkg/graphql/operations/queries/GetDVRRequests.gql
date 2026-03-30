@@ -10,9 +10,7 @@ query GetDVRRequests($streamId: ID, $first: Int = 50, $after: String) {
         dvrHash
         playbackId
         streamId
-        stream {
-          streamId
-        }
+        sourceStreamId
         title
         createdAt
         updatedAt

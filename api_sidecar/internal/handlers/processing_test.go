@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -161,4 +163,88 @@ func TestSignalProcessingComplete(t *testing.T) {
 
 	// Signaling an unregistered stream must not panic
 	SignalProcessingComplete("processing+nonexistent_stream")
+}
+
+func TestShouldIgnoreProcessExitByBootCount(t *testing.T) {
+	ignored := map[string]int{}
+
+	if shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "Livepeer", BootCount: 1}, ignored) {
+		t.Fatal("unexpected ignore before any generation is retired")
+	}
+
+	ignoreProcessExitThrough(ignored, "Livepeer", 3)
+
+	if !shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "Livepeer", BootCount: 2}, ignored) {
+		t.Fatal("expected older Livepeer boot count to be ignored")
+	}
+	if !shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "Livepeer", BootCount: 3}, ignored) {
+		t.Fatal("expected retired Livepeer boot count to be ignored")
+	}
+	if shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "Livepeer", BootCount: 4}, ignored) {
+		t.Fatal("expected newer Livepeer boot count to remain eligible")
+	}
+	if shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "AV", BootCount: 1}, ignored) {
+		t.Fatal("expected other process types to remain eligible")
+	}
+}
+
+func TestShouldIgnoreProcessExitWhenTypeRetiredWithoutBootCount(t *testing.T) {
+	ignored := map[string]int{}
+	ignoreProcessExitThrough(ignored, "Livepeer", 0)
+
+	if !shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "Livepeer", BootCount: 99}, ignored) {
+		t.Fatal("expected all retired Livepeer exits to be ignored")
+	}
+	if !shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "Livepeer"}, ignored) {
+		t.Fatal("expected missing boot count to be ignored for retired Livepeer exits")
+	}
+	if shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "AV", BootCount: 1}, ignored) {
+		t.Fatal("expected non-retired process types to remain eligible")
+	}
+}
+
+func TestWaitForProcessingOutput_SucceedsWhenFileExists(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "out.mkv")
+	if err := os.WriteFile(outputPath, []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	size, err := waitForProcessingOutput(outputPath, time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if size != 2 {
+		t.Fatalf("expected size 2, got %d", size)
+	}
+}
+
+func TestWaitForProcessingOutput_WaitsForDelayedFile(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "delayed.mkv")
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = os.WriteFile(outputPath, []byte("ready"), 0644)
+	}()
+
+	size, err := waitForProcessingOutput(outputPath, time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if size != 5 {
+		t.Fatalf("expected size 5, got %d", size)
+	}
+}
+
+func TestWaitForProcessingOutput_FailsForEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "empty.mkv")
+	if err := os.WriteFile(outputPath, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := waitForProcessingOutput(outputPath, 150*time.Millisecond); err == nil {
+		t.Fatal("expected validation error for empty file")
+	}
 }

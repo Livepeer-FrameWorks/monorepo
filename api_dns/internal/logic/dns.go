@@ -114,7 +114,10 @@ func defaultServicePorts() map[string]int {
 		"edge-storage":    18008,
 		"edge-processing": 18008,
 	}
-	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward", "listmonk", "chatwoot"} {
+	for _, name := range pkgdns.ManagedServiceTypes() {
+		if _, exists := ports[name]; exists {
+			continue
+		}
 		if svc, ok := servicedefs.Lookup(name); ok {
 			ports[name] = svc.DefaultPort
 		}
@@ -125,13 +128,16 @@ func defaultServicePorts() map[string]int {
 // defaultServiceHealthPaths returns the health check path for each service type.
 func defaultServiceHealthPaths() map[string]string {
 	paths := make(map[string]string)
-	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward", "listmonk", "chatwoot"} {
+	for _, e := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
+		paths[e] = "/health"
+	}
+	for _, name := range pkgdns.ManagedServiceTypes() {
+		if _, exists := paths[name]; exists {
+			continue
+		}
 		if svc, ok := servicedefs.Lookup(name); ok && svc.HealthPath != "" {
 			paths[name] = svc.HealthPath
 		}
-	}
-	for _, e := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
-		paths[e] = "/health"
 	}
 	return paths
 }
@@ -171,10 +177,7 @@ func ClusterSlug(cluster *proto.InfrastructureCluster) string {
 	if cluster == nil {
 		return "default"
 	}
-	if v := SanitizeLabel(cluster.GetClusterId()); v != "default" {
-		return v
-	}
-	return SanitizeLabel(cluster.GetClusterName())
+	return pkgdns.ClusterSlug(cluster.GetClusterId(), cluster.GetClusterName())
 }
 
 func (m *DNSManager) clusterSlug(cluster *proto.InfrastructureCluster) string {
@@ -342,14 +345,10 @@ func isEdgeNodeRecord(recordName, prefix, suffix string) bool {
 }
 
 func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {
-	subdomain := serviceType
-	switch serviceType {
-	case "bridge":
-		subdomain = "bridge"
-	case "foredeck":
-		return rootDomain
+	if fqdn, ok := pkgdns.ServiceFQDN(serviceType, rootDomain); ok {
+		return fqdn
 	}
-	return fmt.Sprintf("%s.%s", subdomain, rootDomain)
+	return fmt.Sprintf("%s.%s", serviceType, rootDomain)
 }
 
 // syncClusterService applies DNS for a cluster-scoped service using pre-fetched IPs.
@@ -386,48 +385,13 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	}
 	log.WithField("count", len(activeIPs)).Info("Found active nodes")
 
-	// 3. Determine Subdomain
-	// Map internal service types to public subdomains
-	var subdomain string
-	switch serviceType {
-	case "edge":
-		subdomain = "edge"
-	case "edge-egress":
-		subdomain = "edge-egress"
-	case "edge-ingest":
-		subdomain = "edge-ingest"
-	case "edge-storage":
-		subdomain = "edge-storage"
-	case "edge-processing":
-		subdomain = "edge-processing"
-	case "foghorn":
-		subdomain = "foghorn"
-	case "bridge":
-		subdomain = "bridge"
-	case "chartroom":
-		subdomain = "chartroom"
-	case "foredeck":
-		subdomain = "@" // Root
-	case "logbook":
-		subdomain = "logbook"
-	case "steward":
-		subdomain = "steward"
-	case "listmonk":
-		subdomain = "listmonk"
-	case "chatwoot":
-		subdomain = "chatwoot"
-	default:
-		return nil, fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
-	}
-
 	domain := m.domain
 	if rootDomain != "" {
 		domain = rootDomain
 	}
-
-	fqdn := fmt.Sprintf("%s.%s", subdomain, domain)
-	if subdomain == "@" {
-		fqdn = domain
+	fqdn, ok := pkgdns.ServiceFQDN(serviceType, domain)
+	if !ok {
+		return nil, fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
 	}
 
 	// 4. Apply "Smart Record" Logic

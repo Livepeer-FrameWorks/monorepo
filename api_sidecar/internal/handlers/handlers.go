@@ -576,6 +576,14 @@ func HandleStreamProcess(c *gin.Context) {
 		return
 	}
 
+	if streamProcess := mistTrigger.GetStreamProcess(); streamProcess != nil {
+		if override, ok := getProcessingProcessOverride(streamProcess.GetStreamName()); ok {
+			incMistWebhook("STREAM_PROCESS", "success")
+			c.String(http.StatusOK, override)
+			return
+		}
+	}
+
 	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTrigger, logger)
 	if err != nil {
@@ -1458,6 +1466,41 @@ func determineQualityTier(tracks []*pb.StreamTrack) string {
 	}
 
 	return result
+}
+
+// HandleProcessExit handles the PROCESS_EXIT webhook from MistServer.
+// Fired every time a MistProc process exits. Routes to the active processing
+// handler for the stream (if any) via the listener registry.
+func HandleProcessExit(c *gin.Context) {
+	incMistWebhook("PROCESS_EXIT", "received")
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		incMistWebhook("PROCESS_EXIT", "read_error")
+		logger.WithError(err).Error("Failed to read PROCESS_EXIT body")
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	evt, err := ParseProcessExitTrigger(body)
+	if err != nil {
+		incMistWebhook("PROCESS_EXIT", "parse_error")
+		logger.WithError(err).Error("Failed to parse PROCESS_EXIT trigger")
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"stream":       evt.StreamName,
+		"process_type": evt.ProcessType,
+		"exit_code":    evt.ExitCode,
+		"status":       evt.Status,
+		"reason":       evt.Reason,
+	}).Info("PROCESS_EXIT received")
+
+	RouteProcessExit(evt)
+	incMistWebhook("PROCESS_EXIT", "routed")
+	c.String(http.StatusOK, "")
 }
 
 // HandleLivepeerSegmentComplete handles LIVEPEER_SEGMENT_COMPLETE webhook

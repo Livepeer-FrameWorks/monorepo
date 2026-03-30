@@ -330,6 +330,10 @@ func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
 			VodLifecycleData: data,
 		},
 	}
+	if data.GetTenantId() != "" {
+		tenantID := data.GetTenantId()
+		trigger.TenantId = &tenantID
+	}
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{

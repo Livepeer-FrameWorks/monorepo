@@ -1050,7 +1050,16 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		case *pb.ControlMessage_ValidateEdgeTokenRequest:
 			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ProcessingJobResult:
-			go processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+			if x.ProcessingJobResult.GetStatus() == "cache_update" {
+				// Best-effort cache refresh for processing fallback. The restarted
+				// push now reads its override locally in Helmsman, so this no longer
+				// needs to act as a cross-process ordering barrier.
+				processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+			} else {
+				go processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+			}
+		case *pb.ControlMessage_ProcessingJobProgress:
+			go processProcessingJobProgress(x.ProcessingJobProgress, registry.log)
 		case *pb.ControlMessage_ThumbnailUploadRequest:
 			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ThumbnailUploaded:
@@ -2634,11 +2643,12 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 
 	var streamName string
 	var originCluster sql.NullString
+	var syncStatus sql.NullString
 	err := db.QueryRowContext(ctx, `
-		SELECT stream_internal_name, origin_cluster_id
+		SELECT stream_internal_name, origin_cluster_id, sync_status
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2`,
-		lookupHash, lookupType).Scan(&streamName, &originCluster)
+		lookupHash, lookupType).Scan(&streamName, &originCluster, &syncStatus)
 
 	// For DVR segment/manifest incremental sync, assetHash is "{dvr_hash}/{filename}"
 	dvrHash := assetHash
@@ -2740,6 +2750,22 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			AssetHash:  assetHash,
 			Approved:   true,
 			SkipUpload: true,
+		}, logger)
+		return
+	}
+
+	// Already synced to S3 — no need to re-freeze
+	if syncStatus.Valid && syncStatus.String == "synced" {
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"asset_type": assetType,
+			"node_id":    nodeID,
+		}).Debug("Asset already synced to S3, rejecting freeze permission")
+		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "already_synced",
 		}, logger)
 		return
 	}
@@ -3286,11 +3312,22 @@ func SendDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets) err
 // Set by the grpc package to avoid circular imports (control → grpc).
 type ProcessingJobResultHandler func(ctx context.Context, jobID, status string, outputs map[string]string, errorMsg string)
 
+// ProcessConfigCacheUpdater updates the STREAM_PROCESS cache for an artifact.
+// Used for Livepeer → local fallback: Helmsman tells Foghorn to cache the
+// local-only config so the restarted push gets it via STREAM_PROCESS.
+type ProcessConfigCacheUpdater func(artifactHash, processesJSON string)
+
 var onProcessingJobResult ProcessingJobResultHandler
+var onProcessConfigCacheUpdate ProcessConfigCacheUpdater
 
 // SetProcessingJobResultHandler registers a callback for processing job results.
 func SetProcessingJobResultHandler(h ProcessingJobResultHandler) {
 	onProcessingJobResult = h
+}
+
+// SetProcessConfigCacheUpdater registers the cache updater for Livepeer fallback.
+func SetProcessConfigCacheUpdater(h ProcessConfigCacheUpdater) {
+	onProcessConfigCacheUpdate = h
 }
 
 // processProcessingJobResult handles job completion/failure results from Helmsman.
@@ -3311,6 +3348,14 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 
 	jobStatus := result.GetStatus()
 	switch jobStatus {
+	case "cache_update":
+		artifactHash := result.GetOutputs()["artifact_hash"]
+		processesJSON := result.GetOutputs()["processes_json"]
+		if artifactHash != "" && processesJSON != "" && onProcessConfigCacheUpdate != nil {
+			onProcessConfigCacheUpdate(artifactHash, processesJSON)
+			logger.WithField("artifact_hash", artifactHash).Info("Updated process config cache for Livepeer fallback")
+		}
+		return
 	case "completed":
 		var outputMeta *string
 		if len(result.GetOutputs()) > 0 {
@@ -3359,31 +3404,16 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 				})
 
 				// Update artifact format to match processed output and reset sync
-				// status so the processed file gets synced to S3.
+				// status so the processed file gets synced to S3. Keep the original
+				// upload URL in s3_url until the replacement upload is durably synced.
 				if _, dbErr := db.ExecContext(ctx, `
-					UPDATE foghorn.artifacts
-					SET format = $1,
-					    sync_status = 'pending',
-					    storage_location = 'local',
-					    s3_url = NULL,
-					    updated_at = NOW()
-					WHERE artifact_hash = $2`, newFormat, artifactHash); dbErr != nil {
+						UPDATE foghorn.artifacts
+						SET format = $1,
+						    sync_status = 'pending',
+						    storage_location = 'local',
+						    updated_at = NOW()
+						WHERE artifact_hash = $2`, newFormat, artifactHash); dbErr != nil {
 					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format after processing")
-				}
-
-				// Delete the original user upload from S3 — the processed version replaces it.
-				if oldS3URL != "" && s3Client != nil {
-					if err := s3Client.DeleteByURL(ctx, oldS3URL); err != nil {
-						logger.WithError(err).WithFields(logging.Fields{
-							"artifact_hash": artifactHash,
-							"old_s3_url":    oldS3URL,
-						}).Warn("Failed to delete original upload from S3 after processing")
-					} else {
-						logger.WithFields(logging.Fields{
-							"artifact_hash": artifactHash,
-							"old_s3_url":    oldS3URL,
-						}).Info("Deleted original upload from S3 after processing")
-					}
 				}
 
 				logger.WithFields(logging.Fields{
@@ -3418,6 +3448,52 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 	// Notify pipeline handler
 	if onProcessingJobResult != nil {
 		onProcessingJobResult(ctx, result.GetJobId(), jobStatus, result.GetOutputs(), result.GetError())
+	}
+}
+
+// processProcessingJobProgress handles periodic progress updates from Helmsman.
+// Refreshes updated_at (preventing stale recovery) and emits lifecycle events.
+func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger logging.Logger) {
+	if db == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	progressPct := progress.GetProgressPct()
+
+	// Update job progress and refresh updated_at so stale recovery doesn't requeue
+	var artifactHash sql.NullString
+	var tenantID string
+	err := db.QueryRowContext(ctx, `
+		UPDATE foghorn.processing_jobs
+		SET progress = $2, updated_at = NOW()
+		WHERE job_id = $1 AND status IN ('dispatched', 'processing')
+		RETURNING artifact_hash, tenant_id::text
+	`, progress.GetJobId(), progressPct).Scan(&artifactHash, &tenantID)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to update processing job progress")
+		}
+		return
+	}
+
+	// Emit VodLifecycleData with progress for Periscope
+	if decklogClient != nil && artifactHash.Valid {
+		vodData := &pb.VodLifecycleData{
+			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+			VodHash:     artifactHash.String,
+			ProgressPct: &progressPct,
+		}
+		if tenantID != "" {
+			vodData.TenantId = &tenantID
+		}
+		go func() {
+			if err := decklogClient.SendVodLifecycle(vodData); err != nil {
+				logger.WithError(err).Warn("Failed to send processing progress lifecycle event")
+			}
+		}()
 	}
 }
 
@@ -4094,14 +4170,16 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 
 	switch status {
 	case "success":
+		var artifactType, internalName, format, tenantID, previousS3URL string
 		// If Helmsman didn't provide s3_url (typical), compute it from stored artifact metadata.
-		if s3URL == "" && s3Client != nil && db != nil {
-			var artifactType, internalName, format, tenantID string
+		if db != nil {
 			_ = db.QueryRowContext(ctx, `
-				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,'')
+				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,''), COALESCE(s3_url,'')
 				FROM foghorn.artifacts
 				WHERE artifact_hash = $1
-			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID)
+			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID, &previousS3URL)
+		}
+		if s3URL == "" && s3Client != nil {
 			if tenantID != "" {
 				switch artifactType {
 				case "clip":
@@ -4158,6 +4236,22 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			"node_id":       reportingNodeID,
 			"dtsh_included": dtshIncluded,
 		}).Info("Asset synced to S3, local copy retained")
+
+		if artifactType == "vod" && previousS3URL != "" && s3URL != "" && previousS3URL != s3URL && s3Client != nil {
+			if err := s3Client.DeleteByURL(ctx, previousS3URL); err != nil {
+				logger.WithError(err).WithFields(logging.Fields{
+					"asset_hash":      assetHash,
+					"replaced_s3_url": previousS3URL,
+					"new_s3_url":      s3URL,
+				}).Warn("Failed to delete replaced VOD source from S3 after sync")
+			} else {
+				logger.WithFields(logging.Fields{
+					"asset_hash":      assetHash,
+					"replaced_s3_url": previousS3URL,
+					"new_s3_url":      s3URL,
+				}).Info("Deleted replaced VOD source from S3 after sync")
+			}
+		}
 
 	case "evicted_remote":
 		// Remote-origin artifact: local copy was deleted, original lives on origin S3.

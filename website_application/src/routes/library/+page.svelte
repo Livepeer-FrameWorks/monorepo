@@ -169,12 +169,19 @@
     artifactStates.filter((s) => s.stage !== "completed" && s.stage !== "error")
   );
 
-  // Storage events (freeze/defrost)
-  let storageEvents = $derived(
-    $storageEventsStore.data?.analytics?.lifecycle?.storageEventsConnection?.edges?.map(
-      (e) => e.node
-    ) ?? []
-  );
+  // Storage events (freeze/defrost) — deduplicate by id to avoid keyed-each errors
+  let storageEvents = $derived.by(() => {
+    const nodes =
+      $storageEventsStore.data?.analytics?.lifecycle?.storageEventsConnection?.edges?.map(
+        (e) => e.node
+      ) ?? [];
+    const seen = new SvelteSet<string>();
+    return nodes.filter((n) => {
+      if (seen.has(n.id)) return false;
+      seen.add(n.id);
+      return true;
+    });
+  });
 
   // Pagination state
   let clipsPageInfo = $derived($clipsStore.data?.clipsConnection?.pageInfo);
@@ -196,13 +203,6 @@
   let allArtifacts = $derived.by(() => {
     const unified: UnifiedArtifact[] = [];
 
-    const toDisplayStreamId = (
-      stream: { streamId?: string | null } | null | undefined,
-      fallback: string | null
-    ): string | null => {
-      return stream?.streamId ?? fallback ?? null;
-    };
-
     // Add clips
     for (const clip of clips) {
       unified.push({
@@ -212,7 +212,7 @@
         hash: clip.clipHash || "",
         playbackId: clip.playbackId,
         streamId: clip.streamId,
-        displayStreamId: toDisplayStreamId(clip.stream, clip.streamId),
+        displayStreamId: clip.sourceStreamId ?? null,
         status: clip.status || "unknown",
         duration: clip.duration,
         sizeBytes: clip.sizeBytes,
@@ -231,7 +231,7 @@
         hash: dvr.dvrHash,
         playbackId: dvr.playbackId,
         streamId: dvr.streamId,
-        displayStreamId: toDisplayStreamId(dvr.stream, dvr.streamId),
+        displayStreamId: dvr.sourceStreamId ?? null,
         status: dvr.status || "unknown",
         duration: dvr.durationSeconds,
         sizeBytes: dvr.sizeBytes,
@@ -419,9 +419,9 @@
 
       await Promise.all([
         streamsStore.fetch(),
-        clipsStore.fetch({ variables: { first: 100 } }),
-        dvrStore.fetch({ variables: { first: 100 } }),
-        vodStore.fetch({ variables: { first: 100 } }),
+        clipsStore.fetch(),
+        dvrStore.fetch(),
+        vodStore.fetch(),
         artifactEventsStore
           .fetch({
             variables: {
@@ -827,6 +827,7 @@
   const SearchIcon = getIconComponent("Search");
   const ChevronUpIcon = getIconComponent("ChevronUp");
   const SnowflakeIcon = getIconComponent("Snowflake");
+  const ZapIcon = getIconComponent("Zap");
   const ActivityIcon = getIconComponent("Activity");
   const CloudUploadIcon = getIconComponent("CloudUpload");
   const FileVideoIcon = getIconComponent("FileVideo");
@@ -1522,7 +1523,11 @@
                               ? 'bg-info/20 text-info border border-info/30'
                               : 'bg-warning/20 text-warning border border-warning/30'}"
                           >
-                            {event.action === "freeze" ? "❄️" : "🔥"}
+                            {#if event.action === "freeze"}
+                              <SnowflakeIcon class="w-3 h-3" />
+                            {:else}
+                              <ZapIcon class="w-3 h-3" />
+                            {/if}
                             {event.action}
                           </span>
                         </TableCell>

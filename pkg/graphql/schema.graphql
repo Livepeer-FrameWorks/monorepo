@@ -2006,6 +2006,7 @@ type DVRRequest {
   dvrHash: ID!
   playbackId: String!
   streamId: ID!
+  sourceStreamId: String
   stream: Stream
   title: String # Stream title or custom title
   createdAt: Time!
@@ -4799,6 +4800,8 @@ type Clip implements Node {
   playbackId: String!
   "Stream this clip was created from."
   streamId: ID!
+  "Stable UUID of the source stream this clip was created from."
+  sourceStreamId: String!
   stream: Stream
   "Display title for the clip."
   title: String!

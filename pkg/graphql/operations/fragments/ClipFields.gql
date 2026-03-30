@@ -4,9 +4,7 @@ fragment ClipFields on Clip {
   clipHash
   playbackId
   streamId
-  stream {
-    streamId
-  }
+  sourceStreamId
   title
   description
   startTime

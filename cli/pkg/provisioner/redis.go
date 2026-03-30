@@ -20,6 +20,12 @@ type RedisProvisioner struct {
 	executor *ansible.Executor
 }
 
+const (
+	defaultRedisEngine   = "valkey"
+	defaultValkeyVersion = "8.1"
+	defaultRedisVersion  = "7.2.4"
+)
+
 // NewRedisProvisioner creates a new Redis provisioner.
 func NewRedisProvisioner(pool *ssh.Pool) (*RedisProvisioner, error) {
 	executor, err := ansible.NewExecutor("")
@@ -71,19 +77,23 @@ func (r *RedisProvisioner) provisionDocker(ctx context.Context, host inventory.H
 	}
 
 	version := config.Version
-	if version == "" {
-		version = "7"
+	engine, err := resolveRedisEngine(config.Metadata)
+	if err != nil {
+		return err
 	}
 
 	image := config.Image
 	if image == "" {
-		image = fmt.Sprintf("redis:%s-alpine", version)
+		image, _, err = buildRedisDockerImage(engine, version)
+		if err != nil {
+			return err
+		}
 	}
 
 	password, _ := config.Metadata["password"].(string)
 
 	// Build redis-server command args
-	cmdArgs := buildRedisCommandArgs(config.Metadata, password)
+	cmdArgs := buildRedisCommandArgs(engine, config.Metadata, password)
 
 	serviceName := fmt.Sprintf("redis-%s", instanceName)
 
@@ -110,7 +120,7 @@ func (r *RedisProvisioner) provisionDocker(ctx context.Context, host inventory.H
 	}
 
 	// Build health check command
-	healthTest := []string{"CMD", "redis-cli"}
+	healthTest := []string{"CMD", redisCLIName(engine)}
 	if password != "" {
 		healthTest = append(healthTest, "-a", password)
 	}
@@ -185,6 +195,40 @@ func (r *RedisProvisioner) provisionDocker(ctx context.Context, host inventory.H
 	return nil
 }
 
+func resolveRedisEngine(metadata map[string]interface{}) (string, error) {
+	engine, ok := metadata["engine"].(string)
+	if !ok {
+		engine = ""
+	}
+	engine = strings.ToLower(strings.TrimSpace(engine))
+	if engine == "" {
+		return defaultRedisEngine, nil
+	}
+	switch engine {
+	case "redis", "valkey":
+		return engine, nil
+	default:
+		return "", fmt.Errorf("unsupported redis engine %q (must be redis or valkey)", engine)
+	}
+}
+
+func buildRedisDockerImage(engine, version string) (string, string, error) {
+	switch engine {
+	case "valkey":
+		if version == "" {
+			version = defaultValkeyVersion
+		}
+		return fmt.Sprintf("valkey/valkey:%s-alpine", version), version, nil
+	case "redis":
+		if version == "" {
+			version = defaultRedisVersion
+		}
+		return fmt.Sprintf("redis:%s-alpine", version), version, nil
+	default:
+		return "", "", fmt.Errorf("unsupported redis engine %q (must be redis or valkey)", engine)
+	}
+}
+
 // provisionNative provisions Redis using Ansible.
 func (r *RedisProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, instanceName string) error {
 	fmt.Printf("Provisioning Redis instance %q in native mode...\n", instanceName)
@@ -195,12 +239,17 @@ func (r *RedisProvisioner) provisionNative(ctx context.Context, host inventory.H
 		port = 6379
 	}
 
+	engine, err := resolveRedisEngine(config.Metadata)
+	if err != nil {
+		return err
+	}
+
 	hostID := host.ExternalIP
 	if hostID == "" {
 		hostID = "localhost"
 	}
 
-	playbook := GenerateRedisPlaybook(hostID, instanceName, port, password, config.Metadata)
+	playbook := GenerateRedisPlaybook(hostID, engine, instanceName, port, password, config.Metadata)
 
 	inv := ansible.NewInventory()
 	inv.AddHost(&ansible.InventoryHost{
@@ -245,9 +294,9 @@ func (r *RedisProvisioner) Initialize(ctx context.Context, host inventory.Host, 
 	return nil
 }
 
-// buildRedisCommandArgs constructs redis-server CLI flags from metadata.
-func buildRedisCommandArgs(metadata map[string]interface{}, password string) string {
-	args := []string{"redis-server", "--appendonly", "yes"}
+// buildRedisCommandArgs constructs server CLI flags from metadata.
+func buildRedisCommandArgs(engine string, metadata map[string]interface{}, password string) string {
+	args := []string{redisServerName(engine), "--appendonly", "yes"}
 
 	if password != "" {
 		args = append(args, "--requirepass", password)
@@ -267,6 +316,20 @@ func buildRedisCommandArgs(metadata map[string]interface{}, password string) str
 	return strings.Join(args, " ")
 }
 
+func redisServerName(engine string) string {
+	if engine == "valkey" {
+		return "valkey-server"
+	}
+	return "redis-server"
+}
+
+func redisCLIName(engine string) string {
+	if engine == "valkey" {
+		return "valkey-cli"
+	}
+	return "redis-cli"
+}
+
 // appendComposeCommand injects a command directive into generated compose YAML.
 func appendComposeCommand(composeYAML, serviceName, command string) string {
 	// Insert command after the image line
@@ -275,9 +338,66 @@ func appendComposeCommand(composeYAML, serviceName, command string) string {
 	return strings.Replace(composeYAML, target, replacement, 1)
 }
 
-// GenerateRedisPlaybook creates an Ansible playbook for native Redis installation.
-func GenerateRedisPlaybook(host, instanceName string, port int, password string, metadata map[string]interface{}) *ansible.Playbook {
+type redisNativeSpec struct {
+	engine       string
+	packageNames []string
+	serviceUser  string
+	serviceGroup string
+	configDir    string
+	configPath   string
+	dataDir      string
+	serverBinary string
+	serviceName  string
+	serviceLabel string
+	installTask  string
+	configTask   string
+	dataDirTask  string
+	systemdTask  string
+	enableTask   string
+}
+
+func buildRedisNativeSpec(engine, instanceName string) redisNativeSpec {
+	spec := redisNativeSpec{
+		engine:       engine,
+		serviceName:  fmt.Sprintf("frameworks-redis-%s", instanceName),
+		serviceLabel: "Redis",
+		packageNames: []string{"redis-server"},
+		serviceUser:  "redis",
+		serviceGroup: "redis",
+		configDir:    "/etc/redis",
+		configPath:   fmt.Sprintf("/etc/redis/redis-%s.conf", instanceName),
+		dataDir:      fmt.Sprintf("/var/lib/redis-%s", instanceName),
+		serverBinary: "/usr/bin/redis-server",
+		installTask:  "Install Redis server",
+		configTask:   "Write Redis configuration",
+		dataDirTask:  "Create Redis data directory",
+		systemdTask:  "Create systemd unit for Redis",
+		enableTask:   "Enable Redis service",
+	}
+
+	if engine == "valkey" {
+		spec.serviceLabel = "Valkey"
+		spec.packageNames = []string{"valkey", "valkey-redis-compat"}
+		spec.serviceUser = "valkey"
+		spec.serviceGroup = "valkey"
+		spec.configDir = "/etc/valkey"
+		spec.configPath = fmt.Sprintf("/etc/valkey/valkey-%s.conf", instanceName)
+		spec.dataDir = fmt.Sprintf("/var/lib/valkey-%s", instanceName)
+		spec.serverBinary = "/usr/bin/valkey-server"
+		spec.installTask = "Install Valkey server"
+		spec.configTask = "Write Valkey configuration"
+		spec.dataDirTask = "Create Valkey data directory"
+		spec.systemdTask = "Create systemd unit for Valkey"
+		spec.enableTask = "Enable Valkey service"
+	}
+
+	return spec
+}
+
+// GenerateRedisPlaybook creates an Ansible playbook for native Redis or Valkey installation.
+func GenerateRedisPlaybook(host, engine, instanceName string, port int, password string, metadata map[string]interface{}) *ansible.Playbook {
 	playbook := ansible.NewPlaybook("Provision Redis", host)
+	spec := buildRedisNativeSpec(engine, instanceName)
 
 	// Build redis.conf directives
 	configLines := []string{
@@ -285,7 +405,7 @@ func GenerateRedisPlaybook(host, instanceName string, port int, password string,
 		"bind 0.0.0.0",
 		"appendonly yes",
 		"daemonize no",
-		fmt.Sprintf("dir /var/lib/redis-%s", instanceName),
+		fmt.Sprintf("dir %s", spec.dataDir),
 	}
 
 	if password != "" {
@@ -303,64 +423,72 @@ func GenerateRedisPlaybook(host, instanceName string, port int, password string,
 	}
 
 	configContent := strings.Join(configLines, "\n") + "\n"
-	serviceName := fmt.Sprintf("frameworks-redis-%s", instanceName)
-	confPath := fmt.Sprintf("/etc/redis/redis-%s.conf", instanceName)
-	dataDir := fmt.Sprintf("/var/lib/redis-%s", instanceName)
 
 	play := ansible.Play{
-		Name:        fmt.Sprintf("Install and configure Redis instance %s", instanceName),
+		Name:        fmt.Sprintf("Install and configure %s instance %s", spec.serviceLabel, instanceName),
 		Hosts:       host,
 		Become:      true,
 		GatherFacts: true,
 		Tasks: []ansible.Task{
 			{
-				Name:   "Install Redis server",
+				Name:   spec.installTask,
 				Module: "apt",
 				Args: map[string]interface{}{
-					"name":             "redis-server",
+					"name":             spec.packageNames,
 					"state":            "present",
 					"update_cache":     true,
 					"cache_valid_time": 3600,
 				},
 			},
 			{
-				Name:   "Create Redis data directory",
+				Name:   "Create native config directory",
 				Module: "file",
 				Args: map[string]interface{}{
-					"path":  dataDir,
+					"path":  spec.configDir,
 					"state": "directory",
-					"owner": "redis",
-					"group": "redis",
+					"owner": spec.serviceUser,
+					"group": spec.serviceGroup,
+					"mode":  "0755",
+				},
+			},
+			{
+				Name:   spec.dataDirTask,
+				Module: "file",
+				Args: map[string]interface{}{
+					"path":  spec.dataDir,
+					"state": "directory",
+					"owner": spec.serviceUser,
+					"group": spec.serviceGroup,
 					"mode":  "0750",
 				},
 			},
 			{
-				Name:   "Write Redis configuration",
+				Name:   spec.configTask,
 				Module: "copy",
 				Args: map[string]interface{}{
 					"content": configContent,
-					"dest":    confPath,
-					"owner":   "redis",
-					"group":   "redis",
+					"dest":    spec.configPath,
+					"owner":   spec.serviceUser,
+					"group":   spec.serviceGroup,
 					"mode":    "0640",
 				},
-				Notify: []string{fmt.Sprintf("restart %s", serviceName)},
+				Notify: []string{fmt.Sprintf("restart %s", spec.serviceName)},
 			},
 			{
-				Name:   "Create systemd unit for Redis",
+				Name:   spec.systemdTask,
 				Module: "copy",
 				Args: map[string]interface{}{
-					"content": generateRedisSystemdUnit(instanceName, confPath),
-					"dest":    fmt.Sprintf("/etc/systemd/system/%s.service", serviceName),
+					"content": generateRedisSystemdUnit(spec, instanceName),
+					"dest":    fmt.Sprintf("/etc/systemd/system/%s.service", spec.serviceName),
 					"mode":    "0644",
 				},
-				Notify: []string{"reload systemd", fmt.Sprintf("restart %s", serviceName)},
+				Notify: []string{"reload systemd", fmt.Sprintf("restart %s", spec.serviceName)},
 			},
 			{
-				Name:   "Enable Redis service",
+				Name:   spec.enableTask,
 				Module: "systemd",
 				Args: map[string]interface{}{
-					"name":    serviceName,
+					"name":    spec.serviceName,
 					"enabled": true,
 					"state":   "started",
 				},
@@ -375,10 +503,10 @@ func GenerateRedisPlaybook(host, instanceName string, port int, password string,
 				},
 			},
 			{
-				Name:   fmt.Sprintf("restart %s", serviceName),
+				Name:   fmt.Sprintf("restart %s", spec.serviceName),
 				Module: "systemd",
 				Args: map[string]interface{}{
-					"name":  serviceName,
+					"name":  spec.serviceName,
 					"state": "restarted",
 				},
 			},
@@ -390,22 +518,22 @@ func GenerateRedisPlaybook(host, instanceName string, port int, password string,
 }
 
 // generateRedisSystemdUnit creates a systemd unit file for a Redis instance.
-func generateRedisSystemdUnit(instanceName, confPath string) string {
+func generateRedisSystemdUnit(spec redisNativeSpec, instanceName string) string {
 	return fmt.Sprintf(`[Unit]
-Description=Frameworks Redis (%s)
+Description=Frameworks %s (%s)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=redis
-Group=redis
-ExecStart=/usr/bin/redis-server %s
+User=%s
+Group=%s
+ExecStart=%s %s
 Restart=always
 RestartSec=5s
 LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
-`, instanceName, confPath)
+`, spec.serviceLabel, instanceName, spec.serviceUser, spec.serviceGroup, spec.serverBinary, spec.configPath)
 }

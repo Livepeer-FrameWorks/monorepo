@@ -16,6 +16,7 @@ import (
 	"frameworks/pkg/config"
 	fieldcrypt "frameworks/pkg/crypto"
 	"frameworks/pkg/database"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -127,21 +128,7 @@ func main() {
 	go renewalWorker.Start(context.Background())
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
 	acmeEmail := config.GetEnv("BRAND_CONTACT_EMAIL", "info@frameworks.network")
-	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, []string{
-		"edge",
-		"edge-egress",
-		"edge-ingest",
-		"edge-storage",
-		"edge-processing",
-		"foghorn",
-		"bridge",
-		"chartroom",
-		"foredeck",
-		"logbook",
-		"steward",
-		"listmonk",
-		"chatwoot",
-	})
+	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes())
 	go reconciler.Start(context.Background())
 
 	// Setup monitoring

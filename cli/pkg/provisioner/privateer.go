@@ -36,6 +36,15 @@ func (p *PrivateerProvisioner) Detect(ctx context.Context, host inventory.Host) 
 
 // Provision installs and configures Privateer
 func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	state, err := p.Detect(ctx, host)
+	if err != nil {
+		state = nil
+	}
+	if skip, reason := shouldSkipProvision(state, config, "", ""); skip {
+		fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
+		return nil
+	}
+
 	// 1. Install WireGuard tools
 	if err := p.installDependencies(ctx, host); err != nil {
 		return fmt.Errorf("failed to install dependencies: %w", err)

@@ -12,6 +12,7 @@
   interface DeleteRecordingData {
     dvrHash: string;
     streamId?: string | null;
+    sourceStreamId?: string | null;
     stream?: {
       streamId: string;
     } | null;
@@ -27,7 +28,9 @@
 
   let { open, recording, deleting, onConfirm, onCancel }: Props = $props();
 
-  const displayStreamId = $derived(recording?.stream?.streamId ?? recording?.streamId ?? null);
+  const displayStreamId = $derived(
+    recording?.sourceStreamId ?? recording?.stream?.streamId ?? recording?.streamId ?? null
+  );
 </script>
 
 <Dialog

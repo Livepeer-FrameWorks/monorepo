@@ -234,6 +234,7 @@ Each cluster gets its own set of DNS records under `{cluster_slug}.{base_domain}
 | `edge-ingest.{slug}.{base}`    | RTMP/SRT/WHIP ingest                     |
 | `edge.{slug}.{base}`           | Edge pool (any edge in cluster)          |
 | `foghorn.{slug}.{base}`        | Viewer routing / playback resolution     |
+| `livepeer.{slug}.{base}`       | Livepeer gateway / transcoding endpoint  |
 | `edge-{node_id}.{slug}.{base}` | Per-edge A records for direct addressing |
 
 Navigator manages these records automatically. Wildcard TLS certificates (`*.{slug}.{base}`) are issued via ACME DNS-01 and distributed to edges via ConfigSeed.

@@ -1,9 +1,14 @@
 package decklog
 
 import (
+	"context"
 	"testing"
 
+	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
+
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestBuildArtifactLifecycleEvent(t *testing.T) {
@@ -165,6 +170,48 @@ func TestInt64Ptr(t *testing.T) {
 				t.Fatalf("expected %d, got %#v", *tc.expected, got)
 			}
 		})
+	}
+}
+
+type fakeDecklogServiceClient struct {
+	lastTrigger *pb.MistTrigger
+}
+
+func (f *fakeDecklogServiceClient) SendEvent(_ context.Context, in *pb.MistTrigger, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+	f.lastTrigger = in
+	return &emptypb.Empty{}, nil
+}
+
+func (f *fakeDecklogServiceClient) SendServiceEvent(_ context.Context, _ *pb.ServiceEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
+}
+
+func TestSendVodLifecycleCopiesTenantToEnvelope(t *testing.T) {
+	fakeClient := &fakeDecklogServiceClient{}
+	client := &BatchedClient{
+		client: fakeClient,
+		logger: logging.NewLogger(),
+	}
+
+	tenantID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	progress := int32(55)
+	err := client.SendVodLifecycle(&pb.VodLifecycleData{
+		Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+		VodHash:     "vod-1",
+		TenantId:    &tenantID,
+		ProgressPct: &progress,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fakeClient.lastTrigger == nil {
+		t.Fatal("expected SendEvent to receive a trigger")
+	}
+	if fakeClient.lastTrigger.GetTenantId() != tenantID {
+		t.Fatalf("expected envelope tenant %q, got %q", tenantID, fakeClient.lastTrigger.GetTenantId())
+	}
+	if payload := fakeClient.lastTrigger.GetVodLifecycleData(); payload == nil || payload.GetProgressPct() != progress {
+		t.Fatalf("expected progress %d to be preserved, got %#v", progress, payload)
 	}
 }
 

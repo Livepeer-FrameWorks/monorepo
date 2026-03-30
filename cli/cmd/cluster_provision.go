@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/credentials"
+	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/githubapp"
 	fwsops "frameworks/cli/pkg/sops"
 	"frameworks/pkg/clients/quartermaster"
@@ -22,6 +25,7 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
@@ -254,6 +258,12 @@ func runProvision(cmd *cobra.Command, manifestPath, ageKeyFile, only string, dry
 		return fmt.Errorf("invalid phase: %s (must be infrastructure, applications, interfaces, or all)", only)
 	}
 
+	if phaseRequiresGatewayMeshValidation(phase) {
+		if err = validateGatewayMeshCoverage(manifest); err != nil {
+			return fmt.Errorf("invalid manifest: %w", err)
+		}
+	}
+
 	// Create execution plan
 	planner := orchestrator.NewPlanner(manifest)
 	plan, err := planner.Plan(ctx, orchestrator.ProvisionOptions{
@@ -302,6 +312,13 @@ type provisionedTask struct {
 	config provisioner.ServiceConfig
 }
 
+type taskProvisionOutcome struct {
+	config            provisioner.ServiceConfig
+	previouslyRunning bool
+	running           bool
+	deferred          bool
+}
+
 // executeProvision runs the provisioning tasks
 func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, force, ignoreValidation bool, manifestDir string) error {
 	// Create SSH pool
@@ -332,16 +349,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				return fmt.Errorf("host %s not found in manifest", task.Host)
 			}
 
-			// Build config for this task
-			config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir)
-			if err != nil {
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
-				return err
-			}
-
 			// Provision based on task type
 			stopProgress := startTaskProgressLogger(cmd, task, 30*time.Second)
-			if err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, runtimeData, manifestDir); err != nil {
+			outcome, err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, runtimeData, manifestDir)
+			if err != nil {
 				stopProgress()
 				fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Provisioning failed for %s: %v\n", task.Name, err)
 				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
@@ -350,13 +361,15 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			}
 			stopProgress()
 
-			// Track completed task for potential rollback
-			completed = append(completed, provisionedTask{task: task, host: host, config: config})
+			// Only roll back services this run actually started from a stopped/nonexistent state.
+			if !outcome.previouslyRunning {
+				completed = append(completed, provisionedTask{task: task, host: host, config: outcome.config})
+			}
 
 			// Bootstrap Logic: Run after Quartermaster is healthy
 			if task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-				result, err := runBootstrap(ctx, manifest)
+				result, err := runBootstrap(ctx, manifest, manifestDir)
 				if err != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Bootstrap failed: %v\n", err)
 					fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
@@ -364,8 +377,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 					return fmt.Errorf("bootstrap failed: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "    ✓ System Tenant bootstrapped")
-				// Store per-cluster tokens and gRPC address for downstream services
-				runtimeData["enrollment_tokens"] = result.EnrollmentTokens
+				// Store Quartermaster runtime data for downstream services.
+				if result.SystemTenantID != "" {
+					runtimeData["system_tenant_id"] = result.SystemTenantID
+				}
 				if result.ServiceToken != "" {
 					runtimeData["service_token"] = result.ServiceToken
 				}
@@ -374,7 +389,18 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				}
 			}
 
+			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, task, host, outcome, runtimeData, manifestDir); err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", task.Name, err)
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "    ✓ %s provisioned\n", task.Name)
+		}
+
+		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Foghorn reconciliation failed: %v\n", err)
+			fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
+			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+			return fmt.Errorf("foghorn reconciliation failed: %w", err)
 		}
 
 		// Mesh preflight gate: after a batch containing Privateer tasks,
@@ -401,11 +427,22 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	return nil
 }
 
+func maybeReconcileBatchFoghornAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+	if !batchContainsService(batch, "foghorn") {
+		return nil
+	}
+
+	return reconcileFoghornClusterAssignments(ctx, cmd, manifest, runtimeData)
+}
+
 // batchContainsPrivateer returns true if any task in the batch is a Privateer deployment.
 func batchContainsPrivateer(batch []*orchestrator.Task) bool {
+	return batchContainsService(batch, "privateer")
+}
+
+func batchContainsService(batch []*orchestrator.Task, serviceName string) bool {
 	for _, task := range batch {
-		name := serviceNameFromTask(task.Name)
-		if name == "privateer" {
+		if serviceNameFromTask(task.Name) == serviceName {
 			return true
 		}
 	}
@@ -419,6 +456,289 @@ func serviceNameFromTask(taskName string) string {
 		return taskName[:idx]
 	}
 	return taskName
+}
+
+func phaseRequiresGatewayMeshValidation(phase orchestrator.Phase) bool {
+	return phase == orchestrator.PhaseApplications || phase == orchestrator.PhaseAll
+}
+
+func serviceRunning(state *detect.ServiceState) bool {
+	return state != nil && state.Exists && state.Running
+}
+
+type foghornClusterAssigner interface {
+	AssignFoghornToCluster(ctx context.Context, req *pb.AssignFoghornToClusterRequest) error
+}
+
+type bootstrapTokenCreator interface {
+	CreateBootstrapToken(ctx context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error)
+}
+
+type publicServiceRegistrar interface {
+	BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error)
+}
+
+func resolveQuartermasterRuntimeData(manifest *inventory.Manifest) (string, string, error) {
+	serviceToken := os.Getenv("SERVICE_TOKEN")
+	if serviceToken == "" {
+		if cfg, _, err := fwcfg.Load(); err == nil {
+			cliCtx := fwcfg.GetCurrent(cfg)
+			cliCtx.Auth = fwcfg.ResolveAuth(cliCtx)
+			serviceToken = cliCtx.Auth.ServiceToken
+		}
+	}
+	if serviceToken == "" {
+		return "", "", fmt.Errorf("service token required for bootstrapping (set SERVICE_TOKEN or run 'frameworks login')")
+	}
+
+	var qmHost string
+	var qmSvc inventory.ServiceConfig
+	for name, svc := range manifest.Services {
+		if name != "quartermaster" {
+			continue
+		}
+		qmHost = svc.Host
+		qmSvc = svc
+		if qmHost == "" && len(svc.Hosts) > 0 {
+			qmHost = svc.Hosts[0]
+		}
+		break
+	}
+	host, ok := manifest.GetHost(qmHost)
+	if !ok {
+		return "", "", fmt.Errorf("quartermaster host not found in manifest")
+	}
+
+	grpcPort := 19002
+	if qmSvc.GRPCPort != 0 {
+		grpcPort = qmSvc.GRPCPort
+	}
+
+	return serviceToken, fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort), nil
+}
+
+func ensurePrivateerEnrollmentToken(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}, clusterID string) error {
+	if clusterID == "" {
+		return fmt.Errorf("privateer task missing cluster_id")
+	}
+
+	if tokens, ok := runtimeData["enrollment_tokens"].(map[string]string); ok {
+		if tokens[clusterID] != "" {
+			return nil
+		}
+	} else {
+		runtimeData["enrollment_tokens"] = map[string]string{}
+	}
+
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return err
+	}
+	systemTenantID, ok := runtimeData["system_tenant_id"].(string)
+	if !ok || systemTenantID == "" {
+		return fmt.Errorf("missing system tenant id for privateer enrollment token")
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:     grpcAddr,
+		Logger:       logging.NewLogger(),
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for privateer enrollment token: %w", err)
+	}
+	defer client.Close()
+
+	if err := ensurePrivateerEnrollmentTokenWithClient(ctx, runtimeData, systemTenantID, clusterID, client); err != nil {
+		return err
+	}
+
+	runtimeData["service_token"] = serviceToken
+	runtimeData["quartermaster_grpc_addr"] = grpcAddr
+	return nil
+}
+
+func ensurePrivateerEnrollmentTokenWithClient(ctx context.Context, runtimeData map[string]interface{}, systemTenantID, clusterID string, creator bootstrapTokenCreator) error {
+	if systemTenantID == "" {
+		return fmt.Errorf("missing system tenant id for privateer enrollment token")
+	}
+
+	resp, err := creator.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
+		Name:      fmt.Sprintf("Infrastructure Enrollment Token for %s", clusterID),
+		Kind:      "infrastructure_node",
+		Ttl:       "720h",
+		TenantId:  &systemTenantID,
+		ClusterId: &clusterID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create bootstrap token for cluster '%s': %w", clusterID, err)
+	}
+
+	tokens, ok := runtimeData["enrollment_tokens"].(map[string]string)
+	if !ok || tokens == nil {
+		tokens = make(map[string]string)
+	}
+	tokens[clusterID] = resp.GetToken().GetToken()
+	runtimeData["enrollment_tokens"] = tokens
+	return nil
+}
+
+func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}, manifestDir string) error {
+	if outcome == nil || outcome.deferred || !outcome.running {
+		return nil
+	}
+
+	serviceName := serviceNameFromTask(task.Name)
+	if _, ok := publicServiceType(serviceName); !ok || selfRegisters(serviceName) {
+		return nil
+	}
+
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return err
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:     grpcAddr,
+		Logger:       logging.NewLogger(),
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for public service registration: %w", err)
+	}
+	defer client.Close()
+
+	runtimeData["service_token"] = serviceToken
+	runtimeData["quartermaster_grpc_addr"] = grpcAddr
+	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, host, runtimeData, manifestDir, client)
+}
+
+func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, registrar publicServiceRegistrar) error {
+	serviceName := serviceNameFromTask(task.Name)
+	serviceType, ok := publicServiceType(serviceName)
+	if !ok || selfRegisters(serviceName) {
+		return nil
+	}
+
+	svcDef, hasDef := servicedefs.Lookup(serviceName)
+	if !hasDef {
+		return nil
+	}
+
+	hostCluster := manifest.HostCluster(task.Host)
+	if hostCluster == "" {
+		hostCluster = manifest.ResolveCluster(serviceName)
+	}
+	if hostCluster == "" {
+		return fmt.Errorf("service %s has no resolved cluster", task.Name)
+	}
+
+	serviceToken, ok := runtimeData["service_token"].(string)
+	if !ok || serviceToken == "" {
+		return fmt.Errorf("missing Quartermaster service token")
+	}
+	healthPath := svcDef.HealthPath
+	effectivePort := 0
+	if svc, ok := manifest.Services[serviceName]; ok {
+		if p, err := resolvePort(serviceName, svc); err == nil {
+			effectivePort = p
+		}
+	} else if iface, ok := manifest.Interfaces[serviceName]; ok {
+		if p, err := resolvePort(serviceName, iface); err == nil {
+			effectivePort = p
+		}
+	}
+	if effectivePort == 0 {
+		effectivePort = svcDef.DefaultPort
+	}
+	port := int32(effectivePort)
+	externalIP := host.ExternalIP
+	req := &pb.BootstrapServiceRequest{
+		ServiceToken:   &serviceToken,
+		Type:           serviceType,
+		Version:        "cli-provisioned",
+		Protocol:       "http",
+		HealthEndpoint: &healthPath,
+		Port:           port,
+		AdvertiseHost:  &externalIP,
+		ClusterId:      &hostCluster,
+		NodeId:         &task.Host,
+	}
+	if metadata, err := serviceRegistrationMetadata(serviceName, task.Host, hostCluster, manifest, runtimeData, manifestDir); err != nil {
+		return fmt.Errorf("resolve metadata: %w", err)
+	} else if len(metadata) > 0 {
+		req.Metadata = metadata
+	}
+
+	if _, err := registrar.BootstrapService(ctx, req); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "    ✓ Registered service instance: %s/%s (%s:%d)\n", task.Host, serviceType, externalIP, port)
+	return nil
+}
+
+func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+	grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string)
+	if !ok {
+		grpcAddr = ""
+	}
+	serviceToken, ok := runtimeData["service_token"].(string)
+	if !ok {
+		serviceToken = ""
+	}
+	if grpcAddr == "" || serviceToken == "" {
+		return fmt.Errorf("missing Quartermaster connection info for foghorn reconciliation")
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:     grpcAddr,
+		Logger:       logging.NewLogger(),
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for foghorn reconciliation: %w", err)
+	}
+	defer client.Close()
+
+	var lastErr error
+	for attempt := 1; attempt <= 6; attempt++ {
+		lastErr = reconcileFoghornClusterAssignmentsWithClient(ctx, cmd.OutOrStdout(), manifest, client)
+		if lastErr == nil {
+			return nil
+		}
+		if attempt == 6 {
+			break
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "    Retry %d/5 after reconciliation failure: %v\n", attempt, lastErr)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	return lastErr
+}
+
+func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, assigner foghornClusterAssigner) error {
+	fmt.Fprintln(out, "  Reconciling Foghorn cluster assignments...")
+
+	for _, clusterID := range manifest.AllClusterIDs() {
+		assignCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := assigner.AssignFoghornToCluster(assignCtx, &pb.AssignFoghornToClusterRequest{
+			ClusterId: clusterID,
+			Count:     1,
+		})
+		cancel()
+		if err != nil {
+			return fmt.Errorf("assign foghorn to cluster %s: %w", clusterID, err)
+		}
+
+		fmt.Fprintf(out, "    ✓ Foghorn assigned to cluster %s\n", clusterID)
+	}
+
+	return nil
 }
 
 // buildTaskConfig creates a ServiceConfig for a task
@@ -577,6 +897,13 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Version = manifest.Infrastructure.Redis.Version
 				}
 				if inst := resolveRedisInstance(task.Name, manifest); inst != nil {
+					engine := manifest.Infrastructure.Redis.Engine
+					if inst.Engine != "" {
+						engine = inst.Engine
+					}
+					if engine != "" {
+						config.Metadata["engine"] = engine
+					}
 					if inst.Port != 0 {
 						config.Port = inst.Port
 					}
@@ -928,19 +1255,29 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 }
 
 // provisionTask provisions a single task
-func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string) error {
+func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string) (*taskProvisionOutcome, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	// Get provisioner from registry
 	prov, err := provisioner.GetProvisioner(task.Type, pool)
 	if err != nil {
-		return fmt.Errorf("failed to get provisioner: %w", err)
+		return nil, fmt.Errorf("failed to get provisioner: %w", err)
+	}
+
+	beforeState, err := prov.Detect(ctx, host)
+	if err != nil {
+		beforeState = nil
+	}
+	if task.Type == "privateer" && (force || !serviceRunning(beforeState)) {
+		if err = ensurePrivateerEnrollmentToken(ctx, manifest, runtimeData, task.ClusterID); err != nil {
+			return nil, err
+		}
 	}
 
 	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Preflight: check required external env vars
@@ -957,7 +1294,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 				fmt.Printf("      %s — %s\n", mk.Key, mk.SetupGuide)
 			}
 			if !ignoreValidation {
-				return fmt.Errorf("%s requires %d missing env var(s) — provide them in env_file or use --ignore-validation to deploy without starting", task.Name, len(missing))
+				return nil, fmt.Errorf("%s requires %d missing env var(s) — provide them in env_file or use --ignore-validation to deploy without starting", task.Name, len(missing))
 			}
 			config.DeferStart = true
 			fmt.Printf("  ⏸ %s: deploying without starting (--ignore-validation)\n", task.Name)
@@ -966,17 +1303,21 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 
 	// Provision
 	if err := prov.Provision(ctx, host, config); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Skip validation for deferred services
 	if config.DeferStart {
 		fmt.Printf("  ⏸ %s deployed but not started. Add missing config to env_file, then re-run.\n", task.Name)
-		return nil
+		return &taskProvisionOutcome{
+			config:            config,
+			previouslyRunning: serviceRunning(beforeState),
+			deferred:          true,
+		}, nil
 	}
 
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Validate
@@ -984,7 +1325,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		if ignoreValidation {
 			fmt.Printf("    Warning: validation failed (ignored due to --ignore-validation): %v\n", err)
 		} else {
-			return fmt.Errorf("validation failed for %s: %w (use --ignore-validation to continue anyway)", task.Name, err)
+			return nil, fmt.Errorf("validation failed for %s: %w (use --ignore-validation to continue anyway)", task.Name, err)
 		}
 	}
 
@@ -1000,7 +1341,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 
 		if err := prov.Initialize(ctx, host, config); err != nil {
-			return fmt.Errorf("initialization failed for %s: %w", task.Name, err)
+			return nil, fmt.Errorf("initialization failed for %s: %w", task.Name, err)
 		}
 
 		// Configure deploys auth credentials (e.g. ClickHouse users.xml)
@@ -1009,59 +1350,36 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 		if c, ok := prov.(configurer); ok {
 			if err := c.Configure(ctx, host, config); err != nil {
-				return fmt.Errorf("configuration failed for %s: %w", task.Name, err)
+				return nil, fmt.Errorf("configuration failed for %s: %w", task.Name, err)
 			}
 		}
 	}
 
-	return nil
+	afterState, err := prov.Detect(ctx, host)
+	if err != nil {
+		afterState = nil
+	}
+
+	return &taskProvisionOutcome{
+		config:            config,
+		previouslyRunning: serviceRunning(beforeState),
+		running:           serviceRunning(afterState),
+	}, nil
 }
 
 // bootstrapResult holds the output of the cluster bootstrap process
 type bootstrapResult struct {
-	EnrollmentTokens map[string]string // clusterID -> token
-	ServiceToken     string
-	QMGRPCAddr       string
+	SystemTenantID string
+	ServiceToken   string
+	QMGRPCAddr     string
 }
 
 // runBootstrap connects to Quartermaster and generates infrastructure tokens
-func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrapResult, error) {
-	serviceToken := os.Getenv("SERVICE_TOKEN")
-	if serviceToken == "" {
-		if cfg, _, err := fwcfg.Load(); err == nil {
-			cliCtx := fwcfg.GetCurrent(cfg)
-			cliCtx.Auth = fwcfg.ResolveAuth(cliCtx)
-			serviceToken = cliCtx.Auth.ServiceToken
-		}
+func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir string) (*bootstrapResult, error) {
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return nil, err
 	}
-	if serviceToken == "" {
-		return nil, fmt.Errorf("service token required for bootstrapping (set SERVICE_TOKEN or run 'frameworks login')")
-	}
-
-	var qmHost string
-	var qmSvc inventory.ServiceConfig
-	for name, svc := range manifest.Services {
-		if name == "quartermaster" {
-			qmHost = svc.Host
-			qmSvc = svc
-			if qmHost == "" && len(svc.Hosts) > 0 {
-				qmHost = svc.Hosts[0]
-			}
-			break
-		}
-	}
-
-	host, ok := manifest.GetHost(qmHost)
-	if !ok {
-		return nil, fmt.Errorf("quartermaster host not found in manifest")
-	}
-
-	// Use gRPC client instead of HTTP
-	grpcPort := 19002
-	if qmSvc.GRPCPort != 0 {
-		grpcPort = qmSvc.GRPCPort
-	}
-	grpcAddr := fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort)
 	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
 		GRPCAddr:     grpcAddr,
 		Logger:       logging.NewLogger(),
@@ -1105,6 +1423,24 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrap
 	}
 
 	// 2. Register all clusters
+	var qmHost string
+	var qmSvc inventory.ServiceConfig
+	for name, svc := range manifest.Services {
+		if name != "quartermaster" {
+			continue
+		}
+		qmHost = svc.Host
+		qmSvc = svc
+		if qmHost == "" && len(svc.Hosts) > 0 {
+			qmHost = svc.Hosts[0]
+		}
+		break
+	}
+	host, ok := manifest.GetHost(qmHost)
+	if !ok {
+		return nil, fmt.Errorf("quartermaster host not found in manifest")
+	}
+
 	clusterIDs := manifest.AllClusterIDs()
 	basePort := 18002
 	if qmSvc.Port != 0 {
@@ -1192,96 +1528,10 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrap
 		}
 	}
 
-	// 3b. Register service instances for public services on existing host nodes.
-	// Infrastructure nodes are already created above (step 3a).
-	// Services that self-register (bridge, foghorn) are skipped.
-	fmt.Printf("  Registering public service instances...\n")
-	registerServiceInstances := func(name string, svc inventory.ServiceConfig) {
-		serviceType, ok := publicServiceType(name)
-		if !ok {
-			return
-		}
-		if selfRegisters(name) {
-			return
-		}
-		svcDef, hasDef := servicedefs.Lookup(name)
-		if !hasDef {
-			return
-		}
-		hosts := svc.Hosts
-		if len(hosts) == 0 && svc.Host != "" {
-			hosts = []string{svc.Host}
-		}
-		for _, hostName := range hosts {
-			hostInfo, ok := manifest.GetHost(hostName)
-			if !ok {
-				continue
-			}
-			hostCluster := manifest.HostCluster(hostName)
-			if hostCluster == "" {
-				hostCluster = manifest.ResolveCluster(name)
-			}
-			externalIP := hostInfo.ExternalIP
-			healthPath := svcDef.HealthPath
-			effectivePort, _ := resolvePort(name, svc)
-			if effectivePort == 0 {
-				effectivePort = svcDef.DefaultPort
-			}
-			port := int32(effectivePort)
-			_, errBS := client.BootstrapService(ctx, &pb.BootstrapServiceRequest{
-				ServiceToken:   &serviceToken,
-				Type:           serviceType,
-				Version:        "cli-provisioned",
-				Protocol:       "http",
-				HealthEndpoint: &healthPath,
-				Port:           port,
-				AdvertiseHost:  &externalIP,
-				ClusterId:      &hostCluster,
-				NodeId:         &hostName,
-			})
-			if errBS != nil {
-				fmt.Printf("    Warning: failed to register service instance for %s/%s: %v\n", hostName, serviceType, errBS)
-			} else {
-				fmt.Printf("    ✓ Registered service instance: %s/%s (%s:%d)\n", hostName, serviceType, externalIP, port)
-			}
-		}
-	}
-	for name, svc := range manifest.Services {
-		if !svc.Enabled {
-			continue
-		}
-		registerServiceInstances(name, svc)
-	}
-	for name, iface := range manifest.Interfaces {
-		if !iface.Enabled {
-			continue
-		}
-		registerServiceInstances(name, iface)
-	}
-
-	// 4. Generate per-cluster enrollment tokens
-	enrollmentTokens := make(map[string]string)
-	fmt.Printf("  Generating Infrastructure Enrollment Tokens...\n")
-	for _, clusterID := range clusterIDs {
-		cid := clusterID
-		resp, errToken := client.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
-			Name:      fmt.Sprintf("Infrastructure Enrollment Token for %s", cid),
-			Kind:      "infrastructure_node",
-			Ttl:       "720h",
-			TenantId:  &systemTenantID,
-			ClusterId: &cid,
-		})
-		if errToken != nil {
-			return nil, fmt.Errorf("failed to create bootstrap token for cluster '%s': %w", cid, errToken)
-		}
-		enrollmentTokens[cid] = resp.Token.Token
-		fmt.Printf("    ✓ Generated token for cluster %s: %s\n", cid, resp.Token.Id)
-	}
-
 	return &bootstrapResult{
-		EnrollmentTokens: enrollmentTokens,
-		ServiceToken:     serviceToken,
-		QMGRPCAddr:       grpcAddr,
+		SystemTenantID: systemTenantID,
+		ServiceToken:   serviceToken,
+		QMGRPCAddr:     grpcAddr,
 	}, nil
 }
 
@@ -1315,9 +1565,47 @@ func publicServiceType(serviceName string) (string, bool) {
 		return "listmonk", true
 	case "chatwoot":
 		return "chatwoot", true
+	case "livepeer-gateway":
+		return "livepeer-gateway", true
 	default:
 		return "", false
 	}
+}
+
+func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]interface{}, manifestDir string) (map[string]string, error) {
+	if name != "livepeer-gateway" {
+		return nil, nil
+	}
+
+	task := &orchestrator.Task{
+		Name:      name,
+		Type:      name,
+		Host:      hostName,
+		ClusterID: clusterID,
+		Phase:     orchestrator.PhaseApplications,
+	}
+
+	config, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir)
+	if err != nil {
+		return nil, err
+	}
+
+	hostInfo, ok := manifest.GetHost(hostName)
+	if !ok {
+		return nil, fmt.Errorf("host %q not found in manifest", hostName)
+	}
+
+	metadata := map[string]string{
+		servicedefs.LivepeerGatewayMetadataPublicHost: gatewayPublicHost(config.EnvVars, manifest, clusterID),
+		servicedefs.LivepeerGatewayMetadataPublicPort: strconv.Itoa(portFromBindAddr(config.EnvVars["http_addr"], 8935)),
+		servicedefs.LivepeerGatewayMetadataAdminHost:  hostInfo.ExternalIP,
+		servicedefs.LivepeerGatewayMetadataAdminPort:  strconv.Itoa(portFromBindAddr(config.EnvVars["cli_addr"], 7935)),
+	}
+	if walletAddr := firstNonEmptyEnv(config.EnvVars, "eth_acct_addr", "LIVEPEER_ETH_ACCT_ADDR"); walletAddr != "" {
+		metadata[servicedefs.LivepeerGatewayMetadataWalletAddress] = walletAddr
+	}
+
+	return metadata, nil
 }
 
 // buildServiceEnvVars generates merged environment variables for a service.
@@ -1540,6 +1828,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
+	normalizeServiceEnvVars(baseName, env)
+	if baseName == "livepeer-gateway" {
+		applyDefaultLivepeerGatewayHost(env, manifest, task.ClusterID)
+	}
+
 	// 5. Auto-generate missing secrets (SERVICE_TOKEN, JWT_SECRET, etc.)
 	if _, err := credentials.GenerateIfMissing(env); err != nil {
 		return nil, fmt.Errorf("auto-generate secrets: %w", err)
@@ -1572,6 +1865,178 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	return env, nil
+}
+
+func normalizeServiceEnvVars(serviceID string, env map[string]string) {
+	switch serviceID {
+	case "livepeer-gateway":
+		normalizeLivepeerEnvVars(env)
+		setEnvIfEmpty(env, "auth_webhook_url", "LIVEPEER_AUTH_WEBHOOK_URL")
+		if strings.TrimSpace(env["auth_webhook_url"]) == "" {
+			env["auth_webhook_url"] = defaultLivepeerGatewayAuthWebhookURL
+		}
+	case "livepeer-signer":
+		normalizeLivepeerEnvVars(env)
+	}
+}
+
+const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webhooks/livepeer/auth"
+
+func normalizeLivepeerEnvVars(env map[string]string) {
+	setEnvIfEmpty(env, "eth_url", livepeerRPCEnvKeys(env)...)
+	setEnvIfEmpty(env, "eth_acct_addr", "LIVEPEER_ETH_ACCT_ADDR")
+	setEnvIfEmpty(env, "orch_webhook_url", "LIVEPEER_ORCH_WEBHOOK_URL")
+	setEnvIfEmpty(env, "remote_signer_url", "LIVEPEER_REMOTE_SIGNER_URL")
+	setEnvIfEmpty(env, "auth_webhook_url", "LIVEPEER_AUTH_WEBHOOK_URL")
+	setEnvIfEmpty(env, "gateway_host", "LIVEPEER_GATEWAY_HOST")
+}
+
+func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
+	gatewaySvc, ok := manifest.Services["livepeer-gateway"]
+	if !ok || !gatewaySvc.Enabled {
+		return nil
+	}
+
+	privateerSvc, ok := manifest.Services["privateer"]
+	if !ok || !privateerSvc.Enabled {
+		return fmt.Errorf("livepeer-gateway requires privateer to resolve foghorn.internal")
+	}
+
+	privateerHosts := make(map[string]struct{})
+	for _, hostName := range orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts) {
+		privateerHosts[hostName] = struct{}{}
+	}
+
+	var gatewayHosts []string
+	if len(gatewaySvc.Hosts) > 0 {
+		gatewayHosts = gatewaySvc.Hosts
+	} else if gatewaySvc.Host != "" {
+		gatewayHosts = []string{gatewaySvc.Host}
+	}
+
+	for _, hostName := range gatewayHosts {
+		if _, ok := privateerHosts[hostName]; !ok {
+			return fmt.Errorf("livepeer-gateway host %q is not covered by privateer; gateway auth webhook uses foghorn.internal", hostName)
+		}
+	}
+
+	return nil
+}
+
+func applyDefaultLivepeerGatewayHost(env map[string]string, manifest *inventory.Manifest, clusterID string) {
+	clusterHost := clusterScopedGatewayHost(manifest, clusterID)
+	if clusterHost == "" {
+		return
+	}
+
+	current := strings.TrimSpace(env["gateway_host"])
+	if current == "" {
+		env["gateway_host"] = clusterHost
+		return
+	}
+
+	globalHost := globalGatewayHost(manifest.RootDomain)
+	if current == globalHost {
+		env["gateway_host"] = clusterHost
+	}
+}
+
+func gatewayPublicHost(env map[string]string, manifest *inventory.Manifest, clusterID string) string {
+	if host := strings.TrimSpace(env["gateway_host"]); host != "" {
+		return host
+	}
+	return clusterScopedGatewayHost(manifest, clusterID)
+}
+
+func clusterScopedGatewayHost(manifest *inventory.Manifest, clusterID string) string {
+	if manifest == nil || manifest.RootDomain == "" || clusterID == "" {
+		return ""
+	}
+
+	clusterSlug := pkgdns.ClusterSlug(clusterID, manifest.Clusters[clusterID].Name)
+	if clusterSlug == "" {
+		return ""
+	}
+
+	fqdn, ok := pkgdns.ServiceFQDN("livepeer-gateway", clusterSlug+"."+manifest.RootDomain)
+	if !ok {
+		return ""
+	}
+	return fqdn
+}
+
+func globalGatewayHost(rootDomain string) string {
+	if rootDomain == "" {
+		return ""
+	}
+	fqdn, ok := pkgdns.ServiceFQDN("livepeer-gateway", rootDomain)
+	if !ok {
+		return ""
+	}
+	return fqdn
+}
+
+func portFromBindAddr(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	if strings.HasPrefix(raw, ":") {
+		if port, err := strconv.Atoi(strings.TrimPrefix(raw, ":")); err == nil && port > 0 {
+			return port
+		}
+		return fallback
+	}
+	if _, portStr, err := net.SplitHostPort(raw); err == nil {
+		if port, convErr := strconv.Atoi(portStr); convErr == nil && port > 0 {
+			return port
+		}
+	}
+	if port, err := strconv.Atoi(raw); err == nil && port > 0 {
+		return port
+	}
+	return fallback
+}
+
+func livepeerRPCEnvKeys(env map[string]string) []string {
+	keys := []string{"LIVEPEER_ETH_URL"}
+
+	switch strings.ToLower(strings.TrimSpace(env["network"])) {
+	case "", "arbitrum", "arbitrum-mainnet", "arbitrum-one-mainnet":
+		return append(keys, "ARBITRUM_RPC_ENDPOINT")
+	case "arbitrum-sepolia":
+		return append(keys, "ARBITRUM_SEPOLIA_RPC_ENDPOINT")
+	case "base", "base-mainnet":
+		return append(keys, "BASE_RPC_ENDPOINT")
+	case "base-sepolia":
+		return append(keys, "BASE_SEPOLIA_RPC_ENDPOINT")
+	case "ethereum", "ethereum-mainnet", "mainnet":
+		return append(keys, "ETH_RPC_ENDPOINT")
+	default:
+		return keys
+	}
+}
+
+func setEnvIfEmpty(env map[string]string, target string, sourceKeys ...string) {
+	if strings.TrimSpace(env[target]) != "" {
+		return
+	}
+
+	for _, key := range sourceKeys {
+		if v := strings.TrimSpace(env[key]); v != "" {
+			env[target] = v
+			return
+		}
+	}
+}
+
+func firstNonEmptyEnv(env map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(env[key]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // loadEnvFile reads a KEY=VALUE env file and merges values into the target map.

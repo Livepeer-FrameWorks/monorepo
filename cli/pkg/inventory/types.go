@@ -213,14 +213,16 @@ type ClickHouseConfig struct {
 // RedisConfig represents Redis instance configuration
 type RedisConfig struct {
 	Enabled   bool            `yaml:"enabled"`
-	Mode      string          `yaml:"mode"`    // "docker" or "native"
-	Version   string          `yaml:"version"` // e.g., "7"
+	Engine    string          `yaml:"engine,omitempty"`  // "valkey" (default) or "redis"
+	Mode      string          `yaml:"mode"`              // "docker" or "native"
+	Version   string          `yaml:"version,omitempty"` // e.g., "8.1" or "7.2.4"
 	Instances []RedisInstance `yaml:"instances"`
 }
 
 // RedisInstance represents a single named Redis instance
 type RedisInstance struct {
 	Name     string            `yaml:"name"`               // e.g., "foghorn", "platform"
+	Engine   string            `yaml:"engine,omitempty"`   // Optional override: "valkey" or "redis"
 	Host     string            `yaml:"host"`               // Host name from Hosts map
 	Port     int               `yaml:"port"`               // Default: 6379
 	Password string            `yaml:"password,omitempty"` // AUTH password

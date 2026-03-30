@@ -167,8 +167,8 @@ Merge-not-replace: rehydration merges Redis data with any state already received
 ```yaml
 # foghorn-redis: shared state backend for all Foghorn instances
 foghorn-redis:
-  image: redis:7-alpine
-  command: redis-server --appendonly yes
+  image: valkey/valkey:8.1-alpine
+  command: valkey-server --appendonly yes
 
 # foghorn (instance 1): FOGHORN_INSTANCE_ID=foghorn-1
 foghorn:

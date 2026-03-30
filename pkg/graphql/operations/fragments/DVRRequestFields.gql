@@ -4,9 +4,7 @@ fragment DVRRequestFields on DVRRequest {
   dvrHash
   playbackId
   streamId
-  stream {
-    streamId
-  }
+  sourceStreamId
   title
   createdAt
   updatedAt

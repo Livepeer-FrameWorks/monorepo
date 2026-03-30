@@ -32,10 +32,34 @@ func (p *LivepeerSignerProvisioner) Detect(ctx context.Context, host inventory.H
 }
 
 func (p *LivepeerSignerProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	state, err := p.Detect(ctx, host)
+	if err != nil {
+		state = nil
+	}
+
 	switch config.Mode {
 	case "native":
+		desiredVersion := ""
+		if config.Version != "" && config.Version != "stable" {
+			desiredVersion = config.Version
+		}
+		if skip, reason := shouldSkipProvision(state, config, desiredVersion, ""); skip {
+			fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
+			return nil
+		}
 		return p.provisionNative(ctx, host, config)
 	case "docker":
+		image := config.Image
+		if image == "" {
+			image = p.resolveImageFromManifest(config.Version)
+		}
+		if image == "" {
+			image = "ghcr.io/livepeer-frameworks/go-livepeer:latest"
+		}
+		if skip, reason := shouldSkipProvision(state, config, "", image); skip {
+			fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
+			return nil
+		}
 		return p.provisionDocker(ctx, host, config)
 	default:
 		return fmt.Errorf("unsupported mode %q for livepeer-signer (native or docker)", config.Mode)

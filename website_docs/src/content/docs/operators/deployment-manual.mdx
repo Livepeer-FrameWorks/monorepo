@@ -574,8 +574,8 @@ docker compose up -d
 **Option B: External Redis + Chatwoot container only**
 
 ```bash
-# Start Redis (if not already running)
-docker run -d --name platform-redis -p 6379:6379 redis:7-alpine
+# Start Valkey (if not already running)
+docker run -d --name platform-redis -p 6379:6379 valkey/valkey:8.1-alpine
 
 # Start Chatwoot (Rails + Sidekiq)
 docker run -d --name chatwoot \

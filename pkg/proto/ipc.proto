@@ -179,6 +179,7 @@ message ControlMessage {
     // VOD processing jobs (Foghorn <-> Helmsman)
     ProcessingJobRequest processing_job_request = 63;
     ProcessingJobResult processing_job_result = 64;
+    ProcessingJobProgress processing_job_progress = 65;
     // Session termination (Foghorn -> Helmsman for billing suspension)
     StopSessionsRequest stop_sessions_request = 70;
     // Node mode change request (Helmsman -> Foghorn, from local agent/CLI)
@@ -1222,6 +1223,7 @@ message VodLifecycleData {
   optional int32 bitrate_kbps = 20;
   optional string origin_cluster_id = 21;  // Cluster where VOD was uploaded
   optional string serving_cluster_id = 22; // Cluster serving the VOD to the viewer
+  optional int32 progress_pct = 23;        // 0-100 processing progress (STATUS_PROCESSING only)
 }
 
 // MessageLifecycleData tracks support messaging events for real-time UI updates
@@ -1570,6 +1572,16 @@ message ProcessingJobResult {
   map<string, string> outputs = 4; // Metadata (codec, resolution, etc.) or completion info
   string output_path = 5;          // Local file path of processed output (for artifact registration)
   int64 output_size_bytes = 6;     // Size of processed output file
+}
+
+// ProcessingJobProgress is sent periodically by Helmsman while a processing
+// push is running. Foghorn uses it to refresh updated_at (preventing stale
+// recovery) and to emit VodLifecycleData progress events.
+message ProcessingJobProgress {
+  string job_id = 1;
+  int32 progress_pct = 2;         // 0-100 based on track position vs source duration
+  int64 last_ms = 3;              // Current output track position in milliseconds
+  int64 source_duration_ms = 4;   // Total source duration in milliseconds
 }
 
 // ==================== API Request Tracking ====================

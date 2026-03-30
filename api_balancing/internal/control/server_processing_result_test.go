@@ -75,8 +75,9 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_url", "format"}).
 			AddRow("art-hash", "s3://old/upload.avi", "avi"))
 
-	// Update artifact format + reset sync
-	mock.ExpectExec("UPDATE foghorn.artifacts.*SET format.*sync_status = 'pending'.*s3_url = NULL").
+	// Update artifact format + reset sync while retaining the old source URL
+	// until the replacement upload is durably synced.
+	mock.ExpectExec("UPDATE foghorn.artifacts.*SET format.*sync_status = 'pending'.*storage_location = 'local'").
 		WithArgs("mp4", "art-hash").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -122,7 +123,7 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 	}
 }
 
-func TestProcessProcessingJobResult_Completed_DeletesOldS3Upload(t *testing.T) {
+func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeReplacementSync(t *testing.T) {
 	mock, s3Mock, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
@@ -147,11 +148,8 @@ func TestProcessProcessingJobResult_Completed_DeletesOldS3Upload(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 	s3Mock.mu.Lock()
-	if len(s3Mock.deleteByURLCalls) != 1 {
-		t.Fatalf("expected 1 DeleteByURL, got %d", len(s3Mock.deleteByURLCalls))
-	}
-	if s3Mock.deleteByURLCalls[0] != "s3://bucket/old/upload.avi" {
-		t.Fatalf("unexpected URL: %s", s3Mock.deleteByURLCalls[0])
+	if len(s3Mock.deleteByURLCalls) != 0 {
+		t.Fatalf("expected no DeleteByURL before replacement sync, got %d", len(s3Mock.deleteByURLCalls))
 	}
 	s3Mock.mu.Unlock()
 }
@@ -169,8 +167,7 @@ func TestProcessProcessingJobResult_Completed_SetsS3URLToNull(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_url", "format"}).
 			AddRow("art-hash", "", "avi"))
 
-	// Verify s3_url = NULL is in the query (matched by regex)
-	mock.ExpectExec("UPDATE foghorn.artifacts.*s3_url = NULL").
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'pending'.*storage_location = 'local'").
 		WithArgs("mp4", "art-hash").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

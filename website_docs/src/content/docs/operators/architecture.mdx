@@ -94,7 +94,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 _Navigator and Privateer are in testing. Production rollout is controlled and may not be enabled in every environment._
 
-**Livepeer integration**: The Livepeer Gateway is provisioned via `frameworks livepeer` CLI commands and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream.
+**Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 
 ### Interfaces
 

@@ -1002,6 +1002,8 @@ message BootstrapServiceRequest {
   // If omitted, falls back to token-bound cluster or single active cluster (dev only)
   optional string cluster_id = 11;      // json:"cluster_id,omitempty"
   optional string node_id = 12;         // json:"node_id,omitempty" - links service instance to physical node
+  map<string, string> metadata = 13;    // json:"metadata,omitempty"
+  bool clear_metadata = 14;             // when true, replace existing metadata with an empty object
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapServiceResponse (lines 267-272)
@@ -1050,6 +1052,7 @@ message ServiceInstance {
   string protocol = 19;                 // http or grpc
   optional string host = 20;            // host address
   optional string health_endpoint = 21; // health check endpoint
+  map<string, string> metadata = 22;    // instance metadata for discovery consumers
 }
 
 // ============================================================================
