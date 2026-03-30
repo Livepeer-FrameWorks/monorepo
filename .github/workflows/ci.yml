@@ -49,7 +49,7 @@ jobs:
           go-version: "1.25"
       - name: Install protoc
         run: |
-          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.0/protoc-34.0-linux-x86_64.zip -o /tmp/protoc.zip
+          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.1/protoc-34.1-linux-x86_64.zip -o /tmp/protoc.zip
           sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
           rm /tmp/protoc.zip
       - name: Install Go protoc plugins
@@ -82,7 +82,7 @@ jobs:
           go-version: "1.25"
       - name: Install protoc
         run: |
-          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.0/protoc-34.0-linux-x86_64.zip -o /tmp/protoc.zip
+          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.1/protoc-34.1-linux-x86_64.zip -o /tmp/protoc.zip
           sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
           rm /tmp/protoc.zip
       - name: Install Go protoc plugins
