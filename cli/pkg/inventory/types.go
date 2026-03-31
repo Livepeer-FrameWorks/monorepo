@@ -252,6 +252,7 @@ type ServiceConfig struct {
 // EdgeManifest represents edge node deployment configuration (edges.yaml)
 type EdgeManifest struct {
 	Version         string     `yaml:"version"`
+	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v0.2.0-rc3")
 	RootDomain      string     `yaml:"root_domain"`
 	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
 	Email           string     `yaml:"email"`       // ACME email

@@ -156,22 +156,41 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Resolve manifest-relative paths to repo-relative for GitHub fetch.
+	manifestDir := filepath.Dir(manifestFile)
+
 	// Collect all referenced file paths (env files + host inventory)
 	filesToFetch := []string{}
 	if manifest.EnvFile != "" {
-		filesToFetch = append(filesToFetch, manifest.EnvFile)
+		repoPath, pathErr := resolveManifestToRepoPath(manifestDir, manifest.EnvFile)
+		if pathErr != nil {
+			return pathErr
+		}
+		filesToFetch = append(filesToFetch, repoPath)
 	}
 	if manifest.HostsFile != "" {
-		filesToFetch = append(filesToFetch, manifest.HostsFile)
+		repoPath, pathErr := resolveManifestToRepoPath(manifestDir, manifest.HostsFile)
+		if pathErr != nil {
+			return pathErr
+		}
+		filesToFetch = append(filesToFetch, repoPath)
 	}
 	for _, svc := range manifest.Services {
 		if svc.EnvFile != "" {
-			filesToFetch = append(filesToFetch, svc.EnvFile)
+			repoPath, pathErr := resolveManifestToRepoPath(manifestDir, svc.EnvFile)
+			if pathErr != nil {
+				return pathErr
+			}
+			filesToFetch = append(filesToFetch, repoPath)
 		}
 	}
 	for _, iface := range manifest.Interfaces {
 		if iface.EnvFile != "" {
-			filesToFetch = append(filesToFetch, iface.EnvFile)
+			repoPath, pathErr := resolveManifestToRepoPath(manifestDir, iface.EnvFile)
+			if pathErr != nil {
+				return pathErr
+			}
+			filesToFetch = append(filesToFetch, repoPath)
 		}
 	}
 
@@ -214,8 +233,12 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 		}
 	}
 
-	// Write fetched manifest to the same temp directory
-	tmpManifest := filepath.Join(tmpDir, filepath.Base(manifestFile))
+	// Write fetched manifest preserving its directory structure so that
+	// manifest-relative paths (env_file, hosts_file) resolve correctly.
+	tmpManifest := filepath.Join(tmpDir, manifestFile)
+	if err := os.MkdirAll(filepath.Dir(tmpManifest), 0o700); err != nil {
+		return fmt.Errorf("failed to create manifest dir: %w", err)
+	}
 	if err := os.WriteFile(tmpManifest, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write temp manifest: %w", err)
 	}
@@ -2111,4 +2134,19 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	fmt.Fprintln(cmd.OutOrStdout(), "    ✓ Mesh healthy on all privateer hosts")
 	return nil
+}
+
+// resolveManifestToRepoPath converts a manifest-relative file path to a
+// repo-root-relative path suitable for GitHub API fetch. For example, given
+// manifestDir="clusters/production" and relPath="../../secrets/production.env",
+// it returns "secrets/production.env".
+func resolveManifestToRepoPath(manifestDir, relPath string) (string, error) {
+	if filepath.IsAbs(relPath) {
+		return "", fmt.Errorf("absolute path %q is not valid in a repository manifest", relPath)
+	}
+	resolved := filepath.Clean(filepath.Join(manifestDir, relPath))
+	if strings.HasPrefix(resolved, "..") {
+		return "", fmt.Errorf("path %q resolves outside repository root (resolved to %q)", relPath, resolved)
+	}
+	return resolved, nil
 }

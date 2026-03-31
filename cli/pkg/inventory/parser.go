@@ -203,8 +203,10 @@ func (m *Manifest) Validate() error {
 
 	// Validate host references in infrastructure
 	if m.Infrastructure.Postgres != nil && m.Infrastructure.Postgres.Enabled {
-		if _, ok := m.Hosts[m.Infrastructure.Postgres.Host]; !ok {
-			return fmt.Errorf("postgres.host '%s' not found in hosts", m.Infrastructure.Postgres.Host)
+		for _, pgHost := range m.Infrastructure.Postgres.AllHosts() {
+			if _, ok := m.Hosts[pgHost]; !ok {
+				return fmt.Errorf("postgres host '%s' not found in hosts", pgHost)
+			}
 		}
 	}
 

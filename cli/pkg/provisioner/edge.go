@@ -862,6 +862,23 @@ echo "Caddy installed"
 
 // installNativeLinux is the original Linux systemd installation path.
 func (e *EdgeProvisioner) installNativeLinux(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
+	// (0) Create frameworks user/group for MistServer and Helmsman systemd units
+	fmt.Println("  creating frameworks user/group...")
+	userScript := `#!/bin/bash
+set -e
+getent group frameworks >/dev/null || groupadd --system frameworks
+id -u frameworks >/dev/null 2>&1 || useradd -r -g frameworks -s /sbin/nologin frameworks
+mkdir -p /opt/frameworks/mistserver /opt/frameworks/helmsman /etc/frameworks /var/log/frameworks
+chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsman /etc/frameworks /var/log/frameworks
+`
+	if result, err := e.ExecuteSudoScript(ctx, host, userScript); err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return fmt.Errorf("failed to create frameworks user: %w (%s)", err, stderr)
+	}
+
 	// (a) MistServer
 	fmt.Println("  installing MistServer...")
 	mistPass, err := e.installNativeMistServer(ctx, host, manifest, arch)

@@ -375,6 +375,8 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var mode string
 	var version string
 	var local bool
+	var ageKeyFile string
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -411,7 +413,7 @@ Multi-node manifest example:
 
 			// Check if using manifest mode
 			if manifestPath != "" {
-				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version)
+				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, ageKeyFile, dryRun)
 			}
 
 			// Default --cluster-id and --foghorn-addr from context
@@ -616,6 +618,8 @@ Multi-node manifest example:
 	cmd.Flags().StringVar(&mode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
 	cmd.Flags().StringVar(&version, "version", "", "Platform version for binary resolution (e.g., stable, v1.2.3)")
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
+	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Load and validate manifest, show provision plan, but do not execute")
 
 	return cmd
 }
@@ -629,9 +633,9 @@ type EdgeProvisionResult struct {
 }
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
-func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion string) error {
-	// Load manifest
-	manifest, err := inventory.LoadEdgeManifest(manifestPath)
+func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, ageKeyFile string, dryRun bool) error {
+	// Load manifest (with host inventory merge if hosts_file is set)
+	manifest, err := inventory.LoadEdgeWithHosts(manifestPath, ageKeyFile)
 	if err != nil {
 		return fmt.Errorf("failed to load manifest: %w", err)
 	}
@@ -640,6 +644,29 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 	fmt.Fprintf(cmd.OutOrStdout(), "  Pool domain: %s\n", manifest.PoolDomain)
 	fmt.Fprintf(cmd.OutOrStdout(), "  Root domain: %s\n", manifest.RootDomain)
 	fmt.Fprintf(cmd.OutOrStdout(), "  Parallelism: %d\n", parallel)
+
+	// Dry-run: show plan and exit without provisioning
+	if dryRun {
+		effectiveVersion := manifest.Channel
+		if cmd.Flags().Changed("version") {
+			effectiveVersion = cliVersion
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "\nDry-run mode — no changes will be made.\n")
+		if effectiveVersion == "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  Release selector: (none — native mode will fail without --version or channel)\n")
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "  Release selector: %s\n", effectiveVersion)
+		}
+		for _, node := range manifest.Nodes {
+			nodeMode := node.ResolvedMode(manifest.Mode)
+			if cmd.Flags().Changed("mode") {
+				nodeMode = cliMode
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  Node: %-20s SSH: %-30s Region: %-12s Mode: %s\n",
+				node.Name, node.SSH, node.Region, nodeMode)
+		}
+		return nil
+	}
 
 	if parallel < 1 {
 		parallel = 1
@@ -698,7 +725,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if cmd.Flags().Changed("mode") {
 				nodeMode = cliMode
 			}
-			nodeVersion := manifest.Version
+			nodeVersion := manifest.Channel
 			if cmd.Flags().Changed("version") {
 				nodeVersion = cliVersion
 			}
