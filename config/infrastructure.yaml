@@ -28,7 +28,7 @@ infrastructure:
   - name: clickhouse
     tested_version: "25.9.2.1"
     minimum_version: "18.16.1"
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:25.9.2.1
     dev_version: "25.9.2.1"
     prod_version: "18.16.1"
     notes: "WARNING: Dev (25.9.2.1) and Prod (18.16.1) have significant version gap. Consider upgrading prod"
@@ -36,7 +36,7 @@ infrastructure:
   - name: prometheus
     tested_version: "3.6.0"
     minimum_version: "2.40.0"
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.6.0
     dev_version: "3.6.0"
     prod_alternative: "VictoriaMetrics v1.122.0"
     notes: "Dev uses Prometheus 3.6.0. Prod uses VictoriaMetrics v1.122.0 (Prometheus-compatible)"
@@ -44,14 +44,14 @@ infrastructure:
   - name: victoriametrics
     tested_version: "v1.122.0"
     minimum_version: "v1.100.0"
-    image: victoriametrics/victoria-metrics:latest
+    image: victoriametrics/victoria-metrics:v1.122.0
     prod_version: "v1.122.0"
     notes: "Production alternative to Prometheus. Prometheus-compatible API"
 
   - name: grafana
     tested_version: "12.2.0"
     minimum_version: "11.0.0"
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.2.0
     dev_version: "12.2.0"
     prod_version: "11.6.1"
     notes: "Requires grafana-clickhouse-datasource plugin for ClickHouse integration"
@@ -59,7 +59,7 @@ infrastructure:
   - name: nginx
     tested_version: "1.29.3"
     minimum_version: "1.24.0"
-    image: nginx:alpine
+    image: nginx:1.29.3-alpine
     dev_version: "1.29.3 (alpine)"
     prod_version: "1.29.1"
     notes: "Alpine variant for smaller footprint in dev/docker environments"
@@ -71,3 +71,15 @@ infrastructure:
     dev_version: "v4.0.1"
     prod_version: "v4.0.1"
     notes: "Self-hosted newsletter manager. Requires PostgreSQL."
+
+  - name: metabase
+    tested_version: "v0.52.5"
+    minimum_version: "v0.46.0"
+    image: metabase/metabase:v0.52.5
+    notes: "BI analytics dashboard. Deployed via FlexibleProvisioner in Docker mode."
+
+  - name: valkey
+    tested_version: "8.1"
+    minimum_version: "7.2"
+    image: valkey/valkey:8.1-alpine
+    notes: "Redis-compatible fork. Used for Foghorn HA state sync and Chatwoot Sidekiq."
