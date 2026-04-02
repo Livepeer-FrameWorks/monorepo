@@ -89,7 +89,10 @@ ZONE="%s"
 echo "Configuring system settings..."
 
 # Create yugabyte user
-id -u yugabyte &>/dev/null || useradd -r -s /bin/false yugabyte
+shell=/usr/bin/nologin
+[ ! -x "$shell" ] && shell=/sbin/nologin
+[ ! -x "$shell" ] && shell=/bin/false
+id -u yugabyte &>/dev/null || useradd -r -s "$shell" yugabyte
 
 # Set ulimits for yugabyte
 cat > /etc/security/limits.d/yugabyte.conf <<'LIMITS'
@@ -120,6 +123,10 @@ if command -v apt-get >/dev/null; then
   apt-get update -qq && apt-get install -y -qq chrony curl >/dev/null 2>&1
 elif command -v yum >/dev/null; then
   yum install -y -q chrony curl >/dev/null 2>&1
+elif command -v dnf >/dev/null; then
+  dnf install -y -q chrony curl >/dev/null 2>&1
+elif command -v pacman >/dev/null; then
+  pacman -Syu --noconfirm --needed chrony curl >/dev/null 2>&1
 fi
 systemctl enable --now chronyd 2>/dev/null || systemctl enable --now chrony 2>/dev/null || true
 

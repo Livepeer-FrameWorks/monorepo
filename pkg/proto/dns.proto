@@ -12,6 +12,8 @@ service NavigatorService {
   rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse);
   // GetCertificate retrieves an existing certificate for a domain.
   rpc GetCertificate(GetCertificateRequest) returns (GetCertificateResponse);
+  // GetTLSBundle retrieves the current certificate material for a managed TLS bundle.
+  rpc GetTLSBundle(GetTLSBundleRequest) returns (GetTLSBundleResponse);
 }
 
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.
@@ -62,4 +64,19 @@ message GetCertificateResponse {
   string key_pem = 5;            // The private key in PEM format
   int64 expires_at = 6;          // Certificate expiration timestamp (Unix)
   string error = 7;              // Error message if retrieval failed
+}
+
+message GetTLSBundleRequest {
+  string bundle_id = 1;
+}
+
+message GetTLSBundleResponse {
+  bool found = 1;
+  string bundle_id = 2;
+  repeated string domains = 3;
+  string cert_pem = 4;
+  string key_pem = 5;
+  int64 expires_at = 6;
+  string version = 7;
+  string error = 8;
 }

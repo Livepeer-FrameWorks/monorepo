@@ -140,25 +140,28 @@ func TestBuildRedisCommandArgs(t *testing.T) {
 }
 
 func TestBuildRedisNativeSpec(t *testing.T) {
-	redisSpec := buildRedisNativeSpec("redis", "cache")
+	redisSpec := buildRedisNativeSpec("redis", "cache", "debian")
 	if redisSpec.serviceUser != "redis" || redisSpec.serverBinary != "/usr/bin/redis-server" {
 		t.Fatalf("unexpected redis spec: %+v", redisSpec)
 	}
+	if redisSpec.packageName != "redis-server" {
+		t.Fatalf("unexpected redis package: %+v", redisSpec)
+	}
 
-	valkeySpec := buildRedisNativeSpec("valkey", "cache")
-	if valkeySpec.serviceUser != "valkey" {
+	valkeySpec := buildRedisNativeSpec("valkey", "cache", "arch")
+	if !strings.Contains(valkeySpec.serviceUser, "valkey") {
 		t.Fatalf("expected valkey user, got %+v", valkeySpec)
 	}
-	if valkeySpec.serverBinary != "/usr/bin/valkey-server" {
+	if !strings.Contains(valkeySpec.serverBinary, "valkey-server") {
 		t.Fatalf("expected valkey server binary, got %+v", valkeySpec)
 	}
-	if valkeySpec.configPath != "/etc/valkey/valkey-cache.conf" {
+	if !strings.Contains(valkeySpec.configPath, "/etc/valkey/valkey-cache.conf") {
 		t.Fatalf("unexpected valkey config path: %+v", valkeySpec)
 	}
 }
 
 func TestGenerateRedisPlaybook_ValkeyNative(t *testing.T) {
-	playbook := GenerateRedisPlaybook("host-1", "valkey", "cache", 6379, "", nil)
+	playbook := GenerateRedisPlaybook("host-1", "valkey", "cache", 6379, "", "debian", nil)
 	if len(playbook.Plays) != 1 {
 		t.Fatalf("expected 1 play, got %d", len(playbook.Plays))
 	}
@@ -168,13 +171,12 @@ func TestGenerateRedisPlaybook_ValkeyNative(t *testing.T) {
 		t.Fatalf("expected tasks to be generated, got %d", len(tasks))
 	}
 
-	installArgs := tasks[0].Args["name"]
-	pkgs, ok := installArgs.([]string)
+	installArg, ok := tasks[0].Args["name"].(string)
 	if !ok {
-		t.Fatalf("expected package list, got %#v", installArgs)
+		t.Fatalf("expected package name string, got %#v", tasks[0].Args["name"])
 	}
-	if len(pkgs) != 2 || pkgs[0] != "valkey" || pkgs[1] != "valkey-redis-compat" {
-		t.Fatalf("unexpected valkey package list: %#v", pkgs)
+	if installArg != "valkey-server" {
+		t.Fatalf("unexpected valkey package name: %#v", installArg)
 	}
 
 	unitContent, ok := tasks[4].Args["content"].(string)

@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
@@ -53,6 +54,9 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, c
 	if !ok {
 		return fmt.Errorf("zookeeper_connect not found in config")
 	}
+	if err := validateApacheKafkaVersion(config.Version); err != nil {
+		return err
+	}
 
 	// Generate Ansible playbook (use address as identifier)
 	hostID := host.ExternalIP
@@ -60,7 +64,12 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		hostID = "localhost"
 	}
 
-	playbook := ansible.GenerateKafkaPlaybook(brokerID, hostID, zkConnect)
+	port := config.Port
+	if port == 0 {
+		port = 9092
+	}
+
+	playbook := ansible.GenerateKafkaPlaybook(config.Version, brokerID, hostID, port, zkConnect, config.Metadata)
 
 	// Generate inventory
 	inv := ansible.NewInventory()
@@ -87,6 +96,17 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		return fmt.Errorf("ansible playbook failed\nOutput: %s", result.Output)
 	}
 
+	return nil
+}
+
+func validateApacheKafkaVersion(version string) error {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return nil
+	}
+	if strings.HasPrefix(version, "7.") {
+		return fmt.Errorf("kafka native mode expects an Apache Kafka version such as 3.6.0; got %q", version)
+	}
 	return nil
 }
 

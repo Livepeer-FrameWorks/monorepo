@@ -25,6 +25,7 @@ type GRPCClient struct {
 	bootstrap       pb.BootstrapServiceClient
 	mesh            pb.MeshServiceClient
 	serviceRegistry pb.ServiceRegistryServiceClient
+	ingress         pb.IngressServiceClient
 	logger          logging.Logger
 }
 
@@ -104,6 +105,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		bootstrap:       pb.NewBootstrapServiceClient(conn),
 		mesh:            pb.NewMeshServiceClient(conn),
 		serviceRegistry: pb.NewServiceRegistryServiceClient(conn),
+		ingress:         pb.NewIngressServiceClient(conn),
 		logger:          config.Logger,
 	}, nil
 }
@@ -250,6 +252,33 @@ func (c *GRPCClient) UnsubscribeFromCluster(ctx context.Context, req *pb.Unsubsc
 // ListMySubscriptions lists clusters the tenant is subscribed to
 func (c *GRPCClient) ListMySubscriptions(ctx context.Context, req *pb.ListMySubscriptionsRequest) (*pb.ListClustersResponse, error) {
 	return c.cluster.ListMySubscriptions(ctx, req)
+}
+
+// UpsertTLSBundle creates or updates desired ingress TLS state.
+func (c *GRPCClient) UpsertTLSBundle(ctx context.Context, bundle *pb.TLSBundle) (*pb.TLSBundleResponse, error) {
+	return c.ingress.UpsertTLSBundle(ctx, &pb.UpsertTLSBundleRequest{Bundle: bundle})
+}
+
+// ListTLSBundles lists desired ingress TLS bundles.
+func (c *GRPCClient) ListTLSBundles(ctx context.Context, clusterID string, pagination *pb.CursorPaginationRequest) (*pb.ListTLSBundlesResponse, error) {
+	return c.ingress.ListTLSBundles(ctx, &pb.ListTLSBundlesRequest{
+		ClusterId:  clusterID,
+		Pagination: pagination,
+	})
+}
+
+// UpsertIngressSite creates or updates a desired ingress site.
+func (c *GRPCClient) UpsertIngressSite(ctx context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error) {
+	return c.ingress.UpsertIngressSite(ctx, &pb.UpsertIngressSiteRequest{Site: site})
+}
+
+// ListIngressSites lists desired ingress sites.
+func (c *GRPCClient) ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListIngressSitesResponse, error) {
+	return c.ingress.ListIngressSites(ctx, &pb.ListIngressSitesRequest{
+		ClusterId:  clusterID,
+		NodeId:     nodeID,
+		Pagination: pagination,
+	})
 }
 
 // ============================================================================

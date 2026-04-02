@@ -22,6 +22,7 @@ const (
 	NavigatorService_SyncDNS_FullMethodName          = "/navigator.NavigatorService/SyncDNS"
 	NavigatorService_IssueCertificate_FullMethodName = "/navigator.NavigatorService/IssueCertificate"
 	NavigatorService_GetCertificate_FullMethodName   = "/navigator.NavigatorService/GetCertificate"
+	NavigatorService_GetTLSBundle_FullMethodName     = "/navigator.NavigatorService/GetTLSBundle"
 )
 
 // NavigatorServiceClient is the client API for NavigatorService service.
@@ -36,6 +37,8 @@ type NavigatorServiceClient interface {
 	IssueCertificate(ctx context.Context, in *IssueCertificateRequest, opts ...grpc.CallOption) (*IssueCertificateResponse, error)
 	// GetCertificate retrieves an existing certificate for a domain.
 	GetCertificate(ctx context.Context, in *GetCertificateRequest, opts ...grpc.CallOption) (*GetCertificateResponse, error)
+	// GetTLSBundle retrieves the current certificate material for a managed TLS bundle.
+	GetTLSBundle(ctx context.Context, in *GetTLSBundleRequest, opts ...grpc.CallOption) (*GetTLSBundleResponse, error)
 }
 
 type navigatorServiceClient struct {
@@ -76,6 +79,16 @@ func (c *navigatorServiceClient) GetCertificate(ctx context.Context, in *GetCert
 	return out, nil
 }
 
+func (c *navigatorServiceClient) GetTLSBundle(ctx context.Context, in *GetTLSBundleRequest, opts ...grpc.CallOption) (*GetTLSBundleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTLSBundleResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_GetTLSBundle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NavigatorServiceServer is the server API for NavigatorService service.
 // All implementations must embed UnimplementedNavigatorServiceServer
 // for forward compatibility.
@@ -88,6 +101,8 @@ type NavigatorServiceServer interface {
 	IssueCertificate(context.Context, *IssueCertificateRequest) (*IssueCertificateResponse, error)
 	// GetCertificate retrieves an existing certificate for a domain.
 	GetCertificate(context.Context, *GetCertificateRequest) (*GetCertificateResponse, error)
+	// GetTLSBundle retrieves the current certificate material for a managed TLS bundle.
+	GetTLSBundle(context.Context, *GetTLSBundleRequest) (*GetTLSBundleResponse, error)
 	mustEmbedUnimplementedNavigatorServiceServer()
 }
 
@@ -106,6 +121,9 @@ func (UnimplementedNavigatorServiceServer) IssueCertificate(context.Context, *Is
 }
 func (UnimplementedNavigatorServiceServer) GetCertificate(context.Context, *GetCertificateRequest) (*GetCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCertificate not implemented")
+}
+func (UnimplementedNavigatorServiceServer) GetTLSBundle(context.Context, *GetTLSBundleRequest) (*GetTLSBundleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTLSBundle not implemented")
 }
 func (UnimplementedNavigatorServiceServer) mustEmbedUnimplementedNavigatorServiceServer() {}
 func (UnimplementedNavigatorServiceServer) testEmbeddedByValue()                          {}
@@ -182,6 +200,24 @@ func _NavigatorService_GetCertificate_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NavigatorService_GetTLSBundle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTLSBundleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).GetTLSBundle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_GetTLSBundle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).GetTLSBundle(ctx, req.(*GetTLSBundleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NavigatorService_ServiceDesc is the grpc.ServiceDesc for NavigatorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -200,6 +236,10 @@ var NavigatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCertificate",
 			Handler:    _NavigatorService_GetCertificate_Handler,
+		},
+		{
+			MethodName: "GetTLSBundle",
+			Handler:    _NavigatorService_GetTLSBundle_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -15,13 +15,33 @@ type Manifest struct {
 	EnvFile    string `yaml:"env_file,omitempty"`    // shared env file for all services (relative to manifest dir)
 	HostsFile  string `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
 
-	Hosts          map[string]Host          `yaml:"hosts,omitempty"`
-	Clusters       map[string]ClusterConfig `yaml:"clusters,omitempty"`
-	WireGuard      *WireGuardConfig         `yaml:"wireguard,omitempty"`
-	Infrastructure InfrastructureConfig     `yaml:"infrastructure,omitempty"`
-	Services       map[string]ServiceConfig `yaml:"services,omitempty"`
-	Interfaces     map[string]ServiceConfig `yaml:"interfaces,omitempty"`
-	Observability  map[string]ServiceConfig `yaml:"observability,omitempty"`
+	Hosts          map[string]Host              `yaml:"hosts,omitempty"`
+	Clusters       map[string]ClusterConfig     `yaml:"clusters,omitempty"`
+	WireGuard      *WireGuardConfig             `yaml:"wireguard,omitempty"`
+	Infrastructure InfrastructureConfig         `yaml:"infrastructure,omitempty"`
+	Services       map[string]ServiceConfig     `yaml:"services,omitempty"`
+	Interfaces     map[string]ServiceConfig     `yaml:"interfaces,omitempty"`
+	Observability  map[string]ServiceConfig     `yaml:"observability,omitempty"`
+	TLSBundles     map[string]TLSBundleConfig   `yaml:"tls_bundles,omitempty"`
+	IngressSites   map[string]IngressSiteConfig `yaml:"ingress_sites,omitempty"`
+}
+
+type TLSBundleConfig struct {
+	Cluster  string            `yaml:"cluster,omitempty"`
+	Domains  []string          `yaml:"domains,omitempty"`
+	Issuer   string            `yaml:"issuer,omitempty"`
+	Email    string            `yaml:"email,omitempty"`
+	Metadata map[string]string `yaml:"metadata,omitempty"`
+}
+
+type IngressSiteConfig struct {
+	Cluster     string            `yaml:"cluster,omitempty"`
+	Node        string            `yaml:"node"`
+	Domains     []string          `yaml:"domains,omitempty"`
+	TLSBundleID string            `yaml:"tls_bundle_id"`
+	Kind        string            `yaml:"kind"`
+	Upstream    string            `yaml:"upstream"`
+	Metadata    map[string]string `yaml:"metadata,omitempty"`
 }
 
 // ClusterConfig defines a cluster to register in Quartermaster during provisioning
@@ -176,12 +196,17 @@ type ZookeeperNode struct {
 
 // KafkaConfig represents Kafka cluster configuration
 type KafkaConfig struct {
-	Enabled          bool          `yaml:"enabled"`
-	Mode             string        `yaml:"mode"` // native
-	Version          string        `yaml:"version"`
-	Brokers          []KafkaBroker `yaml:"brokers,omitempty"`
-	ZookeeperConnect string        `yaml:"zookeeper_connect"`
-	Topics           []KafkaTopic  `yaml:"topics,omitempty"`
+	Enabled                              bool          `yaml:"enabled"`
+	Mode                                 string        `yaml:"mode"` // native
+	Version                              string        `yaml:"version"`
+	Brokers                              []KafkaBroker `yaml:"brokers,omitempty"`
+	ZookeeperConnect                     string        `yaml:"zookeeper_connect"`
+	Topics                               []KafkaTopic  `yaml:"topics,omitempty"`
+	DeleteTopicEnable                    *bool         `yaml:"delete_topic_enable,omitempty"`
+	MinInSyncReplicas                    int           `yaml:"min_insync_replicas,omitempty"`
+	OffsetsTopicReplicationFactor        int           `yaml:"offsets_topic_replication_factor,omitempty"`
+	TransactionStateLogReplicationFactor int           `yaml:"transaction_state_log_replication_factor,omitempty"`
+	TransactionStateLogMinISR            int           `yaml:"transaction_state_log_min_isr,omitempty"`
 }
 
 // KafkaBroker represents a Kafka broker

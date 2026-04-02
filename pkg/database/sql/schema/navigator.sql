@@ -37,3 +37,16 @@ CREATE INDEX IF NOT EXISTS idx_acme_accounts_tenant ON navigator.acme_accounts(t
 CREATE UNIQUE INDEX IF NOT EXISTS idx_acme_accounts_platform_email
     ON navigator.acme_accounts(email)
     WHERE tenant_id IS NULL;
+
+CREATE TABLE IF NOT EXISTS navigator.tls_bundles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bundle_id TEXT NOT NULL UNIQUE,
+    domains JSONB NOT NULL DEFAULT '[]'::jsonb,
+    cert_pem TEXT NOT NULL,
+    key_pem TEXT NOT NULL, -- AES-256-GCM encrypted via pkg/crypto.FieldEncryptor (enc:v1: prefix)
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tls_bundles_expires_at ON navigator.tls_bundles(expires_at);

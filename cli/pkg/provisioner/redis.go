@@ -243,13 +243,17 @@ func (r *RedisProvisioner) provisionNative(ctx context.Context, host inventory.H
 	if err != nil {
 		return err
 	}
+	family, err := r.DetectDistroFamily(ctx, host)
+	if err != nil {
+		return fmt.Errorf("detect distro family: %w", err)
+	}
 
 	hostID := host.ExternalIP
 	if hostID == "" {
 		hostID = "localhost"
 	}
 
-	playbook := GenerateRedisPlaybook(hostID, engine, instanceName, port, password, config.Metadata)
+	playbook := GenerateRedisPlaybook(hostID, engine, instanceName, port, password, family, config.Metadata)
 
 	inv := ansible.NewInventory()
 	inv.AddHost(&ansible.InventoryHost{
@@ -340,7 +344,7 @@ func appendComposeCommand(composeYAML, serviceName, command string) string {
 
 type redisNativeSpec struct {
 	engine       string
-	packageNames []string
+	packageName  string
 	serviceUser  string
 	serviceGroup string
 	configDir    string
@@ -356,17 +360,21 @@ type redisNativeSpec struct {
 	enableTask   string
 }
 
-func buildRedisNativeSpec(engine, instanceName string) redisNativeSpec {
+func buildRedisNativeSpec(engine, instanceName, family string) redisNativeSpec {
+	packageName := "redis"
+	if family == "debian" {
+		packageName = "redis-server"
+	}
 	spec := redisNativeSpec{
 		engine:       engine,
 		serviceName:  fmt.Sprintf("frameworks-redis-%s", instanceName),
 		serviceLabel: "Redis",
-		packageNames: []string{"redis-server"},
+		packageName:  packageName,
 		serviceUser:  "redis",
 		serviceGroup: "redis",
 		configDir:    "/etc/redis",
 		configPath:   fmt.Sprintf("/etc/redis/redis-%s.conf", instanceName),
-		dataDir:      fmt.Sprintf("/var/lib/redis-%s", instanceName),
+		dataDir:      fmt.Sprintf("/var/lib/frameworks/redis-%s", instanceName),
 		serverBinary: "/usr/bin/redis-server",
 		installTask:  "Install Redis server",
 		configTask:   "Write Redis configuration",
@@ -377,12 +385,15 @@ func buildRedisNativeSpec(engine, instanceName string) redisNativeSpec {
 
 	if engine == "valkey" {
 		spec.serviceLabel = "Valkey"
-		spec.packageNames = []string{"valkey", "valkey-redis-compat"}
+		spec.packageName = "valkey"
+		if family == "debian" {
+			spec.packageName = "valkey-server"
+		}
 		spec.serviceUser = "valkey"
 		spec.serviceGroup = "valkey"
 		spec.configDir = "/etc/valkey"
 		spec.configPath = fmt.Sprintf("/etc/valkey/valkey-%s.conf", instanceName)
-		spec.dataDir = fmt.Sprintf("/var/lib/valkey-%s", instanceName)
+		spec.dataDir = fmt.Sprintf("/var/lib/frameworks/valkey-%s", instanceName)
 		spec.serverBinary = "/usr/bin/valkey-server"
 		spec.installTask = "Install Valkey server"
 		spec.configTask = "Write Valkey configuration"
@@ -395,9 +406,9 @@ func buildRedisNativeSpec(engine, instanceName string) redisNativeSpec {
 }
 
 // GenerateRedisPlaybook creates an Ansible playbook for native Redis or Valkey installation.
-func GenerateRedisPlaybook(host, engine, instanceName string, port int, password string, metadata map[string]interface{}) *ansible.Playbook {
+func GenerateRedisPlaybook(host, engine, instanceName string, port int, password, family string, metadata map[string]interface{}) *ansible.Playbook {
 	playbook := ansible.NewPlaybook("Provision Redis", host)
-	spec := buildRedisNativeSpec(engine, instanceName)
+	spec := buildRedisNativeSpec(engine, instanceName, family)
 
 	// Build redis.conf directives
 	configLines := []string{
@@ -432,12 +443,10 @@ func GenerateRedisPlaybook(host, engine, instanceName string, port int, password
 		Tasks: []ansible.Task{
 			{
 				Name:   spec.installTask,
-				Module: "apt",
+				Module: "package",
 				Args: map[string]interface{}{
-					"name":             spec.packageNames,
-					"state":            "present",
-					"update_cache":     true,
-					"cache_valid_time": 3600,
+					"name":  spec.packageName,
+					"state": "present",
 				},
 			},
 			{

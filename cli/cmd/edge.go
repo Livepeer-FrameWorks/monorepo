@@ -947,9 +947,12 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, email string) (certPEM, keyPEM string, err error) {
 	// Create Navigator gRPC client
 	navClient, err := navigator.NewClient(navigator.Config{
-		Addr:         cliCtx.Endpoints.NavigatorGRPCAddr,
-		Timeout:      120 * time.Second, // ACME can take a while
-		ServiceToken: cliCtx.Auth.ServiceToken,
+		Addr:          cliCtx.Endpoints.NavigatorGRPCAddr,
+		Timeout:       120 * time.Second, // ACME can take a while
+		ServiceToken:  cliCtx.Auth.ServiceToken,
+		AllowInsecure: os.Getenv("NAVIGATOR_ALLOW_INSECURE") != "false",
+		CACertFile:    os.Getenv("NAVIGATOR_GRPC_CA_FILE"),
+		ServerName:    os.Getenv("NAVIGATOR_GRPC_SERVER_NAME"),
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("failed to connect to Navigator: %w", err)

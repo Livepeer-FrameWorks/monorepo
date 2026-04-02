@@ -83,14 +83,18 @@ func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Hos
 }
 
 func (p *PrivateerProvisioner) installDependencies(ctx context.Context, host inventory.Host) error {
-	// Simple detection for apt vs yum
+	// Install WireGuard userspace tools with the host's package manager.
 	script := `#!/bin/bash
-if command -v apt-get >/dev/null;
-    then
+set -e
+
+if command -v apt-get >/dev/null; then
     apt-get update && apt-get install -y wireguard-tools
-elif command -v yum >/dev/null;
-    then
+elif command -v dnf >/dev/null; then
+    dnf install -y wireguard-tools
+elif command -v yum >/dev/null; then
     yum install -y wireguard-tools
+elif command -v pacman >/dev/null; then
+    pacman -Syu --noconfirm --needed wireguard-tools
 else
     echo "Unsupported package manager"
     exit 1

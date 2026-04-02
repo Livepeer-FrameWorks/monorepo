@@ -31,6 +31,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // newClusterProvisionCmd creates the provision command
@@ -415,6 +416,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, task, host, outcome, runtimeData, manifestDir); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", task.Name, err)
 			}
+			if err := maybeRegisterIngressDesiredState(ctx, cmd.OutOrStdout(), manifest, task, host, outcome); err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: ingress desired state registration skipped for %s: %v\n", task.Name, err)
+			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "    ✓ %s provisioned\n", task.Name)
 		}
@@ -499,6 +503,11 @@ type bootstrapTokenCreator interface {
 
 type publicServiceRegistrar interface {
 	BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error)
+}
+
+type ingressDesiredStateRegistrar interface {
+	UpsertTLSBundle(ctx context.Context, bundle *pb.TLSBundle) (*pb.TLSBundleResponse, error)
+	UpsertIngressSite(ctx context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error)
 }
 
 func resolveQuartermasterRuntimeData(manifest *inventory.Manifest) (string, string, error) {
@@ -636,6 +645,32 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, host, runtimeData, manifestDir, client)
 }
 
+func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome) error {
+	if outcome == nil || outcome.deferred || !outcome.running {
+		return nil
+	}
+	if task.Type != "nginx" && task.Type != "caddy" {
+		return nil
+	}
+
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return err
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:     grpcAddr,
+		Logger:       logging.NewLogger(),
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for ingress desired state: %w", err)
+	}
+	defer client.Close()
+
+	return registerIngressDesiredStateWithClient(ctx, out, manifest, task, host, client)
+}
+
 func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, registrar publicServiceRegistrar) error {
 	serviceName := serviceNameFromTask(task.Name)
 	serviceType, ok := publicServiceType(serviceName)
@@ -698,6 +733,192 @@ func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer,
 	}
 	fmt.Fprintf(out, "    ✓ Registered service instance: %s/%s (%s:%d)\n", task.Host, serviceType, externalIP, port)
 	return nil
+}
+
+func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, registrar ingressDesiredStateRegistrar) error {
+	if manifest.RootDomain == "" {
+		return nil
+	}
+
+	clusterID := manifest.HostCluster(task.Host)
+	if clusterID == "" {
+		clusterID = manifest.ResolveCluster(task.Type)
+	}
+	if clusterID == "" {
+		return fmt.Errorf("host %s has no resolved cluster", task.Host)
+	}
+
+	defaultEmail := strings.TrimSpace(os.Getenv("BRAND_CONTACT_EMAIL"))
+	if defaultEmail == "" {
+		defaultEmail = "info@frameworks.network"
+	}
+
+	wildcardBundleID := tlsBundleID("wildcard", manifest.RootDomain)
+	if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
+		BundleId:  wildcardBundleID,
+		ClusterId: clusterID,
+		Domains:   []string{"*." + manifest.RootDomain},
+		Issuer:    "navigator",
+		Email:     defaultEmail,
+	}); err != nil {
+		return fmt.Errorf("upsert wildcard bundle: %w", err)
+	}
+
+	localSvcs := make(map[string]interface{})
+	addLocalProxyRoutes(localSvcs, task.Host, manifest.Services, task.Type)
+	addLocalProxyRoutes(localSvcs, task.Host, manifest.Interfaces, task.Type)
+	addLocalProxyRoutes(localSvcs, task.Host, manifest.Observability, task.Type)
+
+	if _, ok := localSvcs["foredeck"]; ok {
+		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
+			BundleId:  tlsBundleID("apex", manifest.RootDomain),
+			ClusterId: clusterID,
+			Domains:   []string{manifest.RootDomain, "www." + manifest.RootDomain},
+			Issuer:    "navigator",
+			Email:     defaultEmail,
+		}); err != nil {
+			return fmt.Errorf("upsert apex bundle: %w", err)
+		}
+	}
+
+	for name, rawPort := range localSvcs {
+		port, ok := rawPort.(int)
+		if !ok || port == 0 {
+			continue
+		}
+
+		domains, bundleID := autoIngressDomains(name, manifest.RootDomain)
+		if len(domains) == 0 || bundleID == "" {
+			continue
+		}
+
+		metadata := map[string]interface{}{}
+		switch name {
+		case "bridge":
+			metadata["websocket_path"] = "/graphql/ws"
+		case "chartroom":
+			metadata["upgrade_all"] = true
+		case "chatwoot":
+			metadata["websocket_path"] = "/cable"
+		case "foghorn":
+			metadata["geo_proxy_headers"] = true
+			metadata["geoip_db_path"] = "/var/lib/GeoIP/GeoLite2-City.mmdb"
+		}
+		siteMetadata, err := structpb.NewStruct(metadata)
+		if err != nil {
+			return fmt.Errorf("encode ingress metadata: %w", err)
+		}
+
+		if _, err := registrar.UpsertIngressSite(ctx, &pb.IngressSite{
+			SiteId:      fmt.Sprintf("%s-%s", name, task.Host),
+			ClusterId:   clusterID,
+			NodeId:      task.Host,
+			Domains:     domains,
+			TlsBundleId: bundleID,
+			Kind:        "reverse_proxy_tcp",
+			Upstream:    fmt.Sprintf("localhost:%d", port),
+			Metadata:    siteMetadata,
+		}); err != nil {
+			return fmt.Errorf("upsert ingress site for %s: %w", name, err)
+		}
+	}
+
+	for bundleID, cfg := range manifest.TLSBundles {
+		if cfg.Cluster != "" && cfg.Cluster != clusterID {
+			continue
+		}
+		email := strings.TrimSpace(cfg.Email)
+		if email == "" {
+			email = defaultEmail
+		}
+		issuer := strings.TrimSpace(cfg.Issuer)
+		if issuer == "" {
+			issuer = "navigator"
+		}
+		var metadata *structpb.Struct
+		if len(cfg.Metadata) > 0 {
+			var err error
+			metadata, err = structpb.NewStruct(stringMapToInterfaceMap(cfg.Metadata))
+			if err != nil {
+				return fmt.Errorf("encode tls bundle metadata for %s: %w", bundleID, err)
+			}
+		}
+		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
+			BundleId:  bundleID,
+			ClusterId: clusterID,
+			Domains:   cfg.Domains,
+			Issuer:    issuer,
+			Email:     email,
+			Metadata:  metadata,
+		}); err != nil {
+			return fmt.Errorf("upsert explicit tls bundle %s: %w", bundleID, err)
+		}
+	}
+
+	for siteID, cfg := range manifest.IngressSites {
+		if cfg.Node != task.Host {
+			continue
+		}
+		siteClusterID := clusterID
+		if cfg.Cluster != "" {
+			siteClusterID = cfg.Cluster
+		}
+		var metadata *structpb.Struct
+		if len(cfg.Metadata) > 0 {
+			var err error
+			metadata, err = structpb.NewStruct(stringMapToInterfaceMap(cfg.Metadata))
+			if err != nil {
+				return fmt.Errorf("encode ingress site metadata for %s: %w", siteID, err)
+			}
+		}
+		if _, err := registrar.UpsertIngressSite(ctx, &pb.IngressSite{
+			SiteId:      siteID,
+			ClusterId:   siteClusterID,
+			NodeId:      cfg.Node,
+			Domains:     cfg.Domains,
+			TlsBundleId: cfg.TLSBundleID,
+			Kind:        cfg.Kind,
+			Upstream:    cfg.Upstream,
+			Metadata:    metadata,
+		}); err != nil {
+			return fmt.Errorf("upsert explicit ingress site %s: %w", siteID, err)
+		}
+	}
+
+	fmt.Fprintf(out, "    ✓ Registered ingress desired state for %s\n", task.Host)
+	return nil
+}
+
+func stringMapToInterfaceMap(values map[string]string) map[string]interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
+func tlsBundleID(kind, rootDomain string) string {
+	replacer := strings.NewReplacer(".", "-", "*", "wildcard-", " ", "-")
+	return kind + "-" + replacer.Replace(rootDomain)
+}
+
+func autoIngressDomains(serviceName, rootDomain string) ([]string, string) {
+	if serviceName == "foredeck" {
+		return []string{rootDomain, "www." + rootDomain}, tlsBundleID("apex", rootDomain)
+	}
+
+	serviceType, ok := publicServiceType(serviceName)
+	if !ok {
+		return nil, ""
+	}
+	fqdn, ok := pkgdns.ServiceFQDN(serviceType, rootDomain)
+	if !ok || fqdn == "" {
+		return nil, ""
+	}
+	return []string{fqdn}, tlsBundleID("wildcard", rootDomain)
 }
 
 func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
@@ -810,6 +1031,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			if svc.EnvFile != "" {
 				config.EnvFile = svc.EnvFile
 			}
+			for k, v := range svc.Config {
+				config.Metadata[k] = v
+			}
 			if port, err := resolvePort(baseName, svc); err == nil && port != 0 {
 				config.Port = port
 			}
@@ -830,6 +1054,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			}
 			if iface.EnvFile != "" {
 				config.EnvFile = iface.EnvFile
+			}
+			for k, v := range iface.Config {
+				config.Metadata[k] = v
 			}
 			if port, err := resolvePort(baseName, iface); err == nil && port != 0 {
 				config.Port = port
@@ -889,6 +1116,25 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				}
 				if len(manifest.Infrastructure.Kafka.Topics) > 0 {
 					config.Metadata["topics"] = kafkaTopicsToMetadata(manifest.Infrastructure.Kafka.Topics)
+				}
+				brokerCount := len(manifest.Infrastructure.Kafka.Brokers)
+				if brokerCount > 0 {
+					config.Metadata["broker_count"] = brokerCount
+				}
+				if manifest.Infrastructure.Kafka.DeleteTopicEnable != nil {
+					config.Metadata["delete_topic_enable"] = *manifest.Infrastructure.Kafka.DeleteTopicEnable
+				}
+				if manifest.Infrastructure.Kafka.MinInSyncReplicas > 0 {
+					config.Metadata["min_insync_replicas"] = manifest.Infrastructure.Kafka.MinInSyncReplicas
+				}
+				if manifest.Infrastructure.Kafka.OffsetsTopicReplicationFactor > 0 {
+					config.Metadata["offsets_topic_replication_factor"] = manifest.Infrastructure.Kafka.OffsetsTopicReplicationFactor
+				}
+				if manifest.Infrastructure.Kafka.TransactionStateLogReplicationFactor > 0 {
+					config.Metadata["transaction_state_log_replication_factor"] = manifest.Infrastructure.Kafka.TransactionStateLogReplicationFactor
+				}
+				if manifest.Infrastructure.Kafka.TransactionStateLogMinISR > 0 {
+					config.Metadata["transaction_state_log_min_isr"] = manifest.Infrastructure.Kafka.TransactionStateLogMinISR
 				}
 			}
 		case "zookeeper":
@@ -1000,21 +1246,20 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		if manifest.RootDomain != "" {
 			config.Metadata["root_domain"] = manifest.RootDomain
 		}
+		config.Metadata["node_id"] = task.Host
 		localSvcs := make(map[string]interface{})
-		for ifaceName, iface := range manifest.Interfaces {
-			if !iface.Enabled || ifaceName == task.Type {
-				continue
-			}
-			if iface.Host == task.Host || containsHost(iface.Hosts, task.Host) {
-				port := iface.Port
-				if port == 0 {
-					port = provisioner.ServicePorts[ifaceName]
-				}
-				localSvcs[ifaceName] = port
-			}
-		}
+		addLocalProxyRoutes(localSvcs, task.Host, manifest.Services, task.Type)
+		addLocalProxyRoutes(localSvcs, task.Host, manifest.Interfaces, task.Type)
+		addLocalProxyRoutes(localSvcs, task.Host, manifest.Observability, task.Type)
 		if len(localSvcs) > 0 {
 			config.Metadata["local_services"] = localSvcs
+		}
+		if grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string); ok && grpcAddr != "" {
+			config.Metadata["quartermaster_http_url"] = quartermasterHTTPURL(grpcAddr)
+		}
+		config.Metadata["navigator_http_url"] = "http://navigator:18010"
+		if serviceToken, ok := runtimeData["service_token"].(string); ok && serviceToken != "" {
+			config.Metadata["service_token"] = serviceToken
 		}
 	}
 
@@ -1038,6 +1283,47 @@ func containsHost(hosts []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func quartermasterHTTPURL(grpcAddr string) string {
+	host, _, err := net.SplitHostPort(grpcAddr)
+	if err == nil && host != "" {
+		return "http://" + host + ":18002"
+	}
+	if idx := strings.LastIndex(grpcAddr, ":"); idx > 0 {
+		return "http://" + grpcAddr[:idx] + ":18002"
+	}
+	return "http://quartermaster:18002"
+}
+
+var proxyRouteServiceNames = map[string]struct{}{
+	"bridge":    {},
+	"chartroom": {},
+	"chatwoot":  {},
+	"foghorn":   {},
+	"foredeck":  {},
+	"logbook":   {},
+	"listmonk":  {},
+	"steward":   {},
+}
+
+func addLocalProxyRoutes(routes map[string]interface{}, hostName string, services map[string]inventory.ServiceConfig, skipName string) {
+	for name, svc := range services {
+		if !svc.Enabled || name == skipName {
+			continue
+		}
+		if _, ok := proxyRouteServiceNames[name]; !ok {
+			continue
+		}
+		if svc.Host != hostName && !containsHost(svc.Hosts, hostName) {
+			continue
+		}
+		port, err := resolvePort(name, svc)
+		if err != nil || port == 0 {
+			continue
+		}
+		routes[name] = port
+	}
 }
 
 type zookeeperNodeConfig struct {

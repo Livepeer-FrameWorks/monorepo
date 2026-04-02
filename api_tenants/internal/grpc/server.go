@@ -52,6 +52,7 @@ type QuartermasterServer struct {
 	pb.UnimplementedClusterServiceServer
 	pb.UnimplementedMeshServiceServer
 	pb.UnimplementedServiceRegistryServiceServer
+	pb.UnimplementedIngressServiceServer
 	db              *sql.DB
 	logger          logging.Logger
 	navigatorClient *navigator.Client
@@ -100,6 +101,20 @@ func marshalStringMapJSON(m map[string]string) (*string, error) {
 	return &value, nil
 }
 
+func marshalStringSliceJSON(values []string) (*string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return nil, err
+	}
+
+	value := string(encoded)
+	return &value, nil
+}
+
 func unmarshalStringMapJSON(raw []byte) map[string]string {
 	if len(raw) == 0 {
 		return nil
@@ -113,6 +128,35 @@ func unmarshalStringMapJSON(raw []byte) map[string]string {
 		return nil
 	}
 	return metadata
+}
+
+func unmarshalStringSliceJSON(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil
+	}
+	return values
+}
+
+func normalizeStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	slices.Sort(normalized)
+	return slices.Compact(normalized)
 }
 
 func buildAdvertiseAddr(host sql.NullString, port sql.NullInt32) (string, bool) {
@@ -5078,6 +5122,361 @@ func (s *QuartermasterServer) GetServiceHealth(ctx context.Context, req *pb.GetS
 	return s.getServicesHealth(ctx, req.GetServiceId())
 }
 
+func (s *QuartermasterServer) UpsertTLSBundle(ctx context.Context, req *pb.UpsertTLSBundleRequest) (*pb.TLSBundleResponse, error) {
+	if req.GetBundle() == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
+	bundle := req.GetBundle()
+	domains := normalizeStringSlice(bundle.GetDomains())
+	if strings.TrimSpace(bundle.GetBundleId()) == "" || strings.TrimSpace(bundle.GetClusterId()) == "" || len(domains) == 0 || strings.TrimSpace(bundle.GetEmail()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id, cluster_id, domains, and email are required")
+	}
+
+	domainsJSON, err := marshalStringSliceJSON(domains)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "encode domains: %v", err)
+	}
+
+	var metadataJSON *string
+	if bundle.GetMetadata() != nil {
+		encoded, marshalErr := json.Marshal(bundle.GetMetadata().AsMap())
+		if marshalErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "encode metadata: %v", marshalErr)
+		}
+		value := string(encoded)
+		metadataJSON = &value
+	}
+
+	query := `
+		INSERT INTO quartermaster.tls_bundles (bundle_id, cluster_id, domains, issuer, email, metadata, updated_at)
+		VALUES ($1, $2, COALESCE($3, '[]')::jsonb, $4, $5, COALESCE($6, '{}')::jsonb, NOW())
+		ON CONFLICT (bundle_id) DO UPDATE SET
+			cluster_id = EXCLUDED.cluster_id,
+			domains = EXCLUDED.domains,
+			issuer = EXCLUDED.issuer,
+			email = EXCLUDED.email,
+			metadata = EXCLUDED.metadata,
+			updated_at = NOW()
+		RETURNING id, created_at, updated_at
+	`
+
+	var id string
+	var createdAt, updatedAt time.Time
+	if err := s.db.QueryRowContext(ctx, query,
+		bundle.GetBundleId(), bundle.GetClusterId(), domainsJSON, bundle.GetIssuer(), bundle.GetEmail(), metadataJSON,
+	).Scan(&id, &createdAt, &updatedAt); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.TLSBundleResponse{
+		Bundle: &pb.TLSBundle{
+			Id:        id,
+			BundleId:  bundle.GetBundleId(),
+			ClusterId: bundle.GetClusterId(),
+			Domains:   domains,
+			Issuer:    bundle.GetIssuer(),
+			Email:     bundle.GetEmail(),
+			Metadata:  bundle.GetMetadata(),
+			CreatedAt: timestamppb.New(createdAt),
+			UpdatedAt: timestamppb.New(updatedAt),
+		},
+	}, nil
+}
+
+func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTLSBundlesRequest) (*pb.ListTLSBundlesResponse, error) {
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "created_at",
+		IDColumn:        "id",
+	}
+
+	where := "WHERE 1=1"
+	countWhere := "WHERE 1=1"
+	args := []interface{}{}
+	countArgs := []interface{}{}
+	argIdx := 1
+
+	if req.GetClusterId() != "" {
+		where += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		args = append(args, req.GetClusterId())
+		countArgs = append(countArgs, req.GetClusterId())
+		argIdx++
+	}
+
+	var total int32
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.tls_bundles %s`, countWhere)
+	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, bundle_id, cluster_id, domains, issuer, email, COALESCE(metadata, '{}'::jsonb), created_at, updated_at
+		FROM quartermaster.tls_bundles
+		%s
+		%s
+		LIMIT %d
+	`, where, builder.OrderBy(params), params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var bundles []*pb.TLSBundle
+	for rows.Next() {
+		var bundle pb.TLSBundle
+		var domainsJSON, metadataJSON []byte
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&bundle.Id, &bundle.BundleId, &bundle.ClusterId, &domainsJSON, &bundle.Issuer, &bundle.Email, &metadataJSON, &createdAt, &updatedAt); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		}
+		bundle.Domains = unmarshalStringSliceJSON(domainsJSON)
+		if len(metadataJSON) > 0 {
+			var metadataMap map[string]interface{}
+			if json.Unmarshal(metadataJSON, &metadataMap) == nil {
+				bundle.Metadata = mapToStruct(metadataMap)
+			}
+		}
+		bundle.CreatedAt = timestamppb.New(createdAt)
+		bundle.UpdatedAt = timestamppb.New(updatedAt)
+		bundles = append(bundles, &bundle)
+	}
+
+	hasMore := len(bundles) > params.Limit
+	if hasMore {
+		bundles = bundles[:params.Limit]
+	}
+	if params.Direction == pagination.Backward && len(bundles) > 0 {
+		for i, j := 0, len(bundles)-1; i < j; i, j = i+1, j-1 {
+			bundles[i], bundles[j] = bundles[j], bundles[i]
+		}
+	}
+
+	var startCursor, endCursor string
+	if len(bundles) > 0 {
+		startCursor = pagination.EncodeCursor(bundles[0].CreatedAt.AsTime(), bundles[0].Id)
+		endCursor = pagination.EncodeCursor(bundles[len(bundles)-1].CreatedAt.AsTime(), bundles[len(bundles)-1].Id)
+	}
+
+	resp := &pb.ListTLSBundlesResponse{
+		Bundles:    bundles,
+		ClusterId:  req.GetClusterId(),
+		Pagination: &pb.CursorPaginationResponse{TotalCount: total},
+	}
+	if startCursor != "" {
+		resp.Pagination.StartCursor = &startCursor
+	}
+	if endCursor != "" {
+		resp.Pagination.EndCursor = &endCursor
+	}
+	if params.Direction == pagination.Forward {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = params.Cursor != nil
+	} else {
+		resp.Pagination.HasPreviousPage = hasMore
+		resp.Pagination.HasNextPage = params.Cursor != nil
+	}
+
+	return resp, nil
+}
+
+func (s *QuartermasterServer) UpsertIngressSite(ctx context.Context, req *pb.UpsertIngressSiteRequest) (*pb.IngressSiteResponse, error) {
+	if req.GetSite() == nil {
+		return nil, status.Error(codes.InvalidArgument, "site is required")
+	}
+
+	site := req.GetSite()
+	domains := normalizeStringSlice(site.GetDomains())
+	if strings.TrimSpace(site.GetSiteId()) == "" || strings.TrimSpace(site.GetClusterId()) == "" || strings.TrimSpace(site.GetNodeId()) == "" || len(domains) == 0 || strings.TrimSpace(site.GetTlsBundleId()) == "" || strings.TrimSpace(site.GetKind()) == "" || strings.TrimSpace(site.GetUpstream()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "site_id, cluster_id, node_id, domains, tls_bundle_id, kind, and upstream are required")
+	}
+
+	domainsJSON, err := marshalStringSliceJSON(domains)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "encode domains: %v", err)
+	}
+
+	var metadataJSON *string
+	if site.GetMetadata() != nil {
+		encoded, marshalErr := json.Marshal(site.GetMetadata().AsMap())
+		if marshalErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "encode metadata: %v", marshalErr)
+		}
+		value := string(encoded)
+		metadataJSON = &value
+	}
+
+	query := `
+		INSERT INTO quartermaster.ingress_sites (site_id, cluster_id, node_id, domains, tls_bundle_id, kind, upstream, metadata, updated_at)
+		VALUES ($1, $2, $3, COALESCE($4, '[]')::jsonb, $5, $6, $7, COALESCE($8, '{}')::jsonb, NOW())
+		ON CONFLICT (site_id) DO UPDATE SET
+			cluster_id = EXCLUDED.cluster_id,
+			node_id = EXCLUDED.node_id,
+			domains = EXCLUDED.domains,
+			tls_bundle_id = EXCLUDED.tls_bundle_id,
+			kind = EXCLUDED.kind,
+			upstream = EXCLUDED.upstream,
+			metadata = EXCLUDED.metadata,
+			updated_at = NOW()
+		RETURNING id, created_at, updated_at
+	`
+
+	var id string
+	var createdAt, updatedAt time.Time
+	if err := s.db.QueryRowContext(ctx, query,
+		site.GetSiteId(), site.GetClusterId(), site.GetNodeId(), domainsJSON, site.GetTlsBundleId(), site.GetKind(), site.GetUpstream(), metadataJSON,
+	).Scan(&id, &createdAt, &updatedAt); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.IngressSiteResponse{
+		Site: &pb.IngressSite{
+			Id:          id,
+			SiteId:      site.GetSiteId(),
+			ClusterId:   site.GetClusterId(),
+			NodeId:      site.GetNodeId(),
+			Domains:     domains,
+			TlsBundleId: site.GetTlsBundleId(),
+			Kind:        site.GetKind(),
+			Upstream:    site.GetUpstream(),
+			Metadata:    site.GetMetadata(),
+			CreatedAt:   timestamppb.New(createdAt),
+			UpdatedAt:   timestamppb.New(updatedAt),
+		},
+	}, nil
+}
+
+func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.ListIngressSitesRequest) (*pb.ListIngressSitesResponse, error) {
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "created_at",
+		IDColumn:        "id",
+	}
+
+	where := "WHERE 1=1"
+	countWhere := "WHERE 1=1"
+	args := []interface{}{}
+	countArgs := []interface{}{}
+	argIdx := 1
+
+	if req.GetClusterId() != "" {
+		where += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		args = append(args, req.GetClusterId())
+		countArgs = append(countArgs, req.GetClusterId())
+		argIdx++
+	}
+	if req.GetNodeId() != "" {
+		where += fmt.Sprintf(" AND node_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND node_id = $%d", argIdx)
+		args = append(args, req.GetNodeId())
+		countArgs = append(countArgs, req.GetNodeId())
+		argIdx++
+	}
+
+	var total int32
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.ingress_sites %s`, countWhere)
+	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, site_id, cluster_id, node_id, domains, tls_bundle_id, kind, upstream, COALESCE(metadata, '{}'::jsonb), created_at, updated_at
+		FROM quartermaster.ingress_sites
+		%s
+		%s
+		LIMIT %d
+	`, where, builder.OrderBy(params), params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var sites []*pb.IngressSite
+	for rows.Next() {
+		var site pb.IngressSite
+		var domainsJSON, metadataJSON []byte
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(
+			&site.Id, &site.SiteId, &site.ClusterId, &site.NodeId, &domainsJSON, &site.TlsBundleId,
+			&site.Kind, &site.Upstream, &metadataJSON, &createdAt, &updatedAt,
+		); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		}
+		site.Domains = unmarshalStringSliceJSON(domainsJSON)
+		if len(metadataJSON) > 0 {
+			var metadataMap map[string]interface{}
+			if json.Unmarshal(metadataJSON, &metadataMap) == nil {
+				site.Metadata = mapToStruct(metadataMap)
+			}
+		}
+		site.CreatedAt = timestamppb.New(createdAt)
+		site.UpdatedAt = timestamppb.New(updatedAt)
+		sites = append(sites, &site)
+	}
+
+	hasMore := len(sites) > params.Limit
+	if hasMore {
+		sites = sites[:params.Limit]
+	}
+	if params.Direction == pagination.Backward && len(sites) > 0 {
+		for i, j := 0, len(sites)-1; i < j; i, j = i+1, j-1 {
+			sites[i], sites[j] = sites[j], sites[i]
+		}
+	}
+
+	var startCursor, endCursor string
+	if len(sites) > 0 {
+		startCursor = pagination.EncodeCursor(sites[0].CreatedAt.AsTime(), sites[0].Id)
+		endCursor = pagination.EncodeCursor(sites[len(sites)-1].CreatedAt.AsTime(), sites[len(sites)-1].Id)
+	}
+
+	resp := &pb.ListIngressSitesResponse{
+		Sites:      sites,
+		ClusterId:  req.GetClusterId(),
+		NodeId:     req.GetNodeId(),
+		Pagination: &pb.CursorPaginationResponse{TotalCount: total},
+	}
+	if startCursor != "" {
+		resp.Pagination.StartCursor = &startCursor
+	}
+	if endCursor != "" {
+		resp.Pagination.EndCursor = &endCursor
+	}
+	if params.Direction == pagination.Forward {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = params.Cursor != nil
+	} else {
+		resp.Pagination.HasPreviousPage = hasMore
+		resp.Pagination.HasNextPage = params.Cursor != nil
+	}
+
+	return resp, nil
+}
+
 func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID string) (*pb.ListServicesHealthResponse, error) {
 	where := "WHERE 1=1"
 	args := []interface{}{}
@@ -7158,6 +7557,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	pb.RegisterClusterServiceServer(server, qmServer)
 	pb.RegisterMeshServiceServer(server, qmServer)
 	pb.RegisterServiceRegistryServiceServer(server, qmServer)
+	pb.RegisterIngressServiceServer(server, qmServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()

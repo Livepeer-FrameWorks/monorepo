@@ -866,8 +866,11 @@ func (e *EdgeProvisioner) installNativeLinux(ctx context.Context, host inventory
 	fmt.Println("  creating frameworks user/group...")
 	userScript := `#!/bin/bash
 set -e
+shell=/usr/bin/nologin
+[ ! -x "$shell" ] && shell=/sbin/nologin
+[ ! -x "$shell" ] && shell=/bin/false
 getent group frameworks >/dev/null || groupadd --system frameworks
-id -u frameworks >/dev/null 2>&1 || useradd -r -g frameworks -s /sbin/nologin frameworks
+id -u frameworks >/dev/null 2>&1 || useradd -r -g frameworks -s "$shell" frameworks
 mkdir -p /opt/frameworks/mistserver /opt/frameworks/helmsman /etc/frameworks /var/log/frameworks
 chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsman /etc/frameworks /var/log/frameworks
 `
@@ -1099,7 +1102,11 @@ chmod +x /opt/frameworks/caddy/caddy
 rm -f /tmp/caddy.tar.gz
 
 # Create caddy user if needed
-id -u caddy &>/dev/null || useradd -r -s /sbin/nologin caddy
+shell=/usr/bin/nologin
+[ ! -x "$shell" ] && shell=/sbin/nologin
+[ ! -x "$shell" ] && shell=/bin/false
+getent group caddy >/dev/null || groupadd --system caddy
+id -u caddy &>/dev/null || useradd -r -g caddy -s "$shell" caddy
 mkdir -p /etc/caddy /var/lib/caddy
 chown -R caddy:caddy /etc/caddy /var/lib/caddy
 

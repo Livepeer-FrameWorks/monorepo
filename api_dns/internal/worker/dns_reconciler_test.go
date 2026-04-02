@@ -25,6 +25,10 @@ func (t *trackingQMClient) ListClusters(_ context.Context, _ *proto.CursorPagina
 	return &proto.ListClustersResponse{}, nil
 }
 
+func (t *trackingQMClient) ListTLSBundles(_ context.Context, _ string, _ *proto.CursorPaginationRequest) (*proto.ListTLSBundlesResponse, error) {
+	return &proto.ListTLSBundlesResponse{}, nil
+}
+
 func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T) {
 	qm := &trackingQMClient{}
 	logger := logrus.New()

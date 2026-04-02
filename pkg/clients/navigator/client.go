@@ -2,7 +2,10 @@ package navigator
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"time"
 
 	"frameworks/pkg/logging"
@@ -10,6 +13,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
@@ -27,7 +31,10 @@ type Config struct {
 	Timeout time.Duration
 	Logger  logging.Logger
 	// ServiceToken for service-to-service auth (optional)
-	ServiceToken string
+	ServiceToken  string
+	AllowInsecure bool
+	CACertFile    string
+	ServerName    string
 }
 
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
@@ -56,9 +63,30 @@ func NewClient(config Config) (*Client, error) {
 		return nil, fmt.Errorf("navigator address is required")
 	}
 
+	var transport grpc.DialOption
+	switch {
+	case config.CACertFile != "":
+		caCert, err := os.ReadFile(config.CACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read navigator CA cert: %w", err)
+		}
+		certPool := x509.NewCertPool()
+		if !certPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to append navigator CA cert")
+		}
+		transport = grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			RootCAs:    certPool,
+			ServerName: config.ServerName,
+		}))
+	case config.AllowInsecure:
+		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
+	default:
+		return nil, fmt.Errorf("navigator client requires CACertFile or AllowInsecure=true")
+	}
+
 	conn, err := grpc.NewClient(
 		config.Addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport,
 		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
 	)
 	if err != nil {
@@ -123,6 +151,15 @@ func (c *Client) GetCertificate(ctx context.Context, req *pb.GetCertificateReque
 	resp, err := c.service.GetCertificate(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get certificate: %w", err)
+	}
+	return resp, nil
+}
+
+// GetTLSBundle retrieves an existing TLS bundle from Navigator.
+func (c *Client) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error) {
+	resp, err := c.service.GetTLSBundle(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tls bundle: %w", err)
 	}
 	return resp, nil
 }

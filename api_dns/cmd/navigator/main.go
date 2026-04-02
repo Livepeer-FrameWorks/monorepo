@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"frameworks/api_dns/internal/logic"
@@ -29,10 +33,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
 // ServerMetrics holds Prometheus metrics for the gRPC server
@@ -72,16 +80,10 @@ func main() {
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
-	// Initialize field encryption for private keys at rest
-	var keyEncryptor *fieldcrypt.FieldEncryptor
-	if encKey := config.GetEnv("FIELD_ENCRYPTION_KEY", ""); encKey != "" {
-		var encErr error
-		keyEncryptor, encErr = fieldcrypt.DeriveFieldEncryptor([]byte(encKey), "navigator-private-keys")
-		if encErr != nil {
-			logger.WithError(encErr).Fatal("Failed to derive field encryption key")
-		}
-	} else {
-		logger.Warn("FIELD_ENCRYPTION_KEY not set; private keys will be stored unencrypted")
+	encKey := config.RequireEnv("FIELD_ENCRYPTION_KEY")
+	keyEncryptor, err := fieldcrypt.DeriveFieldEncryptor([]byte(encKey), "navigator-private-keys")
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to derive field encryption key")
 	}
 
 	// Initialize Store
@@ -184,13 +186,29 @@ func main() {
 			},
 		})
 
-		logger.Warn("Navigator gRPC is running without TLS; certificate private keys will traverse plaintext. Ensure network-level encryption (e.g. WireGuard mesh) is in place.")
+		grpcCreds := credentials.TransportCredentials(insecure.NewCredentials())
+		grpcCertFile := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_CERT_FILE", ""))
+		grpcKeyFile := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_KEY_FILE", ""))
+		if grpcCertFile != "" || grpcKeyFile != "" {
+			if grpcCertFile == "" || grpcKeyFile == "" {
+				logger.Fatal("Both NAVIGATOR_GRPC_CERT_FILE and NAVIGATOR_GRPC_KEY_FILE are required together")
+			}
+			tlsCreds, tlsErr := credentials.NewServerTLSFromFile(grpcCertFile, grpcKeyFile)
+			if tlsErr != nil {
+				logger.WithError(tlsErr).Fatal("Failed to load Navigator gRPC TLS credentials")
+			}
+			grpcCreds = tlsCreds
+			logger.WithField("cert_file", grpcCertFile).Info("Navigator gRPC TLS enabled")
+		} else {
+			logger.Warn("Navigator gRPC is running without TLS; private keys require a private network path.")
+		}
 
 		grpcServer := grpc.NewServer(
-			grpc.Creds(insecure.NewCredentials()),
+			grpc.Creds(grpcCreds),
 			grpc.ChainUnaryInterceptor(
 				grpcutil.SanitizeUnaryServerInterceptor(),
 				authInterceptor,
+				requirePrivatePeerUnaryInterceptor(),
 			),
 		)
 		pb.RegisterNavigatorServiceServer(grpcServer, navigatorServer)
@@ -210,10 +228,44 @@ func main() {
 
 	// === HTTP Server ===
 	serverConfig := server.DefaultConfig("navigator", config.RequireEnv("NAVIGATOR_PORT"))
+	serverConfig.TLSCertFile = config.GetEnv("NAVIGATOR_HTTP_TLS_CERT_FILE", "")
+	serverConfig.TLSKeyFile = config.GetEnv("NAVIGATOR_HTTP_TLS_KEY_FILE", "")
 
 	app := server.SetupServiceRouter(logger, "navigator", healthChecker, metricsCollector)
 	app.GET("/status", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "running", "version": version.Version})
+	})
+	app.GET("/internal/tls-bundles/:bundleID", func(c *gin.Context) {
+		if !requirePrivateInternalRequest(c) {
+			return
+		}
+		authz := strings.TrimSpace(c.GetHeader("Authorization"))
+		if authz != "Bearer "+serviceToken {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		bundleID := strings.TrimSpace(c.Param("bundleID"))
+		if bundleID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bundle_id is required"})
+			return
+		}
+
+		bundle, err := certManager.GetTLSBundle(c.Request.Context(), bundleID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+
+		hash := sha256.Sum256([]byte(bundle.CertPEM + bundle.KeyPEM))
+		c.JSON(http.StatusOK, gin.H{
+			"bundle_id":  bundle.BundleID,
+			"domains":    bundle.Domains,
+			"cert_pem":   bundle.CertPEM,
+			"key_pem":    bundle.KeyPEM,
+			"expires_at": bundle.ExpiresAt.Unix(),
+			"version":    hex.EncodeToString(hash[:]),
+		})
 	})
 
 	// Best-effort service registration in Quartermaster
@@ -251,6 +303,45 @@ func main() {
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.WithError(err).Fatal("Navigator HTTP server failed")
 	}
+}
+
+func requirePrivatePeerUnaryInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		p, ok := peer.FromContext(ctx)
+		if !ok || p.Addr == nil {
+			return nil, status.Error(codes.PermissionDenied, "navigator gRPC requires a private network peer")
+		}
+
+		host := p.Addr.String()
+		if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
+			host = splitHost
+		}
+		if !isPrivateClientIP(host) {
+			return nil, status.Error(codes.PermissionDenied, "navigator gRPC requires a private network peer")
+		}
+
+		return handler(ctx, req)
+	}
+}
+
+func requirePrivateInternalRequest(c *gin.Context) bool {
+	host := c.Request.RemoteAddr
+	if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
+		host = splitHost
+	}
+	if isPrivateClientIP(host) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "private network access required"})
+	return false
+}
+
+func isPrivateClientIP(raw string) bool {
+	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast()
 }
 
 // SyncDNS implements the gRPC SyncDNS method
@@ -351,5 +442,30 @@ func (s *NavigatorServer) GetCertificate(ctx context.Context, req *pb.GetCertifi
 		CertPem:   cert.CertPEM,
 		KeyPem:    cert.KeyPEM,
 		ExpiresAt: cert.ExpiresAt.Unix(),
+	}, nil
+}
+
+func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error) {
+	log := s.Logger.WithField("bundle_id", req.GetBundleId())
+	log.Info("Received GetTLSBundle request")
+
+	bundle, err := s.CertManager.GetTLSBundle(ctx, req.GetBundleId())
+	if err != nil {
+		log.WithError(err).Info("TLS bundle not found")
+		return &pb.GetTLSBundleResponse{
+			Found: false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	hash := sha256.Sum256([]byte(bundle.CertPEM + bundle.KeyPEM))
+	return &pb.GetTLSBundleResponse{
+		Found:     true,
+		BundleId:  bundle.BundleID,
+		Domains:   bundle.Domains,
+		CertPem:   bundle.CertPEM,
+		KeyPem:    bundle.KeyPEM,
+		ExpiresAt: bundle.ExpiresAt.Unix(),
+		Version:   hex.EncodeToString(hash[:]),
 	}, nil
 }

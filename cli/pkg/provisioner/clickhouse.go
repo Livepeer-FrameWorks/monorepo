@@ -67,6 +67,7 @@ install_clickhouse_apt() {
 }
 
 install_clickhouse_yum() {
+  PKG_MGR="$1"
   cat >/etc/yum.repos.d/clickhouse.repo <<'REPO'
 [clickhouse]
 name=ClickHouse
@@ -76,16 +77,84 @@ gpgcheck=1
 gpgkey=https://packages.clickhouse.com/rpm/stable/repodata/repomd.xml.key
 REPO
   if [ -n "$VERSION" ]; then
-    yum install -y "clickhouse-server-$VERSION" "clickhouse-client-$VERSION"
+    "$PKG_MGR" install -y "clickhouse-server-$VERSION" "clickhouse-client-$VERSION"
   else
-    yum install -y clickhouse-server clickhouse-client
+    "$PKG_MGR" install -y clickhouse-server clickhouse-client
   fi
+}
+
+install_clickhouse_arch() {
+  pacman -Syu --noconfirm --needed curl tar
+
+  checksum_value() {
+    awk 'NF { print $1; exit }' "$1"
+  }
+
+  verify_checksum() {
+    local algorithm="$1" file="$2" checksum_file="$3" expected actual
+    expected="$(checksum_value "$checksum_file")"
+    [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
+    case "$algorithm" in
+      sha512)
+        if command -v sha512sum >/dev/null 2>&1; then
+          actual="$(sha512sum "$file" | awk '{print $1}')"
+        elif command -v shasum >/dev/null 2>&1; then
+          actual="$(shasum -a 512 "$file" | awk '{print $1}')"
+        else
+          actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
+        fi
+        ;;
+      *)
+        echo "unsupported checksum algorithm: $algorithm" >&2
+        exit 1
+        ;;
+    esac
+    [ "$actual" = "$expected" ] || {
+      echo "checksum mismatch for $file" >&2
+      echo "expected: $expected" >&2
+      echo "actual:   $actual" >&2
+      exit 1
+    }
+  }
+
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64) ch_arch="amd64" ;;
+    aarch64|arm64) ch_arch="arm64" ;;
+    *)
+      echo "unsupported architecture: $arch" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ -n "$VERSION" ]; then
+    archive="clickhouse-common-static-${VERSION}-${ch_arch}.tgz"
+  else
+    archive=$(curl -fsSL https://packages.clickhouse.com/tgz/stable/ | grep -o "clickhouse-common-static-[0-9][^\"']*-${ch_arch}\.tgz" | sort -V | tail -n 1)
+  fi
+  if [ -z "$archive" ]; then
+    echo "failed to resolve clickhouse static archive" >&2
+    exit 1
+  fi
+
+  curl -fsSL -o /tmp/clickhouse.tgz "https://packages.clickhouse.com/tgz/stable/${archive}"
+  curl -fsSL -o /tmp/clickhouse.tgz.sha512 "https://packages.clickhouse.com/tgz/stable/${archive}.sha512"
+  verify_checksum sha512 /tmp/clickhouse.tgz /tmp/clickhouse.tgz.sha512
+  topdir=$(tar -tzf /tmp/clickhouse.tgz | head -n 1 | cut -d/ -f1)
+  rm -rf "/tmp/${topdir}"
+  tar -xzf /tmp/clickhouse.tgz -C /tmp
+  "/tmp/${topdir}/usr/bin/clickhouse" install --noninteractive --user clickhouse --group clickhouse
+  rm -rf "/tmp/${topdir}" /tmp/clickhouse.tgz /tmp/clickhouse.tgz.sha512
 }
 
 if command -v apt-get >/dev/null; then
   install_clickhouse_apt
+elif command -v dnf >/dev/null; then
+  install_clickhouse_yum dnf
 elif command -v yum >/dev/null; then
-  install_clickhouse_yum
+  install_clickhouse_yum yum
+elif command -v pacman >/dev/null; then
+  install_clickhouse_arch
 else
   echo "Unsupported package manager"
   exit 1
