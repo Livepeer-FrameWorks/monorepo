@@ -106,6 +106,9 @@ func main() {
 		QuartermasterGRPCAddr: qmGRPCAddr,
 		ServiceToken:          serviceToken,
 		EnrollmentToken:       enrollmentToken,
+		AllowInsecure:         config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:            config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:            config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		SyncInterval:          syncInterval,
 		SyncTimeout:           syncTimeout,
 		InterfaceName:         os.Getenv("MESH_INTERFACE"), // Defaults to wg0

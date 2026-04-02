@@ -63,10 +63,13 @@ func main() {
 			config.GetEnv("QUARTERMASTER_HOST", "quartermaster")+":"+config.GetEnv("QUARTERMASTER_GRPC_PORT", "19002"))
 
 		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     qmAddr,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      qmAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")

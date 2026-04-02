@@ -126,10 +126,13 @@ func main() {
 	// Periscope gRPC client — used by the heartbeat agent for direct diagnostics.
 	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope-query:19004")
 	periscopeClient, err := periscopeclient.NewGRPCClient(periscopeclient.GRPCConfig{
-		GRPCAddr:     periscopeGRPCAddr,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      periscopeGRPCAddr,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Periscope gRPC client - diagnostics disabled")
@@ -142,10 +145,13 @@ func main() {
 	// Create Purser gRPC client for tier checks
 	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:     purserGRPCAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      purserGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - tier gating unavailable")
@@ -173,10 +179,13 @@ func main() {
 	// Create Quartermaster gRPC client for tenant listings
 	qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     qmGRPCAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      qmGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - heartbeat disabled")
@@ -510,7 +519,7 @@ func main() {
 		if listenErr != nil {
 			logger.WithError(listenErr).Fatal("Failed to listen on gRPC port")
 		}
-		grpcSrv := grpc.NewServer(
+		serverOpts := []grpc.ServerOption{
 			grpc.ChainUnaryInterceptor(
 				grpcutil.SanitizeUnaryServerInterceptor(),
 				middleware.GRPCAuthInterceptor(grpcAuthCfg),
@@ -518,7 +527,19 @@ func main() {
 			grpc.ChainStreamInterceptor(
 				middleware.GRPCStreamAuthInterceptor(grpcAuthCfg),
 			),
-		)
+		}
+		tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		}, logger)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to configure Skipper gRPC TLS")
+		}
+		if tlsOpt != nil {
+			serverOpts = append(serverOpts, tlsOpt)
+		}
+		grpcSrv := grpc.NewServer(serverOpts...)
 		pb.RegisterSkipperChatServiceServer(grpcSrv, grpcChatServer)
 		hs := health.NewServer()
 		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)

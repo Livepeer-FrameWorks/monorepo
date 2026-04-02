@@ -3454,6 +3454,9 @@ type GRPCServerConfig struct {
 	QuartermasterClient *qmclient.GRPCClient
 	CommodoreClient     handlers.CommodoreClient
 	DecklogClient       *decklogclient.BatchedClient
+	CertFile            string
+	KeyFile             string
+	AllowInsecure       bool
 }
 
 // NewGRPCServer creates a new gRPC server for Purser
@@ -3471,6 +3474,17 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
+	}
+	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		AllowInsecure: cfg.AllowInsecure,
+	}, cfg.Logger)
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to configure Purser gRPC TLS")
+	}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
 	}
 
 	server := grpc.NewServer(opts...)

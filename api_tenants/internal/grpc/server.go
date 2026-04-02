@@ -23,6 +23,7 @@ import (
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/dns"
 	"frameworks/pkg/geoip"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
@@ -7515,6 +7516,9 @@ type GRPCServerConfig struct {
 	PurserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC)
 	GeoIPReader     *geoip.Reader
 	Metrics         *ServerMetrics
+	CertFile        string
+	KeyFile         string
+	AllowInsecure   bool
 }
 
 // ServerMetrics holds Prometheus metrics for the gRPC server
@@ -7545,6 +7549,17 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)),
+	}
+	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		AllowInsecure: cfg.AllowInsecure,
+	}, cfg.Logger)
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to configure Quartermaster gRPC TLS")
+	}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
 	}
 
 	server := grpc.NewServer(opts...)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 	"frameworks/pkg/clients/decklog"
 	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/clips"
+	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/grpcutil"
@@ -386,7 +388,21 @@ func StartGRPCServer(ctx context.Context, addr string, server *FoghornGRPCServer
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(grpcutil.SanitizeUnaryServerInterceptor()))
+	serverOpts := []grpc.ServerOption{
+		grpc.UnaryInterceptor(grpcutil.SanitizeUnaryServerInterceptor()),
+	}
+	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+		CertFile:      strings.TrimSpace(os.Getenv("GRPC_TLS_CERT_PATH")),
+		KeyFile:       strings.TrimSpace(os.Getenv("GRPC_TLS_KEY_PATH")),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+	}, server.logger)
+	if err != nil {
+		return fmt.Errorf("configure foghorn gRPC TLS: %w", err)
+	}
+	if tlsOpt != nil {
+		serverOpts = append(serverOpts, tlsOpt)
+	}
+	grpcServer := grpc.NewServer(serverOpts...)
 	server.RegisterServices(grpcServer)
 
 	// gRPC health service for Foghorn control APIs

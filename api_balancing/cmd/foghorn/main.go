@@ -288,10 +288,13 @@ func main() {
 	// Quartermaster (gRPC)
 	quartermasterGRPCURL := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     quartermasterGRPCURL,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      quartermasterGRPCURL,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to create Quartermaster gRPC client - starting in degraded mode")
@@ -338,11 +341,14 @@ func main() {
 	commodoreCache := newCache(ttl, swr, neg, maxEntries)
 
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr:     commodoreGRPCURL,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		Cache:        commodoreCache,
-		ServiceToken: serviceToken,
+		GRPCAddr:      commodoreGRPCURL,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		Cache:         commodoreCache,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to create Commodore gRPC client - starting in degraded mode")
@@ -360,10 +366,13 @@ func main() {
 	// Navigator (gRPC) - wildcard certificate retrieval for edge ConfigSeed
 	navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "navigator:19004")
 	navigatorClient, err := navclient.NewClient(navclient.Config{
-		Addr:         navigatorAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		Addr:          navigatorAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("NAVIGATOR_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("NAVIGATOR_GRPC_CA_FILE", ""),
+		ServerName:    config.GetEnv("NAVIGATOR_GRPC_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Navigator gRPC client - TLS bundles will not be seeded")
@@ -375,10 +384,13 @@ func main() {
 	// Purser (gRPC) - x402 settlement + billing checks
 	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:     purserGRPCURL,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      purserGRPCURL,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - x402 payments will be unavailable")
@@ -846,10 +858,13 @@ func reconnectQuartermaster(
 	defer ticker.Stop()
 	for range ticker.C {
 		client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     grpcAddr,
-			Timeout:      30 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      grpcAddr,
+			Timeout:       30 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			clients.setQuartermaster(false, err)
@@ -884,11 +899,14 @@ func reconnectCommodore(
 	defer ticker.Stop()
 	for range ticker.C {
 		client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-			GRPCAddr:     grpcAddr,
-			Timeout:      30 * time.Second,
-			Logger:       logger,
-			Cache:        commodoreCache,
-			ServiceToken: serviceToken,
+			GRPCAddr:      grpcAddr,
+			Timeout:       30 * time.Second,
+			Logger:        logger,
+			Cache:         commodoreCache,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			clients.setCommodore(false, err)

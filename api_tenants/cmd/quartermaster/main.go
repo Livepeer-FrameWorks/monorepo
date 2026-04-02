@@ -115,10 +115,13 @@ func main() {
 	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	var purserClient *purserclient.GRPCClient
 	purserClient, err = purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:     purserGRPCAddr,
-		Timeout:      5 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      purserGRPCAddr,
+		Timeout:       5 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - billing status lookups will use defaults")
@@ -218,6 +221,9 @@ func main() {
 			PurserClient:    purserClient,
 			GeoIPReader:     geoipReader,
 			Metrics:         serverMetrics,
+			CertFile:        config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:         config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure:   config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 
@@ -235,10 +241,13 @@ func main() {
 	// Must be launched BEFORE server.Start() which blocks
 	go func() {
 		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     quartermasterGRPCAddr,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      quartermasterGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client for self-registration")

@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	signalmanclient "frameworks/pkg/clients/signalman"
+	pkgconfig "frameworks/pkg/config"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -118,12 +119,15 @@ func (sm *SubscriptionManager) GetOrCreateConnection(ctx context.Context, config
 
 	// Create new gRPC client
 	client, err := signalmanclient.NewGRPCClient(signalmanclient.GRPCConfig{
-		GRPCAddr:     sm.signalmanAddr,
-		Timeout:      30 * time.Second,
-		Logger:       sm.logger,
-		UserID:       config.UserID,
-		TenantID:     config.TenantID,
-		ServiceToken: sm.serviceToken,
+		GRPCAddr:      sm.signalmanAddr,
+		Timeout:       30 * time.Second,
+		Logger:        sm.logger,
+		UserID:        config.UserID,
+		TenantID:      config.TenantID,
+		ServiceToken:  sm.serviceToken,
+		AllowInsecure: pkgconfig.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    pkgconfig.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    pkgconfig.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		sm.logger.WithError(err).WithFields(logging.Fields{

@@ -572,9 +572,10 @@ func ensurePrivateerEnrollmentToken(ctx context.Context, manifest *inventory.Man
 	}
 
 	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Logger:       logging.NewLogger(),
-		ServiceToken: serviceToken,
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for privateer enrollment token: %w", err)
@@ -631,9 +632,10 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 	}
 
 	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Logger:       logging.NewLogger(),
-		ServiceToken: serviceToken,
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for public service registration: %w", err)
@@ -659,9 +661,10 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 	}
 
 	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Logger:       logging.NewLogger(),
-		ServiceToken: serviceToken,
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for ingress desired state: %w", err)
@@ -935,9 +938,10 @@ func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command,
 	}
 
 	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Logger:       logging.NewLogger(),
-		ServiceToken: serviceToken,
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for foghorn reconciliation: %w", err)
@@ -1690,9 +1694,10 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 		return nil, err
 	}
 	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Logger:       logging.NewLogger(),
-		ServiceToken: serviceToken,
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)

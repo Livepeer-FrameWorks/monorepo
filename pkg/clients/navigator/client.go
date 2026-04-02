@@ -2,19 +2,15 @@ package navigator
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"os"
 	"time"
 
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto" // Import generated protobuf code
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -63,25 +59,13 @@ func NewClient(config Config) (*Client, error) {
 		return nil, fmt.Errorf("navigator address is required")
 	}
 
-	var transport grpc.DialOption
-	switch {
-	case config.CACertFile != "":
-		caCert, err := os.ReadFile(config.CACertFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read navigator CA cert: %w", err)
-		}
-		certPool := x509.NewCertPool()
-		if !certPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to append navigator CA cert")
-		}
-		transport = grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			RootCAs:    certPool,
-			ServerName: config.ServerName,
-		}))
-	case config.AllowInsecure:
-		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
-	default:
-		return nil, fmt.Errorf("navigator client requires CACertFile or AllowInsecure=true")
+	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
+		CACertFile:    config.CACertFile,
+		ServerName:    config.ServerName,
+		AllowInsecure: config.AllowInsecure,
+	}, config.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Navigator gRPC TLS: %w", err)
 	}
 
 	conn, err := grpc.NewClient(

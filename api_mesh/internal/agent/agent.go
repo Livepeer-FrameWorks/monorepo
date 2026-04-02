@@ -73,6 +73,9 @@ type Config struct {
 	QuartermasterGRPCAddr string
 	ServiceToken          string // Or EnrollmentToken
 	EnrollmentToken       string // Bootstrap token for initial registration (optional)
+	AllowInsecure         bool
+	CACertFile            string
+	ServerName            string
 	NodeIDPath            string
 	NodeID                string // Explicit identity from env; skips file-based generation when set
 	InterfaceName         string
@@ -135,10 +138,13 @@ func New(cfg Config) (*Agent, error) {
 	if client == nil {
 		var err error
 		client, err = qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     cfg.QuartermasterGRPCAddr,
-			ServiceToken: cfg.ServiceToken,
-			Logger:       cfg.Logger,
-			Timeout:      10 * time.Second,
+			GRPCAddr:      cfg.QuartermasterGRPCAddr,
+			ServiceToken:  cfg.ServiceToken,
+			Logger:        cfg.Logger,
+			Timeout:       10 * time.Second,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CACertFile,
+			ServerName:    cfg.ServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create quartermaster gRPC client: %w", err)

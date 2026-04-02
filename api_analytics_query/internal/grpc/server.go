@@ -6150,11 +6150,14 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 // GRPCServerConfig contains configuration for creating a Periscope gRPC server
 // Note: All queries use ClickHouse only - no PostgreSQL dependency
 type GRPCServerConfig struct {
-	ClickHouse   database.ClickHouseConn
-	Logger       logging.Logger
-	ServiceToken string
-	JWTSecret    []byte
-	Metrics      *metrics.Metrics
+	ClickHouse    database.ClickHouseConn
+	Logger        logging.Logger
+	ServiceToken  string
+	JWTSecret     []byte
+	Metrics       *metrics.Metrics
+	CertFile      string
+	KeyFile       string
+	AllowInsecure bool
 }
 
 // NewGRPCServer creates a new gRPC server for Periscope
@@ -6172,6 +6175,17 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
+	}
+	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		AllowInsecure: cfg.AllowInsecure,
+	}, cfg.Logger)
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to configure Periscope gRPC TLS")
+	}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
 	}
 
 	server := grpc.NewServer(opts...)

@@ -34,8 +34,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/peer"
@@ -100,10 +98,13 @@ func main() {
 	// Quartermaster gRPC client
 	qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     qmGRPCAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      qmGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
@@ -186,31 +187,31 @@ func main() {
 			},
 		})
 
-		grpcCreds := credentials.TransportCredentials(insecure.NewCredentials())
 		grpcCertFile := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_CERT_FILE", ""))
 		grpcKeyFile := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_KEY_FILE", ""))
-		if grpcCertFile != "" || grpcKeyFile != "" {
-			if grpcCertFile == "" || grpcKeyFile == "" {
-				logger.Fatal("Both NAVIGATOR_GRPC_CERT_FILE and NAVIGATOR_GRPC_KEY_FILE are required together")
-			}
-			tlsCreds, tlsErr := credentials.NewServerTLSFromFile(grpcCertFile, grpcKeyFile)
-			if tlsErr != nil {
-				logger.WithError(tlsErr).Fatal("Failed to load Navigator gRPC TLS credentials")
-			}
-			grpcCreds = tlsCreds
-			logger.WithField("cert_file", grpcCertFile).Info("Navigator gRPC TLS enabled")
-		} else {
+		grpcTLSOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+			CertFile:      grpcCertFile,
+			KeyFile:       grpcKeyFile,
+			AllowInsecure: grpcCertFile == "" && grpcKeyFile == "",
+		}, logger)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to configure Navigator gRPC TLS")
+		}
+		if grpcTLSOpt == nil {
 			logger.Warn("Navigator gRPC is running without TLS; private keys require a private network path.")
 		}
 
-		grpcServer := grpc.NewServer(
-			grpc.Creds(grpcCreds),
+		serverOpts := []grpc.ServerOption{
 			grpc.ChainUnaryInterceptor(
 				grpcutil.SanitizeUnaryServerInterceptor(),
 				authInterceptor,
 				requirePrivatePeerUnaryInterceptor(),
 			),
-		)
+		}
+		if grpcTLSOpt != nil {
+			serverOpts = append(serverOpts, grpcTLSOpt)
+		}
+		grpcServer := grpc.NewServer(serverOpts...)
 		pb.RegisterNavigatorServiceServer(grpcServer, navigatorServer)
 
 		// gRPC health service so external probes can use gRPC health checks

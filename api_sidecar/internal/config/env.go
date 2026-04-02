@@ -66,6 +66,7 @@ type HelmsmanConfig struct {
 	GRPCUseTLS      bool
 	GRPCTLSCertPath string
 	GRPCTLSKeyPath  string
+	GRPCTLSCAPath   string
 
 	// BlockingGraceMs waits for reconnection before failing blocking triggers.
 	// Default 2000ms = wait briefly for transient disconnects.
@@ -124,6 +125,7 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		GRPCUseTLS:      config.GetEnvBool("GRPC_USE_TLS", false),
 		GRPCTLSCertPath: config.GetEnv("GRPC_TLS_CERT_PATH", ""),
 		GRPCTLSKeyPath:  config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+		GRPCTLSCAPath:   config.GetEnv("GRPC_TLS_CA_PATH", ""),
 
 		BlockingGraceMs: config.GetEnvInt("HELMSMAN_BLOCKING_GRACE_MS", 2000),
 

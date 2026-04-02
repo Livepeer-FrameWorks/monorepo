@@ -1435,14 +1435,14 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 	keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
 
 	if certFile != "" && keyFile != "" {
-		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+			CertFile: certFile,
+			KeyFile:  keyFile,
+		}, cfg.Logger)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load TLS certificates: %w", err)
+			return nil, fmt.Errorf("failed to configure file-based TLS: %w", err)
 		}
-		creds := credentials.NewTLS(&tls.Config{
-			Certificates: []tls.Certificate{cert},
-		})
-		opts = append(opts, grpc.Creds(creds))
+		opts = append(opts, tlsOpt)
 		cfg.Logger.WithFields(logging.Fields{
 			"cert_file": certFile,
 			"key_file":  keyFile,

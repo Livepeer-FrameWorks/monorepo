@@ -55,10 +55,13 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 	}
 
 	quartermasterClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     quartermasterGRPCAddr,
-		ServiceToken: serviceToken,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
+		GRPCAddr:      quartermasterGRPCAddr,
+		ServiceToken:  serviceToken,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client for billing")

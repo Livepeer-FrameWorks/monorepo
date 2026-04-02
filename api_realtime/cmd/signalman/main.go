@@ -292,13 +292,25 @@ func main() {
 			},
 		})
 
-		grpcSrv := grpc.NewServer(
+		serverOpts := []grpc.ServerOption{
 			grpc.ChainUnaryInterceptor(
 				grpcutil.SanitizeUnaryServerInterceptor(),
 				authInterceptor,
 			),
 			grpc.ChainStreamInterceptor(streamAuthInterceptor),
-		)
+		}
+		tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		}, logger)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to configure Signalman gRPC TLS")
+		}
+		if tlsOpt != nil {
+			serverOpts = append(serverOpts, tlsOpt)
+		}
+		grpcSrv := grpc.NewServer(serverOpts...)
 		pb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)
 
 		// gRPC health service so Quartermaster's gRPC probe passes
@@ -324,10 +336,13 @@ func main() {
 	// Must be launched BEFORE server.Start() which blocks
 	go func() {
 		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     quartermasterGRPCAddr,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      quartermasterGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")

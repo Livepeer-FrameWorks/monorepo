@@ -345,6 +345,9 @@ type CommodoreServerConfig struct {
 	TurnstileFailOpen  bool
 	// Password reset token signing
 	PasswordResetSecret []byte
+	CertFile            string
+	KeyFile             string
+	AllowInsecure       bool
 }
 
 // NewCommodoreServer creates a new Commodore gRPC server
@@ -6037,6 +6040,17 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
+	}
+	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		AllowInsecure: cfg.AllowInsecure,
+	}, cfg.Logger)
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to configure Commodore gRPC TLS")
+	}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
 	}
 
 	server := grpc.NewServer(opts...)

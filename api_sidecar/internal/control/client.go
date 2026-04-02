@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/storage"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
@@ -29,20 +31,8 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-func addrIsFQDN(addr string) bool {
-	host := addr
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		host = h
-	}
-	if net.ParseIP(host) != nil {
-		return false
-	}
-	return strings.Contains(host, ".")
-}
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -517,7 +507,7 @@ func runClient(addr string, logger logging.Logger) error {
 
 	// Auto-detect TLS: FQDN address (contains dots, not a bare IP) → TLS.
 	// Docker service names (no dots) → insecure.
-	useTLS := cfg.GRPCUseTLS || addrIsFQDN(addr)
+	useTLS := cfg.GRPCUseTLS || grpcutil.AddrIsFQDN(addr)
 	var creds credentials.TransportCredentials
 	if useTLS {
 		if cfg.GRPCTLSCertPath != "" && cfg.GRPCTLSKeyPath != "" {
@@ -525,15 +515,33 @@ func runClient(addr string, logger logging.Logger) error {
 			if err != nil {
 				return fmt.Errorf("failed to load TLS certificates: %w", err)
 			}
+			rootCAs, err := loadSidecarRootCAs(cfg.GRPCTLSCAPath)
+			if err != nil {
+				return err
+			}
 			creds = credentials.NewTLS(&tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				RootCAs:      rootCAs,
 				Certificates: []tls.Certificate{cert},
 			})
 		} else {
-			creds = credentials.NewTLS(&tls.Config{})
+			var err error
+			creds, err = grpcutil.ClientTransportCredentials(grpcutil.ClientTLSConfig{
+				CACertFile: cfg.GRPCTLSCAPath,
+			}, logger)
+			if err != nil {
+				return err
+			}
 		}
 		logger.Info("Connecting to gRPC server with TLS")
 	} else {
-		creds = insecure.NewCredentials()
+		var err error
+		creds, err = grpcutil.ClientTransportCredentials(grpcutil.ClientTLSConfig{
+			AllowInsecure: true,
+		}, logger)
+		if err != nil {
+			return err
+		}
 		logger.Info("Connecting to gRPC server without TLS")
 	}
 
@@ -707,6 +715,29 @@ func runClient(addr string, logger logging.Logger) error {
 			return e
 		}
 	}
+}
+
+func loadSidecarRootCAs(caPath string) (*x509.CertPool, error) {
+	if strings.TrimSpace(caPath) == "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system cert pool: %w", err)
+		}
+		if pool == nil {
+			pool = x509.NewCertPool()
+		}
+		return pool, nil
+	}
+
+	pemBytes, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read sidecar CA cert %q: %w", caPath, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("append sidecar CA cert %q: invalid PEM", caPath)
+	}
+	return pool, nil
 }
 
 func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*pb.ControlMessage)) {

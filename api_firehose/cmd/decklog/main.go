@@ -109,10 +109,13 @@ func main() {
 	// Best-effort service registration in Quartermaster (using gRPC)
 	go func() {
 		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     quartermasterGRPCAddr,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      quartermasterGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")

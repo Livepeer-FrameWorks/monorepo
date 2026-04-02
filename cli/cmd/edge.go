@@ -899,9 +899,10 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 	cliCtx.Auth = fwcfg.ResolveAuth(cliCtx)
 	// Create Quartermaster gRPC client
 	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     cliCtx.Endpoints.QuartermasterGRPCAddr,
-		Timeout:      30 * time.Second,
-		ServiceToken: cliCtx.Auth.ServiceToken,
+		GRPCAddr:      cliCtx.Endpoints.QuartermasterGRPCAddr,
+		Timeout:       30 * time.Second,
+		ServiceToken:  cliCtx.Auth.ServiceToken,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to Quartermaster: %w", err)

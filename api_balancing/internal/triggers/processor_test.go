@@ -631,8 +631,9 @@ func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, 
 	}()
 
 	client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr: listener.Addr().String(),
-		Logger:   logging.Logger(logrus.New()),
+		GRPCAddr:      listener.Addr().String(),
+		Logger:        logging.Logger(logrus.New()),
+		AllowInsecure: true,
 	})
 	if err != nil {
 		server.Stop()
@@ -668,8 +669,9 @@ func setupCommodoreResolveIdentifierClient(t *testing.T, response *pb.ResolveIde
 	}()
 
 	client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr: listener.Addr().String(),
-		Logger:   logging.Logger(logrus.New()),
+		GRPCAddr:      listener.Addr().String(),
+		Logger:        logging.Logger(logrus.New()),
+		AllowInsecure: true,
 	})
 	if err != nil {
 		server.Stop()

@@ -13,9 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"frameworks/pkg/grpcutil"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 )
@@ -193,9 +194,18 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				status := "healthy"
 				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
+				transport, err := grpcHealthDialOption()
+				if err != nil {
+					status = "unhealthy"
+					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check TLS config failed")
+					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
+						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
+					}
+					return
+				}
 				conn, err := grpc.NewClient(
 					addr,
-					grpc.WithTransportCredentials(insecure.NewCredentials()),
+					transport,
 					grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 2 * time.Second}),
 				)
 				if err != nil {
@@ -362,9 +372,15 @@ func (m *grpcWatchManager) clearWatch(instanceID string) {
 
 func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceInstance, dialTimeout, backoff time.Duration) {
 	addr := fmt.Sprintf("%s:%d", inst.host, inst.port)
+	transport, err := grpcHealthDialOption()
+	if err != nil {
+		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch TLS config failed")
+		m.setBackoff(inst.id, backoff)
+		return
+	}
 	conn, err := grpc.NewClient(
 		addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport,
 		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: dialTimeout}),
 	)
 	if err != nil {
@@ -396,6 +412,14 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 			logger.WithError(dbErr).WithField("instance_id", inst.id).Warn("Failed to persist health status")
 		}
 	}
+}
+
+func grpcHealthDialOption() (grpc.DialOption, error) {
+	return grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
+		CACertFile:    strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH")),
+		ServerName:    strings.TrimSpace(os.Getenv("GRPC_TLS_SERVER_NAME")),
+		AllowInsecure: getenvBool("GRPC_ALLOW_INSECURE", true),
+	}, logger)
 }
 
 func (m *grpcWatchManager) setBackoff(instanceID string, backoff time.Duration) {

@@ -41,6 +41,9 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
 	}
+	grpcAllowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", true)
+	grpcCACertFile := config.GetEnv("GRPC_TLS_CA_PATH", "")
+	grpcServerName := config.GetEnv("GRPC_TLS_SERVER_NAME", "")
 
 	// Quartermaster cache
 	qmTTL := time.Duration(config.GetEnvInt("QUARTERMASTER_CACHE_TTL_SECONDS", 60)) * time.Second
@@ -51,11 +54,14 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Commodore gRPC client
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr:     config.RequireEnv("COMMODORE_GRPC_ADDR"),
-		Timeout:      cfg.Timeout,
-		Logger:       cfg.Logger,
-		Cache:        qmCache, // Used for stream key validation caching
-		ServiceToken: cfg.ServiceToken,
+		GRPCAddr:      config.RequireEnv("COMMODORE_GRPC_ADDR"),
+		Timeout:       cfg.Timeout,
+		Logger:        cfg.Logger,
+		Cache:         qmCache, // Used for stream key validation caching
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: grpcAllowInsecure,
+		CACertFile:    grpcCACertFile,
+		ServerName:    grpcServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Commodore gRPC client: %w", err)
@@ -63,10 +69,13 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Periscope gRPC client
 	periscopeClient, err := periscope.NewGRPCClient(periscope.GRPCConfig{
-		GRPCAddr:     config.RequireEnv("PERISCOPE_GRPC_ADDR"),
-		Timeout:      cfg.Timeout,
-		Logger:       cfg.Logger,
-		ServiceToken: cfg.ServiceToken,
+		GRPCAddr:      config.RequireEnv("PERISCOPE_GRPC_ADDR"),
+		Timeout:       cfg.Timeout,
+		Logger:        cfg.Logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: grpcAllowInsecure,
+		CACertFile:    grpcCACertFile,
+		ServerName:    grpcServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Periscope gRPC client: %w", err)
@@ -74,10 +83,13 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Purser gRPC client
 	purserClient, err := purser.NewGRPCClient(purser.GRPCConfig{
-		GRPCAddr:     config.RequireEnv("PURSER_GRPC_ADDR"),
-		Timeout:      cfg.Timeout,
-		Logger:       cfg.Logger,
-		ServiceToken: cfg.ServiceToken,
+		GRPCAddr:      config.RequireEnv("PURSER_GRPC_ADDR"),
+		Timeout:       cfg.Timeout,
+		Logger:        cfg.Logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: grpcAllowInsecure,
+		CACertFile:    grpcCACertFile,
+		ServerName:    grpcServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Purser gRPC client: %w", err)
@@ -85,10 +97,13 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Quartermaster gRPC client
 	quartermasterClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     config.RequireEnv("QUARTERMASTER_GRPC_ADDR"),
-		Timeout:      cfg.Timeout,
-		Logger:       cfg.Logger,
-		ServiceToken: cfg.ServiceToken,
+		GRPCAddr:      config.RequireEnv("QUARTERMASTER_GRPC_ADDR"),
+		Timeout:       cfg.Timeout,
+		Logger:        cfg.Logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: grpcAllowInsecure,
+		CACertFile:    grpcCACertFile,
+		ServerName:    grpcServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Quartermaster gRPC client: %w", err)
@@ -96,10 +111,13 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Signalman gRPC client
 	signalmanClient, err := signalman.NewGRPCClient(signalman.GRPCConfig{
-		GRPCAddr:     config.RequireEnv("SIGNALMAN_GRPC_ADDR"),
-		Timeout:      cfg.Timeout,
-		Logger:       cfg.Logger,
-		ServiceToken: cfg.ServiceToken,
+		GRPCAddr:      config.RequireEnv("SIGNALMAN_GRPC_ADDR"),
+		Timeout:       cfg.Timeout,
+		Logger:        cfg.Logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: grpcAllowInsecure,
+		CACertFile:    grpcCACertFile,
+		ServerName:    grpcServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Signalman gRPC client: %w", err)
@@ -122,10 +140,13 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	var deckhandClient *deckhand.GRPCClient
 	if deckhandAddr := config.GetEnv("DECKHAND_GRPC_ADDR", ""); deckhandAddr != "" {
 		deckhandClient, err = deckhand.NewGRPCClient(deckhand.GRPCConfig{
-			GRPCAddr:     deckhandAddr,
-			Timeout:      cfg.Timeout,
-			Logger:       cfg.Logger,
-			ServiceToken: cfg.ServiceToken,
+			GRPCAddr:      deckhandAddr,
+			Timeout:       cfg.Timeout,
+			Logger:        cfg.Logger,
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: grpcAllowInsecure,
+			CACertFile:    grpcCACertFile,
+			ServerName:    grpcServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Deckhand gRPC client: %w", err)
@@ -137,10 +158,13 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	var skipperClient *skipperclient.GRPCClient
 	if skipperAddr := config.GetEnv("SKIPPER_GRPC_ADDR", ""); skipperAddr != "" {
 		skipperClient, err = skipperclient.NewGRPCClient(skipperclient.GRPCConfig{
-			GRPCAddr:     skipperAddr,
-			Timeout:      cfg.Timeout,
-			Logger:       cfg.Logger,
-			ServiceToken: cfg.ServiceToken,
+			GRPCAddr:      skipperAddr,
+			Timeout:       cfg.Timeout,
+			Logger:        cfg.Logger,
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: grpcAllowInsecure,
+			CACertFile:    grpcCACertFile,
+			ServerName:    grpcServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Skipper gRPC client: %w", err)
