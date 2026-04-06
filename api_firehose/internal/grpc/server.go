@@ -452,11 +452,17 @@ type GRPCServerConfig struct {
 func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	var opts []grpc.ServerOption
 
-	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,
 		KeyFile:       cfg.KeyFile,
 		AllowInsecure: cfg.AllowInsecure,
-	}, cfg.Logger)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+		return nil, fmt.Errorf("wait for Decklog gRPC TLS files: %w", err)
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 	if err != nil {
 		return nil, err
 	}

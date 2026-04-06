@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,90 +75,218 @@ func runSyncGeoIP(_ *cobra.Command, manifestPath, licenseKey, source, filePath, 
 		return fmt.Errorf("failed to load manifest: %w", err)
 	}
 
-	var mmdbPath string
+	manifestDir := filepath.Dir(manifestPath)
+	licenseKey = effectiveGeoIPLicenseKey(manifest, licenseKey)
+	source = effectiveGeoIPSource(manifest, source)
+	services = effectiveGeoIPServices(manifest, services)
+	remotePath = effectiveGeoIPRemotePath(manifest, remotePath)
+	filePath = effectiveGeoIPFilePath(manifest, filePath, manifestDir)
+
+	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, manifest, source, filePath, licenseKey)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	pool := ssh.NewPool(0)
+	defer pool.Close()
+
+	uploaded, err := uploadGeoIPToHosts(ctx, manifest, pool, mmdbPath, remotePath, services, restart, os.Stdout)
+	if err != nil {
+		return err
+	}
+	if uploaded == 0 {
+		fmt.Println("No hosts matched the target GeoIP services in the manifest.")
+	}
+	return nil
+}
+
+func effectiveGeoIPLicenseKey(manifest *inventory.Manifest, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if manifest != nil && manifest.GeoIP != nil && manifest.GeoIP.LicenseKeyEnv != "" {
+		return os.Getenv(manifest.GeoIP.LicenseKeyEnv)
+	}
+	return os.Getenv("MAXMIND_LICENSE_KEY")
+}
+
+func effectiveGeoIPSource(manifest *inventory.Manifest, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if manifest != nil && manifest.GeoIP != nil && manifest.GeoIP.Source != "" {
+		return manifest.GeoIP.Source
+	}
+	return "maxmind"
+}
+
+func effectiveGeoIPFilePath(manifest *inventory.Manifest, explicit, manifestDir string) string {
+	path := explicit
+	if path == "" && manifest != nil && manifest.GeoIP != nil {
+		path = manifest.GeoIP.File
+	}
+	if path == "" || manifestDir == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(manifestDir, path)
+}
+
+func effectiveGeoIPRemotePath(manifest *inventory.Manifest, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if manifest != nil && manifest.GeoIP != nil && manifest.GeoIP.RemotePath != "" {
+		return manifest.GeoIP.RemotePath
+	}
+	return "/var/lib/GeoIP/GeoLite2-City.mmdb"
+}
+
+func effectiveGeoIPServices(manifest *inventory.Manifest, services []string) []string {
+	if len(services) > 0 {
+		return services
+	}
+	if manifest != nil && manifest.GeoIP != nil && len(manifest.GeoIP.Services) > 0 {
+		return append([]string{}, manifest.GeoIP.Services...)
+	}
+	return []string{"foghorn", "quartermaster"}
+}
+
+func resolveGeoIPMMDBPath(ctx context.Context, manifest *inventory.Manifest, source, filePath, licenseKey string) (string, func(), error) {
 	switch source {
 	case "file":
 		if filePath == "" {
-			return fmt.Errorf("--file is required when source=file")
+			return "", func() {}, fmt.Errorf("geoip source=file requires a local MMDB file")
 		}
 		if _, err := os.Stat(filePath); err != nil {
-			return fmt.Errorf("file not found: %w", err)
+			return "", func() {}, fmt.Errorf("geoip file not found: %w", err)
 		}
-		mmdbPath = filePath
-
+		return filePath, func() {}, nil
 	case "maxmind":
 		if licenseKey == "" {
-			return fmt.Errorf("--license-key or MAXMIND_LICENSE_KEY env required for maxmind source")
+			return "", func() {}, fmt.Errorf("geoip source=maxmind requires --license-key or MAXMIND_LICENSE_KEY")
 		}
 		tmpPath, err := downloadMaxMindDB(ctx, licenseKey)
 		if err != nil {
-			return fmt.Errorf("failed to download MaxMind DB: %w", err)
+			return "", func() {}, fmt.Errorf("failed to download MaxMind DB: %w", err)
 		}
-		defer func() { _ = os.Remove(tmpPath) }()
-		mmdbPath = tmpPath
 		fmt.Println("Downloaded GeoLite2-City.mmdb")
-
+		return tmpPath, func() { _ = os.Remove(tmpPath) }, nil
 	default:
-		return fmt.Errorf("unknown source %q (use maxmind or file)", source)
+		return "", func() {}, fmt.Errorf("unknown geoip source %q (use maxmind or file)", source)
 	}
+}
 
-	// Build set of target service slugs for matching against host roles
-	targetSet := make(map[string]bool, len(services))
-	for _, s := range services {
-		targetSet[strings.ToLower(s)] = true
+func geoIPTargetHosts(manifest *inventory.Manifest, services []string) ([]string, error) {
+	if manifest == nil {
+		return nil, fmt.Errorf("manifest is required")
 	}
-
-	pool := ssh.NewPool(0)
-	uploaded := 0
-
-	for hostName, host := range manifest.Hosts {
-		match := false
-		for _, role := range host.Roles {
-			if targetSet[strings.ToLower(role)] {
-				match = true
-				break
-			}
-		}
-		if !match {
+	hostSet := make(map[string]struct{})
+	for _, serviceName := range services {
+		name := strings.TrimSpace(serviceName)
+		if name == "" {
 			continue
 		}
+		svc, ok := manifest.Services[name]
+		if !ok {
+			return nil, fmt.Errorf("geoip target service %q not found in manifest services", name)
+		}
+		if !svc.Enabled {
+			continue
+		}
+		if svc.Host != "" {
+			hostSet[svc.Host] = struct{}{}
+		}
+		for _, hostName := range svc.Hosts {
+			hostSet[hostName] = struct{}{}
+		}
+	}
 
+	hosts := make([]string, 0, len(hostSet))
+	for hostName := range hostSet {
+		if _, ok := manifest.Hosts[hostName]; !ok {
+			return nil, fmt.Errorf("geoip target host %q not found in manifest", hostName)
+		}
+		hosts = append(hosts, hostName)
+	}
+	sort.Strings(hosts)
+	return hosts, nil
+}
+
+func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool *ssh.Pool, mmdbPath, remotePath string, services []string, restart bool, out io.Writer) (int, error) {
+	targetHosts, err := geoIPTargetHosts(manifest, services)
+	if err != nil {
+		return 0, err
+	}
+	if len(targetHosts) == 0 {
+		return 0, nil
+	}
+
+	serviceSet := make(map[string]struct{}, len(services))
+	for _, svc := range services {
+		serviceSet[strings.TrimSpace(svc)] = struct{}{}
+	}
+
+	uploaded := 0
+	for _, hostName := range targetHosts {
+		host := manifest.Hosts[hostName]
 		connCfg := &ssh.ConnectionConfig{
 			Address: host.ExternalIP,
 			User:    host.User,
 			KeyPath: host.SSHKey,
 		}
 
-		fmt.Printf("Uploading to %s (%s)...\n", hostName, host.ExternalIP)
+		fmt.Fprintf(out, "Uploading GeoIP MMDB to %s (%s)...\n", hostName, host.ExternalIP)
+		if _, err := pool.Run(ctx, connCfg, fmt.Sprintf("mkdir -p %s", filepath.Dir(remotePath))); err != nil {
+			return uploaded, fmt.Errorf("prepare geoip directory on %s: %w", hostName, err)
+		}
 		if err := pool.Upload(ctx, connCfg, ssh.UploadOptions{
 			LocalPath:  mmdbPath,
 			RemotePath: remotePath,
 			Mode:       0644,
 		}); err != nil {
-			return fmt.Errorf("failed to upload to %s: %w", hostName, err)
+			return uploaded, fmt.Errorf("failed to upload GeoIP MMDB to %s: %w", hostName, err)
 		}
 		uploaded++
 
-		if restart {
-			restartTargets := make([]string, 0, len(services))
-			for _, svc := range services {
-				restartTargets = append(restartTargets, fmt.Sprintf("frameworks-%s", svc))
+		if !restart {
+			continue
+		}
+
+		var restartTargets []string
+		for _, serviceName := range services {
+			svc, ok := manifest.Services[serviceName]
+			if !ok || !svc.Enabled {
+				continue
 			}
-			restartCmd := fmt.Sprintf("docker restart %s", strings.Join(restartTargets, " "))
-			fmt.Printf("Restarting services on %s...\n", hostName)
+			if svc.Host == hostName || slicesContain(svc.Hosts, hostName) {
+				restartTargets = append(restartTargets, serviceName)
+			}
+		}
+		if len(restartTargets) == 0 {
+			continue
+		}
+
+		for _, serviceName := range restartTargets {
+			fmt.Fprintf(out, "Restarting %s on %s...\n", serviceName, hostName)
+			restartCmd := fmt.Sprintf("docker restart frameworks-%s || systemctl restart frameworks-%s", serviceName, serviceName)
 			if _, err := pool.Run(ctx, connCfg, restartCmd); err != nil {
-				fmt.Printf("Warning: restart failed on %s: %v\n", hostName, err)
+				fmt.Fprintf(out, "Warning: failed to restart %s on %s: %v\n", serviceName, hostName, err)
 			}
 		}
 	}
 
-	if uploaded == 0 {
-		fmt.Println("No hosts matched the target services. Check your manifest roles.")
-		return nil
-	}
+	fmt.Fprintf(out, "Uploaded GeoIP MMDB to %d host(s)\n", uploaded)
+	return uploaded, nil
+}
 
-	fmt.Printf("Uploaded MMDB to %d host(s)\n", uploaded)
-	return nil
+func slicesContain(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func downloadMaxMindDB(ctx context.Context, licenseKey string) (string, error) {

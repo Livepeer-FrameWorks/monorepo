@@ -29,7 +29,6 @@ services:
         hard: 1048576
     environment:
       - MIST_DEBUG=3
-      - MIST_PASSWORD={{MIST_API_PASSWORD}}
     expose:
       - "8080"
     restart: unless-stopped
@@ -49,9 +48,9 @@ services:
       - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
       - MIST_API_USERNAME=frameworks
       - MIST_API_PASSWORD={{MIST_API_PASSWORD}}
-      - MIST_PASSWORD={{MIST_API_PASSWORD}}
     volumes:
       - ./certs:/etc/frameworks/certs
+      - ./pki:/etc/frameworks/pki
       - caddy_admin:/run/caddy
     expose:
       - "18007"

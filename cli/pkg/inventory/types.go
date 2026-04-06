@@ -22,8 +22,18 @@ type Manifest struct {
 	Services       map[string]ServiceConfig     `yaml:"services,omitempty"`
 	Interfaces     map[string]ServiceConfig     `yaml:"interfaces,omitempty"`
 	Observability  map[string]ServiceConfig     `yaml:"observability,omitempty"`
+	GeoIP          *GeoIPConfig                 `yaml:"geoip,omitempty"`
 	TLSBundles     map[string]TLSBundleConfig   `yaml:"tls_bundles,omitempty"`
 	IngressSites   map[string]IngressSiteConfig `yaml:"ingress_sites,omitempty"`
+}
+
+type GeoIPConfig struct {
+	Enabled       bool     `yaml:"enabled"`
+	Source        string   `yaml:"source,omitempty"`          // maxmind | file
+	File          string   `yaml:"file,omitempty"`            // Local MMDB path when source=file
+	LicenseKeyEnv string   `yaml:"license_key_env,omitempty"` // Env var containing the MaxMind key
+	RemotePath    string   `yaml:"remote_path,omitempty"`     // Remote MMDB location
+	Services      []string `yaml:"services,omitempty"`        // Defaults to foghorn,quartermaster
 }
 
 type TLSBundleConfig struct {
@@ -276,17 +286,24 @@ type ServiceConfig struct {
 
 // EdgeManifest represents edge node deployment configuration (edges.yaml)
 type EdgeManifest struct {
-	Version         string     `yaml:"version"`
-	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v0.2.0-rc3")
-	RootDomain      string     `yaml:"root_domain"`
-	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
-	Email           string     `yaml:"email"`       // ACME email
-	ClusterID       string     `yaml:"cluster_id,omitempty"`
-	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
-	HostsFile       string     `yaml:"hosts_file,omitempty"`       // SOPS-encrypted host inventory
-	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
-	Mode            string     `yaml:"mode,omitempty"`             // "docker" (default) or "native"
-	Nodes           []EdgeNode `yaml:"nodes"`
+	Version         string               `yaml:"version"`
+	Channel         string               `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v0.2.0-rc3")
+	RootDomain      string               `yaml:"root_domain"`
+	PoolDomain      string               `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
+	Email           string               `yaml:"email"`       // ACME email
+	ClusterID       string               `yaml:"cluster_id,omitempty"`
+	EnrollmentToken string               `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
+	HostsFile       string               `yaml:"hosts_file,omitempty"`       // SOPS-encrypted host inventory
+	FetchCert       bool                 `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
+	Mode            string               `yaml:"mode,omitempty"`             // "docker" (default) or "native"
+	Telemetry       *EdgeTelemetryConfig `yaml:"telemetry,omitempty"`
+	Nodes           []EdgeNode           `yaml:"nodes"`
+}
+
+type EdgeTelemetryConfig struct {
+	RemoteWriteURL string `yaml:"remote_write_url,omitempty"`
+	Username       string `yaml:"username,omitempty"`
+	Password       string `yaml:"password,omitempty"`
 }
 
 // EdgeNode represents a single edge node in the manifest

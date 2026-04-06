@@ -1157,7 +1157,7 @@ frameworks edge provision --ssh ubuntu@10.0.0.5 \
 frameworks edge provision --manifest edges.yaml --parallel 4
 ```
 
-When `--enrollment-token` is provided without `--pool-domain` and `--node-domain`, the CLI calls `PreRegisterEdge` to validate the token and get auto-assigned domains, certificates, and cluster routing information.
+When `--enrollment-token` is provided without `--pool-domain` and `--node-domain`, the CLI calls `PreRegisterEdge` to validate the token and get auto-assigned domains, the initial internal CA bundle, and cluster routing information.
 
 ---
 

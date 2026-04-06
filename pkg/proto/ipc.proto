@@ -1039,7 +1039,7 @@ message NodeLifecycleUpdate {
   // Stored artifacts
   repeated StoredArtifact artifacts = 24;
   
-  // MistServer outputs configuration (parsed from koekjes endpoint)
+  // MistServer outputs configuration (parsed from the Mist metrics endpoint)
   string outputs_json = 25;
   
   // Enrichment fields added by Foghorn
@@ -1498,6 +1498,8 @@ message ConfigSeed {
   TLSCertBundle tls = 20;
   // Public site configuration for Helmsman Caddyfile rendering (populated by Foghorn)
   SiteConfig site = 21;
+  // Optional internal CA bundle for Helmsman gRPC trust bootstrap and rotation.
+  bytes ca_bundle = 22;
 }
 
 // SiteConfig carries the public-facing site parameters that Helmsman uses to

@@ -46,7 +46,6 @@ type PrometheusMonitor struct {
 	mutex         sync.RWMutex
 	updateChannel chan models.NodeUpdate
 	stopChannel   chan bool
-	mistPassword  string // Configurable password for /koekjes endpoint
 	// MistServer API authentication
 	mistUsername    string // Username for MistServer API
 	mistAPIPassword string // Password for MistServer API
@@ -142,7 +141,6 @@ func InitPrometheusMonitor(logger logging.Logger) {
 
 	mistAPIPassword := os.Getenv("MIST_API_PASSWORD")
 	mistUsername := os.Getenv("MIST_API_USERNAME")
-	mistPassword := os.Getenv("MIST_PASSWORD")
 
 	if mistAPIPassword == "" {
 		mistAPIPassword = "test"
@@ -150,12 +148,8 @@ func InitPrometheusMonitor(logger logging.Logger) {
 	if mistUsername == "" {
 		mistUsername = "test"
 	}
-	if mistPassword == "" {
-		mistPassword = "koekjes"
-	}
 
 	prometheusMonitor = &PrometheusMonitor{
-		mistPassword:    mistPassword,
 		mistUsername:    mistUsername,
 		mistAPIPassword: mistAPIPassword,
 		updateChannel:   make(chan models.NodeUpdate, 10),
@@ -620,13 +614,13 @@ func (pm *PrometheusMonitor) processUpdates() {
 					"node_id":       update.NodeID,
 					"has_json_data": true,
 					"json_keys":     getMapKeys(jsonData),
-				}).Debug("Processing JSON data from koekjes endpoint")
+				}).Debug("Processing JSON data from Mist metrics JSON endpoint")
 
 				if locData, ok := jsonData["loc"].(map[string]any); ok {
 					monitorLogger.WithFields(logging.Fields{
 						"node_id":  update.NodeID,
 						"loc_data": locData,
-					}).Info("Found location data in koekjes JSON")
+					}).Info("Found location data in Mist metrics JSON")
 
 					oldLat := pm.latitude
 					oldLon := pm.longitude
@@ -662,7 +656,7 @@ func (pm *PrometheusMonitor) processUpdates() {
 			} else {
 				monitorLogger.WithFields(logging.Fields{
 					"node_id": update.NodeID,
-				}).Error("No JSON data received from koekjes endpoint")
+				}).Error("No JSON data received from Mist metrics JSON endpoint")
 			}
 		}
 
@@ -1051,7 +1045,7 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 	return nil
 }
 
-// getLastJSONData safely gets the last JSON data from koekjes endpoint
+// getLastJSONData safely gets the last JSON data from the Mist metrics endpoint
 func (pm *PrometheusMonitor) getLastJSONData() map[string]any {
 	pm.mutex.RLock()
 	defer pm.mutex.RUnlock()

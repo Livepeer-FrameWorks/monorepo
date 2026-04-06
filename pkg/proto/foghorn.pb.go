@@ -78,8 +78,9 @@ func (SetNodeModeStatus) EnumDescriptor() ([]byte, []int) {
 
 type PreRegisterEdgeRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	EnrollmentToken string                 `protobuf:"bytes,1,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"` // Bootstrap token for edge enrollment
-	ExternalIp      string                 `protobuf:"bytes,2,opt,name=external_ip,json=externalIp,proto3" json:"external_ip,omitempty"`                // Edge's public IP (detected by CLI)
+	EnrollmentToken string                 `protobuf:"bytes,1,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"`   // Bootstrap token for edge enrollment
+	ExternalIp      string                 `protobuf:"bytes,2,opt,name=external_ip,json=externalIp,proto3" json:"external_ip,omitempty"`                  // Edge's public IP (detected by CLI)
+	PreferredNodeId string                 `protobuf:"bytes,3,opt,name=preferred_node_id,json=preferredNodeId,proto3" json:"preferred_node_id,omitempty"` // Optional human-friendly node ID/hostname hint
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -128,20 +129,28 @@ func (x *PreRegisterEdgeRequest) GetExternalIp() string {
 	return ""
 }
 
+func (x *PreRegisterEdgeRequest) GetPreferredNodeId() string {
+	if x != nil {
+		return x.PreferredNodeId
+	}
+	return ""
+}
+
 type PreRegisterEdgeResponse struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	NodeId          string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`             // Assigned node ID
-	EdgeDomain      string                 `protobuf:"bytes,2,opt,name=edge_domain,json=edgeDomain,proto3" json:"edge_domain,omitempty"` // e.g., edge-{node_id}.{cluster_slug}.{root_domain}
+	EdgeDomain      string                 `protobuf:"bytes,2,opt,name=edge_domain,json=edgeDomain,proto3" json:"edge_domain,omitempty"` // e.g., {node_label}.{cluster_slug}.{root_domain}; node_label is node_id with a single edge- prefix
 	PoolDomain      string                 `protobuf:"bytes,3,opt,name=pool_domain,json=poolDomain,proto3" json:"pool_domain,omitempty"` // e.g., edge.{cluster_slug}.{root_domain}
 	ClusterSlug     string                 `protobuf:"bytes,4,opt,name=cluster_slug,json=clusterSlug,proto3" json:"cluster_slug,omitempty"`
 	FoghornGrpcAddr string                 `protobuf:"bytes,5,opt,name=foghorn_grpc_addr,json=foghornGrpcAddr,proto3" json:"foghorn_grpc_addr,omitempty"` // Address for Helmsman's FOGHORN_CONTROL_ADDR
 	// Deprecated: Marked as deprecated in foghorn.proto.
 	CertPem string `protobuf:"bytes,6,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"` // Deprecated: certs now delivered via ConfigSeed only
 	// Deprecated: Marked as deprecated in foghorn.proto.
-	KeyPem        string `protobuf:"bytes,7,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`          // Deprecated: certs now delivered via ConfigSeed only
-	ClusterId     string `protobuf:"bytes,8,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"` // Raw cluster ID (may differ from DNS-safe cluster_slug)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	KeyPem           string `protobuf:"bytes,7,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`                                 // Deprecated: certs now delivered via ConfigSeed only
+	ClusterId        string `protobuf:"bytes,8,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                        // Raw cluster ID (may differ from DNS-safe cluster_slug)
+	InternalCaBundle []byte `protobuf:"bytes,9,opt,name=internal_ca_bundle,json=internalCaBundle,proto3" json:"internal_ca_bundle,omitempty"` // Optional internal CA bundle for pre-Connect trust bootstrap
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PreRegisterEdgeResponse) Reset() {
@@ -230,6 +239,13 @@ func (x *PreRegisterEdgeResponse) GetClusterId() string {
 		return x.ClusterId
 	}
 	return ""
+}
+
+func (x *PreRegisterEdgeResponse) GetInternalCaBundle() []byte {
+	if x != nil {
+		return x.InternalCaBundle
+	}
+	return nil
 }
 
 type SetNodeModeRequest struct {
@@ -808,11 +824,12 @@ var File_foghorn_proto protoreflect.FileDescriptor
 
 const file_foghorn_proto_rawDesc = "" +
 	"\n" +
-	"\rfoghorn.proto\x12\afoghorn\x1a\fshared.proto\"d\n" +
+	"\rfoghorn.proto\x12\afoghorn\x1a\fshared.proto\"\x90\x01\n" +
 	"\x16PreRegisterEdgeRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vexternal_ip\x18\x02 \x01(\tR\n" +
-	"externalIp\"\x9e\x02\n" +
+	"externalIp\x12*\n" +
+	"\x11preferred_node_id\x18\x03 \x01(\tR\x0fpreferredNodeId\"\xcc\x02\n" +
 	"\x17PreRegisterEdgeResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1f\n" +
 	"\vedge_domain\x18\x02 \x01(\tR\n" +
@@ -824,7 +841,8 @@ const file_foghorn_proto_rawDesc = "" +
 	"\bcert_pem\x18\x06 \x01(\tB\x02\x18\x01R\acertPem\x12\x1b\n" +
 	"\akey_pem\x18\a \x01(\tB\x02\x18\x01R\x06keyPem\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\b \x01(\tR\tclusterId\"X\n" +
+	"cluster_id\x18\b \x01(\tR\tclusterId\x12,\n" +
+	"\x12internal_ca_bundle\x18\t \x01(\fR\x10internalCaBundle\"X\n" +
 	"\x12SetNodeModeRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x15\n" +

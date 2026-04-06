@@ -11477,7 +11477,9 @@ type ConfigSeed struct {
 	OperationalMode NodeOperationalMode `protobuf:"varint,12,opt,name=operational_mode,json=operationalMode,proto3,enum=helmsmancontrol.NodeOperationalMode" json:"operational_mode,omitempty"`
 	Tls             *TLSCertBundle      `protobuf:"bytes,20,opt,name=tls,proto3" json:"tls,omitempty"`
 	// Public site configuration for Helmsman Caddyfile rendering (populated by Foghorn)
-	Site          *SiteConfig `protobuf:"bytes,21,opt,name=site,proto3" json:"site,omitempty"`
+	Site *SiteConfig `protobuf:"bytes,21,opt,name=site,proto3" json:"site,omitempty"`
+	// Optional internal CA bundle for Helmsman gRPC trust bootstrap and rotation.
+	CaBundle      []byte `protobuf:"bytes,22,opt,name=ca_bundle,json=caBundle,proto3" json:"ca_bundle,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11578,6 +11580,13 @@ func (x *ConfigSeed) GetTls() *TLSCertBundle {
 func (x *ConfigSeed) GetSite() *SiteConfig {
 	if x != nil {
 		return x.Site
+	}
+	return nil
+}
+
+func (x *ConfigSeed) GetCaBundle() []byte {
+	if x != nil {
+		return x.CaBundle
 	}
 	return nil
 }
@@ -14430,7 +14439,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\akey_pem\x18\x02 \x01(\tR\x06keyPem\x12\x16\n" +
 	"\x06domain\x18\x03 \x01(\tR\x06domain\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\x03R\texpiresAt\"\xd7\x03\n" +
+	"expires_at\x18\x04 \x01(\x03R\texpiresAt\"\xf4\x03\n" +
 	"\n" +
 	"ConfigSeed\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1a\n" +
@@ -14445,7 +14454,8 @@ const file_ipc_proto_rawDesc = "" +
 	"processing\x12O\n" +
 	"\x10operational_mode\x18\f \x01(\x0e2$.helmsmancontrol.NodeOperationalModeR\x0foperationalMode\x120\n" +
 	"\x03tls\x18\x14 \x01(\v2\x1e.helmsmancontrol.TLSCertBundleR\x03tls\x12/\n" +
-	"\x04site\x18\x15 \x01(\v2\x1b.helmsmancontrol.SiteConfigR\x04site\"\x90\x01\n" +
+	"\x04site\x18\x15 \x01(\v2\x1b.helmsmancontrol.SiteConfigR\x04site\x12\x1b\n" +
+	"\tca_bundle\x18\x16 \x01(\fR\bcaBundle\"\x90\x01\n" +
 	"\n" +
 	"SiteConfig\x12!\n" +
 	"\fsite_address\x18\x01 \x01(\tR\vsiteAddress\x12\x1f\n" +

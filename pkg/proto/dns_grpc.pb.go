@@ -19,10 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NavigatorService_SyncDNS_FullMethodName          = "/navigator.NavigatorService/SyncDNS"
-	NavigatorService_IssueCertificate_FullMethodName = "/navigator.NavigatorService/IssueCertificate"
-	NavigatorService_GetCertificate_FullMethodName   = "/navigator.NavigatorService/GetCertificate"
-	NavigatorService_GetTLSBundle_FullMethodName     = "/navigator.NavigatorService/GetTLSBundle"
+	NavigatorService_SyncDNS_FullMethodName           = "/navigator.NavigatorService/SyncDNS"
+	NavigatorService_IssueCertificate_FullMethodName  = "/navigator.NavigatorService/IssueCertificate"
+	NavigatorService_GetCertificate_FullMethodName    = "/navigator.NavigatorService/GetCertificate"
+	NavigatorService_GetTLSBundle_FullMethodName      = "/navigator.NavigatorService/GetTLSBundle"
+	NavigatorService_GetCABundle_FullMethodName       = "/navigator.NavigatorService/GetCABundle"
+	NavigatorService_IssueInternalCert_FullMethodName = "/navigator.NavigatorService/IssueInternalCert"
 )
 
 // NavigatorServiceClient is the client API for NavigatorService service.
@@ -39,6 +41,10 @@ type NavigatorServiceClient interface {
 	GetCertificate(ctx context.Context, in *GetCertificateRequest, opts ...grpc.CallOption) (*GetCertificateResponse, error)
 	// GetTLSBundle retrieves the current certificate material for a managed TLS bundle.
 	GetTLSBundle(ctx context.Context, in *GetTLSBundleRequest, opts ...grpc.CallOption) (*GetTLSBundleResponse, error)
+	// GetCABundle retrieves the current internal CA bundle used for internal gRPC.
+	GetCABundle(ctx context.Context, in *GetCABundleRequest, opts ...grpc.CallOption) (*GetCABundleResponse, error)
+	// IssueInternalCert issues or renews a node-scoped internal gRPC certificate.
+	IssueInternalCert(ctx context.Context, in *IssueInternalCertRequest, opts ...grpc.CallOption) (*IssueInternalCertResponse, error)
 }
 
 type navigatorServiceClient struct {
@@ -89,6 +95,26 @@ func (c *navigatorServiceClient) GetTLSBundle(ctx context.Context, in *GetTLSBun
 	return out, nil
 }
 
+func (c *navigatorServiceClient) GetCABundle(ctx context.Context, in *GetCABundleRequest, opts ...grpc.CallOption) (*GetCABundleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCABundleResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_GetCABundle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *navigatorServiceClient) IssueInternalCert(ctx context.Context, in *IssueInternalCertRequest, opts ...grpc.CallOption) (*IssueInternalCertResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IssueInternalCertResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_IssueInternalCert_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NavigatorServiceServer is the server API for NavigatorService service.
 // All implementations must embed UnimplementedNavigatorServiceServer
 // for forward compatibility.
@@ -103,6 +129,10 @@ type NavigatorServiceServer interface {
 	GetCertificate(context.Context, *GetCertificateRequest) (*GetCertificateResponse, error)
 	// GetTLSBundle retrieves the current certificate material for a managed TLS bundle.
 	GetTLSBundle(context.Context, *GetTLSBundleRequest) (*GetTLSBundleResponse, error)
+	// GetCABundle retrieves the current internal CA bundle used for internal gRPC.
+	GetCABundle(context.Context, *GetCABundleRequest) (*GetCABundleResponse, error)
+	// IssueInternalCert issues or renews a node-scoped internal gRPC certificate.
+	IssueInternalCert(context.Context, *IssueInternalCertRequest) (*IssueInternalCertResponse, error)
 	mustEmbedUnimplementedNavigatorServiceServer()
 }
 
@@ -124,6 +154,12 @@ func (UnimplementedNavigatorServiceServer) GetCertificate(context.Context, *GetC
 }
 func (UnimplementedNavigatorServiceServer) GetTLSBundle(context.Context, *GetTLSBundleRequest) (*GetTLSBundleResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTLSBundle not implemented")
+}
+func (UnimplementedNavigatorServiceServer) GetCABundle(context.Context, *GetCABundleRequest) (*GetCABundleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCABundle not implemented")
+}
+func (UnimplementedNavigatorServiceServer) IssueInternalCert(context.Context, *IssueInternalCertRequest) (*IssueInternalCertResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IssueInternalCert not implemented")
 }
 func (UnimplementedNavigatorServiceServer) mustEmbedUnimplementedNavigatorServiceServer() {}
 func (UnimplementedNavigatorServiceServer) testEmbeddedByValue()                          {}
@@ -218,6 +254,42 @@ func _NavigatorService_GetTLSBundle_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NavigatorService_GetCABundle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCABundleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).GetCABundle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_GetCABundle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).GetCABundle(ctx, req.(*GetCABundleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NavigatorService_IssueInternalCert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IssueInternalCertRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).IssueInternalCert(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_IssueInternalCert_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).IssueInternalCert(ctx, req.(*IssueInternalCertRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NavigatorService_ServiceDesc is the grpc.ServiceDesc for NavigatorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -240,6 +312,14 @@ var NavigatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTLSBundle",
 			Handler:    _NavigatorService_GetTLSBundle_Handler,
+		},
+		{
+			MethodName: "GetCABundle",
+			Handler:    _NavigatorService_GetCABundle_Handler,
+		},
+		{
+			MethodName: "IssueInternalCert",
+			Handler:    _NavigatorService_IssueInternalCert_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -595,6 +595,254 @@ func (x *GetTLSBundleResponse) GetError() string {
 	return ""
 }
 
+type GetCABundleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCABundleRequest) Reset() {
+	*x = GetCABundleRequest{}
+	mi := &file_dns_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCABundleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCABundleRequest) ProtoMessage() {}
+
+func (x *GetCABundleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCABundleRequest.ProtoReflect.Descriptor instead.
+func (*GetCABundleRequest) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{8}
+}
+
+type GetCABundleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	CaPem         string                 `protobuf:"bytes,2,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCABundleResponse) Reset() {
+	*x = GetCABundleResponse{}
+	mi := &file_dns_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCABundleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCABundleResponse) ProtoMessage() {}
+
+func (x *GetCABundleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCABundleResponse.ProtoReflect.Descriptor instead.
+func (*GetCABundleResponse) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GetCABundleResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *GetCABundleResponse) GetCaPem() string {
+	if x != nil {
+		return x.CaPem
+	}
+	return ""
+}
+
+func (x *GetCABundleResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type IssueInternalCertRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ServiceType   string                 `protobuf:"bytes,2,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"`
+	IssueToken    string                 `protobuf:"bytes,3,opt,name=issue_token,json=issueToken,proto3" json:"issue_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IssueInternalCertRequest) Reset() {
+	*x = IssueInternalCertRequest{}
+	mi := &file_dns_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IssueInternalCertRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IssueInternalCertRequest) ProtoMessage() {}
+
+func (x *IssueInternalCertRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IssueInternalCertRequest.ProtoReflect.Descriptor instead.
+func (*IssueInternalCertRequest) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *IssueInternalCertRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *IssueInternalCertRequest) GetServiceType() string {
+	if x != nil {
+		return x.ServiceType
+	}
+	return ""
+}
+
+func (x *IssueInternalCertRequest) GetIssueToken() string {
+	if x != nil {
+		return x.IssueToken
+	}
+	return ""
+}
+
+type IssueInternalCertResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ServiceType   string                 `protobuf:"bytes,3,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"`
+	CertPem       string                 `protobuf:"bytes,4,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	KeyPem        string                 `protobuf:"bytes,5,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
+	ExpiresAt     int64                  `protobuf:"varint,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IssueInternalCertResponse) Reset() {
+	*x = IssueInternalCertResponse{}
+	mi := &file_dns_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IssueInternalCertResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IssueInternalCertResponse) ProtoMessage() {}
+
+func (x *IssueInternalCertResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IssueInternalCertResponse.ProtoReflect.Descriptor instead.
+func (*IssueInternalCertResponse) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *IssueInternalCertResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *IssueInternalCertResponse) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *IssueInternalCertResponse) GetServiceType() string {
+	if x != nil {
+		return x.ServiceType
+	}
+	return ""
+}
+
+func (x *IssueInternalCertResponse) GetCertPem() string {
+	if x != nil {
+		return x.CertPem
+	}
+	return ""
+}
+
+func (x *IssueInternalCertResponse) GetKeyPem() string {
+	if x != nil {
+		return x.KeyPem
+	}
+	return ""
+}
+
+func (x *IssueInternalCertResponse) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+func (x *IssueInternalCertResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_dns_proto protoreflect.FileDescriptor
 
 const file_dns_proto_rawDesc = "" +
@@ -659,12 +907,33 @@ const file_dns_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x06 \x01(\x03R\texpiresAt\x12\x18\n" +
 	"\aversion\x18\a \x01(\tR\aversion\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05error2\xd9\x02\n" +
+	"\x05error\x18\b \x01(\tR\x05error\"\x14\n" +
+	"\x12GetCABundleRequest\"X\n" +
+	"\x13GetCABundleResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12\x15\n" +
+	"\x06ca_pem\x18\x02 \x01(\tR\x05caPem\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"w\n" +
+	"\x18IssueInternalCertRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12!\n" +
+	"\fservice_type\x18\x02 \x01(\tR\vserviceType\x12\x1f\n" +
+	"\vissue_token\x18\x03 \x01(\tR\n" +
+	"issueToken\"\xda\x01\n" +
+	"\x19IssueInternalCertResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12!\n" +
+	"\fservice_type\x18\x03 \x01(\tR\vserviceType\x12\x19\n" +
+	"\bcert_pem\x18\x04 \x01(\tR\acertPem\x12\x17\n" +
+	"\akey_pem\x18\x05 \x01(\tR\x06keyPem\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x06 \x01(\x03R\texpiresAt\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05error2\x87\x04\n" +
 	"\x10NavigatorService\x12@\n" +
 	"\aSyncDNS\x12\x19.navigator.SyncDNSRequest\x1a\x1a.navigator.SyncDNSResponse\x12[\n" +
 	"\x10IssueCertificate\x12\".navigator.IssueCertificateRequest\x1a#.navigator.IssueCertificateResponse\x12U\n" +
 	"\x0eGetCertificate\x12 .navigator.GetCertificateRequest\x1a!.navigator.GetCertificateResponse\x12O\n" +
-	"\fGetTLSBundle\x12\x1e.navigator.GetTLSBundleRequest\x1a\x1f.navigator.GetTLSBundleResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\fGetTLSBundle\x12\x1e.navigator.GetTLSBundleRequest\x1a\x1f.navigator.GetTLSBundleResponse\x12L\n" +
+	"\vGetCABundle\x12\x1d.navigator.GetCABundleRequest\x1a\x1e.navigator.GetCABundleResponse\x12^\n" +
+	"\x11IssueInternalCert\x12#.navigator.IssueInternalCertRequest\x1a$.navigator.IssueInternalCertResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
 
 var (
 	file_dns_proto_rawDescOnce sync.Once
@@ -678,33 +947,41 @@ func file_dns_proto_rawDescGZIP() []byte {
 	return file_dns_proto_rawDescData
 }
 
-var file_dns_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_dns_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_dns_proto_goTypes = []any{
-	(*SyncDNSRequest)(nil),           // 0: navigator.SyncDNSRequest
-	(*SyncDNSResponse)(nil),          // 1: navigator.SyncDNSResponse
-	(*IssueCertificateRequest)(nil),  // 2: navigator.IssueCertificateRequest
-	(*IssueCertificateResponse)(nil), // 3: navigator.IssueCertificateResponse
-	(*GetCertificateRequest)(nil),    // 4: navigator.GetCertificateRequest
-	(*GetCertificateResponse)(nil),   // 5: navigator.GetCertificateResponse
-	(*GetTLSBundleRequest)(nil),      // 6: navigator.GetTLSBundleRequest
-	(*GetTLSBundleResponse)(nil),     // 7: navigator.GetTLSBundleResponse
-	nil,                              // 8: navigator.SyncDNSResponse.ErrorsEntry
+	(*SyncDNSRequest)(nil),            // 0: navigator.SyncDNSRequest
+	(*SyncDNSResponse)(nil),           // 1: navigator.SyncDNSResponse
+	(*IssueCertificateRequest)(nil),   // 2: navigator.IssueCertificateRequest
+	(*IssueCertificateResponse)(nil),  // 3: navigator.IssueCertificateResponse
+	(*GetCertificateRequest)(nil),     // 4: navigator.GetCertificateRequest
+	(*GetCertificateResponse)(nil),    // 5: navigator.GetCertificateResponse
+	(*GetTLSBundleRequest)(nil),       // 6: navigator.GetTLSBundleRequest
+	(*GetTLSBundleResponse)(nil),      // 7: navigator.GetTLSBundleResponse
+	(*GetCABundleRequest)(nil),        // 8: navigator.GetCABundleRequest
+	(*GetCABundleResponse)(nil),       // 9: navigator.GetCABundleResponse
+	(*IssueInternalCertRequest)(nil),  // 10: navigator.IssueInternalCertRequest
+	(*IssueInternalCertResponse)(nil), // 11: navigator.IssueInternalCertResponse
+	nil,                               // 12: navigator.SyncDNSResponse.ErrorsEntry
 }
 var file_dns_proto_depIdxs = []int32{
-	8, // 0: navigator.SyncDNSResponse.errors:type_name -> navigator.SyncDNSResponse.ErrorsEntry
-	0, // 1: navigator.NavigatorService.SyncDNS:input_type -> navigator.SyncDNSRequest
-	2, // 2: navigator.NavigatorService.IssueCertificate:input_type -> navigator.IssueCertificateRequest
-	4, // 3: navigator.NavigatorService.GetCertificate:input_type -> navigator.GetCertificateRequest
-	6, // 4: navigator.NavigatorService.GetTLSBundle:input_type -> navigator.GetTLSBundleRequest
-	1, // 5: navigator.NavigatorService.SyncDNS:output_type -> navigator.SyncDNSResponse
-	3, // 6: navigator.NavigatorService.IssueCertificate:output_type -> navigator.IssueCertificateResponse
-	5, // 7: navigator.NavigatorService.GetCertificate:output_type -> navigator.GetCertificateResponse
-	7, // 8: navigator.NavigatorService.GetTLSBundle:output_type -> navigator.GetTLSBundleResponse
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	12, // 0: navigator.SyncDNSResponse.errors:type_name -> navigator.SyncDNSResponse.ErrorsEntry
+	0,  // 1: navigator.NavigatorService.SyncDNS:input_type -> navigator.SyncDNSRequest
+	2,  // 2: navigator.NavigatorService.IssueCertificate:input_type -> navigator.IssueCertificateRequest
+	4,  // 3: navigator.NavigatorService.GetCertificate:input_type -> navigator.GetCertificateRequest
+	6,  // 4: navigator.NavigatorService.GetTLSBundle:input_type -> navigator.GetTLSBundleRequest
+	8,  // 5: navigator.NavigatorService.GetCABundle:input_type -> navigator.GetCABundleRequest
+	10, // 6: navigator.NavigatorService.IssueInternalCert:input_type -> navigator.IssueInternalCertRequest
+	1,  // 7: navigator.NavigatorService.SyncDNS:output_type -> navigator.SyncDNSResponse
+	3,  // 8: navigator.NavigatorService.IssueCertificate:output_type -> navigator.IssueCertificateResponse
+	5,  // 9: navigator.NavigatorService.GetCertificate:output_type -> navigator.GetCertificateResponse
+	7,  // 10: navigator.NavigatorService.GetTLSBundle:output_type -> navigator.GetTLSBundleResponse
+	9,  // 11: navigator.NavigatorService.GetCABundle:output_type -> navigator.GetCABundleResponse
+	11, // 12: navigator.NavigatorService.IssueInternalCert:output_type -> navigator.IssueInternalCertResponse
+	7,  // [7:13] is the sub-list for method output_type
+	1,  // [1:7] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_dns_proto_init() }
@@ -723,7 +1000,7 @@ func file_dns_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dns_proto_rawDesc), len(file_dns_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

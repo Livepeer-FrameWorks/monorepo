@@ -333,7 +333,7 @@ infrastructure:
 
 ## Services / Interfaces / Observability
 
-All three sections share the same shape. Use them to define application services, public interfaces (reverse proxy + web surfaces), and observability stack (Prometheus, Grafana, etc.).
+All three sections share the same shape. Use them to define application services, public interfaces (reverse proxy + web surfaces), and observability stack (VictoriaMetrics, vmagent, Grafana, etc.).
 
 ### Service Definition
 
@@ -375,8 +375,9 @@ services:
 
 <Aside type="note" title="Privateer auto-deploy">
   When `privateer` has no `host` or `hosts` field, the CLI automatically deploys it to **every
-  host** in the manifest. This ensures the WireGuard mesh covers all nodes before application
-  services start.
+  non-edge host** in the manifest. This ensures the WireGuard mesh covers all backend nodes before
+  application services start, and it is now required anywhere internal gRPC service leaf
+  certificates are staged under `/etc/frameworks/pki/services/<service>/`.
 </Aside>
 
 **Environment variable merge order** (later wins):
@@ -387,6 +388,26 @@ services:
 4. Inline `config` map
 
 The merged result is written to `/etc/frameworks/{service}.env` on each host.
+
+For `profile: production`, provisioning also forces secure internal gRPC defaults:
+
+- `NODE_ENV=production`
+- `BUILD_ENV=production`
+- `GRPC_ALLOW_INSECURE=false`
+- `NAVIGATOR_ALLOW_INSECURE=false`
+- `DECKLOG_ALLOW_INSECURE=false`
+- `DECKLOG_USE_TLS=true`
+
+If `navigator` is enabled in a production manifest, the shared `env_file` must also provide:
+
+- one complete managed CA source for Navigator:
+- `NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE`
+- `NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE`
+- `NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE`
+- or:
+- `NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64`
+- `NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64`
+- `NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64`
 
 ---
 
@@ -403,6 +424,10 @@ pool_domain: edge.example.com
 email: ops@example.com
 cluster_id: regional-production
 fetch_cert: true
+telemetry:
+  remote_write_url: https://telemetry.example.com/api/v1/write
+  username: edge-ingest
+  password: "<edge-remote-write-password>"
 nodes:
   - name: edge-us-east-1
     ssh: admin@203.0.113.10
@@ -419,6 +444,7 @@ nodes:
 - `email` (ACME)
 - `cluster_id` (required when `register_qm: true`)
 - `fetch_cert` (optional) - Fetch certs from Navigator
+- `telemetry` (optional) - remote_write configuration for per-edge vmagent
 - `nodes` (required)
 
 **Node fields:**

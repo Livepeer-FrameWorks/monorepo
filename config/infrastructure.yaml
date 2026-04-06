@@ -48,6 +48,13 @@ infrastructure:
     prod_version: "v1.122.0"
     notes: "Production alternative to Prometheus. Prometheus-compatible API"
 
+  - name: vmagent
+    tested_version: "v1.122.0"
+    minimum_version: "v1.100.0"
+    image: victoriametrics/vmagent:v1.122.0
+    prod_version: "v1.122.0"
+    notes: "Per-host metrics agent that scrapes local endpoints and remote-writes to VictoriaMetrics"
+
   - name: grafana
     tested_version: "12.2.0"
     minimum_version: "11.0.0"

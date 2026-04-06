@@ -183,7 +183,7 @@ services:
     <<: *default-env
     # MistServer Load Balancer (comment out to use FrameWorks Foghorn)
     # image: ddvtech/mistserver_loadbalancer:latest
-    # command: ["/usr/bin/MistUtilLoad", "-g", "5", "-P", "koekjes", "-p", "8042", "-s", "http://mistserver:4242"]
+    # command: ["/usr/bin/MistUtilLoad", "-g", "5", "-P", "metrics", "-p", "8042", "-s", "http://mistserver:4242"]
 
     # FrameWorks Foghorn
     container_name: frameworks-foghorn
@@ -677,7 +677,6 @@ services:
       FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
       EDGE_PUBLIC_URL: ${EDGE_PUBLIC_URL}
       MISTSERVER_URL: ${MISTSERVER_URL}
-      MIST_PASSWORD: ${MIST_PASSWORD}
       MIST_API_USERNAME: ${MIST_API_USERNAME}
       MIST_API_PASSWORD: ${MIST_API_PASSWORD}
       NODE_ID: ${HELMSMAN_NODE_ID}

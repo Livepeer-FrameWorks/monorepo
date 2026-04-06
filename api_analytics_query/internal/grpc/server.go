@@ -6176,11 +6176,17 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
 	}
-	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,
 		KeyFile:       cfg.KeyFile,
 		AllowInsecure: cfg.AllowInsecure,
-	}, cfg.Logger)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+		cfg.Logger.WithError(err).Fatal("Timed out waiting for Periscope gRPC TLS files")
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 	if err != nil {
 		cfg.Logger.WithError(err).Fatal("Failed to configure Periscope gRPC TLS")
 	}

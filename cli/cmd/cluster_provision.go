@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -286,6 +287,9 @@ func runProvision(cmd *cobra.Command, manifestPath, ageKeyFile, only string, dry
 		if err = validateGatewayMeshCoverage(manifest); err != nil {
 			return fmt.Errorf("invalid manifest: %w", err)
 		}
+		if err = validateInternalGRPCTLSCoverage(manifest); err != nil {
+			return fmt.Errorf("invalid manifest: %w", err)
+		}
 	}
 
 	// Create execution plan
@@ -354,6 +358,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	// Execute each batch sequentially
 	runtimeData := make(map[string]interface{})
+	if err := ensureProvisionGeoIP(ctx, cmd.OutOrStdout(), manifest, manifestDir, sshPool); err != nil {
+		return err
+	}
 
 	for batchNum, batch := range plan.Batches {
 		fmt.Fprintf(cmd.OutOrStdout(), "Executing Batch %d/%d:\n", batchNum+1, len(plan.Batches))
@@ -485,6 +492,37 @@ func serviceNameFromTask(taskName string) string {
 	return taskName
 }
 
+func meshHostname(name string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(name))
+	if trimmed == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s.internal", trimmed)
+}
+
+func manifestMeshHostname(manifest *inventory.Manifest, hostName string) string {
+	if manifest == nil {
+		return ""
+	}
+	hostName = strings.TrimSpace(hostName)
+	if hostName == "" {
+		return ""
+	}
+	if _, ok := manifest.GetHost(hostName); !ok {
+		return ""
+	}
+	return meshHostname(hostName)
+}
+
+func usesInternalGRPCLeaf(serviceName string) bool {
+	switch serviceName {
+	case "commodore", "quartermaster", "purser", "periscope-query", "decklog", "foghorn", "signalman", "deckhand", "skipper", "navigator":
+		return true
+	default:
+		return false
+	}
+}
+
 func phaseRequiresGatewayMeshValidation(phase orchestrator.Phase) bool {
 	return phase == orchestrator.PhaseApplications || phase == orchestrator.PhaseAll
 }
@@ -613,6 +651,73 @@ func ensurePrivateerEnrollmentTokenWithClient(ctx context.Context, runtimeData m
 	}
 	tokens[clusterID] = resp.GetToken().GetToken()
 	runtimeData["enrollment_tokens"] = tokens
+	return nil
+}
+
+func ensurePrivateerCertIssueToken(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}, clusterID, nodeID string) error {
+	if clusterID == "" {
+		return fmt.Errorf("privateer task missing cluster_id")
+	}
+	if nodeID == "" {
+		return fmt.Errorf("privateer task missing node_id")
+	}
+
+	if tokens, ok := runtimeData["cert_issue_tokens"].(map[string]string); ok {
+		if tokens[nodeID] != "" {
+			return nil
+		}
+	}
+
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return err
+	}
+	systemTenantID, ok := runtimeData["system_tenant_id"].(string)
+	if !ok || systemTenantID == "" {
+		return fmt.Errorf("missing system tenant id for privateer cert issue token")
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for privateer cert issue token: %w", err)
+	}
+	defer client.Close()
+
+	return ensurePrivateerCertIssueTokenWithClient(ctx, runtimeData, systemTenantID, clusterID, nodeID, client)
+}
+
+func ensurePrivateerCertIssueTokenWithClient(ctx context.Context, runtimeData map[string]interface{}, systemTenantID, clusterID, nodeID string, creator bootstrapTokenCreator) error {
+	metadata, err := structpb.NewStruct(map[string]interface{}{
+		"node_id": nodeID,
+		"purpose": "cert_sync",
+	})
+	if err != nil {
+		return fmt.Errorf("build cert issue token metadata: %w", err)
+	}
+
+	resp, err := creator.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
+		Name:      fmt.Sprintf("Internal Cert Sync Token for %s", nodeID),
+		Kind:      "infrastructure_node",
+		Ttl:       "720h",
+		TenantId:  &systemTenantID,
+		ClusterId: &clusterID,
+		Metadata:  metadata,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create cert issue token for node '%s': %w", nodeID, err)
+	}
+
+	tokens, ok := runtimeData["cert_issue_tokens"].(map[string]string)
+	if !ok || tokens == nil {
+		tokens = make(map[string]string)
+	}
+	tokens[nodeID] = resp.GetToken().GetToken()
+	runtimeData["cert_issue_tokens"] = tokens
 	return nil
 }
 
@@ -756,15 +861,17 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 		defaultEmail = "info@frameworks.network"
 	}
 
-	wildcardBundleID := tlsBundleID("wildcard", manifest.RootDomain)
-	if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
-		BundleId:  wildcardBundleID,
-		ClusterId: clusterID,
-		Domains:   []string{"*." + manifest.RootDomain},
-		Issuer:    "navigator",
-		Email:     defaultEmail,
-	}); err != nil {
-		return fmt.Errorf("upsert wildcard bundle: %w", err)
+	for _, bundleRootDomain := range ingressWildcardBundleDomains(manifest, clusterID) {
+		wildcardBundleID := tlsBundleID("wildcard", bundleRootDomain)
+		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
+			BundleId:  wildcardBundleID,
+			ClusterId: clusterID,
+			Domains:   []string{"*." + bundleRootDomain},
+			Issuer:    "navigator",
+			Email:     defaultEmail,
+		}); err != nil {
+			return fmt.Errorf("upsert wildcard bundle: %w", err)
+		}
 	}
 
 	localSvcs := make(map[string]interface{})
@@ -790,7 +897,7 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 			continue
 		}
 
-		domains, bundleID := autoIngressDomains(name, manifest.RootDomain)
+		domains, bundleID := autoIngressDomains(name, manifest, clusterID)
 		if len(domains) == 0 || bundleID == "" {
 			continue
 		}
@@ -908,13 +1015,58 @@ func tlsBundleID(kind, rootDomain string) string {
 	return kind + "-" + replacer.Replace(rootDomain)
 }
 
-func autoIngressDomains(serviceName, rootDomain string) ([]string, string) {
+func clusterScopedRootDomain(manifest *inventory.Manifest, clusterID string) string {
+	if manifest == nil || manifest.RootDomain == "" || clusterID == "" {
+		return ""
+	}
+
+	clusterName := ""
+	if cfg, ok := manifest.Clusters[clusterID]; ok {
+		clusterName = cfg.Name
+	}
+	clusterSlug := pkgdns.ClusterSlug(clusterID, clusterName)
+	if clusterSlug == "" {
+		return ""
+	}
+	return clusterSlug + "." + manifest.RootDomain
+}
+
+func publicServiceRootDomain(serviceType string, manifest *inventory.Manifest, clusterID string) string {
+	if manifest == nil {
+		return ""
+	}
+	if pkgdns.IsClusterScopedServiceType(serviceType) {
+		return clusterScopedRootDomain(manifest, clusterID)
+	}
+	return strings.TrimSpace(manifest.RootDomain)
+}
+
+func ingressWildcardBundleDomains(manifest *inventory.Manifest, clusterID string) []string {
+	if manifest == nil || manifest.RootDomain == "" {
+		return nil
+	}
+
+	domains := []string{manifest.RootDomain}
+	if clusterRoot := clusterScopedRootDomain(manifest, clusterID); clusterRoot != "" {
+		domains = append(domains, clusterRoot)
+	}
+	return domains
+}
+
+func autoIngressDomains(serviceName string, manifest *inventory.Manifest, clusterID string) ([]string, string) {
 	if serviceName == "foredeck" {
-		return []string{rootDomain, "www." + rootDomain}, tlsBundleID("apex", rootDomain)
+		if manifest == nil || manifest.RootDomain == "" {
+			return nil, ""
+		}
+		return []string{manifest.RootDomain, "www." + manifest.RootDomain}, tlsBundleID("apex", manifest.RootDomain)
 	}
 
 	serviceType, ok := publicServiceType(serviceName)
 	if !ok {
+		return nil, ""
+	}
+	rootDomain := publicServiceRootDomain(serviceType, manifest, clusterID)
+	if rootDomain == "" {
 		return nil, ""
 	}
 	fqdn, ok := pkgdns.ServiceFQDN(serviceType, rootDomain)
@@ -1063,6 +1215,30 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				config.Metadata[k] = v
 			}
 			if port, err := resolvePort(baseName, iface); err == nil && port != 0 {
+				config.Port = port
+			}
+		}
+		// Observability overrides
+		if obs, ok := manifest.Observability[baseName]; ok {
+			if obs.Mode != "" {
+				config.Mode = obs.Mode
+			}
+			if obs.Version != "" {
+				config.Version = obs.Version
+			}
+			if obs.Image != "" {
+				config.Image = obs.Image
+			}
+			if obs.BinaryURL != "" {
+				config.BinaryURL = obs.BinaryURL
+			}
+			if obs.EnvFile != "" {
+				config.EnvFile = obs.EnvFile
+			}
+			for k, v := range obs.Config {
+				config.Metadata[k] = v
+			}
+			if port, err := resolvePort(baseName, obs); err == nil && port != 0 {
 				config.Port = port
 			}
 		}
@@ -1243,6 +1419,21 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				config.Metadata["enrollment_token"] = token
 			}
 		}
+		if tokens, ok := runtimeData["cert_issue_tokens"].(map[string]string); ok && task.Host != "" {
+			if token, ok := tokens[task.Host]; ok {
+				config.Metadata["cert_issue_token"] = token
+			}
+		}
+		if services := internalGRPCLeafServicesForHost(manifest, task.Host); len(services) > 0 {
+			config.Metadata["expected_internal_grpc_services"] = services
+		}
+	}
+
+	if task.Type == "vmagent" {
+		config.Mode = "docker"
+		if targets := buildVMAgentScrapeTargets(manifest, task.Host); len(targets) > 0 {
+			config.Metadata["scrape_targets"] = targets
+		}
 	}
 
 	// Reverse proxy metadata: inject root_domain and colocated services
@@ -1289,6 +1480,193 @@ func containsHost(hosts []string, target string) bool {
 	return false
 }
 
+func ensureProvisionGeoIP(ctx context.Context, out io.Writer, manifest *inventory.Manifest, manifestDir string, pool *ssh.Pool) error {
+	if manifest == nil || manifest.GeoIP == nil || !manifest.GeoIP.Enabled {
+		return nil
+	}
+
+	services := effectiveGeoIPServices(manifest, nil)
+	if len(services) == 0 {
+		return nil
+	}
+
+	source := effectiveGeoIPSource(manifest, "")
+	filePath := effectiveGeoIPFilePath(manifest, "", manifestDir)
+	licenseKey := effectiveGeoIPLicenseKey(manifest, "")
+	remotePath := effectiveGeoIPRemotePath(manifest, "")
+
+	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, manifest, source, filePath, licenseKey)
+	if err != nil {
+		return fmt.Errorf("geoip provisioning failed: %w", err)
+	}
+	defer cleanup()
+
+	if _, err := uploadGeoIPToHosts(ctx, manifest, pool, mmdbPath, remotePath, services, false, out); err != nil {
+		return fmt.Errorf("geoip provisioning failed: %w", err)
+	}
+
+	return nil
+}
+
+func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []map[string]interface{} {
+	if manifest == nil || hostName == "" {
+		return nil
+	}
+	metricsCapableServices := map[string]struct{}{
+		"bridge":           {},
+		"chandler":         {},
+		"commodore":        {},
+		"deckhand":         {},
+		"decklog":          {},
+		"foghorn":          {},
+		"helmsman":         {},
+		"livepeer-gateway": {},
+		"livepeer-signer":  {},
+		"navigator":        {},
+		"periscope-ingest": {},
+		"periscope-query":  {},
+		"privateer":        {},
+		"purser":           {},
+		"quartermaster":    {},
+		"signalman":        {},
+		"skipper":          {},
+		"steward":          {},
+		"victoriametrics":  {},
+		"vmagent":          {},
+	}
+
+	type target struct {
+		name   string
+		port   int
+		path   string
+		labels map[string]string
+	}
+
+	var targets []target
+	addTarget := func(name string, svc inventory.ServiceConfig, source string) {
+		if !svc.Enabled {
+			return
+		}
+		if _, ok := metricsCapableServices[name]; !ok {
+			return
+		}
+		if svc.Host != hostName && !containsHost(svc.Hosts, hostName) {
+			return
+		}
+		port, err := resolvePort(name, svc)
+		if err != nil || port == 0 {
+			return
+		}
+		path := "/metrics"
+		if name == "victoriametrics" {
+			path = "/metrics"
+		}
+		targets = append(targets, target{
+			name: name,
+			port: port,
+			path: path,
+			labels: map[string]string{
+				"frameworks_service": name,
+				"frameworks_source":  source,
+				"node_id":            hostName,
+			},
+		})
+	}
+
+	for name, svc := range manifest.Services {
+		addTarget(name, svc, "services")
+	}
+	for name, svc := range manifest.Interfaces {
+		addTarget(name, svc, "interfaces")
+	}
+	for name, svc := range manifest.Observability {
+		if name == "grafana" {
+			continue
+		}
+		addTarget(name, svc, "observability")
+	}
+
+	if len(targets) == 0 {
+		return nil
+	}
+
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].name == targets[j].name {
+			return targets[i].port < targets[j].port
+		}
+		return targets[i].name < targets[j].name
+	})
+
+	result := make([]map[string]interface{}, 0, len(targets))
+	for _, tgt := range targets {
+		result = append(result, map[string]interface{}{
+			"job_name": tgt.name,
+			"targets":  []string{fmt.Sprintf("127.0.0.1:%d", tgt.port)},
+			"path":     tgt.path,
+			"labels":   tgt.labels,
+		})
+	}
+
+	return result
+}
+
+func defaultVictoriaMetricsHost(manifest *inventory.Manifest) (string, int) {
+	if manifest == nil {
+		return "", 0
+	}
+	obs, ok := manifest.Observability["victoriametrics"]
+	if !ok || !obs.Enabled {
+		return "", 0
+	}
+	hostName := obs.Host
+	if hostName == "" && len(obs.Hosts) > 0 {
+		hostName = obs.Hosts[0]
+	}
+	if hostName == "" {
+		return "", 0
+	}
+	port, err := resolvePort("victoriametrics", obs)
+	if err != nil || port == 0 {
+		port = provisioner.ServicePorts["victoriametrics"]
+	}
+	return manifestMeshHostname(manifest, hostName), port
+}
+
+func defaultVictoriaMetricsWriteURL(manifest *inventory.Manifest) string {
+	host, port := defaultVictoriaMetricsHost(manifest)
+	if host == "" || port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://%s:%d/api/v1/write", host, port)
+}
+
+func defaultVictoriaMetricsDatasourceURL(manifest *inventory.Manifest) string {
+	host, port := defaultVictoriaMetricsHost(manifest)
+	if host == "" || port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://%s:%d/prometheus", host, port)
+}
+
+func internalGRPCLeafServicesForHost(manifest *inventory.Manifest, hostName string) []string {
+	if manifest == nil || hostName == "" {
+		return nil
+	}
+
+	var services []string
+	for serviceName, svc := range manifest.Services {
+		if !svc.Enabled || !usesInternalGRPCLeaf(serviceName) {
+			continue
+		}
+		if svc.Host == hostName || containsHost(svc.Hosts, hostName) {
+			services = append(services, serviceName)
+		}
+	}
+
+	sort.Strings(services)
+	return services
+}
+
 func quartermasterHTTPURL(grpcAddr string) string {
 	host, _, err := net.SplitHostPort(grpcAddr)
 	if err == nil && host != "" {
@@ -1302,6 +1680,7 @@ func quartermasterHTTPURL(grpcAddr string) string {
 
 var proxyRouteServiceNames = map[string]struct{}{
 	"bridge":    {},
+	"chandler":  {},
 	"chartroom": {},
 	"chatwoot":  {},
 	"foghorn":   {},
@@ -1586,6 +1965,9 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		if err = ensurePrivateerEnrollmentToken(ctx, manifest, runtimeData, task.ClusterID); err != nil {
 			return nil, err
 		}
+		if err = ensurePrivateerCertIssueToken(ctx, manifest, runtimeData, task.ClusterID, task.Host); err != nil {
+			return nil, err
+		}
 	}
 
 	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir)
@@ -1756,18 +2138,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 	}
 
 	clusterIDs := manifest.AllClusterIDs()
-	basePort := 18002
-	if qmSvc.Port != 0 {
-		basePort = qmSvc.Port
-	}
-	baseURL := fmt.Sprintf("http://%s:%d", host.ExternalIP, basePort)
-	if bridgeSvc, ok := manifest.Services["bridge"]; ok && bridgeSvc.Enabled {
-		if bridgeSvc.Port != 0 {
-			if bridgeHost, ok := manifest.GetHost(bridgeSvc.Host); ok {
-				baseURL = fmt.Sprintf("http://%s:%d", bridgeHost.ExternalIP, bridgeSvc.Port)
-			}
-		}
-	}
+	baseURL := desiredClusterBaseURL(manifest, host, qmSvc)
 
 	for _, clusterID := range clusterIDs {
 		clusterName := fmt.Sprintf("FrameWorks %s %s Cluster", manifest.Type, manifest.Profile)
@@ -1782,7 +2153,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 			return nil, fmt.Errorf("cluster %q has unsupported cluster type %q (allowed: %s)", clusterID, clusterType, strings.Join(infra.ClusterTypeValues(), ", "))
 		}
 
-		_, err = client.GetCluster(ctx, clusterID)
+		clusterResp, err := client.GetCluster(ctx, clusterID)
 		if err != nil && status.Code(err) == codes.NotFound {
 			fmt.Printf("  Registering Cluster '%s'...\n", clusterID)
 			_, err = client.CreateCluster(ctx, &pb.CreateClusterRequest{
@@ -1798,7 +2169,26 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to check cluster '%s': %w", clusterID, err)
 		} else {
-			fmt.Printf("  ✓ Cluster '%s' already registered.\n", clusterID)
+			updateReq := &pb.UpdateClusterRequest{ClusterId: clusterID}
+			needsUpdate := false
+			if cluster := clusterResp.GetCluster(); cluster != nil {
+				if strings.TrimSpace(cluster.GetClusterName()) != clusterName {
+					updateReq.ClusterName = &clusterName
+					needsUpdate = true
+				}
+				if strings.TrimSpace(cluster.GetBaseUrl()) != baseURL {
+					updateReq.BaseUrl = &baseURL
+					needsUpdate = true
+				}
+			}
+			if needsUpdate {
+				if _, err := client.UpdateCluster(ctx, updateReq); err != nil {
+					return nil, fmt.Errorf("failed to update cluster '%s': %w", clusterID, err)
+				}
+				fmt.Printf("  ✓ Cluster '%s' already registered; updated metadata.\n", clusterID)
+			} else {
+				fmt.Printf("  ✓ Cluster '%s' already registered.\n", clusterID)
+			}
 		}
 	}
 
@@ -1849,6 +2239,32 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 	}, nil
 }
 
+func desiredClusterBaseURL(manifest *inventory.Manifest, quartermasterHost inventory.Host, quartermasterSvc inventory.ServiceConfig) string {
+	if manifest == nil {
+		return ""
+	}
+
+	if rootDomain := strings.TrimSpace(manifest.RootDomain); rootDomain != "" {
+		return rootDomain
+	}
+
+	basePort := 18002
+	if quartermasterSvc.Port != 0 {
+		basePort = quartermasterSvc.Port
+	}
+	baseURL := fmt.Sprintf("http://%s:%d", quartermasterHost.ExternalIP, basePort)
+
+	if bridgeSvc, ok := manifest.Services["bridge"]; ok && bridgeSvc.Enabled {
+		if bridgeSvc.Port != 0 {
+			if bridgeHost, ok := manifest.GetHost(bridgeSvc.Host); ok {
+				baseURL = fmt.Sprintf("http://%s:%d", bridgeHost.ExternalIP, bridgeSvc.Port)
+			}
+		}
+	}
+
+	return baseURL
+}
+
 // selfRegisters returns true for services that create their own
 // service_instance via BootstrapService on startup. The CLI should
 // not register instances for these to avoid conflicts.
@@ -1865,6 +2281,8 @@ func publicServiceType(serviceName string) (string, bool) {
 	switch serviceName {
 	case "bridge":
 		return "bridge", true
+	case "chandler":
+		return "chandler", true
 	case "foghorn":
 		return "foghorn", true
 	case "chartroom":
@@ -1930,17 +2348,15 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// 1. Auto-generated infrastructure env vars
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
 		port := pg.EffectivePort()
-		var pgIP string
+		var pgHost string
 		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 			// Use first node for DATABASE_HOST (services need a single endpoint)
-			if h, ok := manifest.GetHost(pg.Nodes[0].Host); ok {
-				pgIP = h.ExternalIP
-			}
-		} else if h, ok := manifest.GetHost(pg.Host); ok {
-			pgIP = h.ExternalIP
+			pgHost = manifestMeshHostname(manifest, pg.Nodes[0].Host)
+		} else {
+			pgHost = manifestMeshHostname(manifest, pg.Host)
 		}
-		if pgIP != "" {
-			env["DATABASE_HOST"] = pgIP
+		if pgHost != "" {
+			env["DATABASE_HOST"] = pgHost
 			env["DATABASE_PORT"] = strconv.Itoa(port)
 		}
 	}
@@ -1948,12 +2364,13 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
 		var brokers []string
 		for _, b := range kafka.Brokers {
-			if bHost, ok := manifest.GetHost(b.Host); ok {
+			brokerHost := manifestMeshHostname(manifest, b.Host)
+			if brokerHost != "" {
 				port := b.Port
 				if port == 0 {
 					port = 9092
 				}
-				brokers = append(brokers, fmt.Sprintf("%s:%d", bHost.ExternalIP, port))
+				brokers = append(brokers, fmt.Sprintf("%s:%d", brokerHost, port))
 			}
 		}
 		if len(brokers) > 0 {
@@ -1968,13 +2385,13 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
-		if chHost, ok := manifest.GetHost(ch.Host); ok {
+		if chHost := manifestMeshHostname(manifest, ch.Host); chHost != "" {
 			port := ch.Port
 			if port == 0 {
 				port = 9000
 			}
-			env["CLICKHOUSE_ADDR"] = fmt.Sprintf("%s:%d", chHost.ExternalIP, port)
-			env["CLICKHOUSE_HOST"] = chHost.ExternalIP
+			env["CLICKHOUSE_ADDR"] = fmt.Sprintf("%s:%d", chHost, port)
+			env["CLICKHOUSE_HOST"] = chHost
 			env["CLICKHOUSE_PORT"] = strconv.Itoa(port)
 			env["CLICKHOUSE_DB"] = "periscope"
 			env["CLICKHOUSE_USER"] = "frameworks"
@@ -1986,20 +2403,20 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 
 	if redis := manifest.Infrastructure.Redis; redis != nil && redis.Enabled {
 		for _, inst := range redis.Instances {
-			if rHost, ok := manifest.GetHost(inst.Host); ok {
+			if rHost := manifestMeshHostname(manifest, inst.Host); rHost != "" {
 				port := inst.Port
 				if port == 0 {
 					port = 6379
 				}
 				// REDIS_{NAME}_ADDR for each named instance
 				key := fmt.Sprintf("REDIS_%s_ADDR", strings.ToUpper(inst.Name))
-				env[key] = fmt.Sprintf("%s:%d", rHost.ExternalIP, port)
+				env[key] = fmt.Sprintf("%s:%d", rHost, port)
 			}
 		}
 	}
 
-	// Service gRPC addresses — use mesh DNS FQDNs (resolved by Privateer after mesh is up).
-	// Infrastructure addresses above use external_ip; service-to-service uses mesh DNS.
+	// Backend dependencies use mesh-reachable DNS names (resolved by Privateer after mesh is up).
+	// Public/external access is handled separately by service registration and edge provisioning.
 	for _, grpc := range servicedefs.GRPCServices() {
 		svc, ok := manifest.Services[grpc.ServiceID]
 		if !ok || !svc.Enabled {
@@ -2019,21 +2436,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		// Wire REDIS_URL from the foghorn Redis instance for HA state sync
 		if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
 			env["REDIS_URL"] = fmt.Sprintf("redis://%s", addr)
-		}
-		// Chandler host/port for asset management
-		if chandler, ok := manifest.Services["chandler"]; ok && chandler.Enabled {
-			chHost := chandler.Host
-			if chHost == "" && len(chandler.Hosts) > 0 {
-				chHost = chandler.Hosts[0]
-			}
-			if h, ok := manifest.GetHost(chHost); ok {
-				chPort := chandler.Port
-				if chPort == 0 {
-					chPort = 18020
-				}
-				env["CHANDLER_HOST"] = h.ExternalIP
-				env["CHANDLER_PORT"] = strconv.Itoa(chPort)
-			}
 		}
 		// Instance ID for HA state sync — stable across restarts
 		if env["FOGHORN_INSTANCE_ID"] == "" {
@@ -2063,12 +2465,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if lmHost == "" && len(listmonk.Hosts) > 0 {
 			lmHost = listmonk.Hosts[0]
 		}
-		if h, ok := manifest.GetHost(lmHost); ok {
+		if lmInternalHost := manifestMeshHostname(manifest, lmHost); lmInternalHost != "" {
 			lmPort := listmonk.Port
 			if lmPort == 0 {
 				lmPort = 9001
 			}
-			env["LISTMONK_URL"] = fmt.Sprintf("http://%s:%d", h.ExternalIP, lmPort)
+			env["LISTMONK_URL"] = fmt.Sprintf("http://%s:%d", lmInternalHost, lmPort)
 		}
 	}
 
@@ -2078,12 +2480,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if cwHost == "" && len(chatwoot.Hosts) > 0 {
 			cwHost = chatwoot.Hosts[0]
 		}
-		if h, ok := manifest.GetHost(cwHost); ok {
+		if cwInternalHost := manifestMeshHostname(manifest, cwHost); cwInternalHost != "" {
 			cwPort := chatwoot.Port
 			if cwPort == 0 {
 				cwPort = 18092
 			}
-			env["CHATWOOT_HOST"] = h.ExternalIP
+			env["CHATWOOT_HOST"] = cwInternalHost
 			env["CHATWOOT_PORT"] = strconv.Itoa(cwPort)
 		}
 	}
@@ -2094,6 +2496,22 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 	if task.Host != "" {
 		env["NODE_ID"] = task.Host
+	}
+	if _, ok := manifest.Services["navigator"]; ok {
+		env["GRPC_TLS_CA_PATH"] = "/etc/frameworks/pki/ca.crt"
+		env["NAVIGATOR_GRPC_CA_FILE"] = "/etc/frameworks/pki/ca.crt"
+		if addr := env["NAVIGATOR_GRPC_ADDR"]; addr != "" && env["NAVIGATOR_URL"] == "" {
+			env["NAVIGATOR_URL"] = addr
+		}
+	}
+	if usesInternalGRPCLeaf(serviceNameFromTask(task.Name)) {
+		serviceName := serviceNameFromTask(task.Name)
+		env["GRPC_TLS_CERT_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.crt", serviceName)
+		env["GRPC_TLS_KEY_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.key", serviceName)
+		if serviceName == "navigator" {
+			env["NAVIGATOR_GRPC_CERT_FILE"] = env["GRPC_TLS_CERT_PATH"]
+			env["NAVIGATOR_GRPC_KEY_FILE"] = env["GRPC_TLS_KEY_PATH"]
+		}
 	}
 
 	// Service token
@@ -2141,6 +2559,59 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			env[k] = v
 		}
 	}
+	if obs, ok := manifest.Observability[baseName]; ok {
+		for k, v := range obs.Config {
+			env[k] = v
+		}
+	}
+	if vmObs, ok := manifest.Observability["victoriametrics"]; ok {
+		if env["VM_HTTP_AUTH_USERNAME"] == "" {
+			env["VM_HTTP_AUTH_USERNAME"] = vmObs.Config["VM_HTTP_AUTH_USERNAME"]
+		}
+		if env["VM_HTTP_AUTH_PASSWORD"] == "" {
+			env["VM_HTTP_AUTH_PASSWORD"] = vmObs.Config["VM_HTTP_AUTH_PASSWORD"]
+		}
+	}
+
+	if manifest.GeoIP != nil && manifest.GeoIP.Enabled && (baseName == "foghorn" || baseName == "quartermaster") {
+		if env["GEOIP_MMDB_PATH"] == "" {
+			env["GEOIP_MMDB_PATH"] = effectiveGeoIPRemotePath(manifest, "")
+		}
+	}
+
+	if baseName == "victoriametrics" {
+		if env["VM_RETENTION_PERIOD"] == "" {
+			env["VM_RETENTION_PERIOD"] = "30d"
+		}
+	}
+
+	if baseName == "vmagent" {
+		if env["VMAGENT_REMOTE_WRITE_URL"] == "" {
+			if url := defaultVictoriaMetricsWriteURL(manifest); url != "" {
+				env["VMAGENT_REMOTE_WRITE_URL"] = url
+			}
+		}
+		if env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"] == "" && env["VM_HTTP_AUTH_USERNAME"] != "" {
+			env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"] = env["VM_HTTP_AUTH_USERNAME"]
+		}
+		if env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"] == "" && env["VM_HTTP_AUTH_PASSWORD"] != "" {
+			env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"] = env["VM_HTTP_AUTH_PASSWORD"]
+		}
+		if env["VMAGENT_SCRAPE_INTERVAL"] == "" {
+			env["VMAGENT_SCRAPE_INTERVAL"] = "30s"
+		}
+	}
+
+	if baseName == "grafana" && env["VICTORIAMETRICS_URL"] == "" {
+		if url := defaultVictoriaMetricsDatasourceURL(manifest); url != "" {
+			env["VICTORIAMETRICS_URL"] = url
+		}
+	}
+
+	applyProductionRuntimeDefaults(manifest, baseName, env)
+	if err := validateProductionServiceEnv(manifest, baseName, env); err != nil {
+		return nil, err
+	}
 
 	normalizeServiceEnvVars(baseName, env)
 	if baseName == "livepeer-gateway" {
@@ -2179,6 +2650,73 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	return env, nil
+}
+
+func applyProductionRuntimeDefaults(manifest *inventory.Manifest, serviceID string, env map[string]string) {
+	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Profile), "production") {
+		return
+	}
+
+	env["NODE_ENV"] = "production"
+	env["BUILD_ENV"] = "production"
+	if strings.TrimSpace(env["GIN_MODE"]) == "" || strings.EqualFold(strings.TrimSpace(env["GIN_MODE"]), "debug") {
+		env["GIN_MODE"] = "release"
+	}
+
+	env["GRPC_ALLOW_INSECURE"] = "false"
+	env["NAVIGATOR_ALLOW_INSECURE"] = "false"
+	env["DECKLOG_ALLOW_INSECURE"] = "false"
+	env["DECKLOG_USE_TLS"] = "true"
+}
+
+func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string, env map[string]string) error {
+	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Profile), "production") {
+		return nil
+	}
+
+	if serviceID != "navigator" {
+		return nil
+	}
+
+	fileKeys := []string{
+		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE",
+	}
+	b64Keys := []string{
+		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64",
+	}
+
+	allFileKeysPresent := true
+	for _, key := range fileKeys {
+		if strings.TrimSpace(env[key]) == "" {
+			allFileKeysPresent = false
+			break
+		}
+	}
+	if allFileKeysPresent {
+		return nil
+	}
+
+	allB64KeysPresent := true
+	for _, key := range b64Keys {
+		if strings.TrimSpace(env[key]) == "" {
+			allB64KeysPresent = false
+			break
+		}
+	}
+	if allB64KeysPresent {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"service %s: production deploy requires managed internal CA env vars via either files (%s) or base64 PEM envs (%s)",
+		serviceID,
+		strings.Join(fileKeys, ", "),
+		strings.Join(b64Keys, ", "),
+	)
 }
 
 func normalizeServiceEnvVars(serviceID string, env map[string]string) {
@@ -2234,6 +2772,56 @@ func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
 		}
 	}
 
+	return nil
+}
+
+func validateInternalGRPCTLSCoverage(manifest *inventory.Manifest) error {
+	internalHosts := make(map[string][]string)
+	for serviceName, svc := range manifest.Services {
+		if !svc.Enabled || !usesInternalGRPCLeaf(serviceName) {
+			continue
+		}
+		for _, hostName := range serviceHosts(svc) {
+			internalHosts[hostName] = append(internalHosts[hostName], serviceName)
+		}
+	}
+	if len(internalHosts) == 0 {
+		return nil
+	}
+
+	navigatorSvc, ok := manifest.Services["navigator"]
+	if !ok || !navigatorSvc.Enabled {
+		return fmt.Errorf("internal gRPC TLS requires navigator to issue CA bundles and service leaf certificates")
+	}
+
+	privateerSvc, ok := manifest.Services["privateer"]
+	if !ok || !privateerSvc.Enabled {
+		return fmt.Errorf("internal gRPC TLS requires privateer so nodes receive /etc/frameworks/pki materials")
+	}
+
+	privateerHosts := make(map[string]struct{})
+	for _, hostName := range orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts) {
+		privateerHosts[hostName] = struct{}{}
+	}
+
+	for hostName, services := range internalHosts {
+		if _, ok := privateerHosts[hostName]; ok {
+			continue
+		}
+		sort.Strings(services)
+		return fmt.Errorf("host %q runs internal gRPC services %s but is not covered by privateer", hostName, strings.Join(services, ", "))
+	}
+
+	return nil
+}
+
+func serviceHosts(svc inventory.ServiceConfig) []string {
+	if len(svc.Hosts) > 0 {
+		return svc.Hosts
+	}
+	if svc.Host != "" {
+		return []string{svc.Host}
+	}
 	return nil
 }
 

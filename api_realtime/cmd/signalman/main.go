@@ -299,11 +299,17 @@ func main() {
 			),
 			grpc.ChainStreamInterceptor(streamAuthInterceptor),
 		}
-		tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+		tlsCfg := grpcutil.ServerTLSConfig{
 			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
 			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
 			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
-		}, logger)
+		}
+		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); err != nil {
+			logger.WithError(err).Fatal("Timed out waiting for Signalman gRPC TLS files")
+		}
+		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
 		if err != nil {
 			logger.WithError(err).Fatal("Failed to configure Signalman gRPC TLS")
 		}

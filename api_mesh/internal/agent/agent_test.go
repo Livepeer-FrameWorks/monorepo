@@ -27,6 +27,56 @@ type fakeMeshClient struct {
 	bootstrapRequests  []*pb.BootstrapInfrastructureNodeRequest
 }
 
+type fakeServiceRegistryClient struct {
+	responses []*pb.ListServiceInstancesResponse
+	err       error
+	requests  []*pb.CursorPaginationRequest
+}
+
+func (f *fakeServiceRegistryClient) ListServiceInstances(_ context.Context, _, _, _ string, pagination *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error) {
+	f.requests = append(f.requests, pagination)
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.responses) == 0 {
+		return &pb.ListServiceInstancesResponse{}, nil
+	}
+	resp := f.responses[0]
+	f.responses = f.responses[1:]
+	return resp, nil
+}
+
+type fakeCertificateClient struct {
+	caResponse     *pb.GetCABundleResponse
+	caErr          error
+	issueResponse  *pb.IssueInternalCertResponse
+	issueErr       error
+	issueRequests  []*pb.IssueInternalCertRequest
+	caRequestCount int
+}
+
+func (f *fakeCertificateClient) GetCABundle(_ context.Context, _ *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
+	f.caRequestCount++
+	if f.caErr != nil {
+		return nil, f.caErr
+	}
+	if f.caResponse == nil {
+		return &pb.GetCABundleResponse{}, nil
+	}
+	return f.caResponse, nil
+}
+
+func (f *fakeCertificateClient) IssueInternalCert(_ context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
+	f.issueRequests = append(f.issueRequests, req)
+	if f.issueErr != nil {
+		return nil, f.issueErr
+	}
+	if f.issueResponse == nil {
+		return &pb.IssueInternalCertResponse{}, nil
+	}
+	return f.issueResponse, nil
+}
+
 type meshSyncResult struct {
 	resp *pb.InfrastructureSyncResponse
 	err  error
@@ -262,6 +312,124 @@ func TestIsHealthyRecentSync(t *testing.T) {
 	agent.lastSyncSuccess.Store(time.Now().Unix() - 60)
 	if !agent.IsHealthy() {
 		t.Fatal("expected healthy when last sync was 60 seconds ago")
+	}
+}
+
+func TestMissingInternalPKIMaterials(t *testing.T) {
+	dir := t.TempDir()
+	agent := &Agent{pkiBasePath: dir}
+
+	if !agent.missingInternalPKIMaterials(nil) {
+		t.Fatal("expected missing CA bundle to require sync")
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "ca.crt"), []byte("ca"), 0o644); err != nil {
+		t.Fatalf("write ca bundle: %v", err)
+	}
+	if agent.missingInternalPKIMaterials(nil) {
+		t.Fatal("did not expect sync when CA bundle exists and no services are registered")
+	}
+
+	serviceDir := filepath.Join(dir, "services", "commodore")
+	if err := os.MkdirAll(serviceDir, 0o755); err != nil {
+		t.Fatalf("mkdir service dir: %v", err)
+	}
+	if !agent.missingInternalPKIMaterials([]string{"commodore"}) {
+		t.Fatal("expected missing leaf certs to require sync")
+	}
+	if err := os.WriteFile(filepath.Join(serviceDir, "tls.crt"), []byte("cert"), 0o644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(serviceDir, "tls.key"), []byte("key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if agent.missingInternalPKIMaterials([]string{"commodore"}) {
+		t.Fatal("did not expect sync when CA bundle and leaf certs exist")
+	}
+}
+
+func TestSyncInternalCertificatesBypassesCooldownWhenFilesMissing(t *testing.T) {
+	dir := t.TempDir()
+	registry := &fakeServiceRegistryClient{
+		responses: []*pb.ListServiceInstancesResponse{
+			{Instances: []*pb.ServiceInstance{{ServiceId: "commodore", Status: "running"}}},
+			{Instances: []*pb.ServiceInstance{{ServiceId: "commodore", Status: "running"}}},
+		},
+	}
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		issueResponse: &pb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "node-1",
+		registryClient:   registry,
+		navigatorClient:  navigator,
+		certIssueToken:   "token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+	}
+	agent.lastCertSyncUnix.Store(time.Now().Unix())
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates returned error: %v", err)
+	}
+
+	if len(navigator.issueRequests) != 1 {
+		t.Fatalf("expected 1 issue request, got %d", len(navigator.issueRequests))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "services", "commodore", "tls.crt")); err != nil {
+		t.Fatalf("expected leaf cert to be written: %v", err)
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("second syncInternalCertificates returned error: %v", err)
+	}
+	if len(navigator.issueRequests) != 1 {
+		t.Fatalf("expected cooldown to skip second issuance, got %d requests", len(navigator.issueRequests))
+	}
+}
+
+func TestSyncInternalCertificatesUsesExpectedServicesWithoutRegistryLookup(t *testing.T) {
+	dir := t.TempDir()
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		issueResponse: &pb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "node-1",
+		navigatorClient:  navigator,
+		certIssueToken:   "token",
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+		expectedServices: []string{"commodore", "signalman"},
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates returned error: %v", err)
+	}
+	if len(navigator.issueRequests) != 2 {
+		t.Fatalf("expected 2 issue requests, got %d", len(navigator.issueRequests))
+	}
+	if navigator.issueRequests[0].GetServiceType() != "commodore" || navigator.issueRequests[1].GetServiceType() != "signalman" {
+		t.Fatalf("unexpected service issue order: %+v", navigator.issueRequests)
 	}
 }
 

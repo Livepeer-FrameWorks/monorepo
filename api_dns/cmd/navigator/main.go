@@ -52,10 +52,11 @@ type ServerMetrics struct {
 // NavigatorServer holds dependencies for the gRPC and HTTP server
 type NavigatorServer struct {
 	pb.UnimplementedNavigatorServiceServer
-	DNSManager  *logic.DNSManager
-	CertManager *logic.CertManager
-	Logger      logging.Logger
-	Metrics     *ServerMetrics
+	DNSManager        *logic.DNSManager
+	CertManager       *logic.CertManager
+	InternalCAManager *logic.InternalCAManager
+	Logger            logging.Logger
+	Metrics           *ServerMetrics
 }
 
 func main() {
@@ -124,7 +125,11 @@ func main() {
 	}
 	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, recordTTL, lbTTL, time.Duration(staleSeconds)*time.Second, monitorConfig)
 	certManager := logic.NewCertManager(certStore)
+	internalCAManager := logic.NewInternalCAManager(certStore, qmClient, logger, rootDomain)
 	dnsManager.SetCertChecker(certManager)
+	if err := internalCAManager.EnsureCA(context.Background()); err != nil {
+		logger.WithError(err).Fatal("Failed to initialize internal CA")
+	}
 
 	// === Background Workers ===
 	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger)
@@ -148,10 +153,11 @@ func main() {
 
 	// === Server Setup ===
 	navigatorServer := &NavigatorServer{
-		DNSManager:  dnsManager,
-		CertManager: certManager,
-		Logger:      logger,
-		Metrics:     serverMetrics,
+		DNSManager:        dnsManager,
+		CertManager:       certManager,
+		InternalCAManager: internalCAManager,
+		Logger:            logger,
+		Metrics:           serverMetrics,
 	}
 
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
@@ -189,11 +195,20 @@ func main() {
 
 		grpcCertFile := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_CERT_FILE", ""))
 		grpcKeyFile := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_KEY_FILE", ""))
-		grpcTLSOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+		tlsCfg := grpcutil.ServerTLSConfig{
 			CertFile:      grpcCertFile,
 			KeyFile:       grpcKeyFile,
 			AllowInsecure: grpcCertFile == "" && grpcKeyFile == "",
-		}, logger)
+		}
+		if err := internalCAManager.EnsureLocalServerCertificate(context.Background(), "navigator", grpcCertFile, grpcKeyFile); err != nil {
+			logger.WithError(err).Fatal("Failed to stage Navigator bootstrap gRPC certificate")
+		}
+		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); err != nil {
+			logger.WithError(err).Fatal("Timed out waiting for Navigator gRPC TLS files")
+		}
+		grpcTLSOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
 		if err != nil {
 			logger.WithError(err).Fatal("Failed to configure Navigator gRPC TLS")
 		}
@@ -468,5 +483,47 @@ func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundle
 		KeyPem:    bundle.KeyPEM,
 		ExpiresAt: bundle.ExpiresAt.Unix(),
 		Version:   hex.EncodeToString(hash[:]),
+	}, nil
+}
+
+func (s *NavigatorServer) GetCABundle(ctx context.Context, _ *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
+	caPEM, err := s.InternalCAManager.GetCABundle(ctx)
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to get internal CA bundle")
+		return &pb.GetCABundleResponse{
+			Found: false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	return &pb.GetCABundleResponse{
+		Found: true,
+		CaPem: caPEM,
+	}, nil
+}
+
+func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
+	log := s.Logger.WithFields(logging.Fields{
+		"node_id":      req.GetNodeId(),
+		"service_type": req.GetServiceType(),
+	})
+	cert, err := s.InternalCAManager.IssueInternalCert(ctx, req.GetNodeId(), req.GetServiceType(), req.GetIssueToken())
+	if err != nil {
+		log.WithError(err).Error("Failed to issue internal certificate")
+		return &pb.IssueInternalCertResponse{
+			Success:     false,
+			NodeId:      req.GetNodeId(),
+			ServiceType: req.GetServiceType(),
+			Error:       err.Error(),
+		}, nil
+	}
+
+	return &pb.IssueInternalCertResponse{
+		Success:     true,
+		NodeId:      cert.NodeID,
+		ServiceType: cert.ServiceType,
+		CertPem:     cert.CertPEM,
+		KeyPem:      cert.KeyPEM,
+		ExpiresAt:   cert.ExpiresAt.Unix(),
 	}, nil
 }

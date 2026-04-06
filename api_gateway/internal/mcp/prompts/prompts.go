@@ -689,8 +689,8 @@ func handleSelfHostingPrompt() (*mcp.GetPromptResult, error) {
 	parts = append(parts, "```")
 	parts = append(parts, "frameworks edge provision --enrollment-token <token> --ssh user@host")
 	parts = append(parts, "```")
-	parts = append(parts, "The CLI handles the full 7-step pipeline: preflight checks, OS tuning, registration (gets domain + TLS cert), Docker install, and startup.")
-	parts = append(parts, "Each edge gets an automatic domain: `edge-{node_id}.{cluster}.frameworks.network`\n")
+	parts = append(parts, "The CLI handles the full 7-step pipeline: preflight checks, OS tuning, registration (gets domain + internal CA bootstrap), Docker install, and startup.")
+	parts = append(parts, "Each edge gets an automatic domain: `{node_label}.{cluster}.frameworks.network` where `node_label` is the node ID with a single `edge-` prefix.\n")
 
 	parts = append(parts, "## Step 6: Verify")
 	parts = append(parts, "Read `nodes://list` to confirm the new edge appears in your infrastructure.")

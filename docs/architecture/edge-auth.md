@@ -70,10 +70,10 @@ Before Helmsman connects, the CLI can call `EdgeProvisioningService.PreRegisterE
 to validate the enrollment token and receive node assignment data:
 
 1. Validates token via `ValidateBootstrapTokenEx` (with IP binding and consumption)
-2. Generates a 6-byte hex `node_id`
-3. Constructs edge FQDN: `edge-{node_id}.{cluster_slug}.{root_domain}`
+2. Uses the preferred human-readable node ID when provided and valid, otherwise generates a 6-byte hex fallback
+3. Constructs edge FQDN: `{node_label}.{cluster_slug}.{root_domain}` where `node_label` is the node ID with a single `edge-` prefix
 4. Constructs pool FQDN: `edge.{cluster_slug}.{root_domain}`
-5. Retrieves cluster wildcard TLS certificate from Navigator and returns it inline
+5. Returns the internal CA bundle for gRPC trust bootstrap
 
 The CLI uses this to stage certs and config before starting Caddy/Helmsman.
 

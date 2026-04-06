@@ -1343,6 +1343,7 @@ func TestClusterServiceFQDN(t *testing.T) {
 		rootDomain  string
 		expected    string
 	}{
+		{"chandler", "c1.example.com", "chandler.c1.example.com"},
 		{"edge", "c1.example.com", "edge.c1.example.com"},
 		{"edge-egress", "c1.example.com", "edge-egress.c1.example.com"},
 		{"edge-ingest", "c1.example.com", "edge-ingest.c1.example.com"},
@@ -1421,6 +1422,65 @@ func TestSyncServiceByCluster_EdgeEgressCreatesNodeRecords(t *testing.T) {
 	}
 	if !hasNodeRecord {
 		t.Fatalf("expected edge node A record, got records: %v", createdRecords)
+	}
+}
+
+func TestSyncServiceByCluster_EdgeEgressPreservesEdgePrefixedNodeIDs(t *testing.T) {
+	ip := "10.0.0.1"
+	var createdRecords []string
+
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{
+			Clusters: []*proto.InfrastructureCluster{
+				{ClusterId: "cluster-abc", ClusterName: "test-cluster", IsActive: true},
+			},
+		},
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{
+				{NodeId: "edge-eu-1", ClusterId: "cluster-abc", ExternalIp: strPtr(ip)},
+			},
+		},
+	}
+
+	cf := &fakeCloudflareClient{
+		createARecord: func(name, content string, proxied bool, ttl int) (*cloudflare.DNSRecord, error) {
+			createdRecords = append(createdRecords, name)
+			return &cloudflare.DNSRecord{Name: name, Content: content}, nil
+		},
+	}
+
+	m := &DNSManager{
+		cfClient:      cf,
+		qmClient:      qm,
+		logger:        logrus.New(),
+		domain:        "example.com",
+		proxy:         map[string]bool{},
+		recordTTL:     60,
+		lbTTL:         60,
+		staleAge:      5 * time.Minute,
+		monitorConfig: MonitorConfig{Interval: 60, Timeout: 5, Retries: 2},
+		servicePorts:  map[string]int{"edge-egress": 18008},
+	}
+
+	partialErrors, err := m.SyncServiceByCluster(context.Background(), "edge-egress")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if len(createdRecords) == 0 {
+		t.Fatal("expected edge node record to be created")
+	}
+	hasNodeRecord := false
+	for _, record := range createdRecords {
+		if record == "edge-eu-1.cluster-abc.example.com" {
+			hasNodeRecord = true
+			break
+		}
+	}
+	if !hasNodeRecord {
+		t.Fatalf("expected edge-prefixed node ID to be reused as-is, got %v", createdRecords)
 	}
 }
 

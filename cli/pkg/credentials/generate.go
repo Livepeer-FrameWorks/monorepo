@@ -19,7 +19,6 @@ var generatable = []secretSpec{
 	{"PASSWORD_RESET_SECRET", 32},
 	{"FIELD_ENCRYPTION_KEY", 32},
 	{"USAGE_HASH_SECRET", 32},
-	{"MIST_PASSWORD", 16},
 }
 
 // isMissing returns true if the value is empty or a known placeholder.

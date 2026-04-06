@@ -89,7 +89,9 @@ export PURSER_URL=http://10.0.1.11:18003
 Navigator creates individual A records for each edge node, enabling direct node addressing:
 
 ```
-edge-{node_id}.{cluster_slug}.{base_domain}  →  A  →  {node_external_ip}
+{node_label}.{cluster_slug}.{base_domain}  →  A  →  {node_external_ip}
+
+`node_label` is the node ID with a single `edge-` prefix.
 ```
 
 For example, with cluster slug `production` and base domain `frameworks.network`:

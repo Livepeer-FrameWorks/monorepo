@@ -31,6 +31,7 @@ func TestCreateBootstrapToken_Success(t *testing.T) {
 			nil,              // tenant_id
 			nil,              // cluster_id
 			nil,              // expected_ip
+			nil,              // metadata
 			nil,              // usage_limit
 			sqlmock.AnyArg(), // expires_at
 		).
@@ -134,6 +135,7 @@ func TestCreateBootstrapToken_EdgeNodeWithTenantID(t *testing.T) {
 			&tenantID,        // tenant_id
 			nil,              // cluster_id
 			nil,              // expected_ip
+			nil,              // metadata
 			nil,              // usage_limit
 			sqlmock.AnyArg(), // expires_at
 		).

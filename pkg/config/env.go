@@ -64,6 +64,18 @@ func GetEnvBool(key string, defaultValue bool) bool {
 	return defaultValue
 }
 
+// IsProduction reports whether the current process is running with production
+// runtime settings.
+func IsProduction() bool {
+	for _, key := range []string{"NODE_ENV", "GO_ENV", "BUILD_ENV"} {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+		case "production", "prod":
+			return true
+		}
+	}
+	return false
+}
+
 // GetLogLevel gets the log level from environment
 func GetLogLevel() logrus.Level {
 	switch os.Getenv("LOG_LEVEL") {

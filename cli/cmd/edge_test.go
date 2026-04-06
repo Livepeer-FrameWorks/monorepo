@@ -6,6 +6,56 @@ import (
 	"frameworks/cli/pkg/inventory"
 )
 
+func TestDeriveEdgeNodeName(t *testing.T) {
+	tests := []struct {
+		name       string
+		nodeName   string
+		nodeDomain string
+		sshTarget  string
+		isLocal    bool
+		want       string
+	}{
+		{name: "explicit node name", nodeName: "edge-eu-1", want: "edge-eu-1"},
+		{name: "from domain", nodeDomain: "edge-eu-1.example.com", want: "edge-eu-1"},
+		{name: "from ssh fqdn with port", sshTarget: "ubuntu@edge-eu-1.example.com:2222", want: "edge-eu-1.example.com"},
+		{name: "from ssh bare host", sshTarget: "ubuntu@edge-eu-1", want: "edge-eu-1"},
+		{name: "ip target returns empty", sshTarget: "ubuntu@203.0.113.10", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deriveEdgeNodeName(tt.nodeName, tt.nodeDomain, tt.sshTarget, tt.isLocal)
+			if got != tt.want {
+				t.Fatalf("deriveEdgeNodeName(%q, %q, %q, %v) = %q, want %q",
+					tt.nodeName, tt.nodeDomain, tt.sshTarget, tt.isLocal, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalEdgeNodeID(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "preserve readable id", input: "edge-eu-1", want: "edge-eu-1"},
+		{name: "strip fqdn", input: "edge-eu-1.example.com", want: "edge-eu-1"},
+		{name: "normalize case and underscores", input: "EDGE_EU_1", want: "edge-eu-1"},
+		{name: "reject invalid ipish", input: "203.0.113.10", want: ""},
+		{name: "reject empty", input: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := canonicalEdgeNodeID(tt.input)
+			if got != tt.want {
+				t.Fatalf("canonicalEdgeNodeID(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEdgeManifestChannelNotVersion(t *testing.T) {
 	// Verify that manifest.Version (schema version) is never used as a release
 	// version. Only manifest.Channel should be used for release resolution.

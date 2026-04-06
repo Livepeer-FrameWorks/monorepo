@@ -1,0 +1,616 @@
+package provisioner
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+
+	"frameworks/cli/pkg/detect"
+	"frameworks/cli/pkg/gitops"
+	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/ssh"
+)
+
+const (
+	defaultVictoriaMetricsImage = "victoriametrics/victoria-metrics:v1.122.0"
+	defaultVMAgentImage         = "victoriametrics/vmagent:v1.122.0"
+	defaultGrafanaImage         = "grafana/grafana:12.2.0"
+)
+
+type VictoriaMetricsProvisioner struct {
+	*BaseProvisioner
+}
+
+func NewVictoriaMetricsProvisioner(pool *ssh.Pool) *VictoriaMetricsProvisioner {
+	return &VictoriaMetricsProvisioner{BaseProvisioner: NewBaseProvisioner("victoriametrics", pool)}
+}
+
+func (p *VictoriaMetricsProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
+	return p.CheckExists(ctx, host, "victoriametrics")
+}
+
+func (p *VictoriaMetricsProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if config.Mode == "" {
+		config.Mode = "docker"
+	}
+	if config.Mode != "docker" {
+		return fmt.Errorf("victoriametrics only supports docker mode")
+	}
+
+	state, err := p.Detect(ctx, host)
+	if err != nil {
+		state = nil
+	}
+
+	image, err := resolveObservabilityImage(config.Version, config.Image, "victoriametrics", defaultVictoriaMetricsImage)
+	if err != nil {
+		return err
+	}
+	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
+		fmt.Printf("Service %s already running (%s), skipping...\n", p.GetName(), reason)
+		return nil
+	}
+
+	if err := p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/victoriametrics /etc/frameworks /var/lib/frameworks/victoriametrics"); err != nil {
+		return err
+	}
+	if err := writeProvisionerEnvFile(ctx, p.BaseProvisioner, host, "/etc/frameworks/victoriametrics.env", config.EnvVars); err != nil {
+		return err
+	}
+
+	passwordPath := ""
+	if password := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_PASSWORD"]); password != "" {
+		passwordPath = "/etc/frameworks/victoriametrics.password"
+		if err := uploadContent(ctx, p.BaseProvisioner, host, passwordPath, password+"\n", 0o600); err != nil {
+			return err
+		}
+	}
+
+	retention := config.EnvVars["VM_RETENTION_PERIOD"]
+	if retention == "" {
+		retention = "30d"
+	}
+
+	command := []string{
+		"--storageDataPath=/storage",
+		"--httpListenAddr=:8428",
+		"--retentionPeriod=" + retention,
+	}
+	if username := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_USERNAME"]); username != "" && passwordPath != "" {
+		command = append(command,
+			"--httpAuth.username="+username,
+			"--httpAuth.password=file://"+passwordPath,
+		)
+	}
+
+	volumes := []string{
+		"/var/lib/frameworks/victoriametrics:/storage",
+	}
+	if passwordPath != "" {
+		volumes = append(volumes, passwordPath+":"+passwordPath+":ro")
+	}
+
+	compose := buildCustomCompose("victoriametrics", image, customComposeOptions{
+		Ports:   []string{fmt.Sprintf("%d:8428", resolvedServicePort(config, 8428))},
+		Volumes: volumes,
+		Network: "frameworks",
+		Command: command,
+	})
+
+	if err := deployCustomCompose(ctx, p.BaseProvisioner, host, "victoriametrics", compose, config.DeferStart); err != nil {
+		return err
+	}
+	if config.DeferStart {
+		fmt.Println("⏸ victoriametrics deployed but NOT started (missing required config)")
+		return nil
+	}
+	fmt.Println("✓ victoriametrics provisioned in Docker mode")
+	return nil
+}
+
+func (p *VictoriaMetricsProvisioner) Validate(ctx context.Context, host inventory.Host, _ ServiceConfig) error {
+	return validateRunningContainer(ctx, p.BaseProvisioner, host, "victoriametrics")
+}
+
+func (p *VictoriaMetricsProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	return nil
+}
+
+type VMAgentProvisioner struct {
+	*BaseProvisioner
+}
+
+func NewVMAgentProvisioner(pool *ssh.Pool) *VMAgentProvisioner {
+	return &VMAgentProvisioner{BaseProvisioner: NewBaseProvisioner("vmagent", pool)}
+}
+
+func (p *VMAgentProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
+	return p.CheckExists(ctx, host, "vmagent")
+}
+
+func (p *VMAgentProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if config.Mode == "" {
+		config.Mode = "docker"
+	}
+	if config.Mode != "docker" {
+		return fmt.Errorf("vmagent only supports docker mode")
+	}
+
+	state, err := p.Detect(ctx, host)
+	if err != nil {
+		state = nil
+	}
+
+	image, err := resolveObservabilityImage(config.Version, config.Image, "vmagent", defaultVMAgentImage)
+	if err != nil {
+		return err
+	}
+	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
+		fmt.Printf("Service %s already running (%s), skipping...\n", p.GetName(), reason)
+		return nil
+	}
+
+	if err := p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/vmagent /etc/frameworks"); err != nil {
+		return err
+	}
+	if err := writeProvisionerEnvFile(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmagent.env", config.EnvVars); err != nil {
+		return err
+	}
+
+	scrapeConfig, err := buildVMAgentScrapeConfig(config.Metadata["scrape_targets"], config.EnvVars["VMAGENT_SCRAPE_INTERVAL"])
+	if err != nil {
+		return err
+	}
+	if err := uploadContent(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmagent.yml", scrapeConfig, 0o644); err != nil {
+		return err
+	}
+
+	passwordPath := ""
+	if password := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"]); password != "" {
+		passwordPath = "/etc/frameworks/vmagent.password"
+		if err := uploadContent(ctx, p.BaseProvisioner, host, passwordPath, password+"\n", 0o600); err != nil {
+			return err
+		}
+	}
+
+	remoteWriteURL := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_URL"])
+	if remoteWriteURL == "" {
+		return fmt.Errorf("vmagent requires VMAGENT_REMOTE_WRITE_URL")
+	}
+	command := []string{
+		"--httpListenAddr=:8429",
+		"--promscrape.config=/etc/frameworks/vmagent.yml",
+		"--remoteWrite.url=" + remoteWriteURL,
+	}
+	if username := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"]); username != "" && passwordPath != "" {
+		command = append(command,
+			"--remoteWrite.basicAuth.username="+username,
+			"--remoteWrite.basicAuth.password=file://"+passwordPath,
+		)
+	}
+
+	volumes := []string{
+		"/etc/frameworks/vmagent.yml:/etc/frameworks/vmagent.yml:ro",
+	}
+	if passwordPath != "" {
+		volumes = append(volumes, passwordPath+":"+passwordPath+":ro")
+	}
+
+	compose := buildCustomCompose("vmagent", image, customComposeOptions{
+		HostNetwork: true,
+		Volumes:     volumes,
+		Command:     command,
+	})
+
+	if err := deployCustomCompose(ctx, p.BaseProvisioner, host, "vmagent", compose, config.DeferStart); err != nil {
+		return err
+	}
+	if config.DeferStart {
+		fmt.Println("⏸ vmagent deployed but NOT started (missing required config)")
+		return nil
+	}
+	fmt.Println("✓ vmagent provisioned in Docker mode")
+	return nil
+}
+
+func (p *VMAgentProvisioner) Validate(ctx context.Context, host inventory.Host, _ ServiceConfig) error {
+	return validateRunningContainer(ctx, p.BaseProvisioner, host, "vmagent")
+}
+
+func (p *VMAgentProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	return nil
+}
+
+type GrafanaProvisioner struct {
+	*BaseProvisioner
+}
+
+func NewGrafanaProvisioner(pool *ssh.Pool) *GrafanaProvisioner {
+	return &GrafanaProvisioner{BaseProvisioner: NewBaseProvisioner("grafana", pool)}
+}
+
+func (p *GrafanaProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
+	return p.CheckExists(ctx, host, "grafana")
+}
+
+func (p *GrafanaProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if config.Mode == "" {
+		config.Mode = "docker"
+	}
+	if config.Mode != "docker" {
+		return fmt.Errorf("grafana only supports docker mode")
+	}
+
+	state, err := p.Detect(ctx, host)
+	if err != nil {
+		state = nil
+	}
+
+	image, err := resolveObservabilityImage(config.Version, config.Image, "grafana", defaultGrafanaImage)
+	if err != nil {
+		return err
+	}
+	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
+		fmt.Printf("Service %s already running (%s), skipping...\n", p.GetName(), reason)
+		return nil
+	}
+
+	if err := p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/grafana/provisioning/datasources /etc/frameworks /var/lib/frameworks/grafana"); err != nil {
+		return err
+	}
+	if err := writeProvisionerEnvFile(ctx, p.BaseProvisioner, host, "/etc/frameworks/grafana.env", config.EnvVars); err != nil {
+		return err
+	}
+
+	if datasourceURL := strings.TrimSpace(config.EnvVars["VICTORIAMETRICS_URL"]); datasourceURL != "" {
+		ds := buildGrafanaDatasource(datasourceURL, config.EnvVars["VM_HTTP_AUTH_USERNAME"], config.EnvVars["VM_HTTP_AUTH_PASSWORD"])
+		if err := uploadContent(ctx, p.BaseProvisioner, host, "/opt/frameworks/grafana/provisioning/datasources/frameworks.yaml", ds, 0o644); err != nil {
+			return err
+		}
+	}
+
+	compose := buildCustomCompose("grafana", image, customComposeOptions{
+		Ports: []string{fmt.Sprintf("%d:3000", resolvedServicePort(config, 3000))},
+		Volumes: []string{
+			"/var/lib/frameworks/grafana:/var/lib/grafana",
+			"/opt/frameworks/grafana/provisioning:/etc/grafana/provisioning",
+		},
+		Network: "frameworks",
+		EnvFile: "/etc/frameworks/grafana.env",
+	})
+
+	if err := deployCustomCompose(ctx, p.BaseProvisioner, host, "grafana", compose, config.DeferStart); err != nil {
+		return err
+	}
+	if config.DeferStart {
+		fmt.Println("⏸ grafana deployed but NOT started (missing required config)")
+		return nil
+	}
+	fmt.Println("✓ grafana provisioned in Docker mode")
+	return nil
+}
+
+func (p *GrafanaProvisioner) Validate(ctx context.Context, host inventory.Host, _ ServiceConfig) error {
+	return validateRunningContainer(ctx, p.BaseProvisioner, host, "grafana")
+}
+
+func (p *GrafanaProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	return nil
+}
+
+type customComposeOptions struct {
+	Ports       []string
+	Volumes     []string
+	Network     string
+	EnvFile     string
+	Command     []string
+	HostNetwork bool
+}
+
+func buildCustomCompose(serviceName, image string, opts customComposeOptions) string {
+	var b strings.Builder
+	b.WriteString("version: '3.8'\n\nservices:\n")
+	b.WriteString(fmt.Sprintf("  %s:\n", serviceName))
+	b.WriteString(fmt.Sprintf("    image: %s\n", image))
+	b.WriteString(fmt.Sprintf("    container_name: frameworks-%s\n", serviceName))
+	b.WriteString("    restart: always\n")
+	if opts.HostNetwork {
+		b.WriteString("    network_mode: host\n")
+	}
+	if len(opts.Ports) > 0 {
+		b.WriteString("    ports:\n")
+		for _, port := range opts.Ports {
+			b.WriteString(fmt.Sprintf("      - %s\n", yamlQuote(port)))
+		}
+	}
+	if opts.EnvFile != "" {
+		b.WriteString("    env_file:\n")
+		b.WriteString(fmt.Sprintf("      - %s\n", opts.EnvFile))
+	}
+	if len(opts.Command) > 0 {
+		b.WriteString("    command:\n")
+		for _, arg := range opts.Command {
+			b.WriteString(fmt.Sprintf("      - %s\n", yamlQuote(arg)))
+		}
+	}
+	if len(opts.Volumes) > 0 {
+		b.WriteString("    volumes:\n")
+		for _, volume := range opts.Volumes {
+			b.WriteString(fmt.Sprintf("      - %s\n", yamlQuote(volume)))
+		}
+	}
+	if opts.Network != "" && !opts.HostNetwork {
+		b.WriteString("    networks:\n")
+		b.WriteString(fmt.Sprintf("      - %s\n", opts.Network))
+		b.WriteString("\nnetworks:\n")
+		b.WriteString(fmt.Sprintf("  %s:\n", opts.Network))
+		b.WriteString("    driver: bridge\n")
+	}
+	return b.String()
+}
+
+func deployCustomCompose(ctx context.Context, base *BaseProvisioner, host inventory.Host, serviceName, compose string, deferStart bool) error {
+	remoteDir := filepath.Join("/opt/frameworks", serviceName)
+	if err := base.RunRemoteCommand(ctx, host, "mkdir -p "+remoteDir); err != nil {
+		return err
+	}
+	if err := uploadContent(ctx, base, host, filepath.Join(remoteDir, "docker-compose.yml"), compose, 0o644); err != nil {
+		return err
+	}
+
+	commands := []string{
+		fmt.Sprintf("cd %s && docker compose pull", remoteDir),
+	}
+	if !deferStart {
+		commands = append(commands, fmt.Sprintf("cd %s && docker compose up -d", remoteDir))
+	}
+	for _, command := range commands {
+		if err := base.RunRemoteCommand(ctx, host, command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeProvisionerEnvFile(ctx context.Context, base *BaseProvisioner, host inventory.Host, remotePath string, envVars map[string]string) error {
+	if len(envVars) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(envVars))
+	for key := range envVars {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", key, envVars[key]))
+	}
+
+	return uploadContent(ctx, base, host, remotePath, strings.Join(lines, "\n")+"\n", 0o600)
+}
+
+func buildVMAgentScrapeConfig(raw interface{}, interval string) (string, error) {
+	targets, ok := raw.([]map[string]interface{})
+	if !ok || len(targets) == 0 {
+		return "", fmt.Errorf("vmagent requires scrape_targets metadata")
+	}
+	if strings.TrimSpace(interval) == "" {
+		interval = "30s"
+	}
+
+	var b strings.Builder
+	b.WriteString("global:\n")
+	b.WriteString(fmt.Sprintf("  scrape_interval: %s\n", yamlBare(interval)))
+	b.WriteString("scrape_configs:\n")
+	for _, target := range targets {
+		jobName, _ := target["job_name"].(string)
+		targetList, _ := target["targets"].([]string)
+		path, _ := target["path"].(string)
+		labels, _ := target["labels"].(map[string]string)
+		if jobName == "" || len(targetList) == 0 {
+			continue
+		}
+		if path == "" {
+			path = "/metrics"
+		}
+		b.WriteString(fmt.Sprintf("  - job_name: %s\n", yamlBare(jobName)))
+		b.WriteString(fmt.Sprintf("    metrics_path: %s\n", yamlBare(path)))
+		b.WriteString("    static_configs:\n")
+		b.WriteString("      - targets:\n")
+		for _, targetAddr := range targetList {
+			b.WriteString(fmt.Sprintf("          - %s\n", yamlQuote(targetAddr)))
+		}
+		if len(labels) > 0 {
+			labelKeys := make([]string, 0, len(labels))
+			for key := range labels {
+				labelKeys = append(labelKeys, key)
+			}
+			sort.Strings(labelKeys)
+			b.WriteString("        labels:\n")
+			for _, key := range labelKeys {
+				b.WriteString(fmt.Sprintf("          %s: %s\n", key, yamlQuote(labels[key])))
+			}
+		}
+	}
+	return b.String(), nil
+}
+
+func buildGrafanaDatasource(url, username, password string) string {
+	var b strings.Builder
+	b.WriteString("apiVersion: 1\n")
+	b.WriteString("datasources:\n")
+	b.WriteString("  - name: VictoriaMetrics\n")
+	b.WriteString("    type: prometheus\n")
+	b.WriteString("    access: proxy\n")
+	b.WriteString(fmt.Sprintf("    url: %s\n", yamlQuote(url)))
+	b.WriteString("    isDefault: true\n")
+	b.WriteString("    editable: false\n")
+	b.WriteString("    jsonData:\n")
+	b.WriteString("      httpMethod: POST\n")
+	if username != "" && password != "" {
+		b.WriteString("    basicAuth: true\n")
+		b.WriteString(fmt.Sprintf("    basicAuthUser: %s\n", yamlQuote(username)))
+		b.WriteString("    secureJsonData:\n")
+		b.WriteString(fmt.Sprintf("      basicAuthPassword: %s\n", yamlQuote(password)))
+	}
+	return b.String()
+}
+
+func resolveObservabilityImage(version, explicitImage, serviceName, fallback string) (string, error) {
+	if strings.TrimSpace(explicitImage) != "" {
+		return explicitImage, nil
+	}
+
+	info, err := resolveObservabilityServiceInfo(version, serviceName)
+	if err == nil && info != nil && strings.TrimSpace(info.FullImage) != "" {
+		return info.FullImage, nil
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return fallback, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("no image available for %s", serviceName)
+}
+
+func resolveVMAgentBinaryURL(version, osName, arch string) (string, error) {
+	info, err := resolveObservabilityServiceInfo(version, "vmagent")
+	if err == nil && info != nil {
+		if binaryURL, binaryErr := info.GetBinaryURL(osName, arch); binaryErr == nil && strings.TrimSpace(binaryURL) != "" {
+			return binaryURL, nil
+		}
+		if fallback := fallbackVMAgentBinaryURL(info.Version, osName, arch); fallback != "" {
+			return fallback, nil
+		}
+	}
+
+	if fallback := fallbackVMAgentBinaryURL(imageVersion(defaultVMAgentImage), osName, arch); fallback != "" {
+		return fallback, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("vmagent binary URL not available for %s/%s", osName, arch)
+}
+
+func resolveObservabilityServiceInfo(version, serviceName string) (*gitops.ServiceInfo, error) {
+	channel, resolvedVersion := gitops.ResolveVersion(version)
+	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gitops fetcher: %w", err)
+	}
+
+	manifest, err := fetcher.Fetch(channel, resolvedVersion)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch gitops manifest: %w", err)
+	}
+
+	info, err := manifest.GetServiceInfo(serviceName)
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func fallbackVMAgentBinaryURL(version, osName, arch string) string {
+	normalized := normalizeVictoriaMetricsVersion(version)
+	if normalized == "" || osName == "" || arch == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/%[1]s/vmutils-%[2]s-%[3]s-%[1]s.tar.gz",
+		normalized,
+		osName,
+		arch,
+	)
+}
+
+func normalizeVictoriaMetricsVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return ""
+	}
+	if !strings.HasPrefix(version, "v") {
+		return "v" + version
+	}
+	return version
+}
+
+func imageVersion(image string) string {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return ""
+	}
+	idx := strings.LastIndex(image, ":")
+	if idx == -1 || idx < strings.LastIndex(image, "/") {
+		return ""
+	}
+	return image[idx+1:]
+}
+
+func validateRunningContainer(ctx context.Context, base *BaseProvisioner, host inventory.Host, serviceName string) error {
+	state, err := base.CheckExists(ctx, host, serviceName)
+	if err != nil {
+		return err
+	}
+	if state == nil || !state.Exists || !state.Running {
+		return fmt.Errorf("%s is not running", serviceName)
+	}
+	return nil
+}
+
+func uploadContent(ctx context.Context, base *BaseProvisioner, host inventory.Host, remotePath, content string, mode os.FileMode) error {
+	tmpFile, err := os.CreateTemp("", "frameworks-provisioner-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.WriteString(content); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := base.RunRemoteCommand(ctx, host, "mkdir -p "+filepath.Dir(remotePath)); err != nil {
+		return err
+	}
+	return base.UploadFile(ctx, host, ssh.UploadOptions{
+		LocalPath:  tmpFile.Name(),
+		RemotePath: remotePath,
+		Mode:       uint32(mode),
+	})
+}
+
+func (b *BaseProvisioner) RunRemoteCommand(ctx context.Context, host inventory.Host, command string) error {
+	result, err := b.RunCommand(ctx, host, command)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("command failed: %s", strings.TrimSpace(result.Stderr))
+	}
+	return nil
+}
+
+func resolvedServicePort(config ServiceConfig, fallback int) int {
+	if config.Port != 0 {
+		return config.Port
+	}
+	return fallback
+}
+
+func yamlQuote(value string) string {
+	return strconv.Quote(value)
+}
+
+func yamlBare(value string) string {
+	return strings.Trim(strconv.Quote(value), `"`)
+}

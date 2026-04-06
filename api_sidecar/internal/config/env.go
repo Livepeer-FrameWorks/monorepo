@@ -27,7 +27,6 @@ type HelmsmanConfig struct {
 
 	// MistServer connection
 	MistServerURL   string
-	MistPassword    string // Prometheus scrape auth
 	MistAPIUsername string
 	MistAPIPassword string
 
@@ -87,7 +86,6 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 
 		// MistServer (required for health checks)
 		MistServerURL:   config.RequireEnv("MISTSERVER_URL"),
-		MistPassword:    config.GetEnv("MIST_PASSWORD", ""),
 		MistAPIUsername: config.GetEnv("MIST_API_USERNAME", ""),
 		MistAPIPassword: config.GetEnv("MIST_API_PASSWORD", ""),
 

@@ -71,6 +71,10 @@ func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Hos
 		return fmt.Errorf("privateer did not become ready: %w", err)
 	}
 
+	if err := p.waitForInitialPKISync(ctx, host, config); err != nil {
+		return fmt.Errorf("privateer initial PKI sync did not complete: %w", err)
+	}
+
 	dnsPort := parseDNSPort(config.Metadata["dns_port"])
 
 	// 5. Configure Host DNS after Privateer is ready.
@@ -156,11 +160,20 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 		token, _ = config.Metadata["enrollment_token"].(string)
 	}
 	serviceToken, _ := config.Metadata["service_token"].(string)
+	certIssueToken, _ := config.Metadata["cert_issue_token"].(string)
 	nodeType, _ := config.Metadata["mesh_node_type"].(string)
 	if nodeType == "" {
 		nodeType = infra.NodeTypeCore
 	}
 	nodeName, _ := config.Metadata["mesh_node_name"].(string)
+	navigatorGRPCAddr := config.EnvVars["NAVIGATOR_GRPC_ADDR"]
+	grpcAllowInsecure := config.EnvVars["GRPC_ALLOW_INSECURE"]
+	if grpcAllowInsecure == "" {
+		grpcAllowInsecure = "true"
+	}
+	nodeEnv := config.EnvVars["NODE_ENV"]
+	buildEnv := config.EnvVars["BUILD_ENV"]
+	expectedServices := metadataStringSlice(config.Metadata["expected_internal_grpc_services"])
 
 	dnsPort := strconv.Itoa(parseDNSPort(config.Metadata["dns_port"]))
 
@@ -175,18 +188,28 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 	nodeID, _ := config.Metadata["node_id"].(string) //nolint:errcheck // type assertion, not error
 
 	envContent := fmt.Sprintf(`QUARTERMASTER_GRPC_ADDR=%s
+NAVIGATOR_GRPC_ADDR=%s
 SERVICE_TOKEN=%s
 ENROLLMENT_TOKEN=%s
+CERT_ISSUANCE_TOKEN=%s
 DNS_PORT=%s
 MESH_INTERFACE=wg0
 MESH_NODE_TYPE=%s
 MESH_NODE_NAME=%s
 MESH_EXTERNAL_IP=%s
 NODE_ID=%s
-`, qmGRPCAddr, serviceToken, token, dnsPort, nodeType, nodeName, host.ExternalIP, nodeID)
+GRPC_TLS_PKI_DIR=/etc/frameworks/pki
+GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
+GRPC_ALLOW_INSECURE=%s
+NODE_ENV=%s
+BUILD_ENV=%s
+`, qmGRPCAddr, navigatorGRPCAddr, serviceToken, token, certIssueToken, dnsPort, nodeType, nodeName, host.ExternalIP, nodeID, grpcAllowInsecure, nodeEnv, buildEnv)
 
 	if upstreamDNS != "" {
 		envContent += fmt.Sprintf("UPSTREAM_DNS=%s\n", upstreamDNS)
+	}
+	if len(expectedServices) > 0 {
+		envContent += fmt.Sprintf("EXPECTED_INTERNAL_GRPC_SERVICES=%s\n", strings.Join(expectedServices, ","))
 	}
 
 	// Upload Env File
@@ -247,6 +270,61 @@ func parseDNSPort(raw any) int {
 	}
 
 	return port
+}
+
+func (p *PrivateerProvisioner) waitForInitialPKISync(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	certIssueToken, _ := config.Metadata["cert_issue_token"].(string)
+	if strings.TrimSpace(certIssueToken) == "" {
+		return nil
+	}
+
+	paths := initialPKIPaths()
+
+	script := "#!/bin/bash\nset -e\npaths=(\n"
+	for _, path := range paths {
+		script += fmt.Sprintf("  %q\n", path)
+	}
+	script += ")\nfor _ in $(seq 1 60); do\n  ready=1\n  for path in \"${paths[@]}\"; do\n    if [ ! -s \"$path\" ]; then\n      ready=0\n      break\n    fi\n  done\n  if [ \"$ready\" -eq 1 ]; then\n    exit 0\n  fi\n  sleep 2\n done\nprintf 'timed out waiting for initial PKI files\\n' >&2\nexit 1\n"
+
+	result, err := p.ExecuteScript(ctx, host, script)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("%s", strings.TrimSpace(result.Stderr))
+	}
+	return nil
+}
+
+func initialPKIPaths() []string {
+	return []string{"/etc/frameworks/pki/ca.crt"}
+}
+
+func metadataStringSlice(raw interface{}) []string {
+	switch values := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				out = append(out, value)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if str, ok := value.(string); ok {
+				str = strings.TrimSpace(str)
+				if str != "" {
+					out = append(out, str)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func (p *PrivateerProvisioner) configureDNS(ctx context.Context, host inventory.Host, port int) error {

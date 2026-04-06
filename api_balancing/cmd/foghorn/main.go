@@ -276,6 +276,8 @@ func main() {
 	decklogConfig := decklog.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
 		AllowInsecure: allowInsecure,
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       10 * time.Second,
 		Source:        "foghorn",
 		ServiceToken:  serviceToken,
@@ -308,6 +310,7 @@ func main() {
 	if qmClient != nil {
 		defer func() { _ = qmClient.Close() }()
 	}
+	control.SetQuartermasterClient(qmClient)
 
 	// Commodore (gRPC)
 	commodoreGRPCURL := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
@@ -876,6 +879,7 @@ func reconnectQuartermaster(
 		clients.setQuartermaster(true, nil)
 		statusGauge.WithLabelValues("quartermaster").Set(1)
 		reconnects.WithLabelValues("quartermaster", "success").Inc()
+		control.SetQuartermasterClient(client)
 		handlers.SetQuartermasterClient(client)
 		if triggerProcessor != nil {
 			triggerProcessor.SetQuartermasterClient(client)

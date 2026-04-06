@@ -50,3 +50,28 @@ CREATE TABLE IF NOT EXISTS navigator.tls_bundles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tls_bundles_expires_at ON navigator.tls_bundles(expires_at);
+
+CREATE TABLE IF NOT EXISTS navigator.internal_ca (
+    role TEXT PRIMARY KEY,
+    cert_pem TEXT NOT NULL,
+    key_pem TEXT,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT chk_internal_ca_role CHECK (role IN ('root_cert_only', 'intermediate'))
+);
+
+CREATE TABLE IF NOT EXISTS navigator.internal_certificates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    node_id TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    service_type TEXT NOT NULL,
+    cert_pem TEXT NOT NULL,
+    key_pem TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uq_internal_certificates_node_service UNIQUE (node_id, service_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_internal_certificates_expires_at ON navigator.internal_certificates(expires_at);

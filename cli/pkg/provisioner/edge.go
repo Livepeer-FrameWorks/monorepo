@@ -20,6 +20,7 @@ import (
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/pkg/mist"
 )
 
 // DarwinDomain selects the launchd domain for macOS service management.
@@ -59,6 +60,10 @@ type EdgeProvisionConfig struct {
 	NodeID          string // From PreRegisterEdge
 	CertPEM         string // Pre-staged wildcard cert
 	KeyPEM          string
+	CABundlePEM     string
+	TelemetryURL    string
+	TelemetryUser   string
+	TelemetryPass   string
 
 	// Step toggles
 	SkipPreflight bool
@@ -93,6 +98,19 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 		return "docker"
 	}
 	return c.Mode
+}
+
+func (c *EdgeProvisionConfig) helmsmanCAPath(remoteOS string) string {
+	if strings.TrimSpace(c.CABundlePEM) == "" {
+		return ""
+	}
+	if c.resolvedMode() == "docker" {
+		return "/etc/frameworks/pki/ca.crt"
+	}
+	if remoteOS == "darwin" {
+		return filepath.Join(darwinPaths(c.DarwinDomain).confDir, "pki", "ca.crt")
+	}
+	return "/etc/frameworks/pki/ca.crt"
 }
 
 // parseUnameOutput parses "uname -sm" output (e.g. "Linux x86_64") into Go-style
@@ -401,6 +419,40 @@ func (e *EdgeProvisioner) stageCertificatesAt(ctx context.Context, host inventor
 	return nil
 }
 
+func (e *EdgeProvisioner) stageCABundleAt(ctx context.Context, host inventory.Host, caBundlePEM, caPath string) error {
+	if strings.TrimSpace(caBundlePEM) == "" || strings.TrimSpace(caPath) == "" {
+		return nil
+	}
+	if _, err := e.RunSudoCommand(ctx, host, "mkdir -p "+filepath.Dir(caPath)); err != nil {
+		return fmt.Errorf("failed to create CA bundle directory: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp("", "edge-ca-*.crt")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err = tmpFile.WriteString(caBundlePEM); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	if err = tmpFile.Close(); err != nil {
+		return err
+	}
+
+	if err = e.uploadFileWithSudo(ctx, host, ssh.UploadOptions{
+		LocalPath:  tmpFile.Name(),
+		RemotePath: caPath,
+		Mode:       0o644,
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("  gRPC CA bundle staged at %s\n", caPath)
+	return nil
+}
+
 // installDocker generates edge templates, uploads them, and runs docker compose up.
 func (e *EdgeProvisioner) installDocker(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	vars := e.buildEdgeVars(config, "linux") // Docker containers are always Linux
@@ -423,6 +475,9 @@ func (e *EdgeProvisioner) installDocker(ctx context.Context, host inventory.Host
 	remoteDir := "/opt/frameworks/edge"
 	if _, err = e.RunSudoCommand(ctx, host, "mkdir -p "+remoteDir); err != nil {
 		return fmt.Errorf("failed to create remote directory: %w", err)
+	}
+	if err = e.stageCABundleAt(ctx, host, config.CABundlePEM, remoteDir+"/pki/ca.crt"); err != nil {
+		return fmt.Errorf("failed to stage gRPC CA bundle: %w", err)
 	}
 
 	// Upload each template file
@@ -460,7 +515,283 @@ func (e *EdgeProvisioner) installDocker(ctx context.Context, host inventory.Host
 	}
 
 	fmt.Println("  edge stack started (caddy, mistserver, helmsman)")
+	if strings.TrimSpace(config.TelemetryURL) != "" {
+		if err := e.installEdgeTelemetryDocker(ctx, host, config); err != nil {
+			return fmt.Errorf("failed to install edge telemetry agent: %w", err)
+		}
+		fmt.Println("  edge telemetry agent started (vmagent)")
+	}
 	return nil
+}
+
+func (e *EdgeProvisioner) installEdgeTelemetryDocker(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
+	if _, err := e.RunSudoCommand(ctx, host, "mkdir -p /etc/frameworks"); err != nil {
+		return err
+	}
+
+	scrapeConfig, err := buildEdgeTelemetryScrapeConfig("docker", config.NodeID)
+	if err != nil {
+		return err
+	}
+	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.yml", scrapeConfig, 0o644); err != nil {
+		return err
+	}
+	image, err := resolveObservabilityImage(config.Version, "", "vmagent", defaultVMAgentImage)
+	if err != nil {
+		return err
+	}
+	networkName, err := e.edgeTelemetryDockerNetwork(ctx, host)
+	if err != nil {
+		return err
+	}
+
+	cmdParts := []string{
+		"docker rm -f frameworks-edge-vmagent >/dev/null 2>&1 || true",
+	}
+	if strings.TrimSpace(config.TelemetryPass) != "" {
+		if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.password", config.TelemetryPass+"\n", 0o600); err != nil {
+			return err
+		}
+	}
+
+	runArgs := []string{
+		fmt.Sprintf("docker run -d --name frameworks-edge-vmagent --restart unless-stopped --network %s", networkName),
+		"-v /etc/frameworks/vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro",
+	}
+	if strings.TrimSpace(config.TelemetryPass) != "" {
+		runArgs = append(runArgs, "-v /etc/frameworks/vmagent-edge.password:/etc/frameworks/vmagent-edge.password:ro")
+	}
+	runArgs = append(runArgs,
+		image,
+		fmt.Sprintf("-promscrape.config=%s", "/etc/frameworks/vmagent-edge.yml"),
+		"-httpListenAddr=:8430",
+		fmt.Sprintf("-remoteWrite.url=%s", config.TelemetryURL),
+	)
+	if strings.TrimSpace(config.TelemetryUser) != "" && strings.TrimSpace(config.TelemetryPass) != "" {
+		runArgs = append(runArgs,
+			fmt.Sprintf("-remoteWrite.basicAuth.username=%s", config.TelemetryUser),
+			"-remoteWrite.basicAuth.password=file:///etc/frameworks/vmagent-edge.password",
+		)
+	}
+	cmdParts = append(cmdParts, strings.Join(runArgs, " "))
+
+	result, err := e.RunSudoCommand(ctx, host, strings.Join(cmdParts, " && "))
+	if err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return fmt.Errorf("edge vmagent startup failed: %w (%s)", err, stderr)
+	}
+	return nil
+}
+
+func buildEdgeTelemetryScrapeConfig(mode, nodeID string) (string, error) {
+	mistTarget := "127.0.0.1:8080"
+	helmsmanTarget := "127.0.0.1:18007"
+	if mode == "docker" {
+		mistTarget = "mistserver:8080"
+		helmsmanTarget = "helmsman:18007"
+	}
+
+	return buildVMAgentScrapeConfig([]map[string]interface{}{
+		{
+			"job_name": "edge-mist",
+			"targets":  []string{mistTarget},
+			"path":     mist.MetricsPath,
+			"labels": map[string]string{
+				"frameworks_mode":    "edge",
+				"frameworks_node":    nodeID,
+				"frameworks_service": "mistserver",
+			},
+		},
+		{
+			"job_name": "edge-helmsman",
+			"targets":  []string{helmsmanTarget},
+			"path":     "/metrics",
+			"labels": map[string]string{
+				"frameworks_mode":    "edge",
+				"frameworks_node":    nodeID,
+				"frameworks_service": "helmsman",
+			},
+		},
+	}, "30s")
+}
+
+func (e *EdgeProvisioner) edgeTelemetryDockerNetwork(ctx context.Context, host inventory.Host) (string, error) {
+	result, err := e.RunSudoCommand(ctx, host, "docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' helmsman 2>/dev/null | head -n 1")
+	if err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return "", fmt.Errorf("failed to detect edge docker network: %w (%s)", err, stderr)
+	}
+	networkName := strings.TrimSpace(result.Stdout)
+	if networkName == "" {
+		return "", fmt.Errorf("failed to detect edge docker network: helmsman has no attached networks")
+	}
+	return networkName, nil
+}
+
+func (e *EdgeProvisioner) installEdgeTelemetryLinux(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, remoteArch string) error {
+	if _, err := e.RunSudoCommand(ctx, host, "mkdir -p /etc/frameworks /opt/frameworks/vmagent-edge /var/log/frameworks"); err != nil {
+		return err
+	}
+
+	scrapeConfig, err := buildEdgeTelemetryScrapeConfig("native", config.NodeID)
+	if err != nil {
+		return err
+	}
+	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.yml", scrapeConfig, 0o644); err != nil {
+		return err
+	}
+	if _, err := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/vmagent-edge.yml"); err != nil {
+		return err
+	}
+
+	passwordArg := ""
+	if strings.TrimSpace(config.TelemetryPass) != "" {
+		if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.password", config.TelemetryPass+"\n", 0o600); err != nil {
+			return err
+		}
+		if _, err := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/vmagent-edge.password"); err != nil {
+			return err
+		}
+		passwordArg = " -remoteWrite.basicAuth.password=file:///etc/frameworks/vmagent-edge.password"
+	}
+
+	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "linux", remoteArch)
+	if err != nil {
+		return err
+	}
+	installScript := fmt.Sprintf(`#!/bin/bash
+set -e
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir" /tmp/vmagent-edge.tar.gz' EXIT
+wget -q -O /tmp/vmagent-edge.tar.gz "%s"
+tar -xzf /tmp/vmagent-edge.tar.gz -C "$tmpdir"
+bin=$(find "$tmpdir" -type f \( -name vmagent-prod -o -name vmagent \) | head -n 1)
+test -n "$bin"
+install -m 0755 "$bin" /opt/frameworks/vmagent-edge/vmagent
+chown -R frameworks:frameworks /opt/frameworks/vmagent-edge /var/log/frameworks
+`, binaryURL)
+	if result, err := e.ExecuteSudoScript(ctx, host, installScript); err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return fmt.Errorf("vmagent install failed: %w (%s)", err, stderr)
+	}
+
+	execStart := fmt.Sprintf(
+		"/opt/frameworks/vmagent-edge/vmagent -httpListenAddr=:8430 -promscrape.config=/etc/frameworks/vmagent-edge.yml -remoteWrite.url=%s",
+		config.TelemetryURL,
+	)
+	if strings.TrimSpace(config.TelemetryUser) != "" && strings.TrimSpace(config.TelemetryPass) != "" {
+		execStart += fmt.Sprintf(" -remoteWrite.basicAuth.username=%s%s", config.TelemetryUser, passwordArg)
+	}
+
+	return e.uploadSystemdUnit(ctx, host, SystemdUnitData{
+		ServiceName: "frameworks-vmagent-edge",
+		Description: "FrameWorks vmagent (edge telemetry)",
+		WorkingDir:  "/opt/frameworks/vmagent-edge",
+		ExecStart:   execStart,
+		User:        "frameworks",
+		After:       []string{"network-online", "frameworks-mistserver", "frameworks-helmsman"},
+		LimitNOFILE: "1048576",
+	})
+}
+
+func (e *EdgeProvisioner) installEdgeTelemetryDarwin(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader, remoteArch string) error {
+	scrapeConfig, err := buildEdgeTelemetryScrapeConfig("native", config.NodeID)
+	if err != nil {
+		return err
+	}
+	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/vmagent-edge.yml", scrapeConfig, 0o644); err != nil {
+		return err
+	}
+
+	passwordPath := ""
+	if strings.TrimSpace(config.TelemetryPass) != "" {
+		passwordPath = dirs.confDir + "/vmagent-edge.password"
+		if err := e.writeRemoteFile(ctx, host, passwordPath, config.TelemetryPass+"\n", 0o600); err != nil {
+			return err
+		}
+	}
+
+	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "darwin", remoteArch)
+	if err != nil {
+		return err
+	}
+	installScript := fmt.Sprintf(`#!/bin/bash
+set -e
+mkdir -p %[1]s/vmagent-edge %[2]s
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir" /tmp/vmagent-edge.tar.gz' EXIT
+curl -sSfL -o /tmp/vmagent-edge.tar.gz "%[3]s"
+tar -xzf /tmp/vmagent-edge.tar.gz -C "$tmpdir"
+bin=$(find "$tmpdir" -type f \( -name vmagent-prod -o -name vmagent \) | head -n 1)
+test -n "$bin"
+install -m 0755 "$bin" %[1]s/vmagent-edge/vmagent
+`, dirs.baseDir, dirs.logDir, binaryURL)
+	if result, err := runScript(installScript); err != nil || result.ExitCode != 0 {
+		stderr := ""
+		if result != nil {
+			stderr = result.Stderr
+		}
+		return fmt.Errorf("vmagent install failed: %w (%s)", err, stderr)
+	}
+
+	args := []string{
+		"-httpListenAddr=:8430",
+		"-promscrape.config=" + dirs.confDir + "/vmagent-edge.yml",
+		"-remoteWrite.url=" + config.TelemetryURL,
+	}
+	if strings.TrimSpace(config.TelemetryUser) != "" && passwordPath != "" {
+		args = append(args,
+			"-remoteWrite.basicAuth.username="+config.TelemetryUser,
+			"-remoteWrite.basicAuth.password=file://"+passwordPath,
+		)
+	}
+
+	return e.uploadLaunchdPlistTo(ctx, host, dirs, LaunchdPlistData{
+		Label:       "com.livepeer.frameworks.vmagent-edge",
+		Description: "FrameWorks vmagent (edge telemetry)",
+		Program:     dirs.baseDir + "/vmagent-edge/vmagent",
+		ProgramArgs: args,
+		WorkingDir:  dirs.baseDir + "/vmagent-edge",
+		RunAtLoad:   true,
+		KeepAlive:   true,
+		LogPath:     dirs.logDir + "/com.livepeer.frameworks.vmagent-edge.log",
+		ErrorPath:   dirs.logDir + "/com.livepeer.frameworks.vmagent-edge.err",
+	})
+}
+
+func linuxTelemetryEnableSuffix(config EdgeProvisionConfig) string {
+	if strings.TrimSpace(config.TelemetryURL) == "" {
+		return ""
+	}
+	return " frameworks-vmagent-edge"
+}
+
+func linuxTelemetryStartCommands(config EdgeProvisionConfig) string {
+	if strings.TrimSpace(config.TelemetryURL) == "" {
+		return ""
+	}
+	return "systemctl start frameworks-vmagent-edge\nsleep 1"
+}
+
+func darwinTelemetryBootstrapCommand(plistDir string, config EdgeProvisionConfig, isUser bool) string {
+	if strings.TrimSpace(config.TelemetryURL) == "" {
+		return ""
+	}
+	if isUser {
+		return fmt.Sprintf(`launchctl bootstrap "gui/${uid}" %s/com.livepeer.frameworks.vmagent-edge.plist 2>/dev/null || launchctl kickstart "gui/${uid}/com.livepeer.frameworks.vmagent-edge"
+sleep 1`, plistDir)
+	}
+	return fmt.Sprintf(`launchctl bootstrap system %s/com.livepeer.frameworks.vmagent-edge.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.vmagent-edge
+sleep 1`, plistDir)
 }
 
 // installNative installs MistServer, Helmsman, and Caddy as systemd services.
@@ -564,10 +895,32 @@ func (e *EdgeProvisioner) installNativeDarwin(ctx context.Context, host inventor
 	fmt.Println("  creating macOS directories...")
 	mkdirScript := fmt.Sprintf(`#!/bin/bash
 set -e
-mkdir -p %s/mistserver %s/helmsman %s/caddy %s %s/certs %s
-`, dirs.baseDir, dirs.baseDir, dirs.baseDir, dirs.logDir, dirs.confDir, dirs.confDir)
+mkdir -p %s/mistserver %s/helmsman %s/caddy %s %s/certs %s %s/pki
+`, dirs.baseDir, dirs.baseDir, dirs.baseDir, dirs.logDir, dirs.confDir, dirs.confDir, dirs.confDir)
 	if _, err := runScript(mkdirScript); err != nil {
 		return fmt.Errorf("failed to create directories: %w", err)
+	}
+	if caPath := config.helmsmanCAPath(remoteOS); strings.TrimSpace(config.CABundlePEM) != "" && caPath != "" {
+		tmpFile, tmpErr := os.CreateTemp("", "edge-ca-*.crt")
+		if tmpErr != nil {
+			return tmpErr
+		}
+		defer os.Remove(tmpFile.Name())
+		if _, tmpErr = tmpFile.WriteString(config.CABundlePEM); tmpErr != nil {
+			tmpFile.Close()
+			return tmpErr
+		}
+		if tmpErr = tmpFile.Close(); tmpErr != nil {
+			return tmpErr
+		}
+		if err := uploadFile(ssh.UploadOptions{
+			LocalPath:  tmpFile.Name(),
+			RemotePath: caPath,
+			Mode:       0o644,
+		}); err != nil {
+			return fmt.Errorf("failed to stage gRPC CA bundle: %w", err)
+		}
+		fmt.Printf("  gRPC CA bundle staged at %s\n", caPath)
 	}
 
 	// Ensure plist directory exists (~/Library/LaunchAgents may not exist)
@@ -595,6 +948,13 @@ mkdir -p %s/mistserver %s/helmsman %s/caddy %s %s/certs %s
 	fmt.Println("  installing Caddy...")
 	if err = e.installDarwinCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch, dirs, runScript, uploadFile); err != nil {
 		return fmt.Errorf("caddy install failed: %w", err)
+	}
+
+	if strings.TrimSpace(config.TelemetryURL) != "" {
+		fmt.Println("  installing edge telemetry agent...")
+		if err = e.installEdgeTelemetryDarwin(ctx, host, config, dirs, runScript, uploadFile, remoteArch); err != nil {
+			return fmt.Errorf("edge telemetry install failed: %w", err)
+		}
 	}
 
 	// (e) Write .edge.env
@@ -631,9 +991,10 @@ launchctl bootstrap "gui/${uid}" %[1]s/com.livepeer.frameworks.mistserver.plist 
 sleep 2
 launchctl bootstrap "gui/${uid}" %[1]s/com.livepeer.frameworks.helmsman.plist 2>/dev/null || launchctl kickstart "gui/${uid}/com.livepeer.frameworks.helmsman"
 sleep 1
+%[2]s
 launchctl bootstrap "gui/${uid}" %[1]s/com.livepeer.frameworks.caddy.plist 2>/dev/null || launchctl kickstart "gui/${uid}/com.livepeer.frameworks.caddy"
 echo "all services started (user domain)"
-`, dirs.plistDir)
+`, dirs.plistDir, darwinTelemetryBootstrapCommand(dirs.plistDir, config, true))
 	} else {
 		startScript = fmt.Sprintf(`#!/bin/bash
 set -e
@@ -641,9 +1002,10 @@ launchctl bootstrap system %[1]s/com.livepeer.frameworks.mistserver.plist 2>/dev
 sleep 2
 launchctl bootstrap system %[1]s/com.livepeer.frameworks.helmsman.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.helmsman
 sleep 1
+%[2]s
 launchctl bootstrap system %[1]s/com.livepeer.frameworks.caddy.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.caddy
 echo "all services started (system domain)"
-`, dirs.plistDir)
+`, dirs.plistDir, darwinTelemetryBootstrapCommand(dirs.plistDir, config, false))
 	}
 	result, err := runScript(startScript)
 	if err != nil || result.ExitCode != 0 {
@@ -693,7 +1055,7 @@ echo "MistServer installed"
 		return "", fmt.Errorf("install script failed: %w (%s)", err, stderr)
 	}
 
-	envContent := fmt.Sprintf("# MistServer environment\nMIST_DEBUG=3\nMIST_PASSWORD=%s\n", mistPass)
+	envContent := "# MistServer environment\nMIST_DEBUG=3\n"
 	if err = e.writeRemoteFile(ctx, host, dirs.confDir+"/mistserver.env", envContent, 0644); err != nil {
 		return "", err
 	}
@@ -761,7 +1123,9 @@ echo "Helmsman installed"
 		"CADDY_ADMIN_URL=http://localhost:2019",
 		fmt.Sprintf("MIST_API_USERNAME=%s", "frameworks"),
 		fmt.Sprintf("MIST_API_PASSWORD=%s", mistPass),
-		fmt.Sprintf("MIST_PASSWORD=%s", mistPass),
+	}
+	if vars.GRPCTLSCAPath != "" {
+		envLines = append(envLines, fmt.Sprintf("GRPC_TLS_CA_PATH=%s", vars.GRPCTLSCAPath))
 	}
 	envContent := strings.Join(envLines, "\n") + "\n"
 	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/helmsman.env", envContent, 0644); err != nil {
@@ -872,6 +1236,7 @@ shell=/usr/bin/nologin
 getent group frameworks >/dev/null || groupadd --system frameworks
 id -u frameworks >/dev/null 2>&1 || useradd -r -g frameworks -s "$shell" frameworks
 mkdir -p /opt/frameworks/mistserver /opt/frameworks/helmsman /etc/frameworks /var/log/frameworks
+mkdir -p /etc/frameworks/pki
 chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsman /etc/frameworks /var/log/frameworks
 `
 	if result, err := e.ExecuteSudoScript(ctx, host, userScript); err != nil || result.ExitCode != 0 {
@@ -880,6 +1245,9 @@ chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsm
 			stderr = result.Stderr
 		}
 		return fmt.Errorf("failed to create frameworks user: %w (%s)", err, stderr)
+	}
+	if err := e.stageCABundleAt(ctx, host, config.CABundlePEM, config.helmsmanCAPath(remoteOS)); err != nil {
+		return fmt.Errorf("failed to stage gRPC CA bundle: %w", err)
 	}
 
 	// (a) MistServer
@@ -899,6 +1267,13 @@ chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsm
 	fmt.Println("  installing Caddy...")
 	if err = e.installNativeCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch); err != nil {
 		return fmt.Errorf("caddy install failed: %w", err)
+	}
+
+	if strings.TrimSpace(config.TelemetryURL) != "" {
+		fmt.Println("  installing edge telemetry agent...")
+		if err = e.installEdgeTelemetryLinux(ctx, host, config, remoteArch); err != nil {
+			return fmt.Errorf("edge telemetry install failed: %w", err)
+		}
 	}
 
 	// (d) Write .edge.env for mode detection by status/update/cert/logs commands
@@ -925,17 +1300,18 @@ chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsm
 
 	// (e) Start all services in order
 	fmt.Println("  starting services...")
-	startScript := `#!/bin/bash
+	startScript := fmt.Sprintf(`#!/bin/bash
 set -e
 systemctl daemon-reload
-systemctl enable frameworks-mistserver frameworks-helmsman frameworks-caddy
+systemctl enable frameworks-mistserver frameworks-helmsman frameworks-caddy%s
 systemctl start frameworks-mistserver
 sleep 2
 systemctl start frameworks-helmsman
-sleep 1
-systemctl start frameworks-caddy
-echo "all services started"
-`
+	sleep 1
+	%s
+	systemctl start frameworks-caddy
+	echo "all services started"
+	`, linuxTelemetryEnableSuffix(config), linuxTelemetryStartCommands(config))
 	result, err := e.ExecuteSudoScript(ctx, host, startScript)
 	if err != nil || result.ExitCode != 0 {
 		stderr := ""
@@ -982,7 +1358,7 @@ echo "MistServer installed"
 		return "", fmt.Errorf("install script failed: %w (%s)", err, stderr)
 	}
 
-	envContent := fmt.Sprintf("# MistServer environment\nMIST_DEBUG=3\nMIST_PASSWORD=%s\n", mistPass)
+	envContent := "# MistServer environment\nMIST_DEBUG=3\n"
 	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/mistserver.env", envContent, 0644); err != nil {
 		return "", err
 	}
@@ -1052,7 +1428,9 @@ echo "Helmsman installed"
 		"CADDY_ADMIN_URL=http://localhost:2019",
 		fmt.Sprintf("MIST_API_USERNAME=%s", "frameworks"),
 		fmt.Sprintf("MIST_API_PASSWORD=%s", mistPass),
-		fmt.Sprintf("MIST_PASSWORD=%s", mistPass),
+	}
+	if vars.GRPCTLSCAPath != "" {
+		envLines = append(envLines, fmt.Sprintf("GRPC_TLS_CA_PATH=%s", vars.GRPCTLSCAPath))
 	}
 	envContent := strings.Join(envLines, "\n") + "\n"
 	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/helmsman.env", envContent, 0644); err != nil {
@@ -1284,7 +1662,11 @@ func (e *EdgeProvisioner) buildEdgeVars(config EdgeProvisionConfig, remoteOS str
 		FoghornHTTPBase: config.FoghornHTTPBase,
 		FoghornGRPCAddr: config.FoghornGRPCAddr,
 		EnrollmentToken: config.EnrollmentToken,
+		GRPCTLSCAPath:   config.helmsmanCAPath(remoteOS),
 		Mode:            config.resolvedMode(),
+		TelemetryURL:    config.TelemetryURL,
+		TelemetryUser:   config.TelemetryUser,
+		TelemetryPass:   config.TelemetryPass,
 	}
 	// Bootstrap Caddyfile: no wildcard site address needed.
 	// Helmsman renders the production Caddyfile after enrollment via ConfigSeed.

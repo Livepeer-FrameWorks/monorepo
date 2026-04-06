@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -62,6 +63,31 @@ func categorizeEnrollmentError(err error) bool {
 	default:
 		return false
 	}
+}
+
+var edgeIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
+
+func normalizePreferredEdgeNodeID(raw string) string {
+	candidate := strings.ToLower(strings.TrimSpace(raw))
+	if candidate == "" {
+		return ""
+	}
+	if idx := strings.Index(candidate, "."); idx > 0 {
+		candidate = candidate[:idx]
+	}
+	candidate = pkgdns.SanitizeLabel(candidate)
+	if !edgeIdentityPattern.MatchString(candidate) {
+		return ""
+	}
+	return candidate
+}
+
+func edgeNodeRecordLabel(nodeID string) string {
+	label := pkgdns.SanitizeLabel(nodeID)
+	if strings.HasPrefix(label, "edge-") {
+		return label
+	}
+	return "edge-" + label
 }
 
 func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID, peerAddr, token, targetClusterID string, servedClusterIDs []string) *pb.BootstrapEdgeNodeRequest {
@@ -135,6 +161,8 @@ var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var localClusterID string
 var servedClusters atomic.Pointer[sync.Map]
+var chandlerBaseMu sync.RWMutex
+var resolvedChandlerBaseURL string
 
 func init() {
 	servedClusters.Store(&sync.Map{})
@@ -162,6 +190,7 @@ func (h *serverCertHolder) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificat
 // In production this calls quartermasterClient.ValidateBootstrapToken.
 var validateBootstrapTokenFn func(ctx context.Context, token string) (*pb.ValidateBootstrapTokenResponse, error)
 var getNodeOwnerFn func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error)
+var getClusterFn func(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error)
 var geoipCache *cache.Cache
 var decklogClient *decklog.BatchedClient
 var dvrStopRegistry DVRStopRegistry
@@ -504,6 +533,7 @@ func GetDB() *sql.DB {
 func SetLocalClusterID(id string) {
 	localClusterID = id
 	servedClusters.Load().Store(id, true)
+	clearResolvedChandlerBaseURL()
 }
 
 // GetLocalClusterID returns the primary cluster ID for this Foghorn instance.
@@ -597,7 +627,10 @@ func SetClipHashResolver(resolver func(string) (string, string, error)) {
 }
 
 // SetQuartermasterClient sets the Quartermaster client for edge enrollment and lookups
-func SetQuartermasterClient(c *qmclient.GRPCClient) { quartermasterClient = c }
+func SetQuartermasterClient(c *qmclient.GRPCClient) {
+	quartermasterClient = c
+	clearResolvedChandlerBaseURL()
+}
 
 func init() {
 	getNodeOwnerFn = func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
@@ -606,6 +639,66 @@ func init() {
 		}
 		return quartermasterClient.GetNodeOwner(ctx, nodeID)
 	}
+	getClusterFn = func(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+		if quartermasterClient == nil {
+			return nil, status.Error(codes.Unavailable, "quartermaster unavailable")
+		}
+		resp, err := quartermasterClient.GetCluster(ctx, clusterID)
+		if err != nil {
+			return nil, err
+		}
+		return resp.GetCluster(), nil
+	}
+}
+
+func clearResolvedChandlerBaseURL() {
+	chandlerBaseMu.Lock()
+	resolvedChandlerBaseURL = ""
+	chandlerBaseMu.Unlock()
+}
+
+func cachedChandlerBaseURL() string {
+	chandlerBaseMu.RLock()
+	defer chandlerBaseMu.RUnlock()
+	return resolvedChandlerBaseURL
+}
+
+func cacheChandlerBaseURL(value string) {
+	chandlerBaseMu.Lock()
+	resolvedChandlerBaseURL = value
+	chandlerBaseMu.Unlock()
+}
+
+func resolvePlatformChandlerBaseURL() string {
+	clusterID := strings.TrimSpace(localClusterID)
+	if clusterID == "" || getClusterFn == nil {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cluster, err := getClusterFn(ctx, clusterID)
+	if err != nil || cluster == nil {
+		return ""
+	}
+
+	baseDomain := strings.TrimSpace(cluster.GetBaseUrl())
+	if baseDomain == "" {
+		return ""
+	}
+
+	clusterSlug := pkgdns.ClusterSlug(clusterID, cluster.GetClusterName())
+	if clusterSlug == "" {
+		return ""
+	}
+
+	fqdn, ok := pkgdns.ServiceFQDN("chandler", clusterSlug+"."+baseDomain)
+	if !ok || fqdn == "" {
+		return ""
+	}
+
+	return "https://" + fqdn
 }
 
 func reconcileNodeCluster(ctx context.Context, canonicalNodeID, clusterID string, logger logging.Logger) string {
@@ -1435,10 +1528,16 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 	keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
 
 	if certFile != "" && keyFile != "" {
-		tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+		tlsCfg := grpcutil.ServerTLSConfig{
 			CertFile: certFile,
 			KeyFile:  keyFile,
-		}, cfg.Logger)
+		}
+		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+			return nil, fmt.Errorf("timed out waiting for file-based gRPC TLS: %w", err)
+		}
+		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to configure file-based TLS: %w", err)
 		}
@@ -2426,7 +2525,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 
 		siteConfig = &pb.SiteConfig{
 			SiteAddress: fmt.Sprintf("*.%s.%s", slug, rootDomain),
-			EdgeDomain:  fmt.Sprintf("edge-%s.%s.%s", nodeID, slug, rootDomain),
+			EdgeDomain:  fmt.Sprintf("%s.%s.%s", edgeNodeRecordLabel(nodeID), slug, rootDomain),
 			PoolDomain:  fmt.Sprintf("edge.%s.%s", slug, rootDomain),
 			AcmeEmail:   os.Getenv("ACME_EMAIL"),
 		}
@@ -2447,6 +2546,8 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		}
 	}
 
+	caBundle := readConfiguredCABundle()
+
 	return &pb.ConfigSeed{
 		NodeId:          nodeID,
 		Latitude:        lat,
@@ -2456,6 +2557,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		OperationalMode: operationalMode,
 		Tls:             tlsBundle,
 		Site:            siteConfig,
+		CaBundle:        caBundle,
 	}
 }
 
@@ -4375,17 +4477,16 @@ func refreshTLSBundles(log logging.Logger) {
 		return
 	}
 
+	seedCaBundle := readConfiguredCABundle()
+
 	for _, n := range nodes {
-		bundle, found, err := fetchClusterTLSBundle(n.canonicalID)
+		bundle, _, err := fetchClusterTLSBundle(n.canonicalID)
 		if err != nil {
 			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to resolve TLS bundle for node")
 			continue
 		}
 
-		nextState := tlsStateNoCert
-		if found {
-			nextState = tlsBundleState(bundle)
-		}
+		nextState := tlsMaterialState(bundle, seedCaBundle)
 
 		prev, ok := lastPushedTLSState.Load(n.connID)
 		if prevState, isString := prev.(string); ok && isString && prevState == nextState {
@@ -4555,11 +4656,42 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 }
 
 func tlsBundleState(bundle *pb.TLSCertBundle) string {
-	if bundle == nil {
+	return tlsMaterialState(bundle, nil)
+}
+
+func tlsMaterialState(bundle *pb.TLSCertBundle, caBundle []byte) string {
+	if bundle == nil && len(caBundle) == 0 {
 		return tlsStateNoCert
 	}
-	sum := sha256.Sum256([]byte(bundle.GetCertPem() + "\x00" + bundle.GetKeyPem() + "\x00" + bundle.GetDomain() + fmt.Sprintf("\x00%d", bundle.GetExpiresAt())))
+	payload := make([]byte, 0, len(caBundle)+128)
+	if bundle != nil {
+		payload = append(payload, bundle.GetCertPem()...)
+		payload = append(payload, '\x00')
+		payload = append(payload, bundle.GetKeyPem()...)
+		payload = append(payload, '\x00')
+		payload = append(payload, bundle.GetDomain()...)
+		payload = append(payload, []byte(fmt.Sprintf("\x00%d", bundle.GetExpiresAt()))...)
+	}
+	payload = append(payload, '\x00')
+	payload = append(payload, caBundle...)
+	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+func readConfiguredCABundle() []byte {
+	caPath := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH"))
+	if caPath == "" {
+		return nil
+	}
+	caBundle, err := os.ReadFile(caPath)
+	if err != nil {
+		logging.NewLogger().WithError(err).WithField("path", caPath).Warn("Failed to read configured gRPC CA bundle")
+		return nil
+	}
+	if len(caBundle) == 0 {
+		return nil
+	}
+	return caBundle
 }
 
 // ==================== Edge Provisioning (PreRegisterEdge) ====================
@@ -4631,26 +4763,30 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 	}
 	AddServedCluster(clusterID)
 
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	nodeID := hex.EncodeToString(b)
+	nodeID := normalizePreferredEdgeNodeID(req.GetPreferredNodeId())
+	if nodeID == "" {
+		b := make([]byte, 6)
+		_, _ = rand.Read(b)
+		nodeID = hex.EncodeToString(b)
+	}
 
 	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
 	if rootDomain == "" {
 		rootDomain = "frameworks.network"
 	}
 
-	edgeDomain := fmt.Sprintf("edge-%s.%s.%s", nodeID, clusterSlug, rootDomain)
+	edgeDomain := fmt.Sprintf("%s.%s.%s", edgeNodeRecordLabel(nodeID), clusterSlug, rootDomain)
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
 	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18019", clusterSlug, rootDomain)
 
 	resp := &pb.PreRegisterEdgeResponse{
-		NodeId:          nodeID,
-		EdgeDomain:      edgeDomain,
-		PoolDomain:      poolDomain,
-		ClusterSlug:     clusterSlug,
-		ClusterId:       clusterID,
-		FoghornGrpcAddr: foghornAddr,
+		NodeId:           nodeID,
+		EdgeDomain:       edgeDomain,
+		PoolDomain:       poolDomain,
+		ClusterSlug:      clusterSlug,
+		ClusterId:        clusterID,
+		FoghornGrpcAddr:  foghornAddr,
+		InternalCaBundle: readConfiguredCABundle(),
 	}
 
 	return resp, nil
@@ -4858,6 +4994,16 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 // getChandlerBaseURL returns the Chandler base URL from environment.
 func getChandlerBaseURL() string {
 	chandlerBase := strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL"))
+	if chandlerBase != "" {
+		return chandlerBase
+	}
+	if cached := cachedChandlerBaseURL(); cached != "" {
+		return cached
+	}
+	if derived := resolvePlatformChandlerBaseURL(); derived != "" {
+		cacheChandlerBaseURL(derived)
+		return derived
+	}
 	if chandlerBase == "" {
 		chandlerHost := strings.TrimSpace(os.Getenv("CHANDLER_HOST"))
 		chandlerPort := strings.TrimSpace(os.Getenv("CHANDLER_PORT"))

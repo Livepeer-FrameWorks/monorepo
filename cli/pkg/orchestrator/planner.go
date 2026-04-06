@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"frameworks/cli/pkg/inventory"
 	infra "frameworks/pkg/models"
@@ -329,6 +330,21 @@ func EffectivePrivateerHosts(svc inventory.ServiceConfig, hosts map[string]inven
 	return result
 }
 
+// EffectiveVMAgentHosts returns the hosts that should run vmagent.
+// Uses explicit hosts if specified, otherwise all manifest hosts.
+func EffectiveVMAgentHosts(svc inventory.ServiceConfig, hosts map[string]inventory.Host) []string {
+	explicit := resolveHosts(svc)
+	if len(explicit) > 0 {
+		return explicit
+	}
+	var result []string
+	for name := range hosts {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
 // addInterfaceTasks adds interface service provisioning tasks
 func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 	// Interfaces depend on application services
@@ -389,6 +405,9 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 		}
 
 		hosts := resolveHosts(obs)
+		if name == "vmagent" && len(hosts) == 0 {
+			hosts = EffectiveVMAgentHosts(obs, p.manifest.Hosts)
+		}
 		for _, hostName := range hosts {
 			taskName := name
 			if len(hosts) > 1 {

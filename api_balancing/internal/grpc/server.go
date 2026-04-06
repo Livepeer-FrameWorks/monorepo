@@ -391,11 +391,17 @@ func StartGRPCServer(ctx context.Context, addr string, server *FoghornGRPCServer
 	serverOpts := []grpc.ServerOption{
 		grpc.UnaryInterceptor(grpcutil.SanitizeUnaryServerInterceptor()),
 	}
-	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      strings.TrimSpace(os.Getenv("GRPC_TLS_CERT_PATH")),
 		KeyFile:       strings.TrimSpace(os.Getenv("GRPC_TLS_KEY_PATH")),
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
-	}, server.logger)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, server.logger); err != nil {
+		return fmt.Errorf("wait for foghorn gRPC TLS files: %w", err)
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, server.logger)
 	if err != nil {
 		return fmt.Errorf("configure foghorn gRPC TLS: %w", err)
 	}

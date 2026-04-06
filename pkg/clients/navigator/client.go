@@ -147,3 +147,21 @@ func (c *Client) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) 
 	}
 	return resp, nil
 }
+
+// GetCABundle retrieves the internal CA bundle from Navigator.
+func (c *Client) GetCABundle(ctx context.Context, req *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
+	resp, err := c.service.GetCABundle(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ca bundle: %w", err)
+	}
+	return resp, nil
+}
+
+// IssueInternalCert requests an internal certificate for a node-scoped service identity.
+func (c *Client) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
+	resp, err := c.service.IssueInternalCert(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to issue internal certificate: %w", err)
+	}
+	return resp, nil
+}

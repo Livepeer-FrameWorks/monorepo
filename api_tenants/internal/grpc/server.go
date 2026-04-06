@@ -4326,10 +4326,19 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 	}
 	expiresAt := time.Now().Add(duration)
 
+	var metadataJSON interface{} = nil
+	if metadata := req.GetMetadata(); metadata != nil && len(metadata.GetFields()) > 0 {
+		encoded, marshalErr := json.Marshal(metadata.AsMap())
+		if marshalErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid metadata: %v", marshalErr)
+		}
+		metadataJSON = string(encoded)
+	}
+
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.bootstrap_tokens (id, name, token_hash, token_prefix, kind, tenant_id, cluster_id, expected_ip, usage_limit, usage_count, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, NOW())
-	`, tokenID, name, hashBootstrapToken(tokenValue), tokenPrefix(tokenValue), kind, req.TenantId, req.ClusterId, req.ExpectedIp, req.UsageLimit, expiresAt)
+		INSERT INTO quartermaster.bootstrap_tokens (id, name, token_hash, token_prefix, kind, tenant_id, cluster_id, expected_ip, metadata, usage_limit, usage_count, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::jsonb, '{}'::jsonb), $10, 0, $11, NOW())
+	`, tokenID, name, hashBootstrapToken(tokenValue), tokenPrefix(tokenValue), kind, req.TenantId, req.ClusterId, req.ExpectedIp, metadataJSON, req.UsageLimit, expiresAt)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
@@ -4344,6 +4353,7 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 			TenantId:   req.TenantId,
 			ClusterId:  req.ClusterId,
 			ExpectedIp: req.ExpectedIp,
+			Metadata:   req.GetMetadata(),
 			UsageLimit: req.UsageLimit,
 			UsageCount: 0,
 			ExpiresAt:  timestamppb.New(expiresAt),
@@ -4508,12 +4518,13 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	var usageLimit sql.NullInt32
 	var usageCount int32
 	var usedAt sql.NullTime
+	var metadataJSON []byte
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at
+		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at, COALESCE(metadata, '{}'::jsonb)
 		FROM quartermaster.bootstrap_tokens
 		WHERE token_hash = $1
-	`, hashBootstrapToken(token)).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt)
+	`, hashBootstrapToken(token)).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt, &metadataJSON)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateBootstrapTokenResponse{Valid: false, Reason: "not_found"}, nil
@@ -4576,6 +4587,12 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	}
 	if clusterID.Valid {
 		resp.ClusterId = clusterID.String
+	}
+	if len(metadataJSON) > 0 {
+		var metadataMap map[string]interface{}
+		if json.Unmarshal(metadataJSON, &metadataMap) == nil && len(metadataMap) > 0 {
+			resp.Metadata = mapToStruct(metadataMap)
+		}
 	}
 	return resp, nil
 }
@@ -7550,11 +7567,17 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)),
 	}
-	tlsOpt, err := grpcutil.ServerTLS(grpcutil.ServerTLSConfig{
+	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,
 		KeyFile:       cfg.KeyFile,
 		AllowInsecure: cfg.AllowInsecure,
-	}, cfg.Logger)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+		cfg.Logger.WithError(err).Fatal("Timed out waiting for Quartermaster gRPC TLS files")
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 	if err != nil {
 		cfg.Logger.WithError(err).Fatal("Failed to configure Quartermaster gRPC TLS")
 	}

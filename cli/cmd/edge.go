@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ import (
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/clients/navigator"
 	"frameworks/pkg/clients/quartermaster"
+	pkgdns "frameworks/pkg/dns"
 	infra "frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
 	"github.com/google/uuid"
@@ -37,6 +40,8 @@ const (
 	minDiskFreePercent = 10.0
 	darwinLogDir       = "/usr/local/var/log/frameworks"
 )
+
+var edgeNodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
 
 func newEdgeCmd() *cobra.Command {
 	edge := &cobra.Command{
@@ -166,6 +171,9 @@ func newEdgeInitCmd() *cobra.Command {
 	var foghornAddr string
 	var overwrite bool
 	var initMode string
+	var telemetryURL string
+	var telemetryUser string
+	var telemetryPass string
 	cmd := &cobra.Command{Use: "init", Short: ".edge.env + templates (compose, Caddyfile)", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, _, err := fwcfg.Load()
 		if err != nil {
@@ -180,6 +188,7 @@ func newEdgeInitCmd() *cobra.Command {
 		// call Foghorn to get an assigned domain.
 		var preRegNodeID string
 		var preRegFoghornAddr string
+		var preRegCABundle string
 		if enrollmentToken != "" && domain == "" {
 			addr := foghornAddr
 			if addr == "" {
@@ -189,15 +198,24 @@ func newEdgeInitCmd() *cobra.Command {
 				return fmt.Errorf("--foghorn-addr is required when using --enrollment-token without --domain")
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
-			resp, preRegErr := preRegisterEdgeLocal(cmd.Context(), addr, enrollmentToken)
+			resp, preRegErr := preRegisterEdgeLocal(cmd.Context(), addr, enrollmentToken, deriveEdgeNodeName("", "", "", true))
 			if preRegErr != nil {
 				return fmt.Errorf("pre-registration failed: %w", preRegErr)
 			}
 			domain = resp.GetEdgeDomain()
 			preRegNodeID = resp.GetNodeId()
 			preRegFoghornAddr = resp.GetFoghornGrpcAddr()
+			preRegCABundle = string(resp.GetInternalCaBundle())
 			fmt.Fprintf(cmd.OutOrStdout(), "  Assigned domain: %s\n", domain)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node ID: %s\n", preRegNodeID)
+		}
+		if preRegNodeID == "" {
+			preRegNodeID = canonicalEdgeNodeID(deriveEdgeNodeName("", domain, "", true))
+		}
+		if preRegNodeID == "" {
+			b := make([]byte, 6)
+			_, _ = rand.Read(b)
+			preRegNodeID = hex.EncodeToString(b)
 		}
 
 		foghornGRPC := cliCtx.Endpoints.FoghornGRPCAddr
@@ -212,7 +230,12 @@ func newEdgeInitCmd() *cobra.Command {
 			FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 			FoghornGRPCAddr: foghornGRPC,
 			EnrollmentToken: enrollmentToken,
+			GRPCTLSCAPath:   "/etc/frameworks/pki/ca.crt",
+			CABundlePEM:     preRegCABundle,
 			Mode:            initMode,
+			TelemetryURL:    telemetryURL,
+			TelemetryUser:   telemetryUser,
+			TelemetryPass:   telemetryPass,
 		}
 
 		if err := templates.WriteEdgeTemplates(target, vars, overwrite); err != nil {
@@ -228,6 +251,9 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 	cmd.Flags().StringVar(&initMode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
+	cmd.Flags().StringVar(&telemetryURL, "telemetry-url", "", "VictoriaMetrics remote_write URL for edge telemetry")
+	cmd.Flags().StringVar(&telemetryUser, "telemetry-username", "", "Basic auth username for edge telemetry remote_write")
+	cmd.Flags().StringVar(&telemetryPass, "telemetry-password", "", "Basic auth password for edge telemetry remote_write")
 	return cmd
 }
 
@@ -377,6 +403,9 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var local bool
 	var ageKeyFile string
 	var dryRun bool
+	var telemetryURL string
+	var telemetryUser string
+	var telemetryPass string
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -434,6 +463,7 @@ Multi-node manifest example:
 			// call Foghorn to validate the token and get an assigned domain.
 			var preRegNodeID string
 			var preRegFoghornAddr string
+			var preRegCABundle string
 			if enrollmentToken != "" && nodeDomain == "" && poolDomain == "" {
 				addr := foghornAddr
 				if addr == "" {
@@ -448,7 +478,8 @@ Multi-node manifest example:
 				if isLocal {
 					preRegTarget = "localhost"
 				}
-				preRegResp, preRegErr := preRegisterEdge(cmd.Context(), addr, enrollmentToken, preRegTarget, sshKey)
+				preferredNodeID := deriveEdgeNodeName(nodeName, "", sshTarget, isLocal)
+				preRegResp, preRegErr := preRegisterEdge(cmd.Context(), addr, enrollmentToken, preRegTarget, sshKey, preferredNodeID)
 				if preRegErr != nil {
 					return fmt.Errorf("pre-registration failed: %w", preRegErr)
 				}
@@ -456,8 +487,9 @@ Multi-node manifest example:
 				poolDomain = preRegResp.GetPoolDomain()
 				preRegNodeID = preRegResp.GetNodeId()
 				preRegFoghornAddr = preRegResp.GetFoghornGrpcAddr()
+				preRegCABundle = string(preRegResp.GetInternalCaBundle())
 				if nodeName == "" {
-					nodeName = "edge-" + preRegNodeID
+					nodeName = preRegNodeID
 				}
 				if clusterID == "" {
 					clusterID = preRegResp.GetClusterId()
@@ -490,22 +522,9 @@ Multi-node manifest example:
 
 			// Default node name from SSH target, domain, or hostname
 			if nodeName == "" {
-				if nodeDomain != "" {
-					nodeName = strings.Split(nodeDomain, ".")[0]
-				} else if isLocal {
-					hostname, _ := os.Hostname()
-					if hostname != "" {
-						nodeName = hostname
-					} else {
-						nodeName = "localhost"
-					}
-				} else {
-					parts := strings.Split(sshTarget, "@")
-					if len(parts) > 1 {
-						nodeName = parts[1]
-					} else {
-						nodeName = sshTarget
-					}
+				nodeName = deriveEdgeNodeName("", nodeDomain, sshTarget, isLocal)
+				if nodeName == "" {
+					nodeName = preRegNodeID
 				}
 			}
 
@@ -568,6 +587,10 @@ Multi-node manifest example:
 				NodeID:          preRegNodeID,
 				CertPEM:         certPEM,
 				KeyPEM:          keyPEM,
+				CABundlePEM:     preRegCABundle,
+				TelemetryURL:    telemetryURL,
+				TelemetryUser:   telemetryUser,
+				TelemetryPass:   telemetryPass,
 				SkipPreflight:   skipPreflight,
 				ApplyTuning:     applyTuning,
 				RegisterNode:    registerNode,
@@ -620,6 +643,9 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Load and validate manifest, show provision plan, but do not execute")
+	cmd.Flags().StringVar(&telemetryURL, "telemetry-url", "", "VictoriaMetrics remote_write URL for edge telemetry")
+	cmd.Flags().StringVar(&telemetryUser, "telemetry-username", "", "Basic auth username for edge telemetry remote_write")
+	cmd.Flags().StringVar(&telemetryPass, "telemetry-password", "", "Basic auth password for edge telemetry remote_write")
 
 	return cmd
 }
@@ -729,7 +755,15 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if cmd.Flags().Changed("version") {
 				nodeVersion = cliVersion
 			}
-			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, token, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion)
+			telemetryURL := ""
+			telemetryUser := ""
+			telemetryPass := ""
+			if manifest.Telemetry != nil {
+				telemetryURL = manifest.Telemetry.RemoteWriteURL
+				telemetryUser = manifest.Telemetry.Username
+				telemetryPass = manifest.Telemetry.Password
+			}
+			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, token, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion, telemetryURL, telemetryUser, telemetryPass)
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -774,7 +808,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 }
 
 // provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version string) error {
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version, telemetryURL, telemetryUser, telemetryPass string) error {
 	primaryDomain := poolDomain
 	if primaryDomain == "" {
 		primaryDomain = nodeDomain
@@ -815,6 +849,10 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 		CertPEM:         certPEM,
 		KeyPEM:          keyPEM,
+		CABundlePEM:     "",
+		TelemetryURL:    telemetryURL,
+		TelemetryUser:   telemetryUser,
+		TelemetryPass:   telemetryPass,
 		SkipPreflight:   false, // Preflight always runs for manifest mode
 		ApplyTuning:     applyTuning,
 		RegisterNode:    registerNode,
@@ -844,11 +882,11 @@ func sshTargetToHost(sshTarget, sshKey string) inventory.Host {
 }
 
 // getRemoteExternalIP detects the external IP of the remote host
-func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken string) (*pb.PreRegisterEdgeResponse, error) {
-	return preRegisterEdge(ctx, foghornAddr, enrollmentToken, "", "")
+func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken, preferredNodeID string) (*pb.PreRegisterEdgeResponse, error) {
+	return preRegisterEdge(ctx, foghornAddr, enrollmentToken, "", "", preferredNodeID)
 }
 
-func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey string) (*pb.PreRegisterEdgeResponse, error) {
+func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID string) (*pb.PreRegisterEdgeResponse, error) {
 	externalIP, _ := getRemoteExternalIP(ctx, sshTarget, sshKey)
 
 	logger := logrus.New()
@@ -867,7 +905,62 @@ func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarge
 	return client.PreRegisterEdge(ctx, &pb.PreRegisterEdgeRequest{
 		EnrollmentToken: enrollmentToken,
 		ExternalIp:      externalIP,
+		PreferredNodeId: preferredNodeID,
 	})
+}
+
+func deriveEdgeNodeName(nodeName, nodeDomain, sshTarget string, isLocal bool) string {
+	if trimmed := strings.TrimSpace(nodeName); trimmed != "" {
+		return trimmed
+	}
+	if host := strings.TrimSpace(nodeDomain); host != "" {
+		if idx := strings.Index(host, "."); idx > 0 {
+			return host[:idx]
+		}
+		return host
+	}
+	if isLocal {
+		hostname, _ := os.Hostname()
+		return strings.TrimSpace(hostname)
+	}
+
+	target := strings.TrimSpace(sshTarget)
+	if target == "" {
+		return ""
+	}
+	if at := strings.LastIndex(target, "@"); at >= 0 {
+		target = target[at+1:]
+	}
+	if host, port, err := net.SplitHostPort(target); err == nil && host != "" && port != "" {
+		target = host
+	}
+	target = strings.Trim(target, "[]")
+	if net.ParseIP(target) != nil {
+		return ""
+	}
+	return target
+}
+
+func canonicalEdgeNodeID(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if net.ParseIP(strings.Trim(trimmed, "[]")) != nil {
+		return ""
+	}
+	candidate := strings.ToLower(trimmed)
+	if idx := strings.Index(candidate, "."); idx > 0 {
+		candidate = candidate[:idx]
+	}
+	candidate = pkgdns.SanitizeLabel(candidate)
+	if candidate == "default" && !strings.EqualFold(trimmed, "default") {
+		return ""
+	}
+	if !edgeNodeIDPattern.MatchString(candidate) {
+		return ""
+	}
+	return candidate
 }
 
 func getRemoteExternalIP(ctx context.Context, sshTarget, sshKey string) (string, error) {
@@ -909,8 +1002,10 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 	}
 	defer qmClient.Close()
 
-	// Generate a node ID
-	nodeID := uuid.New().String()
+	nodeID := canonicalEdgeNodeID(nodeName)
+	if nodeID == "" {
+		nodeID = uuid.New().String()
+	}
 
 	// Create node request
 	req := &pb.CreateNodeRequest{

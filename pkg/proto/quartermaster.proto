@@ -1120,6 +1120,7 @@ message ValidateBootstrapTokenResponse {
   string cluster_id = 3;        // json:"cluster_id,omitempty" — bound cluster if any
   string tenant_id = 4;         // json:"tenant_id,omitempty"
   string reason = 5;            // json:"reason,omitempty" — if invalid: "expired", "revoked", "usage_exceeded", "not_found"
+  google.protobuf.Struct metadata = 6; // json:"metadata,omitempty"
 }
 
 // ============================================================================

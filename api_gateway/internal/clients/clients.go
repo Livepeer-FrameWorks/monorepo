@@ -126,7 +126,9 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	// Initialize Decklog gRPC client (for API usage tracking)
 	decklogClient, err := decklog.NewBatchedClient(decklog.BatchedClientConfig{
 		Target:        config.RequireEnv("DECKLOG_GRPC_ADDR"),
-		AllowInsecure: true, // Internal service communication
+		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		CACertFile:    grpcCACertFile,
+		ServerName:    grpcServerName,
 		Timeout:       cfg.Timeout,
 		Source:        "bridge",
 		ServiceToken:  cfg.ServiceToken,

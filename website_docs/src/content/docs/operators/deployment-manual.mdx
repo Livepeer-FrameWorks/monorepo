@@ -149,12 +149,12 @@ Configure your DNS provider with the following records. Exact steps vary by prov
 
 In multi-cluster deployments, each cluster gets its own set of streaming records under `{cluster_slug}.{base_domain}`. Navigator manages these automatically. For manual setups:
 
-| Type | Name                                    | Content            | Notes                      |
-| ---- | --------------------------------------- | ------------------ | -------------------------- |
-| A    | `edge-ingest.{slug}.your-domain.com`    | Edge node IP(s)    | Cluster-scoped ingest      |
-| A    | `edge.{slug}.your-domain.com`           | Edge node IP(s)    | Cluster-scoped edge pool   |
-| A    | `foghorn.{slug}.your-domain.com`        | Foghorn IP         | Cluster-scoped routing     |
-| A    | `edge-{node_id}.{slug}.your-domain.com` | Individual edge IP | Per-edge direct addressing |
+| Type | Name                                  | Content            | Notes                                                                                 |
+| ---- | ------------------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
+| A    | `edge-ingest.{slug}.your-domain.com`  | Edge node IP(s)    | Cluster-scoped ingest                                                                 |
+| A    | `edge.{slug}.your-domain.com`         | Edge node IP(s)    | Cluster-scoped edge pool                                                              |
+| A    | `foghorn.{slug}.your-domain.com`      | Foghorn IP         | Cluster-scoped routing                                                                |
+| A    | `{node_label}.{slug}.your-domain.com` | Individual edge IP | Per-edge direct addressing (`node_label` is the node ID with a single `edge-` prefix) |
 
 See [DNS Automation](/operators/dns) for details on per-edge A records and wildcard TLS certificates.
 
@@ -683,7 +683,9 @@ QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 # Decklog (local regional)
 
 DECKLOG_GRPC_ADDR=127.0.0.1:18006
-DECKLOG_USE_TLS=false
+DECKLOG_USE_TLS=true
+GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
+GRPC_TLS_SERVER_NAME=decklog.<cluster-slug>.<root-domain>
 
 # GeoIP (MaxMind)
 
@@ -788,11 +790,22 @@ QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 
 SERVICE_EVENTS_KAFKA_TOPIC=service_events
 
-# TLS (production - optional but recommended for edge communication)
+# Internal gRPC TLS (production required)
 
-DECKLOG_ALLOW_INSECURE=true
-DECKLOG_TLS_CERT_FILE=
-DECKLOG_TLS_KEY_FILE=
+DECKLOG_ALLOW_INSECURE=false
+GRPC_TLS_CERT_PATH=/etc/frameworks/pki/services/decklog/tls.crt
+GRPC_TLS_KEY_PATH=/etc/frameworks/pki/services/decklog/tls.key
+GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
+
+# Navigator internal CA import (production required)
+
+# Navigator must receive managed CA material; generated fallback is dev/bootstrap only.
+
+# Prefer base64 PEM env vars in GitOps unless your deploy tooling already places files on disk.
+
+NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64=<base64-root-cert-pem>
+NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64=<base64-intermediate-cert-pem>
+NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64=<base64-intermediate-key-pem>
 
 ````
 </TabItem>
@@ -998,7 +1011,6 @@ SERVICE_TOKEN=<your-service-token>
 
 # MistServer (local)
 MISTSERVER_URL=http://127.0.0.1:4242
-MIST_PASSWORD=<mist-password>
 MIST_API_USERNAME=admin
 MIST_API_PASSWORD=<mist-api-password>
 

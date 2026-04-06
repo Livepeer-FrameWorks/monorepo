@@ -229,7 +229,7 @@ frameworks cluster sync-geoip --source file --file /path/to/GeoLite2-City.mmdb
 frameworks cluster sync-geoip --license-key KEY --services foghorn,quartermaster --restart
 ```
 
-The CLI reads your cluster manifest to find hosts by role, uploads the MMDB via SSH, and optionally restarts the target containers.
+The CLI reads your cluster manifest to find the hosts running the target services, uploads the MMDB via SSH, and optionally restarts those workloads. You can also make GeoIP part of normal cluster provisioning with a `geoip:` block in the manifest so `frameworks cluster provision` stages the MMDB before Foghorn and Quartermaster start.
 
 **Manual Provisioning:**
 

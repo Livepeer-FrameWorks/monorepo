@@ -20,6 +20,8 @@ type EdgeVars struct {
 	FoghornHTTPBase string
 	FoghornGRPCAddr string
 	EnrollmentToken string
+	GRPCTLSCAPath   string
+	CABundlePEM     string
 	// Optional: file-based TLS certificate paths (if using Navigator-issued certs)
 	CertPath string // e.g., /etc/frameworks/certs/cert.pem
 	KeyPath  string // e.g., /etc/frameworks/certs/key.pem
@@ -31,6 +33,9 @@ type EdgeVars struct {
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
 	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
 	ChandlerUpstream string // Docker: "chandler:18020", Native: "localhost:18020"
+	TelemetryURL     string
+	TelemetryUser    string
+	TelemetryPass    string
 }
 
 // SetModeDefaults fills Mode-dependent fields if not explicitly set.
@@ -94,6 +99,15 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 			{"edge/docker-compose.edge.yml.tmpl", "docker-compose.edge.yml"},
 		}, files...)
 	}
+	if strings.TrimSpace(vars.CABundlePEM) != "" {
+		pkiDir := filepath.Join(targetDir, "pki")
+		if err := os.MkdirAll(pkiDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(pkiDir, "ca.crt"), []byte(vars.CABundlePEM), 0o644); err != nil {
+			return err
+		}
+	}
 	for _, f := range files {
 		b, err := edgeFS.ReadFile(f.in)
 		if err != nil {
@@ -106,6 +120,7 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{FOGHORN_HTTP_BASE}}", vars.FoghornHTTPBase)
 		content = strings.ReplaceAll(content, "{{FOGHORN_GRPC_ADDR}}", vars.FoghornGRPCAddr)
 		content = strings.ReplaceAll(content, "{{ENROLLMENT_TOKEN}}", vars.EnrollmentToken)
+		content = strings.ReplaceAll(content, "{{GRPC_TLS_CA_PATH}}", vars.GRPCTLSCAPath)
 		content = strings.ReplaceAll(content, "{{CERT_PATH}}", vars.CertPath)
 		content = strings.ReplaceAll(content, "{{KEY_PATH}}", vars.KeyPath)
 		content = strings.ReplaceAll(content, "{{HELMSMAN_UPSTREAM}}", vars.HelmsmanUpstream)
@@ -115,6 +130,9 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
 		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)
+		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
+		content = strings.ReplaceAll(content, "{{TELEMETRY_USER}}", vars.TelemetryUser)
+		content = strings.ReplaceAll(content, "{{TELEMETRY_PASS}}", vars.TelemetryPass)
 		// TLS directive placeholder (kept for backward compat with any templates that reference it)
 		if vars.CertPath != "" && vars.KeyPath != "" {
 			tlsDirective := fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath)

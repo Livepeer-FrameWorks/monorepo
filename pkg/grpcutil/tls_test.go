@@ -50,6 +50,15 @@ func TestBuildServerTLSConfigAllowsExplicitInsecure(t *testing.T) {
 	}
 }
 
+func TestBuildServerTLSConfigRejectsInsecureInProduction(t *testing.T) {
+	t.Setenv("NODE_ENV", "production")
+
+	_, err := buildServerTLSConfig(ServerTLSConfig{AllowInsecure: true})
+	if err == nil {
+		t.Fatal("expected production insecure server config to fail")
+	}
+}
+
 func TestBuildClientTLSConfigInsecure(t *testing.T) {
 	cfg, insecureAllowed, err := buildClientTLSConfig(ClientTLSConfig{AllowInsecure: true})
 	if err != nil {
@@ -60,6 +69,18 @@ func TestBuildClientTLSConfigInsecure(t *testing.T) {
 	}
 	if cfg != nil {
 		t.Fatal("expected nil tls config in insecure mode")
+	}
+}
+
+func TestBuildClientTLSConfigRejectsInsecureInProduction(t *testing.T) {
+	t.Setenv("NODE_ENV", "production")
+
+	_, insecureAllowed, err := buildClientTLSConfig(ClientTLSConfig{AllowInsecure: true})
+	if err == nil {
+		t.Fatal("expected production insecure client config to fail")
+	}
+	if insecureAllowed {
+		t.Fatal("expected insecureAllowed=false on production error")
 	}
 }
 

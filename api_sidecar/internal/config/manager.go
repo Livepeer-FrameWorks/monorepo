@@ -97,6 +97,10 @@ func (m *Manager) reconcile() {
 		return
 	}
 
+	if len(seed.GetCaBundle()) > 0 {
+		m.applyCABundle(seed.GetCaBundle())
+	}
+
 	certChanged := false
 	if tls := seed.GetTls(); tls != nil {
 		certChanged = m.applyTLSBundle(tls)
@@ -125,10 +129,7 @@ func (m *Manager) reconcile() {
 		}
 	}
 
-	// Prometheus passphrase (from env)
-	if prom := os.Getenv("MIST_PASSWORD"); prom != "" {
-		desiredConfig["prometheus"] = prom
-	}
+	desiredConfig["prometheus"] = mist.MetricsConfigValue
 
 	// Trusted proxies: localhost (IPv4 + IPv6) + "nginx" Docker service name
 	desiredConfig["trustedproxy"] = []string{"127.0.0.1", "::1", "localhost", "nginx"}
@@ -184,6 +185,33 @@ func (m *Manager) reconcile() {
 		m.lastAppliedSum = sum
 		m.mu.Unlock()
 	}
+}
+
+func grpcCABundlePath() string {
+	if path := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH")); path != "" {
+		return path
+	}
+	return "/etc/frameworks/pki/ca.crt"
+}
+
+func (m *Manager) applyCABundle(bundle []byte) bool {
+	caPath := grpcCABundlePath()
+	if len(bundle) == 0 {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(caPath), 0o755); err != nil {
+		m.logger.WithError(err).Warn("Failed to create gRPC CA bundle directory")
+		return false
+	}
+	if existing, err := os.ReadFile(caPath); err == nil && bytes.Equal(existing, bundle) {
+		return false
+	}
+	if err := os.WriteFile(caPath, bundle, 0o600); err != nil {
+		m.logger.WithError(err).Warn("Failed to write gRPC CA bundle")
+		return false
+	}
+	m.logger.WithField("path", caPath).Info("Applied gRPC CA bundle from ConfigSeed")
+	return true
 }
 
 // applyTLSBundle writes cert/key files to disk. Returns true if files were changed.

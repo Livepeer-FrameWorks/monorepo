@@ -216,10 +216,10 @@ frameworks edge provision \
 
 The CLI calls Foghorn's `PreRegisterEdge` RPC, which returns:
 
-- Assigned node ID and edge domain (`edge-{node_id}.{cluster_slug}.{base}`)
+- Assigned node ID and edge domain (`{node_label}.{cluster_slug}.{base}`, where `node_label` is the node ID with a single `edge-` prefix)
 - Pool domain for the cluster
 - Foghorn gRPC address for Helmsman's control stream
-- Wildcard TLS certificate for the cluster
+- Internal CA bundle for initial gRPC trust bootstrap
 
 The `--foghorn-addr` flag (or CLI context) is required — the edge must know Foghorn's address to call PreRegisterEdge. Edge nodes communicate only with Foghorn over the public internet; they do not join the WireGuard mesh.
 
@@ -229,13 +229,13 @@ The `--foghorn-addr` flag (or CLI context) is required — the edge must know Fo
 
 Each cluster gets its own set of DNS records under `{cluster_slug}.{base_domain}`:
 
-| Record                         | Purpose                                  |
-| ------------------------------ | ---------------------------------------- |
-| `edge-ingest.{slug}.{base}`    | RTMP/SRT/WHIP ingest                     |
-| `edge.{slug}.{base}`           | Edge pool (any edge in cluster)          |
-| `foghorn.{slug}.{base}`        | Viewer routing / playback resolution     |
-| `livepeer.{slug}.{base}`       | Livepeer gateway / transcoding endpoint  |
-| `edge-{node_id}.{slug}.{base}` | Per-edge A records for direct addressing |
+| Record                       | Purpose                                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------------------------- |
+| `edge-ingest.{slug}.{base}`  | RTMP/SRT/WHIP ingest                                                                                |
+| `edge.{slug}.{base}`         | Edge pool (any edge in cluster)                                                                     |
+| `foghorn.{slug}.{base}`      | Viewer routing / playback resolution                                                                |
+| `livepeer.{slug}.{base}`     | Livepeer gateway / transcoding endpoint                                                             |
+| `{node_label}.{slug}.{base}` | Per-edge A records for direct addressing (`node_label` is the node ID with a single `edge-` prefix) |
 
 Navigator manages these records automatically. Wildcard TLS certificates (`*.{slug}.{base}`) are issued via ACME DNS-01 and distributed to edges via ConfigSeed.
 

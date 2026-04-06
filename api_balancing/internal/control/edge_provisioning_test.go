@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -72,6 +73,38 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 	}
 	if resp.GetKeyPem() != "" { //nolint:staticcheck // intentionally testing deprecated field is empty
 		t.Errorf("expected empty key_pem, got %d bytes", len(resp.GetKeyPem())) //nolint:staticcheck
+	}
+	if len(resp.GetInternalCaBundle()) != 0 {
+		t.Errorf("expected empty internal_ca_bundle by default, got %d bytes", len(resp.GetInternalCaBundle()))
+	}
+}
+
+func TestPreRegisterEdge_ReturnsConfiguredCABundle(t *testing.T) {
+	t.Setenv("CLUSTER_ID", "us_west_1")
+	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	tmpDir := t.TempDir()
+	caPath := filepath.Join(tmpDir, "ca.crt")
+	want := "-----BEGIN CERTIFICATE-----\nTEST-CA\n-----END CERTIFICATE-----\n"
+	if err := os.WriteFile(caPath, []byte(want), 0o600); err != nil {
+		t.Fatalf("failed to write temp ca bundle: %v", err)
+	}
+	t.Setenv("GRPC_TLS_CA_PATH", caPath)
+
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid:     true,
+		Kind:      "edge_node",
+		ClusterId: "us_west_1",
+	})
+
+	srv := &EdgeProvisioningServer{}
+	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_validtoken",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := string(resp.GetInternalCaBundle()); got != want {
+		t.Fatalf("internal_ca_bundle = %q, want %q", got, want)
 	}
 }
 
@@ -226,6 +259,33 @@ func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 			t.Fatalf("duplicate node_id %q on iteration %d", resp.NodeId, i)
 		}
 		seen[resp.NodeId] = true
+	}
+}
+
+func TestPreRegisterEdge_UsesPreferredNodeIDWithoutDoublePrefix(t *testing.T) {
+	t.Setenv("CLUSTER_ID", "eu_west_1")
+	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid:     true,
+		Kind:      "edge_node",
+		ClusterId: "eu_west_1",
+	})
+
+	srv := &EdgeProvisioningServer{}
+	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_named",
+		PreferredNodeId: "edge-eu-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.NodeId != "edge-eu-1" {
+		t.Fatalf("expected preferred node_id to be preserved, got %q", resp.NodeId)
+	}
+	if resp.EdgeDomain != "edge-eu-1.eu-west-1.example.com" {
+		t.Fatalf("expected non-double-prefixed edge_domain, got %q", resp.EdgeDomain)
 	}
 }
 

@@ -184,6 +184,14 @@ func (m *DNSManager) clusterSlug(cluster *proto.InfrastructureCluster) string {
 	return ClusterSlug(cluster)
 }
 
+func edgeNodeRecordName(nodeID, rootDomain string) string {
+	nodeLabel := SanitizeLabel(nodeID)
+	if strings.HasPrefix(nodeLabel, "edge-") {
+		return fmt.Sprintf("%s.%s", nodeLabel, rootDomain)
+	}
+	return fmt.Sprintf("edge-%s.%s", nodeLabel, rootDomain)
+}
+
 func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType string) (map[string]string, error) {
 	partialErrors := map[string]string{}
 
@@ -293,8 +301,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 			if node.ExternalIp == nil || *node.ExternalIp == "" {
 				continue
 			}
-			nodeLabel := SanitizeLabel(node.GetNodeId())
-			fqdn := fmt.Sprintf("edge-%s.%s", nodeLabel, rootDomain)
+			fqdn := edgeNodeRecordName(node.GetNodeId(), rootDomain)
 			desiredNodeRecords[fqdn] = *node.ExternalIp
 			if err := m.applySingleNodeConfig(ctx, fqdn, *node.ExternalIp, false); err != nil {
 				partialErrors[fqdn] = err.Error()

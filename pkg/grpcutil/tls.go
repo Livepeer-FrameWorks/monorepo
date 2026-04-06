@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 
 	"google.golang.org/grpc"
@@ -66,6 +67,10 @@ func ClientTransportCredentials(cfg ClientTLSConfig, logger logging.Logger) (cre
 }
 
 func buildServerTLSConfig(cfg ServerTLSConfig) (*tls.Config, error) {
+	if cfg.AllowInsecure && config.IsProduction() {
+		return nil, fmt.Errorf("server TLS cannot use AllowInsecure in production")
+	}
+
 	hasCert := cfg.CertFile != ""
 	hasKey := cfg.KeyFile != ""
 	if hasCert != hasKey {
@@ -89,6 +94,10 @@ func buildServerTLSConfig(cfg ServerTLSConfig) (*tls.Config, error) {
 }
 
 func buildClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, bool, error) {
+	if cfg.AllowInsecure && config.IsProduction() {
+		return nil, false, fmt.Errorf("client TLS cannot use AllowInsecure in production")
+	}
+
 	if cfg.AllowInsecure && cfg.CACertFile == "" && cfg.ServerName == "" {
 		return nil, true, nil
 	}

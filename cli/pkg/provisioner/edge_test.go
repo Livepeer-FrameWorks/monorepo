@@ -63,6 +63,7 @@ func TestBuildEdgeVars_Docker(t *testing.T) {
 		EnrollmentToken: "tok-abc",
 		CertPEM:         "-----BEGIN CERTIFICATE-----\nMIIB...\n",
 		KeyPEM:          "-----BEGIN PRIVATE KEY-----\nMIIE...\n",
+		CABundlePEM:     "-----BEGIN CERTIFICATE-----\nCA...\n",
 	}
 
 	vars := ep.buildEdgeVars(config, "linux")
@@ -75,6 +76,9 @@ func TestBuildEdgeVars_Docker(t *testing.T) {
 	}
 	if vars.EdgeDomain != "edge.example.com" {
 		t.Errorf("EdgeDomain = %q, want edge.example.com", vars.EdgeDomain)
+	}
+	if vars.GRPCTLSCAPath != "/etc/frameworks/pki/ca.crt" {
+		t.Errorf("GRPCTLSCAPath = %q, want /etc/frameworks/pki/ca.crt", vars.GRPCTLSCAPath)
 	}
 	// Certs are no longer staged by CLI — delivered via ConfigSeed after enrollment
 	if vars.CertPath != "" || vars.KeyPath != "" {
@@ -115,6 +119,24 @@ func TestBuildEdgeVars_NativeNoCerts(t *testing.T) {
 	}
 	if vars.CertPath != "" || vars.KeyPath != "" {
 		t.Error("CertPath/KeyPath should be empty when no certs provided")
+	}
+}
+
+func TestBuildEdgeVars_DarwinUserCAPATH(t *testing.T) {
+	ep := NewEdgeProvisioner(nil)
+	t.Setenv("HOME", "/Users/tester")
+	config := EdgeProvisionConfig{
+		Mode:         "native",
+		NodeDomain:   "edge-1.example.com",
+		CABundlePEM:  "-----BEGIN CERTIFICATE-----\nCA...\n",
+		DarwinDomain: DomainUser,
+	}
+
+	vars := ep.buildEdgeVars(config, "darwin")
+
+	want := "/Users/tester/.config/frameworks/pki/ca.crt"
+	if vars.GRPCTLSCAPath != want {
+		t.Errorf("GRPCTLSCAPath = %q, want %q", vars.GRPCTLSCAPath, want)
 	}
 }
 
@@ -163,6 +185,14 @@ func TestWriteEdgeTemplates_DockerMode(t *testing.T) {
 	envContent, _ := os.ReadFile(filepath.Join(tmpDir, ".edge.env"))
 	if !strings.Contains(string(envContent), "DEPLOY_MODE=docker") {
 		t.Error(".edge.env should contain DEPLOY_MODE=docker")
+	}
+
+	composeContent, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.edge.yml"))
+	if err != nil {
+		t.Fatalf("failed to read docker-compose.edge.yml: %v", err)
+	}
+	if strings.Contains(string(composeContent), "./pki:/etc/frameworks/pki:ro") {
+		t.Error("docker compose should not mount ./pki read-only; Helmsman updates the CA bundle via ConfigSeed")
 	}
 }
 
