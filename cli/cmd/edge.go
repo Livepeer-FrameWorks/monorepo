@@ -172,8 +172,7 @@ func newEdgeInitCmd() *cobra.Command {
 	var overwrite bool
 	var initMode string
 	var telemetryURL string
-	var telemetryUser string
-	var telemetryPass string
+	var telemetryToken string
 	cmd := &cobra.Command{Use: "init", Short: ".edge.env + templates (compose, Caddyfile)", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, _, err := fwcfg.Load()
 		if err != nil {
@@ -189,23 +188,29 @@ func newEdgeInitCmd() *cobra.Command {
 		var preRegNodeID string
 		var preRegFoghornAddr string
 		var preRegCABundle string
-		if enrollmentToken != "" && domain == "" {
+		if enrollmentToken != "" {
 			addr := foghornAddr
 			if addr == "" {
 				addr = cliCtx.Endpoints.FoghornGRPCAddr
 			}
 			if addr == "" {
-				return fmt.Errorf("--foghorn-addr is required when using --enrollment-token without --domain")
+				return fmt.Errorf("--foghorn-addr is required when using --enrollment-token")
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
 			resp, preRegErr := preRegisterEdgeLocal(cmd.Context(), addr, enrollmentToken, deriveEdgeNodeName("", "", "", true))
 			if preRegErr != nil {
 				return fmt.Errorf("pre-registration failed: %w", preRegErr)
 			}
-			domain = resp.GetEdgeDomain()
+			if domain == "" {
+				domain = resp.GetEdgeDomain()
+			}
 			preRegNodeID = resp.GetNodeId()
 			preRegFoghornAddr = resp.GetFoghornGrpcAddr()
 			preRegCABundle = string(resp.GetInternalCaBundle())
+			if telemetry := resp.GetTelemetry(); telemetry != nil && telemetry.GetEnabled() {
+				telemetryURL = telemetry.GetWriteUrl()
+				telemetryToken = telemetry.GetBearerToken()
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "  Assigned domain: %s\n", domain)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node ID: %s\n", preRegNodeID)
 		}
@@ -234,8 +239,7 @@ func newEdgeInitCmd() *cobra.Command {
 			CABundlePEM:     preRegCABundle,
 			Mode:            initMode,
 			TelemetryURL:    telemetryURL,
-			TelemetryUser:   telemetryUser,
-			TelemetryPass:   telemetryPass,
+			TelemetryToken:  telemetryToken,
 		}
 
 		if err := templates.WriteEdgeTemplates(target, vars, overwrite); err != nil {
@@ -251,9 +255,6 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 	cmd.Flags().StringVar(&initMode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
-	cmd.Flags().StringVar(&telemetryURL, "telemetry-url", "", "VictoriaMetrics remote_write URL for edge telemetry")
-	cmd.Flags().StringVar(&telemetryUser, "telemetry-username", "", "Basic auth username for edge telemetry remote_write")
-	cmd.Flags().StringVar(&telemetryPass, "telemetry-password", "", "Basic auth password for edge telemetry remote_write")
 	return cmd
 }
 
@@ -404,8 +405,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var ageKeyFile string
 	var dryRun bool
 	var telemetryURL string
-	var telemetryUser string
-	var telemetryPass string
+	var telemetryToken string
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -464,13 +464,13 @@ Multi-node manifest example:
 			var preRegNodeID string
 			var preRegFoghornAddr string
 			var preRegCABundle string
-			if enrollmentToken != "" && nodeDomain == "" && poolDomain == "" {
+			if enrollmentToken != "" {
 				addr := foghornAddr
 				if addr == "" {
 					addr = cliCtx.Endpoints.FoghornGRPCAddr
 				}
 				if addr == "" {
-					return fmt.Errorf("--foghorn-addr is required when using --enrollment-token without --node-domain")
+					return fmt.Errorf("--foghorn-addr is required when using --enrollment-token")
 				}
 
 				fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
@@ -483,11 +483,19 @@ Multi-node manifest example:
 				if preRegErr != nil {
 					return fmt.Errorf("pre-registration failed: %w", preRegErr)
 				}
-				nodeDomain = preRegResp.GetEdgeDomain()
-				poolDomain = preRegResp.GetPoolDomain()
+				if nodeDomain == "" {
+					nodeDomain = preRegResp.GetEdgeDomain()
+				}
+				if poolDomain == "" {
+					poolDomain = preRegResp.GetPoolDomain()
+				}
 				preRegNodeID = preRegResp.GetNodeId()
 				preRegFoghornAddr = preRegResp.GetFoghornGrpcAddr()
 				preRegCABundle = string(preRegResp.GetInternalCaBundle())
+				if telemetry := preRegResp.GetTelemetry(); telemetry != nil && telemetry.GetEnabled() {
+					telemetryURL = telemetry.GetWriteUrl()
+					telemetryToken = telemetry.GetBearerToken()
+				}
 				if nodeName == "" {
 					nodeName = preRegNodeID
 				}
@@ -589,8 +597,7 @@ Multi-node manifest example:
 				KeyPEM:          keyPEM,
 				CABundlePEM:     preRegCABundle,
 				TelemetryURL:    telemetryURL,
-				TelemetryUser:   telemetryUser,
-				TelemetryPass:   telemetryPass,
+				TelemetryToken:  telemetryToken,
 				SkipPreflight:   skipPreflight,
 				ApplyTuning:     applyTuning,
 				RegisterNode:    registerNode,
@@ -643,9 +650,6 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Load and validate manifest, show provision plan, but do not execute")
-	cmd.Flags().StringVar(&telemetryURL, "telemetry-url", "", "VictoriaMetrics remote_write URL for edge telemetry")
-	cmd.Flags().StringVar(&telemetryUser, "telemetry-username", "", "Basic auth username for edge telemetry remote_write")
-	cmd.Flags().StringVar(&telemetryPass, "telemetry-password", "", "Basic auth password for edge telemetry remote_write")
 
 	return cmd
 }
@@ -755,15 +759,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if cmd.Flags().Changed("version") {
 				nodeVersion = cliVersion
 			}
-			telemetryURL := ""
-			telemetryUser := ""
-			telemetryPass := ""
-			if manifest.Telemetry != nil {
-				telemetryURL = manifest.Telemetry.RemoteWriteURL
-				telemetryUser = manifest.Telemetry.Username
-				telemetryPass = manifest.Telemetry.Password
-			}
-			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, token, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion, telemetryURL, telemetryUser, telemetryPass)
+			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, token, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion, "", "")
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -808,7 +804,35 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 }
 
 // provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version, telemetryURL, telemetryUser, telemetryPass string) error {
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version, telemetryURL, telemetryToken string) error {
+	var preRegFoghornAddr string
+	var preRegCABundle string
+	if enrollmentToken != "" {
+		addr := cliCtx.Endpoints.FoghornGRPCAddr
+		if addr == "" {
+			return fmt.Errorf("foghorn gRPC address is required when using enrollment tokens")
+		}
+		preferredNodeID := deriveEdgeNodeName(nodeName, nodeDomain, sshTarget, false)
+		preRegResp, err := preRegisterEdge(cmd.Context(), addr, enrollmentToken, sshTarget, sshKey, preferredNodeID)
+		if err != nil {
+			return fmt.Errorf("pre-registration failed: %w", err)
+		}
+		preRegFoghornAddr = preRegResp.GetFoghornGrpcAddr()
+		preRegCABundle = string(preRegResp.GetInternalCaBundle())
+		if nodeDomain == "" {
+			nodeDomain = preRegResp.GetEdgeDomain()
+		}
+		if poolDomain == "" {
+			poolDomain = preRegResp.GetPoolDomain()
+		}
+		if clusterID == "" {
+			clusterID = preRegResp.GetClusterId()
+		}
+		if telemetry := preRegResp.GetTelemetry(); telemetry != nil && telemetry.GetEnabled() {
+			telemetryURL = telemetry.GetWriteUrl()
+			telemetryToken = telemetry.GetBearerToken()
+		}
+	}
 	primaryDomain := poolDomain
 	if primaryDomain == "" {
 		primaryDomain = nodeDomain
@@ -845,14 +869,13 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		Region:          region,
 		Email:           email,
 		EnrollmentToken: enrollmentToken,
-		FoghornGRPCAddr: cliCtx.Endpoints.FoghornGRPCAddr,
+		FoghornGRPCAddr: firstNonEmpty(preRegFoghornAddr, cliCtx.Endpoints.FoghornGRPCAddr),
 		FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 		CertPEM:         certPEM,
 		KeyPEM:          keyPEM,
-		CABundlePEM:     "",
+		CABundlePEM:     preRegCABundle,
 		TelemetryURL:    telemetryURL,
-		TelemetryUser:   telemetryUser,
-		TelemetryPass:   telemetryPass,
+		TelemetryToken:  telemetryToken,
 		SkipPreflight:   false, // Preflight always runs for manifest mode
 		ApplyTuning:     applyTuning,
 		RegisterNode:    registerNode,
@@ -863,6 +886,15 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	pool := fwssh.NewPool(30 * time.Second)
 	ep := provisioner.NewEdgeProvisioner(pool)
 	return ep.Provision(cmd.Context(), host, config)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // sshTargetToHost converts a "user@host" string into an inventory.Host.

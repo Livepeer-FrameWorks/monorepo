@@ -4,6 +4,7 @@ package foghorn;
 
 option go_package = "frameworks/pkg/proto";
 
+import "common.proto";
 import "shared.proto";
 
 // =============================================================================
@@ -77,6 +78,7 @@ message PreRegisterEdgeResponse {
   string key_pem = 7 [deprecated = true];   // Deprecated: certs now delivered via ConfigSeed only
   string cluster_id = 8;        // Raw cluster ID (may differ from DNS-safe cluster_slug)
   bytes internal_ca_bundle = 9; // Optional internal CA bundle for pre-Connect trust bootstrap
+  common.EdgeTelemetryConfig telemetry = 10; // Optional per-edge telemetry remote_write config
 }
 
 // NodeControlService exposes node lifecycle operations.

@@ -1500,6 +1500,8 @@ message ConfigSeed {
   SiteConfig site = 21;
   // Optional internal CA bundle for Helmsman gRPC trust bootstrap and rotation.
   bytes ca_bundle = 22;
+  // Optional control-plane-managed edge telemetry remote_write settings.
+  common.EdgeTelemetryConfig telemetry = 23;
 }
 
 // SiteConfig carries the public-facing site parameters that Helmsman uses to

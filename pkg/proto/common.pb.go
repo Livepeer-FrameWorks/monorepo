@@ -401,6 +401,76 @@ func (x *SignupAttribution) GetMetadataJson() string {
 	return ""
 }
 
+// EdgeTelemetryConfig carries control-plane-managed remote_write settings for
+// per-edge vmagent processes.
+type EdgeTelemetryConfig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	WriteUrl      string                 `protobuf:"bytes,2,opt,name=write_url,json=writeUrl,proto3" json:"write_url,omitempty"`
+	BearerToken   string                 `protobuf:"bytes,3,opt,name=bearer_token,json=bearerToken,proto3" json:"bearer_token,omitempty"`
+	ExpiresAt     string                 `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"` // RFC3339 timestamp
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EdgeTelemetryConfig) Reset() {
+	*x = EdgeTelemetryConfig{}
+	mi := &file_common_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EdgeTelemetryConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EdgeTelemetryConfig) ProtoMessage() {}
+
+func (x *EdgeTelemetryConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_common_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EdgeTelemetryConfig.ProtoReflect.Descriptor instead.
+func (*EdgeTelemetryConfig) Descriptor() ([]byte, []int) {
+	return file_common_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *EdgeTelemetryConfig) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *EdgeTelemetryConfig) GetWriteUrl() string {
+	if x != nil {
+		return x.WriteUrl
+	}
+	return ""
+}
+
+func (x *EdgeTelemetryConfig) GetBearerToken() string {
+	if x != nil {
+		return x.BearerToken
+	}
+	return ""
+}
+
+func (x *EdgeTelemetryConfig) GetExpiresAt() string {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return ""
+}
+
 var File_common_proto protoreflect.FileDescriptor
 
 const file_common_proto_rawDesc = "" +
@@ -442,7 +512,13 @@ const file_common_proto_rawDesc = "" +
 	"\rreferral_code\x18\n" +
 	" \x01(\tR\freferralCode\x12\x19\n" +
 	"\bis_agent\x18\v \x01(\bR\aisAgent\x12#\n" +
-	"\rmetadata_json\x18\f \x01(\tR\fmetadataJson*P\n" +
+	"\rmetadata_json\x18\f \x01(\tR\fmetadataJson\"\x8e\x01\n" +
+	"\x13EdgeTelemetryConfig\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1b\n" +
+	"\twrite_url\x18\x02 \x01(\tR\bwriteUrl\x12!\n" +
+	"\fbearer_token\x18\x03 \x01(\tR\vbearerToken\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x04 \x01(\tR\texpiresAt*P\n" +
 	"\tSortOrder\x12\x1a\n" +
 	"\x16SORT_ORDER_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSORT_ORDER_ASC\x10\x01\x12\x13\n" +
@@ -461,18 +537,19 @@ func file_common_proto_rawDescGZIP() []byte {
 }
 
 var file_common_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_common_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_common_proto_goTypes = []any{
 	(SortOrder)(0),                   // 0: common.SortOrder
 	(*CursorPaginationRequest)(nil),  // 1: common.CursorPaginationRequest
 	(*CursorPaginationResponse)(nil), // 2: common.CursorPaginationResponse
 	(*TimeRange)(nil),                // 3: common.TimeRange
 	(*SignupAttribution)(nil),        // 4: common.SignupAttribution
-	(*timestamppb.Timestamp)(nil),    // 5: google.protobuf.Timestamp
+	(*EdgeTelemetryConfig)(nil),      // 5: common.EdgeTelemetryConfig
+	(*timestamppb.Timestamp)(nil),    // 6: google.protobuf.Timestamp
 }
 var file_common_proto_depIdxs = []int32{
-	5, // 0: common.TimeRange.start:type_name -> google.protobuf.Timestamp
-	5, // 1: common.TimeRange.end:type_name -> google.protobuf.Timestamp
+	6, // 0: common.TimeRange.start:type_name -> google.protobuf.Timestamp
+	6, // 1: common.TimeRange.end:type_name -> google.protobuf.Timestamp
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
@@ -493,7 +570,7 @@ func file_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_proto_rawDesc), len(file_common_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

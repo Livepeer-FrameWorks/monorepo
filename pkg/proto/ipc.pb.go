@@ -8469,7 +8469,7 @@ type NodeLifecycleUpdate struct {
 	Streams map[string]*StreamData `protobuf:"bytes,23,rep,name=streams,proto3" json:"streams,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Stored artifacts
 	Artifacts []*StoredArtifact `protobuf:"bytes,24,rep,name=artifacts,proto3" json:"artifacts,omitempty"`
-	// MistServer outputs configuration (parsed from koekjes endpoint)
+	// MistServer outputs configuration (parsed from the Mist metrics endpoint)
 	OutputsJson string `protobuf:"bytes,25,opt,name=outputs_json,json=outputsJson,proto3" json:"outputs_json,omitempty"`
 	// Enrichment fields added by Foghorn
 	TenantId *string `protobuf:"bytes,26,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
@@ -11479,7 +11479,9 @@ type ConfigSeed struct {
 	// Public site configuration for Helmsman Caddyfile rendering (populated by Foghorn)
 	Site *SiteConfig `protobuf:"bytes,21,opt,name=site,proto3" json:"site,omitempty"`
 	// Optional internal CA bundle for Helmsman gRPC trust bootstrap and rotation.
-	CaBundle      []byte `protobuf:"bytes,22,opt,name=ca_bundle,json=caBundle,proto3" json:"ca_bundle,omitempty"`
+	CaBundle []byte `protobuf:"bytes,22,opt,name=ca_bundle,json=caBundle,proto3" json:"ca_bundle,omitempty"`
+	// Optional control-plane-managed edge telemetry remote_write settings.
+	Telemetry     *EdgeTelemetryConfig `protobuf:"bytes,23,opt,name=telemetry,proto3" json:"telemetry,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11587,6 +11589,13 @@ func (x *ConfigSeed) GetSite() *SiteConfig {
 func (x *ConfigSeed) GetCaBundle() []byte {
 	if x != nil {
 		return x.CaBundle
+	}
+	return nil
+}
+
+func (x *ConfigSeed) GetTelemetry() *EdgeTelemetryConfig {
+	if x != nil {
+		return x.Telemetry
 	}
 	return nil
 }
@@ -14439,7 +14448,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\akey_pem\x18\x02 \x01(\tR\x06keyPem\x12\x16\n" +
 	"\x06domain\x18\x03 \x01(\tR\x06domain\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\x03R\texpiresAt\"\xf4\x03\n" +
+	"expires_at\x18\x04 \x01(\x03R\texpiresAt\"\xaf\x04\n" +
 	"\n" +
 	"ConfigSeed\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1a\n" +
@@ -14455,7 +14464,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x10operational_mode\x18\f \x01(\x0e2$.helmsmancontrol.NodeOperationalModeR\x0foperationalMode\x120\n" +
 	"\x03tls\x18\x14 \x01(\v2\x1e.helmsmancontrol.TLSCertBundleR\x03tls\x12/\n" +
 	"\x04site\x18\x15 \x01(\v2\x1b.helmsmancontrol.SiteConfigR\x04site\x12\x1b\n" +
-	"\tca_bundle\x18\x16 \x01(\fR\bcaBundle\"\x90\x01\n" +
+	"\tca_bundle\x18\x16 \x01(\fR\bcaBundle\x129\n" +
+	"\ttelemetry\x18\x17 \x01(\v2\x1b.common.EdgeTelemetryConfigR\ttelemetry\"\x90\x01\n" +
 	"\n" +
 	"SiteConfig\x12!\n" +
 	"\fsite_address\x18\x01 \x01(\tR\vsiteAddress\x12\x1f\n" +
@@ -14756,7 +14766,8 @@ var file_ipc_proto_goTypes = []any{
 	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 122: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
 	(*timestamppb.Timestamp)(nil),                   // 123: google.protobuf.Timestamp
 	(*SignupAttribution)(nil),                       // 124: common.SignupAttribution
-	(*emptypb.Empty)(nil),                           // 125: google.protobuf.Empty
+	(*EdgeTelemetryConfig)(nil),                     // 125: common.EdgeTelemetryConfig
+	(*emptypb.Empty)(nil),                           // 126: google.protobuf.Empty
 }
 var file_ipc_proto_depIdxs = []int32{
 	123, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
@@ -14892,25 +14903,26 @@ var file_ipc_proto_depIdxs = []int32{
 	3,   // 130: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
 	97,  // 131: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
 	99,  // 132: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
-	100, // 133: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
-	120, // 134: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	121, // 135: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
-	108, // 136: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
-	122, // 137: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	91,  // 138: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
-	20,  // 139: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
-	39,  // 140: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
-	35,  // 141: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
-	12,  // 142: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
-	20,  // 143: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	40,  // 144: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	125, // 145: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	125, // 146: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	143, // [143:147] is the sub-list for method output_type
-	139, // [139:143] is the sub-list for method input_type
-	139, // [139:139] is the sub-list for extension type_name
-	139, // [139:139] is the sub-list for extension extendee
-	0,   // [0:139] is the sub-list for field type_name
+	125, // 133: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
+	100, // 134: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
+	120, // 135: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	121, // 136: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
+	108, // 137: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
+	122, // 138: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	91,  // 139: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
+	20,  // 140: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
+	39,  // 141: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
+	35,  // 142: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
+	12,  // 143: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
+	20,  // 144: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	40,  // 145: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	126, // 146: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	126, // 147: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	144, // [144:148] is the sub-list for method output_type
+	140, // [140:144] is the sub-list for method input_type
+	140, // [140:140] is the sub-list for extension type_name
+	140, // [140:140] is the sub-list for extension extendee
+	0,   // [0:140] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }

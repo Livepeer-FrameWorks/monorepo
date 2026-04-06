@@ -48,6 +48,13 @@ infrastructure:
     prod_version: "v1.122.0"
     notes: "Production alternative to Prometheus. Prometheus-compatible API"
 
+  - name: vmauth
+    tested_version: "v1.122.0"
+    minimum_version: "v1.100.0"
+    image: victoriametrics/vmauth:v1.122.0
+    prod_version: "v1.122.0"
+    notes: "JWT-authenticated reverse proxy in front of VictoriaMetrics for scoped edge telemetry writes"
+
   - name: vmagent
     tested_version: "v1.122.0"
     minimum_version: "v1.100.0"

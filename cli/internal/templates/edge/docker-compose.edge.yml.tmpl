@@ -51,10 +51,13 @@ services:
     volumes:
       - ./certs:/etc/frameworks/certs
       - ./pki:/etc/frameworks/pki
+      - ./telemetry:/etc/frameworks/telemetry
       - caddy_admin:/run/caddy
     expose:
       - "18007"
     restart: unless-stopped
+
+{{VMAGENT_EDGE_SERVICE}}
 
 volumes:
   caddy_data: {}

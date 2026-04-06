@@ -449,3 +449,67 @@ func BuildLocalProxyRoutes(rootDomain string, localServices map[string]int) []Pr
 
 	return routes
 }
+
+func BuildExtraProxyRoutes(raw interface{}) []ProxyRoute {
+	items, ok := raw.([]map[string]interface{})
+	if !ok || len(items) == 0 {
+		list, ok := raw.([]interface{})
+		if !ok || len(list) == 0 {
+			return nil
+		}
+		items = make([]map[string]interface{}, 0, len(list))
+		for _, item := range list {
+			entry, ok := item.(map[string]interface{})
+			if ok {
+				items = append(items, entry)
+			}
+		}
+		if len(items) == 0 {
+			return nil
+		}
+	}
+
+	routes := make([]ProxyRoute, 0, len(items))
+	for _, item := range items {
+		name, _ := item["name"].(string)
+		upstream, _ := item["upstream"].(string)
+		serverNames := stringifySlice(item["server_names"])
+		if upstream == "" || len(serverNames) == 0 {
+			continue
+		}
+		route := ProxyRoute{
+			Name:        name,
+			ServerNames: serverNames,
+			Upstream:    upstream,
+		}
+		if websocketPath, _ := item["websocket_path"].(string); websocketPath != "" {
+			route.WebsocketPath = websocketPath
+		}
+		if geoProxy, _ := item["geo_proxy"].(bool); geoProxy {
+			route.GeoProxy = true
+		}
+		if upgradeAll, _ := item["upgrade_all"].(bool); upgradeAll {
+			route.UpgradeAll = true
+		}
+		routes = append(routes, route)
+	}
+
+	return routes
+}
+
+func stringifySlice(raw interface{}) []string {
+	switch values := raw.(type) {
+	case []string:
+		return values
+	case []interface{}:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}

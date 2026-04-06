@@ -2,7 +2,9 @@ package provisioner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +19,7 @@ import (
 
 const (
 	defaultVictoriaMetricsImage = "victoriametrics/victoria-metrics:v1.122.0"
+	defaultVMAAuthImage         = "victoriametrics/vmauth:v1.122.0"
 	defaultVMAgentImage         = "victoriametrics/vmagent:v1.122.0"
 	defaultGrafanaImage         = "grafana/grafana:12.2.0"
 )
@@ -222,6 +225,91 @@ func (p *VMAgentProvisioner) Validate(ctx context.Context, host inventory.Host, 
 }
 
 func (p *VMAgentProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	return nil
+}
+
+type VMAAuthProvisioner struct {
+	*BaseProvisioner
+}
+
+func NewVMAAuthProvisioner(pool *ssh.Pool) *VMAAuthProvisioner {
+	return &VMAAuthProvisioner{BaseProvisioner: NewBaseProvisioner("vmauth", pool)}
+}
+
+func (p *VMAAuthProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
+	return p.CheckExists(ctx, host, "vmauth")
+}
+
+func (p *VMAAuthProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if config.Mode == "" {
+		config.Mode = "docker"
+	}
+	if config.Mode != "docker" {
+		return fmt.Errorf("vmauth only supports docker mode")
+	}
+
+	state, err := p.Detect(ctx, host)
+	if err != nil {
+		state = nil
+	}
+
+	image, err := resolveObservabilityImage(config.Version, config.Image, "vmauth", defaultVMAAuthImage)
+	if err != nil {
+		return err
+	}
+	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
+		fmt.Printf("Service %s already running (%s), skipping...\n", p.GetName(), reason)
+		return nil
+	}
+
+	if err := p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/vmauth /etc/frameworks"); err != nil {
+		return err
+	}
+	if err := writeProvisionerEnvFile(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmauth.env", config.EnvVars); err != nil {
+		return err
+	}
+
+	authConfig, err := buildVMAAuthConfig(
+		config.EnvVars["VMAUTH_UPSTREAM_WRITE_URL"],
+		config.EnvVars["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"],
+		config.EnvVars["VM_HTTP_AUTH_USERNAME"],
+		config.EnvVars["VM_HTTP_AUTH_PASSWORD"],
+	)
+	if err != nil {
+		return err
+	}
+	if err := uploadContent(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmauth.yml", authConfig, 0o644); err != nil {
+		return err
+	}
+
+	compose := buildCustomCompose("vmauth", image, customComposeOptions{
+		Ports: []string{fmt.Sprintf("%d:8427", resolvedServicePort(config, 8427))},
+		Volumes: []string{
+			"/etc/frameworks/vmauth.yml:/etc/frameworks/vmauth.yml:ro",
+		},
+		Network: "frameworks",
+		Command: []string{
+			"--httpListenAddr=:8427",
+			"--auth.config=/etc/frameworks/vmauth.yml",
+		},
+	})
+
+	if err := deployCustomCompose(ctx, p.BaseProvisioner, host, "vmauth", compose, config.DeferStart); err != nil {
+		return err
+	}
+	if config.DeferStart {
+		fmt.Println("⏸ vmauth deployed but NOT started (missing required config)")
+		return nil
+	}
+	fmt.Println("✓ vmauth provisioned in Docker mode")
+	return nil
+}
+
+func (p *VMAAuthProvisioner) Validate(ctx context.Context, host inventory.Host, _ ServiceConfig) error {
+	return validateRunningContainer(ctx, p.BaseProvisioner, host, "vmauth")
+}
+
+func (p *VMAAuthProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	return nil
 }
 
@@ -460,6 +548,52 @@ func buildGrafanaDatasource(url, username, password string) string {
 		b.WriteString(fmt.Sprintf("      basicAuthPassword: %s\n", yamlQuote(password)))
 	}
 	return b.String()
+}
+
+func buildVMAAuthConfig(upstreamWriteURL, publicKeyB64, upstreamUsername, upstreamPassword string) (string, error) {
+	upstreamWriteURL = strings.TrimSpace(upstreamWriteURL)
+	if upstreamWriteURL == "" {
+		return "", fmt.Errorf("vmauth requires VMAUTH_UPSTREAM_WRITE_URL")
+	}
+	publicKeyB64 = strings.TrimSpace(publicKeyB64)
+	if publicKeyB64 == "" {
+		return "", fmt.Errorf("vmauth requires EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64")
+	}
+	publicKeyPEM, err := base64.StdEncoding.DecodeString(publicKeyB64)
+	if err != nil {
+		return "", fmt.Errorf("decode vmauth public key: %w", err)
+	}
+	proxyURL, err := vmauthProxyURL(upstreamWriteURL, upstreamUsername, upstreamPassword)
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	b.WriteString("users:\n")
+	b.WriteString("  - jwt:\n")
+	b.WriteString("      public_keys:\n")
+	b.WriteString("        - |\n")
+	for _, line := range strings.Split(strings.TrimSpace(string(publicKeyPEM)), "\n") {
+		b.WriteString("          " + line + "\n")
+	}
+	b.WriteString("    url_prefix: " + yamlQuote(proxyURL) + "\n")
+	return b.String(), nil
+}
+
+func vmauthProxyURL(upstreamWriteURL, upstreamUsername, upstreamPassword string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(upstreamWriteURL))
+	if err != nil {
+		return "", fmt.Errorf("parse VMAUTH_UPSTREAM_WRITE_URL: %w", err)
+	}
+	if username := strings.TrimSpace(upstreamUsername); username != "" {
+		parsed.User = url.UserPassword(username, upstreamPassword)
+	}
+	rendered := parsed.String()
+	separator := "?"
+	if strings.Contains(rendered, "?") {
+		separator = "&"
+	}
+	return rendered + separator + "extra_label={{.MetricsExtraLabels}}", nil
 }
 
 func resolveObservabilityImage(version, explicitImage, serviceName, fallback string) (string, error) {

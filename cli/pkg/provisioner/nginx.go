@@ -58,6 +58,7 @@ func (n *NginxProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		}
 	} else {
 		routes := BuildLocalProxyRoutes(rootDomain, localServicePorts(config.Metadata))
+		routes = append(routes, BuildExtraProxyRoutes(config.Metadata["extra_proxy_routes"])...)
 		confData := NginxConfData{
 			RootDomain:    rootDomain,
 			ListenAddress: listenAddr,

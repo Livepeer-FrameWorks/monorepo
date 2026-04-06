@@ -61,11 +61,13 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 	}
 
 	routes := localServicePorts(config.Metadata)
+	proxyRoutes := BuildLocalProxyRoutes(rootDomain, routes)
+	proxyRoutes = append(proxyRoutes, BuildExtraProxyRoutes(config.Metadata["extra_proxy_routes"])...)
 	caddyData := CaddyfileData{
 		Email:         email,
 		RootDomain:    rootDomain,
 		ListenAddress: listenAddr,
-		Routes:        BuildLocalProxyRoutes(rootDomain, routes),
+		Routes:        proxyRoutes,
 	}
 
 	caddyfileContent, err := GenerateCentralCaddyfile(caddyData)

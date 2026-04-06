@@ -12,6 +12,9 @@ func TestManagedServiceTypesIncludesLivepeerGateway(t *testing.T) {
 	if !slices.Contains(ManagedServiceTypes(), "chandler") {
 		t.Fatal("ManagedServiceTypes() should include chandler")
 	}
+	if !slices.Contains(ManagedServiceTypes(), "telemetry") {
+		t.Fatal("ManagedServiceTypes() should include telemetry")
+	}
 }
 
 func TestPublicSubdomain(t *testing.T) {
@@ -21,6 +24,7 @@ func TestPublicSubdomain(t *testing.T) {
 		ok          bool
 	}{
 		{serviceType: "chandler", want: "chandler", ok: true},
+		{serviceType: "telemetry", want: "telemetry", ok: true},
 		{serviceType: "livepeer-gateway", want: "livepeer", ok: true},
 		{serviceType: "foghorn", want: "foghorn", ok: true},
 		{serviceType: "foredeck", want: "", ok: true},
@@ -48,6 +52,7 @@ func TestServiceFQDN(t *testing.T) {
 		ok          bool
 	}{
 		{serviceType: "chandler", rootDomain: "example.com", want: "chandler.example.com", ok: true},
+		{serviceType: "telemetry", rootDomain: "example.com", want: "telemetry.example.com", ok: true},
 		{serviceType: "chandler", rootDomain: "cluster-a.example.com", want: "chandler.cluster-a.example.com", ok: true},
 		{serviceType: "livepeer-gateway", rootDomain: "example.com", want: "livepeer.example.com", ok: true},
 		{serviceType: "livepeer-gateway", rootDomain: "cluster-a.example.com", want: "livepeer.cluster-a.example.com", ok: true},
@@ -74,6 +79,9 @@ func TestIsClusterScopedServiceType(t *testing.T) {
 	}
 	if !IsClusterScopedServiceType("livepeer-gateway") {
 		t.Fatal("livepeer-gateway should be cluster-scoped")
+	}
+	if !IsClusterScopedServiceType("telemetry") {
+		t.Fatal("telemetry should be cluster-scoped")
 	}
 	if IsClusterScopedServiceType("bridge") {
 		t.Fatal("bridge should not be cluster-scoped")

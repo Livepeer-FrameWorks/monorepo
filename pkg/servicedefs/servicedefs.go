@@ -60,6 +60,7 @@ var Services = map[string]Service{
 	"caddy":           {ID: "caddy", DefaultPort: 18090, HealthPath: "", HealthProtocol: "http", Role: "interface"},
 	"prometheus":      {ID: "prometheus", DefaultPort: 9090, HealthPath: "/-/healthy", HealthProtocol: "http", Role: "observability"},
 	"victoriametrics": {ID: "victoriametrics", DefaultPort: 8428, HealthPath: "/health", HealthProtocol: "http", Role: "observability"},
+	"vmauth":          {ID: "vmauth", DefaultPort: 8427, HealthPath: "/health", HealthProtocol: "http", Role: "observability"},
 	"vmagent":         {ID: "vmagent", DefaultPort: 8429, HealthPath: "/health", HealthProtocol: "http", Role: "observability"},
 	"grafana":         {ID: "grafana", DefaultPort: 3000, HealthPath: "/api/health", HealthProtocol: "http", Role: "observability"},
 	"metabase":        {ID: "metabase", DefaultPort: 3001, HealthPath: "/api/health", HealthProtocol: "http", Role: "observability"},

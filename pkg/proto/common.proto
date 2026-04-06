@@ -77,3 +77,12 @@ enum SortOrder {
   SORT_ORDER_ASC = 1;
   SORT_ORDER_DESC = 2;
 }
+
+// EdgeTelemetryConfig carries control-plane-managed remote_write settings for
+// per-edge vmagent processes.
+message EdgeTelemetryConfig {
+  bool enabled = 1;
+  string write_url = 2;
+  string bearer_token = 3;
+  string expires_at = 4; // RFC3339 timestamp
+}

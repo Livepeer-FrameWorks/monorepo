@@ -100,6 +100,7 @@ func (m *Manager) reconcile() {
 	if len(seed.GetCaBundle()) > 0 {
 		m.applyCABundle(seed.GetCaBundle())
 	}
+	m.applyTelemetryConfig(seed.GetTelemetry())
 
 	certChanged := false
 	if tls := seed.GetTls(); tls != nil {
@@ -192,6 +193,34 @@ func grpcCABundlePath() string {
 		return path
 	}
 	return "/etc/frameworks/pki/ca.crt"
+}
+
+func edgeTelemetryTokenPath() string {
+	return "/etc/frameworks/telemetry/token"
+}
+
+func (m *Manager) applyTelemetryConfig(cfg *pb.EdgeTelemetryConfig) bool {
+	tokenPath := edgeTelemetryTokenPath()
+	if cfg == nil || !cfg.GetEnabled() || strings.TrimSpace(cfg.GetBearerToken()) == "" {
+		if err := os.Remove(tokenPath); err != nil && !os.IsNotExist(err) {
+			m.logger.WithError(err).WithField("path", tokenPath).Warn("Failed to remove edge telemetry token")
+			return false
+		}
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o755); err != nil {
+		m.logger.WithError(err).Warn("Failed to create edge telemetry token directory")
+		return false
+	}
+	if err := atomicWriteFile(tokenPath, []byte(cfg.GetBearerToken()+"\n"), 0o600); err != nil {
+		m.logger.WithError(err).WithField("path", tokenPath).Warn("Failed to write edge telemetry token")
+		return false
+	}
+	m.logger.WithFields(logging.Fields{
+		"path":       tokenPath,
+		"expires_at": cfg.GetExpiresAt(),
+	}).Info("Applied edge telemetry token from ConfigSeed")
+	return true
 }
 
 func (m *Manager) applyCABundle(bundle []byte) bool {
@@ -642,4 +671,38 @@ func hashSeed(seed *pb.ConfigSeed) string {
 	b, _ := json.Marshal(flat)
 	sum := sha256.Sum256(b)
 	return string(sum[:])
+}
+
+func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".frameworks-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }

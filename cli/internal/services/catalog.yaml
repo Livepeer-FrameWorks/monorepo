@@ -51,6 +51,7 @@ profiles:
     - logbook
   observability:
     - victoriametrics
+    - vmauth
     - vmagent
     - grafana
     - metabase
@@ -266,6 +267,16 @@ services:
       protocol: http
       path: /health
       port: 8428
+  vmauth:
+    name: vmauth
+    title: VMAuth
+    role: observability
+    image: victoriametrics/vmauth:v1.122.0
+    ports: ["8427:8427"]
+    health:
+      protocol: http
+      path: /health
+      port: 8427
   vmagent:
     name: vmagent
     title: VMAgent

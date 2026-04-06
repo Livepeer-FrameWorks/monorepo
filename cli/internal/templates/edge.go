@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"frameworks/pkg/maintenance"
+	"frameworks/pkg/mist"
 )
 
 //go:embed edge/*
@@ -34,8 +35,7 @@ type EdgeVars struct {
 	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
 	ChandlerUpstream string // Docker: "chandler:18020", Native: "localhost:18020"
 	TelemetryURL     string
-	TelemetryUser    string
-	TelemetryPass    string
+	TelemetryToken   string
 }
 
 // SetModeDefaults fills Mode-dependent fields if not explicitly set.
@@ -108,6 +108,54 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 			return err
 		}
 	}
+	vmagentServiceBlock := ""
+	if strings.TrimSpace(vars.TelemetryURL) != "" && strings.TrimSpace(vars.TelemetryToken) != "" {
+		telemetryDir := filepath.Join(targetDir, "telemetry")
+		if err := os.MkdirAll(telemetryDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(telemetryDir, "token"), []byte(vars.TelemetryToken+"\n"), 0o600); err != nil {
+			return err
+		}
+		vmagentConfig := fmt.Sprintf(`global:
+  scrape_interval: 30s
+scrape_configs:
+  - job_name: edge-mist
+    metrics_path: %s
+    static_configs:
+      - targets:
+          - "mistserver:8080"
+        labels:
+          frameworks_mode: "edge"
+          frameworks_node: %q
+          frameworks_service: "mistserver"
+  - job_name: edge-helmsman
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "helmsman:18007"
+        labels:
+          frameworks_mode: "edge"
+          frameworks_node: %q
+          frameworks_service: "helmsman"
+`, mist.MetricsPath, vars.NodeID, vars.NodeID)
+		if err := os.WriteFile(filepath.Join(targetDir, "vmagent-edge.yml"), []byte(vmagentConfig), 0o644); err != nil {
+			return err
+		}
+		vmagentServiceBlock = `  vmagent:
+    image: victoriametrics/vmagent:v1.122.0
+    container_name: frameworks-edge-vmagent
+    command:
+      - -httpListenAddr=:8430
+      - -promscrape.config=/etc/frameworks/vmagent-edge.yml
+      - -remoteWrite.url={{TELEMETRY_URL}}
+      - -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token
+    volumes:
+      - ./vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro
+      - ./telemetry:/etc/frameworks/telemetry:ro
+    restart: unless-stopped
+`
+	}
 	for _, f := range files {
 		b, err := edgeFS.ReadFile(f.in)
 		if err != nil {
@@ -131,8 +179,8 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
 		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)
 		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
-		content = strings.ReplaceAll(content, "{{TELEMETRY_USER}}", vars.TelemetryUser)
-		content = strings.ReplaceAll(content, "{{TELEMETRY_PASS}}", vars.TelemetryPass)
+		content = strings.ReplaceAll(content, "{{VMAGENT_EDGE_SERVICE}}", vmagentServiceBlock)
+		content = strings.ReplaceAll(content, "{{TELEMETRY_TOKEN}}", vars.TelemetryToken)
 		// TLS directive placeholder (kept for backward compat with any templates that reference it)
 		if vars.CertPath != "" && vars.KeyPath != "" {
 			tlsDirective := fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath)

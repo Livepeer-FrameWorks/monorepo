@@ -62,8 +62,7 @@ type EdgeProvisionConfig struct {
 	KeyPEM          string
 	CABundlePEM     string
 	TelemetryURL    string
-	TelemetryUser   string
-	TelemetryPass   string
+	TelemetryToken  string
 
 	// Step toggles
 	SkipPreflight bool
@@ -111,6 +110,19 @@ func (c *EdgeProvisionConfig) helmsmanCAPath(remoteOS string) string {
 		return filepath.Join(darwinPaths(c.DarwinDomain).confDir, "pki", "ca.crt")
 	}
 	return "/etc/frameworks/pki/ca.crt"
+}
+
+func (c *EdgeProvisionConfig) telemetryTokenPath(remoteOS string) string {
+	if strings.TrimSpace(c.TelemetryToken) == "" {
+		return ""
+	}
+	if c.resolvedMode() == "docker" {
+		return "/etc/frameworks/telemetry/token"
+	}
+	if remoteOS == "darwin" {
+		return filepath.Join(darwinPaths(c.DarwinDomain).confDir, "telemetry", "token")
+	}
+	return "/etc/frameworks/telemetry/token"
 }
 
 // parseUnameOutput parses "uname -sm" output (e.g. "Linux x86_64") into Go-style
@@ -525,7 +537,7 @@ func (e *EdgeProvisioner) installDocker(ctx context.Context, host inventory.Host
 }
 
 func (e *EdgeProvisioner) installEdgeTelemetryDocker(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
-	if _, err := e.RunSudoCommand(ctx, host, "mkdir -p /etc/frameworks"); err != nil {
+	if _, err := e.RunSudoCommand(ctx, host, "mkdir -p /etc/frameworks /etc/frameworks/telemetry"); err != nil {
 		return err
 	}
 
@@ -548,8 +560,8 @@ func (e *EdgeProvisioner) installEdgeTelemetryDocker(ctx context.Context, host i
 	cmdParts := []string{
 		"docker rm -f frameworks-edge-vmagent >/dev/null 2>&1 || true",
 	}
-	if strings.TrimSpace(config.TelemetryPass) != "" {
-		if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.password", config.TelemetryPass+"\n", 0o600); err != nil {
+	if strings.TrimSpace(config.TelemetryToken) != "" {
+		if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/telemetry/token", config.TelemetryToken+"\n", 0o600); err != nil {
 			return err
 		}
 	}
@@ -558,8 +570,8 @@ func (e *EdgeProvisioner) installEdgeTelemetryDocker(ctx context.Context, host i
 		fmt.Sprintf("docker run -d --name frameworks-edge-vmagent --restart unless-stopped --network %s", networkName),
 		"-v /etc/frameworks/vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro",
 	}
-	if strings.TrimSpace(config.TelemetryPass) != "" {
-		runArgs = append(runArgs, "-v /etc/frameworks/vmagent-edge.password:/etc/frameworks/vmagent-edge.password:ro")
+	if strings.TrimSpace(config.TelemetryToken) != "" {
+		runArgs = append(runArgs, "-v /etc/frameworks/telemetry:/etc/frameworks/telemetry:ro")
 	}
 	runArgs = append(runArgs,
 		image,
@@ -567,11 +579,8 @@ func (e *EdgeProvisioner) installEdgeTelemetryDocker(ctx context.Context, host i
 		"-httpListenAddr=:8430",
 		fmt.Sprintf("-remoteWrite.url=%s", config.TelemetryURL),
 	)
-	if strings.TrimSpace(config.TelemetryUser) != "" && strings.TrimSpace(config.TelemetryPass) != "" {
-		runArgs = append(runArgs,
-			fmt.Sprintf("-remoteWrite.basicAuth.username=%s", config.TelemetryUser),
-			"-remoteWrite.basicAuth.password=file:///etc/frameworks/vmagent-edge.password",
-		)
+	if strings.TrimSpace(config.TelemetryToken) != "" {
+		runArgs = append(runArgs, "-remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token")
 	}
 	cmdParts = append(cmdParts, strings.Join(runArgs, " "))
 
@@ -635,7 +644,7 @@ func (e *EdgeProvisioner) edgeTelemetryDockerNetwork(ctx context.Context, host i
 }
 
 func (e *EdgeProvisioner) installEdgeTelemetryLinux(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, remoteArch string) error {
-	if _, err := e.RunSudoCommand(ctx, host, "mkdir -p /etc/frameworks /opt/frameworks/vmagent-edge /var/log/frameworks"); err != nil {
+	if _, err := e.RunSudoCommand(ctx, host, "mkdir -p /etc/frameworks /etc/frameworks/telemetry /opt/frameworks/vmagent-edge /var/log/frameworks"); err != nil {
 		return err
 	}
 
@@ -650,15 +659,15 @@ func (e *EdgeProvisioner) installEdgeTelemetryLinux(ctx context.Context, host in
 		return err
 	}
 
-	passwordArg := ""
-	if strings.TrimSpace(config.TelemetryPass) != "" {
-		if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.password", config.TelemetryPass+"\n", 0o600); err != nil {
+	tokenArg := ""
+	if strings.TrimSpace(config.TelemetryToken) != "" {
+		if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/telemetry/token", config.TelemetryToken+"\n", 0o600); err != nil {
 			return err
 		}
-		if _, err := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/vmagent-edge.password"); err != nil {
+		if _, err := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/telemetry/token"); err != nil {
 			return err
 		}
-		passwordArg = " -remoteWrite.basicAuth.password=file:///etc/frameworks/vmagent-edge.password"
+		tokenArg = " -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token"
 	}
 
 	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "linux", remoteArch)
@@ -688,8 +697,8 @@ chown -R frameworks:frameworks /opt/frameworks/vmagent-edge /var/log/frameworks
 		"/opt/frameworks/vmagent-edge/vmagent -httpListenAddr=:8430 -promscrape.config=/etc/frameworks/vmagent-edge.yml -remoteWrite.url=%s",
 		config.TelemetryURL,
 	)
-	if strings.TrimSpace(config.TelemetryUser) != "" && strings.TrimSpace(config.TelemetryPass) != "" {
-		execStart += fmt.Sprintf(" -remoteWrite.basicAuth.username=%s%s", config.TelemetryUser, passwordArg)
+	if tokenArg != "" {
+		execStart += tokenArg
 	}
 
 	return e.uploadSystemdUnit(ctx, host, SystemdUnitData{
@@ -712,10 +721,10 @@ func (e *EdgeProvisioner) installEdgeTelemetryDarwin(ctx context.Context, host i
 		return err
 	}
 
-	passwordPath := ""
-	if strings.TrimSpace(config.TelemetryPass) != "" {
-		passwordPath = dirs.confDir + "/vmagent-edge.password"
-		if err := e.writeRemoteFile(ctx, host, passwordPath, config.TelemetryPass+"\n", 0o600); err != nil {
+	tokenPath := ""
+	if strings.TrimSpace(config.TelemetryToken) != "" {
+		tokenPath = dirs.confDir + "/telemetry/token"
+		if err := e.writeRemoteFile(ctx, host, tokenPath, config.TelemetryToken+"\n", 0o600); err != nil {
 			return err
 		}
 	}
@@ -748,11 +757,8 @@ install -m 0755 "$bin" %[1]s/vmagent-edge/vmagent
 		"-promscrape.config=" + dirs.confDir + "/vmagent-edge.yml",
 		"-remoteWrite.url=" + config.TelemetryURL,
 	}
-	if strings.TrimSpace(config.TelemetryUser) != "" && passwordPath != "" {
-		args = append(args,
-			"-remoteWrite.basicAuth.username="+config.TelemetryUser,
-			"-remoteWrite.basicAuth.password=file://"+passwordPath,
-		)
+	if tokenPath != "" {
+		args = append(args, "-remoteWrite.bearerTokenFile="+tokenPath)
 	}
 
 	return e.uploadLaunchdPlistTo(ctx, host, dirs, LaunchdPlistData{
@@ -1665,8 +1671,7 @@ func (e *EdgeProvisioner) buildEdgeVars(config EdgeProvisionConfig, remoteOS str
 		GRPCTLSCAPath:   config.helmsmanCAPath(remoteOS),
 		Mode:            config.resolvedMode(),
 		TelemetryURL:    config.TelemetryURL,
-		TelemetryUser:   config.TelemetryUser,
-		TelemetryPass:   config.TelemetryPass,
+		TelemetryToken:  config.TelemetryToken,
 	}
 	// Bootstrap Caddyfile: no wildcard site address needed.
 	// Helmsman renders the production Caddyfile after enrollment via ConfigSeed.

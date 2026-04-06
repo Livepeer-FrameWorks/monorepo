@@ -286,24 +286,17 @@ type ServiceConfig struct {
 
 // EdgeManifest represents edge node deployment configuration (edges.yaml)
 type EdgeManifest struct {
-	Version         string               `yaml:"version"`
-	Channel         string               `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v0.2.0-rc3")
-	RootDomain      string               `yaml:"root_domain"`
-	PoolDomain      string               `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
-	Email           string               `yaml:"email"`       // ACME email
-	ClusterID       string               `yaml:"cluster_id,omitempty"`
-	EnrollmentToken string               `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
-	HostsFile       string               `yaml:"hosts_file,omitempty"`       // SOPS-encrypted host inventory
-	FetchCert       bool                 `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
-	Mode            string               `yaml:"mode,omitempty"`             // "docker" (default) or "native"
-	Telemetry       *EdgeTelemetryConfig `yaml:"telemetry,omitempty"`
-	Nodes           []EdgeNode           `yaml:"nodes"`
-}
-
-type EdgeTelemetryConfig struct {
-	RemoteWriteURL string `yaml:"remote_write_url,omitempty"`
-	Username       string `yaml:"username,omitempty"`
-	Password       string `yaml:"password,omitempty"`
+	Version         string     `yaml:"version"`
+	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v0.2.0-rc3")
+	RootDomain      string     `yaml:"root_domain"`
+	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
+	Email           string     `yaml:"email"`       // ACME email
+	ClusterID       string     `yaml:"cluster_id,omitempty"`
+	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
+	HostsFile       string     `yaml:"hosts_file,omitempty"`       // SOPS-encrypted host inventory
+	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
+	Mode            string     `yaml:"mode,omitempty"`             // "docker" (default) or "native"
+	Nodes           []EdgeNode `yaml:"nodes"`
 }
 
 // EdgeNode represents a single edge node in the manifest

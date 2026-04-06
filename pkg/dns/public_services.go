@@ -6,6 +6,7 @@ var managedServiceTypes = []string{
 	"edge-ingest",
 	"edge-storage",
 	"edge-processing",
+	"telemetry",
 	"chandler",
 	"foghorn",
 	"livepeer-gateway",
@@ -25,6 +26,7 @@ var clusterScopedServiceTypes = map[string]struct{}{
 	"edge-ingest":      {},
 	"edge-storage":     {},
 	"edge-processing":  {},
+	"telemetry":        {},
 	"foghorn":          {},
 	"livepeer-gateway": {},
 }
@@ -36,6 +38,7 @@ var publicSubdomains = map[string]string{
 	"edge-ingest":      "edge-ingest",
 	"edge-storage":     "edge-storage",
 	"edge-processing":  "edge-processing",
+	"telemetry":        "telemetry",
 	"foghorn":          "foghorn",
 	"livepeer-gateway": "livepeer",
 	"bridge":           "bridge",

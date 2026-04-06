@@ -2,6 +2,12 @@ package cmd
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -585,6 +591,36 @@ func resolveQuartermasterRuntimeData(manifest *inventory.Manifest) (string, stri
 	}
 
 	return serviceToken, fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort), nil
+}
+
+func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]interface{}) error {
+	if runtimeData == nil {
+		return fmt.Errorf("runtime data is nil")
+	}
+	priv, privOK := runtimeData["edge_telemetry_jwt_private_key_pem_b64"].(string)
+	pub, pubOK := runtimeData["edge_telemetry_jwt_public_key_pem_b64"].(string)
+	if privOK && pubOK && strings.TrimSpace(priv) != "" && strings.TrimSpace(pub) != "" {
+		return nil
+	}
+
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate edge telemetry signing key: %w", err)
+	}
+	privateDER, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		return fmt.Errorf("marshal edge telemetry private key: %w", err)
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return fmt.Errorf("marshal edge telemetry public key: %w", err)
+	}
+
+	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privateDER})
+	publicPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})
+	runtimeData["edge_telemetry_jwt_private_key_pem_b64"] = base64.StdEncoding.EncodeToString(privatePEM)
+	runtimeData["edge_telemetry_jwt_public_key_pem_b64"] = base64.StdEncoding.EncodeToString(publicPEM)
+	return nil
 }
 
 func ensurePrivateerEnrollmentToken(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}, clusterID string) error {
@@ -1442,12 +1478,19 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			config.Metadata["root_domain"] = manifest.RootDomain
 		}
 		config.Metadata["node_id"] = task.Host
+		clusterID := manifest.HostCluster(task.Host)
+		if clusterID == "" {
+			clusterID = manifest.ResolveCluster(task.Type)
+		}
 		localSvcs := make(map[string]interface{})
 		addLocalProxyRoutes(localSvcs, task.Host, manifest.Services, task.Type)
 		addLocalProxyRoutes(localSvcs, task.Host, manifest.Interfaces, task.Type)
 		addLocalProxyRoutes(localSvcs, task.Host, manifest.Observability, task.Type)
 		if len(localSvcs) > 0 {
 			config.Metadata["local_services"] = localSvcs
+		}
+		if routes := buildExtraProxyRoutesForHost(manifest, task.Host, clusterID); len(routes) > 0 {
+			config.Metadata["extra_proxy_routes"] = routes
 		}
 		if grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string); ok && grpcAddr != "" {
 			config.Metadata["quartermaster_http_url"] = quartermasterHTTPURL(grpcAddr)
@@ -1632,6 +1675,28 @@ func defaultVictoriaMetricsHost(manifest *inventory.Manifest) (string, int) {
 	return manifestMeshHostname(manifest, hostName), port
 }
 
+func defaultVMAAuthHost(manifest *inventory.Manifest) (string, int) {
+	if manifest == nil {
+		return "", 0
+	}
+	obs, ok := manifest.Observability["vmauth"]
+	if !ok || !obs.Enabled {
+		return "", 0
+	}
+	hostName := obs.Host
+	if hostName == "" && len(obs.Hosts) > 0 {
+		hostName = obs.Hosts[0]
+	}
+	if hostName == "" {
+		return "", 0
+	}
+	port, err := resolvePort("vmauth", obs)
+	if err != nil || port == 0 {
+		port = provisioner.ServicePorts["vmauth"]
+	}
+	return manifestMeshHostname(manifest, hostName), port
+}
+
 func defaultVictoriaMetricsWriteURL(manifest *inventory.Manifest) string {
 	host, port := defaultVictoriaMetricsHost(manifest)
 	if host == "" || port == 0 {
@@ -1688,6 +1753,39 @@ var proxyRouteServiceNames = map[string]struct{}{
 	"logbook":   {},
 	"listmonk":  {},
 	"steward":   {},
+	"vmauth":    {},
+}
+
+func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, clusterID string) []map[string]interface{} {
+	if manifest == nil || hostName == "" || clusterID == "" {
+		return nil
+	}
+	vmauth, ok := manifest.Observability["vmauth"]
+	if !ok || !vmauth.Enabled {
+		return nil
+	}
+	if vmauth.Host != hostName && !containsHost(vmauth.Hosts, hostName) {
+		return nil
+	}
+	rootDomain := publicServiceRootDomain("telemetry", manifest, clusterID)
+	if rootDomain == "" {
+		return nil
+	}
+	fqdn, ok := pkgdns.ServiceFQDN("telemetry", rootDomain)
+	if !ok || fqdn == "" {
+		return nil
+	}
+	port, err := resolvePort("vmauth", vmauth)
+	if err != nil || port == 0 {
+		port = provisioner.ServicePorts["vmauth"]
+	}
+	return []map[string]interface{}{
+		{
+			"name":         "telemetry",
+			"server_names": []string{fqdn},
+			"upstream":     fmt.Sprintf("127.0.0.1:%d", port),
+		},
+	}
 }
 
 func addLocalProxyRoutes(routes map[string]interface{}, hostName string, services map[string]inventory.ServiceConfig, skipName string) {
@@ -2299,6 +2397,8 @@ func publicServiceType(serviceName string) (string, bool) {
 		return "chatwoot", true
 	case "livepeer-gateway":
 		return "livepeer-gateway", true
+	case "vmauth":
+		return "telemetry", true
 	default:
 		return "", false
 	}
@@ -2562,6 +2662,26 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if obs, ok := manifest.Observability[baseName]; ok {
 		for k, v := range obs.Config {
 			env[k] = v
+		}
+	}
+	if baseName == "foghorn" || baseName == "vmauth" {
+		if err := ensureEdgeTelemetryJWTKeypair(runtimeData); err != nil {
+			return nil, err
+		}
+		if env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"] == "" {
+			if value, ok := runtimeData["edge_telemetry_jwt_private_key_pem_b64"].(string); ok {
+				env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"] = value
+			}
+		}
+		if env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"] == "" {
+			if value, ok := runtimeData["edge_telemetry_jwt_public_key_pem_b64"].(string); ok {
+				env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"] = value
+			}
+		}
+	}
+	if baseName == "vmauth" && env["VMAUTH_UPSTREAM_WRITE_URL"] == "" {
+		if url := defaultVictoriaMetricsWriteURL(manifest); url != "" {
+			env["VMAUTH_UPSTREAM_WRITE_URL"] = url
 		}
 	}
 	if vmObs, ok := manifest.Observability["victoriametrics"]; ok {

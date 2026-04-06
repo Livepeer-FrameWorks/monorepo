@@ -2,13 +2,16 @@ package control
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -38,6 +41,7 @@ import (
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/version"
 
+	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -2463,9 +2467,12 @@ func resolveOperationalMode(nodeID string, requestedMode pb.NodeOperationalMode)
 var geoOnce sync.Once
 var geoipReader *geoip.Reader
 
+const edgeTelemetryTokenTTL = 365 * 24 * time.Hour
+
 func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode pb.NodeOperationalMode, clusterID string) *pb.ConfigSeed {
 	var lat, lon float64
 	var loc string
+	var ownerTenantID string
 
 	geoOnce.Do(func() {
 		geoipReader = geoip.GetSharedReader()
@@ -2508,12 +2515,25 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 	var siteConfig *pb.SiteConfig
 
 	resolvedClusterID := clusterID
-	if resolvedClusterID == "" && quartermasterClient != nil {
+	if quartermasterClient != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		node, err := quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
 		cancel()
 		if err == nil && node != nil {
-			resolvedClusterID = strings.TrimSpace(node.GetClusterId())
+			if resolvedClusterID == "" {
+				resolvedClusterID = strings.TrimSpace(node.GetClusterId())
+			}
+		}
+	}
+	if getNodeOwnerFn != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ownerResp, err := getNodeOwnerFn(ctx, nodeID)
+		cancel()
+		if err == nil && ownerResp != nil {
+			ownerTenantID = strings.TrimSpace(ownerResp.GetOwnerTenantId())
+			if resolvedClusterID == "" {
+				resolvedClusterID = strings.TrimSpace(ownerResp.GetClusterId())
+			}
 		}
 	}
 	if resolvedClusterID != "" {
@@ -2547,6 +2567,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 	}
 
 	caBundle := readConfiguredCABundle()
+	telemetry := buildEdgeTelemetryConfig(nodeID, resolvedClusterID, ownerTenantID)
 
 	return &pb.ConfigSeed{
 		NodeId:          nodeID,
@@ -2558,7 +2579,129 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		Tls:             tlsBundle,
 		Site:            siteConfig,
 		CaBundle:        caBundle,
+		TenantId:        ownerTenantID,
+		Telemetry:       telemetry,
 	}
+}
+
+type edgeTelemetryClaims struct {
+	NodeID    string `json:"node_id"`
+	ClusterID string `json:"cluster_id"`
+	TenantID  string `json:"tenant_id,omitempty"`
+	Role      string `json:"role"`
+	VMAccess  struct {
+		MetricsExtraLabels string `json:"metrics_extra_labels"`
+	} `json:"vm_access"`
+	jwt.RegisteredClaims
+}
+
+func buildEdgeTelemetryConfig(nodeID, clusterID, tenantID string) *pb.EdgeTelemetryConfig {
+	nodeID = strings.TrimSpace(nodeID)
+	clusterID = strings.TrimSpace(clusterID)
+	if nodeID == "" || clusterID == "" {
+		return nil
+	}
+	writeURL := edgeTelemetryWriteURL(clusterID)
+	if writeURL == "" {
+		return nil
+	}
+	token, expiresAt, err := mintEdgeTelemetryToken(nodeID, clusterID, tenantID)
+	if err != nil {
+		logging.NewLogger().WithError(err).WithFields(logging.Fields{
+			"node_id":    nodeID,
+			"cluster_id": clusterID,
+		}).Warn("Failed to mint edge telemetry token")
+		return nil
+	}
+	return &pb.EdgeTelemetryConfig{
+		Enabled:     true,
+		WriteUrl:    writeURL,
+		BearerToken: token,
+		ExpiresAt:   expiresAt.Format(time.RFC3339),
+	}
+}
+
+func edgeTelemetryWriteURL(clusterID string) string {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return ""
+	}
+	clusterSlug := pkgdns.SanitizeLabel(clusterID)
+	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
+	if getClusterFn != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		cluster, err := getClusterFn(ctx, clusterID)
+		cancel()
+		if err == nil && cluster != nil {
+			if slug := pkgdns.ClusterSlug(clusterID, cluster.GetClusterName()); slug != "" {
+				clusterSlug = slug
+			}
+			if baseURL := strings.TrimSpace(cluster.GetBaseUrl()); baseURL != "" {
+				rootDomain = baseURL
+			}
+		}
+	}
+	if clusterSlug == "" || rootDomain == "" {
+		return ""
+	}
+	fqdn, ok := pkgdns.ServiceFQDN("telemetry", clusterSlug+"."+rootDomain)
+	if !ok || fqdn == "" {
+		return ""
+	}
+	return "https://" + fqdn + "/api/v1/write"
+}
+
+func mintEdgeTelemetryToken(nodeID, clusterID, tenantID string) (string, time.Time, error) {
+	privateKey, err := parseEdgeTelemetryPrivateKey()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(edgeTelemetryTokenTTL)
+	claims := edgeTelemetryClaims{
+		NodeID:    nodeID,
+		ClusterID: clusterID,
+		TenantID:  strings.TrimSpace(tenantID),
+		Role:      "edge_metrics_write",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "foghorn",
+			Subject:   "edge/" + nodeID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now.Add(-1 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+	}
+	claims.VMAccess.MetricsExtraLabels = "frameworks_node=" + nodeID
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	signed, err := token.SignedString(privateKey)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("sign telemetry token: %w", err)
+	}
+	return signed, expiresAt, nil
+}
+
+func parseEdgeTelemetryPrivateKey() (*ecdsa.PrivateKey, error) {
+	encoded := strings.TrimSpace(os.Getenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"))
+	if encoded == "" {
+		return nil, fmt.Errorf("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64 is not set")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode telemetry private key: %w", err)
+	}
+	block, _ := pem.Decode(decoded)
+	if block == nil {
+		return nil, fmt.Errorf("decode telemetry private key PEM: no PEM block found")
+	}
+	keyAny, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse telemetry private key: %w", err)
+	}
+	key, ok := keyAny.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("telemetry private key is %T, expected ECDSA", keyAny)
+	}
+	return key, nil
 }
 
 func resolveClusterTLSBundle(nodeID string) *pb.TLSCertBundle {
@@ -4787,6 +4930,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 		ClusterId:        clusterID,
 		FoghornGrpcAddr:  foghornAddr,
 		InternalCaBundle: readConfiguredCABundle(),
+		Telemetry:        buildEdgeTelemetryConfig(nodeID, clusterID, strings.TrimSpace(valResp.GetTenantId())),
 	}
 
 	return resp, nil

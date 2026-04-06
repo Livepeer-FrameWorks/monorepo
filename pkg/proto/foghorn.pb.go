@@ -146,9 +146,10 @@ type PreRegisterEdgeResponse struct {
 	// Deprecated: Marked as deprecated in foghorn.proto.
 	CertPem string `protobuf:"bytes,6,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"` // Deprecated: certs now delivered via ConfigSeed only
 	// Deprecated: Marked as deprecated in foghorn.proto.
-	KeyPem           string `protobuf:"bytes,7,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`                                 // Deprecated: certs now delivered via ConfigSeed only
-	ClusterId        string `protobuf:"bytes,8,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                        // Raw cluster ID (may differ from DNS-safe cluster_slug)
-	InternalCaBundle []byte `protobuf:"bytes,9,opt,name=internal_ca_bundle,json=internalCaBundle,proto3" json:"internal_ca_bundle,omitempty"` // Optional internal CA bundle for pre-Connect trust bootstrap
+	KeyPem           string               `protobuf:"bytes,7,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`                                 // Deprecated: certs now delivered via ConfigSeed only
+	ClusterId        string               `protobuf:"bytes,8,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                        // Raw cluster ID (may differ from DNS-safe cluster_slug)
+	InternalCaBundle []byte               `protobuf:"bytes,9,opt,name=internal_ca_bundle,json=internalCaBundle,proto3" json:"internal_ca_bundle,omitempty"` // Optional internal CA bundle for pre-Connect trust bootstrap
+	Telemetry        *EdgeTelemetryConfig `protobuf:"bytes,10,opt,name=telemetry,proto3" json:"telemetry,omitempty"`                                        // Optional per-edge telemetry remote_write config
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -244,6 +245,13 @@ func (x *PreRegisterEdgeResponse) GetClusterId() string {
 func (x *PreRegisterEdgeResponse) GetInternalCaBundle() []byte {
 	if x != nil {
 		return x.InternalCaBundle
+	}
+	return nil
+}
+
+func (x *PreRegisterEdgeResponse) GetTelemetry() *EdgeTelemetryConfig {
+	if x != nil {
+		return x.Telemetry
 	}
 	return nil
 }
@@ -824,12 +832,12 @@ var File_foghorn_proto protoreflect.FileDescriptor
 
 const file_foghorn_proto_rawDesc = "" +
 	"\n" +
-	"\rfoghorn.proto\x12\afoghorn\x1a\fshared.proto\"\x90\x01\n" +
+	"\rfoghorn.proto\x12\afoghorn\x1a\fcommon.proto\x1a\fshared.proto\"\x90\x01\n" +
 	"\x16PreRegisterEdgeRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vexternal_ip\x18\x02 \x01(\tR\n" +
 	"externalIp\x12*\n" +
-	"\x11preferred_node_id\x18\x03 \x01(\tR\x0fpreferredNodeId\"\xcc\x02\n" +
+	"\x11preferred_node_id\x18\x03 \x01(\tR\x0fpreferredNodeId\"\x87\x03\n" +
 	"\x17PreRegisterEdgeResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1f\n" +
 	"\vedge_domain\x18\x02 \x01(\tR\n" +
@@ -842,7 +850,9 @@ const file_foghorn_proto_rawDesc = "" +
 	"\akey_pem\x18\a \x01(\tB\x02\x18\x01R\x06keyPem\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\b \x01(\tR\tclusterId\x12,\n" +
-	"\x12internal_ca_bundle\x18\t \x01(\fR\x10internalCaBundle\"X\n" +
+	"\x12internal_ca_bundle\x18\t \x01(\fR\x10internalCaBundle\x129\n" +
+	"\ttelemetry\x18\n" +
+	" \x01(\v2\x1b.common.EdgeTelemetryConfigR\ttelemetry\"X\n" +
 	"\x12SetNodeModeRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x15\n" +
@@ -954,76 +964,78 @@ var file_foghorn_proto_goTypes = []any{
 	(*InvalidateTenantCacheResponse)(nil),  // 8: foghorn.InvalidateTenantCacheResponse
 	(*TerminateTenantStreamsRequest)(nil),  // 9: foghorn.TerminateTenantStreamsRequest
 	(*TerminateTenantStreamsResponse)(nil), // 10: foghorn.TerminateTenantStreamsResponse
-	(*CreateClipRequest)(nil),              // 11: shared.CreateClipRequest
-	(*DeleteClipRequest)(nil),              // 12: shared.DeleteClipRequest
-	(*StartDVRRequest)(nil),                // 13: shared.StartDVRRequest
-	(*StopDVRRequest)(nil),                 // 14: shared.StopDVRRequest
-	(*DeleteDVRRequest)(nil),               // 15: shared.DeleteDVRRequest
-	(*ViewerEndpointRequest)(nil),          // 16: shared.ViewerEndpointRequest
-	(*IngestEndpointRequest)(nil),          // 17: shared.IngestEndpointRequest
-	(*CreateVodUploadRequest)(nil),         // 18: shared.CreateVodUploadRequest
-	(*CompleteVodUploadRequest)(nil),       // 19: shared.CompleteVodUploadRequest
-	(*AbortVodUploadRequest)(nil),          // 20: shared.AbortVodUploadRequest
-	(*GetVodAssetRequest)(nil),             // 21: shared.GetVodAssetRequest
-	(*ListVodAssetsRequest)(nil),           // 22: shared.ListVodAssetsRequest
-	(*DeleteVodAssetRequest)(nil),          // 23: shared.DeleteVodAssetRequest
-	(*CreateClipResponse)(nil),             // 24: shared.CreateClipResponse
-	(*DeleteClipResponse)(nil),             // 25: shared.DeleteClipResponse
-	(*StartDVRResponse)(nil),               // 26: shared.StartDVRResponse
-	(*StopDVRResponse)(nil),                // 27: shared.StopDVRResponse
-	(*DeleteDVRResponse)(nil),              // 28: shared.DeleteDVRResponse
-	(*ViewerEndpointResponse)(nil),         // 29: shared.ViewerEndpointResponse
-	(*IngestEndpointResponse)(nil),         // 30: shared.IngestEndpointResponse
-	(*CreateVodUploadResponse)(nil),        // 31: shared.CreateVodUploadResponse
-	(*CompleteVodUploadResponse)(nil),      // 32: shared.CompleteVodUploadResponse
-	(*AbortVodUploadResponse)(nil),         // 33: shared.AbortVodUploadResponse
-	(*VodAssetInfo)(nil),                   // 34: shared.VodAssetInfo
-	(*ListVodAssetsResponse)(nil),          // 35: shared.ListVodAssetsResponse
-	(*DeleteVodAssetResponse)(nil),         // 36: shared.DeleteVodAssetResponse
+	(*EdgeTelemetryConfig)(nil),            // 11: common.EdgeTelemetryConfig
+	(*CreateClipRequest)(nil),              // 12: shared.CreateClipRequest
+	(*DeleteClipRequest)(nil),              // 13: shared.DeleteClipRequest
+	(*StartDVRRequest)(nil),                // 14: shared.StartDVRRequest
+	(*StopDVRRequest)(nil),                 // 15: shared.StopDVRRequest
+	(*DeleteDVRRequest)(nil),               // 16: shared.DeleteDVRRequest
+	(*ViewerEndpointRequest)(nil),          // 17: shared.ViewerEndpointRequest
+	(*IngestEndpointRequest)(nil),          // 18: shared.IngestEndpointRequest
+	(*CreateVodUploadRequest)(nil),         // 19: shared.CreateVodUploadRequest
+	(*CompleteVodUploadRequest)(nil),       // 20: shared.CompleteVodUploadRequest
+	(*AbortVodUploadRequest)(nil),          // 21: shared.AbortVodUploadRequest
+	(*GetVodAssetRequest)(nil),             // 22: shared.GetVodAssetRequest
+	(*ListVodAssetsRequest)(nil),           // 23: shared.ListVodAssetsRequest
+	(*DeleteVodAssetRequest)(nil),          // 24: shared.DeleteVodAssetRequest
+	(*CreateClipResponse)(nil),             // 25: shared.CreateClipResponse
+	(*DeleteClipResponse)(nil),             // 26: shared.DeleteClipResponse
+	(*StartDVRResponse)(nil),               // 27: shared.StartDVRResponse
+	(*StopDVRResponse)(nil),                // 28: shared.StopDVRResponse
+	(*DeleteDVRResponse)(nil),              // 29: shared.DeleteDVRResponse
+	(*ViewerEndpointResponse)(nil),         // 30: shared.ViewerEndpointResponse
+	(*IngestEndpointResponse)(nil),         // 31: shared.IngestEndpointResponse
+	(*CreateVodUploadResponse)(nil),        // 32: shared.CreateVodUploadResponse
+	(*CompleteVodUploadResponse)(nil),      // 33: shared.CompleteVodUploadResponse
+	(*AbortVodUploadResponse)(nil),         // 34: shared.AbortVodUploadResponse
+	(*VodAssetInfo)(nil),                   // 35: shared.VodAssetInfo
+	(*ListVodAssetsResponse)(nil),          // 36: shared.ListVodAssetsResponse
+	(*DeleteVodAssetResponse)(nil),         // 37: shared.DeleteVodAssetResponse
 }
 var file_foghorn_proto_depIdxs = []int32{
-	0,  // 0: foghorn.SetNodeModeResponse.status:type_name -> foghorn.SetNodeModeStatus
-	11, // 1: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
-	12, // 2: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
-	13, // 3: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
-	14, // 4: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
-	15, // 5: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
-	16, // 6: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	17, // 7: foghorn.ViewerControlService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
-	18, // 8: foghorn.VodControlService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
-	19, // 9: foghorn.VodControlService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
-	20, // 10: foghorn.VodControlService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
-	21, // 11: foghorn.VodControlService.GetVodAsset:input_type -> shared.GetVodAssetRequest
-	22, // 12: foghorn.VodControlService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
-	23, // 13: foghorn.VodControlService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	1,  // 14: foghorn.EdgeProvisioningService.PreRegisterEdge:input_type -> foghorn.PreRegisterEdgeRequest
-	3,  // 15: foghorn.NodeControlService.SetNodeOperationalMode:input_type -> foghorn.SetNodeModeRequest
-	5,  // 16: foghorn.NodeControlService.GetNodeHealth:input_type -> foghorn.GetNodeHealthRequest
-	9,  // 17: foghorn.TenantControlService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
-	7,  // 18: foghorn.TenantControlService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
-	24, // 19: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
-	25, // 20: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
-	26, // 21: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
-	27, // 22: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
-	28, // 23: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
-	29, // 24: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	30, // 25: foghorn.ViewerControlService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
-	31, // 26: foghorn.VodControlService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
-	32, // 27: foghorn.VodControlService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
-	33, // 28: foghorn.VodControlService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
-	34, // 29: foghorn.VodControlService.GetVodAsset:output_type -> shared.VodAssetInfo
-	35, // 30: foghorn.VodControlService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
-	36, // 31: foghorn.VodControlService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	2,  // 32: foghorn.EdgeProvisioningService.PreRegisterEdge:output_type -> foghorn.PreRegisterEdgeResponse
-	4,  // 33: foghorn.NodeControlService.SetNodeOperationalMode:output_type -> foghorn.SetNodeModeResponse
-	6,  // 34: foghorn.NodeControlService.GetNodeHealth:output_type -> foghorn.GetNodeHealthResponse
-	10, // 35: foghorn.TenantControlService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
-	8,  // 36: foghorn.TenantControlService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
-	19, // [19:37] is the sub-list for method output_type
-	1,  // [1:19] is the sub-list for method input_type
-	1,  // [1:1] is the sub-list for extension type_name
-	1,  // [1:1] is the sub-list for extension extendee
-	0,  // [0:1] is the sub-list for field type_name
+	11, // 0: foghorn.PreRegisterEdgeResponse.telemetry:type_name -> common.EdgeTelemetryConfig
+	0,  // 1: foghorn.SetNodeModeResponse.status:type_name -> foghorn.SetNodeModeStatus
+	12, // 2: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
+	13, // 3: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
+	14, // 4: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
+	15, // 5: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
+	16, // 6: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	17, // 7: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	18, // 8: foghorn.ViewerControlService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
+	19, // 9: foghorn.VodControlService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
+	20, // 10: foghorn.VodControlService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
+	21, // 11: foghorn.VodControlService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
+	22, // 12: foghorn.VodControlService.GetVodAsset:input_type -> shared.GetVodAssetRequest
+	23, // 13: foghorn.VodControlService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
+	24, // 14: foghorn.VodControlService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
+	1,  // 15: foghorn.EdgeProvisioningService.PreRegisterEdge:input_type -> foghorn.PreRegisterEdgeRequest
+	3,  // 16: foghorn.NodeControlService.SetNodeOperationalMode:input_type -> foghorn.SetNodeModeRequest
+	5,  // 17: foghorn.NodeControlService.GetNodeHealth:input_type -> foghorn.GetNodeHealthRequest
+	9,  // 18: foghorn.TenantControlService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
+	7,  // 19: foghorn.TenantControlService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
+	25, // 20: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
+	26, // 21: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
+	27, // 22: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
+	28, // 23: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
+	29, // 24: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	30, // 25: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	31, // 26: foghorn.ViewerControlService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
+	32, // 27: foghorn.VodControlService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
+	33, // 28: foghorn.VodControlService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
+	34, // 29: foghorn.VodControlService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
+	35, // 30: foghorn.VodControlService.GetVodAsset:output_type -> shared.VodAssetInfo
+	36, // 31: foghorn.VodControlService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
+	37, // 32: foghorn.VodControlService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
+	2,  // 33: foghorn.EdgeProvisioningService.PreRegisterEdge:output_type -> foghorn.PreRegisterEdgeResponse
+	4,  // 34: foghorn.NodeControlService.SetNodeOperationalMode:output_type -> foghorn.SetNodeModeResponse
+	6,  // 35: foghorn.NodeControlService.GetNodeHealth:output_type -> foghorn.GetNodeHealthResponse
+	10, // 36: foghorn.TenantControlService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
+	8,  // 37: foghorn.TenantControlService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
+	20, // [20:38] is the sub-list for method output_type
+	2,  // [2:20] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_proto_init() }
@@ -1031,6 +1043,7 @@ func file_foghorn_proto_init() {
 	if File_foghorn_proto != nil {
 		return
 	}
+	file_common_proto_init()
 	file_shared_proto_init()
 	file_foghorn_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
