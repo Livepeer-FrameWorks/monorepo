@@ -67,3 +67,36 @@ func TestLoadEnv_NoFile(t *testing.T) {
 	logger := logrus.New()
 	LoadEnv(logger)
 }
+
+func TestIsProductionUsesBuildEnvOnly(t *testing.T) {
+	t.Setenv("BUILD_ENV", "production")
+	t.Setenv("NODE_ENV", "development")
+	t.Setenv("GO_ENV", "development")
+	if !IsProduction() {
+		t.Fatalf("expected BUILD_ENV=production to report production")
+	}
+
+	t.Setenv("BUILD_ENV", "development")
+	t.Setenv("NODE_ENV", "production")
+	t.Setenv("GO_ENV", "production")
+	if IsProduction() {
+		t.Fatalf("expected BUILD_ENV=development to win over NODE_ENV/GO_ENV")
+	}
+}
+
+func TestIsDevelopmentUsesBuildEnvOnly(t *testing.T) {
+	t.Setenv("BUILD_ENV", "")
+	if !IsDevelopment() {
+		t.Fatalf("expected empty BUILD_ENV to default to development")
+	}
+
+	t.Setenv("BUILD_ENV", "development")
+	if !IsDevelopment() {
+		t.Fatalf("expected BUILD_ENV=development to report development")
+	}
+
+	t.Setenv("BUILD_ENV", "production")
+	if IsDevelopment() {
+		t.Fatalf("expected BUILD_ENV=production to report non-development")
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/attribution"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/pkg/clients/commodore"
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -106,11 +107,8 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 			return
 		}
 
-		// Set all auth tokens as HttpOnly cookies
-		// Check multiple env vars for dev mode detection
-		isDev := os.Getenv("ENV") == "development" ||
-			os.Getenv("BUILD_ENV") == "development" ||
-			os.Getenv("GO_ENV") == "development"
+		// Set all auth tokens as HttpOnly cookies.
+		isDev := config.IsDevelopment()
 		secure := !isDev
 		sameSite := http.SameSiteLaxMode
 
@@ -206,10 +204,8 @@ func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 			return
 		}
 
-		// Set all auth tokens as HttpOnly cookies (same as Login)
-		isDev := os.Getenv("ENV") == "development" ||
-			os.Getenv("BUILD_ENV") == "development" ||
-			os.Getenv("GO_ENV") == "development"
+		// Set all auth tokens as HttpOnly cookies (same as Login).
+		isDev := config.IsDevelopment()
 		secure := !isDev
 		sameSite := http.SameSiteLaxMode
 
@@ -345,10 +341,8 @@ func (h *AuthHandlers) Logout() gin.HandlerFunc {
 			return
 		}
 
-		// Clear all auth cookies (must match domain and Secure flag to actually clear)
-		isDev := os.Getenv("ENV") == "development" ||
-			os.Getenv("BUILD_ENV") == "development" ||
-			os.Getenv("GO_ENV") == "development"
+		// Clear all auth cookies (must match domain and Secure flag to actually clear).
+		isDev := config.IsDevelopment()
 		secure := !isDev
 		c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
 		c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
@@ -374,10 +368,8 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 		resp, err := h.commodore.RefreshToken(c.Request.Context(), refreshToken)
 		if err != nil {
 			h.logger.WithError(err).Debug("Token refresh failed")
-			// Clear invalid cookies (must match Secure flag to actually clear)
-			isDev := os.Getenv("ENV") == "development" ||
-				os.Getenv("BUILD_ENV") == "development" ||
-				os.Getenv("GO_ENV") == "development"
+			// Clear invalid cookies (must match Secure flag to actually clear).
+			isDev := config.IsDevelopment()
 			secure := !isDev
 			c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
 			c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
@@ -386,11 +378,8 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 			return
 		}
 
-		// Set all auth tokens as HttpOnly cookies
-		// Check multiple env vars for dev mode detection
-		isDev := os.Getenv("ENV") == "development" ||
-			os.Getenv("BUILD_ENV") == "development" ||
-			os.Getenv("GO_ENV") == "development"
+		// Set all auth tokens as HttpOnly cookies.
+		isDev := config.IsDevelopment()
 		secure := !isDev
 		sameSite := http.SameSiteLaxMode
 

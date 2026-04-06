@@ -46,7 +46,7 @@ func (f *fakeInternalCAStore) SaveInternalCertificate(_ context.Context, _ *stor
 }
 
 func TestEnsureCARequiresManagedFilesInProduction(t *testing.T) {
-	t.Setenv("NODE_ENV", "production")
+	t.Setenv("BUILD_ENV", "production")
 
 	manager := NewInternalCAManager(&fakeInternalCAStore{}, nil, nil, "frameworks.network")
 	err := manager.EnsureCA(context.Background())
@@ -65,7 +65,7 @@ func TestEnsureCAImportsManagedMaterialFromBase64Env(t *testing.T) {
 		t.Fatalf("generate intermediate test cert: %v", err)
 	}
 
-	t.Setenv("NODE_ENV", "production")
+	t.Setenv("BUILD_ENV", "production")
 	t.Setenv("NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64", base64.StdEncoding.EncodeToString([]byte(rootCertPEM)))
 	t.Setenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64", base64.StdEncoding.EncodeToString([]byte(intermediateCertPEM)))
 	t.Setenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64", base64.StdEncoding.EncodeToString([]byte(intermediateKeyPEM)))

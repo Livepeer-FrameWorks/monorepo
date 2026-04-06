@@ -171,7 +171,6 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 	if grpcAllowInsecure == "" {
 		grpcAllowInsecure = "true"
 	}
-	nodeEnv := config.EnvVars["NODE_ENV"]
 	buildEnv := config.EnvVars["BUILD_ENV"]
 	expectedServices := metadataStringSlice(config.Metadata["expected_internal_grpc_services"])
 
@@ -201,9 +200,8 @@ NODE_ID=%s
 GRPC_TLS_PKI_DIR=/etc/frameworks/pki
 GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
 GRPC_ALLOW_INSECURE=%s
-NODE_ENV=%s
 BUILD_ENV=%s
-`, qmGRPCAddr, navigatorGRPCAddr, serviceToken, token, certIssueToken, dnsPort, nodeType, nodeName, host.ExternalIP, nodeID, grpcAllowInsecure, nodeEnv, buildEnv)
+`, qmGRPCAddr, navigatorGRPCAddr, serviceToken, token, certIssueToken, dnsPort, nodeType, nodeName, host.ExternalIP, nodeID, grpcAllowInsecure, buildEnv)
 
 	if upstreamDNS != "" {
 		envContent += fmt.Sprintf("UPSTREAM_DNS=%s\n", upstreamDNS)

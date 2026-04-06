@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -164,7 +163,7 @@ func main() {
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       5 * time.Second,
@@ -838,9 +837,7 @@ func adminSessionMAC(apiKey string) string {
 }
 
 func setAdminSessionCookie(c *gin.Context, apiKey string) {
-	isDev := os.Getenv("ENV") == "development" ||
-		os.Getenv("BUILD_ENV") == "development" ||
-		os.Getenv("GO_ENV") == "development"
+	isDev := config.IsDevelopment()
 	secure := !isDev
 	c.SetCookie("skipper_session", adminSessionMAC(apiKey), 86400, "/", "", secure, true)
 }

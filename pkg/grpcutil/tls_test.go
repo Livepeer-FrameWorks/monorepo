@@ -51,7 +51,7 @@ func TestBuildServerTLSConfigAllowsExplicitInsecure(t *testing.T) {
 }
 
 func TestBuildServerTLSConfigRejectsInsecureInProduction(t *testing.T) {
-	t.Setenv("NODE_ENV", "production")
+	t.Setenv("BUILD_ENV", "production")
 
 	_, err := buildServerTLSConfig(ServerTLSConfig{AllowInsecure: true})
 	if err == nil {
@@ -73,7 +73,7 @@ func TestBuildClientTLSConfigInsecure(t *testing.T) {
 }
 
 func TestBuildClientTLSConfigRejectsInsecureInProduction(t *testing.T) {
-	t.Setenv("NODE_ENV", "production")
+	t.Setenv("BUILD_ENV", "production")
 
 	_, insecureAllowed, err := buildClientTLSConfig(ClientTLSConfig{AllowInsecure: true})
 	if err == nil {

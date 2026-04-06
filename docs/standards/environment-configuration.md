@@ -72,7 +72,7 @@ There is a strong shared set already:
 - `GRPC_TLS_KEY_PATH`
 - `GRPC_TLS_SERVER_NAME`
 
-There are also service-specific aliases such as `DECKLOG_ALLOW_INSECURE`, `DECKLOG_TLS_*`, `FOGHORN_GRPC_TLS_*`, and `HELMSMAN_GRPC_TLS_*`.
+There are also compose/provisioning inputs such as `DECKLOG_TLS_*`, `FOGHORN_GRPC_TLS_*`, and `HELMSMAN_GRPC_TLS_*`.
 
 Recommendation:
 
@@ -151,17 +151,18 @@ Use `BUILD_ENV` as the repo-wide selector. Keep `NODE_ENV` only where frontend t
 - `GO_ENV`
 - most direct app logic reads of `NODE_ENV`
 
-### Phase out as service-specific TLS aliases
+### Compose and provisioning TLS inputs
 
-These are acceptable as compose/provisioning shims, but application code should prefer shared `GRPC_*` keys:
+These still exist because a shared source env file has to feed multiple services with different leaf cert paths:
 
-- `DECKLOG_ALLOW_INSECURE`
 - `DECKLOG_TLS_CERT_FILE`
 - `DECKLOG_TLS_KEY_FILE`
 - `FOGHORN_GRPC_TLS_CERT_PATH`
 - `FOGHORN_GRPC_TLS_KEY_PATH`
 - `HELMSMAN_GRPC_TLS_CERT_PATH`
 - `HELMSMAN_GRPC_TLS_KEY_PATH`
+
+At runtime, services should read `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, and `GRPC_TLS_KEY_PATH`.
 
 ### Remove from base env if service defaults are good enough
 
@@ -203,20 +204,8 @@ These are real runtime knobs but are missing or under-documented in env examples
 These are especially confusing because the same key changes meaning across layers:
 
 - `CLICKHOUSE_HOST`: canonical input is a host name in `base.env`, but config generation rewrites it into `host:port` runtime form
-- `NAVIGATOR_URL`: despite the name, runtime code uses it as a bare `host:port` gRPC address rather than a URL
+- `NAVIGATOR_URL`: was overloaded between a runtime gRPC address and an ingress-sync HTTP URL; split these into `NAVIGATOR_GRPC_ADDR` and `NAVIGATOR_HTTP_URL`
 
-## Repeatable Audit
-
-Run:
-
-```bash
-make env-audit
-```
-
-That script reports:
-
-- shared variables used across services
-- per-service backend and frontend inventories
 - keys declared in env files but not read by app code
 - keys read in code but missing from env/example files
 

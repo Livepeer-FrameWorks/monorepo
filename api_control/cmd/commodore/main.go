@@ -111,7 +111,7 @@ func main() {
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       5 * time.Second,

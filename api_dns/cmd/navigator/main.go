@@ -193,8 +193,8 @@ func main() {
 			},
 		})
 
-		grpcCertFile := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_CERT_FILE", ""))
-		grpcKeyFile := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_KEY_FILE", ""))
+		grpcCertFile := strings.TrimSpace(config.GetEnv("GRPC_TLS_CERT_PATH", ""))
+		grpcKeyFile := strings.TrimSpace(config.GetEnv("GRPC_TLS_KEY_PATH", ""))
 		tlsCfg := grpcutil.ServerTLSConfig{
 			CertFile:      grpcCertFile,
 			KeyFile:       grpcKeyFile,

@@ -272,7 +272,7 @@ func main() {
 	// --- Initialize Clients (Lifted from Handlers) ---
 
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
-	allowInsecure := config.GetEnv("DECKLOG_USE_TLS", "false") != "true"
+	allowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", true)
 	decklogConfig := decklog.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
 		AllowInsecure: allowInsecure,
@@ -367,15 +367,15 @@ func main() {
 	}
 
 	// Navigator (gRPC) - wildcard certificate retrieval for edge ConfigSeed
-	navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "navigator:19004")
+	navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "navigator:18011")
 	navigatorClient, err := navclient.NewClient(navclient.Config{
 		Addr:          navigatorAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("NAVIGATOR_ALLOW_INSECURE", true),
-		CACertFile:    config.GetEnv("NAVIGATOR_GRPC_CA_FILE", ""),
-		ServerName:    config.GetEnv("NAVIGATOR_GRPC_SERVER_NAME", ""),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Navigator gRPC client - TLS bundles will not be seeded")

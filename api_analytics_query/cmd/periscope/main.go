@@ -33,7 +33,7 @@ func main() {
 	// PostgreSQL is ONLY used for billing_cursors (usage summary tracking)
 	// All analytics queries use ClickHouse exclusively
 	dbURL := config.RequireEnv("DATABASE_URL")
-	clickhouseHost := config.RequireEnv("CLICKHOUSE_HOST")
+	clickhouseAddr := config.RequireEnv("CLICKHOUSE_ADDR")
 	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
 	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
 	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
@@ -49,7 +49,7 @@ func main() {
 
 	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
-	chConfig.Addr = []string{clickhouseHost}
+	chConfig.Addr = []string{clickhouseAddr}
 	chConfig.Database = clickhouseDB
 	chConfig.Username = clickhouseUser
 	chConfig.Password = clickhousePassword
@@ -65,7 +65,7 @@ func main() {
 	healthChecker.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
 		"DATABASE_URL":    dbURL,
-		"CLICKHOUSE_HOST": clickhouseHost,
+		"CLICKHOUSE_ADDR": clickhouseAddr,
 		"CLICKHOUSE_DB":   clickhouseDB,
 		"JWT_SECRET":      jwtSecret,
 	}))

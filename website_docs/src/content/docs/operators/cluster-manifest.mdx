@@ -391,12 +391,9 @@ The merged result is written to `/etc/frameworks/{service}.env` on each host.
 
 For `profile: production`, provisioning also forces secure internal gRPC defaults:
 
-- `NODE_ENV=production`
 - `BUILD_ENV=production`
 - `GRPC_ALLOW_INSECURE=false`
-- `NAVIGATOR_ALLOW_INSECURE=false`
-- `DECKLOG_ALLOW_INSECURE=false`
-- `DECKLOG_USE_TLS=true`
+- `GIN_MODE=release` when not explicitly set or when set to `debug`
 
 If `navigator` is enabled in a production manifest, the shared `env_file` must also provide:
 

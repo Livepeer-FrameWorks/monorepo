@@ -65,15 +65,25 @@ func GetEnvBool(key string, defaultValue bool) bool {
 }
 
 // IsProduction reports whether the current process is running with production
-// runtime settings.
+// runtime settings. BUILD_ENV is the repo-wide runtime selector.
 func IsProduction() bool {
-	for _, key := range []string{"NODE_ENV", "GO_ENV", "BUILD_ENV"} {
-		switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
-		case "production", "prod":
-			return true
-		}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILD_ENV"))) {
+	case "production", "prod":
+		return true
+	default:
+		return false
 	}
-	return false
+}
+
+// IsDevelopment reports whether the current process should use development
+// runtime behavior. An empty BUILD_ENV is treated as development.
+func IsDevelopment() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILD_ENV"))) {
+	case "", "development", "dev":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetLogLevel gets the log level from environment

@@ -255,7 +255,7 @@ func computeDerived(env map[string]string) error {
 	if err != nil {
 		return err
 	}
-	env["CLICKHOUSE_HOST"] = fmt.Sprintf("%s:%s", chHost, chNativePort)
+	env["CLICKHOUSE_ADDR"] = fmt.Sprintf("%s:%s", chHost, chNativePort)
 	env["CLICKHOUSE_PORT"] = chHTTPPort
 
 	if errSet := setHTTPURL(env, "COMMODORE_URL", "COMMODORE_HOST", "COMMODORE_PORT"); errSet != nil {
@@ -286,7 +286,7 @@ func computeDerived(env map[string]string) error {
 		return errSet
 	}
 
-	// Navigator gRPC URL (no scheme, just host:port)
+	// Navigator gRPC address (no scheme, just host:port).
 	navHost, err := require(env, "NAVIGATOR_HOST")
 	if err != nil {
 		return err
@@ -295,7 +295,7 @@ func computeDerived(env map[string]string) error {
 	if err != nil {
 		return err
 	}
-	env["NAVIGATOR_URL"] = fmt.Sprintf("%s:%s", navHost, navGRPCPort)
+	env["NAVIGATOR_GRPC_ADDR"] = fmt.Sprintf("%s:%s", navHost, navGRPCPort)
 
 	// Control Plane gRPC addresses (host:port, no scheme)
 	// These are used for internal service-to-service communication

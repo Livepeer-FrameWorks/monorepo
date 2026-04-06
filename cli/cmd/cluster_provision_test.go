@@ -388,17 +388,17 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
-	if env["NODE_ENV"] != "production" {
-		t.Fatalf("expected NODE_ENV=production, got %q", env["NODE_ENV"])
-	}
 	if env["BUILD_ENV"] != "production" {
 		t.Fatalf("expected BUILD_ENV=production, got %q", env["BUILD_ENV"])
 	}
 	if env["GRPC_ALLOW_INSECURE"] != "false" {
 		t.Fatalf("expected GRPC_ALLOW_INSECURE=false, got %q", env["GRPC_ALLOW_INSECURE"])
 	}
-	if env["DECKLOG_USE_TLS"] != "true" {
-		t.Fatalf("expected DECKLOG_USE_TLS=true, got %q", env["DECKLOG_USE_TLS"])
+	if _, ok := env["NODE_ENV"]; ok {
+		t.Fatalf("expected NODE_ENV to be absent from service env, got %q", env["NODE_ENV"])
+	}
+	if _, ok := env["DECKLOG_USE_TLS"]; ok {
+		t.Fatalf("expected DECKLOG_USE_TLS to be absent from service env, got %q", env["DECKLOG_USE_TLS"])
 	}
 }
 
@@ -529,9 +529,6 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	}
 	if env["CLICKHOUSE_ADDR"] != "yuga-eu-1.internal:9000" {
 		t.Fatalf("expected CLICKHOUSE_ADDR to use mesh host, got %q", env["CLICKHOUSE_ADDR"])
-	}
-	if env["CLICKHOUSE_HOST"] != "yuga-eu-1.internal" {
-		t.Fatalf("expected CLICKHOUSE_HOST to use mesh host, got %q", env["CLICKHOUSE_HOST"])
 	}
 	if env["REDIS_FOGHORN_ADDR"] != "central-eu-1.internal:6379" {
 		t.Fatalf("expected REDIS_FOGHORN_ADDR to use mesh host, got %q", env["REDIS_FOGHORN_ADDR"])

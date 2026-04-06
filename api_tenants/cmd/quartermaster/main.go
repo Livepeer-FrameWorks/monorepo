@@ -42,7 +42,7 @@ func main() {
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	navigatorURL := config.GetEnv("NAVIGATOR_URL", "") // Load Navigator URL (optional)
+	navigatorGRPCAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "") // Optional: enables DNS features.
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -75,15 +75,15 @@ func main() {
 	var navigatorClient *navigator.Client
 	var err error
 
-	if navigatorURL != "" {
+	if navigatorGRPCAddr != "" {
 		navigatorClient, err = navigator.NewClient(navigator.Config{
-			Addr:          navigatorURL,
+			Addr:          navigatorGRPCAddr,
 			Timeout:       5 * time.Second,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("NAVIGATOR_ALLOW_INSECURE", true),
-			CACertFile:    config.GetEnv("NAVIGATOR_GRPC_CA_FILE", ""),
-			ServerName:    config.GetEnv("NAVIGATOR_GRPC_SERVER_NAME", ""),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			logger.WithError(err).Error("Failed to create Navigator client - DNS features will be disabled")
@@ -91,14 +91,14 @@ func main() {
 			defer func() { _ = navigatorClient.Close() }() // Ensure the client connection is closed
 		}
 	} else {
-		logger.Info("NAVIGATOR_URL not set - DNS features will be disabled")
+		logger.Info("NAVIGATOR_GRPC_ADDR not set - DNS features will be disabled")
 	}
 
 	// Create Decklog gRPC client for service events
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       5 * time.Second,

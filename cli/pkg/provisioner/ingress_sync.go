@@ -35,7 +35,7 @@ func (n *NginxProvisioner) installIngressSync(ctx context.Context, host inventor
 	envContent := fmt.Sprintf(`SERVICE_TOKEN=%s
 NODE_ID=%s
 QUARTERMASTER_URL=%s
-NAVIGATOR_URL=%s
+NAVIGATOR_HTTP_URL=%s
 QUARTERMASTER_CA_FILE=%s
 NAVIGATOR_CA_FILE=%s
 SITES_AVAILABLE_DIR=/etc/nginx/sites-available
@@ -77,7 +77,7 @@ import urllib.request
 TOKEN = os.environ["SERVICE_TOKEN"]
 NODE_ID = os.environ["NODE_ID"]
 QM_URL = os.environ["QUARTERMASTER_URL"].rstrip("/")
-NAV_URL = os.environ["NAVIGATOR_URL"].rstrip("/")
+NAV_URL = os.environ["NAVIGATOR_HTTP_URL"].rstrip("/")
 QM_CA_FILE = os.environ.get("QUARTERMASTER_CA_FILE", "").strip()
 NAV_CA_FILE = os.environ.get("NAVIGATOR_CA_FILE", "").strip()
 SITES_AVAILABLE = pathlib.Path(os.environ["SITES_AVAILABLE_DIR"])

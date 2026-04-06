@@ -2491,7 +2491,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				port = 9000
 			}
 			env["CLICKHOUSE_ADDR"] = fmt.Sprintf("%s:%d", chHost, port)
-			env["CLICKHOUSE_HOST"] = chHost
 			env["CLICKHOUSE_PORT"] = strconv.Itoa(port)
 			env["CLICKHOUSE_DB"] = "periscope"
 			env["CLICKHOUSE_USER"] = "frameworks"
@@ -2599,19 +2598,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 	if _, ok := manifest.Services["navigator"]; ok {
 		env["GRPC_TLS_CA_PATH"] = "/etc/frameworks/pki/ca.crt"
-		env["NAVIGATOR_GRPC_CA_FILE"] = "/etc/frameworks/pki/ca.crt"
-		if addr := env["NAVIGATOR_GRPC_ADDR"]; addr != "" && env["NAVIGATOR_URL"] == "" {
-			env["NAVIGATOR_URL"] = addr
-		}
 	}
 	if usesInternalGRPCLeaf(serviceNameFromTask(task.Name)) {
 		serviceName := serviceNameFromTask(task.Name)
 		env["GRPC_TLS_CERT_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.crt", serviceName)
 		env["GRPC_TLS_KEY_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.key", serviceName)
-		if serviceName == "navigator" {
-			env["NAVIGATOR_GRPC_CERT_FILE"] = env["GRPC_TLS_CERT_PATH"]
-			env["NAVIGATOR_GRPC_KEY_FILE"] = env["GRPC_TLS_KEY_PATH"]
-		}
 	}
 
 	// Service token
@@ -2701,7 +2692,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 
 	if baseName == "victoriametrics" {
 		if env["VM_RETENTION_PERIOD"] == "" {
-			env["VM_RETENTION_PERIOD"] = "30d"
+			env["VM_RETENTION_PERIOD"] = "90d"
 		}
 	}
 
@@ -2777,16 +2768,12 @@ func applyProductionRuntimeDefaults(manifest *inventory.Manifest, serviceID stri
 		return
 	}
 
-	env["NODE_ENV"] = "production"
 	env["BUILD_ENV"] = "production"
 	if strings.TrimSpace(env["GIN_MODE"]) == "" || strings.EqualFold(strings.TrimSpace(env["GIN_MODE"]), "debug") {
 		env["GIN_MODE"] = "release"
 	}
 
 	env["GRPC_ALLOW_INSECURE"] = "false"
-	env["NAVIGATOR_ALLOW_INSECURE"] = "false"
-	env["DECKLOG_ALLOW_INSECURE"] = "false"
-	env["DECKLOG_USE_TLS"] = "true"
 }
 
 func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string, env map[string]string) error {

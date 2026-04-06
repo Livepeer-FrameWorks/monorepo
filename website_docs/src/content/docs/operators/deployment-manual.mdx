@@ -315,7 +315,7 @@ SERVICE_TOKEN=<your-service-token>
 
 # Optional DNS
 
-NAVIGATOR_URL=
+NAVIGATOR_GRPC_ADDR=
 
 ````
 </TabItem>
@@ -397,8 +397,7 @@ BUILD_ENV=production
 DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
 
 # ClickHouse
-CLICKHOUSE_HOST=<clickhouse-host>
-CLICKHOUSE_PORT=9000
+CLICKHOUSE_ADDR=<clickhouse-host>:9000
 CLICKHOUSE_DB=periscope
 CLICKHOUSE_USER=<clickhouse-user>
 CLICKHOUSE_PASSWORD=<clickhouse-password>
@@ -660,12 +659,6 @@ LOG_LEVEL=info
 GIN_MODE=release
 BUILD_ENV=production
 
-# gRPC TLS (Helmsman control plane)
-
-GRPC_USE_TLS=false
-GRPC_TLS_CERT_PATH=
-GRPC_TLS_KEY_PATH=
-
 # Database
 
 DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
@@ -683,9 +676,8 @@ QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 # Decklog (local regional)
 
 DECKLOG_GRPC_ADDR=127.0.0.1:18006
-DECKLOG_USE_TLS=true
+GRPC_ALLOW_INSECURE=false
 GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
-GRPC_TLS_SERVER_NAME=decklog.<cluster-slug>.<root-domain>
 
 # GeoIP (MaxMind)
 
@@ -792,7 +784,7 @@ SERVICE_EVENTS_KAFKA_TOPIC=service_events
 
 # Internal gRPC TLS (production required)
 
-DECKLOG_ALLOW_INSECURE=false
+GRPC_ALLOW_INSECURE=false
 GRPC_TLS_CERT_PATH=/etc/frameworks/pki/services/decklog/tls.crt
 GRPC_TLS_KEY_PATH=/etc/frameworks/pki/services/decklog/tls.key
 GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
@@ -817,7 +809,7 @@ BUILD_ENV=production
 ENABLE_HEALTH_ENDPOINT=true
 
 # ClickHouse (native driver expects host:port)
-CLICKHOUSE_HOST=<clickhouse-host>:9000
+CLICKHOUSE_ADDR=<clickhouse-host>:9000
 CLICKHOUSE_DB=periscope
 CLICKHOUSE_USER=<clickhouse-user>
 CLICKHOUSE_PASSWORD=<clickhouse-password>
