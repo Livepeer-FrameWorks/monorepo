@@ -6,34 +6,20 @@ FROM node:24-alpine AS builder
 
 ARG BUILD_ENV
 ARG VITE_APP_URL
-ARG VITE_GITHUB_URL
-ARG VITE_LIVEPEER_URL
-ARG VITE_LIVEPEER_EXPLORER_URL
 ARG VITE_CONTACT_EMAIL
-ARG VITE_FORUM_URL
-ARG VITE_DISCORD_URL
-ARG VITE_DEMO_STREAM_NAME
-ARG VITE_COMPANY_NAME
-ARG VITE_DOMAIN
 ARG VITE_GATEWAY_URL
 ARG VITE_CONTACT_API_URL
 ARG VITE_TURNSTILE_FORMS_SITE_KEY
 ARG VITE_DOCS_SITE_URL
+ARG VITE_MARKETING_SITE_URL
 
 ENV VITE_APP_URL=${VITE_APP_URL}
-ENV VITE_GITHUB_URL=${VITE_GITHUB_URL}
-ENV VITE_LIVEPEER_URL=${VITE_LIVEPEER_URL}
-ENV VITE_LIVEPEER_EXPLORER_URL=${VITE_LIVEPEER_EXPLORER_URL}
 ENV VITE_CONTACT_EMAIL=${VITE_CONTACT_EMAIL}
-ENV VITE_FORUM_URL=${VITE_FORUM_URL}
-ENV VITE_DISCORD_URL=${VITE_DISCORD_URL}
-ENV VITE_DEMO_STREAM_NAME=${VITE_DEMO_STREAM_NAME}
-ENV VITE_COMPANY_NAME=${VITE_COMPANY_NAME}
-ENV VITE_DOMAIN=${VITE_DOMAIN}
 ENV VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
 ENV VITE_CONTACT_API_URL=${VITE_CONTACT_API_URL}
 ENV VITE_TURNSTILE_FORMS_SITE_KEY=${VITE_TURNSTILE_FORMS_SITE_KEY}
 ENV VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
+ENV VITE_MARKETING_SITE_URL=${VITE_MARKETING_SITE_URL}
 
 WORKDIR /app
 
@@ -54,6 +40,7 @@ COPY npm_studio/packages/core/package.json npm_studio/packages/core/
 COPY npm_studio/packages/react/package.json npm_studio/packages/react/
 COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
 COPY npm_studio/packages/wc/package.json npm_studio/packages/wc/
+COPY packages/site-config/package.json packages/site-config/
 COPY website_application/package.json website_application/
 COPY website_docs/package.json website_docs/
 COPY website_marketing/package.json website_marketing/
@@ -67,6 +54,7 @@ RUN if [ "$BUILD_ENV" = "development" ]; then \
     fi
 
 # copy the remaining sources now that deps are cached
+COPY packages/site-config/ packages/site-config/
 COPY npm_player/ npm_player/
 COPY website_marketing/ website_marketing/
 COPY docs/skills/ docs/skills/

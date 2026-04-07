@@ -710,8 +710,8 @@ func loadSkillFiles(logger logging.Logger) skillFiles {
 	}
 
 	if sf.didJSON != nil {
-		if addr := strings.TrimSpace(os.Getenv("PLATFORM_X402_ADDRESS")); addr != "" {
-			sf.didJSON = bytes.ReplaceAll(sf.didJSON, []byte("{{PLATFORM_X402_ADDRESS}}"), []byte(addr))
+		if addr := strings.TrimSpace(os.Getenv("X402_GAS_WALLET_ADDRESS")); addr != "" {
+			sf.didJSON = bytes.ReplaceAll(sf.didJSON, []byte("{{X402_GAS_WALLET_ADDRESS}}"), []byte(addr))
 		} else {
 			var doc map[string]interface{}
 			if err := json.Unmarshal(sf.didJSON, &doc); err == nil {

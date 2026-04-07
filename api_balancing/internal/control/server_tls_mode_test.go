@@ -11,7 +11,7 @@ import (
 func TestStartGRPCServer_NoTLSSource_FailsClosedByDefault(t *testing.T) {
 	t.Setenv("GRPC_TLS_CERT_PATH", "")
 	t.Setenv("GRPC_TLS_KEY_PATH", "")
-	t.Setenv("FOGHORN_ALLOW_INSECURE_CONTROL_GRPC", "")
+	t.Setenv("GRPC_ALLOW_INSECURE", "")
 
 	prevNavigator := navigatorClient
 	navigatorClient = nil
@@ -29,7 +29,7 @@ func TestStartGRPCServer_NoTLSSource_FailsClosedByDefault(t *testing.T) {
 func TestStartGRPCServer_NoTLSSource_AllowsExplicitInsecureMode(t *testing.T) {
 	t.Setenv("GRPC_TLS_CERT_PATH", "")
 	t.Setenv("GRPC_TLS_KEY_PATH", "")
-	t.Setenv("FOGHORN_ALLOW_INSECURE_CONTROL_GRPC", "true")
+	t.Setenv("GRPC_ALLOW_INSECURE", "true")
 
 	prevNavigator := navigatorClient
 	navigatorClient = nil

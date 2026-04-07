@@ -105,7 +105,7 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 		// Use contact email for ACME registration
 		// For tenant-specific certificates, we could look up tenant contact email from Quartermaster
 		// For now, use the platform default
-		email := os.Getenv("BRAND_CONTACT_EMAIL")
+		email := os.Getenv("FROM_EMAIL")
 		if email == "" {
 			email = "info@frameworks.network"
 		}
@@ -151,7 +151,7 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 	w.logger.WithField("count", len(bundles)).Info("Found tls bundles expiring soon")
 	for _, bundle := range bundles {
 		log := w.logger.WithField("bundle_id", bundle.BundleID).WithField("domains", bundle.Domains)
-		email := os.Getenv("BRAND_CONTACT_EMAIL")
+		email := os.Getenv("FROM_EMAIL")
 		if email == "" {
 			email = "info@frameworks.network"
 		}

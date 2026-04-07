@@ -284,7 +284,7 @@ func isDomainAllowed(domain string) bool {
 				suffixes = append(suffixes, s)
 			}
 		}
-	} else if root := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN")); root != "" {
+	} else if root := strings.TrimSpace(os.Getenv("BRAND_DOMAIN")); root != "" {
 		suffixes = []string{strings.ToLower(strings.TrimSuffix(root, "."))}
 	}
 

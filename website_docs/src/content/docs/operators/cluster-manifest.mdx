@@ -21,7 +21,9 @@ version: v1
 type: cluster
 profile: production
 channel: stable # optional: stable (default) or rc
-env_file: secrets/production.env # optional: shared secrets
+env_files:
+  - config/production.env
+  - secrets/production.env
 hosts: {}
 clusters: {}
 infrastructure: {}
@@ -89,14 +91,16 @@ channel: rc
 
 ---
 
-### env_file
+### env_files
 
-Path to a shared environment file for all services (optional). Relative to the manifest directory. Values in this file override auto-generated environment variables (DATABASE_URL, KAFKA_BROKERS, etc.) but are overridden by per-service `env_file` and inline `config` entries.
+Paths to shared environment files for all services (optional). Relative to the manifest directory. Files are loaded in order. Shared env files override auto-generated environment variables, but are overridden by per-service `env_file` and inline `config` entries.
 
 **Example:**
 
 ```yaml
-env_file: secrets/production.env
+env_files:
+  - config/production.env
+  - secrets/production.env
 ```
 
 ---
@@ -369,7 +373,7 @@ services:
 - `replicas` (optional) - Replica count
 - `port` (optional)
 - `grpc_port` (optional)
-- `env_file` (optional) - Per-service env file (overrides the top-level `env_file`)
+- `env_file` (optional) - Per-service env file (overrides the top-level `env_files`)
 - `depends_on` (optional)
 - `config` (optional) - Inline key/value overrides (highest priority)
 
@@ -383,7 +387,7 @@ services:
 **Environment variable merge order** (later wins):
 
 1. Auto-generated from manifest infrastructure (DATABASE_URL, KAFKA_BROKERS, QUARTERMASTER_GRPC_ADDR, etc.)
-2. Top-level `env_file`
+2. Top-level `env_files`
 3. Per-service `env_file`
 4. Inline `config` map
 
@@ -395,7 +399,7 @@ For `profile: production`, provisioning also forces secure internal gRPC default
 - `GRPC_ALLOW_INSECURE=false`
 - `GIN_MODE=release` when not explicitly set or when set to `debug`
 
-If `navigator` is enabled in a production manifest, the shared `env_file` must also provide:
+If `navigator` is enabled in a production manifest, the shared `env_files` must also provide:
 
 - one complete managed CA source for Navigator:
 - `NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE`
@@ -494,7 +498,7 @@ frameworks cluster provision --repo your-org/infra-repo \
   --github-private-key /path/to/key.pem
 ```
 
-The CLI fetches `cluster.yaml` (or whichever file `--manifest` specifies) from the repo, along with all referenced `env_file` paths (top-level and per-service). The standard provision pipeline then runs with the fetched data.
+The CLI fetches `cluster.yaml` (or whichever file `--manifest` specifies) from the repo, along with all referenced `env_files` and per-service `env_file` paths. The standard provision pipeline then runs with the fetched data.
 
 ### Configuration Keys
 

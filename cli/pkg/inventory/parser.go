@@ -12,7 +12,7 @@ import (
 )
 
 // ParseManifest parses a cluster manifest from raw YAML bytes without validation.
-// Use this when you need the parsed structure (e.g. to inspect HostsFile or EnvFile)
+// Use this when you need the parsed structure (e.g. to inspect HostsFile or EnvFiles)
 // before full validation.
 func ParseManifest(data []byte) (*Manifest, error) {
 	var manifest Manifest

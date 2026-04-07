@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper build-image-chandler \
-	proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test coverage env tidy update fmt format \
+	proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test coverage env frontend-env tidy update fmt format \
 	lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
@@ -345,8 +345,13 @@ coverage: proto graphql
 	@echo "Combined coverage saved to $(CURDIR)/coverage/coverage.out"
 
 env:
-	@echo "Generating .env from config/env/*.env..."
-	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run .
+	@echo "Generating .env and .env.frontend from config/env/*.env..."
+	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run . --output ../../.env
+	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run . --frontend-only --output ../../.env.frontend
+
+frontend-env:
+	@echo "Generating .env.frontend from config/env/base.env..."
+	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run . --frontend-only --output ../../.env.frontend
 
 # SOPS encryption for secrets.env (requires: brew install sops age)
 encrypt:

@@ -279,7 +279,7 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 
 	manifest := &inventory.Manifest{
 		RootDomain: "frameworks.network",
-		EnvFile:    envFile,
+		EnvFiles:   []string{envFile},
 		Hosts: map[string]inventory.Host{
 			"central-eu-1": {ExternalIP: "10.0.0.10"},
 		},
@@ -335,6 +335,140 @@ func TestEnsurePrivateerEnrollmentTokenWithClientStoresClusterToken(t *testing.T
 	}
 }
 
+func TestLoadInfraCredentialsLoadsSplitManifestEnvFiles(t *testing.T) {
+	baseEnv := writeTestEnvFile(t, "DATABASE_USER=frameworks\n")
+	secretsEnv := writeTestEnvFile(t, strings.Join([]string{
+		"DATABASE_PASSWORD=test-db-pass",
+		"CLICKHOUSE_PASSWORD=test-ch-pass",
+		"CLICKHOUSE_READONLY_PASSWORD=test-ch-ro-pass",
+	}, "\n")+"\n")
+
+	manifest := &inventory.Manifest{
+		EnvFiles: []string{baseEnv, secretsEnv},
+	}
+
+	creds := loadInfraCredentials(manifest, "")
+	if got := creds["postgres_user"]; got != "frameworks" {
+		t.Fatalf("expected postgres_user from first env file, got %v", got)
+	}
+	if got := creds["postgres_password"]; got != "test-db-pass" {
+		t.Fatalf("expected postgres_password from second env file, got %v", got)
+	}
+	if got := creds["clickhouse_password"]; got != "test-ch-pass" {
+		t.Fatalf("expected clickhouse_password from second env file, got %v", got)
+	}
+	if got := creds["clickhouse_readonly_password"]; got != "test-ch-ro-pass" {
+		t.Fatalf("expected clickhouse_readonly_password from second env file, got %v", got)
+	}
+}
+
+func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
+	baseEnv := writeTestEnvFile(t, strings.Join([]string{
+		"ARBITRUM_RPC_ENDPOINT=https://arb.example",
+		"LIVEPEER_GATEWAY_HOST=livepeer.frameworks.network",
+	}, "\n")+"\n")
+	secretsEnv := writeTestEnvFile(t, "LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
+
+	manifest := &inventory.Manifest{
+		RootDomain: "frameworks.network",
+		EnvFiles:   []string{baseEnv, secretsEnv},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-central-primary": {Name: "Media Central Primary"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {
+				Enabled: true,
+				Config: map[string]string{
+					"network": "arbitrum-one-mainnet",
+				},
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "livepeer-gateway",
+		Type:      "livepeer-gateway",
+		ClusterID: "media-central-primary",
+	}, manifest, map[string]interface{}{}, "", "")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["eth_url"]; got != "https://arb.example" {
+		t.Fatalf("expected eth_url from first env file, got %q", got)
+	}
+	if got := env["eth_acct_addr"]; got != "0xabc123" {
+		t.Fatalf("expected eth_acct_addr from second env file, got %q", got)
+	}
+	if got := env["gateway_host"]; got != "livepeer.media-central-primary.frameworks.network" {
+		t.Fatalf("expected cluster-scoped gateway_host, got %q", got)
+	}
+}
+
+func TestBuildServiceEnvVarsDerivesSharedRuntimeValues(t *testing.T) {
+	baseEnv := writeTestEnvFile(t, strings.Join([]string{
+		"FROM_EMAIL=info@frameworks.network",
+		"X402_GAS_WALLET_ADDRESS=0xabc123",
+	}, "\n")+"\n")
+
+	manifest := &inventory.Manifest{
+		RootDomain: "frameworks.network",
+		EnvFiles:   []string{baseEnv},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name: "foghorn",
+		Type: "foghorn",
+	}, manifest, map[string]interface{}{}, "", "")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["BRAND_DOMAIN"]; got != "frameworks.network" {
+		t.Fatalf("expected BRAND_DOMAIN from manifest root_domain, got %q", got)
+	}
+	if got := env["FROM_EMAIL"]; got != "info@frameworks.network" {
+		t.Fatalf("expected FROM_EMAIL from env files, got %q", got)
+	}
+	if got := env["X402_GAS_WALLET_ADDRESS"]; got != "0xabc123" {
+		t.Fatalf("expected X402_GAS_WALLET_ADDRESS from env files, got %q", got)
+	}
+	if got := env["DATABASE_USER"]; got != "frameworks" {
+		t.Fatalf("expected DATABASE_USER default, got %q", got)
+	}
+}
+
+func TestBuildServiceEnvVarsDerivesRegionFromHostLabels(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-us-1": {
+				Labels: map[string]string{
+					"region": "us-east",
+				},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "regional-us-1"},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name: "foghorn",
+		Type: "foghorn",
+		Host: "regional-us-1",
+	}, manifest, map[string]interface{}{}, "", "")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["REGION"]; got != "us-east" {
+		t.Fatalf("expected REGION from host labels, got %q", got)
+	}
+}
+
 func TestValidateInternalGRPCTLSCoverageRejectsHostWithoutPrivateer(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
@@ -367,7 +501,7 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
-		EnvFile:    envFile,
+		EnvFiles:   []string{envFile},
 		Hosts: map[string]inventory.Host{
 			"core-1": {ExternalIP: "10.0.0.1", Roles: []string{"control"}},
 		},
@@ -440,7 +574,7 @@ func TestBuildServiceEnvVarsProductionAcceptsNavigatorManagedCABase64Env(t *test
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
-		EnvFile:    envFile,
+		EnvFiles:   []string{envFile},
 		Hosts: map[string]inventory.Host{
 			"core-1": {ExternalIP: "10.0.0.1", Roles: []string{"control"}},
 		},
@@ -551,7 +685,7 @@ func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *t
 	envFile := writeTestEnvFile(t, "LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
 	manifest := &inventory.Manifest{
 		RootDomain: "frameworks.network",
-		EnvFile:    envFile,
+		EnvFiles:   []string{envFile},
 		Hosts: map[string]inventory.Host{
 			"core-1": {
 				ExternalIP: "10.0.0.10",
@@ -680,7 +814,7 @@ func TestResolveManifestToRepoPath(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "env_file with parent traversal",
+			name:        "env_files entry with parent traversal",
 			manifestDir: "clusters/production",
 			relPath:     "../../secrets/production.env",
 			want:        "secrets/production.env",

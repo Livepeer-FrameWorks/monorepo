@@ -505,9 +505,13 @@ func runClient(addr string, logger logging.Logger) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// Auto-detect TLS: FQDN address (contains dots, not a bare IP) → TLS.
-	// Docker service names (no dots) → insecure.
-	useTLS := cfg.GRPCUseTLS || grpcutil.AddrIsFQDN(addr)
+	// Use TLS whenever the deployment requires secure transport or trust
+	// material is present. Bare Docker service names still use insecure
+	// transport in local development when explicitly allowed.
+	useTLS := !cfg.GRPCAllowInsecure ||
+		cfg.GRPCTLSCAPath != "" ||
+		(cfg.GRPCTLSCertPath != "" && cfg.GRPCTLSKeyPath != "") ||
+		grpcutil.AddrIsFQDN(addr)
 	var creds credentials.TransportCredentials
 	if useTLS {
 		if cfg.GRPCTLSCertPath != "" && cfg.GRPCTLSKeyPath != "" {

@@ -827,10 +827,12 @@ export const sharedStyles = css`
 
     .fw-seek-progress {
       position: absolute;
+      width: 100%;
       height: 100%;
       border-radius: 9999px;
       background: hsl(var(--fw-accent));
-      will-change: width;
+      transform-origin: left center;
+      will-change: transform;
     }
 
     .fw-seek-hover-line {

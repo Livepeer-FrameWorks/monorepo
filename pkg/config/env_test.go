@@ -100,3 +100,31 @@ func TestIsDevelopmentUsesBuildEnvOnly(t *testing.T) {
 		t.Fatalf("expected BUILD_ENV=production to report non-development")
 	}
 }
+
+func TestGetCookieDomainNormalizesLeadingDot(t *testing.T) {
+	t.Setenv("COOKIE_DOMAIN", ".example.com")
+	if got := GetCookieDomain(); got != "example.com" {
+		t.Fatalf("expected example.com, got %q", got)
+	}
+}
+
+func TestGetGatewayPublicURLTrimsTrailingSlash(t *testing.T) {
+	t.Setenv("GATEWAY_PUBLIC_URL", "https://api.example.com/")
+	if got := GetGatewayPublicURL(); got != "https://api.example.com" {
+		t.Fatalf("expected trimmed gateway URL, got %q", got)
+	}
+}
+
+func TestGetGatewayGraphQLURLUsesGatewayPublicURL(t *testing.T) {
+	t.Setenv("GATEWAY_PUBLIC_URL", "https://api.example.com")
+	if got := GetGatewayGraphQLURL(); got != "https://api.example.com/graphql/" {
+		t.Fatalf("expected derived GraphQL URL, got %q", got)
+	}
+}
+
+func TestX402IncludeTestnetsEnabled(t *testing.T) {
+	t.Setenv("X402_INCLUDE_TESTNETS", "true")
+	if !X402IncludeTestnetsEnabled() {
+		t.Fatal("expected X402_INCLUDE_TESTNETS=true to enable testnets")
+	}
+}

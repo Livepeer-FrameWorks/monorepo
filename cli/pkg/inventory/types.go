@@ -7,13 +7,13 @@ import (
 
 // Manifest represents the cluster.yaml configuration
 type Manifest struct {
-	Version    string `yaml:"version"`
-	Type       string `yaml:"type"`                  // cluster | edge
-	Profile    string `yaml:"profile,omitempty"`     // control-plane | regional | analytics-only | edge-gateway
-	Channel    string `yaml:"channel,omitempty"`     // release channel: "stable" (default), "rc"
-	RootDomain string `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
-	EnvFile    string `yaml:"env_file,omitempty"`    // shared env file for all services (relative to manifest dir)
-	HostsFile  string `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
+	Version    string   `yaml:"version"`
+	Type       string   `yaml:"type"`                  // cluster | edge
+	Profile    string   `yaml:"profile,omitempty"`     // control-plane | regional | analytics-only | edge-gateway
+	Channel    string   `yaml:"channel,omitempty"`     // release channel: "stable" (default), "rc"
+	RootDomain string   `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
+	EnvFiles   []string `yaml:"env_files,omitempty"`   // shared env files for all services, merged in order
+	HostsFile  string   `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
 
 	Hosts          map[string]Host              `yaml:"hosts,omitempty"`
 	Clusters       map[string]ClusterConfig     `yaml:"clusters,omitempty"`
@@ -25,6 +25,20 @@ type Manifest struct {
 	GeoIP          *GeoIPConfig                 `yaml:"geoip,omitempty"`
 	TLSBundles     map[string]TLSBundleConfig   `yaml:"tls_bundles,omitempty"`
 	IngressSites   map[string]IngressSiteConfig `yaml:"ingress_sites,omitempty"`
+}
+
+func (m *Manifest) SharedEnvFiles() []string {
+	if m == nil {
+		return nil
+	}
+	files := make([]string, 0, len(m.EnvFiles))
+	for _, file := range m.EnvFiles {
+		if strings.TrimSpace(file) == "" {
+			continue
+		}
+		files = append(files, file)
+	}
+	return files
 }
 
 type GeoIPConfig struct {

@@ -64,6 +64,25 @@ func GetEnvBool(key string, defaultValue bool) bool {
 	return defaultValue
 }
 
+func GetCookieDomain() string {
+	return strings.TrimPrefix(strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")), ".")
+}
+
+func GetGatewayPublicURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL")), "/")
+}
+
+func GetGatewayGraphQLURL() string {
+	if gatewayURL := GetGatewayPublicURL(); gatewayURL != "" {
+		return gatewayURL + "/graphql/"
+	}
+	return "http://localhost:8080/graphql/"
+}
+
+func X402IncludeTestnetsEnabled() bool {
+	return GetEnvBool("X402_INCLUDE_TESTNETS", false)
+}
+
 // IsProduction reports whether the current process is running with production
 // runtime settings. BUILD_ENV is the repo-wide runtime selector.
 func IsProduction() bool {

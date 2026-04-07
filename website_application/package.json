@@ -73,6 +73,7 @@
     "static"
   ],
   "dependencies": {
+    "@frameworks/site-config": "workspace:^",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lint": "^6.9.5",
     "@codemirror/theme-one-dark": "^6.1.3",

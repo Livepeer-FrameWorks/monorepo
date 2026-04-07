@@ -14,17 +14,19 @@ import (
 )
 
 type Options struct {
-	BaseFile    string
-	SecretsFile string
-	OutputFile  string
-	Context     string
+	BaseFile     string
+	OverlayFiles []string
+	SecretsFile  string
+	OutputFile   string
+	Context      string
+	FrontendOnly bool
 }
 
 func (o *Options) defaults() error {
 	if o.BaseFile == "" {
 		return fmt.Errorf("BaseFile is required")
 	}
-	if o.SecretsFile == "" {
+	if !o.FrontendOnly && o.SecretsFile == "" {
 		return fmt.Errorf("SecretsFile is required")
 	}
 	if o.Context == "" {
@@ -119,13 +121,36 @@ func Generate(opts Options) (map[string]string, error) {
 		return nil, fmt.Errorf("read base env: %w", err)
 	}
 
+	env := make(map[string]string, len(baseEnv)+32)
+	merge(env, baseEnv)
+
+	for _, overlayPath := range opts.OverlayFiles {
+		overlayEnv, overlayErr := readEnvFile(overlayPath)
+		if overlayErr != nil {
+			return nil, fmt.Errorf("read overlay env %s: %w", overlayPath, overlayErr)
+		}
+		merge(env, overlayEnv)
+	}
+
+	if opts.FrontendOnly {
+		if err := computeViteVariables(env); err != nil {
+			return nil, fmt.Errorf("derive VITE variables: %w", err)
+		}
+		env = filterFrontendEnv(env)
+		env["ENV_CONTEXT"] = opts.Context
+		env["ENV_GENERATED_AT"] = time.Now().UTC().Format(time.RFC3339)
+		if opts.OutputFile != "" {
+			if err := writeEnvFile(opts.OutputFile, env); err != nil {
+				return nil, fmt.Errorf("write env file: %w", err)
+			}
+		}
+		return env, nil
+	}
+
 	secretsEnv, err := readEnvFile(opts.SecretsFile)
 	if err != nil {
 		return nil, fmt.Errorf("read secrets env: %w", err)
 	}
-
-	env := make(map[string]string, len(baseEnv)+len(secretsEnv)+32)
-	merge(env, baseEnv)
 	merge(env, secretsEnv)
 
 	if err := computeDerived(env); err != nil {
@@ -150,6 +175,16 @@ func Generate(opts Options) (map[string]string, error) {
 	}
 
 	return env, nil
+}
+
+func filterFrontendEnv(env map[string]string) map[string]string {
+	filtered := make(map[string]string)
+	for key, value := range env {
+		if strings.HasPrefix(key, "VITE_") {
+			filtered[key] = value
+		}
+	}
+	return filtered
 }
 
 func readEnvFile(path string) (map[string]string, error) {
@@ -384,11 +419,12 @@ func computeViteVariables(env map[string]string) error {
 	}
 	env["VITE_WEBHOOKS_URL"] = webhooksURL
 
-	authPublicURL, err := require(env, "AUTH_PUBLIC_URL")
+	// AUTH_PUBLIC_URL is always GATEWAY + /auth
+	authURL, err := joinURLPath(gatewayBaseURL, "/auth")
 	if err != nil {
-		return err
+		return fmt.Errorf("build auth URL: %w", err)
 	}
-	env["VITE_AUTH_URL"] = authPublicURL
+	env["VITE_AUTH_URL"] = authURL
 
 	// 2. APPLICATION URLS - Read from base.env
 	webappPublicURL, err := require(env, "WEBAPP_PUBLIC_URL")
@@ -436,80 +472,14 @@ func computeViteVariables(env map[string]string) error {
 	}
 	env["VITE_STREAMING_EDGE_URL"] = streamingEdgeURL
 
-	// Streaming ports for protocols that need explicit ports (SRT, RTMP)
-	env["VITE_STREAMING_RTMP_PORT"] = valueOrDefault(env, "STREAMING_RTMP_PORT", "1935")
-	env["VITE_STREAMING_SRT_PORT"] = valueOrDefault(env, "STREAMING_SRT_PORT", "8889")
+	env["VITE_CONTACT_EMAIL"] = valueOrDefault(env, "FROM_EMAIL", "info@frameworks.network")
 
-	// Streaming paths from base.env
-	env["VITE_STREAMING_HLS_PATH"] = valueOrDefault(env, "STREAMING_HLS_PATH", "/hls")
-	env["VITE_STREAMING_WEBRTC_PATH"] = valueOrDefault(env, "STREAMING_WEBRTC_PATH", "/webrtc")
-	env["VITE_STREAMING_RTMP_PATH"] = valueOrDefault(env, "STREAMING_RTMP_PATH", "/live")
-	env["VITE_STREAMING_EMBED_PATH"] = valueOrDefault(env, "STREAMING_EMBED_PATH", "/")
-
-	// 5. BRANDING - Passthrough from base.env
-	env["VITE_COMPANY_NAME"] = valueOrDefault(env, "BRAND_NAME", "FrameWorks")
-	env["VITE_DOMAIN"] = valueOrDefault(env, "BRAND_DOMAIN", "frameworks.network")
-	env["VITE_CONTACT_EMAIL"] = valueOrDefault(env, "BRAND_CONTACT_EMAIL", "info@frameworks.network")
-
-	// 6. EXTERNAL LINKS - Passthrough from base.env
-	githubURL, err := require(env, "GITHUB_URL")
-	if err != nil {
-		return err
-	}
-	env["VITE_GITHUB_URL"] = githubURL
-
-	livepeerURL, err := require(env, "LIVEPEER_URL")
-	if err != nil {
-		return err
-	}
-	env["VITE_LIVEPEER_URL"] = livepeerURL
-
-	livepeerExplorerURL, err := require(env, "LIVEPEER_EXPLORER_URL")
-	if err != nil {
-		return err
-	}
-	env["VITE_LIVEPEER_EXPLORER_URL"] = livepeerExplorerURL
-
-	forumURL, err := require(env, "FORUM_URL")
-	if err != nil {
-		return err
-	}
-	env["VITE_FORUM_URL"] = forumURL
-
-	discordURL, err := require(env, "DISCORD_URL")
-	if err != nil {
-		return err
-	}
-	env["VITE_DISCORD_URL"] = discordURL
-
-	demoStreamName, err := require(env, "DEMO_STREAM_NAME")
-	if err != nil {
-		return err
-	}
-	env["VITE_DEMO_STREAM_NAME"] = demoStreamName
-
-	// 7. TURNSTILE - Passthrough from secrets.env
 	if authKey := env["TURNSTILE_AUTH_SITE_KEY"]; authKey != "" {
 		env["VITE_TURNSTILE_AUTH_SITE_KEY"] = authKey
 	}
 	if formsKey := env["TURNSTILE_FORMS_SITE_KEY"]; formsKey != "" {
 		env["VITE_TURNSTILE_FORMS_SITE_KEY"] = formsKey
 	}
-
-	// 8. BUILD CONFIG - Extract BASE_PATH from WEBAPP_PUBLIC_URL
-	webappPath, err := extractPathFromURL(webappPublicURL)
-	if err != nil {
-		return fmt.Errorf("extract path from webapp URL: %w", err)
-	}
-	env["BASE_PATH"] = webappPath
-
-	// 9. DOCS CONFIG - Extract DOCS_BASE_PATH from DOCS_PUBLIC_URL
-	var docsPath string
-	docsPath, err = extractPathFromURL(docsPublicURL)
-	if err != nil {
-		return fmt.Errorf("extract path from docs URL: %w", err)
-	}
-	env["DOCS_BASE_PATH"] = docsPath
 
 	return nil
 }

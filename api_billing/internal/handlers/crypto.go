@@ -10,13 +10,13 @@ import (
 	"math"
 	"math/big"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"frameworks/pkg/billing"
 	decklogclient "frameworks/pkg/clients/decklog"
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -65,7 +65,7 @@ func NewCryptoMonitor(database *sql.DB, log logging.Logger, decklogSvc *decklogc
 		logger:          log,
 		decklogClient:   decklogSvc,
 		stopCh:          make(chan struct{}),
-		includeTestnets: os.Getenv("CRYPTO_INCLUDE_TESTNETS") == "true",
+		includeTestnets: config.X402IncludeTestnetsEnabled(),
 	}
 }
 

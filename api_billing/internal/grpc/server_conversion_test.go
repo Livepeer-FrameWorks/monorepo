@@ -189,7 +189,7 @@ func TestCreateStripePayment_ResponseDecodeAndValidation(t *testing.T) {
 func TestCreateMolliePayment_ResponseDecodeAndCheckoutURL(t *testing.T) {
 	t.Setenv("MOLLIE_API_KEY", "mollie_test_123")
 	t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.com")
-	t.Setenv("API_PUBLIC_URL", "https://api.example.com")
+	t.Setenv("GATEWAY_PUBLIC_URL", "https://api.example.com")
 
 	s := &PurserServer{}
 

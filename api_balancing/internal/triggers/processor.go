@@ -73,7 +73,6 @@ type Processor struct {
 	dvrService          DVRStarter // Internal DVR orchestration (FoghornGRPCServer)
 	metrics             *ProcessorMetrics
 	nodeID              string
-	region              string
 	clusterID           string
 	ownerTenantID       string
 
@@ -106,7 +105,6 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		loadBalancer:    loadBalancer,
 		geoipClient:     geoipClient,
 		nodeID:          os.Getenv("NODE_ID"),
-		region:          os.Getenv("REGION"),
 		clusterID:       os.Getenv("CLUSTER_ID"),
 	}
 

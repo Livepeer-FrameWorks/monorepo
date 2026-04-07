@@ -154,7 +154,6 @@ var requiredExternalEnv = map[string][]RequiredEnvVar{
 		{Key: "CLOUDFLARE_API_TOKEN", SetupGuide: "https://dash.cloudflare.com/profile/api-tokens"},
 		{Key: "CLOUDFLARE_ZONE_ID", SetupGuide: "Cloudflare dashboard > domain > Zone ID"},
 		{Key: "CLOUDFLARE_ACCOUNT_ID", SetupGuide: "Cloudflare dashboard > Account Home"},
-		{Key: "NAVIGATOR_ROOT_DOMAIN", SetupGuide: "Your root domain (e.g. example.com)"},
 	},
 	"chatwoot": {
 		{Key: "DATABASE_HOST", SetupGuide: "Enable postgres in infrastructure config"},
@@ -164,10 +163,10 @@ var requiredExternalEnv = map[string][]RequiredEnvVar{
 		{Key: "DATABASE_HOST", SetupGuide: "Enable postgres in infrastructure config"},
 	},
 	"livepeer-gateway": {
-		{Key: "eth_url", SetupGuide: "Set the network RPC in env_file (for example ARBITRUM_RPC_ENDPOINT or LIVEPEER_ETH_URL)"},
+		{Key: "eth_url", SetupGuide: "Set the network RPC in shared env files (for example ARBITRUM_RPC_ENDPOINT or LIVEPEER_ETH_URL)"},
 	},
 	"livepeer-signer": {
-		{Key: "eth_url", SetupGuide: "Set the network RPC in env_file (for example ARBITRUM_RPC_ENDPOINT or LIVEPEER_ETH_URL)"},
+		{Key: "eth_url", SetupGuide: "Set the network RPC in shared env files (for example ARBITRUM_RPC_ENDPOINT or LIVEPEER_ETH_URL)"},
 	},
 }
 

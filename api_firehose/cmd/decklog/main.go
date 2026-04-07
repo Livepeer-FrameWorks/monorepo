@@ -72,8 +72,8 @@ func main() {
 	metrics.KafkaMessages, metrics.KafkaDuration, metrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
 
 	// Get TLS configuration
-	certFile := config.GetEnv("GRPC_TLS_CERT_PATH", config.GetEnv("DECKLOG_TLS_CERT_FILE", "/etc/letsencrypt/live/decklog/fullchain.pem"))
-	keyFile := config.GetEnv("GRPC_TLS_KEY_PATH", config.GetEnv("DECKLOG_TLS_KEY_FILE", "/etc/letsencrypt/live/decklog/privkey.pem"))
+	certFile := config.GetEnv("GRPC_TLS_CERT_PATH", "")
+	keyFile := config.GetEnv("GRPC_TLS_KEY_PATH", "")
 	allowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
 
 	// Create gRPC server

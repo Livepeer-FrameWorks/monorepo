@@ -3,13 +3,13 @@ package resources
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/introspection"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -70,10 +70,7 @@ type APICatalog struct {
 
 // RegisterAPISchemaResources registers API schema resources.
 func RegisterAPISchemaResources(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, logger logging.Logger) {
-	graphqlURL := os.Getenv("GRAPHQL_URL")
-	if graphqlURL == "" {
-		graphqlURL = "http://localhost:8080/graphql/"
-	}
+	graphqlURL := config.GetGatewayGraphQLURL()
 	catalogIntrospectionClient = introspection.NewClient(graphqlURL, logger)
 
 	catalogTemplateLoader = introspection.NewTemplateLoader()

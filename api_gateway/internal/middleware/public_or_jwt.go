@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -173,7 +172,7 @@ func applyX402Cookies(c *gin.Context, authResult *AuthResult) {
 
 	isDev := config.IsDevelopment()
 	secure := !isDev
-	cookieDomain := strings.TrimPrefix(os.Getenv("COOKIE_DOMAIN"), ".")
+	cookieDomain := config.GetCookieDomain()
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("access_token", authResult.JWTToken, 15*60, "/", cookieDomain, secure, true)
 	if authResult.TenantID != "" {

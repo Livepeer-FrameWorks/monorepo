@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -200,10 +201,7 @@ func (s *CheckoutService) createMollieCheckout(ctx context.Context, req Checkout
 	amountStr := fmt.Sprintf("%.2f", float64(req.AmountCents)/100)
 
 	webhookURL := ""
-	webhookBase := strings.TrimSpace(os.Getenv("API_PUBLIC_URL"))
-	if webhookBase == "" {
-		webhookBase = strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL"))
-	}
+	webhookBase := config.GetGatewayPublicURL()
 	if webhookBase != "" {
 		webhookURL = webhookBase + "/webhooks/billing/mollie"
 	}

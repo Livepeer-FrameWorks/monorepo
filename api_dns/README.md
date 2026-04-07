@@ -26,7 +26,7 @@ Configuration comes from the top-level `config/env` stack. Generate `.env` with 
 
 - `ACME_ENV` (`production` or `staging`, default: `production`)
 - `NAVIGATOR_PROXY_SERVICES` (comma-separated service types to proxy via Cloudflare; default: `app,website,docs`)
-- `NAVIGATOR_CERT_ALLOWED_SUFFIXES` (comma-separated domain suffix allowlist; default: `NAVIGATOR_ROOT_DOMAIN`)
+- `NAVIGATOR_CERT_ALLOWED_SUFFIXES` (comma-separated domain suffix allowlist; default: `BRAND_DOMAIN`)
 
 ## Health & ports
 

@@ -32,6 +32,7 @@ import (
 	"frameworks/pkg/clients/decklog"
 	navclient "frameworks/pkg/clients/navigator"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/config"
 	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/grpcutil"
@@ -70,6 +71,14 @@ func categorizeEnrollmentError(err error) bool {
 }
 
 var edgeIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
+
+func platformRootDomain() string {
+	rootDomain := strings.TrimSpace(os.Getenv("BRAND_DOMAIN"))
+	if rootDomain == "" {
+		rootDomain = "frameworks.network"
+	}
+	return rootDomain
+}
 
 func normalizePreferredEdgeNodeID(raw string) string {
 	candidate := strings.ToLower(strings.TrimSpace(raw))
@@ -1551,10 +1560,7 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 			"key_file":  keyFile,
 		}).Info("gRPC server TLS: file-based")
 	} else if navigatorClient != nil {
-		rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-		if rootDomain == "" {
-			rootDomain = "frameworks.network"
-		}
+		rootDomain := platformRootDomain()
 		wildcardDomain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(localClusterID), rootDomain)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1651,7 +1657,7 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 }
 
 func allowInsecureControlGRPC() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("FOGHORN_ALLOW_INSECURE_CONTROL_GRPC")), "true")
+	return config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
 }
 
 // Helpers
@@ -2537,10 +2543,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		}
 	}
 	if resolvedClusterID != "" {
-		rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-		if rootDomain == "" {
-			rootDomain = "frameworks.network"
-		}
+		rootDomain := platformRootDomain()
 		slug := pkgdns.SanitizeLabel(resolvedClusterID)
 
 		siteConfig = &pb.SiteConfig{
@@ -2627,7 +2630,7 @@ func edgeTelemetryWriteURL(clusterID string) string {
 		return ""
 	}
 	clusterSlug := pkgdns.SanitizeLabel(clusterID)
-	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
+	rootDomain := platformRootDomain()
 	if getClusterFn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		cluster, err := getClusterFn(ctx, clusterID)
@@ -4579,10 +4582,7 @@ func StartCertRefreshLoop(ctx context.Context, interval time.Duration, log loggi
 func refreshTLSBundles(log logging.Logger) {
 	// Refresh the server's own TLS certificate if Navigator-backed
 	if navigatorClient != nil && serverCert.cert.Load() != nil {
-		rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-		if rootDomain == "" {
-			rootDomain = "frameworks.network"
-		}
+		rootDomain := platformRootDomain()
 		domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(localClusterID), rootDomain)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -4773,10 +4773,7 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 		return nil, false, nil
 	}
 
-	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-	if rootDomain == "" {
-		rootDomain = "frameworks.network"
-	}
+	rootDomain := platformRootDomain()
 	domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(node.GetClusterId()), rootDomain)
 
 	certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: domain})
@@ -4913,10 +4910,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 		nodeID = hex.EncodeToString(b)
 	}
 
-	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-	if rootDomain == "" {
-		rootDomain = "frameworks.network"
-	}
+	rootDomain := platformRootDomain()
 
 	edgeDomain := fmt.Sprintf("%s.%s.%s", edgeNodeRecordLabel(nodeID), clusterSlug, rootDomain)
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)

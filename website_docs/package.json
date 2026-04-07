@@ -13,6 +13,7 @@
     "format": "prettier --write 'src/**/*.{ts,mts,astro,md,mdx}'"
   },
   "dependencies": {
+    "@frameworks/site-config": "workspace:^",
     "@astrojs/sitemap": "^3.7.1",
     "@astrojs/starlight": "^0.38.1",
     "@astrojs/svelte": "^8.0.0",

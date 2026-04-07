@@ -22,6 +22,7 @@ import (
 	"frameworks/pkg/billing"
 	decklogclient "frameworks/pkg/clients/decklog"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/config"
 	"frameworks/pkg/countries"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/grpcutil"
@@ -1770,12 +1771,9 @@ func (s *PurserServer) createMolliePayment(invoiceID, tenantID string, amount fl
 	if webappURL == "" {
 		return "", "", fmt.Errorf("WEBAPP_PUBLIC_URL is required")
 	}
-	webhookURL := strings.TrimSpace(os.Getenv("API_PUBLIC_URL"))
+	webhookURL := config.GetGatewayPublicURL()
 	if webhookURL == "" {
-		webhookURL = strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL"))
-	}
-	if webhookURL == "" {
-		return "", "", fmt.Errorf("API_PUBLIC_URL or GATEWAY_PUBLIC_URL is required")
+		return "", "", fmt.Errorf("GATEWAY_PUBLIC_URL is required")
 	}
 
 	payload := map[string]interface{}{
@@ -5085,10 +5083,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 	}
 
 	// Build webhook URL (routed through Gateway)
-	webhookBaseURL := strings.TrimSpace(os.Getenv("API_PUBLIC_URL"))
-	if webhookBaseURL == "" {
-		webhookBaseURL = strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL"))
-	}
+	webhookBaseURL := config.GetGatewayPublicURL()
 	webhookURL := ""
 	if webhookBaseURL != "" {
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"
@@ -5184,10 +5179,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 	}
 
 	// Build webhook URL
-	webhookBaseURL := strings.TrimSpace(os.Getenv("API_PUBLIC_URL"))
-	if webhookBaseURL == "" {
-		webhookBaseURL = strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL"))
-	}
+	webhookBaseURL := config.GetGatewayPublicURL()
 	webhookURL := ""
 	if webhookBaseURL != "" {
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"

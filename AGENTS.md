@@ -94,6 +94,24 @@ Never run: `reset`, `checkout <file>`, `clean`, `stash`, `revert`, `cherry-pick`
 
 If changes need undoing, tell the user what to run.
 
+## SOPS Files
+
+For `gitops/secrets/*.env`, do not edit the encrypted file directly and do not improvise custom edit flows.
+
+Use `gitops/scripts/sops-env.sh` only:
+
+- `delete <file> <KEY> [KEY...]`
+- `set <file> <KEY> <VALUE>`
+- `insert-after <file> <AFTER_KEY> <KEY> <VALUE>`
+- `insert-before <file> <BEFORE_KEY> <KEY> <VALUE>`
+
+Required flow:
+
+1. decrypt to a temp plaintext file in the same directory
+2. modify the temp plaintext file
+3. re-encrypt the temp plaintext file
+4. replace the original encrypted file
+
 ## Behavioral Guidelines
 
 **Ask, don't assume** - One clarifying question beats speculative changes

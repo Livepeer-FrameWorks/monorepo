@@ -1,4 +1,13 @@
 import { getStreamingConfig } from "$lib/stores/streaming-config.svelte";
+import {
+  GITHUB_URL,
+  STREAMING_RTMP_PORT,
+  STREAMING_SRT_PORT,
+  STREAMING_RTMP_PATH,
+  STREAMING_HLS_PATH,
+  STREAMING_WEBRTC_PATH,
+  STREAMING_EMBED_PATH,
+} from "@frameworks/site-config";
 
 // Parse a URL and extract components for building protocol-specific URLs
 interface ParsedStreamingUrl {
@@ -77,15 +86,15 @@ const rawConfig = {
   playUrl: import.meta.env.VITE_STREAMING_PLAY_URL, // Foghorn for HTTP 307 redirects
   edgeUrl: import.meta.env.VITE_STREAMING_EDGE_URL, // Direct edge for non-HTTP protocols
   graphqlUrl: import.meta.env.VITE_GRAPHQL_HTTP_URL,
-  rtmpPort: import.meta.env.VITE_STREAMING_RTMP_PORT || "1935",
-  srtPort: import.meta.env.VITE_STREAMING_SRT_PORT || "8889",
-  rtmpPath: import.meta.env.VITE_STREAMING_RTMP_PATH || "/live",
-  hlsPath: import.meta.env.VITE_STREAMING_HLS_PATH || "/hls",
-  webrtcPath: import.meta.env.VITE_STREAMING_WEBRTC_PATH || "/webrtc",
-  embedPath: import.meta.env.VITE_STREAMING_EMBED_PATH || "/",
+  rtmpPort: STREAMING_RTMP_PORT,
+  srtPort: STREAMING_SRT_PORT,
+  rtmpPath: STREAMING_RTMP_PATH,
+  hlsPath: STREAMING_HLS_PATH,
+  webrtcPath: STREAMING_WEBRTC_PATH,
+  embedPath: STREAMING_EMBED_PATH,
   marketingSiteUrl: import.meta.env.VITE_MARKETING_SITE_URL,
   docsSiteUrl: import.meta.env.VITE_DOCS_SITE_URL,
-  githubUrl: import.meta.env.VITE_GITHUB_URL,
+  githubUrl: GITHUB_URL,
 };
 
 // Parsed URLs for deriving hostnames and TLS mode

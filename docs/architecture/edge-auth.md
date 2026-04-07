@@ -17,12 +17,10 @@ The server checks for file-based env vars first, then queries Navigator if
 available. Navigator returns the cluster wildcard cert which Foghorn stores
 atomically and rotates at runtime without restart.
 
-Client-side TLS is auto-detected in Helmsman: if the Foghorn address contains a
-dot (FQDN), TLS is enabled. Docker service names without dots default to insecure
-connections for local development.
-
-`GRPC_USE_TLS` is **not used**. TLS is determined by cert availability (server)
-and FQDN detection (client).
+Client-side TLS is auto-detected in Helmsman. TLS is used whenever the Foghorn
+address is an FQDN, trust material is provided via `GRPC_TLS_*`, or
+`GRPC_ALLOW_INSECURE=false`. Docker service names without dots can still use
+insecure connections for local development when explicitly allowed.
 
 **Implementation:** `api_balancing/internal/control` (server),
 `api_sidecar/internal/control` (client)

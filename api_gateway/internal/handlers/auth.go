@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 
 	"frameworks/api_gateway/internal/attribution"
@@ -72,7 +71,7 @@ func NewAuthHandlers(commodoreClient *commodore.GRPCClient, logger logging.Logge
 	return &AuthHandlers{
 		commodore:    commodoreClient,
 		logger:       logger,
-		cookieDomain: os.Getenv("COOKIE_DOMAIN"),
+		cookieDomain: config.GetCookieDomain(),
 	}
 }
 

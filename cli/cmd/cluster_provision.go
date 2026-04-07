@@ -169,8 +169,8 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 
 	// Collect all referenced file paths (env files + host inventory)
 	filesToFetch := []string{}
-	if manifest.EnvFile != "" {
-		repoPath, pathErr := resolveManifestToRepoPath(manifestDir, manifest.EnvFile)
+	for _, envFile := range manifest.SharedEnvFiles() {
+		repoPath, pathErr := resolveManifestToRepoPath(manifestDir, envFile)
 		if pathErr != nil {
 			return pathErr
 		}
@@ -242,7 +242,7 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 	}
 
 	// Write fetched manifest preserving its directory structure so that
-	// manifest-relative paths (env_file, hosts_file) resolve correctly.
+	// manifest-relative paths (env_files, hosts_file) resolve correctly.
 	tmpManifest := filepath.Join(tmpDir, manifestFile)
 	if err := os.MkdirAll(filepath.Dir(tmpManifest), 0o700); err != nil {
 		return fmt.Errorf("failed to create manifest dir: %w", err)
@@ -892,7 +892,7 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 		return fmt.Errorf("host %s has no resolved cluster", task.Host)
 	}
 
-	defaultEmail := strings.TrimSpace(os.Getenv("BRAND_CONTACT_EMAIL"))
+	defaultEmail := strings.TrimSpace(os.Getenv("FROM_EMAIL"))
 	if defaultEmail == "" {
 		defaultEmail = "info@frameworks.network"
 	}
@@ -1944,27 +1944,31 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface
 	return metadata
 }
 
-// loadInfraCredentials reads the manifest env_file and extracts database credentials
+// loadInfraCredentials reads the manifest env files and extracts database credentials
 // needed by infrastructure Initialize/Configure steps.
 func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) map[string]interface{} {
 	result := make(map[string]interface{})
-	if manifest.EnvFile == "" {
+	envFiles := manifest.SharedEnvFiles()
+	if len(envFiles) == 0 {
 		return result
-	}
-
-	envPath := manifest.EnvFile
-	if manifestDir != "" && !filepath.IsAbs(envPath) {
-		envPath = filepath.Join(manifestDir, envPath)
 	}
 
 	env := make(map[string]string)
-	if err := loadEnvFile(envPath, env); err != nil {
-		return result
+	for _, envFile := range envFiles {
+		envPath := envFile
+		if manifestDir != "" && !filepath.IsAbs(envPath) {
+			envPath = filepath.Join(manifestDir, envPath)
+		}
+		if err := loadEnvFile(envPath, env); err != nil {
+			return result
+		}
 	}
 
 	// Map env vars to metadata keys used by provisioners
 	if v := env["DATABASE_USER"]; v != "" {
 		result["postgres_user"] = v
+	} else {
+		result["postgres_user"] = "frameworks"
 	}
 	if v := env["DATABASE_PASSWORD"]; v != "" {
 		result["postgres_password"] = v
@@ -2087,7 +2091,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 				fmt.Printf("      %s — %s\n", mk.Key, mk.SetupGuide)
 			}
 			if !ignoreValidation {
-				return nil, fmt.Errorf("%s requires %d missing env var(s) — provide them in env_file or use --ignore-validation to deploy without starting", task.Name, len(missing))
+				return nil, fmt.Errorf("%s requires %d missing env var(s) — provide them in shared env files, a per-service env_file, or use --ignore-validation to deploy without starting", task.Name, len(missing))
 			}
 			config.DeferStart = true
 			fmt.Printf("  ⏸ %s: deploying without starting (--ignore-validation)\n", task.Name)
@@ -2101,7 +2105,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 
 	// Skip validation for deferred services
 	if config.DeferStart {
-		fmt.Printf("  ⏸ %s deployed but not started. Add missing config to env_file, then re-run.\n", task.Name)
+		fmt.Printf("  ⏸ %s deployed but not started. Add missing config to the shared env files or service env_file, then re-run.\n", task.Name)
 		return &taskProvisionOutcome{
 			config:            config,
 			previouslyRunning: serviceRunning(beforeState),
@@ -2123,7 +2127,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}
 
 	// Infrastructure tasks: run Initialize + Configure after Provision/Validate.
-	// Load credentials from manifest env_file so Initialize can create app users.
+	// Load credentials from manifest env files so Initialize can create app users.
 	if task.Phase == orchestrator.PhaseInfrastructure {
 		infraCreds := loadInfraCredentials(manifest, manifestDir)
 		for k, v := range infraCreds {
@@ -2441,7 +2445,7 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 }
 
 // buildServiceEnvVars generates merged environment variables for a service.
-// Merge order (later wins): auto-generated → shared env_file → per-service env_file → inline config.
+// Merge order (later wins): auto-generated → shared env_files → per-service env_file → inline config.
 func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, perServiceEnvFile string, manifestDir string) (map[string]string, error) {
 	env := make(map[string]string)
 
@@ -2552,10 +2556,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if baseName == "navigator" {
 		env["NAVIGATOR_PORT"] = "18010"
 		env["NAVIGATOR_GRPC_PORT"] = "18011"
-		if manifest.RootDomain != "" && env["NAVIGATOR_ROOT_DOMAIN"] == "" {
-			env["NAVIGATOR_ROOT_DOMAIN"] = manifest.RootDomain
-		}
-		// BRAND_CONTACT_EMAIL comes from env_file (FROM_EMAIL in production.env)
 	}
 
 	// Listmonk URL — self-hosted, address from manifest
@@ -2596,6 +2596,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if task.Host != "" {
 		env["NODE_ID"] = task.Host
 	}
+	if region := manifestTaskRegion(manifest, task); region != "" && env["REGION"] == "" {
+		env["REGION"] = region
+	}
 	if _, ok := manifest.Services["navigator"]; ok {
 		env["GRPC_TLS_CA_PATH"] = "/etc/frameworks/pki/ca.crt"
 	}
@@ -2617,14 +2620,14 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// 2. Shared env_file from manifest root
-	if manifest.EnvFile != "" {
-		envPath := manifest.EnvFile
+	// 2. Shared env files from manifest root
+	for _, envFile := range manifest.SharedEnvFiles() {
+		envPath := envFile
 		if manifestDir != "" && !filepath.IsAbs(envPath) {
 			envPath = filepath.Join(manifestDir, envPath)
 		}
 		if err := loadEnvFile(envPath, env); err != nil {
-			return nil, fmt.Errorf("manifest env_file: %w", err)
+			return nil, fmt.Errorf("manifest env_files: %w", err)
 		}
 	}
 
@@ -2738,6 +2741,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if manifest.RootDomain != "" && env["COOKIE_DOMAIN"] == "" {
 		env["COOKIE_DOMAIN"] = manifest.RootDomain
 	}
+	if manifest.RootDomain != "" && env["BRAND_DOMAIN"] == "" {
+		env["BRAND_DOMAIN"] = manifest.RootDomain
+	}
+	if env["DATABASE_USER"] == "" {
+		env["DATABASE_USER"] = "frameworks"
+	}
 
 	// Construct DATABASE_URL from merged credentials (operator may have set
 	// DATABASE_USER / DATABASE_PASSWORD in their env_file).
@@ -2837,6 +2846,33 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 	case "livepeer-signer":
 		normalizeLivepeerEnvVars(env)
 	}
+}
+
+func manifestTaskRegion(manifest *inventory.Manifest, task *orchestrator.Task) string {
+	if manifest == nil || task == nil {
+		return ""
+	}
+	if task.Host != "" {
+		if host, ok := manifest.Hosts[task.Host]; ok {
+			if region := strings.TrimSpace(host.Labels["region"]); region != "" {
+				return region
+			}
+			clusterID := strings.TrimSpace(host.Cluster)
+			if clusterID != "" {
+				if cluster, ok := manifest.Clusters[clusterID]; ok {
+					if region := strings.TrimSpace(cluster.Region); region != "" {
+						return region
+					}
+				}
+			}
+		}
+	}
+	if task.ClusterID != "" {
+		if cluster, ok := manifest.Clusters[task.ClusterID]; ok {
+			return strings.TrimSpace(cluster.Region)
+		}
+	}
+	return ""
 }
 
 const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webhooks/livepeer/auth"

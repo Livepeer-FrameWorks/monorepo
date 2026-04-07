@@ -76,7 +76,7 @@ Public metadata served by the API gateway for agent and skill discovery. Source 
 
 These follow the [Agent Skills](https://agentskills.io) open standard adopted by Claude Code, OpenClaw, Cursor, Gemini CLI, and 25+ other agent products.
 
-The DID document (`did.json`) substitutes `{{PLATFORM_X402_ADDRESS}}` at runtime from the environment.
+The DID document (`did.json`) substitutes `{{X402_GAS_WALLET_ADDRESS}}` at runtime from the environment.
 
 ---
 
@@ -259,7 +259,7 @@ x402 only works with EIP-3009 tokens (USDC). ETH/LPT use the deposit flow.
 
 ### Testnet Support (Local Development Only)
 
-`X402_INCLUDE_TESTNETS=true` and `CRYPTO_INCLUDE_TESTNETS=true` add Base Sepolia and Arbitrum Sepolia to accepted networks. These flags exist for local development convenience only. There is no balance isolation — testnet payments credit real tenant balances identically to mainnet payments. Never enable in production.
+`X402_INCLUDE_TESTNETS=true` adds Base Sepolia and Arbitrum Sepolia to accepted networks. This flag exists for local development convenience only. There is no balance isolation — testnet payments credit real tenant balances identically to mainnet payments. Never enable in production.
 
 ### Gas Wallet
 

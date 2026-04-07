@@ -22,7 +22,7 @@ func setMockValidator(t *testing.T, resp *pb.ValidateBootstrapTokenResponse) {
 
 func TestPreRegisterEdge_ValidToken(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "us_west_1")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -81,7 +81,7 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 
 func TestPreRegisterEdge_ReturnsConfiguredCABundle(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "us_west_1")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 	tmpDir := t.TempDir()
 	caPath := filepath.Join(tmpDir, "ca.crt")
 	want := "-----BEGIN CERTIFICATE-----\nTEST-CA\n-----END CERTIFICATE-----\n"
@@ -187,7 +187,7 @@ func TestPreRegisterEdge_NoValidatorNoQM(t *testing.T) {
 
 func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 	os.Unsetenv("CLUSTER_ID")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "frameworks.network")
+	t.Setenv("BRAND_DOMAIN", "frameworks.network")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid: true,
@@ -216,7 +216,7 @@ func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 
 func TestPreRegisterEdge_TokenBoundCluster(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "env-cluster")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -239,7 +239,7 @@ func TestPreRegisterEdge_TokenBoundCluster(t *testing.T) {
 
 func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "test")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid: true,
@@ -264,7 +264,7 @@ func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 
 func TestPreRegisterEdge_UsesPreferredNodeIDWithoutDoublePrefix(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "eu_west_1")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -290,7 +290,7 @@ func TestPreRegisterEdge_UsesPreferredNodeIDWithoutDoublePrefix(t *testing.T) {
 }
 
 func TestPreRegisterEdge_EmptySanitizedClusterSlugFallsBackToDefault(t *testing.T) {
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid:     true,
