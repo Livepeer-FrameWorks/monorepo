@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper build-image-chandler \
-	proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test coverage env frontend-env tidy update fmt format \
+	proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test coverage env frontend-env tidy update outdated fmt format \
 	lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
@@ -20,7 +20,7 @@ SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ing
 
 # All Go modules (including pkg for testing)
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
-GO_GET_ARGS ?= -u ./...
+GO_GET_ARGS ?= -u all
 PNPM_UP_ARGS ?= -r
 
 # Generate proto files first
@@ -391,6 +391,21 @@ update:
 	@echo "Updating JS dependencies (pnpm up $(PNPM_UP_ARGS))..."
 	pnpm up $(PNPM_UP_ARGS)
 	@echo "✓ Update complete"
+
+# Show outdated dependencies across Go and JS
+outdated:
+	@echo "Checking outdated Go dependencies..."
+	@for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		stale=$$(cd $$service_dir && go list -m -u all 2>/dev/null | grep '\[' | wc -l | tr -d ' '); \
+		if [ "$$stale" -gt 0 ]; then \
+			echo "==> $$service_name ($$stale outdated)"; \
+			cd $$service_dir && go list -m -u all 2>/dev/null | grep '\['; \
+		fi; \
+	done
+	@echo ""
+	@echo "Checking outdated JS dependencies..."
+	@pnpm outdated -r 2>/dev/null || true
 
 # Format all Go code
 fmt:
