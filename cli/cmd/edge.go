@@ -219,7 +219,9 @@ func newEdgeInitCmd() *cobra.Command {
 		}
 		if preRegNodeID == "" {
 			b := make([]byte, 6)
-			_, _ = rand.Read(b)
+			if _, randErr := rand.Read(b); randErr != nil {
+				return randErr
+			}
 			preRegNodeID = hex.EncodeToString(b)
 		}
 
@@ -952,7 +954,10 @@ func deriveEdgeNodeName(nodeName, nodeDomain, sshTarget string, isLocal bool) st
 		return host
 	}
 	if isLocal {
-		hostname, _ := os.Hostname()
+		hostname, hostErr := os.Hostname()
+		if hostErr != nil {
+			return ""
+		}
 		return strings.TrimSpace(hostname)
 	}
 

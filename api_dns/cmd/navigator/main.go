@@ -200,13 +200,13 @@ func main() {
 			KeyFile:       grpcKeyFile,
 			AllowInsecure: grpcCertFile == "" && grpcKeyFile == "",
 		}
-		if err := internalCAManager.EnsureLocalServerCertificate(context.Background(), "navigator", grpcCertFile, grpcKeyFile); err != nil {
-			logger.WithError(err).Fatal("Failed to stage Navigator bootstrap gRPC certificate")
+		if caErr := internalCAManager.EnsureLocalServerCertificate(context.Background(), "navigator", grpcCertFile, grpcKeyFile); caErr != nil {
+			logger.WithError(caErr).Fatal("Failed to stage Navigator bootstrap gRPC certificate")
 		}
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); err != nil {
-			logger.WithError(err).Fatal("Timed out waiting for Navigator gRPC TLS files")
+		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
+			logger.WithError(waitErr).Fatal("Timed out waiting for Navigator gRPC TLS files")
 		}
 		grpcTLSOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
 		if err != nil {

@@ -1675,28 +1675,6 @@ func defaultVictoriaMetricsHost(manifest *inventory.Manifest) (string, int) {
 	return manifestMeshHostname(manifest, hostName), port
 }
 
-func defaultVMAAuthHost(manifest *inventory.Manifest) (string, int) {
-	if manifest == nil {
-		return "", 0
-	}
-	obs, ok := manifest.Observability["vmauth"]
-	if !ok || !obs.Enabled {
-		return "", 0
-	}
-	hostName := obs.Host
-	if hostName == "" && len(obs.Hosts) > 0 {
-		hostName = obs.Hosts[0]
-	}
-	if hostName == "" {
-		return "", 0
-	}
-	port, err := resolvePort("vmauth", obs)
-	if err != nil || port == 0 {
-		port = provisioner.ServicePorts["vmauth"]
-	}
-	return manifestMeshHostname(manifest, hostName), port
-}
-
 func defaultVictoriaMetricsWriteURL(manifest *inventory.Manifest) string {
 	host, port := defaultVictoriaMetricsHost(manifest)
 	if host == "" || port == 0 {

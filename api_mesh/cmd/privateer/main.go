@@ -215,7 +215,9 @@ func bootstrapInternalCABundleFromEnv(caPath string) {
 	if err := os.MkdirAll(filepath.Dir(caPath), 0o755); err != nil {
 		return
 	}
-	_ = os.WriteFile(caPath, []byte(bundle), 0o644)
+	if err := os.WriteFile(caPath, []byte(bundle), 0o644); err != nil {
+		return
+	}
 }
 
 func decodePEMEnv(key string) (string, bool) {

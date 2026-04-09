@@ -72,9 +72,9 @@ func (n *NginxProvisioner) Provision(ctx context.Context, host inventory.Host, c
 			}
 		}
 
-		confContent, err := GenerateNginxConf(confData)
-		if err != nil {
-			return fmt.Errorf("failed to generate nginx.conf: %w", err)
+		confContent, genErr := GenerateNginxConf(confData)
+		if genErr != nil {
+			return fmt.Errorf("failed to generate nginx.conf: %w", genErr)
 		}
 
 		tmpFile := filepath.Join(os.TempDir(), "frameworks-nginx.conf")
@@ -218,7 +218,7 @@ func (n *NginxProvisioner) provisionNative(ctx context.Context, host inventory.H
 		return fmt.Errorf("failed to detect distro family: %w", err)
 	}
 	requiresGeoIP := false
-	rootDomain, _ := config.Metadata["root_domain"].(string)
+	rootDomain, _ := config.Metadata["root_domain"].(string) //nolint:errcheck // zero value acceptable
 	for _, route := range BuildLocalProxyRoutes(rootDomain, localServicePorts(config.Metadata)) {
 		if route.GeoProxy {
 			requiresGeoIP = true

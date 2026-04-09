@@ -112,19 +112,6 @@ func (c *EdgeProvisionConfig) helmsmanCAPath(remoteOS string) string {
 	return "/etc/frameworks/pki/ca.crt"
 }
 
-func (c *EdgeProvisionConfig) telemetryTokenPath(remoteOS string) string {
-	if strings.TrimSpace(c.TelemetryToken) == "" {
-		return ""
-	}
-	if c.resolvedMode() == "docker" {
-		return "/etc/frameworks/telemetry/token"
-	}
-	if remoteOS == "darwin" {
-		return filepath.Join(darwinPaths(c.DarwinDomain).confDir, "telemetry", "token")
-	}
-	return "/etc/frameworks/telemetry/token"
-}
-
 // parseUnameOutput parses "uname -sm" output (e.g. "Linux x86_64") into Go-style
 // os and arch values (e.g. "linux", "amd64").
 // detectRemoteArch delegates to BaseProvisioner.DetectRemoteArch.
@@ -545,7 +532,8 @@ func (e *EdgeProvisioner) installEdgeTelemetryDocker(ctx context.Context, host i
 	if err != nil {
 		return err
 	}
-	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.yml", scrapeConfig, 0o644); err != nil {
+	err = e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.yml", scrapeConfig, 0o644)
+	if err != nil {
 		return err
 	}
 	image, err := resolveObservabilityImage(config.Version, "", "vmagent", defaultVMAgentImage)
@@ -561,7 +549,8 @@ func (e *EdgeProvisioner) installEdgeTelemetryDocker(ctx context.Context, host i
 		"docker rm -f frameworks-edge-vmagent >/dev/null 2>&1 || true",
 	}
 	if strings.TrimSpace(config.TelemetryToken) != "" {
-		if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/telemetry/token", config.TelemetryToken+"\n", 0o600); err != nil {
+		err = e.writeRemoteFile(ctx, host, "/etc/frameworks/telemetry/token", config.TelemetryToken+"\n", 0o600)
+		if err != nil {
 			return err
 		}
 	}
@@ -652,20 +641,22 @@ func (e *EdgeProvisioner) installEdgeTelemetryLinux(ctx context.Context, host in
 	if err != nil {
 		return err
 	}
-	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.yml", scrapeConfig, 0o644); err != nil {
+	err = e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.yml", scrapeConfig, 0o644)
+	if err != nil {
 		return err
 	}
-	if _, err := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/vmagent-edge.yml"); err != nil {
-		return err
+	if _, chownErr := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/vmagent-edge.yml"); chownErr != nil {
+		return chownErr
 	}
 
 	tokenArg := ""
 	if strings.TrimSpace(config.TelemetryToken) != "" {
-		if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/telemetry/token", config.TelemetryToken+"\n", 0o600); err != nil {
+		err = e.writeRemoteFile(ctx, host, "/etc/frameworks/telemetry/token", config.TelemetryToken+"\n", 0o600)
+		if err != nil {
 			return err
 		}
-		if _, err := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/telemetry/token"); err != nil {
-			return err
+		if _, chownErr := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/telemetry/token"); chownErr != nil {
+			return chownErr
 		}
 		tokenArg = " -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token"
 	}
@@ -717,14 +708,16 @@ func (e *EdgeProvisioner) installEdgeTelemetryDarwin(ctx context.Context, host i
 	if err != nil {
 		return err
 	}
-	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/vmagent-edge.yml", scrapeConfig, 0o644); err != nil {
+	err = e.writeRemoteFile(ctx, host, dirs.confDir+"/vmagent-edge.yml", scrapeConfig, 0o644)
+	if err != nil {
 		return err
 	}
 
 	tokenPath := ""
 	if strings.TrimSpace(config.TelemetryToken) != "" {
 		tokenPath = dirs.confDir + "/telemetry/token"
-		if err := e.writeRemoteFile(ctx, host, tokenPath, config.TelemetryToken+"\n", 0o600); err != nil {
+		err = e.writeRemoteFile(ctx, host, tokenPath, config.TelemetryToken+"\n", 0o600)
+		if err != nil {
 			return err
 		}
 	}

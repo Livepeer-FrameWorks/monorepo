@@ -188,8 +188,12 @@ func main() {
 				c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
-			_ = json.Unmarshal(domainsJSON, &site.Domains)
-			_ = json.Unmarshal(metadataJSON, &site.Metadata)
+			if unmarshalErr := json.Unmarshal(domainsJSON, &site.Domains); unmarshalErr != nil {
+				site.Domains = nil
+			}
+			if unmarshalErr := json.Unmarshal(metadataJSON, &site.Metadata); unmarshalErr != nil {
+				site.Metadata = nil
+			}
 			sites = append(sites, site)
 		}
 

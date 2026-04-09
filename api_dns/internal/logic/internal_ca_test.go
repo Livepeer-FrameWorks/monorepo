@@ -172,8 +172,8 @@ func TestEnsureLocalServerCertificateWritesBootstrapLeaf(t *testing.T) {
 	dir := t.TempDir()
 	certPath := dir + "/tls.crt"
 	keyPath := dir + "/tls.key"
-	if err := manager.EnsureLocalServerCertificate(context.Background(), "navigator", certPath, keyPath); err != nil {
-		t.Fatalf("EnsureLocalServerCertificate returned error: %v", err)
+	if certErr := manager.EnsureLocalServerCertificate(context.Background(), "navigator", certPath, keyPath); certErr != nil {
+		t.Fatalf("EnsureLocalServerCertificate returned error: %v", certErr)
 	}
 
 	certPEM, err := os.ReadFile(certPath)

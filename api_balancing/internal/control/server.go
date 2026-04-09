@@ -4906,7 +4906,9 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 	nodeID := normalizePreferredEdgeNodeID(req.GetPreferredNodeId())
 	if nodeID == "" {
 		b := make([]byte, 6)
-		_, _ = rand.Read(b)
+		if _, randErr := rand.Read(b); randErr != nil {
+			return nil, fmt.Errorf("generate random node ID: %w", randErr)
+		}
 		nodeID = hex.EncodeToString(b)
 	}
 

@@ -5229,7 +5229,8 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTL
 
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.tls_bundles %s`, countWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	err = s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -5410,7 +5411,8 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.ingress_sites %s`, countWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	err = s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 

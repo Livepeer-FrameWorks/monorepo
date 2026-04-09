@@ -487,10 +487,10 @@ func BuildExtraProxyRoutes(raw interface{}) []ProxyRoute {
 
 	routes := make([]ProxyRoute, 0, len(items))
 	for _, item := range items {
-		name, _ := item["name"].(string)
-		upstream, _ := item["upstream"].(string)
+		name, _ := item["name"].(string) //nolint:errcheck // zero value acceptable
+		upstream, ok := item["upstream"].(string)
 		serverNames := stringifySlice(item["server_names"])
-		if upstream == "" || len(serverNames) == 0 {
+		if !ok || upstream == "" || len(serverNames) == 0 {
 			continue
 		}
 		route := ProxyRoute{
@@ -498,16 +498,16 @@ func BuildExtraProxyRoutes(raw interface{}) []ProxyRoute {
 			ServerNames: serverNames,
 			Upstream:    upstream,
 		}
-		if websocketPath, _ := item["websocket_path"].(string); websocketPath != "" {
+		if websocketPath, ok := item["websocket_path"].(string); ok && websocketPath != "" {
 			route.WebsocketPath = websocketPath
 		}
-		if geoProxy, _ := item["geo_proxy"].(bool); geoProxy {
+		if geoProxy, ok := item["geo_proxy"].(bool); ok && geoProxy {
 			route.GeoProxy = true
 		}
-		if upgradeAll, _ := item["upgrade_all"].(bool); upgradeAll {
+		if upgradeAll, ok := item["upgrade_all"].(bool); ok && upgradeAll {
 			route.UpgradeAll = true
 		}
-		if errorPage, _ := item["error_page"].(bool); errorPage {
+		if errorPage, ok := item["error_page"].(bool); ok && errorPage {
 			route.ErrorPage = true
 		}
 		routes = append(routes, route)

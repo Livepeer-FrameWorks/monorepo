@@ -133,14 +133,16 @@ func Generate(opts Options) (map[string]string, error) {
 	}
 
 	if opts.FrontendOnly {
-		if err := computeViteVariables(env); err != nil {
+		err = computeViteVariables(env)
+		if err != nil {
 			return nil, fmt.Errorf("derive VITE variables: %w", err)
 		}
 		env = filterFrontendEnv(env)
 		env["ENV_CONTEXT"] = opts.Context
 		env["ENV_GENERATED_AT"] = time.Now().UTC().Format(time.RFC3339)
 		if opts.OutputFile != "" {
-			if err := writeEnvFile(opts.OutputFile, env); err != nil {
+			err = writeEnvFile(opts.OutputFile, env)
+			if err != nil {
 				return nil, fmt.Errorf("write env file: %w", err)
 			}
 		}

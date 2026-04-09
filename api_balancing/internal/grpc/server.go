@@ -398,7 +398,8 @@ func StartGRPCServer(ctx context.Context, addr string, server *FoghornGRPCServer
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, server.logger); err != nil {
+	err = grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, server.logger)
+	if err != nil {
 		return fmt.Errorf("wait for foghorn gRPC TLS files: %w", err)
 	}
 	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, server.logger)

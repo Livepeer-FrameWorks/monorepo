@@ -54,7 +54,8 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, c
 	if !ok {
 		return fmt.Errorf("zookeeper_connect not found in config")
 	}
-	if err := validateApacheKafkaVersion(config.Version); err != nil {
+	err = validateApacheKafkaVersion(config.Version)
+	if err != nil {
 		return err
 	}
 

@@ -157,10 +157,12 @@ func (p *VMAgentProvisioner) Provision(ctx context.Context, host inventory.Host,
 		return nil
 	}
 
-	if err := p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/vmagent /etc/frameworks"); err != nil {
+	err = p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/vmagent /etc/frameworks")
+	if err != nil {
 		return err
 	}
-	if err := writeProvisionerEnvFile(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmagent.env", config.EnvVars); err != nil {
+	err = writeProvisionerEnvFile(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmagent.env", config.EnvVars)
+	if err != nil {
 		return err
 	}
 
@@ -262,10 +264,12 @@ func (p *VMAAuthProvisioner) Provision(ctx context.Context, host inventory.Host,
 		return nil
 	}
 
-	if err := p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/vmauth /etc/frameworks"); err != nil {
+	err = p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/vmauth /etc/frameworks")
+	if err != nil {
 		return err
 	}
-	if err := writeProvisionerEnvFile(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmauth.env", config.EnvVars); err != nil {
+	err = writeProvisionerEnvFile(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmauth.env", config.EnvVars)
+	if err != nil {
 		return err
 	}
 
@@ -497,11 +501,14 @@ func buildVMAgentScrapeConfig(raw interface{}, interval string) (string, error) 
 	b.WriteString(fmt.Sprintf("  scrape_interval: %s\n", yamlBare(interval)))
 	b.WriteString("scrape_configs:\n")
 	for _, target := range targets {
-		jobName, _ := target["job_name"].(string)
-		targetList, _ := target["targets"].([]string)
-		path, _ := target["path"].(string)
-		labels, _ := target["labels"].(map[string]string)
-		if jobName == "" || len(targetList) == 0 {
+		jobName, ok := target["job_name"].(string)
+		if !ok || jobName == "" {
+			continue
+		}
+		targetList, ok := target["targets"].([]string)
+		path, _ := target["path"].(string)                //nolint:errcheck // zero value acceptable
+		labels, _ := target["labels"].(map[string]string) //nolint:errcheck // zero value acceptable
+		if !ok || len(targetList) == 0 {
 			continue
 		}
 		if path == "" {

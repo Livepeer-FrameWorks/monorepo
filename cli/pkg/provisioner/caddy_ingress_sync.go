@@ -11,26 +11,26 @@ import (
 )
 
 func (c *CaddyProvisioner) installIngressSync(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	serviceToken, _ := config.Metadata["service_token"].(string)
-	if serviceToken == "" {
+	serviceToken, ok := config.Metadata["service_token"].(string)
+	if !ok || serviceToken == "" {
 		return fmt.Errorf("caddy ingress sync requires service_token metadata")
 	}
 
-	nodeID, _ := config.Metadata["node_id"].(string)
-	if nodeID == "" {
+	nodeID, ok := config.Metadata["node_id"].(string)
+	if !ok || nodeID == "" {
 		return fmt.Errorf("caddy ingress sync requires node_id metadata")
 	}
 
-	quartermasterURL, _ := config.Metadata["quartermaster_http_url"].(string)
-	if quartermasterURL == "" {
+	quartermasterURL, ok := config.Metadata["quartermaster_http_url"].(string)
+	if !ok || quartermasterURL == "" {
 		quartermasterURL = "http://quartermaster:18002"
 	}
-	navigatorURL, _ := config.Metadata["navigator_http_url"].(string)
-	if navigatorURL == "" {
+	navigatorURL, ok := config.Metadata["navigator_http_url"].(string)
+	if !ok || navigatorURL == "" {
 		navigatorURL = "http://navigator:18010"
 	}
-	quartermasterCAFile, _ := config.Metadata["quartermaster_http_ca_file"].(string)
-	navigatorCAFile, _ := config.Metadata["navigator_http_ca_file"].(string)
+	quartermasterCAFile, _ := config.Metadata["quartermaster_http_ca_file"].(string) //nolint:errcheck // zero value acceptable
+	navigatorCAFile, _ := config.Metadata["navigator_http_ca_file"].(string)         //nolint:errcheck // zero value acceptable
 
 	envContent := fmt.Sprintf(`SERVICE_TOKEN=%s
 NODE_ID=%s
@@ -235,29 +235,33 @@ WantedBy=timers.target
 `
 
 	tmpUnit := filepath.Join(os.TempDir(), "frameworks-caddy-sync.service")
-	if err := os.WriteFile(tmpUnit, []byte(unitContent), 0644); err != nil {
+	err = os.WriteFile(tmpUnit, []byte(unitContent), 0644)
+	if err != nil {
 		return err
 	}
 	defer os.Remove(tmpUnit)
 
 	tmpTimer := filepath.Join(os.TempDir(), "frameworks-caddy-sync.timer")
-	if err := os.WriteFile(tmpTimer, []byte(timerContent), 0644); err != nil {
+	err = os.WriteFile(tmpTimer, []byte(timerContent), 0644)
+	if err != nil {
 		return err
 	}
 	defer os.Remove(tmpTimer)
 
-	if err := c.UploadFile(ctx, host, ssh.UploadOptions{
+	err = c.UploadFile(ctx, host, ssh.UploadOptions{
 		LocalPath:  tmpUnit,
 		RemotePath: "/etc/systemd/system/frameworks-caddy-sync.service",
 		Mode:       0644,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("upload caddy ingress sync unit: %w", err)
 	}
-	if err := c.UploadFile(ctx, host, ssh.UploadOptions{
+	err = c.UploadFile(ctx, host, ssh.UploadOptions{
 		LocalPath:  tmpTimer,
 		RemotePath: "/etc/systemd/system/frameworks-caddy-sync.timer",
 		Mode:       0644,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("upload caddy ingress sync timer: %w", err)
 	}
 

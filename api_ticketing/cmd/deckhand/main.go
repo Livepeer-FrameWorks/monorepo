@@ -202,8 +202,8 @@ func main() {
 		}
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); err != nil {
-			logger.WithError(err).Fatal("Timed out waiting for Deckhand gRPC TLS files")
+		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
+			logger.WithError(waitErr).Fatal("Timed out waiting for Deckhand gRPC TLS files")
 		}
 		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
 		if err != nil {

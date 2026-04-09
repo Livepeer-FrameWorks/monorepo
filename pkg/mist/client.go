@@ -477,7 +477,7 @@ func (c *Client) FetchJSON(endpoint string) (map[string]interface{}, error) {
 	}
 
 	base := strings.TrimRight(c.BaseURL, "/")
-	path := MetricsJSONPath
+	var path string
 	if endpoint == "" {
 		path = MetricsJSONPath
 	} else if strings.HasPrefix(endpoint, "/") {

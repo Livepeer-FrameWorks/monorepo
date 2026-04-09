@@ -160,7 +160,7 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 		token, _ = config.Metadata["enrollment_token"].(string)
 	}
 	serviceToken, _ := config.Metadata["service_token"].(string)
-	certIssueToken, _ := config.Metadata["cert_issue_token"].(string)
+	certIssueToken, _ := config.Metadata["cert_issue_token"].(string) //nolint:errcheck // zero value acceptable
 	nodeType, _ := config.Metadata["mesh_node_type"].(string)
 	if nodeType == "" {
 		nodeType = infra.NodeTypeCore
@@ -271,8 +271,8 @@ func parseDNSPort(raw any) int {
 }
 
 func (p *PrivateerProvisioner) waitForInitialPKISync(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	certIssueToken, _ := config.Metadata["cert_issue_token"].(string)
-	if strings.TrimSpace(certIssueToken) == "" {
+	certIssueToken, ok := config.Metadata["cert_issue_token"].(string)
+	if !ok || strings.TrimSpace(certIssueToken) == "" {
 		return nil
 	}
 

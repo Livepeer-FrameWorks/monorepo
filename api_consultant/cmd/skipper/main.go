@@ -536,12 +536,12 @@ func main() {
 		}
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); err != nil {
-			logger.WithError(err).Fatal("Timed out waiting for Skipper gRPC TLS files")
+		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
+			logger.WithError(waitErr).Fatal("Timed out waiting for Skipper gRPC TLS files")
 		}
-		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to configure Skipper gRPC TLS")
+		tlsOpt, tlsErr := grpcutil.ServerTLS(tlsCfg, logger)
+		if tlsErr != nil {
+			logger.WithError(tlsErr).Fatal("Failed to configure Skipper gRPC TLS")
 		}
 		if tlsOpt != nil {
 			serverOpts = append(serverOpts, tlsOpt)

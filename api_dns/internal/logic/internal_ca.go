@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -66,10 +67,10 @@ func (m *InternalCAManager) EnsureCA(ctx context.Context) error {
 	if rootErr == nil && intErr == nil {
 		return nil
 	}
-	if rootErr != nil && rootErr != store.ErrNotFound {
+	if rootErr != nil && !errors.Is(rootErr, store.ErrNotFound) {
 		return fmt.Errorf("load root ca: %w", rootErr)
 	}
-	if intErr != nil && intErr != store.ErrNotFound {
+	if intErr != nil && !errors.Is(intErr, store.ErrNotFound) {
 		return fmt.Errorf("load intermediate ca: %w", intErr)
 	}
 
@@ -133,12 +134,12 @@ func (m *InternalCAManager) IssueInternalCert(ctx context.Context, nodeID, servi
 		return nil, err
 	}
 
-	if existing, err := m.store.GetInternalCertificate(ctx, nodeID, serviceType); err == nil {
+	if existing, lookupErr := m.store.GetInternalCertificate(ctx, nodeID, serviceType); lookupErr == nil {
 		if existing.ClusterID == clusterID && time.Until(existing.ExpiresAt) > internalLeafRenewWindow {
 			return existing, nil
 		}
-	} else if err != store.ErrNotFound {
-		return nil, fmt.Errorf("load internal certificate: %w", err)
+	} else if !errors.Is(lookupErr, store.ErrNotFound) {
+		return nil, fmt.Errorf("load internal certificate: %w", lookupErr)
 	}
 
 	certPEM, keyPEM, notAfter, err := m.signInternalLeaf(ctx, serviceType, clusterID)
@@ -392,10 +393,10 @@ func (m *InternalCAManager) authorizeIssue(ctx context.Context, nodeID, serviceT
 	if resp.GetMetadata() != nil {
 		metadata = resp.GetMetadata().AsMap()
 	}
-	if purpose, _ := metadata["purpose"].(string); purpose != "cert_sync" {
+	if purpose, ok := metadata["purpose"].(string); !ok || purpose != "cert_sync" {
 		return "", fmt.Errorf("issue token purpose %q is not allowed", purpose)
 	}
-	if tokenNodeID, _ := metadata["node_id"].(string); tokenNodeID == "" || tokenNodeID != nodeID {
+	if tokenNodeID, ok := metadata["node_id"].(string); !ok || tokenNodeID == "" || tokenNodeID != nodeID {
 		return "", fmt.Errorf("issue token is not valid for node %q", nodeID)
 	}
 
