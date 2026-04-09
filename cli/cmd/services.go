@@ -50,10 +50,11 @@ func newQMGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
 	}
 
 	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Timeout:      15 * time.Second,
-		Logger:       logging.NewLogger(),
-		ServiceToken: ctxCfg.Auth.ServiceToken,
+		GRPCAddr:      grpcAddr,
+		Timeout:       15 * time.Second,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  ctxCfg.Auth.ServiceToken,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)

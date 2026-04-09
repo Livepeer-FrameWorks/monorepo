@@ -9,11 +9,11 @@ import (
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -47,6 +47,10 @@ type GRPCConfig struct {
 	Cache *cache.Cache
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
 	ServiceToken string
+	// TLS configuration for the gRPC connection.
+	AllowInsecure bool
+	CACertFile    string
+	ServerName    string
 }
 
 // authInterceptor propagates authentication to gRPC metadata.
@@ -96,10 +100,20 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		config.Timeout = 30 * time.Second
 	}
 
+	tlsCfg := grpcutil.ClientTLSConfig{
+		CACertFile:    config.CACertFile,
+		ServerName:    config.ServerName,
+		AllowInsecure: config.AllowInsecure,
+	}
+	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Commodore gRPC TLS: %w", err)
+	}
+
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
 	conn, err := grpc.NewClient(
 		config.GRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			authInterceptor(config.ServiceToken),
@@ -508,15 +522,6 @@ func (c *GRPCClient) ListStreams(ctx context.Context, pagination *pb.CursorPagin
 // UpdateStream updates a stream
 func (c *GRPCClient) UpdateStream(ctx context.Context, req *pb.UpdateStreamRequest) (*pb.Stream, error) {
 	return c.stream.UpdateStream(ctx, req)
-}
-
-// UpdateStreamThumbnail updates the thumbnail URL for a stream (internal, called by Foghorn)
-func (c *GRPCClient) UpdateStreamThumbnail(ctx context.Context, playbackID, thumbnailURL string) error {
-	_, err := c.internal.UpdateStreamThumbnail(ctx, &pb.UpdateStreamThumbnailRequest{
-		PlaybackId:   playbackID,
-		ThumbnailUrl: thumbnailURL,
-	})
-	return err
 }
 
 // DeleteStream deletes a stream

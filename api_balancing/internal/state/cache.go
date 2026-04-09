@@ -82,9 +82,12 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 			n.Artifacts = make([]*pb.StoredArtifact, 0, len(arts))
 			for _, a := range arts {
 				n.Artifacts = append(n.Artifacts, &pb.StoredArtifact{
-					ClipHash:  a.ClipHash,
-					FilePath:  a.FilePath,
-					SizeBytes: a.SizeBytes,
+					ClipHash:     a.ClipHash,
+					FilePath:     a.FilePath,
+					SizeBytes:    a.SizeBytes,
+					StreamName:   a.StreamName,
+					ArtifactType: artifactTypeFromString(a.ArtifactType),
+					Format:       a.Format,
 				})
 			}
 		}
@@ -143,9 +146,12 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 				n.Artifacts = make([]*pb.StoredArtifact, 0, len(arts))
 				for _, a := range arts {
 					n.Artifacts = append(n.Artifacts, &pb.StoredArtifact{
-						ClipHash:  a.ClipHash,
-						FilePath:  a.FilePath,
-						SizeBytes: a.SizeBytes,
+						ClipHash:     a.ClipHash,
+						FilePath:     a.FilePath,
+						SizeBytes:    a.SizeBytes,
+						StreamName:   a.StreamName,
+						ArtifactType: artifactTypeFromString(a.ArtifactType),
+						Format:       a.Format,
 					})
 				}
 			}

@@ -46,9 +46,10 @@ func getMeshQuartermasterGRPCClient() (*quartermaster.GRPCClient, error) {
 	}
 
 	return quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Logger:       logging.NewLogger(),
-		ServiceToken: ctxConfig.Auth.ServiceToken,
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  ctxConfig.Auth.ServiceToken,
+		AllowInsecure: true,
 	})
 }
 

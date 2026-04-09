@@ -34,8 +34,13 @@ type S3Config struct {
 	SecretKey string
 }
 
+// S3Getter abstracts the S3 GetObject call for testability.
+type S3Getter interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
 type AssetHandler struct {
-	s3     *s3.Client
+	s3     S3Getter
 	bucket string
 	prefix string
 	cache  *cache.LRU
@@ -84,11 +89,11 @@ func NewAssetHandler(cfg S3Config, lru *cache.LRU, logger logging.Logger, cacheH
 }
 
 func (h *AssetHandler) RegisterRoutes(router *gin.Engine) {
-	router.GET("/assets/:playbackId/:file", h.handleGetAsset)
+	router.GET("/assets/:assetKey/:file", h.handleGetAsset)
 }
 
 func (h *AssetHandler) handleGetAsset(c *gin.Context) {
-	playbackID := c.Param("playbackId")
+	assetKey := c.Param("assetKey")
 	file := c.Param("file")
 
 	contentType, ok := allowedFiles[file]
@@ -103,12 +108,12 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 	}
 
 	// Reject path traversal
-	if strings.Contains(playbackID, "/") || strings.Contains(playbackID, "..") {
+	if strings.Contains(assetKey, "/") || strings.Contains(assetKey, "..") {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 
-	s3Key := h.fullKey(path.Join("thumbnails", playbackID, file))
+	s3Key := h.fullKey(path.Join("thumbnails", assetKey, file))
 
 	// Check cache
 	if data, ct, hit := h.cache.Get(s3Key); hit {

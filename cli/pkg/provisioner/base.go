@@ -3,8 +3,10 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/cli/pkg/detect"
@@ -14,8 +16,10 @@ import (
 
 // BaseProvisioner provides common functionality for all provisioners
 type BaseProvisioner struct {
-	name    string
-	sshPool *ssh.Pool
+	name        string
+	sshPool     *ssh.Pool
+	distroMu    sync.Mutex
+	distroCache map[string]string
 }
 
 // NewBaseProvisioner creates a new base provisioner
@@ -25,8 +29,9 @@ func NewBaseProvisioner(name string, pool *ssh.Pool) *BaseProvisioner {
 	}
 
 	return &BaseProvisioner{
-		name:    name,
-		sshPool: pool,
+		name:        name,
+		sshPool:     pool,
+		distroCache: make(map[string]string),
 	}
 }
 
@@ -150,6 +155,78 @@ func ParseUnameOutput(output string) (osName, goArch string, err error) {
 		goArch = parts[1]
 	}
 	return osName, goArch, nil
+}
+
+// DetectDistroFamily classifies the target host into a package-manager family.
+func (b *BaseProvisioner) DetectDistroFamily(ctx context.Context, host inventory.Host) (string, error) {
+	cacheKey := host.ExternalIP
+	if cacheKey == "" || cacheKey == "127.0.0.1" || cacheKey == "localhost" {
+		cacheKey = "localhost"
+	}
+
+	b.distroMu.Lock()
+	if family, ok := b.distroCache[cacheKey]; ok && family != "" {
+		b.distroMu.Unlock()
+		return family, nil
+	}
+	b.distroMu.Unlock()
+
+	var raw string
+	if cacheKey == "localhost" {
+		content, err := os.ReadFile("/etc/os-release")
+		if err != nil {
+			return "", fmt.Errorf("read local /etc/os-release: %w", err)
+		}
+		raw = string(content)
+	} else {
+		result, err := b.RunCommand(ctx, host, "cat /etc/os-release")
+		if err != nil {
+			return "", fmt.Errorf("read remote /etc/os-release: %w", err)
+		}
+		if result.ExitCode != 0 {
+			return "", fmt.Errorf("cat /etc/os-release failed: %s", strings.TrimSpace(result.Stderr))
+		}
+		raw = result.Stdout
+	}
+
+	family := parseDistroFamily(raw)
+	if family == "unknown" {
+		return "", fmt.Errorf("unsupported linux distribution")
+	}
+
+	b.distroMu.Lock()
+	b.distroCache[cacheKey] = family
+	b.distroMu.Unlock()
+	return family, nil
+}
+
+func parseDistroFamily(osRelease string) string {
+	var id, idLike string
+	for _, line := range strings.Split(osRelease, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "ID="):
+			id = strings.Trim(strings.TrimPrefix(line, "ID="), `"`)
+		case strings.HasPrefix(line, "ID_LIKE="):
+			idLike = strings.Trim(strings.TrimPrefix(line, "ID_LIKE="), `"`)
+		}
+	}
+
+	candidates := strings.Fields(strings.ToLower(strings.TrimSpace(id + " " + idLike)))
+	for _, candidate := range candidates {
+		switch candidate {
+		case "ubuntu", "debian":
+			return "debian"
+		case "rhel", "centos", "fedora", "rocky", "alma", "amzn":
+			return "rhel"
+		case "arch", "manjaro", "endeavouros":
+			return "arch"
+		case "alpine":
+			return "alpine"
+		}
+	}
+
+	return "unknown"
 }
 
 // Cleanup stops a service for rollback. Default implementation tries docker/systemd stop.

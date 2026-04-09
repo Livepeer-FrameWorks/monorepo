@@ -149,12 +149,12 @@ Configure your DNS provider with the following records. Exact steps vary by prov
 
 In multi-cluster deployments, each cluster gets its own set of streaming records under `{cluster_slug}.{base_domain}`. Navigator manages these automatically. For manual setups:
 
-| Type | Name                                    | Content            | Notes                      |
-| ---- | --------------------------------------- | ------------------ | -------------------------- |
-| A    | `edge-ingest.{slug}.your-domain.com`    | Edge node IP(s)    | Cluster-scoped ingest      |
-| A    | `edge.{slug}.your-domain.com`           | Edge node IP(s)    | Cluster-scoped edge pool   |
-| A    | `foghorn.{slug}.your-domain.com`        | Foghorn IP         | Cluster-scoped routing     |
-| A    | `edge-{node_id}.{slug}.your-domain.com` | Individual edge IP | Per-edge direct addressing |
+| Type | Name                                  | Content            | Notes                                                                                 |
+| ---- | ------------------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
+| A    | `edge-ingest.{slug}.your-domain.com`  | Edge node IP(s)    | Cluster-scoped ingest                                                                 |
+| A    | `edge.{slug}.your-domain.com`         | Edge node IP(s)    | Cluster-scoped edge pool                                                              |
+| A    | `foghorn.{slug}.your-domain.com`      | Foghorn IP         | Cluster-scoped routing                                                                |
+| A    | `{node_label}.{slug}.your-domain.com` | Individual edge IP | Per-edge direct addressing (`node_label` is the node ID with a single `edge-` prefix) |
 
 See [DNS Automation](/operators/dns) for details on per-edge A records and wildcard TLS certificates.
 
@@ -315,7 +315,7 @@ SERVICE_TOKEN=<your-service-token>
 
 # Optional DNS
 
-NAVIGATOR_URL=
+NAVIGATOR_GRPC_ADDR=
 
 ````
 </TabItem>
@@ -397,8 +397,7 @@ BUILD_ENV=production
 DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
 
 # ClickHouse
-CLICKHOUSE_HOST=<clickhouse-host>
-CLICKHOUSE_PORT=9000
+CLICKHOUSE_ADDR=<clickhouse-host>:9000
 CLICKHOUSE_DB=periscope
 CLICKHOUSE_USER=<clickhouse-user>
 CLICKHOUSE_PASSWORD=<clickhouse-password>
@@ -450,8 +449,7 @@ SERVICE_TOKEN=<your-service-token>
 ```bash
 # /etc/frameworks/steward.env
 PORT=18032
-NODE_ENV=production
-FORMS_ALLOWED_ORIGINS=https://your-domain.com
+ALLOWED_ORIGINS=https://your-domain.com
 TURNSTILE_FORMS_SECRET_KEY=<your-turnstile-secret>
 
 # SMTP
@@ -574,8 +572,8 @@ docker compose up -d
 **Option B: External Redis + Chatwoot container only**
 
 ```bash
-# Start Redis (if not already running)
-docker run -d --name platform-redis -p 6379:6379 redis:7-alpine
+# Start Valkey (if not already running)
+docker run -d --name platform-redis -p 6379:6379 valkey/valkey:8.1-alpine
 
 # Start Chatwoot (Rails + Sidekiq)
 docker run -d --name chatwoot \
@@ -626,6 +624,7 @@ Deploy per region. Each region needs its own set of these services.
 | Decklog          | 18026 | 18006 | decklog          |
 | Periscope Ingest | 18005 | -     | periscope-ingest |
 | Signalman        | 18009 | 19005 | signalman        |
+| Chandler         | 18020 | -     | chandler         |
 
 **Notes:**
 
@@ -641,9 +640,10 @@ make build-bin-foghorn
 make build-bin-decklog
 make build-bin-periscope-ingest
 make build-bin-signalman
+make build-bin-chandler
 
 install -d /opt/frameworks/bin
-cp bin/{bridge,foghorn,decklog,periscope-ingest,signalman} /opt/frameworks/bin/
+cp bin/{bridge,foghorn,decklog,periscope-ingest,signalman,chandler} /opt/frameworks/bin/
 ```
 
 ### Environment Configuration
@@ -657,12 +657,6 @@ FOGHORN_CONTROL_BIND_ADDR=:18019
 LOG_LEVEL=info
 GIN_MODE=release
 BUILD_ENV=production
-
-# gRPC TLS (Helmsman control plane)
-
-GRPC_USE_TLS=false
-GRPC_TLS_CERT_PATH=
-GRPC_TLS_KEY_PATH=
 
 # Database
 
@@ -681,7 +675,8 @@ QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 # Decklog (local regional)
 
 DECKLOG_GRPC_ADDR=127.0.0.1:18006
-DECKLOG_USE_TLS=false
+GRPC_ALLOW_INSECURE=false
+GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
 
 # GeoIP (MaxMind)
 
@@ -768,7 +763,6 @@ PORT=18006
 DECKLOG_METRICS_PORT=18026
 LOG_LEVEL=info
 BUILD_ENV=production
-REGION=eu-west
 
 # Kafka (shared cluster)
 
@@ -786,11 +780,22 @@ QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 
 SERVICE_EVENTS_KAFKA_TOPIC=service_events
 
-# TLS (production - optional but recommended for edge communication)
+# Internal gRPC TLS (production required)
 
-DECKLOG_ALLOW_INSECURE=true
-DECKLOG_TLS_CERT_FILE=
-DECKLOG_TLS_KEY_FILE=
+GRPC_ALLOW_INSECURE=false
+GRPC_TLS_CERT_PATH=/etc/frameworks/pki/services/decklog/tls.crt
+GRPC_TLS_KEY_PATH=/etc/frameworks/pki/services/decklog/tls.key
+GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
+
+# Navigator internal CA import (production required)
+
+# Navigator must receive managed CA material; generated fallback is dev/bootstrap only.
+
+# Prefer base64 PEM env vars in GitOps unless your deploy tooling already places files on disk.
+
+NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64=<base64-root-cert-pem>
+NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64=<base64-intermediate-cert-pem>
+NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64=<base64-intermediate-key-pem>
 
 ````
 </TabItem>
@@ -802,7 +807,7 @@ BUILD_ENV=production
 ENABLE_HEALTH_ENDPOINT=true
 
 # ClickHouse (native driver expects host:port)
-CLICKHOUSE_HOST=<clickhouse-host>:9000
+CLICKHOUSE_ADDR=<clickhouse-host>:9000
 CLICKHOUSE_DB=periscope
 CLICKHOUSE_USER=<clickhouse-user>
 CLICKHOUSE_PASSWORD=<clickhouse-password>
@@ -832,7 +837,6 @@ PORT=18009
 GRPC_PORT=19005
 LOG_LEVEL=info
 BUILD_ENV=production
-REGION=eu-west
 
 # Auth
 
@@ -854,6 +858,37 @@ KAFKA_CLUSTER_ID=frameworks
 QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 
 ````
+</TabItem>
+<TabItem label="Chandler">
+```bash
+# /etc/frameworks/chandler.env
+PORT=18020
+LOG_LEVEL=info
+BUILD_ENV=production
+
+# Auth
+
+SERVICE_TOKEN=<your-service-token>
+CLUSTER_ID=<cluster-id>
+
+# S3 (serves thumbnails, sprites, VOD metadata)
+
+STORAGE_S3_BUCKET=<your-bucket>
+STORAGE_S3_REGION=<region>
+STORAGE_S3_ENDPOINT=<s3-compatible-endpoint>
+STORAGE_S3_ACCESS_KEY=<access-key>
+STORAGE_S3_SECRET_KEY=<secret-key>
+STORAGE_S3_PREFIX=
+
+# Cache
+
+CACHE_MAX_BYTES=52428800
+CACHE_TTL_SECONDS=30
+
+# Dependencies
+
+QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
+```
 </TabItem>
 </Tabs>
 
@@ -954,7 +989,6 @@ cp bin/helmsman /opt/frameworks/bin/
 PORT=18007
 LOG_LEVEL=info
 BUILD_ENV=production
-REGION=eu-west
 
 # Node identity
 NODE_ID=edge-<region>-<n>
@@ -965,7 +999,6 @@ SERVICE_TOKEN=<your-service-token>
 
 # MistServer (local)
 MISTSERVER_URL=http://127.0.0.1:4242
-MIST_PASSWORD=<mist-password>
 MIST_API_USERNAME=admin
 MIST_API_PASSWORD=<mist-api-password>
 
@@ -973,8 +1006,8 @@ MIST_API_PASSWORD=<mist-api-password>
 FOGHORN_URL=https://foghorn-<region>.your-domain.com
 FOGHORN_CONTROL_ADDR=foghorn-<region>.your-domain.com:18019
 
-# gRPC TLS (Helmsman client to Foghorn control plane)
-GRPC_USE_TLS=false
+# gRPC TLS / trust (Helmsman client to Foghorn control plane)
+GRPC_ALLOW_INSECURE=false
 GRPC_TLS_CERT_PATH=
 GRPC_TLS_KEY_PATH=
 
@@ -1080,9 +1113,6 @@ CLOUDFLARE_API_TOKEN=<your-dns-provider-token>
 CLOUDFLARE_ZONE_ID=<your-zone-id>
 CLOUDFLARE_ACCOUNT_ID=<your-account-id>
 
-# DNS Configuration
-NAVIGATOR_ROOT_DOMAIN=your-domain.com
-
 # DNS Tuning
 NAVIGATOR_DNS_TTL_A_RECORD=60
 NAVIGATOR_DNS_TTL_LB=60
@@ -1129,7 +1159,7 @@ systemctl start navigator
 
 ## Phase 7: Web Applications
 
-Deploy the three frontend applications on the central server. All use Docker and have environment variables baked at build time.
+Deploy the three frontend applications on the central server. All use Docker with build-time variables generated from canonical deployment inputs.
 
 ### Service Ports
 
@@ -1139,136 +1169,85 @@ Deploy the three frontend applications on the central server. All use Docker and
 | Marketing Site | 18031 | React (static)  | Public landing page |
 | Documentation  | 18033 | Astro (static)  | Starlight docs      |
 
-### Build Variables Reference
+### Deployment Inputs
 
-<Tabs>
-<TabItem label="Web Console">
+Frontend build variables are generated by `scripts/env --frontend-only` from these 11 canonical inputs. You do not set VITE\_\* variables directly.
+
 ```bash
-# website_application - SvelteKit SSR
-# VITE_* variables are baked at build time
-
-VITE_AUTH_URL=https://bridge.your-domain.com/auth
-VITE_GRAPHQL_HTTP_URL=https://bridge.your-domain.com/graphql
-VITE_GRAPHQL_WS_URL=wss://bridge.your-domain.com/graphql/ws
-VITE_STREAMING_INGEST_URL=https://edge-ingest.your-domain.com
-VITE_STREAMING_PLAY_URL=https://foghorn.your-domain.com
-VITE_STREAMING_EDGE_URL=https://edge.your-domain.com
-VITE_STREAMING_RTMP_PORT=1935
-VITE_STREAMING_SRT_PORT=8889
-VITE_STREAMING_RTMP_PATH=/live
-VITE_STREAMING_HLS_PATH=/hls
-VITE_STREAMING_WEBRTC_PATH=/webrtc
-VITE_STREAMING_EMBED_PATH=/
-VITE_MARKETING_SITE_URL=https://your-domain.com
-VITE_DOCS_SITE_URL=https://logbook.your-domain.com
-VITE_TURNSTILE_AUTH_SITE_KEY=<your-turnstile-site-key>
-BASE_PATH=/app
-
-````
-</TabItem>
-<TabItem label="Marketing Site">
-```bash
-# website_marketing - React static site
-# VITE_* variables are baked at build time
-
-VITE_APP_URL=https://chartroom.your-domain.com
-VITE_GATEWAY_URL=https://bridge.your-domain.com
-VITE_GITHUB_URL=https://github.com/your-org/your-repo
-VITE_LIVEPEER_URL=https://livepeer.org
-VITE_LIVEPEER_EXPLORER_URL=https://explorer.livepeer.org
-VITE_CONTACT_EMAIL=info@your-domain.com
-VITE_FORUM_URL=https://forum.your-domain.com
-VITE_DISCORD_URL=https://discord.gg/your-invite
-VITE_DEMO_STREAM_NAME=live+demo
-VITE_COMPANY_NAME=YourCompany
-VITE_DOMAIN=your-domain.com
-VITE_CONTACT_API_URL=https://bridge.your-domain.com/forms
-VITE_TURNSTILE_FORMS_SITE_KEY=<your-turnstile-forms-key>
-````
-
-</TabItem>
-<TabItem label="Documentation">
-```bash
-# website_docs - Astro Starlight
-# PUBLIC_* variables are baked at build time
-
-PUBLIC_DOCS_URL=https://logbook.your-domain.com
+# Canonical inputs (set in your deployment config)
+GATEWAY_PUBLIC_URL=https://bridge.your-domain.com
 WEBAPP_PUBLIC_URL=https://chartroom.your-domain.com
 MARKETING_PUBLIC_URL=https://your-domain.com
-GATEWAY_PUBLIC_URL=https://bridge.your-domain.com
+DOCS_PUBLIC_URL=https://logbook.your-domain.com
+FORMS_PUBLIC_URL=https://steward.your-domain.com
 STREAMING_INGEST_URL=https://edge-ingest.your-domain.com
+STREAMING_PLAY_URL=https://foghorn.your-domain.com
 STREAMING_EDGE_URL=https://edge.your-domain.com
-STREAMING_HLS_PATH=/hls
-STREAMING_WEBRTC_PATH=/webrtc
-DISCORD_URL=https://discord.gg/your-invite
-GITHUB_URL=https://github.com/your-org/your-repo
+TURNSTILE_AUTH_SITE_KEY=<your-turnstile-site-key>
+TURNSTILE_FORMS_SITE_KEY=<your-turnstile-forms-key>
+FROM_EMAIL=info@your-domain.com
+```
 
-````
-</TabItem>
-</Tabs>
+The generator derives all VITE\_\* outputs (auth URL, GraphQL endpoints, WebSocket URLs, etc.) from these inputs. Product constants (GitHub URL, Discord URL, streaming ports/paths) are checked into source and not configurable per deployment.
 
 ### Build and Deploy
 
-#### Option A: Docker (Recommended)
+#### Generate Frontend Build Env
 
 ```bash
 cd /opt/frameworks/monorepo
 
+# Generate VITE_* from canonical inputs
+cd scripts/env
+go run . \
+  --frontend-only \
+  --context production \
+  --base ../../config/env/base.env \
+  --overlay /path/to/your/production.env \
+  --output /tmp/frontend.env
+cd ../..
+```
+
+#### Option A: Docker (Recommended)
+
+```bash
+# Source generated env, then build each webapp with those args
+set -a && . /tmp/frontend.env && set +a
+
+# Helper to convert env file to --build-arg flags
+build_args() {
+  echo "--build-arg BUILD_ENV=production"
+  while IFS='=' read -r key val; do
+    case "$key" in ""|\#*|ENV_CONTEXT|ENV_GENERATED_AT) continue ;; esac
+    echo "--build-arg $key=$val"
+  done < /tmp/frontend.env
+}
+
 # Web Console
-docker build -f website_application/Dockerfile \
-  --build-arg BUILD_ENV=production \
-  --build-arg VITE_AUTH_URL=https://bridge.your-domain.com/auth \
-  --build-arg VITE_GRAPHQL_HTTP_URL=https://bridge.your-domain.com/graphql \
-  --build-arg VITE_GRAPHQL_WS_URL=wss://bridge.your-domain.com/graphql/ws \
-  # ... (all VITE_* args from reference above)
-  -t frameworks-chartroom .
+docker build -f website_application/Dockerfile $(build_args) -t frameworks-chartroom .
+docker run -d --name frameworks-chartroom --restart unless-stopped -p 18030:18030 frameworks-chartroom
 
-docker run -d --name frameworks-chartroom \
-  --restart unless-stopped \
-  -p 18030:18030 \
-  frameworks-chartroom
+# Marketing Site
+docker build -f website_marketing/Dockerfile $(build_args) -t frameworks-foredeck .
+docker run -d --name frameworks-foredeck --restart unless-stopped -p 18031:18031 frameworks-foredeck
 
-# Foredeck (Marketing Site)
-docker build -f website_marketing/Dockerfile \
-  --build-arg BUILD_ENV=production \
-  --build-arg VITE_APP_URL=https://chartroom.your-domain.com \
-  # ... (all VITE_* args)
-  -t frameworks-foredeck .
-
-docker run -d --name frameworks-foredeck \
-  --restart unless-stopped \
-  -p 18031:18031 \
-  frameworks-foredeck
-
-# Logbook (Documentation)
-docker build -f website_docs/Dockerfile \
-  --build-arg BUILD_ENV=production \
-  --build-arg PUBLIC_DOCS_URL=https://logbook.your-domain.com \
-  # ... (all PUBLIC_* args)
-  -t frameworks-logbook .
-
-docker run -d --name frameworks-logbook \
-  --restart unless-stopped \
-  -p 18033:18033 \
-  frameworks-logbook
-````
+# Documentation
+docker build -f website_docs/Dockerfile $(build_args) -t frameworks-logbook .
+docker run -d --name frameworks-logbook --restart unless-stopped -p 18033:18033 frameworks-logbook
+```
 
 #### Option B: Native Node.js
 
 ```bash
 cd /opt/frameworks/monorepo
-
-# Install pnpm
 npm install -g pnpm
 
-# Build Web Console
+# Source generated frontend env
+set -a && . /tmp/frontend.env && set +a
+
 cd website_application
-export VITE_AUTH_URL=https://bridge.your-domain.com/auth
-# ... set all VITE_* vars
 pnpm install --frozen-lockfile
 pnpm run build
-
-# Run with PM2 or systemd
 node build/index.js
 ```
 

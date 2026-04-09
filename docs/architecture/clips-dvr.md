@@ -137,7 +137,7 @@ Foghorn stores denormalized context for event emission fallbacks:
 ```sql
 foghorn.artifacts (
   artifact_hash VARCHAR(32) PRIMARY KEY,
-  internal_name VARCHAR(255),          -- Artifact routing name (MistServer stream: vod+{this})
+  internal_name VARCHAR(64),           -- Artifact routing name (MistServer stream: vod+{this})
   stream_internal_name VARCHAR(255),   -- Source stream routing name (the live stream this was clipped/recorded from)
   tenant_id UUID NOT NULL,             -- Required; denormalized for routing
   user_id UUID,                        -- Denormalized fallback

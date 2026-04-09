@@ -5,12 +5,12 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/pkg/auth"
+	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
@@ -170,11 +170,9 @@ func applyX402Cookies(c *gin.Context, authResult *AuthResult) {
 		c.Header("X-Access-Token-Expires-At", authResult.ExpiresAt.Format(time.RFC3339))
 	}
 
-	isDev := os.Getenv("ENV") == "development" ||
-		os.Getenv("BUILD_ENV") == "development" ||
-		os.Getenv("GO_ENV") == "development"
+	isDev := config.IsDevelopment()
 	secure := !isDev
-	cookieDomain := strings.TrimPrefix(os.Getenv("COOKIE_DOMAIN"), ".")
+	cookieDomain := config.GetCookieDomain()
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("access_token", authResult.JWTToken, 15*60, "/", cookieDomain, secure, true)
 	if authResult.TenantID != "" {

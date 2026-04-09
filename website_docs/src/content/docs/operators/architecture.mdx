@@ -75,25 +75,26 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ### Infrastructure Components
 
-| Component                                    | Role                                | Plane          | Port(s)                                           | Deploy Location                            |
-| -------------------------------------------- | ----------------------------------- | -------------- | ------------------------------------------------- | ------------------------------------------ |
-| MistServer                                   | Media processing (ingest/transcode) | Media          | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
-| Livepeer Gateway (external)                  | Operator-hosted transcoding gateway | Media          | Operator-defined                                  | Operator-managed                           |
-| PostgreSQL-compatible DB (Postgres/Yugabyte) | State & configuration database      | Control        | Operator-defined                                  | Central                                    |
-| ClickHouse                                   | Time-series analytics database      | Data           | 8123 (HTTP), 9000 (Native)                        | Central                                    |
-| Kafka                                        | Event streaming backbone            | Data           | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
-| Zookeeper                                    | Kafka cluster management            | Data           | 2181                                              | Central + Regional                         |
-| Privateer                                    | WireGuard mesh agent                | Infrastructure | 18012 (API), 53/udp (DNS), 51820/udp (WireGuard)  | Central/Regional \*                        |
-| Nginx                                        | Reverse proxy & routing             | Support        | 18090                                             | Central                                    |
-| VictoriaMetrics (or Prometheus)              | Metrics collection                  | Support        | Operator-defined                                  | Central                                    |
-| Grafana                                      | Metrics visualization               | Support        | Operator-defined                                  | Central                                    |
-| Listmonk                                     | Newsletter/mailing list manager     | Support        | 9000 (service), 9001 (docker-compose host)        | Central                                    |
+| Component                                    | Role                                       | Plane          | Port(s)                                           | Deploy Location                            |
+| -------------------------------------------- | ------------------------------------------ | -------------- | ------------------------------------------------- | ------------------------------------------ |
+| MistServer                                   | Media processing (ingest/transcode)        | Media          | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
+| Livepeer Gateway                             | Transcoding gateway (orchestrator routing) | Media          | 8935                                              | Edge (co-located with MistServer)          |
+| Livepeer Signer                              | ETH transaction signer for gateway         | Control        | 18016                                             | Central                                    |
+| PostgreSQL-compatible DB (Postgres/Yugabyte) | State & configuration database             | Control        | Operator-defined                                  | Central                                    |
+| ClickHouse                                   | Time-series analytics database             | Data           | 8123 (HTTP), 9000 (Native)                        | Central                                    |
+| Kafka                                        | Event streaming backbone                   | Data           | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
+| Zookeeper                                    | Kafka cluster management                   | Data           | 2181                                              | Central + Regional                         |
+| Privateer                                    | WireGuard mesh agent                       | Infrastructure | 18012 (API), 53/udp (DNS), 51820/udp (WireGuard)  | Central/Regional \*                        |
+| Nginx                                        | Reverse proxy & routing                    | Support        | 18090                                             | Central                                    |
+| VictoriaMetrics + vmagent                    | Metrics collection                         | Support        | Operator-defined                                  | Central + every backend and edge host      |
+| Grafana                                      | Metrics visualization                      | Support        | Operator-defined                                  | Central                                    |
+| Listmonk                                     | Newsletter/mailing list manager            | Support        | 9000 (service), 9001 (docker-compose host)        | Central                                    |
 
 | Foghorn Redis | 6379 | Foghorn state sync (HA) | Infrastructure | Regional |
 
 _Navigator and Privateer are in testing. Production rollout is controlled and may not be enabled in every environment._
 
-**Livepeer integration note**: Today you run the Livepeer Gateway as an external service and configure MistServer to send segments to it. Longer term, we will integrate more directly with Livepeer orchestrators or embed the gateway more tightly.
+**Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 
 ### Interfaces
 

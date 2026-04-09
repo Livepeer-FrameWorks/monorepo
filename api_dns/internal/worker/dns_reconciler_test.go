@@ -25,6 +25,10 @@ func (t *trackingQMClient) ListClusters(_ context.Context, _ *proto.CursorPagina
 	return &proto.ListClustersResponse{}, nil
 }
 
+func (t *trackingQMClient) ListTLSBundles(_ context.Context, _ string, _ *proto.CursorPaginationRequest) (*proto.ListTLSBundlesResponse, error) {
+	return &proto.ListTLSBundlesResponse{}, nil
+}
+
 func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T) {
 	qm := &trackingQMClient{}
 	logger := logrus.New()
@@ -38,6 +42,7 @@ func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T)
 		"edge-storage",
 		"edge-processing",
 		"foghorn",
+		"livepeer-gateway",
 		"bridge",
 		"chartroom",
 	})
@@ -45,9 +50,9 @@ func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T)
 	reconciler.reconcile(context.Background())
 
 	// SyncServiceByCluster calls ListClusters once per cluster-scoped type.
-	// edge-egress, edge-ingest, edge-storage, edge-processing, foghorn trigger it (5 calls).
-	// bridge and chartroom do not.
-	if qm.listClustersCount != 5 {
-		t.Fatalf("expected ListClusters called 5 times (edge-egress, edge-ingest, edge-storage, edge-processing, foghorn), got %d", qm.listClustersCount)
+	// edge-egress, edge-ingest, edge-storage, edge-processing, foghorn, and
+	// livepeer-gateway trigger it (6 calls). bridge and chartroom do not.
+	if qm.listClustersCount != 6 {
+		t.Fatalf("expected ListClusters called 6 times (edge-egress, edge-ingest, edge-storage, edge-processing, foghorn, livepeer-gateway), got %d", qm.listClustersCount)
 	}
 }

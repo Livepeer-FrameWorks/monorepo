@@ -54,8 +54,8 @@ The 7-step pipeline:
 
 Everything else is cluster-assigned automatically:
 
-- Node ID (6-byte hex)
-- Edge domain: `edge-{node_id}.{cluster_slug}.frameworks.network`
+- Node ID: preferred human-readable host/node label when available, otherwise a 6-byte hex fallback
+- Edge domain: `{node_label}.{cluster_slug}.frameworks.network` where `node_label` is the node ID with a single `edge-` prefix
 - Wildcard TLS certificate (pushed via ConfigSeed)
 - Foghorn gRPC address (for Helmsman control plane)
 
@@ -92,7 +92,7 @@ MistServer listens on 8080 internally; Caddy reverse-proxies to it. No RTMP or S
 
 DNS and TLS are fully automatic:
 
-- **DNS**: Foghorn tells Navigator to create an A record: `edge-{node_id}.{cluster}.frameworks.network → your IP`
+- **DNS**: Foghorn tells Navigator to create an A record: `{node_label}.{cluster}.frameworks.network → your IP`, where `node_label` is the node ID with a single `edge-` prefix
 - **TLS**: Cluster wildcard cert (`*.{cluster}.frameworks.network`) is pushed to Helmsman, which configures Caddy
 
 No manual DNS or cert setup required. Cert renewal is automatic.

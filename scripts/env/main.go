@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,11 +23,26 @@ func run() error {
 		return err
 	}
 
+	base := flag.String("base", filepath.Join(root, "config", "env", "base.env"), "path to base env file")
+	secrets := flag.String("secrets", filepath.Join(root, "config", "env", "secrets.env"), "path to secrets env file")
+	overlay := flag.String("overlay", "", "overlay env file merged on top of base (last-write-wins)")
+	output := flag.String("output", filepath.Join(root, ".env"), "output env file path")
+	context := flag.String("context", "dev", "generation context")
+	frontendOnly := flag.Bool("frontend-only", false, "emit frontend build env only")
+	flag.Parse()
+
+	var overlays []string
+	if *overlay != "" {
+		overlays = []string{*overlay}
+	}
+
 	opts := configgen.Options{
-		BaseFile:    filepath.Join(root, "config", "env", "base.env"),
-		SecretsFile: filepath.Join(root, "config", "env", "secrets.env"),
-		OutputFile:  filepath.Join(root, ".env"),
-		Context:     "dev",
+		BaseFile:     *base,
+		OverlayFiles: overlays,
+		SecretsFile:  *secrets,
+		OutputFile:   *output,
+		Context:      *context,
+		FrontendOnly: *frontendOnly,
 	}
 
 	if _, err := configgen.Generate(opts); err != nil {

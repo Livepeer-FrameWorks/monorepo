@@ -38,15 +38,15 @@
     "lit": "^3.3.2"
   },
   "devDependencies": {
-    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-commonjs": "^29.0.2",
     "@rollup/plugin-node-resolve": "^16.0.3",
-    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-terser": "^1.0.0",
     "@rollup/plugin-typescript": "^12.3.0",
-    "rollup": "^4.59.0",
+    "rollup": "^4.60.1",
     "rollup-plugin-copy": "^3.5.0",
     "tslib": "^2.8.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
   },
   "author": "Livepeer FrameWorks",
   "license": "Unlicense"

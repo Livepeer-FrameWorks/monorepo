@@ -137,3 +137,77 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 - `rfcs/dns-anycast.md` - Self-hosted global anycast DNS
 - `rfcs/wireguard-ospf.md` - Dynamic mesh routing
 - `rfcs/mesh-isolation.md` - Per-tenant network segments
+
+---
+
+## Operator Infrastructure Playbook
+
+Guidance for operators deploying FrameWorks on sovereign infrastructure.
+
+### Facility Selection
+
+Choose **Network and Carrier-Neutral Exchange** facilities over hyperscaler campuses. These house multiple ISPs and Internet Exchange Points, providing lowest latency to eyeball networks.
+
+Evaluation checklist:
+
+- **IX presence**: Internet Exchange Points in the facility reduce hops to major ISPs
+- **Tier-1 ISP diversity**: Multiple upstream transit providers for redundancy
+- **Financial stability**: Research the datacenter REIT's financial health (facility closures disrupt operations)
+- **Physical security**: Access controls, surveillance, security personnel
+- **Loading dock access**: Shipping and receiving procedures for equipment deliveries
+- **Floor weight loads**: Verify cabinets support your hardware density
+- **Fuel autonomy**: Days of generator runtime (10+ days is ideal)
+- **Smart hands**: On-site staff who can swap components or power-cycle equipment in emergencies
+- **Parent lease risk**: For subdivided buildings, verify the primary leaseholder's stability
+
+### Edge Placement Strategy
+
+Foghorn's viewer routing scores edges by geographic distance (haversine, H3 resolution 5) and bandwidth (weight 1000 each — the two heaviest factors). Placing edges at IX-adjacent facilities directly optimizes these scores:
+
+- Fewer network hops to eyeball networks = lower viewer latency
+- IX peering = better bandwidth utilization scores
+- Carrier-neutral facilities often have direct peering with major CDNs and ISPs
+
+Haversine distance matters, but network topology matters more. An edge 100km away at a well-connected IX may score better than an edge 50km away behind multiple transit hops.
+
+### Capacity Planning (N×2 Rule)
+
+Never exceed 50% utilization on any resource (CPU, RAM, bandwidth). This ensures:
+
+- Headroom for traffic spikes (viral streams, concurrent events)
+- Graceful degradation if an edge goes offline (remaining edges absorb load without saturation)
+- Maintenance windows without impacting service
+
+Foghorn's scoring deprioritizes saturated nodes via gradient scoring but doesn't exclude them. Operators should provision enough edges that the gradient never reaches the danger zone. See `rfcs/capacity-planning.md` for proposed configurable exclusion thresholds.
+
+### Hardware Diversity
+
+- Track every SKU: CPUs, NICs, drives, transceivers. Use Quartermaster's `infrastructure_nodes` for node-level inventory; consider Netbox for component-level tracking
+- Maintain cold spares: "Two is one, one is none." Keep replacement components racked and unplugged, or binned at the facility
+- Diversify vendors: Don't run all edges on identical hardware. A firmware bug or supply chain issue in one vendor shouldn't take down the fleet
+- Buy N-1 generation: Current-generation hardware at release pricing is rarely justified. Previous-generation components at steep discounts provide better value
+
+### Bus Factor of 2
+
+Every operational procedure must be documented. Every credential must be accessible by at least two people.
+
+No single person should be the only one who can:
+
+- Access a facility
+- Rotate a certificate or credential
+- Restart a critical service
+- Perform a database migration
+- Respond to an incident
+
+### Why Sovereign Infrastructure Matters
+
+The consolidation towards hyperscalers shapes how engineers think about architecture. A generation of developers is trained not to build what is right, but what is easy because there is a managed service for it.
+
+FrameWorks exists to break that constraint. Sovereign infrastructure enables capabilities that are impossible or impractical on managed platforms:
+
+- Custom NAT traversal coordination (see `rfcs/nat-traversal.md`)
+- TLS fingerprinting at the edge for fraud detection (see `rfcs/network-security-capabilities.md`)
+- DNS query logging for adversary tracking (see `rfcs/dns-anycast.md`)
+- Network-level security techniques that require controlling the TLS termination point
+
+Operators who run FrameWorks on their own infrastructure aren't just saving money — they're gaining capabilities that differentiate their service.

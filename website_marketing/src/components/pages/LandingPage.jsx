@@ -309,7 +309,7 @@ const LandingPage = () => {
                           autoplay: true,
                           muted: true,
                           controls: false,
-                          gatewayUrl: config.gatewayUrl || undefined,
+                          gatewayUrl: config.gatewayUrl,
                         }}
                         onStateChange={(st) => setDemoState(st)}
                       />

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/servicedefs"
 )
 
 // streamContext holds cached tenant and user information for a stream
@@ -71,7 +73,6 @@ type Processor struct {
 	dvrService          DVRStarter // Internal DVR orchestration (FoghornGRPCServer)
 	metrics             *ProcessorMetrics
 	nodeID              string
-	region              string
 	clusterID           string
 	ownerTenantID       string
 
@@ -104,7 +105,6 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		loadBalancer:    loadBalancer,
 		geoipClient:     geoipClient,
 		nodeID:          os.Getenv("NODE_ID"),
-		region:          os.Getenv("REGION"),
 		clusterID:       os.Getenv("CLUSTER_ID"),
 	}
 
@@ -185,7 +185,17 @@ func (p *Processor) getLivepeerGatewayURL() string {
 	if scheme == "" {
 		scheme = "https"
 	}
-	p.gatewayURL = fmt.Sprintf("%s://%s:%d", scheme, inst.GetHost(), inst.GetPort())
+	host := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataPublicHost])
+	if host == "" {
+		host = inst.GetHost()
+	}
+	port := inst.GetPort()
+	if rawPort := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataPublicPort]); rawPort != "" {
+		if parsed, convErr := strconv.Atoi(rawPort); convErr == nil && parsed > 0 {
+			port = int32(parsed)
+		}
+	}
+	p.gatewayURL = fmt.Sprintf("%s://%s:%d", scheme, host, port)
 	return p.gatewayURL
 }
 
@@ -662,15 +672,17 @@ func (p *Processor) handleStorageLifecycleData(trigger *pb.MistTrigger) (string,
 		return "", false, fmt.Errorf("unexpected payload type for StorageLifecycleData: %T", trigger.GetTriggerPayload())
 	}
 	sld := payload.StorageLifecycleData
-	// Enrich tenant context if available in the payload
 	if sld.TenantId != nil {
 		trigger.TenantId = sld.TenantId
 	}
 	if sld.InternalName != nil && *sld.InternalName != "" {
 		p.applyStreamContext(trigger, *sld.InternalName)
 	} else if sld.StreamId != nil && *sld.StreamId != "" {
-		// Fallback: resolve tenant/user context from stream_id (UUID)
 		p.applyStreamContext(trigger, *sld.StreamId)
+	} else if sld.AssetHash != "" {
+		// Helmsman doesn't have platform context — resolve via Commodore's
+		// unified resolver which accepts clip_hash/dvr_hash/vod_hash.
+		p.applyStreamContext(trigger, sld.AssetHash)
 	}
 	if sld.StreamId == nil || *sld.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
@@ -705,6 +717,9 @@ func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, boo
 	} else if dld.StreamId != nil && *dld.StreamId != "" {
 		// Fallback: resolve tenant/user context from stream_id (UUID)
 		p.applyStreamContext(trigger, *dld.StreamId)
+	} else if dld.DvrHash != "" {
+		// Helmsman may only know the DVR artifact hash at this point.
+		p.applyStreamContext(trigger, dld.DvrHash)
 	}
 	if dld.StreamId == nil || *dld.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
@@ -974,9 +989,12 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		)
 	}
 
-	// Set playback_id on stream state for federation advertisement
+	// Set playback_id and stream_id on stream state for federation and thumbnail S3 keying
 	if streamValidation.PlaybackId != "" {
 		state.DefaultManager().SetStreamPlaybackID(streamValidation.InternalName, streamValidation.PlaybackId)
+	}
+	if streamValidation.StreamId != "" {
+		state.DefaultManager().SetStreamStreamID(streamValidation.InternalName, streamValidation.StreamId)
 	}
 
 	// Broadcast stream-live to federated peers for cross-cluster dedup
@@ -2074,9 +2092,20 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 		state.DefaultManager().UpdateNodeStats(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), s.GetReplicated())
 	}
 
-	// Update artifacts directly from protobuf - this is critical for VOD playback
-	if artifacts := nu.GetArtifacts(); len(artifacts) > 0 {
-		state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), artifacts)
+	previousArtifacts := func() []*pb.StoredArtifact {
+		nodeState := state.DefaultManager().GetNodeState(nu.GetNodeId())
+		if nodeState == nil {
+			return nil
+		}
+		return nodeState.Artifacts
+	}()
+
+	// Update artifacts directly from protobuf - this is critical for VOD playback.
+	// Called unconditionally: an empty slice clears stale artifacts from a node
+	// that has lost all local files (prevents ghost artifacts in routing).
+	state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), nu.GetArtifacts())
+	if !artifactMapsEqual(previousArtifacts, nu.GetArtifacts()) {
+		control.NotifyArtifactMapUpdated(nu.GetNodeId())
 	}
 
 	// Enrich with database UUID for subscription lookups (frontend uses UUID, not logical name)
@@ -2124,6 +2153,50 @@ func mapOperationalMode(mode pb.NodeOperationalMode) (state.NodeOperationalMode,
 	default:
 		return "", false
 	}
+}
+
+func artifactMapsEqual(current, incoming []*pb.StoredArtifact) bool {
+	if len(current) != len(incoming) {
+		return false
+	}
+	if len(current) == 0 {
+		return true
+	}
+
+	counts := make(map[string]int, len(current))
+	for _, artifact := range current {
+		counts[artifactMapKey(artifact)]++
+	}
+
+	for _, artifact := range incoming {
+		key := artifactMapKey(artifact)
+		if counts[key] == 0 {
+			return false
+		}
+		counts[key]--
+		if counts[key] == 0 {
+			delete(counts, key)
+		}
+	}
+
+	return len(counts) == 0
+}
+
+func artifactMapKey(artifact *pb.StoredArtifact) string {
+	if artifact == nil {
+		return "<nil>"
+	}
+
+	return fmt.Sprintf("%s|%s|%s|%d|%d|%s|%t|%d",
+		artifact.GetClipHash(),
+		artifact.GetStreamName(),
+		artifact.GetFilePath(),
+		artifact.GetSizeBytes(),
+		artifact.GetCreatedAt(),
+		artifact.GetFormat(),
+		artifact.GetHasDtsh(),
+		artifact.GetArtifactType(),
+	)
 }
 
 // resolveNodeUUID resolves a node's logical name (e.g., "edge-node-1") to its database UUID.
@@ -2422,10 +2495,14 @@ func stringPtr(s string) *string {
 }
 
 func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint string, allowCache bool) (streamContext, bool, error) {
-	// For artifact hashes (VOD playback), check in-memory state first.
+	// For artifacts (VOD playback), check in-memory state first.
 	// This avoids Commodore calls for artifacts we already know about.
+	// Key may be artifact_hash (from processing+) or artifact_internal_name (from vod+).
 	if tenantIDHint != "" && p.streamCache != nil {
 		_, artifactInfo := state.DefaultManager().FindNodeByArtifactHash(key)
+		if artifactInfo == nil {
+			_, artifactInfo = state.DefaultManager().FindNodeByArtifactInternalName(key)
+		}
 		if artifactInfo != nil && artifactInfo.GetStreamName() != "" {
 			parentInternal := mist.ExtractInternalName(artifactInfo.GetStreamName())
 			cacheKey := tenantIDHint + ":" + parentInternal

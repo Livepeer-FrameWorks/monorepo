@@ -162,6 +162,9 @@ func main() {
 
 		// Thumbnail triggers
 		webhooks.POST("/mist/thumbnail_updated", handlers.HandleThumbnailUpdated)
+
+		// Process exit trigger (from MistServer PROCESS_EXIT)
+		webhooks.POST("/mist/process_exit", handlers.HandleProcessExit)
 	}
 
 	// Graceful shutdown handling

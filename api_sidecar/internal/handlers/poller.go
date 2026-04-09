@@ -46,7 +46,6 @@ type PrometheusMonitor struct {
 	mutex         sync.RWMutex
 	updateChannel chan models.NodeUpdate
 	stopChannel   chan bool
-	mistPassword  string // Configurable password for /koekjes endpoint
 	// MistServer API authentication
 	mistUsername    string // Username for MistServer API
 	mistAPIPassword string // Password for MistServer API
@@ -59,7 +58,7 @@ type PrometheusMonitor struct {
 	location      string
 	lastSeen      time.Time
 	isHealthy     bool
-	lastJSONData  map[string]interface{} // Store last fetched JSON data
+	lastJSONData  map[string]any // Store last fetched JSON data
 	// Artifact index for fast VOD lookups
 	artifactIndex    map[string]*ClipInfo // clipHash -> ClipInfo
 	lastArtifactScan time.Time
@@ -142,7 +141,6 @@ func InitPrometheusMonitor(logger logging.Logger) {
 
 	mistAPIPassword := os.Getenv("MIST_API_PASSWORD")
 	mistUsername := os.Getenv("MIST_API_USERNAME")
-	mistPassword := os.Getenv("MIST_PASSWORD")
 
 	if mistAPIPassword == "" {
 		mistAPIPassword = "test"
@@ -150,18 +148,14 @@ func InitPrometheusMonitor(logger logging.Logger) {
 	if mistUsername == "" {
 		mistUsername = "test"
 	}
-	if mistPassword == "" {
-		mistPassword = "koekjes"
-	}
 
 	prometheusMonitor = &PrometheusMonitor{
-		mistPassword:    mistPassword,
 		mistUsername:    mistUsername,
 		mistAPIPassword: mistAPIPassword,
 		updateChannel:   make(chan models.NodeUpdate, 10),
 		stopChannel:     make(chan bool, 1),
 		isHealthy:       true,
-		lastJSONData:    make(map[string]interface{}),
+		lastJSONData:    make(map[string]any),
 		artifactIndex:   make(map[string]*ClipInfo),
 	}
 
@@ -188,7 +182,7 @@ func (pm *PrometheusMonitor) AddNode(nodeID, baseURL, edgePublicURL string) {
 	pm.latitude = nil
 	pm.longitude = nil
 	pm.location = ""
-	pm.lastJSONData = make(map[string]interface{}) // Clear previous data
+	pm.lastJSONData = make(map[string]any) // Clear previous data
 
 	// Initialize or update Mist client for this node
 	if pm.mistClient == nil {
@@ -215,7 +209,7 @@ func (pm *PrometheusMonitor) RemoveNode(nodeID string) {
 	pm.latitude = nil
 	pm.longitude = nil
 	pm.location = ""
-	pm.lastJSONData = make(map[string]interface{}) // Clear previous data
+	pm.lastJSONData = make(map[string]any) // Clear previous data
 
 	monitorLogger.WithFields(logging.Fields{
 		"node_id": nodeID,
@@ -347,14 +341,14 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 	}
 
 	// Extract active streams data
-	if activeStreams, ok := apiResponse["active_streams"].(map[string]interface{}); ok {
+	if activeStreams, ok := apiResponse["active_streams"].(map[string]any); ok {
 		monitorLogger.WithFields(logging.Fields{
 			"api_url": baseURL + "/api2",
 			"node_id": nodeID,
 			"count":   len(activeStreams),
 		}).Info("Found active streams via Mist API")
 		for streamName, streamData := range activeStreams {
-			if streamInfo, ok := streamData.(map[string]interface{}); ok {
+			if streamInfo, ok := streamData.(map[string]any); ok {
 				pm.processActiveStreamData(nodeID, streamName, streamInfo)
 			}
 		}
@@ -367,11 +361,11 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 }
 
 // processActiveStreamData processes individual stream data from MistServer API
-func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, streamData map[string]interface{}) {
+func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, streamData map[string]any) {
 	// Extract internal name from wildcard stream
 	var internalName string
-	if plusIndex := strings.Index(streamName, "+"); plusIndex != -1 {
-		internalName = streamName[plusIndex+1:]
+	if _, after, ok := strings.Cut(streamName, "+"); ok {
+		internalName = after
 	} else {
 		internalName = streamName
 	}
@@ -427,10 +421,10 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 	_ = lastMs  // Available for future timing calculations
 
 	// Parse health data for detailed track information
-	var healthData map[string]interface{}
-	var trackDetails []map[string]interface{}
+	var healthData map[string]any
+	var trackDetails []map[string]any
 
-	if health, ok := streamData["health"].(map[string]interface{}); ok {
+	if health, ok := streamData["health"].(map[string]any); ok {
 		healthData = health
 		healthJSON, _ := json.MarshalIndent(health, "", "  ")
 		monitorLogger.WithFields(logging.Fields{
@@ -441,7 +435,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 
 		// Parse individual tracks from health data
 		for trackName, trackInfo := range health {
-			if trackMap, ok := trackInfo.(map[string]interface{}); ok {
+			if trackMap, ok := trackInfo.(map[string]any); ok {
 				// Skip non-track fields (buffer, jitter, maxkeepaway)
 				if trackName == "buffer" || trackName == "jitter" || trackName == "maxkeepaway" {
 					continue
@@ -449,7 +443,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 
 				// Check if this looks like a track (has codec field)
 				if codec, hasCodec := trackMap["codec"].(string); hasCodec {
-					trackDetail := map[string]interface{}{
+					trackDetail := map[string]any{
 						"track_name": trackName,
 						"codec":      codec,
 					}
@@ -513,7 +507,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 					}
 
 					// Extract timing/frame info from keys if available
-					if keys, ok := trackMap["keys"].(map[string]interface{}); ok {
+					if keys, ok := trackMap["keys"].(map[string]any); ok {
 						if frameMax, ok := keys["frames_max"].(float64); ok {
 							trackDetail["frames_max"] = int(frameMax)
 						}
@@ -620,13 +614,13 @@ func (pm *PrometheusMonitor) processUpdates() {
 					"node_id":       update.NodeID,
 					"has_json_data": true,
 					"json_keys":     getMapKeys(jsonData),
-				}).Debug("Processing JSON data from koekjes endpoint")
+				}).Debug("Processing JSON data from Mist metrics JSON endpoint")
 
-				if locData, ok := jsonData["loc"].(map[string]interface{}); ok {
+				if locData, ok := jsonData["loc"].(map[string]any); ok {
 					monitorLogger.WithFields(logging.Fields{
 						"node_id":  update.NodeID,
 						"loc_data": locData,
-					}).Info("Found location data in koekjes JSON")
+					}).Info("Found location data in Mist metrics JSON")
 
 					oldLat := pm.latitude
 					oldLon := pm.longitude
@@ -662,7 +656,7 @@ func (pm *PrometheusMonitor) processUpdates() {
 			} else {
 				monitorLogger.WithFields(logging.Fields{
 					"node_id": update.NodeID,
-				}).Error("No JSON data received from koekjes endpoint")
+				}).Error("No JSON data received from Mist metrics JSON endpoint")
 			}
 		}
 
@@ -716,7 +710,7 @@ func GetPrometheusNodes(c *gin.Context) {
 	}
 
 	prometheusMonitor.mutex.RLock()
-	nodeInfo := map[string]interface{}{
+	nodeInfo := map[string]any{
 		"node_id":   prometheusMonitor.nodeID,
 		"base_url":  prometheusMonitor.baseURL,
 		"latitude":  prometheusMonitor.latitude,
@@ -727,7 +721,7 @@ func GetPrometheusNodes(c *gin.Context) {
 	}
 	prometheusMonitor.mutex.RUnlock()
 
-	c.JSON(http.StatusOK, gin.H{"nodes": []interface{}{nodeInfo}})
+	c.JSON(http.StatusOK, gin.H{"nodes": []any{nodeInfo}})
 }
 
 // AddPrometheusNode adds a new node to monitor
@@ -793,16 +787,16 @@ func getFloat64PointerValue(f *float64) float64 {
 	return *f
 }
 
-// getFloat64 safely converts interface{} to float64
-func getFloat64(v interface{}) float64 {
+// getFloat64 safely converts any to float64
+func getFloat64(v any) float64 {
 	if f, ok := v.(float64); ok {
 		return f
 	}
 	return 0
 }
 
-// getInt64 safely converts interface{} to int64
-func getInt64(v interface{}) int64 {
+// getInt64 safely converts any to int64
+func getInt64(v any) int64 {
 	if f, ok := v.(float64); ok {
 		return int64(f)
 	}
@@ -812,16 +806,16 @@ func getInt64(v interface{}) int64 {
 	return 0
 }
 
-// getString safely converts interface{} to string
-func getString(v interface{}) string {
+// getString safely converts any to string
+func getString(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
 	return ""
 }
 
-// getMapKeys returns the keys of a map[string]interface{} for debugging
-func getMapKeys(m map[string]interface{}) []string {
+// getMapKeys returns the keys of a map[string]any for debugging
+func getMapKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -843,11 +837,11 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 	}
 
 	// Process client metrics
-	if clients, ok := result["clients"].(map[string]interface{}); ok {
-		if data, ok := clients["data"].([]interface{}); ok {
-			fields, ok := clients["fields"].([]interface{})
+	if clients, ok := result["clients"].(map[string]any); ok {
+		if data, ok := clients["data"].([]any); ok {
+			fields, ok := clients["fields"].([]any)
 			if !ok {
-				monitorLogger.Error("Failed to parse client fields as []interface{}")
+				monitorLogger.Error("Failed to parse client fields as []any")
 				return err
 			}
 
@@ -864,9 +858,9 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 
 			// Process each client connection
 			for _, clientData := range data {
-				client, ok := clientData.([]interface{})
+				client, ok := clientData.([]any)
 				if !ok {
-					monitorLogger.WithField("clientData", clientData).Error("Failed to parse client data as []interface{}")
+					monitorLogger.WithField("clientData", clientData).Error("Failed to parse client data as []any")
 					continue
 				}
 
@@ -1051,8 +1045,8 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 	return nil
 }
 
-// getLastJSONData safely gets the last JSON data from koekjes endpoint
-func (pm *PrometheusMonitor) getLastJSONData() map[string]interface{} {
+// getLastJSONData safely gets the last JSON data from the Mist metrics endpoint
+func (pm *PrometheusMonitor) getLastJSONData() map[string]any {
 	pm.mutex.RLock()
 	defer pm.mutex.RUnlock()
 
@@ -1324,8 +1318,7 @@ func calculateDVRSegmentSize(manifestPath, baseDir string) (uint64, int) {
 		return 0, 0
 	}
 
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		// Skip empty lines and tags
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -1418,7 +1411,7 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 
 			// Add DVR manifest to artifact index using same ClipInfo structure
 			dvrInfo := &ClipInfo{
-				FilePath:     manifestPath,
+				FilePath:     dvrPath,
 				StreamName:   streamID,
 				Format:       "m3u8",
 				SizeBytes:    dvrTotalSize,
@@ -1504,7 +1497,7 @@ func touchArtifactAccess(hash string) {
 }
 
 // convertNodeAPIToMistTrigger converts MistServer JSON API response to MistTrigger
-func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]interface{}, logger logging.Logger) *pb.MistTrigger {
+func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]any, logger logging.Logger) *pb.MistTrigger {
 	// Use public edge URL for client-facing BaseUrl (for playback URLs)
 	// Fall back to internal URL if public not configured
 	baseURL := pm.edgePublicURL
@@ -1528,7 +1521,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		// Extract RAM info (Mist provides bytes)
 		if memTotal, ok := jsonData["mem_total"].(float64); ok {
 			nodeUpdate.RamMax = uint64(memTotal) // Bytes
-		} else if ram, ok := jsonData["ram"].(map[string]interface{}); ok {
+		} else if ram, ok := jsonData["ram"].(map[string]any); ok {
 			// Fallback to old 'ram' object if 'mem_total' missing
 			if max, ok := ram["max"].(float64); ok {
 				nodeUpdate.RamMax = uint64(max)
@@ -1537,7 +1530,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 
 		if memUsed, ok := jsonData["mem_used"].(float64); ok {
 			nodeUpdate.RamCurrent = uint64(memUsed) // Bytes
-		} else if ram, ok := jsonData["ram"].(map[string]interface{}); ok {
+		} else if ram, ok := jsonData["ram"].(map[string]any); ok {
 			// Fallback
 			if current, ok := ram["current"].(float64); ok {
 				nodeUpdate.RamCurrent = uint64(current)
@@ -1553,7 +1546,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		}
 
 		// Extract bandwidth data from bw array: [up_total, down_total]
-		if bw, ok := jsonData["bw"].([]interface{}); ok && len(bw) >= 2 {
+		if bw, ok := jsonData["bw"].([]any); ok && len(bw) >= 2 {
 			var currentUp, currentDown uint64
 			if up, ok := bw[0].(float64); ok {
 				currentUp = uint64(up)
@@ -1579,7 +1572,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			pm.lastBwUp = currentUp
 			pm.lastBwDown = currentDown
 			pm.lastPollTime = time.Now()
-		} else if bandwidth, ok := jsonData["bandwidth"].(map[string]interface{}); ok {
+		} else if bandwidth, ok := jsonData["bandwidth"].(map[string]any); ok {
 			// Fallback to old 'bandwidth' object (legacy)
 			if up, ok := bandwidth["up"].(float64); ok {
 				nodeUpdate.UpSpeed = uint64(up)
@@ -1591,7 +1584,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 
 		// Extract current connections from curr array
 		// curr = [viewers, inputs, outgoing, unspecified, cached]
-		if curr, ok := jsonData["curr"].([]interface{}); ok {
+		if curr, ok := jsonData["curr"].([]any); ok {
 			if len(curr) > 0 {
 				if viewers, ok := curr[0].(float64); ok {
 					nodeUpdate.ConnectionsCurrent = uint32(viewers)
@@ -1615,7 +1608,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		}
 
 		// Extract MistServer trigger health statistics (for monitoring/debugging)
-		if triggers, ok := jsonData["triggers"].(map[string]interface{}); ok {
+		if triggers, ok := jsonData["triggers"].(map[string]any); ok {
 			if triggersJSON, err := json.Marshal(triggers); err == nil {
 				nodeUpdate.TriggersJson = string(triggersJSON)
 			}
@@ -1629,7 +1622,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		}
 
 		// Extract location data
-		if locData, ok := jsonData["loc"].(map[string]interface{}); ok {
+		if locData, ok := jsonData["loc"].(map[string]any); ok {
 			if lat, ok := locData["lat"].(float64); ok {
 				nodeUpdate.Latitude = lat
 			}
@@ -1701,14 +1694,14 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	// Populate full Streams map from MistServer data
 	// This is CRITICAL for load balancing - balancer checks stream.Inputs > 0
 	if jsonData != nil {
-		if streams, ok := jsonData["streams"].(map[string]interface{}); ok {
+		if streams, ok := jsonData["streams"].(map[string]any); ok {
 			nodeUpdate.Streams = make(map[string]*pb.StreamData)
 			for streamName, streamData := range streams {
-				if streamInfo, ok := streamData.(map[string]interface{}); ok {
+				if streamInfo, ok := streamData.(map[string]any); ok {
 					sd := &pb.StreamData{}
 
 					// Extract from curr array: [viewers, inputs, outgoing, unspecified, cached]
-					if curr, ok := streamInfo["curr"].([]interface{}); ok {
+					if curr, ok := streamInfo["curr"].([]any); ok {
 						if len(curr) > 0 {
 							if viewers, ok := curr[0].(float64); ok {
 								sd.Total = uint64(viewers)
@@ -1722,7 +1715,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 					}
 
 					// Extract from bw array: [bandwidth_in, bandwidth_out]
-					if bw, ok := streamInfo["bw"].([]interface{}); ok && len(bw) >= 2 {
+					if bw, ok := streamInfo["bw"].([]any); ok && len(bw) >= 2 {
 						if bandwidthIn, ok := bw[0].(float64); ok {
 							sd.BytesUp = uint64(bandwidthIn)
 						}
@@ -1741,7 +1734,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 					}
 
 					// Extract packet counts from pkts array
-					if pkts, ok := streamInfo["pkts"].([]interface{}); ok {
+					if pkts, ok := streamInfo["pkts"].([]any); ok {
 						sd.PacketCounts = make([]int64, len(pkts))
 						for i, pkt := range pkts {
 							if v, ok := pkt.(float64); ok {
@@ -1751,7 +1744,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 					}
 
 					// Extract total connections from tot array
-					if tot, ok := streamInfo["tot"].([]interface{}); ok {
+					if tot, ok := streamInfo["tot"].([]any); ok {
 						sd.TotalConnections = make([]int64, len(tot))
 						for i, t := range tot {
 							if v, ok := t.(float64); ok {
@@ -1882,7 +1875,7 @@ func interpretCapabilityFlag(value string, def bool) bool {
 }
 
 // convertStreamAPIToMistTrigger converts stream API response data to a MistTrigger protobuf
-func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, streamData, healthData map[string]interface{}, trackDetails []map[string]interface{}, trackCount int, logger logging.Logger) *pb.MistTrigger {
+func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, streamData, healthData map[string]any, trackDetails []map[string]any, trackCount int, _logger logging.Logger) *pb.MistTrigger {
 	streamLifecycleUpdate := &pb.StreamLifecycleUpdate{
 		NodeId:       nodeID,
 		InternalName: internalName,
@@ -2149,7 +2142,7 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 }
 
 // convertClientAPIToMistTrigger converts client API response data to a MistTrigger protobuf
-func convertClientAPIToMistTrigger(nodeID, streamName, internalName, protocol, host, sessionID string, connectionTime, position float64, bandwidthIn, bandwidthOut float64, bytesDown, bytesUp, packetsSent, packetsLost, packetsRetransmitted int64, logger logging.Logger) *pb.MistTrigger {
+func convertClientAPIToMistTrigger(nodeID, _streamName, internalName, protocol, host, sessionID string, connectionTime, position float64, bandwidthIn, bandwidthOut float64, bytesDown, bytesUp, packetsSent, packetsLost, packetsRetransmitted int64, _logger logging.Logger) *pb.MistTrigger {
 	clientLifecycleUpdate := &pb.ClientLifecycleUpdate{
 		NodeId:       nodeID,
 		InternalName: internalName,

@@ -330,6 +330,35 @@ func (c *S3Client) BuildS3URL(key string) string {
 	return fmt.Sprintf("s3://%s/%s", c.config.Bucket, fullKey)
 }
 
+// ParseS3URL extracts the raw S3 key from an s3://bucket/prefix/key URL,
+// stripping the bucket name and the client's configured prefix.
+func (c *S3Client) ParseS3URL(s3URL string) (string, error) {
+	if !strings.HasPrefix(s3URL, "s3://") {
+		return "", fmt.Errorf("not an s3:// URL: %s", s3URL)
+	}
+	withoutScheme := strings.TrimPrefix(s3URL, "s3://")
+	slashIdx := strings.Index(withoutScheme, "/")
+	if slashIdx < 0 {
+		return "", fmt.Errorf("no key in s3 URL: %s", s3URL)
+	}
+	fullKey := withoutScheme[slashIdx+1:]
+	// Strip the configured prefix so Delete()/fullKey() won't double-prepend
+	if c.config.Prefix != "" {
+		prefix := strings.TrimSuffix(c.config.Prefix, "/") + "/"
+		fullKey = strings.TrimPrefix(fullKey, prefix)
+	}
+	return fullKey, nil
+}
+
+// DeleteByURL parses an s3://bucket/key URL and deletes the object.
+func (c *S3Client) DeleteByURL(ctx context.Context, s3URL string) error {
+	key, err := c.ParseS3URL(s3URL)
+	if err != nil {
+		return err
+	}
+	return c.Delete(ctx, key)
+}
+
 // BuildS3Key builds the S3 key for a clip
 func (c *S3Client) BuildClipS3Key(tenantID, streamName, clipHash, format string) string {
 	return fmt.Sprintf("clips/%s/%s/%s.%s", tenantID, streamName, clipHash, format)

@@ -61,6 +61,7 @@ type StreamState struct {
 	StreamName       string                 `json:"stream_name"`
 	InternalName     string                 `json:"internal_name"`
 	PlaybackID       string                 `json:"playback_id,omitempty"`
+	StreamID         string                 `json:"stream_id,omitempty"`
 	NodeID           string                 `json:"node_id"`
 	TenantID         string                 `json:"tenant_id"`
 	Status           string                 `json:"status"`       // "live", "offline", etc.
@@ -187,6 +188,9 @@ type NodeState struct {
 	PendingRedirects    int       `json:"pending_redirects"` // Count of redirects awaiting USER_NEW
 	EstBandwidthPerUser uint64    `json:"-"`                 // Cached per-viewer bandwidth estimate (bytes/sec)
 	LastPollTime        time.Time `json:"-"`                 // When real metrics arrived from Helmsman
+
+	// Activation probe: Foghorn verified this node's HTTPS endpoint is serving with valid TLS.
+	ProbeVerified bool `json:"probe_verified"`
 }
 
 type NodeOperationalMode string
@@ -297,6 +301,7 @@ func newNodeState(nodeID string) *NodeState {
 	return &NodeState{
 		NodeID:          nodeID,
 		OperationalMode: NodeModeNormal,
+		ProbeVerified:   true, // default true; freshly enrolled nodes are set false until Foghorn probes
 	}
 }
 
@@ -769,6 +774,18 @@ func (sm *StreamStateManager) SetStreamPlaybackID(internalName, playbackID strin
 	}
 }
 
+// SetStreamStreamID sets the stream_id (UUID) on an existing stream for thumbnail S3 keying.
+func (sm *StreamStateManager) SetStreamStreamID(internalName, streamID string) {
+	if streamID == "" {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if ss := sm.streams[internalName]; ss != nil {
+		ss.StreamID = streamID
+	}
+}
+
 func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	sm.mu.Lock()
 	union := sm.streams[internalName]
@@ -889,6 +906,18 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+}
+
+// SetProbeVerified marks whether Foghorn has verified the node's HTTPS endpoint.
+func (sm *StreamStateManager) SetProbeVerified(nodeID string, verified bool) {
+	sm.mu.Lock()
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = newNodeState(nodeID)
+		sm.nodes[nodeID] = n
+	}
+	n.ProbeVerified = verified
+	sm.mu.Unlock()
 }
 
 // SetNodeInfo updates per-node info
@@ -1430,6 +1459,39 @@ func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.S
 	return best.Host, best.Artifact
 }
 
+// FindNodeByArtifactInternalName searches for a node hosting an artifact by its routing name.
+// StoredArtifact.StreamName is "vod+{internal_name}" — this matches the suffix after "+".
+func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string) (string, *pb.StoredArtifact) {
+	snapshot := sm.GetBalancerSnapshotAtomic()
+	if snapshot == nil || internalName == "" {
+		return "", nil
+	}
+
+	var bestHost string
+	var bestArtifact *pb.StoredArtifact
+	bestScore := int64(1<<63 - 1)
+
+	for _, node := range snapshot.Nodes {
+		if !node.IsActive {
+			continue
+		}
+		for _, artifact := range node.Artifacts {
+			sn := artifact.GetStreamName()
+			if idx := strings.IndexByte(sn, '+'); idx >= 0 && sn[idx+1:] == internalName {
+				score := int64(node.CPUScore + node.RAMScore)
+				if score < bestScore {
+					bestScore = score
+					bestHost = node.Host
+					bestArtifact = artifact
+				}
+				break
+			}
+		}
+	}
+
+	return bestHost, bestArtifact
+}
+
 // UpdateAddBandwidth updates the bandwidth penalty for a node
 func (sm *StreamStateManager) UpdateAddBandwidth(nodeID string, addBandwidth uint64) {
 	sm.mu.Lock()
@@ -1476,11 +1538,18 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	if redisStore != nil {
 		artifactStates := make([]*NodeArtifactState, 0, len(artifacts))
 		for _, artifact := range artifacts {
+			aType := artifactTypeToString(artifact.GetArtifactType())
+			if aType == "" {
+				aType = inferArtifactType(artifact.GetFilePath())
+			}
 			artifactStates = append(artifactStates, &NodeArtifactState{
-				NodeID:    nodeID,
-				ClipHash:  artifact.GetClipHash(),
-				FilePath:  artifact.GetFilePath(),
-				SizeBytes: artifact.GetSizeBytes(),
+				NodeID:       nodeID,
+				ClipHash:     artifact.GetClipHash(),
+				FilePath:     artifact.GetFilePath(),
+				SizeBytes:    artifact.GetSizeBytes(),
+				StreamName:   artifact.GetStreamName(),
+				ArtifactType: aType,
+				Format:       artifact.GetFormat(),
 			})
 		}
 		if err := redisStore.SetNodeArtifacts(nodeID, artifactStates); err != nil {
@@ -1493,29 +1562,35 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	}
 
 	// Persist to database (outside lock to avoid blocking)
-	if artifactRepo != nil && len(artifacts) > 0 {
-		records := make([]ArtifactRecord, 0, len(artifacts))
-		for _, a := range artifacts {
-			artifactType := artifactTypeToString(a.GetArtifactType())
-			if artifactType == "" {
-				artifactType = inferArtifactType(a.GetFilePath())
+	if artifactRepo != nil {
+		if len(artifacts) > 0 {
+			records := make([]ArtifactRecord, 0, len(artifacts))
+			for _, a := range artifacts {
+				artifactType := artifactTypeToString(a.GetArtifactType())
+				if artifactType == "" {
+					artifactType = inferArtifactType(a.GetFilePath())
+				}
+				records = append(records, ArtifactRecord{
+					ArtifactHash: a.GetClipHash(),
+					ArtifactType: artifactType,
+					StreamName:   a.GetStreamName(),
+					FilePath:     a.GetFilePath(),
+					SizeBytes:    int64(a.GetSizeBytes()),
+					CreatedAt:    a.GetCreatedAt(),
+					HasDtsh:      a.GetHasDtsh(),
+					AccessCount:  int64(a.GetAccessCount()),
+					LastAccessed: a.GetLastAccessed(),
+				})
 			}
-			records = append(records, ArtifactRecord{
-				ArtifactHash: a.GetClipHash(),
-				ArtifactType: artifactType,
-				StreamName:   a.GetStreamName(),
-				FilePath:     a.GetFilePath(),
-				SizeBytes:    int64(a.GetSizeBytes()),
-				CreatedAt:    a.GetCreatedAt(),
-				HasDtsh:      a.GetHasDtsh(),
-				AccessCount:  int64(a.GetAccessCount()),
-				LastAccessed: a.GetLastAccessed(),
-			})
+			go func() {
+				_ = artifactRepo.UpsertArtifacts(context.Background(), nodeID, records)
+			}()
+		} else {
+			// Node reports zero artifacts — mark all its DB rows as orphaned
+			go func() {
+				_ = artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nodeID)
+			}()
 		}
-		// Fire-and-forget persistence (errors logged in repository)
-		go func() {
-			_ = artifactRepo.UpsertArtifacts(context.Background(), nodeID, records)
-		}()
 	}
 
 	// Check for .dtsh files that appeared after initial sync
@@ -1593,6 +1668,19 @@ func artifactTypeToString(artifactType pb.ArtifactEvent_ArtifactType) string {
 		return "vod"
 	default:
 		return ""
+	}
+}
+
+func artifactTypeFromString(s string) pb.ArtifactEvent_ArtifactType {
+	switch s {
+	case "clip":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_CLIP
+	case "dvr":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_DVR
+	case "vod":
+		return pb.ArtifactEvent_ARTIFACT_TYPE_VOD
+	default:
+		return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
 	}
 }
 
@@ -1928,7 +2016,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 		if mode == "" {
 			mode = NodeModeNormal
 		}
-		isActive := n.IsHealthy && mode != NodeModeMaintenance
+		isActive := n.IsHealthy && n.ProbeVerified && mode != NodeModeMaintenance
 		snapshot := EnhancedBalancerNodeSnapshot{
 			Host:   n.BaseURL,
 			NodeID: nodeID,
@@ -2141,13 +2229,19 @@ func (sm *StreamStateManager) checkStaleNodes() {
 	}
 	sm.mu.Unlock()
 
-	// Delete from Redis outside the lock
+	// Delete from Redis and mark DB artifacts orphaned outside the lock
+	artifactRepo := sm.repos.Artifacts
 	for _, nodeID := range toRemove {
 		if sm.redisStore != nil {
 			if err := sm.redisStore.DeleteNode(nodeID); err != nil && stateLogger != nil {
 				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete stale node from Redis")
 			}
 			_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
+		}
+		if artifactRepo != nil {
+			go func(nid string) {
+				_ = artifactRepo.MarkNodeArtifactsOrphaned(context.Background(), nid)
+			}(nodeID)
 		}
 		if stateLogger != nil {
 			stateLogger.WithField("node_id", nodeID).Info("Evicted disconnected node from state")
@@ -2783,6 +2877,8 @@ type ArtifactRepository interface {
 	GetCachedAt(ctx context.Context, artifactHash string) (int64, error)
 	// ListAllNodeArtifacts returns all non-orphaned artifacts grouped by node ID (for rehydration)
 	ListAllNodeArtifacts(ctx context.Context) (map[string][]ArtifactRecord, error)
+	// MarkNodeArtifactsOrphaned sets is_orphaned=true for all artifacts on a node
+	MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string) error
 }
 
 // ArtifactRecord represents an artifact (clip or DVR) stored on a node

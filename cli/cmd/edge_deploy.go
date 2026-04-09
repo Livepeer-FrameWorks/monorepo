@@ -24,6 +24,7 @@ func newEdgeDeployCmd() *cobra.Command {
 		clusterID       string
 		clusterName     string
 		region          string
+		nodeName        string
 		enrollmentToken string
 		foghornAddr     string
 		sshTarget       string
@@ -54,6 +55,7 @@ Mode B — Pre-existing token (no login needed):
 
 			if enrollmentToken != "" {
 				return deployWithToken(ctx, cmd, deployConfig{
+					nodeName:        nodeName,
 					enrollmentToken: enrollmentToken,
 					foghornAddr:     foghornAddr,
 					sshTarget:       sshTarget,
@@ -71,6 +73,7 @@ Mode B — Pre-existing token (no login needed):
 				clusterID:     clusterID,
 				clusterName:   clusterName,
 				region:        region,
+				nodeName:      nodeName,
 				foghornAddr:   foghornAddr,
 				sshTarget:     sshTarget,
 				sshKey:        sshKey,
@@ -87,6 +90,7 @@ Mode B — Pre-existing token (no login needed):
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to deploy to (auto-detected if omitted)")
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "name for new private cluster if one needs to be created")
 	cmd.Flags().StringVar(&region, "region", "", "region for new private cluster")
+	cmd.Flags().StringVar(&nodeName, "node-name", "", "preferred node name/id for enrollment and DNS")
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "pre-existing enrollment token (skips login/VPC setup)")
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address (required with --enrollment-token)")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host) for remote deployment")
@@ -104,6 +108,7 @@ type deployConfig struct {
 	clusterID       string
 	clusterName     string
 	region          string
+	nodeName        string
 	enrollmentToken string
 	foghornAddr     string
 	sshTarget       string
@@ -256,7 +261,8 @@ func createEnrollmentTokenForCluster(ctx context.Context, qm *qmclient.GRPCClien
 func runEdgeDeploy(ctx context.Context, cmd *cobra.Command, cfg deployConfig) error {
 	fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge node...")
 
-	resp, err := preRegisterEdge(ctx, cfg.foghornAddr, cfg.enrollmentToken, cfg.sshTarget, cfg.sshKey)
+	preferredNodeID := deriveEdgeNodeName(cfg.nodeName, "", cfg.sshTarget, cfg.sshTarget == "")
+	resp, err := preRegisterEdge(ctx, cfg.foghornAddr, cfg.enrollmentToken, cfg.sshTarget, cfg.sshKey, preferredNodeID)
 	if err != nil {
 		return fmt.Errorf("pre-registration failed: %w", err)
 	}
@@ -287,7 +293,7 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 
 	epConfig := provisioner.EdgeProvisionConfig{
 		Mode:            cfg.mode,
-		NodeName:        "edge-" + resp.GetNodeId(),
+		NodeName:        resp.GetNodeId(),
 		NodeDomain:      resp.GetEdgeDomain(),
 		PoolDomain:      resp.GetPoolDomain(),
 		EnrollmentToken: cfg.enrollmentToken,
@@ -296,6 +302,7 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 		NodeID:          resp.GetNodeId(),
 		CertPEM:         resp.GetCertPem(),
 		KeyPEM:          resp.GetKeyPem(),
+		CABundlePEM:     string(resp.GetInternalCaBundle()),
 		Email:           cfg.email,
 		SkipPreflight:   cfg.skipPreflight,
 		ApplyTuning:     cfg.applyTuning,
@@ -316,7 +323,7 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 
 	epConfig := provisioner.EdgeProvisionConfig{
 		Mode:            "native",
-		NodeName:        "edge-" + resp.GetNodeId(),
+		NodeName:        resp.GetNodeId(),
 		NodeDomain:      resp.GetEdgeDomain(),
 		PoolDomain:      resp.GetPoolDomain(),
 		EnrollmentToken: cfg.enrollmentToken,
@@ -325,6 +332,7 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		NodeID:          resp.GetNodeId(),
 		CertPEM:         resp.GetCertPem(),
 		KeyPEM:          resp.GetKeyPem(),
+		CABundlePEM:     string(resp.GetInternalCaBundle()),
 		Email:           cfg.email,
 		SkipPreflight:   cfg.skipPreflight,
 		ApplyTuning:     cfg.applyTuning,

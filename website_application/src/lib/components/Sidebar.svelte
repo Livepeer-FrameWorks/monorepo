@@ -7,6 +7,7 @@
   import { getIconComponent } from "../iconUtils";
   import { sidebarStore } from "../stores/sidebar.svelte";
   import { getMarketingSiteUrl } from "$lib/config";
+  import DiscordBadge from "./DiscordBadge.svelte";
 
   interface Props {
     collapsed?: boolean;
@@ -296,5 +297,14 @@
         </div>
       {/if}
     {/each}
+
+    <!-- Discord -->
+    <div
+      class="{collapsed ? 'flex justify-center' : ''} mt-auto pt-4 pb-2 {collapsed
+        ? 'px-0'
+        : 'px-1'}"
+    >
+      <DiscordBadge />
+    </div>
   </nav>
 </div>

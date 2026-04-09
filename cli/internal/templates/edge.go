@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"frameworks/pkg/maintenance"
+	"frameworks/pkg/mist"
 )
 
 //go:embed edge/*
@@ -18,6 +21,8 @@ type EdgeVars struct {
 	FoghornHTTPBase string
 	FoghornGRPCAddr string
 	EnrollmentToken string
+	GRPCTLSCAPath   string
+	CABundlePEM     string
 	// Optional: file-based TLS certificate paths (if using Navigator-issued certs)
 	CertPath string // e.g., /etc/frameworks/certs/cert.pem
 	KeyPath  string // e.g., /etc/frameworks/certs/key.pem
@@ -28,6 +33,9 @@ type EdgeVars struct {
 	CaddyAdminAddr   string // Docker: "unix//run/caddy/admin.sock", Native: "localhost:2019"
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
 	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
+	ChandlerUpstream string // Docker: "chandler:18020", Native: "localhost:18020"
+	TelemetryURL     string
+	TelemetryToken   string
 }
 
 // SetModeDefaults fills Mode-dependent fields if not explicitly set.
@@ -56,6 +64,13 @@ func (v *EdgeVars) SetModeDefaults() {
 			v.CaddyAdminAddr = "unix//run/caddy/admin.sock"
 		}
 	}
+	if v.ChandlerUpstream == "" {
+		if v.Mode == "native" {
+			v.ChandlerUpstream = "localhost:18020"
+		} else {
+			v.ChandlerUpstream = "chandler:18020"
+		}
+	}
 }
 
 // WriteEdgeTemplates writes edge stack templates into target directory.
@@ -66,6 +81,14 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return err
 	}
+	// Write shared maintenance page (embedded via pkg/maintenance)
+	maintPath := filepath.Join(targetDir, "maintenance.html")
+	if _, err := os.Stat(maintPath); err != nil || overwrite {
+		if err := os.WriteFile(maintPath, maintenance.HTML, 0o644); err != nil {
+			return err
+		}
+	}
+
 	// files to render — native mode skips docker-compose
 	files := []struct{ in, out string }{
 		{"edge/Caddyfile.tmpl", "Caddyfile"},
@@ -75,6 +98,63 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		files = append([]struct{ in, out string }{
 			{"edge/docker-compose.edge.yml.tmpl", "docker-compose.edge.yml"},
 		}, files...)
+	}
+	if strings.TrimSpace(vars.CABundlePEM) != "" {
+		pkiDir := filepath.Join(targetDir, "pki")
+		if err := os.MkdirAll(pkiDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(pkiDir, "ca.crt"), []byte(vars.CABundlePEM), 0o644); err != nil {
+			return err
+		}
+	}
+	vmagentServiceBlock := ""
+	if strings.TrimSpace(vars.TelemetryURL) != "" && strings.TrimSpace(vars.TelemetryToken) != "" {
+		telemetryDir := filepath.Join(targetDir, "telemetry")
+		if err := os.MkdirAll(telemetryDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(telemetryDir, "token"), []byte(vars.TelemetryToken+"\n"), 0o600); err != nil {
+			return err
+		}
+		vmagentConfig := fmt.Sprintf(`global:
+  scrape_interval: 30s
+scrape_configs:
+  - job_name: edge-mist
+    metrics_path: %s
+    static_configs:
+      - targets:
+          - "mistserver:8080"
+        labels:
+          frameworks_mode: "edge"
+          frameworks_node: %q
+          frameworks_service: "mistserver"
+  - job_name: edge-helmsman
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "helmsman:18007"
+        labels:
+          frameworks_mode: "edge"
+          frameworks_node: %q
+          frameworks_service: "helmsman"
+`, mist.MetricsPath, vars.NodeID, vars.NodeID)
+		if err := os.WriteFile(filepath.Join(targetDir, "vmagent-edge.yml"), []byte(vmagentConfig), 0o644); err != nil {
+			return err
+		}
+		vmagentServiceBlock = `  vmagent:
+    image: victoriametrics/vmagent:v1.122.0
+    container_name: frameworks-edge-vmagent
+    command:
+      - -httpListenAddr=:8430
+      - -promscrape.config=/etc/frameworks/vmagent-edge.yml
+      - -remoteWrite.url={{TELEMETRY_URL}}
+      - -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token
+    volumes:
+      - ./vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro
+      - ./telemetry:/etc/frameworks/telemetry:ro
+    restart: unless-stopped
+`
 	}
 	for _, f := range files {
 		b, err := edgeFS.ReadFile(f.in)
@@ -88,6 +168,7 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{FOGHORN_HTTP_BASE}}", vars.FoghornHTTPBase)
 		content = strings.ReplaceAll(content, "{{FOGHORN_GRPC_ADDR}}", vars.FoghornGRPCAddr)
 		content = strings.ReplaceAll(content, "{{ENROLLMENT_TOKEN}}", vars.EnrollmentToken)
+		content = strings.ReplaceAll(content, "{{GRPC_TLS_CA_PATH}}", vars.GRPCTLSCAPath)
 		content = strings.ReplaceAll(content, "{{CERT_PATH}}", vars.CertPath)
 		content = strings.ReplaceAll(content, "{{KEY_PATH}}", vars.KeyPath)
 		content = strings.ReplaceAll(content, "{{HELMSMAN_UPSTREAM}}", vars.HelmsmanUpstream)
@@ -96,9 +177,11 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{SITE_ADDRESS}}", vars.SiteAddress)
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
-		// TLS: use explicit cert paths if provided, otherwise auto-ACME (Caddy default).
-		// ConfigSeed will push wildcard certs to /etc/frameworks/certs/ at runtime;
-		// Caddy watches the files and hot-reloads when they appear.
+		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)
+		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
+		content = strings.ReplaceAll(content, "{{VMAGENT_EDGE_SERVICE}}", vmagentServiceBlock)
+		content = strings.ReplaceAll(content, "{{TELEMETRY_TOKEN}}", vars.TelemetryToken)
+		// TLS directive placeholder (kept for backward compat with any templates that reference it)
 		if vars.CertPath != "" && vars.KeyPath != "" {
 			tlsDirective := fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath)
 			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", tlsDirective)

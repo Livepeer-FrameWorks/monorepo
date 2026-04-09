@@ -2,6 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"strings"
+
+	"frameworks/cli/pkg/installer"
 	"frameworks/cli/pkg/selfupdate"
 	fwv "frameworks/pkg/version"
 
@@ -44,11 +48,33 @@ func newUpdateCmd() *cobra.Command {
 				return fmt.Errorf("update failed: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Updated to %s\n", result.NewVersion)
+			fmt.Fprintf(cmd.OutOrStdout(), "Updated %s -> %s\n", current, result.NewVersion)
+
+			if majorVersion(current) != majorVersion(result.NewVersion) {
+				fmt.Fprintln(cmd.OutOrStdout(), "Warning: major version change — review the changelog for breaking changes")
+			}
+
+			// Record install state for lifecycle tracking
+			execPath, err := os.Executable()
+			if err != nil {
+				execPath = ""
+			}
+			if err := installer.RecordInstall(result.NewVersion, execPath); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to record install state: %v\n", err)
+			}
+
 			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "Only check for updates, don't install")
 	return cmd
+}
+
+func majorVersion(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	if idx := strings.Index(v, "."); idx != -1 {
+		return v[:idx]
+	}
+	return v
 }

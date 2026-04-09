@@ -494,13 +494,24 @@ func (r *artifactRepositoryDB) SetSyncStatus(ctx context.Context, artifactHash, 
 	if db == nil {
 		return sql.ErrConnDone
 	}
+	if status == "synced" {
+		_, err := db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET sync_status = 'synced',
+			    s3_url = NULLIF($2, ''),
+			    last_sync_attempt = NOW(),
+			    sync_error = NULL,
+			    frozen_at = NOW()
+			WHERE artifact_hash = $1
+		`, artifactHash, s3URL)
+		return err
+	}
 	_, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET sync_status = $2,
 		    s3_url = NULLIF($3, ''),
 		    last_sync_attempt = NOW(),
-		    sync_error = NULL,
-		    frozen_at = CASE WHEN $2 = 'synced' THEN NOW() ELSE frozen_at END
+		    sync_error = NULL
 		WHERE artifact_hash = $1
 	`, artifactHash, status, s3URL)
 	return err
@@ -626,4 +637,16 @@ func (r *artifactRepositoryDB) ListAllNodeArtifacts(ctx context.Context) (map[st
 		result[nodeID] = append(result[nodeID], rec)
 	}
 	return result, rows.Err()
+}
+
+func (r *artifactRepositoryDB) MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string) error {
+	if db == nil {
+		return sql.ErrConnDone
+	}
+	_, err := db.ExecContext(ctx, `
+		UPDATE foghorn.artifact_nodes
+		SET is_orphaned = true, last_seen_at = NOW()
+		WHERE node_id = $1 AND is_orphaned = false
+	`, nodeID)
+	return err
 }

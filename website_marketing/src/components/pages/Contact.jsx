@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { useState, useEffect, useRef } from "react";
 import { Turnstile } from "@marsidev/react-turnstile";
 import config from "../../config";
+import { DISCORD_GUILD_ID } from "@frameworks/site-config";
 import {
   EnvelopeIcon,
   ChatBubbleLeftRightIcon,
@@ -106,6 +107,9 @@ const Contact = () => {
       subtitle: "discord.gg/9J6haUjdAq",
       description: "Join our Discord for ultra low latency chat.",
       link: { label: "discord.gg/9J6haUjdAq", href: config.discordUrl, external: true },
+      widget: DISCORD_GUILD_ID
+        ? `https://discord.com/widget?id=${DISCORD_GUILD_ID}&theme=dark`
+        : null,
     },
     {
       icon: ChatBubbleOvalLeftEllipsisIcon,
@@ -333,15 +337,28 @@ const Contact = () => {
 
                     if (method.link?.href) {
                       return (
-                        <a
-                          key={method.title ?? index}
-                          href={method.link.href}
-                          target={method.link.external ? "_blank" : undefined}
-                          rel={method.link.external ? "noreferrer noopener" : undefined}
-                          className="contact-method-link"
-                        >
-                          {slab}
-                        </a>
+                        <div key={method.title ?? index}>
+                          <a
+                            href={method.link.href}
+                            target={method.link.external ? "_blank" : undefined}
+                            rel={method.link.external ? "noreferrer noopener" : undefined}
+                            className="contact-method-link"
+                          >
+                            {slab}
+                          </a>
+                          {method.widget && (
+                            <iframe
+                              src={method.widget}
+                              width="100%"
+                              height="300"
+                              allowTransparency="true"
+                              frameBorder="0"
+                              sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+                              className="mt-2 rounded-lg"
+                              title="Discord widget"
+                            />
+                          )}
+                        </div>
                       );
                     }
 

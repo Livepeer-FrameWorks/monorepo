@@ -7,7 +7,7 @@
   import { page } from "$app/stores";
   import { base, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { loadStreamingConfig } from "$lib/stores/streaming-config";
+  import { loadStreamingConfig } from "$lib/stores/streaming-config.svelte";
   import { sidebarStore } from "$lib/stores/sidebar.svelte";
   import { getMarketingSiteUrl } from "$lib/config";
   import { getRouteInfo } from "$lib/navigation.js";

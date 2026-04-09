@@ -4,6 +4,7 @@ package foghorn;
 
 option go_package = "frameworks/pkg/proto";
 
+import "common.proto";
 import "shared.proto";
 
 // =============================================================================
@@ -64,17 +65,20 @@ service EdgeProvisioningService {
 message PreRegisterEdgeRequest {
   string enrollment_token = 1;  // Bootstrap token for edge enrollment
   string external_ip = 2;       // Edge's public IP (detected by CLI)
+  string preferred_node_id = 3; // Optional human-friendly node ID/hostname hint
 }
 
 message PreRegisterEdgeResponse {
   string node_id = 1;           // Assigned node ID
-  string edge_domain = 2;       // e.g., edge-{node_id}.{cluster_slug}.{root_domain}
+  string edge_domain = 2;       // e.g., {node_label}.{cluster_slug}.{root_domain}; node_label is node_id with a single edge- prefix
   string pool_domain = 3;       // e.g., edge.{cluster_slug}.{root_domain}
   string cluster_slug = 4;
   string foghorn_grpc_addr = 5; // Address for Helmsman's FOGHORN_CONTROL_ADDR
-  string cert_pem = 6;          // Wildcard TLS certificate (PEM) for the cluster
-  string key_pem = 7;           // Corresponding private key (PEM)
+  string cert_pem = 6 [deprecated = true];  // Deprecated: certs now delivered via ConfigSeed only
+  string key_pem = 7 [deprecated = true];   // Deprecated: certs now delivered via ConfigSeed only
   string cluster_id = 8;        // Raw cluster ID (may differ from DNS-safe cluster_slug)
+  bytes internal_ca_bundle = 9; // Optional internal CA bundle for pre-Connect trust bootstrap
+  common.EdgeTelemetryConfig telemetry = 10; // Optional per-edge telemetry remote_write config
 }
 
 // NodeControlService exposes node lifecycle operations.

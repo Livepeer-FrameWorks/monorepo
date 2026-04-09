@@ -21,10 +21,12 @@ type RenewalWorker struct {
 
 type renewalStore interface {
 	ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]store.Certificate, error)
+	ListExpiringTLSBundles(ctx context.Context, threshold time.Duration) ([]store.TLSBundle, error)
 }
 
 type certIssuer interface {
 	IssueCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error)
+	EnsureTLSBundle(ctx context.Context, bundleID string, domains []string, email string) (*store.TLSBundle, error)
 }
 
 type sleepFunc func(ctx context.Context, duration time.Duration) error
@@ -103,7 +105,7 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 		// Use contact email for ACME registration
 		// For tenant-specific certificates, we could look up tenant contact email from Quartermaster
 		// For now, use the platform default
-		email := os.Getenv("BRAND_CONTACT_EMAIL")
+		email := os.Getenv("FROM_EMAIL")
 		if email == "" {
 			email = "info@frameworks.network"
 		}
@@ -134,6 +136,49 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 			continue
 		}
 		log.Info("Certificate renewed successfully")
+	}
+
+	bundles, err := w.store.ListExpiringTLSBundles(ctx, threshold)
+	if err != nil {
+		w.logger.WithError(err).Error("Failed to list expiring tls bundles")
+		return
+	}
+
+	if len(bundles) == 0 {
+		return
+	}
+
+	w.logger.WithField("count", len(bundles)).Info("Found tls bundles expiring soon")
+	for _, bundle := range bundles {
+		log := w.logger.WithField("bundle_id", bundle.BundleID).WithField("domains", bundle.Domains)
+		email := os.Getenv("FROM_EMAIL")
+		if email == "" {
+			email = "info@frameworks.network"
+		}
+
+		var lastErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			_, err := w.certManager.EnsureTLSBundle(ctx, bundle.BundleID, bundle.Domains, email)
+			if err == nil {
+				lastErr = nil
+				break
+			}
+			lastErr = err
+			if !isRetryableACMEError(err) {
+				break
+			}
+
+			backoff := time.Duration(30<<uint(attempt-1)) * time.Second
+			if err := w.sleep(ctx, backoff); err != nil {
+				log.WithError(err).Warn("TLS bundle renewal interrupted")
+				return
+			}
+		}
+		if lastErr != nil {
+			log.WithError(lastErr).Error("Failed to renew tls bundle")
+			continue
+		}
+		log.Info("TLS bundle renewed successfully")
 	}
 }
 

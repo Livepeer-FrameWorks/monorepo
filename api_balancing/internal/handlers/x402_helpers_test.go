@@ -47,8 +47,9 @@ func setupPurserClient(t *testing.T, service *stubX402Service) (*purserclient.GR
 	}()
 
 	client, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr: listener.Addr().String(),
-		Logger:   logging.Logger(logrus.New()),
+		GRPCAddr:      listener.Addr().String(),
+		Logger:        logging.Logger(logrus.New()),
+		AllowInsecure: true,
 	})
 	if err != nil {
 		server.Stop()

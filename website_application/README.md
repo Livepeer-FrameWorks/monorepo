@@ -40,7 +40,7 @@ npm run dev
 
 App URLs:
 
-- Local dev server (npm run dev): http://localhost:3000
+- Local dev server (npm run dev): http://localhost:3001
 - Docker (webapp service in compose): http://localhost:18030
 
 ## GraphQL Usage & Tenant Context
@@ -51,7 +51,7 @@ App URLs:
 
 ## Configuration
 
-Copy `env.example` to `.env` and adjust as needed. Do not commit secrets.
+Copy `env.example` to `.env` for standalone frontend dev. Deployment/browser `VITE_*` values for the stack are generated from the root config via `make env`.
 
 Key variables:
 

@@ -42,9 +42,4 @@ interface DisplayMediaStreamOptions {
   preferCurrentTab?: boolean;
 }
 
-// RTCRtpScriptTransform API
-declare class RTCRtpScriptTransform {
-  constructor(worker: Worker, options?: unknown);
-}
-
 // Note: Worker bundling is handled via Rollup worker entrypoints in dist/workers.

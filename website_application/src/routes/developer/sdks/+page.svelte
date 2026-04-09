@@ -236,7 +236,7 @@ await controller.stopStreaming();`,
   const CopyIcon = getIconComponent("Copy");
   const ExternalLinkIcon = getIconComponent("ExternalLink");
   const BookOpenIcon = getIconComponent("BookOpen");
-  const GithubIcon = getIconComponent("Github");
+  const GithubIcon = getIconComponent("Code");
   const CheckIcon = getIconComponent("Check");
   const ClockIcon = getIconComponent("Clock");
   const ZapIcon = getIconComponent("Zap");

@@ -18,7 +18,7 @@ This document defines the authoritative units and semantics for all metrics in t
 
 ### 1. Node Metrics (Infrastructure Health)
 
-**Source:** MistServer `/koekjes` JSON → Helmsman poller → ClickHouse `node_metrics_samples`
+**Source:** MistServer `/metrics.json` → Helmsman poller → ClickHouse `node_metrics_samples`
 
 **Important:** In ClickHouse, `node_metrics_samples.bandwidth_in` / `bandwidth_out` are **cumulative bytes** since node start (not a rate). Rates are stored separately as `up_speed` / `down_speed` (bytes/sec).
 
@@ -163,7 +163,7 @@ MistServer's per-stream counters (`streams[x].bw`, `streams[x].tot`) reset when 
 
 ## MistServer Data Sources
 
-### Node-level JSON (`/koekjes`)
+### Node-level JSON (`/metrics.json`)
 
 | Field  | Type    | Indices                                              | Description                                                                                |
 | ------ | ------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |

@@ -1002,6 +1002,8 @@ message BootstrapServiceRequest {
   // If omitted, falls back to token-bound cluster or single active cluster (dev only)
   optional string cluster_id = 11;      // json:"cluster_id,omitempty"
   optional string node_id = 12;         // json:"node_id,omitempty" - links service instance to physical node
+  map<string, string> metadata = 13;    // json:"metadata,omitempty"
+  bool clear_metadata = 14;             // when true, replace existing metadata with an empty object
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapServiceResponse (lines 267-272)
@@ -1050,6 +1052,7 @@ message ServiceInstance {
   string protocol = 19;                 // http or grpc
   optional string host = 20;            // host address
   optional string health_endpoint = 21; // health check endpoint
+  map<string, string> metadata = 22;    // instance metadata for discovery consumers
 }
 
 // ============================================================================
@@ -1117,6 +1120,7 @@ message ValidateBootstrapTokenResponse {
   string cluster_id = 3;        // json:"cluster_id,omitempty" — bound cluster if any
   string tenant_id = 4;         // json:"tenant_id,omitempty"
   string reason = 5;            // json:"reason,omitempty" — if invalid: "expired", "revoked", "usage_exceeded", "not_found"
+  google.protobuf.Struct metadata = 6; // json:"metadata,omitempty"
 }
 
 // ============================================================================
@@ -1172,6 +1176,20 @@ service ServiceRegistryService {
 
   // Get health of specific service instances
   rpc GetServiceHealth(GetServiceHealthRequest) returns (ListServicesHealthResponse);
+}
+
+service IngressService {
+  // Create or update a desired TLS bundle for a cluster ingress surface.
+  rpc UpsertTLSBundle(UpsertTLSBundleRequest) returns (TLSBundleResponse);
+
+  // List desired TLS bundles.
+  rpc ListTLSBundles(ListTLSBundlesRequest) returns (ListTLSBundlesResponse);
+
+  // Create or update a desired ingress site.
+  rpc UpsertIngressSite(UpsertIngressSiteRequest) returns (IngressSiteResponse);
+
+  // List desired ingress sites.
+  rpc ListIngressSites(ListIngressSitesRequest) returns (ListIngressSitesResponse);
 }
 
 // ============================================================================
@@ -1324,6 +1342,74 @@ message ServiceInstanceHealth {
 message ListServicesHealthResponse {
   repeated ServiceInstanceHealth instances = 1;
   common.CursorPaginationResponse pagination = 2;
+}
+
+message TLSBundle {
+  string id = 1;
+  string bundle_id = 2;
+  string cluster_id = 3;
+  repeated string domains = 4;
+  string issuer = 5;
+  string email = 6;
+  google.protobuf.Struct metadata = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message UpsertTLSBundleRequest {
+  TLSBundle bundle = 1;
+}
+
+message TLSBundleResponse {
+  TLSBundle bundle = 1;
+  string error = 2;
+}
+
+message ListTLSBundlesRequest {
+  string cluster_id = 1;
+  common.CursorPaginationRequest pagination = 2;
+}
+
+message ListTLSBundlesResponse {
+  repeated TLSBundle bundles = 1;
+  string cluster_id = 2;
+  common.CursorPaginationResponse pagination = 3;
+}
+
+message IngressSite {
+  string id = 1;
+  string site_id = 2;
+  string cluster_id = 3;
+  string node_id = 4;
+  repeated string domains = 5;
+  string tls_bundle_id = 6;
+  string kind = 7;
+  string upstream = 8;
+  google.protobuf.Struct metadata = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message UpsertIngressSiteRequest {
+  IngressSite site = 1;
+}
+
+message IngressSiteResponse {
+  IngressSite site = 1;
+  string error = 2;
+}
+
+message ListIngressSitesRequest {
+  string cluster_id = 1;
+  string node_id = 2;
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message ListIngressSitesResponse {
+  repeated IngressSite sites = 1;
+  string cluster_id = 2;
+  string node_id = 3;
+  common.CursorPaginationResponse pagination = 4;
 }
 
 // ============================================================================

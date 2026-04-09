@@ -1,0 +1,54 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: service
+    attributes:
+      label: Affected Service
+      options:
+        - Bridge (api_gateway)
+        - Commodore (api_control)
+        - Foghorn (api_balancing)
+        - Helmsman (api_sidecar)
+        - Purser (api_billing)
+        - Periscope (api_analytics)
+        - Decklog (api_events)
+        - Navigator (api_dns)
+        - Privateer (api_mesh)
+        - Signalman (api_realtime)
+        - Quartermaster (api_tenants)
+        - Skipper (api_consultant)
+        - Player SDK (npm_player)
+        - StreamCrafter SDK (npm_studio)
+        - CLI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Paste any relevant log output
+      render: shell

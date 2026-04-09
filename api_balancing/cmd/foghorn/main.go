@@ -272,10 +272,12 @@ func main() {
 	// --- Initialize Clients (Lifted from Handlers) ---
 
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
-	allowInsecure := config.GetEnv("DECKLOG_USE_TLS", "false") != "true"
+	allowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", true)
 	decklogConfig := decklog.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
 		AllowInsecure: allowInsecure,
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       10 * time.Second,
 		Source:        "foghorn",
 		ServiceToken:  serviceToken,
@@ -288,10 +290,13 @@ func main() {
 	// Quartermaster (gRPC)
 	quartermasterGRPCURL := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     quartermasterGRPCURL,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      quartermasterGRPCURL,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to create Quartermaster gRPC client - starting in degraded mode")
@@ -305,6 +310,7 @@ func main() {
 	if qmClient != nil {
 		defer func() { _ = qmClient.Close() }()
 	}
+	control.SetQuartermasterClient(qmClient)
 
 	// Commodore (gRPC)
 	commodoreGRPCURL := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
@@ -338,11 +344,14 @@ func main() {
 	commodoreCache := newCache(ttl, swr, neg, maxEntries)
 
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr:     commodoreGRPCURL,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		Cache:        commodoreCache,
-		ServiceToken: serviceToken,
+		GRPCAddr:      commodoreGRPCURL,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		Cache:         commodoreCache,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to create Commodore gRPC client - starting in degraded mode")
@@ -358,12 +367,15 @@ func main() {
 	}
 
 	// Navigator (gRPC) - wildcard certificate retrieval for edge ConfigSeed
-	navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "navigator:19004")
+	navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "navigator:18011")
 	navigatorClient, err := navclient.NewClient(navclient.Config{
-		Addr:         navigatorAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		Addr:          navigatorAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Navigator gRPC client - TLS bundles will not be seeded")
@@ -375,10 +387,13 @@ func main() {
 	// Purser (gRPC) - x402 settlement + billing checks
 	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:     purserGRPCURL,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      purserGRPCURL,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - x402 payments will be unavailable")
@@ -432,6 +447,7 @@ func main() {
 	// different interface types (foghorngrpc.S3ClientInterface vs jobs.S3Client).
 	var s3ForGRPC foghorngrpc.S3ClientInterface
 	var s3ForJobs jobs.S3Client
+	var s3ForReconciler jobs.ReconcilerS3Client
 	var s3ForFederation *storage.S3Client
 	if s3Bucket := config.GetEnv("STORAGE_S3_BUCKET", ""); s3Bucket != "" {
 		s3Config := storage.S3Config{
@@ -449,6 +465,7 @@ func main() {
 			// Only assign to interfaces if successfully created (avoids typed nil issue)
 			s3ForGRPC = client
 			s3ForJobs = client
+			s3ForReconciler = client
 			s3ForFederation = client
 			control.SetS3Client(client)
 			logger.WithFields(logging.Fields{
@@ -699,6 +716,16 @@ func main() {
 	staleDefrostJob.Start()
 	defer staleDefrostJob.Stop()
 
+	// Start stale freeze cleanup job (resets stuck freezing artifacts)
+	staleFreezeJob := jobs.NewStaleFreezeCleanupJob(jobs.StaleFreezeCleanupConfig{
+		DB:         db,
+		Logger:     logger,
+		Interval:   1 * time.Minute,
+		StaleAfter: 30 * time.Minute,
+	})
+	staleFreezeJob.Start()
+	defer staleFreezeJob.Stop()
+
 	// Start orphan reconciliation job (retries failed deletions)
 	orphanCleanupJob := jobs.NewOrphanCleanupJob(jobs.OrphanCleanupConfig{
 		DB:       db,
@@ -720,6 +747,22 @@ func main() {
 	purgeDeletedJob.Start()
 	defer purgeDeletedJob.Stop()
 
+	// Start artifact reconciler (retries failed syncs, advances pending, onboards orphaned)
+	artifactReconciler := jobs.NewArtifactReconciler(jobs.ArtifactReconcilerConfig{
+		DB:              db,
+		S3Client:        s3ForReconciler,
+		CommodoreClient: commodoreClient,
+		SendFreeze:      control.SendFreezeRequest,
+		Logger:          logger,
+		Interval:        5 * time.Minute,
+	})
+	artifactReconciler.Start()
+	defer artifactReconciler.Stop()
+	control.SetOnArtifactMapUpdated(func(nodeID string) {
+		logger.WithField("node_id", nodeID).Debug("Triggering immediate artifact reconciliation after artifact map update")
+		artifactReconciler.Trigger()
+	})
+
 	// Start processing job dispatcher (routes VOD processing jobs to edge nodes)
 	processingDispatcher := jobs.NewProcessingDispatcher(jobs.ProcessingDispatcherConfig{
 		DB:     db,
@@ -727,14 +770,21 @@ func main() {
 	})
 	processingDispatcher.SetProcessConfigCacher(triggerProcessor)
 	processingDispatcher.SetGatewayResolver(triggerProcessor)
-	processingDispatcher.Start()
-	defer processingDispatcher.Stop()
 
 	// Initialize VOD processing pipeline and wire result handler
 	foghorngrpc.InitVodPipeline(db, logger, decklogClient)
 	control.SetProcessingJobResultHandler(func(ctx context.Context, jobID, status string, outputs map[string]string, errorMsg string) {
 		foghorngrpc.GetVodPipeline().HandleJobResult(ctx, jobID, status, outputs, errorMsg)
 	})
+	control.SetProcessConfigCacheUpdater(triggerProcessor.CacheProcessConfig)
+
+	// When stale recovery exhausts a job's retries, reconcile the artifact
+	// so it doesn't stay stuck in 'processing' forever.
+	processingDispatcher.SetJobExhaustedHandler(func(ctx context.Context, jobID, artifactHash string) {
+		foghorngrpc.GetVodPipeline().HandleJobResult(ctx, jobID, "failed", nil, "max retries exceeded")
+	})
+	processingDispatcher.Start()
+	defer processingDispatcher.Stop()
 
 	// Setup router with unified monitoring (health/metrics only - all API routes now gRPC)
 	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
@@ -811,10 +861,13 @@ func reconnectQuartermaster(
 	defer ticker.Stop()
 	for range ticker.C {
 		client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     grpcAddr,
-			Timeout:      30 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      grpcAddr,
+			Timeout:       30 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			clients.setQuartermaster(false, err)
@@ -826,6 +879,7 @@ func reconnectQuartermaster(
 		clients.setQuartermaster(true, nil)
 		statusGauge.WithLabelValues("quartermaster").Set(1)
 		reconnects.WithLabelValues("quartermaster", "success").Inc()
+		control.SetQuartermasterClient(client)
 		handlers.SetQuartermasterClient(client)
 		if triggerProcessor != nil {
 			triggerProcessor.SetQuartermasterClient(client)
@@ -849,11 +903,14 @@ func reconnectCommodore(
 	defer ticker.Stop()
 	for range ticker.C {
 		client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-			GRPCAddr:     grpcAddr,
-			Timeout:      30 * time.Second,
-			Logger:       logger,
-			Cache:        commodoreCache,
-			ServiceToken: serviceToken,
+			GRPCAddr:      grpcAddr,
+			Timeout:       30 * time.Second,
+			Logger:        logger,
+			Cache:         commodoreCache,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			clients.setCommodore(false, err)

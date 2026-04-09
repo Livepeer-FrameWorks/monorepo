@@ -11,6 +11,7 @@
     dvrHash: string;
     playbackId?: string | null;
     streamId?: string | null;
+    sourceStreamId?: string | null;
     stream?: { streamId: string } | null;
     manifestPath?: string | null;
     status?: string | null;
@@ -212,7 +213,11 @@
         {@const isExpanded = expandedItem === `dvr-${recording.dvrHash}`}
         {@const expired = isExpired(recording.expiresAt)}
         {@const canPlay = isPlayable(recording.status, recording.playbackId, expired)}
-        {@const displayId = recording.stream?.streamId ?? recording.streamId ?? recording.dvrHash}
+        {@const displayId =
+          recording.sourceStreamId ??
+          recording.stream?.streamId ??
+          recording.streamId ??
+          recording.dvrHash}
         <div>
           <div class="p-4">
             <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">

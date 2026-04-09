@@ -8,6 +8,16 @@ import mermaid from "astro-mermaid";
 import { visit } from "unist-util-visit";
 import { loadEnv } from "vite";
 import { codecovVitePlugin } from "@codecov/vite-plugin";
+import {
+  GITHUB_URL,
+  DISCORD_URL,
+  TWITTER_URL,
+  STREAMING_RTMP_PORT,
+  STREAMING_SRT_PORT,
+  STREAMING_RTMP_PATH,
+  STREAMING_HLS_PATH,
+  STREAMING_WEBRTC_PATH,
+} from "@frameworks/site-config";
 
 // Load .env files manually - Astro doesn't auto-load them in config
 // See: https://docs.astro.build/en/guides/environment-variables/
@@ -33,12 +43,12 @@ const playUrl = env.VITE_STREAMING_PLAY_URL || "http://localhost:18008";
 const ingest = parseStreamingUrl(ingestUrl);
 const edge = parseStreamingUrl(edgeUrl);
 
-// Build protocol-specific URLs
-const rtmpPort = env.VITE_STREAMING_RTMP_PORT || "1935";
-const srtPort = env.VITE_STREAMING_SRT_PORT || "8889";
-const rtmpPath = env.VITE_STREAMING_RTMP_PATH || "/live";
-const hlsPath = env.VITE_STREAMING_HLS_PATH || "/hls";
-const webrtcPath = env.VITE_STREAMING_WEBRTC_PATH || "/webrtc";
+// Protocol defaults from site-config (not env)
+const rtmpPort = STREAMING_RTMP_PORT;
+const srtPort = STREAMING_SRT_PORT;
+const rtmpPath = STREAMING_RTMP_PATH;
+const hlsPath = STREAMING_HLS_PATH;
+const webrtcPath = STREAMING_WEBRTC_PATH;
 
 // Build full URLs for docs examples
 const rtmpProto = ingest.useTls ? "rtmps" : "rtmp";
@@ -65,9 +75,8 @@ const envVarMap = {
   // Raw hostname for SRT examples that need just the host
   INGEST_HOSTNAME: ingest.hostname,
   SRT_PORT: srtPort,
-  // Community links
-  DISCORD_URL: env.VITE_DISCORD_URL,
-  GITHUB_URL: env.VITE_GITHUB_URL,
+  DISCORD_URL,
+  GITHUB_URL,
 };
 
 // Helper to replace %PLACEHOLDER% patterns
@@ -137,6 +146,9 @@ export default defineConfig({
     rehypePlugins: [rehypeBaseLinks],
   },
   vite: {
+    resolve: {
+      noExternal: ["svelte-turnstile"],
+    },
     plugins: [
       codecovVitePlugin({
         enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
@@ -187,12 +199,17 @@ export default defineConfig({
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/livepeer-frameworks/monorepo",
+          href: GITHUB_URL,
         },
         {
           icon: "x.com",
           label: "X (Twitter)",
-          href: "https://x.com/GetFrames",
+          href: TWITTER_URL,
+        },
+        {
+          icon: "discord",
+          label: "Discord",
+          href: DISCORD_URL,
         },
       ],
       customCss: [

@@ -59,10 +59,13 @@ type streamInstanceRecord struct {
 }
 
 type NodeArtifactState struct {
-	NodeID    string `json:"node_id"`
-	ClipHash  string `json:"clip_hash"`
-	FilePath  string `json:"file_path"`
-	SizeBytes uint64 `json:"size_bytes"`
+	NodeID       string `json:"node_id"`
+	ClipHash     string `json:"clip_hash"`
+	FilePath     string `json:"file_path"`
+	SizeBytes    uint64 `json:"size_bytes"`
+	StreamName   string `json:"stream_name,omitempty"`
+	ArtifactType string `json:"artifact_type,omitempty"`
+	Format       string `json:"format,omitempty"`
 }
 
 type RedisStateStore struct {

@@ -71,6 +71,7 @@
   const PlayIcon = getIconComponent("Play");
   const Trash2Icon = getIconComponent("Trash2");
   const Loader2Icon = getIconComponent("Loader2");
+  const AlertTriangleIcon = getIconComponent("AlertTriangle");
 </script>
 
 <div
@@ -162,7 +163,8 @@
             class="text-xs text-destructive mt-1.5 truncate"
             title={effectiveHealthData.issuesDescription}
           >
-            ⚠ {effectiveHealthData.issuesDescription}
+            <AlertTriangleIcon class="w-3 h-3 inline-block" />
+            {effectiveHealthData.issuesDescription}
           </p>
         {/if}
       </div>

@@ -22,6 +22,7 @@ import (
 	"frameworks/pkg/billing"
 	decklogclient "frameworks/pkg/clients/decklog"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/config"
 	"frameworks/pkg/countries"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/grpcutil"
@@ -1770,12 +1771,9 @@ func (s *PurserServer) createMolliePayment(invoiceID, tenantID string, amount fl
 	if webappURL == "" {
 		return "", "", fmt.Errorf("WEBAPP_PUBLIC_URL is required")
 	}
-	webhookURL := strings.TrimSpace(os.Getenv("API_PUBLIC_URL"))
+	webhookURL := config.GetGatewayPublicURL()
 	if webhookURL == "" {
-		webhookURL = strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL"))
-	}
-	if webhookURL == "" {
-		return "", "", fmt.Errorf("API_PUBLIC_URL or GATEWAY_PUBLIC_URL is required")
+		return "", "", fmt.Errorf("GATEWAY_PUBLIC_URL is required")
 	}
 
 	payload := map[string]interface{}{
@@ -3454,6 +3452,9 @@ type GRPCServerConfig struct {
 	QuartermasterClient *qmclient.GRPCClient
 	CommodoreClient     handlers.CommodoreClient
 	DecklogClient       *decklogclient.BatchedClient
+	CertFile            string
+	KeyFile             string
+	AllowInsecure       bool
 }
 
 // NewGRPCServer creates a new gRPC server for Purser
@@ -3471,6 +3472,23 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
+	}
+	tlsCfg := grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		AllowInsecure: cfg.AllowInsecure,
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+		cfg.Logger.WithError(err).Fatal("Timed out waiting for Purser gRPC TLS files")
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to configure Purser gRPC TLS")
+	}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
 	}
 
 	server := grpc.NewServer(opts...)
@@ -5065,10 +5083,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 	}
 
 	// Build webhook URL (routed through Gateway)
-	webhookBaseURL := strings.TrimSpace(os.Getenv("API_PUBLIC_URL"))
-	if webhookBaseURL == "" {
-		webhookBaseURL = strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL"))
-	}
+	webhookBaseURL := config.GetGatewayPublicURL()
 	webhookURL := ""
 	if webhookBaseURL != "" {
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"
@@ -5164,10 +5179,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 	}
 
 	// Build webhook URL
-	webhookBaseURL := strings.TrimSpace(os.Getenv("API_PUBLIC_URL"))
-	if webhookBaseURL == "" {
-		webhookBaseURL = strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL"))
-	}
+	webhookBaseURL := config.GetGatewayPublicURL()
 	webhookURL := ""
 	if webhookBaseURL != "" {
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"

@@ -33,7 +33,7 @@ func main() {
 	// PostgreSQL is ONLY used for billing_cursors (usage summary tracking)
 	// All analytics queries use ClickHouse exclusively
 	dbURL := config.RequireEnv("DATABASE_URL")
-	clickhouseHost := config.RequireEnv("CLICKHOUSE_HOST")
+	clickhouseAddr := config.RequireEnv("CLICKHOUSE_ADDR")
 	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
 	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
 	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
@@ -49,7 +49,7 @@ func main() {
 
 	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
-	chConfig.Addr = []string{clickhouseHost}
+	chConfig.Addr = []string{clickhouseAddr}
 	chConfig.Database = clickhouseDB
 	chConfig.Username = clickhouseUser
 	chConfig.Password = clickhousePassword
@@ -65,7 +65,7 @@ func main() {
 	healthChecker.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
 		"DATABASE_URL":    dbURL,
-		"CLICKHOUSE_HOST": clickhouseHost,
+		"CLICKHOUSE_ADDR": clickhouseAddr,
 		"CLICKHOUSE_DB":   clickhouseDB,
 		"JWT_SECRET":      jwtSecret,
 	}))
@@ -96,11 +96,14 @@ func main() {
 		}
 
 		grpcServer := periscopegrpc.NewGRPCServer(periscopegrpc.GRPCServerConfig{
-			ClickHouse:   clickhouse,
-			Logger:       logger,
-			ServiceToken: serviceToken,
-			JWTSecret:    []byte(jwtSecret),
-			Metrics:      serviceMetrics,
+			ClickHouse:    clickhouse,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			JWTSecret:     []byte(jwtSecret),
+			Metrics:       serviceMetrics,
+			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 
@@ -116,10 +119,13 @@ func main() {
 	// Must be launched BEFORE server.Start() which blocks
 	go func() {
 		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     quartermasterGRPCAddr,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      quartermasterGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")

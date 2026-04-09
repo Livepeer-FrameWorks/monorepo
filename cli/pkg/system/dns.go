@@ -63,6 +63,13 @@ fi
 `, configContent)
 }
 
+// CaptureUpstreamNameservers returns a script that prints the current nameserver
+// entries from /etc/resolv.conf (excluding loopback) as a comma-separated list.
+// Run this BEFORE overwriting resolv.conf so Privateer can forward non-.internal queries.
+func CaptureUpstreamNameservers() string {
+	return `awk '/^nameserver/ && $2 !~ /^127\./ {printf sep $2; sep=","}' /etc/resolv.conf`
+}
+
 // ConfigureResolvConf returns a script to configure resolv.conf directly (fallback)
 func ConfigureResolvConf() string {
 	return `#!/bin/bash

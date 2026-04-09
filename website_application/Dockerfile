@@ -11,18 +11,11 @@ ARG VITE_GRAPHQL_WS_URL
 ARG VITE_STREAMING_INGEST_URL
 ARG VITE_STREAMING_PLAY_URL
 ARG VITE_STREAMING_EDGE_URL
-ARG VITE_STREAMING_RTMP_PORT
-ARG VITE_STREAMING_SRT_PORT
-ARG VITE_STREAMING_RTMP_PATH
-ARG VITE_STREAMING_HLS_PATH
-ARG VITE_STREAMING_WEBRTC_PATH
-ARG VITE_STREAMING_EMBED_PATH
 ARG VITE_MARKETING_SITE_URL
 ARG VITE_DOCS_SITE_URL
-ARG BASE_PATH
+ARG VITE_APP_URL
 ARG VITE_TURNSTILE_AUTH_SITE_KEY
 ARG VITE_GATEWAY_URL
-ARG VITE_GITHUB_URL
 
 ENV VITE_AUTH_URL=${VITE_AUTH_URL}
 ENV VITE_GRAPHQL_HTTP_URL=${VITE_GRAPHQL_HTTP_URL}
@@ -30,18 +23,11 @@ ENV VITE_GRAPHQL_WS_URL=${VITE_GRAPHQL_WS_URL}
 ENV VITE_STREAMING_INGEST_URL=${VITE_STREAMING_INGEST_URL}
 ENV VITE_STREAMING_PLAY_URL=${VITE_STREAMING_PLAY_URL}
 ENV VITE_STREAMING_EDGE_URL=${VITE_STREAMING_EDGE_URL}
-ENV VITE_STREAMING_RTMP_PORT=${VITE_STREAMING_RTMP_PORT}
-ENV VITE_STREAMING_SRT_PORT=${VITE_STREAMING_SRT_PORT}
-ENV VITE_STREAMING_RTMP_PATH=${VITE_STREAMING_RTMP_PATH}
-ENV VITE_STREAMING_HLS_PATH=${VITE_STREAMING_HLS_PATH}
-ENV VITE_STREAMING_WEBRTC_PATH=${VITE_STREAMING_WEBRTC_PATH}
-ENV VITE_STREAMING_EMBED_PATH=${VITE_STREAMING_EMBED_PATH}
 ENV VITE_MARKETING_SITE_URL=${VITE_MARKETING_SITE_URL}
 ENV VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
-ENV BASE_PATH=${BASE_PATH}
+ENV VITE_APP_URL=${VITE_APP_URL}
 ENV VITE_TURNSTILE_AUTH_SITE_KEY=${VITE_TURNSTILE_AUTH_SITE_KEY}
 ENV VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
-ENV VITE_GITHUB_URL=${VITE_GITHUB_URL}
 
 WORKDIR /app
 
@@ -67,6 +53,9 @@ COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
 COPY npm_studio/packages/react/package.json npm_studio/packages/react/
 COPY npm_studio/packages/wc/package.json npm_studio/packages/wc/
 
+# shared workspace packages
+COPY packages/site-config/package.json packages/site-config/
+
 # remaining workspace members (pnpm requires all manifests for graph resolution)
 COPY website_marketing/package.json website_marketing/
 COPY website_docs/package.json website_docs/
@@ -82,6 +71,7 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     fi
 
 # copy sources
+COPY packages/site-config/ packages/site-config/
 COPY npm_player/ npm_player/
 COPY npm_studio/ npm_studio/
 COPY website_application/ website_application/
@@ -96,7 +86,7 @@ COPY scripts/copy-agent-files.sh scripts/copy-agent-files.sh
 RUN cd website_application && ../scripts/copy-agent-files.sh static
 
 # build the app (increase memory for Houdini codegen + Vite SSR + adapter-node)
-RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter frameworks-frontend... run build
+RUN NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter frameworks-frontend... run build
 
 # deploy with production dependencies only into an isolated directory
 RUN pnpm --filter frameworks-frontend --prod deploy /app/deployed

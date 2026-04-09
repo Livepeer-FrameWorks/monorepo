@@ -16,14 +16,19 @@ import (
 	"frameworks/pkg/logging"
 )
 
+const (
+	MetricsConfigValue = "metrics"
+	MetricsPath        = "/metrics"
+	MetricsJSONPath    = "/metrics.json"
+)
+
 // Client handles interactions with MistServer API
 type Client struct {
-	BaseURL         string
-	Username        string
-	Password        string
-	MetricsPassword string // Preshared secret for metrics endpoints (/{secret} and /{secret}.json)
-	httpClient      *http.Client
-	Logger          logging.Logger
+	BaseURL    string
+	Username   string
+	Password   string
+	httpClient *http.Client
+	Logger     logging.Logger
 
 	// Authentication state for TCP API
 	authenticated bool
@@ -50,11 +55,6 @@ type StreamInfo struct {
 
 // NewClient creates a new MistServer API client
 func NewClient(logger logging.Logger) *Client {
-	metricsPassword := os.Getenv("MIST_PASSWORD")
-	if metricsPassword == "" {
-		metricsPassword = "koekjes" // Default dev secret
-	}
-
 	user := os.Getenv("MIST_API_USERNAME")
 	if user == "" {
 		user = "test"
@@ -66,10 +66,9 @@ func NewClient(logger logging.Logger) *Client {
 	}
 
 	return &Client{
-		BaseURL:         os.Getenv("MISTSERVER_URL"), // e.g., "http://localhost:4242"
-		Username:        user,
-		Password:        pass,
-		MetricsPassword: metricsPassword,
+		BaseURL:  os.Getenv("MISTSERVER_URL"), // e.g., "http://localhost:4242"
+		Username: user,
+		Password: pass,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -471,22 +470,24 @@ func (c *Client) calculatePasswordHash(password, challenge string) string {
 	return hex.EncodeToString(finalMD5[:])
 }
 
-// FetchJSON fetches data from MistServer metrics endpoint (/{secret}.json)
+// FetchJSON fetches data from MistServer's JSON metrics endpoint.
 func (c *Client) FetchJSON(endpoint string) (map[string]interface{}, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("MISTSERVER_URL not configured")
 	}
 
-	// Build URL for metrics JSON: /{secret}.json
 	base := strings.TrimRight(c.BaseURL, "/")
-	var urlStr string
+	var path string
 	if endpoint == "" {
-		urlStr = fmt.Sprintf("%s/%s.json", base, c.MetricsPassword)
+		path = MetricsJSONPath
+	} else if strings.HasPrefix(endpoint, "/") {
+		path = endpoint
 	} else if strings.HasSuffix(endpoint, ".json") {
-		urlStr = fmt.Sprintf("%s/%s/%s", base, c.MetricsPassword, endpoint)
+		path = "/" + endpoint
 	} else {
-		urlStr = fmt.Sprintf("%s/%s.json", base, c.MetricsPassword)
+		path = "/" + endpoint + ".json"
 	}
+	urlStr := base + path
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, urlStr, nil)
 	if err != nil {

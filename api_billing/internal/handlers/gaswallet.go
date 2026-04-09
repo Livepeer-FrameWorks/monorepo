@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -53,7 +54,7 @@ const LowBalanceThreshold = 0.005
 func NewGasWalletMonitor(log logging.Logger) *GasWalletMonitor {
 	privKey := os.Getenv("X402_GAS_WALLET_PRIVKEY")
 	address := os.Getenv("X402_GAS_WALLET_ADDRESS")
-	includeTestnets := os.Getenv("X402_INCLUDE_TESTNETS") == "true"
+	includeTestnets := config.X402IncludeTestnetsEnabled()
 
 	// Derive address from private key if not provided
 	if address == "" && privKey != "" {

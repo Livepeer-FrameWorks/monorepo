@@ -9,20 +9,24 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	dbsql "frameworks/pkg/database/sql"
-
-	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
 // ClickHouseProvisioner provisions ClickHouse
 type ClickHouseProvisioner struct {
 	*BaseProvisioner
+	ch CHExecutor
 }
 
 // NewClickHouseProvisioner creates a new ClickHouse provisioner
-func NewClickHouseProvisioner(pool *ssh.Pool) (*ClickHouseProvisioner, error) {
-	return &ClickHouseProvisioner{
+func NewClickHouseProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (*ClickHouseProvisioner, error) {
+	p := &ClickHouseProvisioner{
 		BaseProvisioner: NewBaseProvisioner("clickhouse", pool),
-	}, nil
+		ch:              &DirectCHExecutor{},
+	}
+	for _, opt := range opts {
+		opt.applyClickHouse(p)
+	}
+	return p, nil
 }
 
 // Detect checks if ClickHouse is installed and running
@@ -63,6 +67,7 @@ install_clickhouse_apt() {
 }
 
 install_clickhouse_yum() {
+  PKG_MGR="$1"
   cat >/etc/yum.repos.d/clickhouse.repo <<'REPO'
 [clickhouse]
 name=ClickHouse
@@ -72,16 +77,84 @@ gpgcheck=1
 gpgkey=https://packages.clickhouse.com/rpm/stable/repodata/repomd.xml.key
 REPO
   if [ -n "$VERSION" ]; then
-    yum install -y "clickhouse-server-$VERSION" "clickhouse-client-$VERSION"
+    "$PKG_MGR" install -y "clickhouse-server-$VERSION" "clickhouse-client-$VERSION"
   else
-    yum install -y clickhouse-server clickhouse-client
+    "$PKG_MGR" install -y clickhouse-server clickhouse-client
   fi
+}
+
+install_clickhouse_arch() {
+  pacman -Syu --noconfirm --needed curl tar
+
+  checksum_value() {
+    awk 'NF { print $1; exit }' "$1"
+  }
+
+  verify_checksum() {
+    local algorithm="$1" file="$2" checksum_file="$3" expected actual
+    expected="$(checksum_value "$checksum_file")"
+    [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
+    case "$algorithm" in
+      sha512)
+        if command -v sha512sum >/dev/null 2>&1; then
+          actual="$(sha512sum "$file" | awk '{print $1}')"
+        elif command -v shasum >/dev/null 2>&1; then
+          actual="$(shasum -a 512 "$file" | awk '{print $1}')"
+        else
+          actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
+        fi
+        ;;
+      *)
+        echo "unsupported checksum algorithm: $algorithm" >&2
+        exit 1
+        ;;
+    esac
+    [ "$actual" = "$expected" ] || {
+      echo "checksum mismatch for $file" >&2
+      echo "expected: $expected" >&2
+      echo "actual:   $actual" >&2
+      exit 1
+    }
+  }
+
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64) ch_arch="amd64" ;;
+    aarch64|arm64) ch_arch="arm64" ;;
+    *)
+      echo "unsupported architecture: $arch" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ -n "$VERSION" ]; then
+    archive="clickhouse-common-static-${VERSION}-${ch_arch}.tgz"
+  else
+    archive=$(curl -fsSL https://packages.clickhouse.com/tgz/stable/ | grep -o "clickhouse-common-static-[0-9][^\"']*-${ch_arch}\.tgz" | sort -V | tail -n 1)
+  fi
+  if [ -z "$archive" ]; then
+    echo "failed to resolve clickhouse static archive" >&2
+    exit 1
+  fi
+
+  curl -fsSL -o /tmp/clickhouse.tgz "https://packages.clickhouse.com/tgz/stable/${archive}"
+  curl -fsSL -o /tmp/clickhouse.tgz.sha512 "https://packages.clickhouse.com/tgz/stable/${archive}.sha512"
+  verify_checksum sha512 /tmp/clickhouse.tgz /tmp/clickhouse.tgz.sha512
+  topdir=$(tar -tzf /tmp/clickhouse.tgz | head -n 1 | cut -d/ -f1)
+  rm -rf "/tmp/${topdir}"
+  tar -xzf /tmp/clickhouse.tgz -C /tmp
+  "/tmp/${topdir}/usr/bin/clickhouse" install --noninteractive --user clickhouse --group clickhouse
+  rm -rf "/tmp/${topdir}" /tmp/clickhouse.tgz /tmp/clickhouse.tgz.sha512
 }
 
 if command -v apt-get >/dev/null; then
   install_clickhouse_apt
+elif command -v dnf >/dev/null; then
+  install_clickhouse_yum dnf
 elif command -v yum >/dev/null; then
-  install_clickhouse_yum
+  install_clickhouse_yum yum
+elif command -v pacman >/dev/null; then
+  install_clickhouse_arch
 else
   echo "Unsupported package manager"
   exit 1
@@ -127,41 +200,28 @@ func (c *ClickHouseProvisioner) Validate(ctx context.Context, host inventory.Hos
 
 // Initialize creates databases and tables
 func (c *ClickHouseProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Get databases from config
 	databases, ok := config.Metadata["databases"].([]string)
 	if !ok {
 		databases = []string{"periscope"}
 	}
 
-	// Connect to ClickHouse
-	conn, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{fmt.Sprintf("%s:%d", host.ExternalIP, config.Port)},
-		Auth: clickhouse.Auth{
-			Database: "default",
-			Username: "default",
-			Password: "",
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to connect to ClickHouse: %w", err)
-	}
-	defer conn.Close()
-
-	// Create each database
 	for _, dbName := range databases {
-		// Create database if not exists
 		query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName)
-		if err := conn.Exec(ctx, query); err != nil {
+		if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, "default", "", "default", query); err != nil {
 			return fmt.Errorf("failed to create database %s: %w", dbName, err)
 		}
 
 		fmt.Printf("✓ Database %s ready\n", dbName)
 
-		// Run initialization SQL for periscope database
 		if dbName == "periscope" {
-			if err := c.initializePeriscopeDatabase(ctx, conn); err != nil {
+			sqlContent, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+			if err != nil {
+				return fmt.Errorf("failed to read embedded ClickHouse schema: %w", err)
+			}
+			if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, "default", "", "periscope", string(sqlContent)); err != nil {
 				return fmt.Errorf("failed to initialize periscope database: %w", err)
 			}
+			fmt.Println("✓ ClickHouse periscope schema initialized")
 		}
 	}
 
@@ -307,19 +367,24 @@ echo "ClickHouse configured with application credentials"
 	return nil
 }
 
-// initializePeriscopeDatabase runs ClickHouse schema for periscope
-func (c *ClickHouseProvisioner) initializePeriscopeDatabase(ctx context.Context, conn clickhouse.Conn) error {
-	sqlContent, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+// ApplyDemoSeeds applies ClickHouse demo data for development.
+// Uses the "frameworks" user when a password is provided in config.Metadata["clickhouse_password"],
+// falling back to "default" (unauthenticated) for local/unconfigured clusters.
+func (c *ClickHouseProvisioner) ApplyDemoSeeds(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	sqlContent, err := dbsql.Content.ReadFile("seeds/demo/clickhouse_demo_data.sql")
 	if err != nil {
-		return fmt.Errorf("failed to read embedded ClickHouse schema: %w", err)
+		return fmt.Errorf("read clickhouse demo seed: %w", err)
 	}
 
-	// Execute SQL (ClickHouse Go driver requires splitting statements)
-	// For simplicity, execute as single multi-statement (may need splitting for complex schemas)
-	if err := conn.Exec(ctx, string(sqlContent)); err != nil {
-		return fmt.Errorf("failed to execute SQL: %w", err)
+	username := "default"
+	password := ""
+	if pw, ok := config.Metadata["clickhouse_password"].(string); ok && pw != "" {
+		username = "frameworks"
+		password = pw
 	}
 
-	fmt.Println("✓ ClickHouse periscope schema initialized")
+	if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, username, password, "periscope", string(sqlContent)); err != nil {
+		return fmt.Errorf("apply clickhouse demo seed: %w", err)
+	}
 	return nil
 }

@@ -11,9 +11,10 @@ services:
       - ACME_AGREE=true
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./maintenance.html:/etc/caddy/maintenance.html:ro
       - caddy_data:/data
       - caddy_config:/config
-      - ./certs:/etc/frameworks/certs:ro
+      - ./certs:/etc/frameworks/certs
       - caddy_admin:/run/caddy
     restart: unless-stopped
 
@@ -28,7 +29,6 @@ services:
         hard: 1048576
     environment:
       - MIST_DEBUG=3
-      - MIST_PASSWORD={{MIST_API_PASSWORD}}
     expose:
       - "8080"
     restart: unless-stopped
@@ -48,13 +48,16 @@ services:
       - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
       - MIST_API_USERNAME=frameworks
       - MIST_API_PASSWORD={{MIST_API_PASSWORD}}
-      - MIST_PASSWORD={{MIST_API_PASSWORD}}
     volumes:
       - ./certs:/etc/frameworks/certs
+      - ./pki:/etc/frameworks/pki
+      - ./telemetry:/etc/frameworks/telemetry
       - caddy_admin:/run/caddy
     expose:
       - "18007"
     restart: unless-stopped
+
+{{VMAGENT_EDGE_SERVICE}}
 
 volumes:
   caddy_data: {}

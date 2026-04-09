@@ -61,7 +61,7 @@ type X402Handler struct {
 func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, commodoreClient CommodoreClient) *X402Handler {
 	privKey := os.Getenv("X402_GAS_WALLET_PRIVKEY")
 	gasAddr := os.Getenv("X402_GAS_WALLET_ADDRESS")
-	includeTestnets := os.Getenv("X402_INCLUDE_TESTNETS") == "true"
+	includeTestnets := config.X402IncludeTestnetsEnabled()
 
 	// If address not provided but privkey is, derive it
 	if gasAddr == "" && privKey != "" {

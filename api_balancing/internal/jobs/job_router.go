@@ -7,7 +7,7 @@ import (
 
 // routeProcessingJob selects the best edge node for a processing job.
 // Returns (nodeID, reason). Empty nodeID means no suitable node found.
-func routeProcessingJob(job *processingJob) (string, string) {
+func routeProcessingJob(_job *processingJob) (string, string) {
 	sm := state.DefaultManager()
 	aliveIDs := sm.AliveNodeIDs(60 * time.Second)
 	if len(aliveIDs) == 0 {

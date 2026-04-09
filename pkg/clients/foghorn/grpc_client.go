@@ -2,37 +2,18 @@ package foghorn
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net"
-	"strings"
 	"time"
 
 	"frameworks/pkg/clients"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
-
-// addrIsFQDN returns true if the address host part is a fully-qualified domain
-// name (contains dots and is not a bare IP). Docker service names like "foghorn"
-// return false; production addresses like "foghorn.cluster.frameworks.network"
-// return true.
-func addrIsFQDN(addr string) bool {
-	host := addr
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		host = h
-	}
-	if net.ParseIP(host) != nil {
-		return false
-	}
-	return strings.Contains(host, ".")
-}
 
 // GRPCClient is the gRPC client for Foghorn control plane services
 type GRPCClient struct {
@@ -61,7 +42,9 @@ type GRPCConfig struct {
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
 	ServiceToken string
 	// UseTLS enables TLS transport. Uses system CA pool for validation.
-	UseTLS bool
+	UseTLS     bool
+	CACertFile string
+	ServerName string
 }
 
 // authInterceptor propagates authentication to gRPC metadata.
@@ -131,18 +114,23 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	// Auto-detect TLS: explicit UseTLS flag, or FQDN address → TLS.
 	// Docker service names (no dots) → insecure. Production FQDNs → TLS.
-	useTLS := config.UseTLS || addrIsFQDN(config.GRPCAddr)
-	var creds credentials.TransportCredentials
-	if useTLS {
-		creds = credentials.NewTLS(&tls.Config{})
-	} else {
-		creds = insecure.NewCredentials()
+	useTLS := config.UseTLS || grpcutil.AddrIsFQDN(config.GRPCAddr)
+	tlsCfg := grpcutil.ClientTLSConfig{
+		CACertFile: config.CACertFile,
+		ServerName: config.ServerName,
+	}
+	if !useTLS {
+		tlsCfg.AllowInsecure = true
+	}
+	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Foghorn gRPC TLS: %w", err)
 	}
 
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
 	conn, err := grpc.NewClient(
 		config.GRPCAddr,
-		grpc.WithTransportCredentials(creds),
+		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			authInterceptor(config.ServiceToken),

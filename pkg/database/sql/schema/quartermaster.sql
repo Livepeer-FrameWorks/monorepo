@@ -282,6 +282,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     started_at TIMESTAMP,
     stopped_at TIMESTAMP,
     last_health_check TIMESTAMP,
+    metadata JSONB DEFAULT '{}',
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
@@ -290,6 +291,9 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
         FOREIGN KEY (node_id, cluster_id)
         REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id)
 );
+
+ALTER TABLE IF EXISTS quartermaster.service_instances
+    ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
 
 -- ============================================================================
 -- FOGHORN-CLUSTER ASSIGNMENTS (many-to-many)
@@ -321,6 +325,44 @@ CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_cluster_id ON quartermast
 CREATE INDEX IF NOT EXISTS idx_qm_services_plane ON quartermaster.services(plane);
 CREATE INDEX IF NOT EXISTS idx_qm_cluster_services_cluster_id ON quartermaster.cluster_services(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_qm_service_instances_cluster_id ON quartermaster.service_instances(cluster_id);
+
+-- ============================================================================
+-- INGRESS & TLS DESIRED STATE
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS quartermaster.tls_bundles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bundle_id VARCHAR(200) NOT NULL UNIQUE,
+    cluster_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_clusters(cluster_id) ON DELETE CASCADE,
+    domains JSONB NOT NULL DEFAULT '[]'::jsonb,
+    issuer VARCHAR(50) NOT NULL DEFAULT 'navigator',
+    email TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_tls_bundles_cluster_id ON quartermaster.tls_bundles(cluster_id);
+
+CREATE TABLE IF NOT EXISTS quartermaster.ingress_sites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    site_id VARCHAR(200) NOT NULL UNIQUE,
+    cluster_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_clusters(cluster_id) ON DELETE CASCADE,
+    node_id VARCHAR(100) NOT NULL,
+    domains JSONB NOT NULL DEFAULT '[]'::jsonb,
+    tls_bundle_id VARCHAR(200) NOT NULL REFERENCES quartermaster.tls_bundles(bundle_id) ON DELETE RESTRICT,
+    kind VARCHAR(50) NOT NULL,
+    upstream TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT fk_qm_ingress_sites_node_cluster
+        FOREIGN KEY (node_id, cluster_id)
+        REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_ingress_sites_cluster_id ON quartermaster.ingress_sites(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_qm_ingress_sites_node_id ON quartermaster.ingress_sites(node_id);
 
 -- ============================================================================
 -- TENANT-CLUSTER MAPPING & ACCESS CONTROL

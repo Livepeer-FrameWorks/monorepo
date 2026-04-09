@@ -64,6 +64,47 @@ func GetEnvBool(key string, defaultValue bool) bool {
 	return defaultValue
 }
 
+func GetCookieDomain() string {
+	return strings.TrimPrefix(strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")), ".")
+}
+
+func GetGatewayPublicURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL")), "/")
+}
+
+func GetGatewayGraphQLURL() string {
+	if gatewayURL := GetGatewayPublicURL(); gatewayURL != "" {
+		return gatewayURL + "/graphql/"
+	}
+	return "http://localhost:8080/graphql/"
+}
+
+func X402IncludeTestnetsEnabled() bool {
+	return GetEnvBool("X402_INCLUDE_TESTNETS", false)
+}
+
+// IsProduction reports whether the current process is running with production
+// runtime settings. BUILD_ENV is the repo-wide runtime selector.
+func IsProduction() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILD_ENV"))) {
+	case "production", "prod":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsDevelopment reports whether the current process should use development
+// runtime behavior. An empty BUILD_ENV is treated as development.
+func IsDevelopment() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILD_ENV"))) {
+	case "", "development", "dev":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetLogLevel gets the log level from environment
 func GetLogLevel() logrus.Level {
 	switch os.Getenv("LOG_LEVEL") {

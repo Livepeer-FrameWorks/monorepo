@@ -16,6 +16,8 @@ type ContactHandler struct {
 	emailSender        EmailSender
 	turnstileValidator TurnstileVerifier
 	toEmail            string
+	emailSubjectPrefix string
+	successMessage     string
 	turnstileEnabled   bool
 	logger             logging.Logger
 	metrics            *FormMetrics
@@ -25,6 +27,8 @@ func NewContactHandler(
 	emailSender EmailSender,
 	turnstileValidator TurnstileVerifier,
 	toEmail string,
+	emailSubjectPrefix string,
+	successMessage string,
 	turnstileEnabled bool,
 	logger logging.Logger,
 	metrics *FormMetrics,
@@ -33,6 +37,8 @@ func NewContactHandler(
 		emailSender:        emailSender,
 		turnstileValidator: turnstileValidator,
 		toEmail:            toEmail,
+		emailSubjectPrefix: emailSubjectPrefix,
+		successMessage:     successMessage,
 		turnstileEnabled:   turnstileEnabled,
 		logger:             logger,
 		metrics:            metrics,
@@ -111,7 +117,7 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	emailSubject := fmt.Sprintf("FrameWorks Contact Form: %s", req.Name)
+	emailSubject := fmt.Sprintf("%s: %s", h.emailSubjectPrefix, req.Name)
 	emailBody := buildEmailHTML(req.Name, req.Email, req.Company, req.Message, remoteIP)
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
@@ -141,7 +147,7 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Thank you for your message! We'll get back to you soon.",
+		"message": h.successMessage,
 	})
 }
 

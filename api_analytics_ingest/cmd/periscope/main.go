@@ -32,7 +32,7 @@ func main() {
 
 	logger.Info("Starting Periscope-Ingest (Analytics Event Processing)")
 
-	clickhouseHost := config.RequireEnv("CLICKHOUSE_HOST")
+	clickhouseAddr := config.RequireEnv("CLICKHOUSE_ADDR")
 	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
 	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
 	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
@@ -43,7 +43,7 @@ func main() {
 
 	// Connect to ClickHouse
 	chConfig := database.DefaultClickHouseConfig()
-	chConfig.Addr = []string{clickhouseHost}
+	chConfig.Addr = []string{clickhouseAddr}
 	chConfig.Database = clickhouseDB
 	chConfig.Username = clickhouseUser
 	chConfig.Password = clickhousePassword
@@ -185,7 +185,7 @@ func main() {
 		healthChecker.AddCheck("kafka_dlq_producer", monitoring.KafkaProducerHealthCheck(dlqProducer.GetClient()))
 	}
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"CLICKHOUSE_HOST":            clickhouseHost,
+		"CLICKHOUSE_ADDR":            clickhouseAddr,
 		"KAFKA_BROKERS":              brokersEnv,
 		"KAFKA_GROUP_ID":             groupID,
 		"SERVICE_EVENTS_KAFKA_TOPIC": serviceEventsTopic,
@@ -210,10 +210,13 @@ func main() {
 	// Best-effort service registration in Quartermaster (using gRPC)
 	go func() {
 		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     quartermasterGRPCAddr,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      quartermasterGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")

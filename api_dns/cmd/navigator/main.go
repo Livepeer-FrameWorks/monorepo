@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"frameworks/api_dns/internal/logic"
@@ -16,6 +20,7 @@ import (
 	"frameworks/pkg/config"
 	fieldcrypt "frameworks/pkg/crypto"
 	"frameworks/pkg/database"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -28,10 +33,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
 // ServerMetrics holds Prometheus metrics for the gRPC server
@@ -45,10 +52,11 @@ type ServerMetrics struct {
 // NavigatorServer holds dependencies for the gRPC and HTTP server
 type NavigatorServer struct {
 	pb.UnimplementedNavigatorServiceServer
-	DNSManager  *logic.DNSManager
-	CertManager *logic.CertManager
-	Logger      logging.Logger
-	Metrics     *ServerMetrics
+	DNSManager        *logic.DNSManager
+	CertManager       *logic.CertManager
+	InternalCAManager *logic.InternalCAManager
+	Logger            logging.Logger
+	Metrics           *ServerMetrics
 }
 
 func main() {
@@ -71,16 +79,10 @@ func main() {
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
-	// Initialize field encryption for private keys at rest
-	var keyEncryptor *fieldcrypt.FieldEncryptor
-	if encKey := config.GetEnv("FIELD_ENCRYPTION_KEY", ""); encKey != "" {
-		var encErr error
-		keyEncryptor, encErr = fieldcrypt.DeriveFieldEncryptor([]byte(encKey), "navigator-private-keys")
-		if encErr != nil {
-			logger.WithError(encErr).Fatal("Failed to derive field encryption key")
-		}
-	} else {
-		logger.Warn("FIELD_ENCRYPTION_KEY not set; private keys will be stored unencrypted")
+	encKey := config.RequireEnv("FIELD_ENCRYPTION_KEY")
+	keyEncryptor, err := fieldcrypt.DeriveFieldEncryptor([]byte(encKey), "navigator-private-keys")
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to derive field encryption key")
 	}
 
 	// Initialize Store
@@ -97,10 +99,13 @@ func main() {
 	// Quartermaster gRPC client
 	qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     qmGRPCAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      qmGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
@@ -108,7 +113,7 @@ func main() {
 	defer qmClient.Close()
 
 	// === Logic Initialization ===
-	rootDomain := config.RequireEnv("NAVIGATOR_ROOT_DOMAIN")
+	rootDomain := config.RequireEnv("BRAND_DOMAIN")
 
 	recordTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_A_RECORD", 60)
 	lbTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_LB", 60)
@@ -120,28 +125,18 @@ func main() {
 	}
 	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, recordTTL, lbTTL, time.Duration(staleSeconds)*time.Second, monitorConfig)
 	certManager := logic.NewCertManager(certStore)
+	internalCAManager := logic.NewInternalCAManager(certStore, qmClient, logger, rootDomain)
 	dnsManager.SetCertChecker(certManager)
+	if err := internalCAManager.EnsureCA(context.Background()); err != nil {
+		logger.WithError(err).Fatal("Failed to initialize internal CA")
+	}
 
 	// === Background Workers ===
 	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger)
 	go renewalWorker.Start(context.Background())
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
-	acmeEmail := config.GetEnv("BRAND_CONTACT_EMAIL", "info@frameworks.network")
-	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, []string{
-		"edge",
-		"edge-egress",
-		"edge-ingest",
-		"edge-storage",
-		"edge-processing",
-		"foghorn",
-		"bridge",
-		"chartroom",
-		"foredeck",
-		"logbook",
-		"steward",
-		"listmonk",
-		"chatwoot",
-	})
+	acmeEmail := config.GetEnv("FROM_EMAIL", "info@frameworks.network")
+	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes())
 	go reconciler.Start(context.Background())
 
 	// Setup monitoring
@@ -158,10 +153,11 @@ func main() {
 
 	// === Server Setup ===
 	navigatorServer := &NavigatorServer{
-		DNSManager:  dnsManager,
-		CertManager: certManager,
-		Logger:      logger,
-		Metrics:     serverMetrics,
+		DNSManager:        dnsManager,
+		CertManager:       certManager,
+		InternalCAManager: internalCAManager,
+		Logger:            logger,
+		Metrics:           serverMetrics,
 	}
 
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
@@ -197,13 +193,40 @@ func main() {
 			},
 		})
 
-		grpcServer := grpc.NewServer(
-			grpc.Creds(insecure.NewCredentials()),
+		grpcCertFile := strings.TrimSpace(config.GetEnv("GRPC_TLS_CERT_PATH", ""))
+		grpcKeyFile := strings.TrimSpace(config.GetEnv("GRPC_TLS_KEY_PATH", ""))
+		tlsCfg := grpcutil.ServerTLSConfig{
+			CertFile:      grpcCertFile,
+			KeyFile:       grpcKeyFile,
+			AllowInsecure: grpcCertFile == "" && grpcKeyFile == "",
+		}
+		if caErr := internalCAManager.EnsureLocalServerCertificate(context.Background(), "navigator", grpcCertFile, grpcKeyFile); caErr != nil {
+			logger.WithError(caErr).Fatal("Failed to stage Navigator bootstrap gRPC certificate")
+		}
+		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
+			logger.WithError(waitErr).Fatal("Timed out waiting for Navigator gRPC TLS files")
+		}
+		grpcTLSOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to configure Navigator gRPC TLS")
+		}
+		if grpcTLSOpt == nil {
+			logger.Warn("Navigator gRPC is running without TLS; private keys require a private network path.")
+		}
+
+		serverOpts := []grpc.ServerOption{
 			grpc.ChainUnaryInterceptor(
 				grpcutil.SanitizeUnaryServerInterceptor(),
 				authInterceptor,
+				requirePrivatePeerUnaryInterceptor(),
 			),
-		)
+		}
+		if grpcTLSOpt != nil {
+			serverOpts = append(serverOpts, grpcTLSOpt)
+		}
+		grpcServer := grpc.NewServer(serverOpts...)
 		pb.RegisterNavigatorServiceServer(grpcServer, navigatorServer)
 
 		// gRPC health service so external probes can use gRPC health checks
@@ -221,10 +244,44 @@ func main() {
 
 	// === HTTP Server ===
 	serverConfig := server.DefaultConfig("navigator", config.RequireEnv("NAVIGATOR_PORT"))
+	serverConfig.TLSCertFile = config.GetEnv("NAVIGATOR_HTTP_TLS_CERT_FILE", "")
+	serverConfig.TLSKeyFile = config.GetEnv("NAVIGATOR_HTTP_TLS_KEY_FILE", "")
 
 	app := server.SetupServiceRouter(logger, "navigator", healthChecker, metricsCollector)
 	app.GET("/status", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "running", "version": version.Version})
+	})
+	app.GET("/internal/tls-bundles/:bundleID", func(c *gin.Context) {
+		if !requirePrivateInternalRequest(c) {
+			return
+		}
+		authz := strings.TrimSpace(c.GetHeader("Authorization"))
+		if authz != "Bearer "+serviceToken {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		bundleID := strings.TrimSpace(c.Param("bundleID"))
+		if bundleID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bundle_id is required"})
+			return
+		}
+
+		bundle, err := certManager.GetTLSBundle(c.Request.Context(), bundleID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+
+		hash := sha256.Sum256([]byte(bundle.CertPEM + bundle.KeyPEM))
+		c.JSON(http.StatusOK, gin.H{
+			"bundle_id":  bundle.BundleID,
+			"domains":    bundle.Domains,
+			"cert_pem":   bundle.CertPEM,
+			"key_pem":    bundle.KeyPEM,
+			"expires_at": bundle.ExpiresAt.Unix(),
+			"version":    hex.EncodeToString(hash[:]),
+		})
 	})
 
 	// Best-effort service registration in Quartermaster
@@ -262,6 +319,45 @@ func main() {
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.WithError(err).Fatal("Navigator HTTP server failed")
 	}
+}
+
+func requirePrivatePeerUnaryInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		p, ok := peer.FromContext(ctx)
+		if !ok || p.Addr == nil {
+			return nil, status.Error(codes.PermissionDenied, "navigator gRPC requires a private network peer")
+		}
+
+		host := p.Addr.String()
+		if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
+			host = splitHost
+		}
+		if !isPrivateClientIP(host) {
+			return nil, status.Error(codes.PermissionDenied, "navigator gRPC requires a private network peer")
+		}
+
+		return handler(ctx, req)
+	}
+}
+
+func requirePrivateInternalRequest(c *gin.Context) bool {
+	host := c.Request.RemoteAddr
+	if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
+		host = splitHost
+	}
+	if isPrivateClientIP(host) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "private network access required"})
+	return false
+}
+
+func isPrivateClientIP(raw string) bool {
+	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast()
 }
 
 // SyncDNS implements the gRPC SyncDNS method
@@ -362,5 +458,72 @@ func (s *NavigatorServer) GetCertificate(ctx context.Context, req *pb.GetCertifi
 		CertPem:   cert.CertPEM,
 		KeyPem:    cert.KeyPEM,
 		ExpiresAt: cert.ExpiresAt.Unix(),
+	}, nil
+}
+
+func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error) {
+	log := s.Logger.WithField("bundle_id", req.GetBundleId())
+	log.Info("Received GetTLSBundle request")
+
+	bundle, err := s.CertManager.GetTLSBundle(ctx, req.GetBundleId())
+	if err != nil {
+		log.WithError(err).Info("TLS bundle not found")
+		return &pb.GetTLSBundleResponse{
+			Found: false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	hash := sha256.Sum256([]byte(bundle.CertPEM + bundle.KeyPEM))
+	return &pb.GetTLSBundleResponse{
+		Found:     true,
+		BundleId:  bundle.BundleID,
+		Domains:   bundle.Domains,
+		CertPem:   bundle.CertPEM,
+		KeyPem:    bundle.KeyPEM,
+		ExpiresAt: bundle.ExpiresAt.Unix(),
+		Version:   hex.EncodeToString(hash[:]),
+	}, nil
+}
+
+func (s *NavigatorServer) GetCABundle(ctx context.Context, _ *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
+	caPEM, err := s.InternalCAManager.GetCABundle(ctx)
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to get internal CA bundle")
+		return &pb.GetCABundleResponse{
+			Found: false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	return &pb.GetCABundleResponse{
+		Found: true,
+		CaPem: caPEM,
+	}, nil
+}
+
+func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
+	log := s.Logger.WithFields(logging.Fields{
+		"node_id":      req.GetNodeId(),
+		"service_type": req.GetServiceType(),
+	})
+	cert, err := s.InternalCAManager.IssueInternalCert(ctx, req.GetNodeId(), req.GetServiceType(), req.GetIssueToken())
+	if err != nil {
+		log.WithError(err).Error("Failed to issue internal certificate")
+		return &pb.IssueInternalCertResponse{
+			Success:     false,
+			NodeId:      req.GetNodeId(),
+			ServiceType: req.GetServiceType(),
+			Error:       err.Error(),
+		}, nil
+	}
+
+	return &pb.IssueInternalCertResponse{
+		Success:     true,
+		NodeId:      cert.NodeID,
+		ServiceType: cert.ServiceType,
+		CertPem:     cert.CertPEM,
+		KeyPem:      cert.KeyPEM,
+		ExpiresAt:   cert.ExpiresAt.Unix(),
 	}, nil
 }

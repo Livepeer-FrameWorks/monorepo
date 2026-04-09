@@ -12,6 +12,12 @@ service NavigatorService {
   rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse);
   // GetCertificate retrieves an existing certificate for a domain.
   rpc GetCertificate(GetCertificateRequest) returns (GetCertificateResponse);
+  // GetTLSBundle retrieves the current certificate material for a managed TLS bundle.
+  rpc GetTLSBundle(GetTLSBundleRequest) returns (GetTLSBundleResponse);
+  // GetCABundle retrieves the current internal CA bundle used for internal gRPC.
+  rpc GetCABundle(GetCABundleRequest) returns (GetCABundleResponse);
+  // IssueInternalCert issues or renews a node-scoped internal gRPC certificate.
+  rpc IssueInternalCert(IssueInternalCertRequest) returns (IssueInternalCertResponse);
 }
 
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.
@@ -62,4 +68,43 @@ message GetCertificateResponse {
   string key_pem = 5;            // The private key in PEM format
   int64 expires_at = 6;          // Certificate expiration timestamp (Unix)
   string error = 7;              // Error message if retrieval failed
+}
+
+message GetTLSBundleRequest {
+  string bundle_id = 1;
+}
+
+message GetTLSBundleResponse {
+  bool found = 1;
+  string bundle_id = 2;
+  repeated string domains = 3;
+  string cert_pem = 4;
+  string key_pem = 5;
+  int64 expires_at = 6;
+  string version = 7;
+  string error = 8;
+}
+
+message GetCABundleRequest {}
+
+message GetCABundleResponse {
+  bool found = 1;
+  string ca_pem = 2;
+  string error = 3;
+}
+
+message IssueInternalCertRequest {
+  string node_id = 1;
+  string service_type = 2;
+  string issue_token = 3;
+}
+
+message IssueInternalCertResponse {
+  bool success = 1;
+  string node_id = 2;
+  string service_type = 3;
+  string cert_pem = 4;
+  string key_pem = 5;
+  int64 expires_at = 6;
+  string error = 7;
 }

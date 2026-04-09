@@ -97,8 +97,9 @@ func TestAuthenticateRequestAPIToken(t *testing.T) {
 	defer cleanup()
 
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr: addr,
-		Timeout:  5 * time.Second,
+		GRPCAddr:      addr,
+		Timeout:       5 * time.Second,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		t.Fatalf("failed to create commodore client: %v", err)
@@ -141,8 +142,9 @@ func TestAuthenticateRequestWalletSuccess(t *testing.T) {
 	defer cleanup()
 
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr: addr,
-		Timeout:  5 * time.Second,
+		GRPCAddr:      addr,
+		Timeout:       5 * time.Second,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		t.Fatalf("failed to create commodore client: %v", err)
@@ -193,8 +195,9 @@ func TestAuthenticateRequestX402Success(t *testing.T) {
 	defer cleanup()
 
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr: addr,
-		Timeout:  5 * time.Second,
+		GRPCAddr:      addr,
+		Timeout:       5 * time.Second,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		t.Fatalf("failed to create commodore client: %v", err)

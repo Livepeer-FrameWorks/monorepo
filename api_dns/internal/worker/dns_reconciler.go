@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"frameworks/api_dns/internal/logic"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/proto"
 )
@@ -23,6 +24,7 @@ type DNSReconciler struct {
 
 type quartermasterClient interface {
 	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
+	ListTLSBundles(ctx context.Context, clusterID string, pagination *proto.CursorPaginationRequest) (*proto.ListTLSBundlesResponse, error)
 }
 
 func NewDNSReconciler(dnsManager *logic.DNSManager, certManager *logic.CertManager, qmClient quartermasterClient, logger logging.Logger, interval time.Duration, rootDomain, acmeEmail string, serviceTypes []string) *DNSReconciler {
@@ -66,7 +68,7 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 			r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("DNS reconciliation completed with partial errors")
 		}
 
-		if serviceType == "edge" || serviceType == "edge-egress" || serviceType == "edge-ingest" || serviceType == "edge-storage" || serviceType == "edge-processing" || serviceType == "foghorn" {
+		if pkgdns.IsClusterScopedServiceType(serviceType) {
 			clusterPartialErrors, clusterErr := r.dnsManager.SyncServiceByCluster(ctx, serviceType)
 			if clusterErr != nil {
 				r.logger.WithError(clusterErr).WithField("service_type", serviceType).Error("Cluster DNS reconciliation failed")
@@ -78,6 +80,7 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 	}
 
 	r.ensureClusterWildcardCerts(ctx)
+	r.ensureTLSBundles(ctx)
 }
 
 func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
@@ -109,5 +112,38 @@ func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
 			"domain":     cert.Domain,
 			"expires_at": cert.ExpiresAt,
 		}).Debug("Ensured cluster wildcard certificate")
+	}
+}
+
+func (r *DNSReconciler) ensureTLSBundles(ctx context.Context) {
+	if r.certManager == nil || r.qmClient == nil {
+		return
+	}
+
+	resp, err := r.qmClient.ListTLSBundles(ctx, "", nil)
+	if err != nil {
+		r.logger.WithError(err).Warn("Failed to list tls bundles for reconciliation")
+		return
+	}
+
+	for _, bundle := range resp.GetBundles() {
+		if strings.TrimSpace(bundle.GetBundleId()) == "" || len(bundle.GetDomains()) == 0 {
+			continue
+		}
+		email := strings.TrimSpace(bundle.GetEmail())
+		if email == "" {
+			email = r.acmeEmail
+		}
+		result, ensureErr := r.certManager.EnsureTLSBundle(ctx, bundle.GetBundleId(), bundle.GetDomains(), email)
+		if ensureErr != nil {
+			r.logger.WithError(ensureErr).WithField("bundle_id", bundle.GetBundleId()).Warn("Failed to ensure tls bundle")
+			continue
+		}
+		r.logger.WithFields(logging.Fields{
+			"bundle_id":  result.BundleID,
+			"domains":    result.Domains,
+			"expires_at": result.ExpiresAt,
+			"cluster_id": bundle.GetClusterId(),
+		}).Debug("Ensured tls bundle")
 	}
 }

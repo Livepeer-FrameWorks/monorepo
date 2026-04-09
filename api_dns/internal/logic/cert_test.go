@@ -24,9 +24,12 @@ import (
 type fakeStore struct {
 	getCertFunc       func(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
 	saveCertFunc      func(ctx context.Context, tenantID string, cert *store.Certificate) error
+	getTLSBundleFunc  func(ctx context.Context, bundleID string) (*store.TLSBundle, error)
+	saveTLSBundleFunc func(ctx context.Context, bundle *store.TLSBundle) error
 	getAccountFunc    func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error)
 	saveAccountFunc   func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
 	saveCertCalled    int
+	saveBundleCalled  int
 	saveAccountCalled int
 }
 
@@ -37,6 +40,15 @@ func (f *fakeStore) GetCertificate(ctx context.Context, tenantID, domain string)
 func (f *fakeStore) SaveCertificate(ctx context.Context, tenantID string, cert *store.Certificate) error {
 	f.saveCertCalled++
 	return f.saveCertFunc(ctx, tenantID, cert)
+}
+
+func (f *fakeStore) GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+	return f.getTLSBundleFunc(ctx, bundleID)
+}
+
+func (f *fakeStore) SaveTLSBundle(ctx context.Context, bundle *store.TLSBundle) error {
+	f.saveBundleCalled++
+	return f.saveTLSBundleFunc(ctx, bundle)
 }
 
 func (f *fakeStore) GetACMEAccount(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
@@ -128,6 +140,12 @@ func TestIssueCertificateSetsUpAndCleansUpChallenges(t *testing.T) {
 		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
 			return nil
 		},
+		getTLSBundleFunc: func(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+			return nil, store.ErrNotFound
+		},
+		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
+			return nil
+		},
 		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
 			return nil, store.ErrNotFound
 		},
@@ -170,6 +188,12 @@ func TestIssueCertificateFailureDoesNotPersistCertificate(t *testing.T) {
 		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
 			return nil
 		},
+		getTLSBundleFunc: func(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+			return nil, store.ErrNotFound
+		},
+		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
+			return nil
+		},
 		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
 			return nil, store.ErrNotFound
 		},
@@ -191,6 +215,57 @@ func TestIssueCertificateFailureDoesNotPersistCertificate(t *testing.T) {
 	require.Equal(t, 1, provider.presentCalls)
 	require.Equal(t, 1, provider.cleanupCalls)
 	require.Equal(t, 0, fakeStore.saveCertCalled)
+}
+
+func TestEnsureTLSBundleObtainsAndPersistsBundle(t *testing.T) {
+	ctx := context.Background()
+	notAfter := time.Now().Add(24 * time.Hour)
+	certPEM, keyPEM := buildTestCert(t, notAfter)
+
+	provider := &fakeDNSProvider{}
+	acme := &fakeACMEClient{
+		resource: &certificate.Resource{
+			Certificate: certPEM,
+			PrivateKey:  keyPEM,
+		},
+	}
+	fakeStore := &fakeStore{
+		getCertFunc: func(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
+			return nil, store.ErrNotFound
+		},
+		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
+			return nil
+		},
+		getTLSBundleFunc: func(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+			return nil, store.ErrNotFound
+		},
+		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
+			return nil
+		},
+		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
+			return nil, store.ErrNotFound
+		},
+		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
+			return nil
+		},
+	}
+
+	manager := NewCertManager(fakeStore)
+	manager.acmeClientFactory = func(config *lego.Config) (acmeClient, error) {
+		return acme, nil
+	}
+	manager.dnsProviderFactory = func() (challenge.Provider, error) {
+		return provider, nil
+	}
+
+	bundle, err := manager.EnsureTLSBundle(ctx, "wildcard-frameworks-network", []string{"*.frameworks.network", "*.frameworks.network"}, "ops@frameworks.network")
+	require.NoError(t, err)
+	require.Equal(t, "wildcard-frameworks-network", bundle.BundleID)
+	require.Equal(t, []string{"*.frameworks.network"}, bundle.Domains)
+	require.WithinDuration(t, notAfter, bundle.ExpiresAt, time.Second)
+	require.Equal(t, 1, fakeStore.saveBundleCalled)
+	require.Equal(t, 1, provider.presentCalls)
+	require.Equal(t, 1, provider.cleanupCalls)
 }
 
 func buildTestCert(t *testing.T, notAfter time.Time) ([]byte, []byte) {

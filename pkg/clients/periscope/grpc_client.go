@@ -7,12 +7,12 @@ import (
 
 	"frameworks/pkg/clients"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -43,7 +43,10 @@ type GRPCConfig struct {
 	// Logger for the client
 	Logger logging.Logger
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
-	ServiceToken string
+	ServiceToken  string
+	AllowInsecure bool
+	CACertFile    string
+	ServerName    string
 }
 
 // CursorPaginationOpts represents cursor-based pagination options
@@ -99,10 +102,20 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		config.Timeout = 30 * time.Second
 	}
 
+	tlsCfg := grpcutil.ClientTLSConfig{
+		CACertFile:    config.CACertFile,
+		ServerName:    config.ServerName,
+		AllowInsecure: config.AllowInsecure,
+	}
+	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Periscope gRPC TLS: %w", err)
+	}
+
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
 	conn, err := grpc.NewClient(
 		config.GRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			authInterceptor(config.ServiceToken),

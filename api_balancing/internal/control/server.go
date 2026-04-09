@@ -2,17 +2,23 @@ package control
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +32,7 @@ import (
 	"frameworks/pkg/clients/decklog"
 	navclient "frameworks/pkg/clients/navigator"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/config"
 	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/grpcutil"
@@ -35,6 +42,7 @@ import (
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/version"
 
+	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -60,6 +68,39 @@ func categorizeEnrollmentError(err error) bool {
 	default:
 		return false
 	}
+}
+
+var edgeIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
+
+func platformRootDomain() string {
+	rootDomain := strings.TrimSpace(os.Getenv("BRAND_DOMAIN"))
+	if rootDomain == "" {
+		rootDomain = "frameworks.network"
+	}
+	return rootDomain
+}
+
+func normalizePreferredEdgeNodeID(raw string) string {
+	candidate := strings.ToLower(strings.TrimSpace(raw))
+	if candidate == "" {
+		return ""
+	}
+	if idx := strings.Index(candidate, "."); idx > 0 {
+		candidate = candidate[:idx]
+	}
+	candidate = pkgdns.SanitizeLabel(candidate)
+	if !edgeIdentityPattern.MatchString(candidate) {
+		return ""
+	}
+	return candidate
+}
+
+func edgeNodeRecordLabel(nodeID string) string {
+	label := pkgdns.SanitizeLabel(nodeID)
+	if strings.HasPrefix(label, "edge-") {
+		return label
+	}
+	return "edge-" + label
 }
 
 func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID, peerAddr, token, targetClusterID string, servedClusterIDs []string) *pb.BootstrapEdgeNodeRequest {
@@ -133,6 +174,8 @@ var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var localClusterID string
 var servedClusters atomic.Pointer[sync.Map]
+var chandlerBaseMu sync.RWMutex
+var resolvedChandlerBaseURL string
 
 func init() {
 	servedClusters.Store(&sync.Map{})
@@ -160,6 +203,7 @@ func (h *serverCertHolder) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificat
 // In production this calls quartermasterClient.ValidateBootstrapToken.
 var validateBootstrapTokenFn func(ctx context.Context, token string) (*pb.ValidateBootstrapTokenResponse, error)
 var getNodeOwnerFn func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error)
+var getClusterFn func(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error)
 var geoipCache *cache.Cache
 var decklogClient *decklog.BatchedClient
 var dvrStopRegistry DVRStopRegistry
@@ -211,8 +255,8 @@ func GetStreamSource(internalName string) (nodeID string, baseURL string, ok boo
 type NodeOutputs struct {
 	NodeID      string
 	BaseURL     string
-	OutputsJSON string                 // Raw outputs JSON from MistServer
-	Outputs     map[string]interface{} // Parsed outputs map
+	OutputsJSON string         // Raw outputs JSON from MistServer
+	Outputs     map[string]any // Parsed outputs map
 	LastUpdate  time.Time
 }
 
@@ -222,6 +266,7 @@ var clipDoneHandler func(*pb.ClipDone)
 var artifactDeletedHandler func(context.Context, *pb.ArtifactDeleted)
 var dvrDeletedHandler func(dvrHash string, sizeBytes uint64, nodeID string)
 var dvrStoppedHandler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)
+var artifactMapUpdatedHandler func(nodeID string)
 
 // SetClipHandlers registers callbacks for analytics emission
 func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone), onDeleted func(context.Context, *pb.ArtifactDeleted)) {
@@ -238,6 +283,19 @@ func SetDVRDeletedHandler(handler func(dvrHash string, sizeBytes uint64, nodeID 
 // SetDVRStoppedHandler registers callback for DVR stopped analytics
 func SetDVRStoppedHandler(handler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)) {
 	dvrStoppedHandler = handler
+}
+
+// SetOnArtifactMapUpdated registers a callback invoked when Helmsman reports a real artifact-map change.
+func SetOnArtifactMapUpdated(handler func(nodeID string)) {
+	artifactMapUpdatedHandler = handler
+}
+
+// NotifyArtifactMapUpdated notifies the registered callback about an artifact-map change.
+func NotifyArtifactMapUpdated(nodeID string) {
+	if artifactMapUpdatedHandler == nil || strings.TrimSpace(nodeID) == "" {
+		return
+	}
+	artifactMapUpdatedHandler(nodeID)
 }
 
 // Init initializes the global registry
@@ -440,6 +498,8 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 		return "stop_sessions"
 	case *pb.ForwardCommandRequest_ProcessingJob:
 		return "processing_job"
+	case *pb.ForwardCommandRequest_Freeze:
+		return "freeze"
 	default:
 		return "unknown"
 	}
@@ -465,6 +525,8 @@ func RelayRequestID(req *pb.ForwardCommandRequest) string {
 		return cmd.DtshSync.GetRequestId()
 	case *pb.ForwardCommandRequest_ProcessingJob:
 		return cmd.ProcessingJob.GetJobId()
+	case *pb.ForwardCommandRequest_Freeze:
+		return cmd.Freeze.GetRequestId()
 	default:
 		return ""
 	}
@@ -484,6 +546,7 @@ func GetDB() *sql.DB {
 func SetLocalClusterID(id string) {
 	localClusterID = id
 	servedClusters.Load().Store(id, true)
+	clearResolvedChandlerBaseURL()
 }
 
 // GetLocalClusterID returns the primary cluster ID for this Foghorn instance.
@@ -577,7 +640,10 @@ func SetClipHashResolver(resolver func(string) (string, string, error)) {
 }
 
 // SetQuartermasterClient sets the Quartermaster client for edge enrollment and lookups
-func SetQuartermasterClient(c *qmclient.GRPCClient) { quartermasterClient = c }
+func SetQuartermasterClient(c *qmclient.GRPCClient) {
+	quartermasterClient = c
+	clearResolvedChandlerBaseURL()
+}
 
 func init() {
 	getNodeOwnerFn = func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
@@ -586,6 +652,66 @@ func init() {
 		}
 		return quartermasterClient.GetNodeOwner(ctx, nodeID)
 	}
+	getClusterFn = func(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+		if quartermasterClient == nil {
+			return nil, status.Error(codes.Unavailable, "quartermaster unavailable")
+		}
+		resp, err := quartermasterClient.GetCluster(ctx, clusterID)
+		if err != nil {
+			return nil, err
+		}
+		return resp.GetCluster(), nil
+	}
+}
+
+func clearResolvedChandlerBaseURL() {
+	chandlerBaseMu.Lock()
+	resolvedChandlerBaseURL = ""
+	chandlerBaseMu.Unlock()
+}
+
+func cachedChandlerBaseURL() string {
+	chandlerBaseMu.RLock()
+	defer chandlerBaseMu.RUnlock()
+	return resolvedChandlerBaseURL
+}
+
+func cacheChandlerBaseURL(value string) {
+	chandlerBaseMu.Lock()
+	resolvedChandlerBaseURL = value
+	chandlerBaseMu.Unlock()
+}
+
+func resolvePlatformChandlerBaseURL() string {
+	clusterID := strings.TrimSpace(localClusterID)
+	if clusterID == "" || getClusterFn == nil {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cluster, err := getClusterFn(ctx, clusterID)
+	if err != nil || cluster == nil {
+		return ""
+	}
+
+	baseDomain := strings.TrimSpace(cluster.GetBaseUrl())
+	if baseDomain == "" {
+		return ""
+	}
+
+	clusterSlug := pkgdns.ClusterSlug(clusterID, cluster.GetClusterName())
+	if clusterSlug == "" {
+		return ""
+	}
+
+	fqdn, ok := pkgdns.ServiceFQDN("chandler", clusterSlug+"."+baseDomain)
+	if !ok || fqdn == "" {
+		return ""
+	}
+
+	return "https://" + fqdn
 }
 
 func reconcileNodeCluster(ctx context.Context, canonicalNodeID, clusterID string, logger logging.Logger) string {
@@ -829,11 +955,37 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 
 			// Determine operational mode: DB-persisted wins over Helmsman's request
 			operationalMode := resolveOperationalMode(canonicalNodeID, x.Register.GetRequestedMode())
-			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr, operationalMode)
+			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr, operationalMode, clusterID)
 			if tenantID != "" {
 				seed.TenantId = tenantID
 			}
+			// Wildcard site without TLS cert is unusable — Caddy would attempt
+			// auto-ACME DNS-01 which isn't configured. Stay on bootstrap until
+			// Navigator provisions the cert.
+			if seed.GetTls() == nil && seed.GetSite() != nil && strings.HasPrefix(seed.GetSite().GetSiteAddress(), "*.") {
+				seed.Site = nil
+			}
 			_ = SendConfigSeed(nodeID, seed)
+
+			// Fresh enrollments without a usable site are not routable.
+			if !fingerprintResolved && (seed.GetSite() == nil || seed.GetSite().GetEdgeDomain() == "") {
+				state.DefaultManager().SetProbeVerified(canonicalNodeID, false)
+				if canonicalNodeID != nodeID {
+					state.DefaultManager().SetProbeVerified(nodeID, false)
+				}
+				registry.log.WithField("node_id", canonicalNodeID).Warn("Fresh enrollment produced no site config; node marked unverified")
+			}
+
+			// Activation: reconnecting nodes (fingerprint resolved) are already verified
+			// (ProbeVerified defaults to true in newNodeState). Fresh enrollments get
+			// probed — Foghorn verifies the HTTPS endpoint before routing traffic.
+			if !fingerprintResolved && seed.GetSite() != nil && seed.GetSite().GetEdgeDomain() != "" {
+				state.DefaultManager().SetProbeVerified(canonicalNodeID, false)
+				if canonicalNodeID != nodeID {
+					state.DefaultManager().SetProbeVerified(nodeID, false)
+				}
+				go probeEdgeActivation(canonicalNodeID, seed.GetSite().GetEdgeDomain(), nodeID)
+			}
 
 			// Forward hardware specs to Quartermaster if present
 			if quartermasterClient != nil && (x.Register.CpuCores != nil || x.Register.MemoryGb != nil || x.Register.DiskGb != nil) {
@@ -927,14 +1079,18 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			if nodeID != "" {
 				canonicalNodeID := nodeID
 				registry.mu.Lock()
-				if c := registry.conns[nodeID]; c != nil {
+				c := registry.conns[nodeID]
+				if c != nil {
 					c.last = time.Now()
 					if c.canonicalID != "" {
 						canonicalNodeID = c.canonicalID
 					}
 				}
 				registry.mu.Unlock()
-				// Refresh node health/last update
+				if c == nil {
+					// Connection was removed (e.g. activation failed) — terminate stream
+					return nil
+				}
 				state.DefaultManager().TouchNode(nodeID, true)
 				if canonicalNodeID != nodeID {
 					state.DefaultManager().TouchNode(canonicalNodeID, true)
@@ -1000,7 +1156,16 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		case *pb.ControlMessage_ValidateEdgeTokenRequest:
 			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ProcessingJobResult:
-			go processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+			if x.ProcessingJobResult.GetStatus() == "cache_update" {
+				// Best-effort cache refresh for processing fallback. The restarted
+				// push now reads its override locally in Helmsman, so this no longer
+				// needs to act as a cross-process ordering barrier.
+				processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+			} else {
+				go processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
+			}
+		case *pb.ControlMessage_ProcessingJobProgress:
+			go processProcessingJobProgress(x.ProcessingJobProgress, registry.log)
 		case *pb.ControlMessage_ThumbnailUploadRequest:
 			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ThumbnailUploaded:
@@ -1376,23 +1541,26 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 	keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
 
 	if certFile != "" && keyFile != "" {
-		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load TLS certificates: %w", err)
+		tlsCfg := grpcutil.ServerTLSConfig{
+			CertFile: certFile,
+			KeyFile:  keyFile,
 		}
-		creds := credentials.NewTLS(&tls.Config{
-			Certificates: []tls.Certificate{cert},
-		})
-		opts = append(opts, grpc.Creds(creds))
+		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+			return nil, fmt.Errorf("timed out waiting for file-based gRPC TLS: %w", err)
+		}
+		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to configure file-based TLS: %w", err)
+		}
+		opts = append(opts, tlsOpt)
 		cfg.Logger.WithFields(logging.Fields{
 			"cert_file": certFile,
 			"key_file":  keyFile,
 		}).Info("gRPC server TLS: file-based")
 	} else if navigatorClient != nil {
-		rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-		if rootDomain == "" {
-			rootDomain = "frameworks.network"
-		}
+		rootDomain := platformRootDomain()
 		wildcardDomain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(localClusterID), rootDomain)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1489,7 +1657,7 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 }
 
 func allowInsecureControlGRPC() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("FOGHORN_ALLOW_INSECURE_CONTROL_GRPC")), "true")
+	return config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
 }
 
 // Helpers
@@ -1603,7 +1771,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	}).Info("Processing DVR start request")
 
 	// Tag ingest node stream instance with DVR requested
-	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), nodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), nodeID, map[string]any{
 		"dvr_status": "requested",
 		"dvr_hash":   dvrHash,
 	})
@@ -1704,7 +1872,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	}).Info("DVR start request forwarded to storage node")
 
 	// Tag storage node stream instance with start info
-	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), storageNodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), storageNodeID, map[string]any{
 		"dvr_status":     "starting",
 		"dvr_hash":       dvrHash,
 		"dvr_source_uri": sourceDTSCURL,
@@ -1998,7 +2166,7 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	sourceURI := BuildDTSCURI(sourceNodeID, internalName, true, logger)
 
 	// Tag storage node (requesting node) instance as ready with source URI
-	state.DefaultManager().UpdateStreamInstanceInfo(internalName, requestingNodeID, map[string]interface{}{
+	state.DefaultManager().UpdateStreamInstanceInfo(internalName, requestingNodeID, map[string]any{
 		"dvr_status":     "ready",
 		"dvr_source_uri": sourceURI,
 	})
@@ -2305,9 +2473,12 @@ func resolveOperationalMode(nodeID string, requestedMode pb.NodeOperationalMode)
 var geoOnce sync.Once
 var geoipReader *geoip.Reader
 
-func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode pb.NodeOperationalMode) *pb.ConfigSeed {
+const edgeTelemetryTokenTTL = 365 * 24 * time.Hour
+
+func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode pb.NodeOperationalMode, clusterID string) *pb.ConfigSeed {
 	var lat, lon float64
 	var loc string
+	var ownerTenantID string
 
 	geoOnce.Do(func() {
 		geoipReader = geoip.GetSharedReader()
@@ -2346,7 +2517,60 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		},
 	}
 
-	tlsBundle := resolveClusterTLSBundle(nodeID)
+	var tlsBundle *pb.TLSCertBundle
+	var siteConfig *pb.SiteConfig
+
+	resolvedClusterID := clusterID
+	if quartermasterClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		node, err := quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
+		cancel()
+		if err == nil && node != nil {
+			if resolvedClusterID == "" {
+				resolvedClusterID = strings.TrimSpace(node.GetClusterId())
+			}
+		}
+	}
+	if getNodeOwnerFn != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ownerResp, err := getNodeOwnerFn(ctx, nodeID)
+		cancel()
+		if err == nil && ownerResp != nil {
+			ownerTenantID = strings.TrimSpace(ownerResp.GetOwnerTenantId())
+			if resolvedClusterID == "" {
+				resolvedClusterID = strings.TrimSpace(ownerResp.GetClusterId())
+			}
+		}
+	}
+	if resolvedClusterID != "" {
+		rootDomain := platformRootDomain()
+		slug := pkgdns.SanitizeLabel(resolvedClusterID)
+
+		siteConfig = &pb.SiteConfig{
+			SiteAddress: fmt.Sprintf("*.%s.%s", slug, rootDomain),
+			EdgeDomain:  fmt.Sprintf("%s.%s.%s", edgeNodeRecordLabel(nodeID), slug, rootDomain),
+			PoolDomain:  fmt.Sprintf("edge.%s.%s", slug, rootDomain),
+			AcmeEmail:   os.Getenv("ACME_EMAIL"),
+		}
+
+		if navigatorClient != nil {
+			wildcardDomain := fmt.Sprintf("*.%s.%s", slug, rootDomain)
+			certCtx, certCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			certResp, certErr := navigatorClient.GetCertificate(certCtx, &pb.GetCertificateRequest{Domain: wildcardDomain})
+			certCancel()
+			if certErr == nil && certResp != nil && certResp.GetFound() {
+				tlsBundle = &pb.TLSCertBundle{
+					CertPem:   certResp.GetCertPem(),
+					KeyPem:    certResp.GetKeyPem(),
+					Domain:    certResp.GetDomain(),
+					ExpiresAt: certResp.GetExpiresAt(),
+				}
+			}
+		}
+	}
+
+	caBundle := readConfiguredCABundle()
+	telemetry := buildEdgeTelemetryConfig(nodeID, resolvedClusterID, ownerTenantID)
 
 	return &pb.ConfigSeed{
 		NodeId:          nodeID,
@@ -2356,7 +2580,131 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		Templates:       templates,
 		OperationalMode: operationalMode,
 		Tls:             tlsBundle,
+		Site:            siteConfig,
+		CaBundle:        caBundle,
+		TenantId:        ownerTenantID,
+		Telemetry:       telemetry,
 	}
+}
+
+type edgeTelemetryClaims struct {
+	NodeID    string `json:"node_id"`
+	ClusterID string `json:"cluster_id"`
+	TenantID  string `json:"tenant_id,omitempty"`
+	Role      string `json:"role"`
+	VMAccess  struct {
+		MetricsExtraLabels string `json:"metrics_extra_labels"`
+	} `json:"vm_access"`
+	jwt.RegisteredClaims
+}
+
+func buildEdgeTelemetryConfig(nodeID, clusterID, tenantID string) *pb.EdgeTelemetryConfig {
+	nodeID = strings.TrimSpace(nodeID)
+	clusterID = strings.TrimSpace(clusterID)
+	if nodeID == "" || clusterID == "" {
+		return nil
+	}
+	writeURL := edgeTelemetryWriteURL(clusterID)
+	if writeURL == "" {
+		return nil
+	}
+	token, expiresAt, err := mintEdgeTelemetryToken(nodeID, clusterID, tenantID)
+	if err != nil {
+		logging.NewLogger().WithError(err).WithFields(logging.Fields{
+			"node_id":    nodeID,
+			"cluster_id": clusterID,
+		}).Warn("Failed to mint edge telemetry token")
+		return nil
+	}
+	return &pb.EdgeTelemetryConfig{
+		Enabled:     true,
+		WriteUrl:    writeURL,
+		BearerToken: token,
+		ExpiresAt:   expiresAt.Format(time.RFC3339),
+	}
+}
+
+func edgeTelemetryWriteURL(clusterID string) string {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return ""
+	}
+	clusterSlug := pkgdns.SanitizeLabel(clusterID)
+	rootDomain := platformRootDomain()
+	if getClusterFn != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		cluster, err := getClusterFn(ctx, clusterID)
+		cancel()
+		if err == nil && cluster != nil {
+			if slug := pkgdns.ClusterSlug(clusterID, cluster.GetClusterName()); slug != "" {
+				clusterSlug = slug
+			}
+			if baseURL := strings.TrimSpace(cluster.GetBaseUrl()); baseURL != "" {
+				rootDomain = baseURL
+			}
+		}
+	}
+	if clusterSlug == "" || rootDomain == "" {
+		return ""
+	}
+	fqdn, ok := pkgdns.ServiceFQDN("telemetry", clusterSlug+"."+rootDomain)
+	if !ok || fqdn == "" {
+		return ""
+	}
+	return "https://" + fqdn + "/api/v1/write"
+}
+
+func mintEdgeTelemetryToken(nodeID, clusterID, tenantID string) (string, time.Time, error) {
+	privateKey, err := parseEdgeTelemetryPrivateKey()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(edgeTelemetryTokenTTL)
+	claims := edgeTelemetryClaims{
+		NodeID:    nodeID,
+		ClusterID: clusterID,
+		TenantID:  strings.TrimSpace(tenantID),
+		Role:      "edge_metrics_write",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "foghorn",
+			Subject:   "edge/" + nodeID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now.Add(-1 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+	}
+	claims.VMAccess.MetricsExtraLabels = "frameworks_node=" + nodeID
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	signed, err := token.SignedString(privateKey)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("sign telemetry token: %w", err)
+	}
+	return signed, expiresAt, nil
+}
+
+func parseEdgeTelemetryPrivateKey() (*ecdsa.PrivateKey, error) {
+	encoded := strings.TrimSpace(os.Getenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"))
+	if encoded == "" {
+		return nil, fmt.Errorf("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64 is not set")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode telemetry private key: %w", err)
+	}
+	block, _ := pem.Decode(decoded)
+	if block == nil {
+		return nil, fmt.Errorf("decode telemetry private key PEM: no PEM block found")
+	}
+	keyAny, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse telemetry private key: %w", err)
+	}
+	key, ok := keyAny.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("telemetry private key is %T, expected ECDSA", keyAny)
+	}
+	return key, nil
 }
 
 func resolveClusterTLSBundle(nodeID string) *pb.TLSCertBundle {
@@ -2409,7 +2757,7 @@ func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) er
 
 	// Helmsman sidecar does NOT merge ConfigSeeds; ApplySeed overwrites lastSeed.
 	// Send a full seed to avoid wiping previously seeded fields.
-	seed := composeConfigSeed(nodeID, nil, c.peerAddr, mode)
+	seed := composeConfigSeed(nodeID, nil, c.peerAddr, mode, "")
 	msg := &pb.ControlMessage{
 		Payload: &pb.ControlMessage_ConfigSeed{ConfigSeed: seed},
 		SentAt:  timestamppb.Now(),
@@ -2428,7 +2776,7 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 		return ErrNotConnected
 	}
 	// For relay: compose a full ConfigSeed (without peer addr, since we don't hold the conn)
-	seed := composeConfigSeed(nodeID, nil, "", mode)
+	seed := composeConfigSeed(nodeID, nil, "", mode, "")
 	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
@@ -2437,7 +2785,7 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 
 // processModeChangeRequest handles an upstream mode change request from Helmsman.
 // Validates the mode and applies it via the existing SetNodeOperationalMode + PushOperationalMode path.
-func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, log logging.Logger) {
+func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, _ pb.HelmsmanControl_ConnectServer, log logging.Logger) {
 	if req == nil {
 		return
 	}
@@ -2481,6 +2829,9 @@ type S3ClientInterface interface {
 	GeneratePresignedPUT(key string, expiry time.Duration) (string, error)
 	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
 	ListPrefix(ctx context.Context, prefix string) ([]string, error)
+	Delete(ctx context.Context, key string) error
+	DeleteByURL(ctx context.Context, s3URL string) error
+	DeletePrefix(ctx context.Context, prefix string) (int, error)
 	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
 	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
@@ -2526,20 +2877,92 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Look up asset info from foghorn.artifacts for stream_internal_name and origin
+	// For DVR segment/manifest incremental sync, resolve to the parent DVR artifact.
+	// The artifacts table stores one row per DVR with artifact_type='dvr', but Helmsman
+	// sends dvr_segment/dvr_manifest with compound hashes like "dvrHash/filename".
+	lookupHash := assetHash
+	lookupType := assetType
+	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
+		lookupType = "dvr"
+		if before, _, ok := strings.Cut(assetHash, "/"); ok {
+			lookupHash = before
+		}
+	}
+
 	var streamName string
 	var originCluster sql.NullString
+	var syncStatus sql.NullString
 	err := db.QueryRowContext(ctx, `
-		SELECT stream_internal_name, origin_cluster_id
+		SELECT stream_internal_name, origin_cluster_id, sync_status
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2`,
-		assetHash, assetType).Scan(&streamName, &originCluster)
+		lookupHash, lookupType).Scan(&streamName, &originCluster, &syncStatus)
+
+	// For DVR segment/manifest incremental sync, assetHash is "{dvr_hash}/{filename}"
+	dvrHash := assetHash
+	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
+		if before, _, ok := strings.Cut(assetHash, "/"); ok {
+			dvrHash = before
+		}
+	}
+
+	// Resolve tenant (and stream name if DB row was missing) via Commodore
+	var tenantID string
+	if CommodoreClient != nil {
+		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer resolveCancel()
+		switch assetType {
+		case "clip":
+			if resp, resolveErr := CommodoreClient.ResolveClipHash(resolveCtx, assetHash); resolveErr == nil && resp.Found {
+				tenantID = resp.TenantId
+				if streamName == "" {
+					streamName = resp.StreamInternalName
+				}
+			}
+		case "dvr", "dvr_segment", "dvr_manifest":
+			if resp, resolveErr := CommodoreClient.ResolveDVRHash(resolveCtx, dvrHash); resolveErr == nil && resp.Found {
+				tenantID = resp.TenantId
+				if streamName == "" {
+					streamName = resp.StreamInternalName
+				}
+			}
+		case "vod":
+			if resp, resolveErr := CommodoreClient.ResolveVodHash(resolveCtx, assetHash); resolveErr == nil && resp.Found {
+				tenantID = resp.TenantId
+				if streamName == "" {
+					streamName = resp.InternalName
+				}
+			}
+		}
+	}
+
+	// If DB row was missing but Commodore resolved the artifact, create the lifecycle row
+	if err != nil && tenantID != "" && streamName != "" {
+		if _, dbErr := db.ExecContext(ctx, `
+			INSERT INTO foghorn.artifacts
+				(artifact_hash, artifact_type, stream_internal_name, tenant_id,
+				 storage_location, sync_status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 'local', 'pending', NOW(), NOW())
+			ON CONFLICT (artifact_hash) DO NOTHING`,
+			lookupHash, lookupType, streamName, tenantID); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", lookupHash).Error("failed to create lifecycle row from Commodore")
+		}
+		logger.WithFields(logging.Fields{
+			"asset_hash": lookupHash,
+			"asset_type": lookupType,
+			"tenant_id":  tenantID,
+		}).Info("Created lifecycle row from Commodore during freeze permission")
+		err = nil
+	}
+
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"asset_hash": assetHash,
-			"asset_type": assetType,
-			"error":      err,
-		}).Error("Asset not found in database")
+			"asset_hash":  assetHash,
+			"asset_type":  assetType,
+			"lookup_hash": lookupHash,
+			"lookup_type": lookupType,
+			"error":       err,
+		}).Error("Asset not found in database or Commodore")
 		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
 			RequestId: requestID,
 			AssetHash: assetHash,
@@ -2549,33 +2972,6 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		return
 	}
 
-	// Get tenant_id from Commodore (business registry owner)
-	var tenantID string
-	// For DVR segment/manifest incremental sync, assetHash is "{dvr_hash}/{filename}"
-	dvrHash := assetHash
-	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
-		if idx := strings.Index(assetHash, "/"); idx != -1 {
-			dvrHash = assetHash[:idx]
-		}
-	}
-	if CommodoreClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		switch assetType {
-		case "clip":
-			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-			}
-		case "dvr", "dvr_segment", "dvr_manifest":
-			if resp, err := CommodoreClient.ResolveDVRHash(ctx, dvrHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-			}
-		case "vod":
-			if resp, err := CommodoreClient.ResolveVodHash(ctx, assetHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-			}
-		}
-	}
 	if tenantID == "" {
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,
@@ -2602,6 +2998,22 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			AssetHash:  assetHash,
 			Approved:   true,
 			SkipUpload: true,
+		}, logger)
+		return
+	}
+
+	// Already synced to S3 — no need to re-freeze
+	if syncStatus.Valid && syncStatus.String == "synced" {
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"asset_type": assetType,
+			"node_id":    nodeID,
+		}).Debug("Asset already synced to S3, rejecting freeze permission")
+		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "already_synced",
 		}, logger)
 		return
 	}
@@ -2664,8 +3076,8 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		// Incremental DVR sync - single segment or manifest file
 		// assetHash is "{dvr_hash}/{filename}", extract filename
 		filename := ""
-		if idx := strings.Index(assetHash, "/"); idx != -1 {
-			filename = assetHash[idx+1:]
+		if _, after, ok := strings.Cut(assetHash, "/"); ok {
+			filename = after
 		}
 		if filename == "" && len(req.GetFilenames()) > 0 {
 			filename = req.GetFilenames()[0]
@@ -2722,7 +3134,9 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 
 	// Update artifact to mark as freezing (skip for incremental segment sync)
 	if assetType != "dvr_segment" && assetType != "dvr_manifest" {
-		_, _ = db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+		if _, dbErr := db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', sync_status = 'in_progress', updated_at = NOW() WHERE artifact_hash = $1`, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as freezing")
+		}
 	}
 
 	sendFreezePermissionResponse(stream, response, logger)
@@ -2781,7 +3195,7 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 
 	if status == "success" {
 		// Update artifact storage location in database
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 				UPDATE foghorn.artifacts
 				SET storage_location = 'local',
 				    sync_status = 'synced',
@@ -2791,10 +3205,12 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 			    sync_error = NULL,
 			    updated_at = NOW()
 			WHERE artifact_hash = $2`,
-			s3URL, assetHash)
+			s3URL, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to update artifact after successful freeze")
+		}
 	} else {
 		// Revert storage location on failure
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    sync_status = 'failed',
@@ -2802,7 +3218,50 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 			    last_sync_attempt = NOW(),
 			    updated_at = NOW()
 			WHERE artifact_hash = $2
-		`, errorMsg, assetHash)
+		`, errorMsg, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after freeze failure")
+		}
+
+		// Clean up partial S3 uploads to avoid storage garbage
+		if s3Client != nil {
+			var artifactType, streamName, tenantID string
+			_ = db.QueryRowContext(ctx, `
+				SELECT artifact_type, COALESCE(stream_internal_name,''), COALESCE(tenant_id::text,'')
+				FROM foghorn.artifacts WHERE artifact_hash = $1`, assetHash).Scan(&artifactType, &streamName, &tenantID)
+			if tenantID != "" {
+				go func() {
+					cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanCancel()
+					var prefix string
+					switch artifactType {
+					case "dvr":
+						prefix = s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
+					case "clip":
+						prefix = s3Client.BuildClipS3Key(tenantID, streamName, assetHash, "")
+						// Clip key includes format extension — strip it to get the prefix
+						if idx := strings.LastIndex(prefix, "."); idx != -1 {
+							prefix = prefix[:idx]
+						}
+					case "vod":
+						prefix = s3Client.BuildVodS3Key(tenantID, assetHash, assetHash)
+						if idx := strings.LastIndex(prefix, "/"); idx != -1 {
+							prefix = prefix[:idx+1] + assetHash
+						}
+					}
+					if prefix != "" {
+						deleted, err := s3Client.DeletePrefix(cleanCtx, prefix)
+						if err != nil {
+							logger.WithError(err).WithField("prefix", prefix).Warn("Failed to clean up partial S3 uploads")
+						} else if deleted > 0 {
+							logger.WithFields(logging.Fields{
+								"prefix":  prefix,
+								"deleted": deleted,
+							}).Info("Cleaned up partial S3 uploads after freeze failure")
+						}
+					}
+				}()
+			}
+		}
 	}
 }
 
@@ -2898,7 +3357,7 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		if reportingNodeID == "" {
 			reportingNodeID = nodeID
 		}
-		_, _ = db.ExecContext(context.Background(), `
+		if _, dbErr := db.ExecContext(context.Background(), `
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    defrost_node_id = NULL,
@@ -2907,7 +3366,9 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 			WHERE artifact_hash = $1
 			  AND storage_location = 'defrosting'
 			  AND (defrost_node_id = $2 OR defrost_node_id IS NULL)
-		`, assetHash, reportingNodeID)
+		`, assetHash, reportingNodeID); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after defrost failure")
+		}
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,
 			"error":      errorMsg,
@@ -2945,6 +3406,36 @@ func SendDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
 		TargetNodeId: nodeID,
 		Command:      &pb.ForwardCommandRequest_Defrost{Defrost: req},
 	}))
+}
+
+// SendFreezeRequest sends a proactive FreezeRequest to the given node, relaying via HA if needed.
+func SendFreezeRequest(nodeID string, req *pb.FreezeRequest) error {
+	err := SendLocalFreezeRequest(nodeID, req)
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &pb.ForwardCommandRequest_Freeze{Freeze: req},
+	}))
+}
+
+func SendLocalFreezeRequest(nodeID string, req *pb.FreezeRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		RequestId: req.RequestId,
+		Payload:   &pb.ControlMessage_FreezeRequest{FreezeRequest: req},
+		SentAt:    timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
 }
 
 func SendLocalDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
@@ -3069,11 +3560,22 @@ func SendDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets) err
 // Set by the grpc package to avoid circular imports (control → grpc).
 type ProcessingJobResultHandler func(ctx context.Context, jobID, status string, outputs map[string]string, errorMsg string)
 
+// ProcessConfigCacheUpdater updates the STREAM_PROCESS cache for an artifact.
+// Used for Livepeer → local fallback: Helmsman tells Foghorn to cache the
+// local-only config so the restarted push gets it via STREAM_PROCESS.
+type ProcessConfigCacheUpdater func(artifactHash, processesJSON string)
+
 var onProcessingJobResult ProcessingJobResultHandler
+var onProcessConfigCacheUpdate ProcessConfigCacheUpdater
 
 // SetProcessingJobResultHandler registers a callback for processing job results.
 func SetProcessingJobResultHandler(h ProcessingJobResultHandler) {
 	onProcessingJobResult = h
+}
+
+// SetProcessConfigCacheUpdater registers the cache updater for Livepeer fallback.
+func SetProcessConfigCacheUpdater(h ProcessConfigCacheUpdater) {
+	onProcessConfigCacheUpdate = h
 }
 
 // processProcessingJobResult handles job completion/failure results from Helmsman.
@@ -3094,6 +3596,14 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 
 	jobStatus := result.GetStatus()
 	switch jobStatus {
+	case "cache_update":
+		artifactHash := result.GetOutputs()["artifact_hash"]
+		processesJSON := result.GetOutputs()["processes_json"]
+		if artifactHash != "" && processesJSON != "" && onProcessConfigCacheUpdate != nil {
+			onProcessConfigCacheUpdate(artifactHash, processesJSON)
+			logger.WithField("artifact_hash", artifactHash).Info("Updated process config cache for Livepeer fallback")
+		}
+		return
 	case "completed":
 		var outputMeta *string
 		if len(result.GetOutputs()) > 0 {
@@ -3118,10 +3628,16 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 		// Register processed output in warm cache + in-memory state so vod+
 		// STREAM_SOURCE resolves immediately (same pattern as defrost completion).
 		if outputPath := result.GetOutputPath(); outputPath != "" {
-			var artifactHash string
-			_ = db.QueryRowContext(ctx, `SELECT artifact_hash FROM foghorn.processing_jobs WHERE job_id = $1`, result.GetJobId()).Scan(&artifactHash)
+			var artifactHash, oldS3URL, oldFormat string
+			_ = db.QueryRowContext(ctx, `
+				SELECT artifact_hash, COALESCE(s3_url,''), COALESCE(format,'')
+				FROM foghorn.processing_jobs pj
+				JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
+				WHERE pj.job_id = $1`, result.GetJobId()).Scan(&artifactHash, &oldS3URL, &oldFormat)
 			if artifactHash != "" {
 				sizeBytes := result.GetOutputSizeBytes()
+				newFormat := strings.TrimPrefix(filepath.Ext(outputPath), ".")
+
 				if artifactRepo != nil {
 					if err := artifactRepo.AddCachedNodeWithPath(ctx, artifactHash, nodeID, outputPath, sizeBytes); err != nil {
 						logger.WithError(err).WithFields(fields).Warn("Failed to register processed artifact in warm cache")
@@ -3132,12 +3648,28 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 					FilePath:  outputPath,
 					SizeBytes: uint64(sizeBytes),
 					CreatedAt: time.Now().Unix(),
-					Format:    strings.TrimPrefix(filepath.Ext(outputPath), "."),
+					Format:    newFormat,
 				})
+
+				// Update artifact format to match processed output and reset sync
+				// status so the processed file gets synced to S3. Keep the original
+				// upload URL in s3_url until the replacement upload is durably synced.
+				if _, dbErr := db.ExecContext(ctx, `
+						UPDATE foghorn.artifacts
+						SET format = $1,
+						    sync_status = 'pending',
+						    storage_location = 'local',
+						    updated_at = NOW()
+						WHERE artifact_hash = $2`, newFormat, artifactHash); dbErr != nil {
+					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format after processing")
+				}
+
 				logger.WithFields(logging.Fields{
 					"artifact_hash": artifactHash,
 					"node_id":       nodeID,
 					"output_path":   outputPath,
+					"old_format":    oldFormat,
+					"new_format":    newFormat,
 				}).Info("Registered processed artifact for immediate playback")
 			}
 		}
@@ -3164,6 +3696,52 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 	// Notify pipeline handler
 	if onProcessingJobResult != nil {
 		onProcessingJobResult(ctx, result.GetJobId(), jobStatus, result.GetOutputs(), result.GetError())
+	}
+}
+
+// processProcessingJobProgress handles periodic progress updates from Helmsman.
+// Refreshes updated_at (preventing stale recovery) and emits lifecycle events.
+func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger logging.Logger) {
+	if db == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	progressPct := progress.GetProgressPct()
+
+	// Update job progress and refresh updated_at so stale recovery doesn't requeue
+	var artifactHash sql.NullString
+	var tenantID string
+	err := db.QueryRowContext(ctx, `
+		UPDATE foghorn.processing_jobs
+		SET progress = $2, updated_at = NOW()
+		WHERE job_id = $1 AND status IN ('dispatched', 'processing')
+		RETURNING artifact_hash, tenant_id::text
+	`, progress.GetJobId(), progressPct).Scan(&artifactHash, &tenantID)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to update processing job progress")
+		}
+		return
+	}
+
+	// Emit VodLifecycleData with progress for Periscope
+	if decklogClient != nil && artifactHash.Valid {
+		vodData := &pb.VodLifecycleData{
+			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+			VodHash:     artifactHash.String,
+			ProgressPct: &progressPct,
+		}
+		if tenantID != "" {
+			vodData.TenantId = &tenantID
+		}
+		go func() {
+			if err := decklogClient.SendVodLifecycle(vodData); err != nil {
+				logger.WithError(err).Warn("Failed to send processing progress lifecycle event")
+			}
+		}()
 	}
 }
 
@@ -3660,7 +4238,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	// Send defrost request to node
 	if err := SendDefrostRequest(nodeID, req); err != nil {
 		// Revert storage location
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    defrost_node_id = NULL,
@@ -3669,7 +4247,9 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 			WHERE artifact_hash = $1
 			  AND storage_location = 'defrosting'
 			  AND defrost_node_id = $2
-		`, assetHash, nodeID)
+		`, assetHash, nodeID); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to revert artifact after defrost send failure")
+		}
 		return "", fmt.Errorf("failed to send defrost request: %w", err)
 	}
 
@@ -3836,26 +4416,39 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 
 	dtshIncluded := complete.GetDtshIncluded()
 
-	if status == "success" {
+	switch status {
+	case "success":
+		var artifactType, internalName, format, tenantID, previousS3URL string
 		// If Helmsman didn't provide s3_url (typical), compute it from stored artifact metadata.
-		if s3URL == "" && s3Client != nil && db != nil {
-			var artifactType, internalName, format, tenantID string
+		if db != nil {
 			_ = db.QueryRowContext(ctx, `
-				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,'')
+				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,''), COALESCE(s3_url,'')
 				FROM foghorn.artifacts
 				WHERE artifact_hash = $1
-			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID)
-			if tenantID != "" && internalName != "" {
+			`, assetHash).Scan(&artifactType, &internalName, &format, &tenantID, &previousS3URL)
+		}
+		if s3URL == "" && s3Client != nil {
+			if tenantID != "" {
 				switch artifactType {
 				case "clip":
 					if format == "" {
 						format = "mp4"
 					}
-					s3Key := s3Client.BuildClipS3Key(tenantID, internalName, assetHash, format)
-					s3URL = s3Client.BuildS3URL(s3Key)
+					if internalName != "" {
+						s3Key := s3Client.BuildClipS3Key(tenantID, internalName, assetHash, format)
+						s3URL = s3Client.BuildS3URL(s3Key)
+					}
 				case "dvr":
-					s3Prefix := s3Client.BuildDVRS3Key(tenantID, internalName, assetHash)
-					s3URL = s3Client.BuildS3URL(s3Prefix)
+					if internalName != "" {
+						s3Prefix := s3Client.BuildDVRS3Key(tenantID, internalName, assetHash)
+						s3URL = s3Client.BuildS3URL(s3Prefix)
+					}
+				case "vod":
+					if format == "" {
+						format = "mp4"
+					}
+					s3Key := s3Client.BuildVodS3Key(tenantID, assetHash, assetHash+"."+format)
+					s3URL = s3Client.BuildS3URL(s3Key)
 				}
 			}
 		}
@@ -3870,18 +4463,20 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			logger.WithError(err).Error("Failed to add cached node")
 		}
 
-		// Update foghorn.artifacts with sync status
-		_, _ = db.ExecContext(ctx, `
+		// Update foghorn.artifacts with storage_location and dtsh_synced
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
-			    sync_status = 'synced',
 			    s3_url = COALESCE(NULLIF($1,''), s3_url),
 			    dtsh_synced = $2,
 			    last_sync_attempt = NOW(),
 			    sync_error = NULL,
 			    updated_at = NOW()
-			WHERE artifact_hash = $3`,
-			s3URL, dtshIncluded, assetHash)
+			WHERE artifact_hash = $3
+			  AND sync_status = 'synced'`,
+			s3URL, dtshIncluded, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark artifact as synced")
+		}
 
 		logger.WithFields(logging.Fields{
 			"asset_hash":    assetHash,
@@ -3889,14 +4484,62 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			"node_id":       reportingNodeID,
 			"dtsh_included": dtshIncluded,
 		}).Info("Asset synced to S3, local copy retained")
-	} else {
+
+		if artifactType == "vod" && previousS3URL != "" && s3URL != "" && previousS3URL != s3URL && s3Client != nil {
+			if err := s3Client.DeleteByURL(ctx, previousS3URL); err != nil {
+				logger.WithError(err).WithFields(logging.Fields{
+					"asset_hash":      assetHash,
+					"replaced_s3_url": previousS3URL,
+					"new_s3_url":      s3URL,
+				}).Warn("Failed to delete replaced VOD source from S3 after sync")
+			} else {
+				logger.WithFields(logging.Fields{
+					"asset_hash":      assetHash,
+					"replaced_s3_url": previousS3URL,
+					"new_s3_url":      s3URL,
+				}).Info("Deleted replaced VOD source from S3 after sync")
+			}
+		}
+
+	case "evicted_remote":
+		// Remote-origin artifact: local copy was deleted, original lives on origin S3.
+		// Mark as synced on S3 and remove this node from warm cache.
+		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "synced", ""); err != nil {
+			logger.WithError(err).Error("Failed to update sync status for evicted remote")
+		}
+
+		if _, dbErr := db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET storage_location = 's3',
+			    sync_status = 'synced',
+			    last_sync_attempt = NOW(),
+			    sync_error = NULL,
+			    updated_at = NOW()
+			WHERE artifact_hash = $1`, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to mark evicted artifact as s3-resident")
+		}
+
+		if _, dbErr := db.ExecContext(ctx, `
+			DELETE FROM foghorn.artifact_nodes
+			WHERE artifact_hash = $1 AND node_id = $2`, assetHash, reportingNodeID); dbErr != nil {
+			logger.WithError(dbErr).WithFields(logging.Fields{"asset_hash": assetHash, "node_id": reportingNodeID}).Error("failed to remove cached node after eviction")
+		}
+
+		// Remove from in-memory + Redis so routing stops directing to this node
+		state.DefaultManager().RemoveNodeArtifact(reportingNodeID, assetHash)
+
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"node_id":    reportingNodeID,
+		}).Info("Remote artifact evicted locally, marked as S3-resident")
+
+	default:
 		// Sync failed
 		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "failed", ""); err != nil {
 			logger.WithError(err).Error("Failed to update sync status to failed")
 		}
 
-		// Update error in foghorn.artifacts
-		_, _ = db.ExecContext(ctx, `
+		if _, dbErr := db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    sync_status = 'failed',
@@ -3904,7 +4547,9 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			    last_sync_attempt = NOW(),
 			    updated_at = NOW()
 			WHERE artifact_hash = $2`,
-			errorMsg, assetHash)
+			errorMsg, assetHash); dbErr != nil {
+			logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to record sync failure")
+		}
 
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,
@@ -3937,10 +4582,7 @@ func StartCertRefreshLoop(ctx context.Context, interval time.Duration, log loggi
 func refreshTLSBundles(log logging.Logger) {
 	// Refresh the server's own TLS certificate if Navigator-backed
 	if navigatorClient != nil && serverCert.cert.Load() != nil {
-		rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-		if rootDomain == "" {
-			rootDomain = "frameworks.network"
-		}
+		rootDomain := platformRootDomain()
 		domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(localClusterID), rootDomain)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -3978,17 +4620,16 @@ func refreshTLSBundles(log logging.Logger) {
 		return
 	}
 
+	seedCaBundle := readConfiguredCABundle()
+
 	for _, n := range nodes {
-		bundle, found, err := fetchClusterTLSBundle(n.canonicalID)
+		bundle, _, err := fetchClusterTLSBundle(n.canonicalID)
 		if err != nil {
 			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to resolve TLS bundle for node")
 			continue
 		}
 
-		nextState := tlsStateNoCert
-		if found {
-			nextState = tlsBundleState(bundle)
-		}
+		nextState := tlsMaterialState(bundle, seedCaBundle)
 
 		prev, ok := lastPushedTLSState.Load(n.connID)
 		if prevState, isString := prev.(string); ok && isString && prevState == nextState {
@@ -3996,11 +4637,11 @@ func refreshTLSBundles(log logging.Logger) {
 		}
 
 		mode := resolveOperationalMode(n.canonicalID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
-		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode)
+		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode, "")
 		// Override TLS with the bundle we already resolved above.
-		// composeConfigSeed calls resolveClusterTLSBundle internally, which
-		// can fail transiently on the second call; using the pre-resolved
-		// bundle avoids pushing a seed that silently drops TLS.
+		// composeConfigSeed resolves TLS internally, which can fail
+		// transiently on a second call; using the pre-resolved bundle
+		// avoids pushing a seed that silently drops TLS.
 		seed.Tls = bundle
 		if err := SendConfigSeed(n.connID, seed); err != nil {
 			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to push renewed TLS certificate")
@@ -4025,6 +4666,97 @@ func refreshTLSBundles(log logging.Logger) {
 	}
 }
 
+// probeEdgeActivation verifies an edge node's HTTPS endpoint is serving with a valid
+// TLS certificate after ConfigSeed delivery. Retries every 5s for up to 60s.
+// On success, marks the node as probe-verified so the load balancer includes it.
+// On failure, closes the gRPC stream to force re-enrollment.
+func probeEdgeActivation(nodeID, edgeDomain, connID string) {
+	if edgeDomain == "" {
+		registry.log.WithField("node_id", nodeID).Warn("No edge domain for activation probe, auto-verifying")
+		state.DefaultManager().SetProbeVerified(nodeID, true)
+		return
+	}
+
+	systemRoots, err := x509.SystemCertPool()
+	if err != nil {
+		registry.log.WithError(err).Warn("Failed to load system cert pool for activation probe, auto-verifying")
+		state.DefaultManager().SetProbeVerified(nodeID, true)
+		return
+	}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    systemRoots,
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+	}
+
+	probeURL := "https://" + edgeDomain + "/"
+	maxAttempts := 12
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		time.Sleep(5 * time.Second)
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			registry.log.WithFields(logging.Fields{
+				"node_id": nodeID, "domain": edgeDomain,
+				"attempt": attempt, "error": err,
+			}).Debug("Activation probe failed")
+			continue
+		}
+		resp.Body.Close()
+
+		// 503 = still serving bootstrap page, not activated yet
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			registry.log.WithFields(logging.Fields{
+				"node_id": nodeID, "domain": edgeDomain, "attempt": attempt,
+			}).Debug("Activation probe got 503 (bootstrap), retrying")
+			continue
+		}
+
+		// Any non-503 response with valid TLS = activated
+		state.DefaultManager().SetProbeVerified(nodeID, true)
+		registry.log.WithFields(logging.Fields{
+			"node_id": nodeID, "domain": edgeDomain, "attempt": attempt,
+		}).Info("Edge activation probe succeeded")
+		return
+	}
+
+	// All attempts exhausted — disconnect the node so Helmsman re-enrolls
+	registry.log.WithFields(logging.Fields{
+		"node_id": nodeID, "domain": edgeDomain,
+	}).Warn("Edge activation probe failed after all attempts, disconnecting node")
+
+	registry.mu.Lock()
+	c := registry.conns[connID]
+	if c != nil {
+		// Send error before removing so Helmsman knows why it was disconnected
+		if err := sendControlError(c.stream, "ACTIVATION_FAILED", "edge proxy did not activate within timeout"); err != nil {
+			registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to send activation failure to node")
+		}
+		delete(registry.conns, connID)
+		if nodeID != connID {
+			if cc, ok := registry.conns[nodeID]; ok && cc.stream == c.stream {
+				delete(registry.conns, nodeID)
+			}
+		}
+	}
+	registry.mu.Unlock()
+
+	if c != nil {
+		state.DefaultManager().MarkNodeDisconnected(connID)
+		if nodeID != connID {
+			state.DefaultManager().MarkNodeDisconnected(nodeID)
+		}
+	}
+}
+
 func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 	if quartermasterClient == nil || navigatorClient == nil {
 		return nil, false, nil
@@ -4041,10 +4773,7 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 		return nil, false, nil
 	}
 
-	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-	if rootDomain == "" {
-		rootDomain = "frameworks.network"
-	}
+	rootDomain := platformRootDomain()
 	domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(node.GetClusterId()), rootDomain)
 
 	certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: domain})
@@ -4067,11 +4796,42 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 }
 
 func tlsBundleState(bundle *pb.TLSCertBundle) string {
-	if bundle == nil {
+	return tlsMaterialState(bundle, nil)
+}
+
+func tlsMaterialState(bundle *pb.TLSCertBundle, caBundle []byte) string {
+	if bundle == nil && len(caBundle) == 0 {
 		return tlsStateNoCert
 	}
-	sum := sha256.Sum256([]byte(bundle.GetCertPem() + "\x00" + bundle.GetKeyPem() + "\x00" + bundle.GetDomain() + fmt.Sprintf("\x00%d", bundle.GetExpiresAt())))
+	payload := make([]byte, 0, len(caBundle)+128)
+	if bundle != nil {
+		payload = append(payload, bundle.GetCertPem()...)
+		payload = append(payload, '\x00')
+		payload = append(payload, bundle.GetKeyPem()...)
+		payload = append(payload, '\x00')
+		payload = append(payload, bundle.GetDomain()...)
+		payload = append(payload, []byte(fmt.Sprintf("\x00%d", bundle.GetExpiresAt()))...)
+	}
+	payload = append(payload, '\x00')
+	payload = append(payload, caBundle...)
+	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+func readConfiguredCABundle() []byte {
+	caPath := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH"))
+	if caPath == "" {
+		return nil
+	}
+	caBundle, err := os.ReadFile(caPath)
+	if err != nil {
+		logging.NewLogger().WithError(err).WithField("path", caPath).Warn("Failed to read configured gRPC CA bundle")
+		return nil
+	}
+	if len(caBundle) == 0 {
+		return nil
+	}
+	return caBundle
 }
 
 // ==================== Edge Provisioning (PreRegisterEdge) ====================
@@ -4098,7 +4858,11 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 		}
 	}
 
-	// Validate + consume token via Quartermaster before returning sensitive material.
+	// Validate token without consuming. PreRegisterEdge is advisory only — it
+	// previews edge identity and stages TLS certs but creates no database
+	// records. Consumption is deferred to BootstrapEdgeNode, which creates
+	// the infrastructure_nodes record. Consuming here would burn single-use
+	// tokens before Helmsman can enroll via BootstrapEdgeNode.
 	validateFn := validateBootstrapTokenFn
 	if validateFn == nil {
 		if quartermasterClient == nil {
@@ -4139,38 +4903,30 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 	}
 	AddServedCluster(clusterID)
 
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	nodeID := hex.EncodeToString(b)
-
-	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-	if rootDomain == "" {
-		rootDomain = "frameworks.network"
+	nodeID := normalizePreferredEdgeNodeID(req.GetPreferredNodeId())
+	if nodeID == "" {
+		b := make([]byte, 6)
+		if _, randErr := rand.Read(b); randErr != nil {
+			return nil, fmt.Errorf("generate random node ID: %w", randErr)
+		}
+		nodeID = hex.EncodeToString(b)
 	}
 
-	edgeDomain := fmt.Sprintf("edge-%s.%s.%s", nodeID, clusterSlug, rootDomain)
+	rootDomain := platformRootDomain()
+
+	edgeDomain := fmt.Sprintf("%s.%s.%s", edgeNodeRecordLabel(nodeID), clusterSlug, rootDomain)
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
-	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18008", clusterSlug, rootDomain)
+	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18019", clusterSlug, rootDomain)
 
 	resp := &pb.PreRegisterEdgeResponse{
-		NodeId:          nodeID,
-		EdgeDomain:      edgeDomain,
-		PoolDomain:      poolDomain,
-		ClusterSlug:     clusterSlug,
-		ClusterId:       clusterID,
-		FoghornGrpcAddr: foghornAddr,
-	}
-
-	// Attach the cluster wildcard cert so CLI can stage TLS before Caddy starts.
-	if navigatorClient != nil {
-		wildcardDomain := fmt.Sprintf("*.%s.%s", clusterSlug, rootDomain)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: wildcardDomain})
-		if certErr == nil && certResp != nil && certResp.GetFound() {
-			resp.CertPem = certResp.GetCertPem()
-			resp.KeyPem = certResp.GetKeyPem()
-		}
+		NodeId:           nodeID,
+		EdgeDomain:       edgeDomain,
+		PoolDomain:       poolDomain,
+		ClusterSlug:      clusterSlug,
+		ClusterId:        clusterID,
+		FoghornGrpcAddr:  foghornAddr,
+		InternalCaBundle: readConfiguredCABundle(),
+		Telemetry:        buildEdgeTelemetryConfig(nodeID, clusterID, strings.TrimSpace(valResp.GetTenantId())),
 	}
 
 	return resp, nil
@@ -4215,8 +4971,10 @@ func sendEdgeTokenResponse(requestID string, stream pb.HelmsmanControl_ConnectSe
 	}
 }
 
-// processThumbnailUploadRequest resolves internal_name → playback_id, generates
+// processThumbnailUploadRequest resolves internal_name → stable ID, generates
 // presigned PUT URLs for each thumbnail file, and sends them back to Helmsman.
+// S3 keys use stable identifiers: stream_id (UUID) for live streams,
+// artifact_hash (32-char hex) for artifacts. Never playback_id (rotatable).
 func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	internalName := req.GetInternalName()
 	filePaths := req.GetFilePaths()
@@ -4232,20 +4990,21 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		return
 	}
 
-	// Resolve internal_name → playback_id from in-memory stream state
-	var playbackID string
+	// Resolve internal_name → stable S3 key identifier.
+	// Live streams: stream_id (UUID, never rotated).
+	// Artifacts: artifact_hash (32-char hex, immutable PK).
+	var thumbnailKey string
 	ss := state.DefaultManager().GetStreamState(internalName)
-	if ss != nil && ss.PlaybackID != "" {
-		playbackID = ss.PlaybackID
+	if ss != nil && ss.StreamID != "" {
+		thumbnailKey = ss.StreamID
 	} else if strings.Contains(internalName, "+") {
 		// Artifact thumbnail (e.g., vod+{artifactInternalName} from MistProcThumbs on DVR playback).
-		// Resolve internal_name → artifact_hash for S3 keying (matches Chandler URL construction).
 		artifactInternalName := mist.ExtractInternalName(internalName)
 		if conn := GetDB(); conn != nil {
 			err := conn.QueryRowContext(context.Background(),
 				`SELECT artifact_hash FROM foghorn.artifacts WHERE internal_name = $1`,
 				artifactInternalName,
-			).Scan(&playbackID)
+			).Scan(&thumbnailKey)
 			if err != nil {
 				logger.WithFields(logging.Fields{
 					"stream_name":   internalName,
@@ -4260,17 +5019,17 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		logger.WithFields(logging.Fields{
 			"stream_name":   internalName,
 			"internal_name": artifactInternalName,
-			"artifact_hash": playbackID,
+			"artifact_hash": thumbnailKey,
 		}).Info("Resolved artifact hash for thumbnail S3 key")
 	} else {
-		logger.WithField("internal_name", internalName).Warn("Stream not found or missing playback_id for thumbnail upload")
+		logger.WithField("internal_name", internalName).Warn("Stream not found or missing stream_id for thumbnail upload")
 		return
 	}
 
 	expiry := 15 * time.Minute
 	resp := &pb.ThumbnailUploadResponse{
-		PlaybackId: playbackID,
-		Uploads:    make([]*pb.ThumbnailUploadResponse_PresignedUpload, 0, len(filePaths)),
+		ThumbnailKey: thumbnailKey,
+		Uploads:      make([]*pb.ThumbnailUploadResponse_PresignedUpload, 0, len(filePaths)),
 	}
 
 	allowedThumbnailFiles := map[string]bool{
@@ -4285,7 +5044,7 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 			logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
 			continue
 		}
-		s3Key := "thumbnails/" + playbackID + "/" + fileName
+		s3Key := "thumbnails/" + thumbnailKey + "/" + fileName
 
 		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
 		if err != nil {
@@ -4319,56 +5078,32 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 	}
 }
 
-// processThumbnailUploaded updates Commodore with the Chandler asset URL after
-// Helmsman successfully uploads thumbnail files to S3.
-// For artifact thumbnails (DVR), marks has_thumbnails=true on the artifact instead.
+// processThumbnailUploaded handles confirmation after Helmsman uploads thumbnail
+// files to S3. For artifact thumbnails (DVR/clip), marks has_thumbnails=true.
+// Stream thumbnails need no DB update — the frontend resolves them via
+// deterministic Chandler URL from assetsDomain + stream_id.
 func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger logging.Logger) {
-	playbackID := req.GetPlaybackId()
+	thumbnailKey := req.GetThumbnailKey()
 	s3Keys := req.GetS3Keys()
 
 	logger.WithFields(logging.Fields{
-		"playback_id": playbackID,
-		"s3_keys":     s3Keys,
-		"node_id":     nodeID,
+		"thumbnail_key": thumbnailKey,
+		"s3_keys":       s3Keys,
+		"node_id":       nodeID,
 	}).Info("Thumbnail upload confirmed")
 
-	// Check if this is an artifact thumbnail (playbackID is actually an artifact hash)
-	if isArtifactThumbnail(playbackID) {
-		markArtifactHasThumbnails(playbackID, logger)
-		return
-	}
-
-	// Construct Chandler URL — Chandler serves /assets/{playbackId}/poster.jpg deterministically
-	chandlerBase := getChandlerBaseURL()
-	thumbnailURL := chandlerBase + "/assets/" + playbackID + "/poster.jpg"
-
-	if CommodoreClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := CommodoreClient.UpdateStreamThumbnail(ctx, playbackID, thumbnailURL); err != nil {
-			logger.WithFields(logging.Fields{
-				"playback_id":   playbackID,
-				"thumbnail_url": thumbnailURL,
-				"error":         err,
-			}).Error("Failed to update stream thumbnail in Commodore")
-			return
-		}
-		logger.WithFields(logging.Fields{
-			"playback_id":   playbackID,
-			"thumbnail_url": thumbnailURL,
-		}).Info("Stream thumbnail URL updated in Commodore")
-	} else {
-		logger.Warn("Commodore client not configured, cannot update stream thumbnail")
+	if isArtifactThumbnail(thumbnailKey) {
+		markArtifactHasThumbnails(thumbnailKey, logger)
 	}
 }
 
-// isArtifactThumbnail checks if the playbackID is actually an artifact hash.
-// Artifact hashes are 32-char hex strings (no dashes, unlike UUIDs).
-func isArtifactThumbnail(playbackID string) bool {
-	if len(playbackID) != 32 {
+// isArtifactThumbnail checks if the thumbnail key is an artifact hash.
+// Artifact hashes are 32-char hex strings. Stream IDs are UUIDs (36 chars with dashes).
+func isArtifactThumbnail(thumbnailKey string) bool {
+	if len(thumbnailKey) != 32 {
 		return false
 	}
-	for _, c := range playbackID {
+	for _, c := range thumbnailKey {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
@@ -4399,6 +5134,16 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 // getChandlerBaseURL returns the Chandler base URL from environment.
 func getChandlerBaseURL() string {
 	chandlerBase := strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL"))
+	if chandlerBase != "" {
+		return chandlerBase
+	}
+	if cached := cachedChandlerBaseURL(); cached != "" {
+		return cached
+	}
+	if derived := resolvePlatformChandlerBaseURL(); derived != "" {
+		cacheChandlerBaseURL(derived)
+		return derived
+	}
 	if chandlerBase == "" {
 		chandlerHost := strings.TrimSpace(os.Getenv("CHANDLER_HOST"))
 		chandlerPort := strings.TrimSpace(os.Getenv("CHANDLER_PORT"))

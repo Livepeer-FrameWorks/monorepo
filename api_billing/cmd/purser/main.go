@@ -87,10 +87,13 @@ func main() {
 
 	// Create Quartermaster gRPC client for tenant lookups (used by webhooks)
 	qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     quartermasterGRPCAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      quartermasterGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
@@ -99,10 +102,13 @@ func main() {
 
 	// Create Commodore gRPC client for stream termination on suspension
 	commodoreClient, err := commodoreclnt.NewGRPCClient(commodoreclnt.GRPCConfig{
-		GRPCAddr:     commodoreGRPCAddr,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      commodoreGRPCAddr,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Commodore gRPC client")
@@ -113,7 +119,9 @@ func main() {
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       5 * time.Second,
 		Source:        "purser",
 		ServiceToken:  serviceToken,
@@ -128,10 +136,13 @@ func main() {
 
 	// Create Periscope gRPC client for invoice enrichment (accurate unique counts, geo breakdown)
 	periscopeClient, err := periscopeclient.NewGRPCClient(periscopeclient.GRPCConfig{
-		GRPCAddr:     periscopeGRPCAddr,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      periscopeGRPCAddr,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Periscope gRPC client - invoice enrichment will be disabled")
@@ -223,6 +234,9 @@ func main() {
 			QuartermasterClient: qmGRPCClient,
 			CommodoreClient:     commodoreClient,
 			DecklogClient:       decklogClient,
+			CertFile:            config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:             config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure:       config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 
@@ -238,10 +252,13 @@ func main() {
 	// Must be launched BEFORE server.Start() which blocks
 	go func() {
 		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     quartermasterGRPCAddr,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
+			GRPCAddr:      quartermasterGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")

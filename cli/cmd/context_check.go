@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/pkg/grpcutil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
@@ -119,7 +119,14 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 		}
 		ctx, cancel := contextWithTimeout(timeout)
 		defer cancel()
-		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{AllowInsecure: true}, nil)
+		if err != nil {
+			r.OK = false
+			r.Status = "tls config error"
+			r.Error = err.Error()
+			return r
+		}
+		conn, err := grpc.NewClient(addr, transport)
 		if err != nil {
 			r.OK = false
 			r.Status = "dial error"

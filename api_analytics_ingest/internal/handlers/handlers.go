@@ -2435,7 +2435,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		filename,
 		"vod",    // content_type
 		stageStr, // stage
-		uint8(0), // progress_percent - not tracked for VOD
+		vodProgressPercent(vodData),
 		nilIfEmptyStringPtr(vodData.Error),
 		event.Timestamp,                        // requested_at
 		nilIfZeroInt64Ptr(vodData.StartedAt),   // started_at
@@ -2551,6 +2551,20 @@ func normalizeVodStage(status pb.VodLifecycleData_Status) string {
 	}
 }
 
+func vodProgressPercent(vodData *pb.VodLifecycleData) uint8 {
+	if vodData == nil {
+		return 0
+	}
+	progress := vodData.GetProgressPct()
+	if progress < 0 {
+		return 0
+	}
+	if progress > 100 {
+		return 100
+	}
+	return uint8(progress)
+}
+
 // processStorageLifecycle handles storage lifecycle events
 func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing storage lifecycle event: %s", event.EventID)
@@ -2586,7 +2600,8 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		INSERT INTO storage_events (
 			timestamp, tenant_id, stream_id, internal_name, asset_hash,
 			action, asset_type, size_bytes, s3_url, local_path,
-			node_id, duration_ms, warm_duration_ms, error
+			node_id, duration_ms, warm_duration_ms, error,
+			cluster_id, origin_cluster_id
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -2608,6 +2623,8 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		nilIfZeroInt64(sld.GetDurationMs()),
 		nilIfZeroInt64(sld.GetWarmDurationMs()),
 		nilIfEmptyString(sld.GetError()),
+		sld.GetClusterId(),
+		sld.GetOriginClusterId(),
 	); err != nil {
 		h.logger.Errorf("Failed to append to storage_events batch: %v", err)
 		return err
@@ -3145,7 +3162,9 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		"aggregate_count": rowCount,
 	}).Debug("Successfully processed service API request batch")
 
-	_ = h.processServiceAPIRequestBatchAudit(ctx, event, aggregatesSlice, sourceNode, timestamp)
+	if err := h.processServiceAPIRequestBatchAudit(ctx, event, aggregatesSlice, sourceNode, timestamp); err != nil {
+		h.logger.WithError(err).Warn("Failed to write API request batch audit to ClickHouse")
+	}
 
 	return nil
 }

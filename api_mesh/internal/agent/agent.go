@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 
 	"frameworks/api_mesh/internal/dns"
 	"frameworks/api_mesh/internal/wireguard"
+	navclient "frameworks/pkg/clients/navigator"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
 	infra "frameworks/pkg/models"
@@ -37,6 +39,15 @@ type Metrics struct {
 type meshClient interface {
 	SyncMesh(ctx context.Context, req *pb.InfrastructureSyncRequest) (*pb.InfrastructureSyncResponse, error)
 	BootstrapInfrastructureNode(ctx context.Context, req *pb.BootstrapInfrastructureNodeRequest) (*pb.BootstrapInfrastructureNodeResponse, error)
+}
+
+type serviceRegistryClient interface {
+	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error)
+}
+
+type certificateClient interface {
+	GetCABundle(ctx context.Context, req *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error)
+	IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error)
 }
 
 type dnsService interface {
@@ -67,13 +78,29 @@ type Agent struct {
 	consecutiveFails atomic.Int32
 	lastConfigMu     sync.Mutex
 	lastAppliedCfg   *wireguard.Config
+	registryClient   serviceRegistryClient
+	navigatorClient  certificateClient
+	certIssueToken   string
+	pkiBasePath      string
+	expectedServices []string
+	certSyncInterval time.Duration
+	lastCertSyncUnix atomic.Int64
 }
 
 type Config struct {
 	QuartermasterGRPCAddr string
 	ServiceToken          string // Or EnrollmentToken
 	EnrollmentToken       string // Bootstrap token for initial registration (optional)
+	AllowInsecure         bool
+	CACertFile            string
+	ServerName            string
+	NavigatorGRPCAddr     string
+	CertIssueToken        string
+	PKIBasePath           string
+	ExpectedServiceTypes  []string
+	CertSyncInterval      time.Duration
 	NodeIDPath            string
+	NodeID                string // Explicit identity from env; skips file-based generation when set
 	InterfaceName         string
 	NodeType              string
 	NodeName              string
@@ -83,9 +110,12 @@ type Config struct {
 	SyncInterval          time.Duration
 	SyncTimeout           time.Duration
 	DNSPort               int
+	DNSUpstreams          []string // Upstream resolver addresses for non-.internal queries
 	Logger                logging.Logger
 	Metrics               *Metrics
 	MeshClient            meshClient
+	ServiceRegistryClient serviceRegistryClient
+	NavigatorClient       certificateClient
 	WireGuardManager      wireguard.Manager
 	DNSService            dnsService
 }
@@ -105,6 +135,12 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if cfg.ListenPort == 0 {
 		cfg.ListenPort = 51820
+	}
+	if cfg.PKIBasePath == "" {
+		cfg.PKIBasePath = "/etc/frameworks/pki"
+	}
+	if cfg.CertSyncInterval == 0 {
+		cfg.CertSyncInterval = 5 * time.Minute
 	}
 	if cfg.NodeType == "" {
 		cfg.NodeType = infra.NodeTypeEdge
@@ -130,42 +166,77 @@ func New(cfg Config) (*Agent, error) {
 
 	// Initialize gRPC API Client
 	client := cfg.MeshClient
+	registry := cfg.ServiceRegistryClient
 	if client == nil {
-		var err error
-		client, err = qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     cfg.QuartermasterGRPCAddr,
-			ServiceToken: cfg.ServiceToken,
-			Logger:       cfg.Logger,
-			Timeout:      10 * time.Second,
+		qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:      cfg.QuartermasterGRPCAddr,
+			ServiceToken:  cfg.ServiceToken,
+			Logger:        cfg.Logger,
+			Timeout:       10 * time.Second,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CACertFile,
+			ServerName:    cfg.ServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create quartermaster gRPC client: %w", err)
+		}
+		client = qmGRPCClient
+		if registry == nil {
+			registry = qmGRPCClient
+		}
+	}
+	if registry == nil {
+		if qmRegistry, ok := client.(serviceRegistryClient); ok {
+			registry = qmRegistry
+		}
+	}
+
+	navigatorClient := cfg.NavigatorClient
+	if navigatorClient == nil && cfg.NavigatorGRPCAddr != "" {
+		var err error
+		navigatorClient, err = navclient.NewClient(navclient.Config{
+			Addr:          cfg.NavigatorGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        cfg.Logger,
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CACertFile,
+			ServerName:    cfg.ServerName,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create navigator gRPC client: %w", err)
 		}
 	}
 
 	// Initialize DNS Server
 	dnsSrv := cfg.DNSService
 	if dnsSrv == nil {
-		dnsSrv = dns.NewServer(cfg.Logger, cfg.DNSPort)
+		dnsSrv = dns.NewServer(cfg.Logger, cfg.DNSPort, cfg.DNSUpstreams...)
 	}
 
 	return &Agent{
-		logger:          cfg.Logger,
-		client:          client,
-		wgManager:       wg,
-		dnsServer:       dnsSrv,
-		interfaceName:   cfg.InterfaceName,
-		enrollmentToken: cfg.EnrollmentToken,
-		nodeType:        cfg.NodeType,
-		nodeName:        cfg.NodeName,
-		externalIP:      cfg.ExternalIP,
-		internalIP:      cfg.InternalIP,
-		listenPort:      cfg.ListenPort,
-		syncInterval:    cfg.SyncInterval,
-		syncTimeout:     cfg.SyncTimeout,
-		stopChan:        make(chan struct{}),
-		nodeID:          loadOrGenerateNodeID(cfg.NodeIDPath, cfg.Logger),
-		metrics:         cfg.Metrics,
+		logger:           cfg.Logger,
+		client:           client,
+		wgManager:        wg,
+		dnsServer:        dnsSrv,
+		interfaceName:    cfg.InterfaceName,
+		enrollmentToken:  cfg.EnrollmentToken,
+		nodeType:         cfg.NodeType,
+		nodeName:         cfg.NodeName,
+		externalIP:       cfg.ExternalIP,
+		internalIP:       cfg.InternalIP,
+		listenPort:       cfg.ListenPort,
+		syncInterval:     cfg.SyncInterval,
+		syncTimeout:      cfg.SyncTimeout,
+		stopChan:         make(chan struct{}),
+		nodeID:           resolveNodeID(cfg),
+		metrics:          cfg.Metrics,
+		registryClient:   registry,
+		navigatorClient:  navigatorClient,
+		certIssueToken:   cfg.CertIssueToken,
+		pkiBasePath:      cfg.PKIBasePath,
+		expectedServices: append([]string(nil), cfg.ExpectedServiceTypes...),
+		certSyncInterval: cfg.CertSyncInterval,
 	}, nil
 }
 
@@ -368,7 +439,172 @@ func (a *Agent) sync() {
 	}
 
 	a.syncSucceeded()
+	if err := a.syncInternalCertificates(); err != nil {
+		a.logger.WithError(err).Warn("Failed to sync internal TLS materials")
+	}
 	a.logger.Info("Successfully applied wireguard config")
+}
+
+func (a *Agent) syncInternalCertificates() error {
+	if a.navigatorClient == nil || strings.TrimSpace(a.certIssueToken) == "" {
+		return nil
+	}
+	if len(a.expectedServices) == 0 && a.registryClient == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
+	defer cancel()
+
+	serviceTypes, err := a.resolvedServiceTypes(ctx)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().Unix()
+	last := a.lastCertSyncUnix.Load()
+	if last > 0 && time.Duration(now-last)*time.Second < a.certSyncInterval && !a.missingInternalPKIMaterials(serviceTypes) {
+		return nil
+	}
+
+	bundleResp, err := a.navigatorClient.GetCABundle(ctx, &pb.GetCABundleRequest{})
+	if err != nil {
+		return fmt.Errorf("get ca bundle: %w", err)
+	}
+	if !bundleResp.GetFound() || strings.TrimSpace(bundleResp.GetCaPem()) == "" {
+		return fmt.Errorf("navigator returned no internal ca bundle")
+	}
+	if err := a.writePKIFile("ca.crt", bundleResp.GetCaPem(), 0644); err != nil {
+		return fmt.Errorf("write ca bundle: %w", err)
+	}
+
+	for _, serviceType := range serviceTypes {
+		resp, issueErr := a.navigatorClient.IssueInternalCert(ctx, &pb.IssueInternalCertRequest{
+			NodeId:      a.nodeID,
+			ServiceType: serviceType,
+			IssueToken:  a.certIssueToken,
+		})
+		if issueErr != nil {
+			return fmt.Errorf("issue internal cert for %s: %w", serviceType, issueErr)
+		}
+		if !resp.GetSuccess() {
+			return fmt.Errorf("issue internal cert for %s rejected: %s", serviceType, resp.GetError())
+		}
+		if err := a.writeServiceCertificate(serviceType, resp.GetCertPem(), resp.GetKeyPem()); err != nil {
+			return fmt.Errorf("write internal cert for %s: %w", serviceType, err)
+		}
+	}
+
+	a.lastCertSyncUnix.Store(now)
+	return nil
+}
+
+func (a *Agent) missingInternalPKIMaterials(serviceTypes []string) bool {
+	if !fileExistsAndNonEmpty(filepath.Join(a.pkiBasePath, "ca.crt")) {
+		return true
+	}
+	for _, serviceType := range serviceTypes {
+		if !fileExistsAndNonEmpty(filepath.Join(a.pkiBasePath, "services", serviceType, "tls.crt")) {
+			return true
+		}
+		if !fileExistsAndNonEmpty(filepath.Join(a.pkiBasePath, "services", serviceType, "tls.key")) {
+			return true
+		}
+	}
+	return false
+}
+
+func fileExistsAndNonEmpty(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Size() > 0
+}
+
+func (a *Agent) resolvedServiceTypes(ctx context.Context) ([]string, error) {
+	if len(a.expectedServices) == 0 {
+		return a.listNodeServiceTypes(ctx)
+	}
+
+	seen := make(map[string]struct{}, len(a.expectedServices))
+	serviceTypes := make([]string, 0, len(a.expectedServices))
+	for _, serviceType := range a.expectedServices {
+		serviceType = strings.TrimSpace(serviceType)
+		if serviceType == "" {
+			continue
+		}
+		if _, ok := seen[serviceType]; ok {
+			continue
+		}
+		seen[serviceType] = struct{}{}
+		serviceTypes = append(serviceTypes, serviceType)
+	}
+	sort.Strings(serviceTypes)
+	return serviceTypes, nil
+}
+
+func (a *Agent) listNodeServiceTypes(ctx context.Context) ([]string, error) {
+	pagination := &pb.CursorPaginationRequest{First: 200}
+	seen := make(map[string]struct{})
+	var services []string
+
+	for {
+		resp, err := a.registryClient.ListServiceInstances(ctx, "", "", a.nodeID, pagination)
+		if err != nil {
+			return nil, fmt.Errorf("list service instances for node %s: %w", a.nodeID, err)
+		}
+		for _, instance := range resp.GetInstances() {
+			serviceType := strings.TrimSpace(instance.GetServiceId())
+			if serviceType == "" || strings.EqualFold(instance.GetStatus(), "stopped") {
+				continue
+			}
+			if _, ok := seen[serviceType]; ok {
+				continue
+			}
+			seen[serviceType] = struct{}{}
+			services = append(services, serviceType)
+		}
+
+		page := resp.GetPagination()
+		if page == nil || !page.GetHasNextPage() || page.GetEndCursor() == "" {
+			break
+		}
+		endCursor := page.GetEndCursor()
+		pagination = &pb.CursorPaginationRequest{
+			First: 200,
+			After: &endCursor,
+		}
+	}
+
+	return services, nil
+}
+
+func (a *Agent) writeServiceCertificate(serviceType, certPEM, keyPEM string) error {
+	dir := filepath.Join(a.pkiBasePath, "services", serviceType)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := writeAtomicFile(filepath.Join(dir, "tls.crt"), []byte(certPEM), 0644); err != nil {
+		return err
+	}
+	return writeAtomicFile(filepath.Join(dir, "tls.key"), []byte(keyPEM), 0600)
+}
+
+func (a *Agent) writePKIFile(relativePath, content string, mode os.FileMode) error {
+	absPath := filepath.Join(a.pkiBasePath, relativePath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+		return err
+	}
+	return writeAtomicFile(absPath, []byte(content), mode)
+}
+
+func writeAtomicFile(absPath string, content []byte, mode os.FileMode) error {
+	tmpPath := absPath + ".tmp"
+	if err := os.WriteFile(tmpPath, content, mode); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, absPath)
 }
 
 func (a *Agent) clearMeshState(reason string) {
@@ -474,6 +710,38 @@ func (a *Agent) bootstrapNode(ctx context.Context) error {
 	}).Info("Node bootstrapped successfully")
 
 	return nil
+}
+
+func resolveNodeID(cfg Config) string {
+	if cfg.NodeID != "" {
+		if cfg.Logger != nil {
+			cfg.Logger.WithField("node_id", cfg.NodeID).Info("Using explicit Node ID from config")
+		}
+		// Persist so restarts are stable even if the env var disappears
+		persistNodeID(cfg.NodeIDPath, cfg.NodeID, cfg.Logger)
+		return cfg.NodeID
+	}
+	return loadOrGenerateNodeID(cfg.NodeIDPath, cfg.Logger)
+}
+
+func persistNodeID(path, id string, logger logging.Logger) {
+	if path == "" {
+		return
+	}
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			if logger != nil {
+				logger.WithError(err).Warn("Failed to create node_id directory for persistence")
+			}
+			return
+		}
+	}
+	if err := os.WriteFile(path, []byte(id), 0600); err != nil {
+		if logger != nil {
+			logger.WithError(err).Warn("Failed to persist explicit Node ID to disk")
+		}
+	}
 }
 
 func loadOrGenerateNodeID(path string, logger logging.Logger) string {

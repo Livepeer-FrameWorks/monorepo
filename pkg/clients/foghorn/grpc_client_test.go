@@ -1,6 +1,10 @@
 package foghorn
 
-import "testing"
+import (
+	"testing"
+
+	"frameworks/pkg/grpcutil"
+)
 
 func TestAddrIsFQDN(t *testing.T) {
 	cases := []struct {
@@ -19,8 +23,8 @@ func TestAddrIsFQDN(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := addrIsFQDN(tc.addr); got != tc.expected {
-				t.Fatalf("addrIsFQDN(%q) = %t, want %t", tc.addr, got, tc.expected)
+			if got := grpcutil.AddrIsFQDN(tc.addr); got != tc.expected {
+				t.Fatalf("AddrIsFQDN(%q) = %t, want %t", tc.addr, got, tc.expected)
 			}
 		})
 	}

@@ -40,7 +40,7 @@ func TestDiscoverServices_ReturnsInstances(t *testing.T) {
 	now := time.Now()
 	instanceCols := []string{
 		"id", "instance_id", "service_id", "cluster_id", "node_id",
-		"protocol", "advertise_host", "port", "health_endpoint_override", "status",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "metadata",
 		"last_health_check", "created_at", "updated_at",
 	}
 
@@ -49,7 +49,7 @@ func TestDiscoverServices_ReturnsInstances(t *testing.T) {
 		WithArgs("bridge", int32(51)). // limit = default 25 + 1
 		WillReturnRows(sqlmock.NewRows(instanceCols).
 			AddRow("uuid-1", "inst-bridge-1", "bridge", "cluster-1", "node-1",
-				"http", "10.0.0.1", int32(18000), nil, "running",
+				"http", "10.0.0.1", int32(18000), nil, "running", []byte(`{"wallet_address":"0xabc123"}`),
 				now, now, now))
 
 	resp, err := server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{
@@ -74,6 +74,9 @@ func TestDiscoverServices_ReturnsInstances(t *testing.T) {
 	if inst.GetPort() != 18000 {
 		t.Fatalf("expected port=18000, got %d", inst.GetPort())
 	}
+	if inst.GetMetadata()["wallet_address"] != "0xabc123" {
+		t.Fatalf("expected wallet metadata, got %v", inst.GetMetadata())
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
@@ -91,7 +94,7 @@ func TestDiscoverServices_EmptyResult(t *testing.T) {
 
 	instanceCols := []string{
 		"id", "instance_id", "service_id", "cluster_id", "node_id",
-		"protocol", "advertise_host", "port", "health_endpoint_override", "status",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "metadata",
 		"last_health_check", "created_at", "updated_at",
 	}
 

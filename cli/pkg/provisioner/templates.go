@@ -125,9 +125,17 @@ type CaddyfileData struct {
 	Email         string
 	RootDomain    string
 	ListenAddress string
-	// Routes maps service names to their local ports.
-	// Only services present in this map will have routes generated.
-	Routes map[string]int
+	Routes        []ProxyRoute
+}
+
+type ProxyRoute struct {
+	Name          string
+	ServerNames   []string
+	Upstream      string
+	UpgradeAll    bool
+	WebsocketPath string
+	GeoProxy      bool
+	ErrorPage     bool // serve maintenance page for nginx-generated 502/503/504
 }
 
 // GenerateSystemdUnit creates a systemd unit file
@@ -275,7 +283,9 @@ func GenerateCentralCaddyfile(data CaddyfileData) (string, error) {
 	}
 
 	const tmpl = `{ 
-	email {$CADDY_EMAIL}
+{{- if .Email }}
+	email {{.Email}}
+{{- end }}
 }
 
 # Health Check (always available)
@@ -285,70 +295,17 @@ func GenerateCentralCaddyfile(data CaddyfileData) (string, error) {
 	}
 }
 
-{{if .Routes.foredeck}}
-# Marketing Website (Root & www)
-{$CADDY_ROOT_DOMAIN}, www.{$CADDY_ROOT_DOMAIN} {
+{{range .Routes}}
+{{join .ServerNames ", "}} {
 	handle {
-		reverse_proxy localhost:{{.Routes.foredeck}}
-	}
-}
-{{end}}
-
-{{if .Routes.bridge}}
-# GraphQL API Gateway & Auth
-bridge.{$CADDY_ROOT_DOMAIN} {
-	handle {
-		reverse_proxy localhost:{{.Routes.bridge}}
-	}
-}
-{{end}}
-
-{{if .Routes.chartroom}}
-# Web Application (Dashboard)
-chartroom.{$CADDY_ROOT_DOMAIN} {
-	handle {
-		reverse_proxy localhost:{{.Routes.chartroom}}
-	}
-}
-{{end}}
-
-{{if .Routes.logbook}}
-# Documentation
-logbook.{$CADDY_ROOT_DOMAIN} {
-	handle {
-		reverse_proxy localhost:{{.Routes.logbook}}
-	}
-}
-{{end}}
-
-{{if .Routes.steward}}
-# Forms Service
-steward.{$CADDY_ROOT_DOMAIN} {
-	handle {
-		reverse_proxy localhost:{{.Routes.steward}}
-	}
-}
-{{end}}
-
-{{if .Routes.listmonk}}
-# Listmonk Service
-listmonk.{$CADDY_ROOT_DOMAIN} {
-	handle {
-		reverse_proxy localhost:{{.Routes.listmonk}}
-	}
-}
-{{end}}
-
-{{if .Routes.chatwoot}}
-# Support Chat
-chatwoot.{$CADDY_ROOT_DOMAIN} {
-	handle {
-		reverse_proxy localhost:{{.Routes.chatwoot}}
+		reverse_proxy {{.Upstream}}
 	}
 }
 {{end}}
 `
-	t, err := template.New("caddyfile").Parse(tmpl)
+	t, err := template.New("caddyfile").Funcs(template.FuncMap{
+		"join": strings.Join,
+	}).Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
@@ -364,8 +321,9 @@ chatwoot.{$CADDY_ROOT_DOMAIN} {
 // NginxConfData holds data for nginx.conf template
 type NginxConfData struct {
 	RootDomain    string
-	ListenAddress string         // e.g. "80"
-	Routes        map[string]int // service name -> port
+	ListenAddress string // e.g. "80"
+	GeoIPDBPath   string
+	Routes        []ProxyRoute
 }
 
 // GenerateNginxConf creates an nginx config with subdomain-based routing
@@ -378,8 +336,8 @@ func GenerateNginxConf(data NginxConfData) (string, error) {
 	}
 
 	const tmpl = `server {
-    listen {{.ListenAddress}} default_server;
-    server_name _;
+    listen 127.0.0.1:18090;
+    server_name frameworks-health.local;
 
     location /health {
         access_log off;
@@ -394,26 +352,22 @@ func GenerateNginxConf(data NginxConfData) (string, error) {
         deny all;
     }
 }
-{{if .Routes.foredeck}}
-server {
-    listen {{.ListenAddress}};
-    server_name {{.RootDomain}} www.{{.RootDomain}};
-
-    location / {
-        proxy_pass http://127.0.0.1:{{.Routes.foredeck}};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+{{if .GeoIPDBPath}}
+geoip2 {{.GeoIPDBPath}} {
+    $geo_lat location latitude;
+    $geo_lon location longitude;
 }
-{{end}}{{if .Routes.bridge}}
+{{end}}
+{{range .Routes}}
 server {
     listen {{.ListenAddress}};
-    server_name bridge.{{.RootDomain}};
-
-    location /graphql/ws {
-        proxy_pass http://127.0.0.1:{{.Routes.bridge}}/graphql/ws;
+    server_name {{join .ServerNames " "}};
+{{if .ErrorPage}}
+    error_page 502 503 504 /maintenance.html;
+{{end}}
+{{if .WebsocketPath}}
+    location {{.WebsocketPath}} {
+        proxy_pass http://{{.Upstream}}{{.WebsocketPath}};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -423,98 +377,36 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 86400;
     }
-
+{{end}}
     location / {
-        proxy_pass http://127.0.0.1:{{.Routes.bridge}};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-{{end}}{{if .Routes.chartroom}}
-server {
-    listen {{.ListenAddress}};
-    server_name chartroom.{{.RootDomain}};
-
-    location / {
-        proxy_pass http://127.0.0.1:{{.Routes.chartroom}};
+        proxy_pass http://{{.Upstream}};
+{{if .UpgradeAll}}
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+{{end}}
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+{{if .GeoProxy}}
+        proxy_set_header X-Latitude $geo_lat;
+        proxy_set_header X-Longitude $geo_lon;
+{{end}}
     }
-}
-{{end}}{{if .Routes.logbook}}
-server {
-    listen {{.ListenAddress}};
-    server_name logbook.{{.RootDomain}};
-
-    location / {
-        proxy_pass http://127.0.0.1:{{.Routes.logbook}};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+{{if .ErrorPage}}
+    location = /maintenance.html {
+        ssi on;
+        root /usr/share/nginx/html;
+        internal;
     }
-}
-{{end}}{{if .Routes.steward}}
-server {
-    listen {{.ListenAddress}};
-    server_name steward.{{.RootDomain}};
-
-    location / {
-        proxy_pass http://127.0.0.1:{{.Routes.steward}};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-{{end}}{{if .Routes.listmonk}}
-server {
-    listen {{.ListenAddress}};
-    server_name listmonk.{{.RootDomain}};
-
-    location / {
-        proxy_pass http://127.0.0.1:{{.Routes.listmonk}};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-{{end}}{{if .Routes.chatwoot}}
-server {
-    listen {{.ListenAddress}};
-    server_name chatwoot.{{.RootDomain}};
-
-    location /cable {
-        proxy_pass http://127.0.0.1:{{.Routes.chatwoot}}/cable;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400;
-    }
-
-    location / {
-        proxy_pass http://127.0.0.1:{{.Routes.chatwoot}};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+{{end}}
 }
 {{end}}`
 
-	t, err := template.New("nginx").Parse(tmpl)
+	t, err := template.New("nginx").Funcs(template.FuncMap{
+		"join": strings.Join,
+	}).Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
@@ -525,4 +417,118 @@ server {
 	}
 
 	return buf.String(), nil
+}
+
+func BuildLocalProxyRoutes(rootDomain string, localServices map[string]int) []ProxyRoute {
+	if rootDomain == "" || len(localServices) == 0 {
+		return nil
+	}
+
+	order := []string{"foredeck", "bridge", "chartroom", "logbook", "steward", "listmonk", "chatwoot", "foghorn"}
+	routes := make([]ProxyRoute, 0, len(localServices))
+	for _, name := range order {
+		port, ok := localServices[name]
+		if !ok || port == 0 {
+			continue
+		}
+
+		route := ProxyRoute{
+			Name:     name,
+			Upstream: fmt.Sprintf("127.0.0.1:%d", port),
+		}
+
+		switch name {
+		case "foredeck":
+			route.ServerNames = []string{rootDomain, "www." + rootDomain}
+		default:
+			route.ServerNames = []string{name + "." + rootDomain}
+		}
+
+		switch name {
+		case "bridge":
+			route.WebsocketPath = "/graphql/ws"
+		case "chartroom":
+			route.UpgradeAll = true
+		case "chatwoot":
+			route.WebsocketPath = "/cable"
+		case "foghorn":
+			route.GeoProxy = true
+		}
+
+		switch name {
+		case "foredeck", "chartroom", "logbook", "chatwoot", "listmonk":
+			route.ErrorPage = true
+		}
+
+		routes = append(routes, route)
+	}
+
+	return routes
+}
+
+func BuildExtraProxyRoutes(raw interface{}) []ProxyRoute {
+	items, ok := raw.([]map[string]interface{})
+	if !ok || len(items) == 0 {
+		list, ok := raw.([]interface{})
+		if !ok || len(list) == 0 {
+			return nil
+		}
+		items = make([]map[string]interface{}, 0, len(list))
+		for _, item := range list {
+			entry, ok := item.(map[string]interface{})
+			if ok {
+				items = append(items, entry)
+			}
+		}
+		if len(items) == 0 {
+			return nil
+		}
+	}
+
+	routes := make([]ProxyRoute, 0, len(items))
+	for _, item := range items {
+		name, _ := item["name"].(string) //nolint:errcheck // zero value acceptable
+		upstream, ok := item["upstream"].(string)
+		serverNames := stringifySlice(item["server_names"])
+		if !ok || upstream == "" || len(serverNames) == 0 {
+			continue
+		}
+		route := ProxyRoute{
+			Name:        name,
+			ServerNames: serverNames,
+			Upstream:    upstream,
+		}
+		if websocketPath, ok := item["websocket_path"].(string); ok && websocketPath != "" {
+			route.WebsocketPath = websocketPath
+		}
+		if geoProxy, ok := item["geo_proxy"].(bool); ok && geoProxy {
+			route.GeoProxy = true
+		}
+		if upgradeAll, ok := item["upgrade_all"].(bool); ok && upgradeAll {
+			route.UpgradeAll = true
+		}
+		if errorPage, ok := item["error_page"].(bool); ok && errorPage {
+			route.ErrorPage = true
+		}
+		routes = append(routes, route)
+	}
+
+	return routes
+}
+
+func stringifySlice(raw interface{}) []string {
+	switch values := raw.(type) {
+	case []string:
+		return values
+	case []interface{}:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok && text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }

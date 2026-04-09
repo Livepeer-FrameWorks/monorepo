@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net"
 	"net/http"
@@ -28,6 +29,8 @@ type Manager struct {
 	logger         logging.Logger
 	lastSeed       *pb.ConfigSeed
 	lastAppliedSum string
+	lastCaddyHash  string
+	caddyActivated bool
 }
 
 var manager *Manager
@@ -94,12 +97,28 @@ func (m *Manager) reconcile() {
 		return
 	}
 
+	if len(seed.GetCaBundle()) > 0 {
+		m.applyCABundle(seed.GetCaBundle())
+	}
+	m.applyTelemetryConfig(seed.GetTelemetry())
+
+	certChanged := false
 	if tls := seed.GetTls(); tls != nil {
-		m.applyTLSBundle(tls)
+		certChanged = m.applyTLSBundle(tls)
 	} else {
 		m.removeTLSBundle()
 	}
-	current, _ := m.mistClient.ConfigBackup()
+
+	if site := seed.GetSite(); site != nil {
+		m.activateCaddy(seed, certChanged)
+	} else if certChanged {
+		m.reloadCaddy(nil)
+	}
+	current, err := m.mistClient.ConfigBackup()
+	if err != nil {
+		m.logger.WithError(err).Warn("ConfigBackup failed, skipping reconcile")
+		return
+	}
 	desiredConfig := map[string]interface{}{}
 
 	// Location (from seed)
@@ -111,10 +130,7 @@ func (m *Manager) reconcile() {
 		}
 	}
 
-	// Prometheus passphrase (from env)
-	if prom := os.Getenv("MIST_PASSWORD"); prom != "" {
-		desiredConfig["prometheus"] = prom
-	}
+	desiredConfig["prometheus"] = mist.MetricsConfigValue
 
 	// Trusted proxies: localhost (IPv4 + IPv6) + "nginx" Docker service name
 	desiredConfig["trustedproxy"] = []string{"127.0.0.1", "::1", "localhost", "nginx"}
@@ -143,11 +159,16 @@ func (m *Manager) reconcile() {
 		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
 		"THUMBNAIL_UPDATED":                   []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
 		"STREAM_PROCESS":                      []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+"}}},
+		"PROCESS_EXIT":                        []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/process_exit"), "sync": false, "streams": []string{"processing+"}}},
 	}
 	desiredConfig["triggers"] = triggers
 
-	_ = m.ensureProtocols(current)
-	_ = m.ensureStreams(seed)
+	if err := m.ensureProtocols(current); err != nil {
+		m.logger.WithError(err).Warn("ensureProtocols failed")
+	}
+	if err := m.ensureStreams(seed); err != nil {
+		m.logger.WithError(err).Warn("ensureStreams failed")
+	}
 
 	if len(desiredConfig) > 0 {
 		if _, err := m.mistClient.UpdateConfig(desiredConfig); err != nil {
@@ -155,7 +176,9 @@ func (m *Manager) reconcile() {
 		}
 	}
 
-	_ = m.mistClient.Save()
+	if err := m.mistClient.Save(); err != nil {
+		m.logger.WithError(err).Warn("Mist config save failed")
+	}
 
 	// Record applied signature
 	if sum := hashSeed(seed); sum != "" {
@@ -165,35 +188,91 @@ func (m *Manager) reconcile() {
 	}
 }
 
-func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) {
+func grpcCABundlePath() string {
+	if path := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH")); path != "" {
+		return path
+	}
+	return "/etc/frameworks/pki/ca.crt"
+}
+
+func edgeTelemetryTokenPath() string {
+	return "/etc/frameworks/telemetry/token"
+}
+
+func (m *Manager) applyTelemetryConfig(cfg *pb.EdgeTelemetryConfig) bool {
+	tokenPath := edgeTelemetryTokenPath()
+	if cfg == nil || !cfg.GetEnabled() || strings.TrimSpace(cfg.GetBearerToken()) == "" {
+		if err := os.Remove(tokenPath); err != nil && !os.IsNotExist(err) {
+			m.logger.WithError(err).WithField("path", tokenPath).Warn("Failed to remove edge telemetry token")
+			return false
+		}
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0o755); err != nil {
+		m.logger.WithError(err).Warn("Failed to create edge telemetry token directory")
+		return false
+	}
+	if err := atomicWriteFile(tokenPath, []byte(cfg.GetBearerToken()+"\n"), 0o600); err != nil {
+		m.logger.WithError(err).WithField("path", tokenPath).Warn("Failed to write edge telemetry token")
+		return false
+	}
+	m.logger.WithFields(logging.Fields{
+		"path":       tokenPath,
+		"expires_at": cfg.GetExpiresAt(),
+	}).Info("Applied edge telemetry token from ConfigSeed")
+	return true
+}
+
+func (m *Manager) applyCABundle(bundle []byte) bool {
+	caPath := grpcCABundlePath()
+	if len(bundle) == 0 {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(caPath), 0o755); err != nil {
+		m.logger.WithError(err).Warn("Failed to create gRPC CA bundle directory")
+		return false
+	}
+	if existing, err := os.ReadFile(caPath); err == nil && bytes.Equal(existing, bundle) {
+		return false
+	}
+	if err := os.WriteFile(caPath, bundle, 0o600); err != nil {
+		m.logger.WithError(err).Warn("Failed to write gRPC CA bundle")
+		return false
+	}
+	m.logger.WithField("path", caPath).Info("Applied gRPC CA bundle from ConfigSeed")
+	return true
+}
+
+// applyTLSBundle writes cert/key files to disk. Returns true if files were changed.
+func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) bool {
 	certPath := "/etc/frameworks/certs/cert.pem"
 	keyPath := "/etc/frameworks/certs/key.pem"
 
 	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
 		m.logger.WithError(err).Warn("Failed to create TLS certificate directory")
-		return
+		return false
 	}
 
 	certBytes := []byte(bundle.GetCertPem())
 	keyBytes := []byte(bundle.GetKeyPem())
 	if len(certBytes) == 0 || len(keyBytes) == 0 {
 		m.logger.Warn("Received empty TLS bundle in ConfigSeed")
-		return
+		return false
 	}
 
 	if existing, err := os.ReadFile(certPath); err == nil && bytes.Equal(existing, certBytes) {
 		if existingKey, keyErr := os.ReadFile(keyPath); keyErr == nil && bytes.Equal(existingKey, keyBytes) {
-			return
+			return false
 		}
 	}
 
 	if err := os.WriteFile(certPath, certBytes, 0o600); err != nil {
 		m.logger.WithError(err).Warn("Failed to write TLS certificate file")
-		return
+		return false
 	}
 	if err := os.WriteFile(keyPath, keyBytes, 0o600); err != nil {
 		m.logger.WithError(err).Warn("Failed to write TLS key file")
-		return
+		return false
 	}
 
 	m.logger.WithFields(logging.Fields{
@@ -201,7 +280,7 @@ func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) {
 		"expires_at": bundle.GetExpiresAt(),
 	}).Info("Applied TLS certificate bundle from ConfigSeed")
 
-	m.reloadCaddy()
+	return true
 }
 
 func (m *Manager) removeTLSBundle() {
@@ -224,15 +303,79 @@ func (m *Manager) removeTLSBundle() {
 
 	if certGone {
 		m.logger.Info("Removed TLS certificate files")
-		m.reloadCaddy()
+		m.reloadCaddy(nil)
 	}
 }
 
+// activateCaddy renders the production Caddyfile from ConfigSeed and pushes it to Caddy.
+func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) {
+	site := seed.GetSite()
+	if site == nil || site.GetSiteAddress() == "" {
+		if certChanged {
+			m.reloadCaddy(nil)
+		}
+		return
+	}
+
+	params := CaddyfileParams{
+		SiteAddress:      site.GetSiteAddress(),
+		AcmeEmail:        site.GetAcmeEmail(),
+		CaddyAdminAddr:   caddyAdminAddr(),
+		HelmsmanUpstream: envDefault("HELMSMAN_WEBHOOK_URL", "http://localhost:18007"),
+		ChandlerUpstream: envDefault("CHANDLER_URL", "chandler:18020"),
+		MistUpstream:     envDefault("MISTSERVER_URL", "http://mistserver:8080"),
+	}
+	// Strip http:// prefix for Caddy reverse_proxy upstream
+	params.HelmsmanUpstream = strings.TrimPrefix(params.HelmsmanUpstream, "http://")
+	params.MistUpstream = strings.TrimPrefix(params.MistUpstream, "http://")
+
+	if seed.GetTls() != nil {
+		params.TLSCertPath = "/etc/frameworks/certs/cert.pem"
+		params.TLSKeyPath = "/etc/frameworks/certs/key.pem"
+	}
+
+	rendered, err := RenderCaddyfile(params)
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to render production Caddyfile")
+		return
+	}
+
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(rendered)))
+	if hash == m.lastCaddyHash && !certChanged {
+		return
+	}
+
+	if m.reloadCaddy([]byte(rendered)) {
+		m.lastCaddyHash = hash
+		m.caddyActivated = true
+		m.logger.WithField("site_address", site.GetSiteAddress()).Info("Activated production Caddyfile via ConfigSeed")
+	}
+}
+
+func caddyAdminAddr() string {
+	if sock := os.Getenv("CADDY_ADMIN_SOCKET"); sock != "" {
+		return "unix/" + sock
+	}
+	if url := os.Getenv("CADDY_ADMIN_URL"); url != "" {
+		return url
+	}
+	return "localhost:2019"
+}
+
+func envDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 // reloadCaddy triggers a Caddy config reload via the admin API.
+// If content is provided, it is POSTed directly. Otherwise reads from /etc/caddy/Caddyfile.
 //
 // Docker: CADDY_ADMIN_SOCKET=/run/caddy/admin.sock (Unix socket, no network exposure)
 // Bare metal: CADDY_ADMIN_URL=http://localhost:2019 (loopback only)
-func (m *Manager) reloadCaddy() {
+// reloadCaddy returns true on success.
+func (m *Manager) reloadCaddy(content []byte) bool {
 	socketPath := os.Getenv("CADDY_ADMIN_SOCKET")
 	adminURL := os.Getenv("CADDY_ADMIN_URL")
 
@@ -254,34 +397,39 @@ func (m *Manager) reloadCaddy() {
 		client = &http.Client{Timeout: 5 * time.Second}
 		baseURL = strings.TrimRight(adminURL, "/")
 	default:
-		return
+		return false
 	}
 
-	body, err := os.ReadFile("/etc/caddy/Caddyfile")
-	if err != nil {
-		m.logger.WithError(err).Warn("Failed to read Caddyfile for reload")
-		return
+	body := content
+	if body == nil {
+		var err error
+		body, err = os.ReadFile("/etc/caddy/Caddyfile")
+		if err != nil {
+			m.logger.WithError(err).Warn("Failed to read Caddyfile for reload")
+			return false
+		}
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+"/load", bytes.NewReader(body))
 	if err != nil {
 		m.logger.WithError(err).Warn("Failed to create Caddy reload request")
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "text/caddyfile")
 
 	resp, err := client.Do(req)
 	if err != nil {
 		m.logger.WithError(err).Warn("Failed to reload Caddy configuration")
-		return
+		return false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		m.logger.Info("Caddy configuration reloaded after TLS certificate update")
-	} else {
-		m.logger.WithField("status", resp.StatusCode).Warn("Caddy reload returned non-200")
+		m.logger.Info("Caddy configuration reloaded")
+		return true
 	}
+	m.logger.WithField("status", resp.StatusCode).Warn("Caddy reload returned non-200")
+	return false
 }
 
 func (m *Manager) ensureProtocols(current map[string]interface{}) error {
@@ -523,4 +671,38 @@ func hashSeed(seed *pb.ConfigSeed) string {
 	b, _ := json.Marshal(flat)
 	sum := sha256.Sum256(b)
 	return string(sum[:])
+}
+
+func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".frameworks-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }

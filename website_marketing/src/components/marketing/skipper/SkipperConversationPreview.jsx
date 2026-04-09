@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import config from "../../../config";
 
 const domain = config.domain || "frameworks.network";
-const gqlEndpoint = config.gatewayUrl || "/graphql";
+const gqlEndpoint = config.gatewayUrl;
 
 const badgeTooltips = {
   verified: "Confirmed from official FrameWorks documentation",

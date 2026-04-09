@@ -23,6 +23,7 @@ import (
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/dns"
 	"frameworks/pkg/geoip"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
@@ -52,6 +53,7 @@ type QuartermasterServer struct {
 	pb.UnimplementedClusterServiceServer
 	pb.UnimplementedMeshServiceServer
 	pb.UnimplementedServiceRegistryServiceServer
+	pb.UnimplementedIngressServiceServer
 	db              *sql.DB
 	logger          logging.Logger
 	navigatorClient *navigator.Client
@@ -84,6 +86,78 @@ func mapToStruct(m map[string]interface{}) *structpb.Struct {
 		return nil
 	}
 	return s
+}
+
+func marshalStringMapJSON(m map[string]string) (*string, error) {
+	if len(m) == 0 {
+		return nil, nil
+	}
+
+	encoded, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	value := string(encoded)
+	return &value, nil
+}
+
+func marshalStringSliceJSON(values []string) (*string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return nil, err
+	}
+
+	value := string(encoded)
+	return &value, nil
+}
+
+func unmarshalStringMapJSON(raw []byte) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var metadata map[string]string
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
+}
+
+func unmarshalStringSliceJSON(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil
+	}
+	return values
+}
+
+func normalizeStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	slices.Sort(normalized)
+	return slices.Compact(normalized)
 }
 
 func buildAdvertiseAddr(host sql.NullString, port sql.NullInt32) (string, bool) {
@@ -723,6 +797,14 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 
 	healthEndpoint := req.HealthEndpoint
 	port := req.GetPort()
+	metadataJSON, err := marshalStringMapJSON(req.GetMetadata())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid metadata: %v", err)
+	}
+	if req.GetClearMetadata() {
+		emptyMetadata := "{}"
+		metadataJSON = &emptyMetadata
+	}
 
 	// 5a. Auto-associate with node by IP when no explicit node_id provided.
 	// If advHost is a hostname, resolve it to an IP first.
@@ -779,14 +861,15 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			    health_endpoint_override = $2,
 			    version = $3,
 			    node_id = COALESCE($4, node_id),
+			    metadata = COALESCE($5::jsonb, metadata),
 			    status = 'running',
 			    health_status = 'unknown',
 			    started_at = COALESCE(started_at, NOW()),
 			    stopped_at = NULL,
 			    last_health_check = NULL,
 			    updated_at = NOW()
-			WHERE id = $5::uuid
-		`, advHost, healthEndpoint, req.GetVersion(), resolvedNodeID, existingID)
+			WHERE id = $6::uuid
+		`, advHost, healthEndpoint, req.GetVersion(), resolvedNodeID, metadataJSON, existingID)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to update service instance")
 			return nil, status.Errorf(codes.Internal, "failed to update service instance: %v", err)
@@ -796,9 +879,9 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		// Insert new row
 		_, err = exec.ExecContext(ctx, `
 			INSERT INTO quartermaster.service_instances
-				(instance_id, cluster_id, node_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, status, health_status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running', 'unknown', NOW(), NOW())
-		`, instanceID, clusterID, resolvedNodeID, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port)
+				(instance_id, cluster_id, node_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, metadata, status, health_status, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::jsonb, '{}'::jsonb), 'running', 'unknown', NOW(), NOW())
+		`, instanceID, clusterID, resolvedNodeID, serviceID, proto, advHost, healthEndpoint, req.GetVersion(), port, metadataJSON)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to create service instance")
 			return nil, status.Errorf(codes.Internal, "failed to create service instance: %v", err)
@@ -1016,7 +1099,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 
 	query := fmt.Sprintf(`
 		SELECT si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id,
-		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status,
+		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, COALESCE(si.metadata, '{}'::jsonb),
 		       si.last_health_check, si.created_at, si.updated_at
 		FROM quartermaster.service_instances si
 		JOIN quartermaster.services s ON si.service_id = s.service_id
@@ -1037,11 +1120,12 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		var inst pb.ServiceInstance
 		var nodeID, host, healthEndpoint sql.NullString
 		var lastHealthCheck sql.NullTime
+		var metadataJSON []byte
 		var createdAt, updatedAt time.Time
 
 		err := rows.Scan(
 			&inst.Id, &inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &nodeID,
-			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &inst.Status,
+			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &inst.Status, &metadataJSON,
 			&lastHealthCheck, &createdAt, &updatedAt,
 		)
 		if err != nil {
@@ -1060,6 +1144,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		if lastHealthCheck.Valid {
 			inst.LastHealthCheck = timestamppb.New(lastHealthCheck.Time)
 		}
+		inst.Metadata = unmarshalStringMapJSON(metadataJSON)
 		inst.CreatedAt = timestamppb.New(createdAt)
 		inst.UpdatedAt = timestamppb.New(updatedAt)
 
@@ -1288,21 +1373,26 @@ func (s *QuartermasterServer) AssignFoghornToCluster(ctx context.Context, req *p
 	if ids := req.GetFoghornInstanceIds(); len(ids) > 0 {
 		// Assign specific Foghorn instances
 		for _, instID := range ids {
-			_, err := s.db.ExecContext(ctx, `
+			res, err := s.db.ExecContext(ctx, `
 				INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
 				SELECT si.id, $1
 				FROM quartermaster.service_instances si
 				JOIN quartermaster.services svc ON svc.service_id = si.service_id
-				WHERE si.id = $2::uuid AND svc.type = 'foghorn'
+				WHERE si.id = $2::uuid AND svc.type = 'foghorn' AND si.status = 'running'
 				ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
 			`, clusterID, instID)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to assign instance %s: %v", instID, err)
 			}
+			if affected, rowsErr := res.RowsAffected(); rowsErr != nil {
+				return nil, status.Errorf(codes.Internal, "failed to confirm assignment for instance %s: %v", instID, rowsErr)
+			} else if affected == 0 {
+				return nil, status.Errorf(codes.NotFound, "foghorn instance %s not found or not running", instID)
+			}
 		}
 	} else if count := req.GetCount(); count > 0 {
 		// Pick N Foghorns with fewest active assignments
-		_, err := s.db.ExecContext(ctx, `
+		res, err := s.db.ExecContext(ctx, `
 			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
 			SELECT si.id, $1
 			FROM quartermaster.service_instances si
@@ -1317,6 +1407,11 @@ func (s *QuartermasterServer) AssignFoghornToCluster(ctx context.Context, req *p
 		`, clusterID, count)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to assign foghorns: %v", err)
+		}
+		if affected, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to confirm foghorn assignment: %v", rowsErr)
+		} else if affected < int64(count) {
+			return nil, status.Errorf(codes.FailedPrecondition, "assigned %d foghorns, requested %d", affected, count)
 		}
 	} else {
 		return nil, status.Error(codes.InvalidArgument, "provide foghorn_instance_ids or count")
@@ -4231,10 +4326,19 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 	}
 	expiresAt := time.Now().Add(duration)
 
+	var metadataJSON interface{} = nil
+	if metadata := req.GetMetadata(); metadata != nil && len(metadata.GetFields()) > 0 {
+		encoded, marshalErr := json.Marshal(metadata.AsMap())
+		if marshalErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid metadata: %v", marshalErr)
+		}
+		metadataJSON = string(encoded)
+	}
+
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.bootstrap_tokens (id, name, token_hash, token_prefix, kind, tenant_id, cluster_id, expected_ip, usage_limit, usage_count, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, NOW())
-	`, tokenID, name, hashBootstrapToken(tokenValue), tokenPrefix(tokenValue), kind, req.TenantId, req.ClusterId, req.ExpectedIp, req.UsageLimit, expiresAt)
+		INSERT INTO quartermaster.bootstrap_tokens (id, name, token_hash, token_prefix, kind, tenant_id, cluster_id, expected_ip, metadata, usage_limit, usage_count, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::jsonb, '{}'::jsonb), $10, 0, $11, NOW())
+	`, tokenID, name, hashBootstrapToken(tokenValue), tokenPrefix(tokenValue), kind, req.TenantId, req.ClusterId, req.ExpectedIp, metadataJSON, req.UsageLimit, expiresAt)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
@@ -4249,6 +4353,7 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 			TenantId:   req.TenantId,
 			ClusterId:  req.ClusterId,
 			ExpectedIp: req.ExpectedIp,
+			Metadata:   req.GetMetadata(),
 			UsageLimit: req.UsageLimit,
 			UsageCount: 0,
 			ExpiresAt:  timestamppb.New(expiresAt),
@@ -4413,12 +4518,13 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	var usageLimit sql.NullInt32
 	var usageCount int32
 	var usedAt sql.NullTime
+	var metadataJSON []byte
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at
+		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at, COALESCE(metadata, '{}'::jsonb)
 		FROM quartermaster.bootstrap_tokens
 		WHERE token_hash = $1
-	`, hashBootstrapToken(token)).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt)
+	`, hashBootstrapToken(token)).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt, &metadataJSON)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateBootstrapTokenResponse{Valid: false, Reason: "not_found"}, nil
@@ -4481,6 +4587,12 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	}
 	if clusterID.Valid {
 		resp.ClusterId = clusterID.String
+	}
+	if len(metadataJSON) > 0 {
+		var metadataMap map[string]interface{}
+		if json.Unmarshal(metadataJSON, &metadataMap) == nil && len(metadataMap) > 0 {
+			resp.Metadata = mapToStruct(metadataMap)
+		}
 	}
 	return resp, nil
 }
@@ -4904,7 +5016,7 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 
 	query := fmt.Sprintf(`
 		SELECT id, instance_id, service_id, cluster_id, node_id, protocol, advertise_host, port,
-		       health_endpoint_override, version, process_id, container_id, status, health_status,
+		       health_endpoint_override, version, process_id, container_id, status, health_status, COALESCE(metadata, '{}'::jsonb),
 		       started_at, stopped_at, last_health_check, created_at, updated_at
 		FROM quartermaster.service_instances
 		%s
@@ -4924,11 +5036,12 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 		var nodeID, host, healthEndpoint, version, containerID sql.NullString
 		var processID sql.NullInt32
 		var startedAt, stoppedAt, lastHealthCheck sql.NullTime
+		var metadataJSON []byte
 		var createdAt, updatedAt time.Time
 
 		err := rows.Scan(&inst.Id, &inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &nodeID,
 			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &version, &processID, &containerID,
-			&inst.Status, &inst.HealthStatus, &startedAt, &stoppedAt, &lastHealthCheck, &createdAt, &updatedAt)
+			&inst.Status, &inst.HealthStatus, &metadataJSON, &startedAt, &stoppedAt, &lastHealthCheck, &createdAt, &updatedAt)
 		if err != nil {
 			s.logger.WithError(err).Warn("Failed to scan service instance row")
 			continue
@@ -4949,6 +5062,7 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 		if processID.Valid {
 			inst.ProcessId = &processID.Int32
 		}
+		inst.Metadata = unmarshalStringMapJSON(metadataJSON)
 		if containerID.Valid {
 			inst.ContainerId = &containerID.String
 		}
@@ -5024,6 +5138,363 @@ func (s *QuartermasterServer) ListServicesHealth(ctx context.Context, req *pb.Li
 // GetServiceHealth returns health of specific service instances
 func (s *QuartermasterServer) GetServiceHealth(ctx context.Context, req *pb.GetServiceHealthRequest) (*pb.ListServicesHealthResponse, error) {
 	return s.getServicesHealth(ctx, req.GetServiceId())
+}
+
+func (s *QuartermasterServer) UpsertTLSBundle(ctx context.Context, req *pb.UpsertTLSBundleRequest) (*pb.TLSBundleResponse, error) {
+	if req.GetBundle() == nil {
+		return nil, status.Error(codes.InvalidArgument, "bundle is required")
+	}
+
+	bundle := req.GetBundle()
+	domains := normalizeStringSlice(bundle.GetDomains())
+	if strings.TrimSpace(bundle.GetBundleId()) == "" || strings.TrimSpace(bundle.GetClusterId()) == "" || len(domains) == 0 || strings.TrimSpace(bundle.GetEmail()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "bundle_id, cluster_id, domains, and email are required")
+	}
+
+	domainsJSON, err := marshalStringSliceJSON(domains)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "encode domains: %v", err)
+	}
+
+	var metadataJSON *string
+	if bundle.GetMetadata() != nil {
+		encoded, marshalErr := json.Marshal(bundle.GetMetadata().AsMap())
+		if marshalErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "encode metadata: %v", marshalErr)
+		}
+		value := string(encoded)
+		metadataJSON = &value
+	}
+
+	query := `
+		INSERT INTO quartermaster.tls_bundles (bundle_id, cluster_id, domains, issuer, email, metadata, updated_at)
+		VALUES ($1, $2, COALESCE($3, '[]')::jsonb, $4, $5, COALESCE($6, '{}')::jsonb, NOW())
+		ON CONFLICT (bundle_id) DO UPDATE SET
+			cluster_id = EXCLUDED.cluster_id,
+			domains = EXCLUDED.domains,
+			issuer = EXCLUDED.issuer,
+			email = EXCLUDED.email,
+			metadata = EXCLUDED.metadata,
+			updated_at = NOW()
+		RETURNING id, created_at, updated_at
+	`
+
+	var id string
+	var createdAt, updatedAt time.Time
+	if err := s.db.QueryRowContext(ctx, query,
+		bundle.GetBundleId(), bundle.GetClusterId(), domainsJSON, bundle.GetIssuer(), bundle.GetEmail(), metadataJSON,
+	).Scan(&id, &createdAt, &updatedAt); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.TLSBundleResponse{
+		Bundle: &pb.TLSBundle{
+			Id:        id,
+			BundleId:  bundle.GetBundleId(),
+			ClusterId: bundle.GetClusterId(),
+			Domains:   domains,
+			Issuer:    bundle.GetIssuer(),
+			Email:     bundle.GetEmail(),
+			Metadata:  bundle.GetMetadata(),
+			CreatedAt: timestamppb.New(createdAt),
+			UpdatedAt: timestamppb.New(updatedAt),
+		},
+	}, nil
+}
+
+func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTLSBundlesRequest) (*pb.ListTLSBundlesResponse, error) {
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "created_at",
+		IDColumn:        "id",
+	}
+
+	where := "WHERE 1=1"
+	countWhere := "WHERE 1=1"
+	args := []interface{}{}
+	countArgs := []interface{}{}
+	argIdx := 1
+
+	if req.GetClusterId() != "" {
+		where += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		args = append(args, req.GetClusterId())
+		countArgs = append(countArgs, req.GetClusterId())
+		argIdx++
+	}
+
+	var total int32
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.tls_bundles %s`, countWhere)
+	err = s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, bundle_id, cluster_id, domains, issuer, email, COALESCE(metadata, '{}'::jsonb), created_at, updated_at
+		FROM quartermaster.tls_bundles
+		%s
+		%s
+		LIMIT %d
+	`, where, builder.OrderBy(params), params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var bundles []*pb.TLSBundle
+	for rows.Next() {
+		var bundle pb.TLSBundle
+		var domainsJSON, metadataJSON []byte
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&bundle.Id, &bundle.BundleId, &bundle.ClusterId, &domainsJSON, &bundle.Issuer, &bundle.Email, &metadataJSON, &createdAt, &updatedAt); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		}
+		bundle.Domains = unmarshalStringSliceJSON(domainsJSON)
+		if len(metadataJSON) > 0 {
+			var metadataMap map[string]interface{}
+			if json.Unmarshal(metadataJSON, &metadataMap) == nil {
+				bundle.Metadata = mapToStruct(metadataMap)
+			}
+		}
+		bundle.CreatedAt = timestamppb.New(createdAt)
+		bundle.UpdatedAt = timestamppb.New(updatedAt)
+		bundles = append(bundles, &bundle)
+	}
+
+	hasMore := len(bundles) > params.Limit
+	if hasMore {
+		bundles = bundles[:params.Limit]
+	}
+	if params.Direction == pagination.Backward && len(bundles) > 0 {
+		for i, j := 0, len(bundles)-1; i < j; i, j = i+1, j-1 {
+			bundles[i], bundles[j] = bundles[j], bundles[i]
+		}
+	}
+
+	var startCursor, endCursor string
+	if len(bundles) > 0 {
+		startCursor = pagination.EncodeCursor(bundles[0].CreatedAt.AsTime(), bundles[0].Id)
+		endCursor = pagination.EncodeCursor(bundles[len(bundles)-1].CreatedAt.AsTime(), bundles[len(bundles)-1].Id)
+	}
+
+	resp := &pb.ListTLSBundlesResponse{
+		Bundles:    bundles,
+		ClusterId:  req.GetClusterId(),
+		Pagination: &pb.CursorPaginationResponse{TotalCount: total},
+	}
+	if startCursor != "" {
+		resp.Pagination.StartCursor = &startCursor
+	}
+	if endCursor != "" {
+		resp.Pagination.EndCursor = &endCursor
+	}
+	if params.Direction == pagination.Forward {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = params.Cursor != nil
+	} else {
+		resp.Pagination.HasPreviousPage = hasMore
+		resp.Pagination.HasNextPage = params.Cursor != nil
+	}
+
+	return resp, nil
+}
+
+func (s *QuartermasterServer) UpsertIngressSite(ctx context.Context, req *pb.UpsertIngressSiteRequest) (*pb.IngressSiteResponse, error) {
+	if req.GetSite() == nil {
+		return nil, status.Error(codes.InvalidArgument, "site is required")
+	}
+
+	site := req.GetSite()
+	domains := normalizeStringSlice(site.GetDomains())
+	if strings.TrimSpace(site.GetSiteId()) == "" || strings.TrimSpace(site.GetClusterId()) == "" || strings.TrimSpace(site.GetNodeId()) == "" || len(domains) == 0 || strings.TrimSpace(site.GetTlsBundleId()) == "" || strings.TrimSpace(site.GetKind()) == "" || strings.TrimSpace(site.GetUpstream()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "site_id, cluster_id, node_id, domains, tls_bundle_id, kind, and upstream are required")
+	}
+
+	domainsJSON, err := marshalStringSliceJSON(domains)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "encode domains: %v", err)
+	}
+
+	var metadataJSON *string
+	if site.GetMetadata() != nil {
+		encoded, marshalErr := json.Marshal(site.GetMetadata().AsMap())
+		if marshalErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "encode metadata: %v", marshalErr)
+		}
+		value := string(encoded)
+		metadataJSON = &value
+	}
+
+	query := `
+		INSERT INTO quartermaster.ingress_sites (site_id, cluster_id, node_id, domains, tls_bundle_id, kind, upstream, metadata, updated_at)
+		VALUES ($1, $2, $3, COALESCE($4, '[]')::jsonb, $5, $6, $7, COALESCE($8, '{}')::jsonb, NOW())
+		ON CONFLICT (site_id) DO UPDATE SET
+			cluster_id = EXCLUDED.cluster_id,
+			node_id = EXCLUDED.node_id,
+			domains = EXCLUDED.domains,
+			tls_bundle_id = EXCLUDED.tls_bundle_id,
+			kind = EXCLUDED.kind,
+			upstream = EXCLUDED.upstream,
+			metadata = EXCLUDED.metadata,
+			updated_at = NOW()
+		RETURNING id, created_at, updated_at
+	`
+
+	var id string
+	var createdAt, updatedAt time.Time
+	if err := s.db.QueryRowContext(ctx, query,
+		site.GetSiteId(), site.GetClusterId(), site.GetNodeId(), domainsJSON, site.GetTlsBundleId(), site.GetKind(), site.GetUpstream(), metadataJSON,
+	).Scan(&id, &createdAt, &updatedAt); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.IngressSiteResponse{
+		Site: &pb.IngressSite{
+			Id:          id,
+			SiteId:      site.GetSiteId(),
+			ClusterId:   site.GetClusterId(),
+			NodeId:      site.GetNodeId(),
+			Domains:     domains,
+			TlsBundleId: site.GetTlsBundleId(),
+			Kind:        site.GetKind(),
+			Upstream:    site.GetUpstream(),
+			Metadata:    site.GetMetadata(),
+			CreatedAt:   timestamppb.New(createdAt),
+			UpdatedAt:   timestamppb.New(updatedAt),
+		},
+	}, nil
+}
+
+func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.ListIngressSitesRequest) (*pb.ListIngressSitesResponse, error) {
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "created_at",
+		IDColumn:        "id",
+	}
+
+	where := "WHERE 1=1"
+	countWhere := "WHERE 1=1"
+	args := []interface{}{}
+	countArgs := []interface{}{}
+	argIdx := 1
+
+	if req.GetClusterId() != "" {
+		where += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND cluster_id = $%d", argIdx)
+		args = append(args, req.GetClusterId())
+		countArgs = append(countArgs, req.GetClusterId())
+		argIdx++
+	}
+	if req.GetNodeId() != "" {
+		where += fmt.Sprintf(" AND node_id = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND node_id = $%d", argIdx)
+		args = append(args, req.GetNodeId())
+		countArgs = append(countArgs, req.GetNodeId())
+		argIdx++
+	}
+
+	var total int32
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.ingress_sites %s`, countWhere)
+	err = s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, site_id, cluster_id, node_id, domains, tls_bundle_id, kind, upstream, COALESCE(metadata, '{}'::jsonb), created_at, updated_at
+		FROM quartermaster.ingress_sites
+		%s
+		%s
+		LIMIT %d
+	`, where, builder.OrderBy(params), params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var sites []*pb.IngressSite
+	for rows.Next() {
+		var site pb.IngressSite
+		var domainsJSON, metadataJSON []byte
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(
+			&site.Id, &site.SiteId, &site.ClusterId, &site.NodeId, &domainsJSON, &site.TlsBundleId,
+			&site.Kind, &site.Upstream, &metadataJSON, &createdAt, &updatedAt,
+		); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		}
+		site.Domains = unmarshalStringSliceJSON(domainsJSON)
+		if len(metadataJSON) > 0 {
+			var metadataMap map[string]interface{}
+			if json.Unmarshal(metadataJSON, &metadataMap) == nil {
+				site.Metadata = mapToStruct(metadataMap)
+			}
+		}
+		site.CreatedAt = timestamppb.New(createdAt)
+		site.UpdatedAt = timestamppb.New(updatedAt)
+		sites = append(sites, &site)
+	}
+
+	hasMore := len(sites) > params.Limit
+	if hasMore {
+		sites = sites[:params.Limit]
+	}
+	if params.Direction == pagination.Backward && len(sites) > 0 {
+		for i, j := 0, len(sites)-1; i < j; i, j = i+1, j-1 {
+			sites[i], sites[j] = sites[j], sites[i]
+		}
+	}
+
+	var startCursor, endCursor string
+	if len(sites) > 0 {
+		startCursor = pagination.EncodeCursor(sites[0].CreatedAt.AsTime(), sites[0].Id)
+		endCursor = pagination.EncodeCursor(sites[len(sites)-1].CreatedAt.AsTime(), sites[len(sites)-1].Id)
+	}
+
+	resp := &pb.ListIngressSitesResponse{
+		Sites:      sites,
+		ClusterId:  req.GetClusterId(),
+		NodeId:     req.GetNodeId(),
+		Pagination: &pb.CursorPaginationResponse{TotalCount: total},
+	}
+	if startCursor != "" {
+		resp.Pagination.StartCursor = &startCursor
+	}
+	if endCursor != "" {
+		resp.Pagination.EndCursor = &endCursor
+	}
+	if params.Direction == pagination.Forward {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = params.Cursor != nil
+	} else {
+		resp.Pagination.HasPreviousPage = hasMore
+		resp.Pagination.HasNextPage = params.Cursor != nil
+	}
+
+	return resp, nil
 }
 
 func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID string) (*pb.ListServicesHealthResponse, error) {
@@ -7064,6 +7535,9 @@ type GRPCServerConfig struct {
 	PurserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC)
 	GeoIPReader     *geoip.Reader
 	Metrics         *ServerMetrics
+	CertFile        string
+	KeyFile         string
+	AllowInsecure   bool
 }
 
 // ServerMetrics holds Prometheus metrics for the gRPC server
@@ -7095,6 +7569,23 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)),
 	}
+	tlsCfg := grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		AllowInsecure: cfg.AllowInsecure,
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+		cfg.Logger.WithError(err).Fatal("Timed out waiting for Quartermaster gRPC TLS files")
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to configure Quartermaster gRPC TLS")
+	}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
+	}
 
 	server := grpc.NewServer(opts...)
 	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
@@ -7106,6 +7597,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	pb.RegisterClusterServiceServer(server, qmServer)
 	pb.RegisterMeshServiceServer(server, qmServer)
 	pb.RegisterServiceRegistryServiceServer(server, qmServer)
+	pb.RegisterIngressServiceServer(server, qmServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()

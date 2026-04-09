@@ -26,6 +26,8 @@ type Config struct {
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	IdleTimeout  time.Duration
+	TLSCertFile  string
+	TLSKeyFile   string
 }
 
 // DefaultConfig returns default server configuration
@@ -56,7 +58,16 @@ func Start(cfg Config, router *gin.Engine, logger logging.Logger) error {
 			"service": cfg.ServiceName,
 		}).Info("Starting HTTP server")
 
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
+			if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+				logger.Fatal("HTTP TLS requires both certificate and key files")
+			}
+			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			logger.WithError(err).Fatal("Failed to start server")
 		}
 	}()

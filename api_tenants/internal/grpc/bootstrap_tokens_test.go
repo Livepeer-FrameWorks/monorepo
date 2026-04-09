@@ -30,13 +30,13 @@ func TestValidateBootstrapTokenConsumeRaceRejected(t *testing.T) {
 	expiresAt := time.Now().Add(time.Hour)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at
+		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at, COALESCE(metadata, '{}'::jsonb)
 		FROM quartermaster.bootstrap_tokens
 		WHERE token_hash = $1
 	`)).
 		WithArgs(hashBootstrapToken("bt_edge")).
-		WillReturnRows(sqlmock.NewRows([]string{"kind", "tenant_id", "cluster_id", "expected_ip", "expires_at", "usage_limit", "usage_count", "used_at"}).
-			AddRow("edge_node", "tenant-1", "cluster-1", nil, expiresAt, nil, int32(0), nil))
+		WillReturnRows(sqlmock.NewRows([]string{"kind", "tenant_id", "cluster_id", "expected_ip", "expires_at", "usage_limit", "usage_count", "used_at", "metadata"}).
+			AddRow("edge_node", "tenant-1", "cluster-1", nil, expiresAt, nil, int32(0), nil, []byte(`{}`)))
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 			UPDATE quartermaster.bootstrap_tokens

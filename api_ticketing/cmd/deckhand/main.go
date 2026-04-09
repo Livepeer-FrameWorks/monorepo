@@ -81,10 +81,13 @@ func main() {
 
 	// Create Quartermaster gRPC client (for tenant info)
 	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     quartermasterGRPCAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      quartermasterGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
@@ -93,10 +96,13 @@ func main() {
 
 	// Create Purser gRPC client (for billing info)
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:     purserGRPCAddr,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      purserGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Purser gRPC client")
@@ -106,7 +112,9 @@ func main() {
 	// Create Decklog gRPC client (for real-time events)
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
-		AllowInsecure: true,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       5 * time.Second,
 		Source:        "deckhand",
 		ServiceToken:  serviceToken,
@@ -180,13 +188,31 @@ func main() {
 			logger.WithError(err).Fatal("Failed to listen on gRPC port")
 		}
 
-		grpcSrv := grpc.NewServer(
+		serverOpts := []grpc.ServerOption{
 			grpc.ChainUnaryInterceptor(
 				grpcutil.SanitizeUnaryServerInterceptor(),
 				authInterceptor,
 				middleware.GRPCLoggingInterceptor(logger),
 			),
-		)
+		}
+		tlsCfg := grpcutil.ServerTLSConfig{
+			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		}
+		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
+			logger.WithError(waitErr).Fatal("Timed out waiting for Deckhand gRPC TLS files")
+		}
+		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to configure Deckhand gRPC TLS")
+		}
+		if tlsOpt != nil {
+			serverOpts = append(serverOpts, tlsOpt)
+		}
+		grpcSrv := grpc.NewServer(serverOpts...)
 		pb.RegisterDeckhandServiceServer(grpcSrv, deckhandServer)
 
 		// Register gRPC health checking service

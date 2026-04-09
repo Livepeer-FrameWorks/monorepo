@@ -18,39 +18,9 @@
  */
 export {};
 
-// Type declarations for WebRTC Encoded Transform APIs (not in standard lib.dom.d.ts yet)
+// RTCTransformEvent and RTCRtpScriptTransformer are still missing from lib.dom.d.ts in TS 6.
+// RTCEncodedVideoFrame, RTCEncodedAudioFrame, and their metadata types are now built-in.
 declare global {
-  interface RTCEncodedVideoFrame {
-    readonly type: "key" | "delta" | "empty";
-    readonly timestamp: number;
-    data: ArrayBuffer;
-    getMetadata(): RTCEncodedVideoFrameMetadata;
-  }
-
-  interface RTCEncodedVideoFrameMetadata {
-    frameId?: number;
-    dependencies?: number[];
-    width?: number;
-    height?: number;
-    spatialIndex?: number;
-    temporalIndex?: number;
-    synchronizationSource?: number;
-    payloadType?: number;
-    contributingSources?: number[];
-  }
-
-  interface RTCEncodedAudioFrame {
-    readonly timestamp: number;
-    data: ArrayBuffer;
-    getMetadata(): RTCEncodedAudioFrameMetadata;
-  }
-
-  interface RTCEncodedAudioFrameMetadata {
-    synchronizationSource?: number;
-    payloadType?: number;
-    contributingSources?: number[];
-  }
-
   interface RTCTransformEvent extends Event {
     readonly transformer: RTCRtpScriptTransformer;
   }

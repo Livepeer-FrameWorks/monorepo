@@ -31,7 +31,7 @@
   let submitting = $state(false);
 
   // Bot protection
-  const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_AUTH_SITE_KEY || "";
+  const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
   const defaultHumanCheck = turnstileSiteKey ? "robot" : "human";
 
   let phoneNumber = $state("");

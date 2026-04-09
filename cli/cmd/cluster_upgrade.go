@@ -417,16 +417,7 @@ func runUpgradeAll(cmd *cobra.Command, manifestPath, version string, dryRun, ski
 		return fmt.Errorf("failed to build execution plan: %w", err)
 	}
 
-	// Collect application/interface/observability tasks (skip infrastructure)
-	var services []string
-	for _, batch := range plan.Batches {
-		for _, task := range batch {
-			if task.Phase == orchestrator.PhaseInfrastructure {
-				continue
-			}
-			services = append(services, task.Name)
-		}
-	}
+	services := collectUpgradeableServices(plan)
 
 	if len(services) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No upgradeable services found in manifest.")
@@ -539,4 +530,28 @@ func stopService(ctx context.Context, host inventory.Host, serviceName, mode str
 	}
 
 	return nil
+}
+
+// collectUpgradeableServices extracts deduplicated service IDs from an
+// execution plan, stripping the @host suffix that the planner appends for
+// multi-host replicated services.
+func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
+	seen := make(map[string]bool)
+	var services []string
+	for _, batch := range plan.Batches {
+		for _, task := range batch {
+			if task.Phase == orchestrator.PhaseInfrastructure {
+				continue
+			}
+			svcID := task.Name
+			if idx := strings.Index(svcID, "@"); idx != -1 {
+				svcID = svcID[:idx]
+			}
+			if !seen[svcID] {
+				seen[svcID] = true
+				services = append(services, svcID)
+			}
+		}
+	}
+	return services
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/storage"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
@@ -29,20 +31,8 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-func addrIsFQDN(addr string) bool {
-	host := addr
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		host = h
-	}
-	if net.ParseIP(host) != nil {
-		return false
-	}
-	return strings.Contains(host, ".")
-}
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -91,6 +81,7 @@ func clearConn() {
 
 // Global state for metrics streaming
 var (
+	pkgLogger      logging.Logger
 	currentConfig  *sidecarcfg.HelmsmanConfig
 	onSeed         func()
 	onStorageWrite func()
@@ -110,6 +101,12 @@ var (
 
 	jitterRandMu sync.Mutex
 	jitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// Outbox for messages that failed to send during disconnect.
+	// Drained on reconnect after successful re-registration.
+	outboxMu  sync.Mutex
+	outbox    []*pb.ControlMessage
+	maxOutbox = 100
 )
 
 const (
@@ -145,6 +142,7 @@ func SetDeleteVodHandler(fn DeleteVodFunc) {
 
 // Start launches the Helmsman control client and maintains the stream to Foghorn
 func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
+	pkgLogger = logger
 	currentConfig = cfg
 	blockingGraceMs = cfg.BlockingGraceMs
 	if blockingGraceMs > 0 {
@@ -191,10 +189,7 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 		return &MistTriggerResult{}, nil
 	}
 
-	attempts := maxBlockingAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(maxBlockingAttempts, 1)
 	deadline := time.Now().Add(blockingTriggerTimeout)
 
 	var lastErr error
@@ -209,10 +204,7 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 			if remaining <= 0 {
 				break
 			}
-			grace := time.Duration(blockingGraceMs) * time.Millisecond
-			if grace > remaining {
-				grace = remaining
-			}
+			grace := min(time.Duration(blockingGraceMs)*time.Millisecond, remaining)
 			stream = waitForReconnection(grace)
 		}
 		if time.Now().After(deadline) {
@@ -380,6 +372,50 @@ func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient
 	}
 }
 
+// enqueueOutbox saves a message for retry on reconnect.
+func enqueueOutbox(msg *pb.ControlMessage) {
+	outboxMu.Lock()
+	defer outboxMu.Unlock()
+	if len(outbox) >= maxOutbox {
+		if pkgLogger != nil {
+			pkgLogger.WithField("outbox_size", maxOutbox).Warn("Outbox full, dropping oldest message")
+		}
+		outbox = outbox[1:]
+	}
+	outbox = append(outbox, msg)
+}
+
+// drainOutbox re-sends all queued messages on the current stream.
+func drainOutbox(stream pb.HelmsmanControl_ConnectClient) {
+	outboxMu.Lock()
+	pending := outbox
+	outbox = nil
+	outboxMu.Unlock()
+
+	for _, msg := range pending {
+		msg.SentAt = timestamppb.Now()
+		if err := stream.Send(msg); err != nil {
+			// Re-enqueue if send fails again
+			enqueueOutbox(msg)
+		}
+	}
+}
+
+// sendOrEnqueue attempts to send a message on the active stream.
+// If the stream is disconnected, the message is saved to the outbox for retry on reconnect.
+func sendOrEnqueue(msg *pb.ControlMessage) error {
+	stream := getStream()
+	if stream == nil {
+		enqueueOutbox(msg)
+		return fmt.Errorf("gRPC control stream not connected (queued for retry)")
+	}
+	if err := stream.Send(msg); err != nil {
+		enqueueOutbox(msg)
+		return err
+	}
+	return nil
+}
+
 func applyJitter(backoff time.Duration, jitterPct int) time.Duration {
 	if jitterPct <= 0 {
 		return backoff
@@ -469,9 +505,13 @@ func runClient(addr string, logger logging.Logger) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// Auto-detect TLS: FQDN address (contains dots, not a bare IP) → TLS.
-	// Docker service names (no dots) → insecure.
-	useTLS := cfg.GRPCUseTLS || addrIsFQDN(addr)
+	// Use TLS whenever the deployment requires secure transport or trust
+	// material is present. Bare Docker service names still use insecure
+	// transport in local development when explicitly allowed.
+	useTLS := !cfg.GRPCAllowInsecure ||
+		cfg.GRPCTLSCAPath != "" ||
+		(cfg.GRPCTLSCertPath != "" && cfg.GRPCTLSKeyPath != "") ||
+		grpcutil.AddrIsFQDN(addr)
 	var creds credentials.TransportCredentials
 	if useTLS {
 		if cfg.GRPCTLSCertPath != "" && cfg.GRPCTLSKeyPath != "" {
@@ -479,15 +519,33 @@ func runClient(addr string, logger logging.Logger) error {
 			if err != nil {
 				return fmt.Errorf("failed to load TLS certificates: %w", err)
 			}
+			rootCAs, err := loadSidecarRootCAs(cfg.GRPCTLSCAPath)
+			if err != nil {
+				return err
+			}
 			creds = credentials.NewTLS(&tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				RootCAs:      rootCAs,
 				Certificates: []tls.Certificate{cert},
 			})
 		} else {
-			creds = credentials.NewTLS(&tls.Config{})
+			var err error
+			creds, err = grpcutil.ClientTransportCredentials(grpcutil.ClientTLSConfig{
+				CACertFile: cfg.GRPCTLSCAPath,
+			}, logger)
+			if err != nil {
+				return err
+			}
 		}
 		logger.Info("Connecting to gRPC server with TLS")
 	} else {
-		creds = insecure.NewCredentials()
+		var err error
+		creds, err = grpcutil.ClientTransportCredentials(grpcutil.ClientTLSConfig{
+			AllowInsecure: true,
+		}, logger)
+		if err != nil {
+			return err
+		}
 		logger.Info("Connecting to gRPC server without TLS")
 	}
 
@@ -541,6 +599,9 @@ func runClient(addr string, logger logging.Logger) error {
 	close(streamReconnected)
 	streamReconnected = make(chan struct{})
 	streamReconnectedM.Unlock()
+
+	// Re-send any messages queued during disconnect
+	drainOutbox(stream)
 	defer func() {
 		clearConn()
 		ControlStreamStatus.Set(0)
@@ -619,6 +680,10 @@ func runClient(addr string, logger logging.Logger) error {
 				if defrostRequestHandler != nil {
 					go defrostRequestHandler(x.DefrostRequest)
 				}
+			case *pb.ControlMessage_FreezeRequest:
+				if freezeRequestHandler != nil {
+					go freezeRequestHandler(x.FreezeRequest)
+				}
 			case *pb.ControlMessage_CanDeleteResponse:
 				// Handle can-delete response from Foghorn
 				go handleCanDeleteResponse(x.CanDeleteResponse)
@@ -654,6 +719,29 @@ func runClient(addr string, logger logging.Logger) error {
 			return e
 		}
 	}
+}
+
+func loadSidecarRootCAs(caPath string) (*x509.CertPool, error) {
+	if strings.TrimSpace(caPath) == "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system cert pool: %w", err)
+		}
+		if pool == nil {
+			pool = x509.NewCertPool()
+		}
+		return pool, nil
+	}
+
+	pemBytes, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read sidecar CA cert %q: %w", caPath, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("append sidecar CA cert %q: invalid PEM", caPath)
+	}
+	return pool, nil
 }
 
 func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*pb.ControlMessage)) {
@@ -1138,6 +1226,9 @@ type FreezePermissionHandler func(*pb.FreezePermissionResponse)
 // DefrostRequestHandler is called when Foghorn sends a defrost request
 type DefrostRequestHandler func(*pb.DefrostRequest)
 
+// FreezeRequestHandler is called when Foghorn proactively requests a freeze/sync
+type FreezeRequestHandler func(*pb.FreezeRequest)
+
 // DtshSyncRequestHandler is called when Foghorn sends a request to sync just the .dtsh file
 type DtshSyncRequestHandler func(*pb.DtshSyncRequest)
 
@@ -1148,6 +1239,7 @@ var (
 	freezePermissionHandlers = make(map[string]chan *pb.FreezePermissionResponse)
 	freezePermissionMutex    = make(chan struct{}, 1)
 	defrostRequestHandler    DefrostRequestHandler
+	freezeRequestHandler     FreezeRequestHandler
 	dtshSyncRequestHandler   DtshSyncRequestHandler
 	processingJobHandler     ProcessingJobHandler
 
@@ -1159,6 +1251,11 @@ var (
 // SetDefrostRequestHandler sets the callback for defrost requests from Foghorn
 func SetDefrostRequestHandler(handler DefrostRequestHandler) {
 	defrostRequestHandler = handler
+}
+
+// SetFreezeRequestHandler sets the callback for proactive freeze requests from Foghorn
+func SetFreezeRequestHandler(handler FreezeRequestHandler) {
+	freezeRequestHandler = handler
 }
 
 // SetDtshSyncRequestHandler sets the callback for incremental .dtsh sync requests from Foghorn
@@ -1261,11 +1358,6 @@ func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUpload
 
 // SendFreezeComplete sends freeze completion status to Foghorn
 func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
 	complete := &pb.FreezeComplete{
 		RequestId: requestID,
 		AssetHash: assetHash,
@@ -1276,7 +1368,7 @@ func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes ui
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezeComplete{FreezeComplete: complete}}
-	return stream.Send(msg)
+	return sendOrEnqueue(msg)
 }
 
 // SendDefrostProgress sends download progress to Foghorn
@@ -1302,11 +1394,6 @@ func SendDefrostProgress(requestID, assetHash string, percent uint32, bytesDownl
 
 // SendDefrostComplete sends defrost completion status to Foghorn
 func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
 	complete := &pb.DefrostComplete{
 		RequestId: requestID,
 		AssetHash: assetHash,
@@ -1318,18 +1405,12 @@ func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeByt
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostComplete{DefrostComplete: complete}}
-	return stream.Send(msg)
+	return sendOrEnqueue(msg)
 }
 
-// SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics)
-// StorageLifecycleData is sent via MistTrigger payload
+// SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics).
+// Queued for retry on disconnect since these feed ClickHouse storage_events.
 func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
-	// StorageLifecycleData is sent as a MistTrigger with storage_lifecycle_data payload
 	trigger := &pb.MistTrigger{
 		TriggerType: "storage_lifecycle",
 		RequestId:   uuid.New().String(),
@@ -1341,7 +1422,7 @@ func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger}}
-	return stream.Send(msg)
+	return sendOrEnqueue(msg)
 }
 
 // SendProcessBillingEvent sends a process billing event to Foghorn (for analytics/billing)
@@ -1368,10 +1449,6 @@ func SendProcessBillingEvent(event *pb.ProcessBillingEvent) error {
 			ProcessBilling: event,
 		},
 	}
-
-	// TRACE: Log what we're sending
-	fmt.Printf("[HELMSMAN TRACE] Sending process_billing trigger: payload_type=%T, payload_nil=%v\n",
-		trigger.GetTriggerPayload(), trigger.GetTriggerPayload() == nil)
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger}}
 	if err := stream.Send(msg); err != nil {
@@ -1458,11 +1535,6 @@ func handleCanDeleteResponse(response *pb.CanDeleteResponse) {
 // Called after successfully uploading an artifact to S3 (while keeping the local copy).
 // dtshIncluded indicates whether the .dtsh index file was included in the sync.
 func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
 	complete := &pb.SyncComplete{
 		RequestId:    requestID,
 		AssetHash:    assetHash,
@@ -1475,7 +1547,7 @@ func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_SyncComplete{SyncComplete: complete}}
-	return stream.Send(msg)
+	return sendOrEnqueue(msg)
 }
 
 // handleStopSessions terminates all sessions for the given streams on this node
@@ -1727,7 +1799,7 @@ func parseRequestedMode(mode string) pb.NodeOperationalMode {
 }
 
 // SendThumbnailUploadRequest sends a thumbnail upload request to Foghorn.
-// Foghorn will resolve the internal_name to a playback_id and respond with presigned URLs.
+// Foghorn resolves internal_name to a stable S3 key and responds with presigned URLs.
 func SendThumbnailUploadRequest(internalName string, filePaths []string) error {
 	stream := getStream()
 	if stream == nil {
@@ -1751,12 +1823,12 @@ func SendThumbnailUploadRequest(internalName string, filePaths []string) error {
 // handleThumbnailUploadResponse uploads thumbnail files to S3 using presigned URLs
 // from Foghorn, then sends a ThumbnailUploaded confirmation.
 func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUploadResponse, send func(*pb.ControlMessage)) {
-	playbackID := resp.GetPlaybackId()
+	thumbnailKey := resp.GetThumbnailKey()
 	uploads := resp.GetUploads()
 
 	logger.WithFields(logging.Fields{
-		"playback_id":  playbackID,
-		"upload_count": len(uploads),
+		"thumbnail_key": thumbnailKey,
+		"upload_count":  len(uploads),
 	}).Info("Received thumbnail presigned URLs from Foghorn")
 
 	presignedClient := storage.NewPresignedClient(logger)
@@ -1795,8 +1867,8 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUplo
 
 	// Notify Foghorn that upload is complete
 	uploaded := &pb.ThumbnailUploaded{
-		PlaybackId: playbackID,
-		S3Keys:     uploadedKeys,
+		ThumbnailKey: thumbnailKey,
+		S3Keys:       uploadedKeys,
 	}
 	send(&pb.ControlMessage{
 		SentAt:  timestamppb.Now(),

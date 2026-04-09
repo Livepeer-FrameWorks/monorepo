@@ -50,7 +50,9 @@ profiles:
     - foredeck
     - logbook
   observability:
-    - prometheus
+    - victoriametrics
+    - vmauth
+    - vmagent
     - grafana
     - metabase
 
@@ -255,6 +257,36 @@ services:
       protocol: http
       path: /-/healthy
       port: 9090
+  victoriametrics:
+    name: victoriametrics
+    title: VictoriaMetrics
+    role: observability
+    image: victoriametrics/victoria-metrics:v1.122.0
+    ports: ["8428:8428"]
+    health:
+      protocol: http
+      path: /health
+      port: 8428
+  vmauth:
+    name: vmauth
+    title: VMAuth
+    role: observability
+    image: victoriametrics/vmauth:v1.122.0
+    ports: ["8427:8427"]
+    health:
+      protocol: http
+      path: /health
+      port: 8427
+  vmagent:
+    name: vmagent
+    title: VMAgent
+    role: observability
+    image: victoriametrics/vmagent:v1.122.0
+    ports: ["8429:8429"]
+    health:
+      protocol: http
+      path: /health
+      port: 8429
   grafana:
     name: grafana
     title: Grafana (Dashboards)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
@@ -157,6 +158,10 @@ func protoToVODAssetInfo(p *pb.VodAssetInfo) VODAssetInfo {
 		info.Status = "DELETED"
 	default:
 		info.Status = "UNKNOWN"
+	}
+
+	if p.ExpiresAt != nil && p.ExpiresAt.AsTime().Before(time.Now()) {
+		info.Status = "DELETED"
 	}
 
 	// Optional fields

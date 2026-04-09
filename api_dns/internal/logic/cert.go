@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,6 +32,8 @@ const platformCertTenantID = ""
 type certStore interface {
 	GetCertificate(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
 	SaveCertificate(ctx context.Context, tenantID string, cert *store.Certificate) error
+	GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error)
+	SaveTLSBundle(ctx context.Context, bundle *store.TLSBundle) error
 	GetACMEAccount(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error)
 	SaveACMEAccount(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
 }
@@ -69,6 +72,28 @@ func (u *ACMEUser) GetEmail() string                        { return u.Email }
 func (u *ACMEUser) GetRegistration() *registration.Resource { return u.Registration }
 func (u *ACMEUser) GetPrivateKey() crypto.PrivateKey        { return u.key }
 
+func normalizeDomains(domains []string) []string {
+	if len(domains) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(domains))
+	normalized := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		value := strings.TrimSpace(strings.ToLower(strings.TrimSuffix(domain, ".")))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	slices.Sort(normalized)
+	return normalized
+}
+
 // IssueCertificate requests a certificate for a domain using Cloudflare DNS-01.
 // It implements "Cache-First" logic.
 // tenantID is optional - empty string means platform-wide certificate.
@@ -76,6 +101,7 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	if domain == "" || email == "" {
 		return "", "", time.Time{}, fmt.Errorf("domain and email are required")
 	}
+	domain = normalizeDomains([]string{domain})[0]
 	if !isDomainAllowed(domain) {
 		return "", "", time.Time{}, fmt.Errorf("domain is not allowed for certificate issuance")
 	}
@@ -92,13 +118,76 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 		return "", "", time.Time{}, fmt.Errorf("failed to check certificate cache: %w", err)
 	}
 
-	// 2. Load or Create ACME User (with tenant context)
+	certificatePEM, privateKeyPEM, expiry, err := m.obtainCertificate(ctx, tenantID, []string{domain}, email)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+
+	// 9. Save to DB (with tenant context)
+	newCert := &store.Certificate{
+		Domain:    domain,
+		CertPEM:   certificatePEM,
+		KeyPEM:    privateKeyPEM,
+		ExpiresAt: expiry,
+	}
+	if err := m.store.SaveCertificate(ctx, tenantID, newCert); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("failed to save certificate: %w", err)
+	}
+
+	return newCert.CertPEM, newCert.KeyPEM, expiry, nil
+}
+
+func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, domains []string, email string) (*store.TLSBundle, error) {
+	bundleID = strings.TrimSpace(bundleID)
+	domains = normalizeDomains(domains)
+	if bundleID == "" || len(domains) == 0 || strings.TrimSpace(email) == "" {
+		return nil, fmt.Errorf("bundle_id, domains, and email are required")
+	}
+
+	for _, domain := range domains {
+		if !isDomainAllowed(domain) {
+			return nil, fmt.Errorf("domain %q is not allowed for certificate issuance", domain)
+		}
+	}
+
+	existing, err := m.store.GetTLSBundle(ctx, bundleID)
+	switch {
+	case err == nil:
+		if slices.Equal(existing.Domains, domains) && time.Until(existing.ExpiresAt) > 30*24*time.Hour {
+			return existing, nil
+		}
+	case !errors.Is(err, store.ErrNotFound):
+		return nil, fmt.Errorf("failed to check tls bundle cache: %w", err)
+	}
+
+	certificatePEM, privateKeyPEM, expiry, err := m.obtainCertificate(ctx, platformCertTenantID, domains, email)
+	if err != nil {
+		return nil, err
+	}
+
+	bundle := &store.TLSBundle{
+		BundleID:  bundleID,
+		Domains:   domains,
+		CertPEM:   certificatePEM,
+		KeyPEM:    privateKeyPEM,
+		ExpiresAt: expiry,
+	}
+	if err := m.store.SaveTLSBundle(ctx, bundle); err != nil {
+		return nil, fmt.Errorf("failed to save tls bundle: %w", err)
+	}
+	return bundle, nil
+}
+
+func (m *CertManager) GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+	return m.store.GetTLSBundle(ctx, bundleID)
+}
+
+func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, domains []string, email string) (certPEM, keyPEM string, expiresAt time.Time, err error) {
 	user, err := m.getOrCreateUser(ctx, tenantID, email)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to load ACME user: %w", err)
 	}
 
-	// 3. Initialize Lego config
 	config := lego.NewConfig(user)
 	switch strings.ToLower(os.Getenv("ACME_ENV")) {
 	case "staging":
@@ -108,13 +197,11 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	}
 	config.Certificate.KeyType = certcrypto.EC256
 
-	// 4. Create Lego client
 	client, err := m.acmeClientFactory(config)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to create lego client: %w", err)
 	}
 
-	// 5. Setup Cloudflare Provider
 	if os.Getenv("CLOUDFLARE_DNS_API_TOKEN") == "" && os.Getenv("CLOUDFLARE_API_TOKEN") != "" {
 		os.Setenv("CLOUDFLARE_DNS_API_TOKEN", os.Getenv("CLOUDFLARE_API_TOKEN"))
 	}
@@ -123,56 +210,38 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to create cloudflare provider: %w", err)
 	}
-
 	if challengeErr := client.SetDNS01Provider(provider); challengeErr != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to set DNS provider: %w", challengeErr)
 	}
 
-	// 6. Register User (if new)
 	if user.Registration == nil {
 		reg, regErr := client.Register()
 		if regErr != nil {
 			return "", "", time.Time{}, fmt.Errorf("registration failed: %w", regErr)
 		}
 		user.Registration = reg
-		// Save updated registration to DB (with tenant context)
 		if saveErr := m.saveUser(ctx, tenantID, user); saveErr != nil {
 			return "", "", time.Time{}, fmt.Errorf("failed to save user registration: %w", saveErr)
 		}
 	}
 
-	// 7. Obtain Certificate
-	request := certificate.ObtainRequest{
-		Domains: []string{domain},
+	certificates, err := client.Obtain(certificate.ObtainRequest{
+		Domains: domains,
 		Bundle:  true,
-	}
-	certificates, err := client.Obtain(request)
+	})
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to obtain certificate: %w", err)
 	}
 
-	// 8. Parse Expiry
-	// We need to parse the cert to get the expiry date
-	expiry := time.Now().Add(90 * 24 * time.Hour) // Fallback
+	expiry := time.Now().Add(90 * 24 * time.Hour)
 	block, _ := pem.Decode(certificates.Certificate)
 	if block != nil {
-		if parsedCert, err := x509.ParseCertificate(block.Bytes); err == nil {
+		if parsedCert, parseErr := x509.ParseCertificate(block.Bytes); parseErr == nil {
 			expiry = parsedCert.NotAfter
 		}
 	}
 
-	// 9. Save to DB (with tenant context)
-	newCert := &store.Certificate{
-		Domain:    domain,
-		CertPEM:   string(certificates.Certificate),
-		KeyPEM:    string(certificates.PrivateKey),
-		ExpiresAt: expiry,
-	}
-	if err := m.store.SaveCertificate(ctx, tenantID, newCert); err != nil {
-		return "", "", time.Time{}, fmt.Errorf("failed to save certificate: %w", err)
-	}
-
-	return newCert.CertPEM, newCert.KeyPEM, expiry, nil
+	return string(certificates.Certificate), string(certificates.PrivateKey), expiry, nil
 }
 
 type legoClient struct {
@@ -215,7 +284,7 @@ func isDomainAllowed(domain string) bool {
 				suffixes = append(suffixes, s)
 			}
 		}
-	} else if root := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN")); root != "" {
+	} else if root := strings.TrimSpace(os.Getenv("BRAND_DOMAIN")); root != "" {
 		suffixes = []string{strings.ToLower(strings.TrimSuffix(root, "."))}
 	}
 

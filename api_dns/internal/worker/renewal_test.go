@@ -14,17 +14,23 @@ import (
 )
 
 type fakeRenewStore struct {
-	certs []store.Certificate
-	err   error
+	certs   []store.Certificate
+	bundles []store.TLSBundle
+	err     error
 }
 
 func (f *fakeRenewStore) ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]store.Certificate, error) {
 	return f.certs, f.err
 }
 
+func (f *fakeRenewStore) ListExpiringTLSBundles(ctx context.Context, threshold time.Duration) ([]store.TLSBundle, error) {
+	return f.bundles, f.err
+}
+
 type fakeIssuer struct {
 	results []error
 	calls   []string
+	bundles []string
 }
 
 func (f *fakeIssuer) IssueCertificate(ctx context.Context, tenantID, domain, email string) (string, string, time.Time, error) {
@@ -35,6 +41,19 @@ func (f *fakeIssuer) IssueCertificate(ctx context.Context, tenantID, domain, ema
 	err := f.results[0]
 	f.results = f.results[1:]
 	return "", "", time.Time{}, err
+}
+
+func (f *fakeIssuer) EnsureTLSBundle(ctx context.Context, bundleID string, domains []string, email string) (*store.TLSBundle, error) {
+	f.bundles = append(f.bundles, bundleID)
+	if len(f.results) == 0 {
+		return &store.TLSBundle{BundleID: bundleID, Domains: domains}, nil
+	}
+	err := f.results[0]
+	f.results = f.results[1:]
+	if err != nil {
+		return nil, err
+	}
+	return &store.TLSBundle{BundleID: bundleID, Domains: domains}, nil
 }
 
 func TestRenewalWorkerRetriesWithBackoff(t *testing.T) {

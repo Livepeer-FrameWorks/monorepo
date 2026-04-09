@@ -11,7 +11,7 @@
   import { Input } from "$lib/components/ui/input";
   import Player from "./Player.svelte";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getContentDeliveryUrls, type PrimaryProtocolUrls } from "$lib/config";
+  import { getContentDeliveryUrls, getAssetUrl, type PrimaryProtocolUrls } from "$lib/config";
   import { toast } from "$lib/stores/toast";
 
   // Clip type matching Houdini schema
@@ -28,6 +28,7 @@
     manifestPath?: string | null;
     createdAt?: string | null;
     streamId?: string;
+    sourceStreamId?: string | null;
     stream?: {
       streamId: string;
     } | null;
@@ -47,6 +48,9 @@
   let clipUrls = $derived(
     clip?.playbackId ? getContentDeliveryUrls(clip.playbackId, "clip") : null
   );
+
+  // Poster from Chandler — artifacts are keyed by clipHash (artifact_hash), not playbackId
+  let posterUrl = $derived(clip?.clipHash ? getAssetUrl(clip.clipHash, "poster.jpg") : undefined);
 
   // Primary protocols to show for clips
   const clipProtocols: Array<{
@@ -130,7 +134,7 @@
           <Player
             contentId={clip.playbackId}
             contentType="clip"
-            thumbnailUrl={undefined}
+            thumbnailUrl={posterUrl}
             options={{
               autoplay: true,
               muted: false,
@@ -170,8 +174,8 @@
           </div>
         </div>
 
-        {#if clip.stream?.streamId || clip.streamId}
-          {@const displayStreamId = clip.stream?.streamId ?? clip.streamId}
+        {#if clip.sourceStreamId || clip.stream?.streamId || clip.streamId}
+          {@const displayStreamId = clip.sourceStreamId ?? clip.stream?.streamId ?? clip.streamId}
           <div class="border border-border p-4">
             <p class="text-sm text-foreground/80">
               From stream: <span class="font-medium text-foreground">{displayStreamId}</span>

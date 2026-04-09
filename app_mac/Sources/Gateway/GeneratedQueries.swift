@@ -92,9 +92,7 @@ enum GQL {
     clipHash
     playbackId
     streamId
-    stream {
-      streamId
-    }
+    sourceStreamId
     title
     description
     startTime
@@ -158,9 +156,7 @@ enum GQL {
     dvrHash
     playbackId
     streamId
-    stream {
-      streamId
-    }
+    sourceStreamId
     title
     createdAt
     updatedAt
@@ -407,7 +403,6 @@ enum GQL {
     record
     createdAt
     updatedAt
-    thumbnailUrl
   }
   """
 
@@ -962,9 +957,7 @@ enum GQL {
           clipHash
           playbackId
           streamId
-          stream {
-            streamId
-          }
+          sourceStreamId
           title
           description
           startTime
@@ -1172,9 +1165,7 @@ enum GQL {
           dvrHash
           playbackId
           streamId
-          stream {
-            streamId
-          }
+          sourceStreamId
           title
           createdAt
           updatedAt
@@ -2891,10 +2882,12 @@ enum GQL {
       ingestDomain
       edgeDomain
       playDomain
+      chandlerDomain
       officialClusterLabel
       officialIngestDomain
       officialEdgeDomain
       officialPlayDomain
+      officialChandlerDomain
       srtPort
       rtmpPort
     }

@@ -7,20 +7,65 @@ import (
 
 // Manifest represents the cluster.yaml configuration
 type Manifest struct {
-	Version    string `yaml:"version"`
-	Type       string `yaml:"type"`                  // cluster | edge
-	Profile    string `yaml:"profile,omitempty"`     // control-plane | regional | analytics-only | edge-gateway
-	Channel    string `yaml:"channel,omitempty"`     // release channel: "stable" (default), "rc"
-	RootDomain string `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
-	EnvFile    string `yaml:"env_file,omitempty"`    // shared env file for all services (relative to manifest dir)
+	Version    string   `yaml:"version"`
+	Type       string   `yaml:"type"`                  // cluster | edge
+	Profile    string   `yaml:"profile,omitempty"`     // control-plane | regional | analytics-only | edge-gateway
+	Channel    string   `yaml:"channel,omitempty"`     // release channel: "stable" (default), "rc"
+	RootDomain string   `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
+	EnvFiles   []string `yaml:"env_files,omitempty"`   // shared env files for all services, merged in order
+	HostsFile  string   `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
 
-	Hosts          map[string]Host          `yaml:"hosts,omitempty"`
-	Clusters       map[string]ClusterConfig `yaml:"clusters,omitempty"`
-	WireGuard      *WireGuardConfig         `yaml:"wireguard,omitempty"`
-	Infrastructure InfrastructureConfig     `yaml:"infrastructure,omitempty"`
-	Services       map[string]ServiceConfig `yaml:"services,omitempty"`
-	Interfaces     map[string]ServiceConfig `yaml:"interfaces,omitempty"`
-	Observability  map[string]ServiceConfig `yaml:"observability,omitempty"`
+	Hosts          map[string]Host              `yaml:"hosts,omitempty"`
+	Clusters       map[string]ClusterConfig     `yaml:"clusters,omitempty"`
+	WireGuard      *WireGuardConfig             `yaml:"wireguard,omitempty"`
+	Infrastructure InfrastructureConfig         `yaml:"infrastructure,omitempty"`
+	Services       map[string]ServiceConfig     `yaml:"services,omitempty"`
+	Interfaces     map[string]ServiceConfig     `yaml:"interfaces,omitempty"`
+	Observability  map[string]ServiceConfig     `yaml:"observability,omitempty"`
+	GeoIP          *GeoIPConfig                 `yaml:"geoip,omitempty"`
+	TLSBundles     map[string]TLSBundleConfig   `yaml:"tls_bundles,omitempty"`
+	IngressSites   map[string]IngressSiteConfig `yaml:"ingress_sites,omitempty"`
+}
+
+func (m *Manifest) SharedEnvFiles() []string {
+	if m == nil {
+		return nil
+	}
+	files := make([]string, 0, len(m.EnvFiles))
+	for _, file := range m.EnvFiles {
+		if strings.TrimSpace(file) == "" {
+			continue
+		}
+		files = append(files, file)
+	}
+	return files
+}
+
+type GeoIPConfig struct {
+	Enabled       bool     `yaml:"enabled"`
+	Source        string   `yaml:"source,omitempty"`          // maxmind | file
+	File          string   `yaml:"file,omitempty"`            // Local MMDB path when source=file
+	LicenseKeyEnv string   `yaml:"license_key_env,omitempty"` // Env var containing the MaxMind key
+	RemotePath    string   `yaml:"remote_path,omitempty"`     // Remote MMDB location
+	Services      []string `yaml:"services,omitempty"`        // Defaults to foghorn,quartermaster
+}
+
+type TLSBundleConfig struct {
+	Cluster  string            `yaml:"cluster,omitempty"`
+	Domains  []string          `yaml:"domains,omitempty"`
+	Issuer   string            `yaml:"issuer,omitempty"`
+	Email    string            `yaml:"email,omitempty"`
+	Metadata map[string]string `yaml:"metadata,omitempty"`
+}
+
+type IngressSiteConfig struct {
+	Cluster     string            `yaml:"cluster,omitempty"`
+	Node        string            `yaml:"node"`
+	Domains     []string          `yaml:"domains,omitempty"`
+	TLSBundleID string            `yaml:"tls_bundle_id"`
+	Kind        string            `yaml:"kind"`
+	Upstream    string            `yaml:"upstream"`
+	Metadata    map[string]string `yaml:"metadata,omitempty"`
 }
 
 // ClusterConfig defines a cluster to register in Quartermaster during provisioning
@@ -78,6 +123,8 @@ type PostgresConfig struct {
 	ReplicationFactor int               `yaml:"replication_factor,omitempty"` // Default: len(Nodes)
 	Databases         []DatabaseConfig  `yaml:"databases,omitempty"`
 	Tuning            map[string]string `yaml:"tuning,omitempty"`
+	SQLAccess         string            `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
+	Password          string            `yaml:"password,omitempty"`
 }
 
 // PostgresNode represents a node in a multi-node Postgres/YugabyteDB cluster
@@ -173,12 +220,17 @@ type ZookeeperNode struct {
 
 // KafkaConfig represents Kafka cluster configuration
 type KafkaConfig struct {
-	Enabled          bool          `yaml:"enabled"`
-	Mode             string        `yaml:"mode"` // native
-	Version          string        `yaml:"version"`
-	Brokers          []KafkaBroker `yaml:"brokers,omitempty"`
-	ZookeeperConnect string        `yaml:"zookeeper_connect"`
-	Topics           []KafkaTopic  `yaml:"topics,omitempty"`
+	Enabled                              bool          `yaml:"enabled"`
+	Mode                                 string        `yaml:"mode"` // native
+	Version                              string        `yaml:"version"`
+	Brokers                              []KafkaBroker `yaml:"brokers,omitempty"`
+	ZookeeperConnect                     string        `yaml:"zookeeper_connect"`
+	Topics                               []KafkaTopic  `yaml:"topics,omitempty"`
+	DeleteTopicEnable                    *bool         `yaml:"delete_topic_enable,omitempty"`
+	MinInSyncReplicas                    int           `yaml:"min_insync_replicas,omitempty"`
+	OffsetsTopicReplicationFactor        int           `yaml:"offsets_topic_replication_factor,omitempty"`
+	TransactionStateLogReplicationFactor int           `yaml:"transaction_state_log_replication_factor,omitempty"`
+	TransactionStateLogMinISR            int           `yaml:"transaction_state_log_min_isr,omitempty"`
 }
 
 // KafkaBroker represents a Kafka broker
@@ -204,19 +256,22 @@ type ClickHouseConfig struct {
 	Host      string   `yaml:"host"` // Host name from Hosts map
 	Port      int      `yaml:"port"`
 	Databases []string `yaml:"databases,omitempty"`
+	SQLAccess string   `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
 }
 
 // RedisConfig represents Redis instance configuration
 type RedisConfig struct {
 	Enabled   bool            `yaml:"enabled"`
-	Mode      string          `yaml:"mode"`    // "docker" or "native"
-	Version   string          `yaml:"version"` // e.g., "7"
+	Engine    string          `yaml:"engine,omitempty"`  // "valkey" (default) or "redis"
+	Mode      string          `yaml:"mode"`              // "docker" or "native"
+	Version   string          `yaml:"version,omitempty"` // e.g., "8.1" or "7.2.4"
 	Instances []RedisInstance `yaml:"instances"`
 }
 
 // RedisInstance represents a single named Redis instance
 type RedisInstance struct {
 	Name     string            `yaml:"name"`               // e.g., "foghorn", "platform"
+	Engine   string            `yaml:"engine,omitempty"`   // Optional override: "valkey" or "redis"
 	Host     string            `yaml:"host"`               // Host name from Hosts map
 	Port     int               `yaml:"port"`               // Default: 6379
 	Password string            `yaml:"password,omitempty"` // AUTH password
@@ -246,11 +301,13 @@ type ServiceConfig struct {
 // EdgeManifest represents edge node deployment configuration (edges.yaml)
 type EdgeManifest struct {
 	Version         string     `yaml:"version"`
+	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v0.2.0-rc3")
 	RootDomain      string     `yaml:"root_domain"`
 	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
 	Email           string     `yaml:"email"`       // ACME email
 	ClusterID       string     `yaml:"cluster_id,omitempty"`
 	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
+	HostsFile       string     `yaml:"hosts_file,omitempty"`       // SOPS-encrypted host inventory
 	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
 	Mode            string     `yaml:"mode,omitempty"`             // "docker" (default) or "native"
 	Nodes           []EdgeNode `yaml:"nodes"`
@@ -275,6 +332,24 @@ func (m *Manifest) ResolvedChannel() string {
 		return m.Channel
 	}
 	return "stable"
+}
+
+// HostInventory holds connection details loaded from a SOPS-encrypted hosts file.
+type HostInventory struct {
+	Hosts     map[string]HostConnection `yaml:"hosts"`
+	EdgeNodes map[string]EdgeConnection `yaml:"edge_nodes,omitempty"`
+}
+
+// HostConnection holds the sensitive connection details for a cluster host.
+type HostConnection struct {
+	ExternalIP string `yaml:"external_ip"`
+	User       string `yaml:"user,omitempty"`
+	SSHKey     string `yaml:"ssh_key,omitempty"`
+}
+
+// EdgeConnection holds the sensitive SSH target for an edge node.
+type EdgeConnection struct {
+	SSH string `yaml:"ssh"`
 }
 
 // ResolvedMode returns the effective mode for this node, falling back to the

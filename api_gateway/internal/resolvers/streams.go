@@ -1322,6 +1322,9 @@ func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, f
 		} else {
 			for _, clip := range clipsResp.Clips {
 				if state, ok := states[clip.ClipHash]; ok && state != nil {
+					if state.GetStreamId() != "" {
+						clip.StreamId = state.GetStreamId()
+					}
 					// Convert uint64 to int64 for size_bytes
 					if state.SizeBytes != nil {
 						sizeInt64 := int64(*state.SizeBytes)
@@ -1435,6 +1438,10 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *s
 		} else {
 			for _, dvr := range response.DvrRecordings {
 				if state, ok := states[dvr.DvrHash]; ok && state != nil {
+					if state.GetStreamId() != "" {
+						sourceStreamID := state.GetStreamId()
+						dvr.StreamId = &sourceStreamID
+					}
 					// Convert uint64 to int64 for size_bytes
 					if state.SizeBytes != nil {
 						sizeInt64 := int64(*state.SizeBytes)

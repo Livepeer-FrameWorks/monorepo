@@ -59,6 +59,8 @@ func main() {
 		emailSender,
 		turnstileValidator,
 		config.GetEnv("TO_EMAIL", "contact@frameworks.network"),
+		config.GetEnv("EMAIL_SUBJECT_PREFIX", "Contact Form"),
+		config.GetEnv("CONTACT_SUCCESS_MESSAGE", "Thank you for your message! We'll get back to you soon."),
 		turnstileEnabled,
 		logger,
 		formMetrics,
@@ -66,16 +68,20 @@ func main() {
 
 	app.POST("/api/contact", contactHandler.Handle)
 
-	// Listmonk Integration
-	listmonkURL := config.RequireEnv("LISTMONK_URL")
-	listmonkUser := config.GetEnv("LISTMONK_USERNAME", "admin")
-	listmonkPass := config.GetEnv("LISTMONK_PASSWORD", "admin")
-	listIDStr := config.GetEnv("DEFAULT_MAILING_LIST_ID", "1")
-	listID, _ := strconv.Atoi(listIDStr)
+	// Listmonk Integration (optional)
+	listmonkURL := config.GetEnv("LISTMONK_URL", "")
+	if listmonkURL != "" {
+		listmonkUser := config.GetEnv("LISTMONK_USERNAME", "admin")
+		listmonkPass := config.GetEnv("LISTMONK_PASSWORD", "admin")
+		listIDStr := config.GetEnv("DEFAULT_MAILING_LIST_ID", "1")
+		listID, _ := strconv.Atoi(listIDStr)
 
-	lmClient := listmonk.NewClient(listmonkURL, listmonkUser, listmonkPass)
-	subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics)
-	app.POST("/api/subscribe", subHandler.Handle)
+		lmClient := listmonk.NewClient(listmonkURL, listmonkUser, listmonkPass)
+		subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics)
+		app.POST("/api/subscribe", subHandler.Handle)
+	} else {
+		logger.Info("LISTMONK_URL not set, subscribe endpoint disabled")
+	}
 
 	serverConfig := server.DefaultConfig("steward", port)
 	if err := server.Start(serverConfig, app, logger); err != nil {

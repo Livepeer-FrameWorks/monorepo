@@ -2,15 +2,25 @@ package cmd
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/credentials"
+	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/githubapp"
 	fwsops "frameworks/cli/pkg/sops"
 	"frameworks/pkg/clients/quartermaster"
@@ -22,11 +32,13 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // newClusterProvisionCmd creates the provision command
@@ -72,7 +84,7 @@ Use --repo to fetch manifests from a private GitHub repo via GitHub App credenti
 			if repo != "" {
 				return runProvisionFromRepo(cmd, repo, githubAppID, githubInstallID, githubKeyPath, ageKeyFile, manifestPath, only, dryRun, force, ignoreValidation)
 			}
-			return runProvision(cmd, manifestPath, only, dryRun, force, ignoreValidation)
+			return runProvision(cmd, manifestPath, ageKeyFile, only, dryRun, force, ignoreValidation)
 		},
 	}
 
@@ -139,8 +151,8 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 		return fmt.Errorf("failed to fetch %s from %s: %w", manifestFile, repo, err)
 	}
 
-	// Validate the manifest parses correctly
-	manifest, err := inventory.LoadFromBytes(data)
+	// Parse manifest structure (validation happens after host inventory merge in runProvision)
+	manifest, err := inventory.ParseManifest(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse manifest from %s: %w", repo, err)
 	}
@@ -152,19 +164,41 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Collect all referenced env_file paths (top-level + per-service + per-interface)
+	// Resolve manifest-relative paths to repo-relative for GitHub fetch.
+	manifestDir := filepath.Dir(manifestFile)
+
+	// Collect all referenced file paths (env files + host inventory)
 	filesToFetch := []string{}
-	if manifest.EnvFile != "" {
-		filesToFetch = append(filesToFetch, manifest.EnvFile)
+	for _, envFile := range manifest.SharedEnvFiles() {
+		repoPath, pathErr := resolveManifestToRepoPath(manifestDir, envFile)
+		if pathErr != nil {
+			return pathErr
+		}
+		filesToFetch = append(filesToFetch, repoPath)
+	}
+	if manifest.HostsFile != "" {
+		repoPath, pathErr := resolveManifestToRepoPath(manifestDir, manifest.HostsFile)
+		if pathErr != nil {
+			return pathErr
+		}
+		filesToFetch = append(filesToFetch, repoPath)
 	}
 	for _, svc := range manifest.Services {
 		if svc.EnvFile != "" {
-			filesToFetch = append(filesToFetch, svc.EnvFile)
+			repoPath, pathErr := resolveManifestToRepoPath(manifestDir, svc.EnvFile)
+			if pathErr != nil {
+				return pathErr
+			}
+			filesToFetch = append(filesToFetch, repoPath)
 		}
 	}
 	for _, iface := range manifest.Interfaces {
 		if iface.EnvFile != "" {
-			filesToFetch = append(filesToFetch, iface.EnvFile)
+			repoPath, pathErr := resolveManifestToRepoPath(manifestDir, iface.EnvFile)
+			if pathErr != nil {
+				return pathErr
+			}
+			filesToFetch = append(filesToFetch, repoPath)
 		}
 	}
 
@@ -185,9 +219,9 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 			continue
 		}
 
-		// Decrypt SOPS-encrypted env files transparently
+		// Decrypt SOPS-encrypted files transparently (format inferred from extension)
 		if fwsops.IsEncrypted(fileData) {
-			plain, decErr := fwsops.Decrypt(fileData, ageKeyFile)
+			plain, decErr := fwsops.DecryptData(fileData, fwsops.FormatFromPath(name), ageKeyFile)
 			if decErr != nil {
 				return fmt.Errorf("decrypt %s: %w", name, decErr)
 			}
@@ -207,20 +241,24 @@ func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int6
 		}
 	}
 
-	// Write fetched manifest to the same temp directory
-	tmpManifest := filepath.Join(tmpDir, filepath.Base(manifestFile))
+	// Write fetched manifest preserving its directory structure so that
+	// manifest-relative paths (env_files, hosts_file) resolve correctly.
+	tmpManifest := filepath.Join(tmpDir, manifestFile)
+	if err := os.MkdirAll(filepath.Dir(tmpManifest), 0o700); err != nil {
+		return fmt.Errorf("failed to create manifest dir: %w", err)
+	}
 	if err := os.WriteFile(tmpManifest, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write temp manifest: %w", err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning cluster from %s/%s\n", repo, manifestFile)
-	return runProvision(cmd, tmpManifest, only, dryRun, force, ignoreValidation)
+	return runProvision(cmd, tmpManifest, ageKeyFile, only, dryRun, force, ignoreValidation)
 }
 
 // runProvision executes the provision command
-func runProvision(cmd *cobra.Command, manifestPath, only string, dryRun, force, ignoreValidation bool) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
+func runProvision(cmd *cobra.Command, manifestPath, ageKeyFile, only string, dryRun, force, ignoreValidation bool) error {
+	// Load manifest (merges host inventory from hosts_file if set)
+	manifest, err := inventory.LoadWithHosts(manifestPath, ageKeyFile)
 	if err != nil {
 		return fmt.Errorf("failed to load manifest: %w", err)
 	}
@@ -249,6 +287,15 @@ func runProvision(cmd *cobra.Command, manifestPath, only string, dryRun, force, 
 		phase = orchestrator.PhaseAll
 	default:
 		return fmt.Errorf("invalid phase: %s (must be infrastructure, applications, interfaces, or all)", only)
+	}
+
+	if phaseRequiresGatewayMeshValidation(phase) {
+		if err = validateGatewayMeshCoverage(manifest); err != nil {
+			return fmt.Errorf("invalid manifest: %w", err)
+		}
+		if err = validateInternalGRPCTLSCoverage(manifest); err != nil {
+			return fmt.Errorf("invalid manifest: %w", err)
+		}
 	}
 
 	// Create execution plan
@@ -299,6 +346,13 @@ type provisionedTask struct {
 	config provisioner.ServiceConfig
 }
 
+type taskProvisionOutcome struct {
+	config            provisioner.ServiceConfig
+	previouslyRunning bool
+	running           bool
+	deferred          bool
+}
+
 // executeProvision runs the provisioning tasks
 func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, force, ignoreValidation bool, manifestDir string) error {
 	// Create SSH pool
@@ -310,6 +364,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	// Execute each batch sequentially
 	runtimeData := make(map[string]interface{})
+	if err := ensureProvisionGeoIP(ctx, cmd.OutOrStdout(), manifest, manifestDir, sshPool); err != nil {
+		return err
+	}
 
 	for batchNum, batch := range plan.Batches {
 		fmt.Fprintf(cmd.OutOrStdout(), "Executing Batch %d/%d:\n", batchNum+1, len(plan.Batches))
@@ -329,16 +386,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				return fmt.Errorf("host %s not found in manifest", task.Host)
 			}
 
-			// Build config for this task
-			config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir)
-			if err != nil {
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
-				return err
-			}
-
 			// Provision based on task type
 			stopProgress := startTaskProgressLogger(cmd, task, 30*time.Second)
-			if err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, runtimeData, manifestDir); err != nil {
+			outcome, err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, runtimeData, manifestDir)
+			if err != nil {
 				stopProgress()
 				fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Provisioning failed for %s: %v\n", task.Name, err)
 				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
@@ -347,13 +398,15 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			}
 			stopProgress()
 
-			// Track completed task for potential rollback
-			completed = append(completed, provisionedTask{task: task, host: host, config: config})
+			// Only roll back services this run actually started from a stopped/nonexistent state.
+			if !outcome.previouslyRunning {
+				completed = append(completed, provisionedTask{task: task, host: host, config: outcome.config})
+			}
 
 			// Bootstrap Logic: Run after Quartermaster is healthy
 			if task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-				result, err := runBootstrap(ctx, manifest)
+				result, err := runBootstrap(ctx, manifest, manifestDir)
 				if err != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Bootstrap failed: %v\n", err)
 					fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
@@ -361,8 +414,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 					return fmt.Errorf("bootstrap failed: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "    ✓ System Tenant bootstrapped")
-				// Store per-cluster tokens and gRPC address for downstream services
-				runtimeData["enrollment_tokens"] = result.EnrollmentTokens
+				// Store Quartermaster runtime data for downstream services.
+				if result.SystemTenantID != "" {
+					runtimeData["system_tenant_id"] = result.SystemTenantID
+				}
 				if result.ServiceToken != "" {
 					runtimeData["service_token"] = result.ServiceToken
 				}
@@ -371,7 +426,21 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				}
 			}
 
+			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, task, host, outcome, runtimeData, manifestDir); err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", task.Name, err)
+			}
+			if err := maybeRegisterIngressDesiredState(ctx, cmd.OutOrStdout(), manifest, task, host, outcome); err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: ingress desired state registration skipped for %s: %v\n", task.Name, err)
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "    ✓ %s provisioned\n", task.Name)
+		}
+
+		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Foghorn reconciliation failed: %v\n", err)
+			fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
+			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+			return fmt.Errorf("foghorn reconciliation failed: %w", err)
 		}
 
 		// Mesh preflight gate: after a batch containing Privateer tasks,
@@ -398,11 +467,22 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	return nil
 }
 
+func maybeReconcileBatchFoghornAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+	if !batchContainsService(batch, "foghorn") {
+		return nil
+	}
+
+	return reconcileFoghornClusterAssignments(ctx, cmd, manifest, runtimeData)
+}
+
 // batchContainsPrivateer returns true if any task in the batch is a Privateer deployment.
 func batchContainsPrivateer(batch []*orchestrator.Task) bool {
+	return batchContainsService(batch, "privateer")
+}
+
+func batchContainsService(batch []*orchestrator.Task, serviceName string) bool {
 	for _, task := range batch {
-		name := serviceNameFromTask(task.Name)
-		if name == "privateer" {
+		if serviceNameFromTask(task.Name) == serviceName {
 			return true
 		}
 	}
@@ -416,6 +496,685 @@ func serviceNameFromTask(taskName string) string {
 		return taskName[:idx]
 	}
 	return taskName
+}
+
+func meshHostname(name string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(name))
+	if trimmed == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s.internal", trimmed)
+}
+
+func manifestMeshHostname(manifest *inventory.Manifest, hostName string) string {
+	if manifest == nil {
+		return ""
+	}
+	hostName = strings.TrimSpace(hostName)
+	if hostName == "" {
+		return ""
+	}
+	if _, ok := manifest.GetHost(hostName); !ok {
+		return ""
+	}
+	return meshHostname(hostName)
+}
+
+func usesInternalGRPCLeaf(serviceName string) bool {
+	switch serviceName {
+	case "commodore", "quartermaster", "purser", "periscope-query", "decklog", "foghorn", "signalman", "deckhand", "skipper", "navigator":
+		return true
+	default:
+		return false
+	}
+}
+
+func phaseRequiresGatewayMeshValidation(phase orchestrator.Phase) bool {
+	return phase == orchestrator.PhaseApplications || phase == orchestrator.PhaseAll
+}
+
+func serviceRunning(state *detect.ServiceState) bool {
+	return state != nil && state.Exists && state.Running
+}
+
+type foghornClusterAssigner interface {
+	AssignFoghornToCluster(ctx context.Context, req *pb.AssignFoghornToClusterRequest) error
+}
+
+type bootstrapTokenCreator interface {
+	CreateBootstrapToken(ctx context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error)
+}
+
+type publicServiceRegistrar interface {
+	BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error)
+}
+
+type ingressDesiredStateRegistrar interface {
+	UpsertTLSBundle(ctx context.Context, bundle *pb.TLSBundle) (*pb.TLSBundleResponse, error)
+	UpsertIngressSite(ctx context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error)
+}
+
+func resolveQuartermasterRuntimeData(manifest *inventory.Manifest) (string, string, error) {
+	serviceToken := os.Getenv("SERVICE_TOKEN")
+	if serviceToken == "" {
+		if cfg, _, err := fwcfg.Load(); err == nil {
+			cliCtx := fwcfg.GetCurrent(cfg)
+			cliCtx.Auth = fwcfg.ResolveAuth(cliCtx)
+			serviceToken = cliCtx.Auth.ServiceToken
+		}
+	}
+	if serviceToken == "" {
+		return "", "", fmt.Errorf("service token required for bootstrapping (set SERVICE_TOKEN or run 'frameworks login')")
+	}
+
+	var qmHost string
+	var qmSvc inventory.ServiceConfig
+	for name, svc := range manifest.Services {
+		if name != "quartermaster" {
+			continue
+		}
+		qmHost = svc.Host
+		qmSvc = svc
+		if qmHost == "" && len(svc.Hosts) > 0 {
+			qmHost = svc.Hosts[0]
+		}
+		break
+	}
+	host, ok := manifest.GetHost(qmHost)
+	if !ok {
+		return "", "", fmt.Errorf("quartermaster host not found in manifest")
+	}
+
+	grpcPort := 19002
+	if qmSvc.GRPCPort != 0 {
+		grpcPort = qmSvc.GRPCPort
+	}
+
+	return serviceToken, fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort), nil
+}
+
+func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]interface{}) error {
+	if runtimeData == nil {
+		return fmt.Errorf("runtime data is nil")
+	}
+	priv, privOK := runtimeData["edge_telemetry_jwt_private_key_pem_b64"].(string)
+	pub, pubOK := runtimeData["edge_telemetry_jwt_public_key_pem_b64"].(string)
+	if privOK && pubOK && strings.TrimSpace(priv) != "" && strings.TrimSpace(pub) != "" {
+		return nil
+	}
+
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate edge telemetry signing key: %w", err)
+	}
+	privateDER, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		return fmt.Errorf("marshal edge telemetry private key: %w", err)
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return fmt.Errorf("marshal edge telemetry public key: %w", err)
+	}
+
+	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privateDER})
+	publicPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})
+	runtimeData["edge_telemetry_jwt_private_key_pem_b64"] = base64.StdEncoding.EncodeToString(privatePEM)
+	runtimeData["edge_telemetry_jwt_public_key_pem_b64"] = base64.StdEncoding.EncodeToString(publicPEM)
+	return nil
+}
+
+func ensurePrivateerEnrollmentToken(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}, clusterID string) error {
+	if clusterID == "" {
+		return fmt.Errorf("privateer task missing cluster_id")
+	}
+
+	if tokens, ok := runtimeData["enrollment_tokens"].(map[string]string); ok {
+		if tokens[clusterID] != "" {
+			return nil
+		}
+	} else {
+		runtimeData["enrollment_tokens"] = map[string]string{}
+	}
+
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return err
+	}
+	systemTenantID, ok := runtimeData["system_tenant_id"].(string)
+	if !ok || systemTenantID == "" {
+		return fmt.Errorf("missing system tenant id for privateer enrollment token")
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for privateer enrollment token: %w", err)
+	}
+	defer client.Close()
+
+	if err := ensurePrivateerEnrollmentTokenWithClient(ctx, runtimeData, systemTenantID, clusterID, client); err != nil {
+		return err
+	}
+
+	runtimeData["service_token"] = serviceToken
+	runtimeData["quartermaster_grpc_addr"] = grpcAddr
+	return nil
+}
+
+func ensurePrivateerEnrollmentTokenWithClient(ctx context.Context, runtimeData map[string]interface{}, systemTenantID, clusterID string, creator bootstrapTokenCreator) error {
+	if systemTenantID == "" {
+		return fmt.Errorf("missing system tenant id for privateer enrollment token")
+	}
+
+	resp, err := creator.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
+		Name:      fmt.Sprintf("Infrastructure Enrollment Token for %s", clusterID),
+		Kind:      "infrastructure_node",
+		Ttl:       "720h",
+		TenantId:  &systemTenantID,
+		ClusterId: &clusterID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create bootstrap token for cluster '%s': %w", clusterID, err)
+	}
+
+	tokens, ok := runtimeData["enrollment_tokens"].(map[string]string)
+	if !ok || tokens == nil {
+		tokens = make(map[string]string)
+	}
+	tokens[clusterID] = resp.GetToken().GetToken()
+	runtimeData["enrollment_tokens"] = tokens
+	return nil
+}
+
+func ensurePrivateerCertIssueToken(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}, clusterID, nodeID string) error {
+	if clusterID == "" {
+		return fmt.Errorf("privateer task missing cluster_id")
+	}
+	if nodeID == "" {
+		return fmt.Errorf("privateer task missing node_id")
+	}
+
+	if tokens, ok := runtimeData["cert_issue_tokens"].(map[string]string); ok {
+		if tokens[nodeID] != "" {
+			return nil
+		}
+	}
+
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return err
+	}
+	systemTenantID, ok := runtimeData["system_tenant_id"].(string)
+	if !ok || systemTenantID == "" {
+		return fmt.Errorf("missing system tenant id for privateer cert issue token")
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for privateer cert issue token: %w", err)
+	}
+	defer client.Close()
+
+	return ensurePrivateerCertIssueTokenWithClient(ctx, runtimeData, systemTenantID, clusterID, nodeID, client)
+}
+
+func ensurePrivateerCertIssueTokenWithClient(ctx context.Context, runtimeData map[string]interface{}, systemTenantID, clusterID, nodeID string, creator bootstrapTokenCreator) error {
+	metadata, err := structpb.NewStruct(map[string]interface{}{
+		"node_id": nodeID,
+		"purpose": "cert_sync",
+	})
+	if err != nil {
+		return fmt.Errorf("build cert issue token metadata: %w", err)
+	}
+
+	resp, err := creator.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
+		Name:      fmt.Sprintf("Internal Cert Sync Token for %s", nodeID),
+		Kind:      "infrastructure_node",
+		Ttl:       "720h",
+		TenantId:  &systemTenantID,
+		ClusterId: &clusterID,
+		Metadata:  metadata,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create cert issue token for node '%s': %w", nodeID, err)
+	}
+
+	tokens, ok := runtimeData["cert_issue_tokens"].(map[string]string)
+	if !ok || tokens == nil {
+		tokens = make(map[string]string)
+	}
+	tokens[nodeID] = resp.GetToken().GetToken()
+	runtimeData["cert_issue_tokens"] = tokens
+	return nil
+}
+
+func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}, manifestDir string) error {
+	if outcome == nil || outcome.deferred || !outcome.running {
+		return nil
+	}
+
+	serviceName := serviceNameFromTask(task.Name)
+	if _, ok := publicServiceType(serviceName); !ok || selfRegisters(serviceName) {
+		return nil
+	}
+
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return err
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for public service registration: %w", err)
+	}
+	defer client.Close()
+
+	runtimeData["service_token"] = serviceToken
+	runtimeData["quartermaster_grpc_addr"] = grpcAddr
+	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, host, runtimeData, manifestDir, client)
+}
+
+func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome) error {
+	if outcome == nil || outcome.deferred || !outcome.running {
+		return nil
+	}
+	if task.Type != "nginx" && task.Type != "caddy" {
+		return nil
+	}
+
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return err
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for ingress desired state: %w", err)
+	}
+	defer client.Close()
+
+	return registerIngressDesiredStateWithClient(ctx, out, manifest, task, host, client)
+}
+
+func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, registrar publicServiceRegistrar) error {
+	serviceName := serviceNameFromTask(task.Name)
+	serviceType, ok := publicServiceType(serviceName)
+	if !ok || selfRegisters(serviceName) {
+		return nil
+	}
+
+	svcDef, hasDef := servicedefs.Lookup(serviceName)
+	if !hasDef {
+		return nil
+	}
+
+	hostCluster := manifest.HostCluster(task.Host)
+	if hostCluster == "" {
+		hostCluster = manifest.ResolveCluster(serviceName)
+	}
+	if hostCluster == "" {
+		return fmt.Errorf("service %s has no resolved cluster", task.Name)
+	}
+
+	serviceToken, ok := runtimeData["service_token"].(string)
+	if !ok || serviceToken == "" {
+		return fmt.Errorf("missing Quartermaster service token")
+	}
+	healthPath := svcDef.HealthPath
+	effectivePort := 0
+	if svc, ok := manifest.Services[serviceName]; ok {
+		if p, err := resolvePort(serviceName, svc); err == nil {
+			effectivePort = p
+		}
+	} else if iface, ok := manifest.Interfaces[serviceName]; ok {
+		if p, err := resolvePort(serviceName, iface); err == nil {
+			effectivePort = p
+		}
+	}
+	if effectivePort == 0 {
+		effectivePort = svcDef.DefaultPort
+	}
+	port := int32(effectivePort)
+	externalIP := host.ExternalIP
+	req := &pb.BootstrapServiceRequest{
+		ServiceToken:   &serviceToken,
+		Type:           serviceType,
+		Version:        "cli-provisioned",
+		Protocol:       "http",
+		HealthEndpoint: &healthPath,
+		Port:           port,
+		AdvertiseHost:  &externalIP,
+		ClusterId:      &hostCluster,
+		NodeId:         &task.Host,
+	}
+	if metadata, err := serviceRegistrationMetadata(serviceName, task.Host, hostCluster, manifest, runtimeData, manifestDir); err != nil {
+		return fmt.Errorf("resolve metadata: %w", err)
+	} else if len(metadata) > 0 {
+		req.Metadata = metadata
+	}
+
+	if _, err := registrar.BootstrapService(ctx, req); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "    ✓ Registered service instance: %s/%s (%s:%d)\n", task.Host, serviceType, externalIP, port)
+	return nil
+}
+
+func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, registrar ingressDesiredStateRegistrar) error {
+	if manifest.RootDomain == "" {
+		return nil
+	}
+
+	clusterID := manifest.HostCluster(task.Host)
+	if clusterID == "" {
+		clusterID = manifest.ResolveCluster(task.Type)
+	}
+	if clusterID == "" {
+		return fmt.Errorf("host %s has no resolved cluster", task.Host)
+	}
+
+	defaultEmail := strings.TrimSpace(os.Getenv("FROM_EMAIL"))
+	if defaultEmail == "" {
+		defaultEmail = "info@frameworks.network"
+	}
+
+	for _, bundleRootDomain := range ingressWildcardBundleDomains(manifest, clusterID) {
+		wildcardBundleID := tlsBundleID("wildcard", bundleRootDomain)
+		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
+			BundleId:  wildcardBundleID,
+			ClusterId: clusterID,
+			Domains:   []string{"*." + bundleRootDomain},
+			Issuer:    "navigator",
+			Email:     defaultEmail,
+		}); err != nil {
+			return fmt.Errorf("upsert wildcard bundle: %w", err)
+		}
+	}
+
+	localSvcs := make(map[string]interface{})
+	addLocalProxyRoutes(localSvcs, task.Host, manifest.Services, task.Type)
+	addLocalProxyRoutes(localSvcs, task.Host, manifest.Interfaces, task.Type)
+	addLocalProxyRoutes(localSvcs, task.Host, manifest.Observability, task.Type)
+
+	if _, ok := localSvcs["foredeck"]; ok {
+		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
+			BundleId:  tlsBundleID("apex", manifest.RootDomain),
+			ClusterId: clusterID,
+			Domains:   []string{manifest.RootDomain, "www." + manifest.RootDomain},
+			Issuer:    "navigator",
+			Email:     defaultEmail,
+		}); err != nil {
+			return fmt.Errorf("upsert apex bundle: %w", err)
+		}
+	}
+
+	for name, rawPort := range localSvcs {
+		port, ok := rawPort.(int)
+		if !ok || port == 0 {
+			continue
+		}
+
+		domains, bundleID := autoIngressDomains(name, manifest, clusterID)
+		if len(domains) == 0 || bundleID == "" {
+			continue
+		}
+
+		metadata := map[string]interface{}{}
+		switch name {
+		case "bridge":
+			metadata["websocket_path"] = "/graphql/ws"
+		case "chartroom":
+			metadata["upgrade_all"] = true
+		case "chatwoot":
+			metadata["websocket_path"] = "/cable"
+		case "foghorn":
+			metadata["geo_proxy_headers"] = true
+			metadata["geoip_db_path"] = "/var/lib/GeoIP/GeoLite2-City.mmdb"
+		}
+		siteMetadata, err := structpb.NewStruct(metadata)
+		if err != nil {
+			return fmt.Errorf("encode ingress metadata: %w", err)
+		}
+
+		if _, err := registrar.UpsertIngressSite(ctx, &pb.IngressSite{
+			SiteId:      fmt.Sprintf("%s-%s", name, task.Host),
+			ClusterId:   clusterID,
+			NodeId:      task.Host,
+			Domains:     domains,
+			TlsBundleId: bundleID,
+			Kind:        "reverse_proxy_tcp",
+			Upstream:    fmt.Sprintf("localhost:%d", port),
+			Metadata:    siteMetadata,
+		}); err != nil {
+			return fmt.Errorf("upsert ingress site for %s: %w", name, err)
+		}
+	}
+
+	for bundleID, cfg := range manifest.TLSBundles {
+		if cfg.Cluster != "" && cfg.Cluster != clusterID {
+			continue
+		}
+		email := strings.TrimSpace(cfg.Email)
+		if email == "" {
+			email = defaultEmail
+		}
+		issuer := strings.TrimSpace(cfg.Issuer)
+		if issuer == "" {
+			issuer = "navigator"
+		}
+		var metadata *structpb.Struct
+		if len(cfg.Metadata) > 0 {
+			var err error
+			metadata, err = structpb.NewStruct(stringMapToInterfaceMap(cfg.Metadata))
+			if err != nil {
+				return fmt.Errorf("encode tls bundle metadata for %s: %w", bundleID, err)
+			}
+		}
+		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
+			BundleId:  bundleID,
+			ClusterId: clusterID,
+			Domains:   cfg.Domains,
+			Issuer:    issuer,
+			Email:     email,
+			Metadata:  metadata,
+		}); err != nil {
+			return fmt.Errorf("upsert explicit tls bundle %s: %w", bundleID, err)
+		}
+	}
+
+	for siteID, cfg := range manifest.IngressSites {
+		if cfg.Node != task.Host {
+			continue
+		}
+		siteClusterID := clusterID
+		if cfg.Cluster != "" {
+			siteClusterID = cfg.Cluster
+		}
+		var metadata *structpb.Struct
+		if len(cfg.Metadata) > 0 {
+			var err error
+			metadata, err = structpb.NewStruct(stringMapToInterfaceMap(cfg.Metadata))
+			if err != nil {
+				return fmt.Errorf("encode ingress site metadata for %s: %w", siteID, err)
+			}
+		}
+		if _, err := registrar.UpsertIngressSite(ctx, &pb.IngressSite{
+			SiteId:      siteID,
+			ClusterId:   siteClusterID,
+			NodeId:      cfg.Node,
+			Domains:     cfg.Domains,
+			TlsBundleId: cfg.TLSBundleID,
+			Kind:        cfg.Kind,
+			Upstream:    cfg.Upstream,
+			Metadata:    metadata,
+		}); err != nil {
+			return fmt.Errorf("upsert explicit ingress site %s: %w", siteID, err)
+		}
+	}
+
+	fmt.Fprintf(out, "    ✓ Registered ingress desired state for %s\n", task.Host)
+	return nil
+}
+
+func stringMapToInterfaceMap(values map[string]string) map[string]interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
+func tlsBundleID(kind, rootDomain string) string {
+	replacer := strings.NewReplacer(".", "-", "*", "wildcard-", " ", "-")
+	return kind + "-" + replacer.Replace(rootDomain)
+}
+
+func clusterScopedRootDomain(manifest *inventory.Manifest, clusterID string) string {
+	if manifest == nil || manifest.RootDomain == "" || clusterID == "" {
+		return ""
+	}
+
+	clusterName := ""
+	if cfg, ok := manifest.Clusters[clusterID]; ok {
+		clusterName = cfg.Name
+	}
+	clusterSlug := pkgdns.ClusterSlug(clusterID, clusterName)
+	if clusterSlug == "" {
+		return ""
+	}
+	return clusterSlug + "." + manifest.RootDomain
+}
+
+func publicServiceRootDomain(serviceType string, manifest *inventory.Manifest, clusterID string) string {
+	if manifest == nil {
+		return ""
+	}
+	if pkgdns.IsClusterScopedServiceType(serviceType) {
+		return clusterScopedRootDomain(manifest, clusterID)
+	}
+	return strings.TrimSpace(manifest.RootDomain)
+}
+
+func ingressWildcardBundleDomains(manifest *inventory.Manifest, clusterID string) []string {
+	if manifest == nil || manifest.RootDomain == "" {
+		return nil
+	}
+
+	domains := []string{manifest.RootDomain}
+	if clusterRoot := clusterScopedRootDomain(manifest, clusterID); clusterRoot != "" {
+		domains = append(domains, clusterRoot)
+	}
+	return domains
+}
+
+func autoIngressDomains(serviceName string, manifest *inventory.Manifest, clusterID string) ([]string, string) {
+	if serviceName == "foredeck" {
+		if manifest == nil || manifest.RootDomain == "" {
+			return nil, ""
+		}
+		return []string{manifest.RootDomain, "www." + manifest.RootDomain}, tlsBundleID("apex", manifest.RootDomain)
+	}
+
+	serviceType, ok := publicServiceType(serviceName)
+	if !ok {
+		return nil, ""
+	}
+	rootDomain := publicServiceRootDomain(serviceType, manifest, clusterID)
+	if rootDomain == "" {
+		return nil, ""
+	}
+	fqdn, ok := pkgdns.ServiceFQDN(serviceType, rootDomain)
+	if !ok || fqdn == "" {
+		return nil, ""
+	}
+	return []string{fqdn}, tlsBundleID("wildcard", rootDomain)
+}
+
+func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+	grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string)
+	if !ok {
+		grpcAddr = ""
+	}
+	serviceToken, ok := runtimeData["service_token"].(string)
+	if !ok {
+		serviceToken = ""
+	}
+	if grpcAddr == "" || serviceToken == "" {
+		return fmt.Errorf("missing Quartermaster connection info for foghorn reconciliation")
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		return fmt.Errorf("connect Quartermaster for foghorn reconciliation: %w", err)
+	}
+	defer client.Close()
+
+	var lastErr error
+	for attempt := 1; attempt <= 6; attempt++ {
+		lastErr = reconcileFoghornClusterAssignmentsWithClient(ctx, cmd.OutOrStdout(), manifest, client)
+		if lastErr == nil {
+			return nil
+		}
+		if attempt == 6 {
+			break
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "    Retry %d/5 after reconciliation failure: %v\n", attempt, lastErr)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	return lastErr
+}
+
+func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, assigner foghornClusterAssigner) error {
+	fmt.Fprintln(out, "  Reconciling Foghorn cluster assignments...")
+
+	for _, clusterID := range manifest.AllClusterIDs() {
+		assignCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := assigner.AssignFoghornToCluster(assignCtx, &pb.AssignFoghornToClusterRequest{
+			ClusterId: clusterID,
+			Count:     1,
+		})
+		cancel()
+		if err != nil {
+			return fmt.Errorf("assign foghorn to cluster %s: %w", clusterID, err)
+		}
+
+		fmt.Fprintf(out, "    ✓ Foghorn assigned to cluster %s\n", clusterID)
+	}
+
+	return nil
 }
 
 // buildTaskConfig creates a ServiceConfig for a task
@@ -464,6 +1223,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			if svc.EnvFile != "" {
 				config.EnvFile = svc.EnvFile
 			}
+			for k, v := range svc.Config {
+				config.Metadata[k] = v
+			}
 			if port, err := resolvePort(baseName, svc); err == nil && port != 0 {
 				config.Port = port
 			}
@@ -485,7 +1247,34 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			if iface.EnvFile != "" {
 				config.EnvFile = iface.EnvFile
 			}
+			for k, v := range iface.Config {
+				config.Metadata[k] = v
+			}
 			if port, err := resolvePort(baseName, iface); err == nil && port != 0 {
+				config.Port = port
+			}
+		}
+		// Observability overrides
+		if obs, ok := manifest.Observability[baseName]; ok {
+			if obs.Mode != "" {
+				config.Mode = obs.Mode
+			}
+			if obs.Version != "" {
+				config.Version = obs.Version
+			}
+			if obs.Image != "" {
+				config.Image = obs.Image
+			}
+			if obs.BinaryURL != "" {
+				config.BinaryURL = obs.BinaryURL
+			}
+			if obs.EnvFile != "" {
+				config.EnvFile = obs.EnvFile
+			}
+			for k, v := range obs.Config {
+				config.Metadata[k] = v
+			}
+			if port, err := resolvePort(baseName, obs); err == nil && port != 0 {
 				config.Port = port
 			}
 		}
@@ -544,6 +1333,25 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if len(manifest.Infrastructure.Kafka.Topics) > 0 {
 					config.Metadata["topics"] = kafkaTopicsToMetadata(manifest.Infrastructure.Kafka.Topics)
 				}
+				brokerCount := len(manifest.Infrastructure.Kafka.Brokers)
+				if brokerCount > 0 {
+					config.Metadata["broker_count"] = brokerCount
+				}
+				if manifest.Infrastructure.Kafka.DeleteTopicEnable != nil {
+					config.Metadata["delete_topic_enable"] = *manifest.Infrastructure.Kafka.DeleteTopicEnable
+				}
+				if manifest.Infrastructure.Kafka.MinInSyncReplicas > 0 {
+					config.Metadata["min_insync_replicas"] = manifest.Infrastructure.Kafka.MinInSyncReplicas
+				}
+				if manifest.Infrastructure.Kafka.OffsetsTopicReplicationFactor > 0 {
+					config.Metadata["offsets_topic_replication_factor"] = manifest.Infrastructure.Kafka.OffsetsTopicReplicationFactor
+				}
+				if manifest.Infrastructure.Kafka.TransactionStateLogReplicationFactor > 0 {
+					config.Metadata["transaction_state_log_replication_factor"] = manifest.Infrastructure.Kafka.TransactionStateLogReplicationFactor
+				}
+				if manifest.Infrastructure.Kafka.TransactionStateLogMinISR > 0 {
+					config.Metadata["transaction_state_log_min_isr"] = manifest.Infrastructure.Kafka.TransactionStateLogMinISR
+				}
 			}
 		case "zookeeper":
 			if manifest.Infrastructure.Zookeeper != nil {
@@ -574,6 +1382,13 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Version = manifest.Infrastructure.Redis.Version
 				}
 				if inst := resolveRedisInstance(task.Name, manifest); inst != nil {
+					engine := manifest.Infrastructure.Redis.Engine
+					if inst.Engine != "" {
+						engine = inst.Engine
+					}
+					if engine != "" {
+						config.Metadata["engine"] = engine
+					}
 					if inst.Port != 0 {
 						config.Port = inst.Port
 					}
@@ -640,6 +1455,21 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				config.Metadata["enrollment_token"] = token
 			}
 		}
+		if tokens, ok := runtimeData["cert_issue_tokens"].(map[string]string); ok && task.Host != "" {
+			if token, ok := tokens[task.Host]; ok {
+				config.Metadata["cert_issue_token"] = token
+			}
+		}
+		if services := internalGRPCLeafServicesForHost(manifest, task.Host); len(services) > 0 {
+			config.Metadata["expected_internal_grpc_services"] = services
+		}
+	}
+
+	if task.Type == "vmagent" {
+		config.Mode = "docker"
+		if targets := buildVMAgentScrapeTargets(manifest, task.Host); len(targets) > 0 {
+			config.Metadata["scrape_targets"] = targets
+		}
 	}
 
 	// Reverse proxy metadata: inject root_domain and colocated services
@@ -647,21 +1477,27 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		if manifest.RootDomain != "" {
 			config.Metadata["root_domain"] = manifest.RootDomain
 		}
-		localSvcs := make(map[string]interface{})
-		for ifaceName, iface := range manifest.Interfaces {
-			if !iface.Enabled || ifaceName == task.Type {
-				continue
-			}
-			if iface.Host == task.Host || containsHost(iface.Hosts, task.Host) {
-				port := iface.Port
-				if port == 0 {
-					port = provisioner.ServicePorts[ifaceName]
-				}
-				localSvcs[ifaceName] = port
-			}
+		config.Metadata["node_id"] = task.Host
+		clusterID := manifest.HostCluster(task.Host)
+		if clusterID == "" {
+			clusterID = manifest.ResolveCluster(task.Type)
 		}
+		localSvcs := make(map[string]interface{})
+		addLocalProxyRoutes(localSvcs, task.Host, manifest.Services, task.Type)
+		addLocalProxyRoutes(localSvcs, task.Host, manifest.Interfaces, task.Type)
+		addLocalProxyRoutes(localSvcs, task.Host, manifest.Observability, task.Type)
 		if len(localSvcs) > 0 {
 			config.Metadata["local_services"] = localSvcs
+		}
+		if routes := buildExtraProxyRoutesForHost(manifest, task.Host, clusterID); len(routes) > 0 {
+			config.Metadata["extra_proxy_routes"] = routes
+		}
+		if grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string); ok && grpcAddr != "" {
+			config.Metadata["quartermaster_http_url"] = quartermasterHTTPURL(grpcAddr)
+		}
+		config.Metadata["navigator_http_url"] = "http://navigator:18010"
+		if serviceToken, ok := runtimeData["service_token"].(string); ok && serviceToken != "" {
+			config.Metadata["service_token"] = serviceToken
 		}
 	}
 
@@ -685,6 +1521,268 @@ func containsHost(hosts []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func ensureProvisionGeoIP(ctx context.Context, out io.Writer, manifest *inventory.Manifest, manifestDir string, pool *ssh.Pool) error {
+	if manifest == nil || manifest.GeoIP == nil || !manifest.GeoIP.Enabled {
+		return nil
+	}
+
+	services := effectiveGeoIPServices(manifest, nil)
+	if len(services) == 0 {
+		return nil
+	}
+
+	source := effectiveGeoIPSource(manifest, "")
+	filePath := effectiveGeoIPFilePath(manifest, "", manifestDir)
+	licenseKey := effectiveGeoIPLicenseKey(manifest, "")
+	remotePath := effectiveGeoIPRemotePath(manifest, "")
+
+	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, manifest, source, filePath, licenseKey)
+	if err != nil {
+		return fmt.Errorf("geoip provisioning failed: %w", err)
+	}
+	defer cleanup()
+
+	if _, err := uploadGeoIPToHosts(ctx, manifest, pool, mmdbPath, remotePath, services, false, out); err != nil {
+		return fmt.Errorf("geoip provisioning failed: %w", err)
+	}
+
+	return nil
+}
+
+func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []map[string]interface{} {
+	if manifest == nil || hostName == "" {
+		return nil
+	}
+	metricsCapableServices := map[string]struct{}{
+		"bridge":           {},
+		"chandler":         {},
+		"commodore":        {},
+		"deckhand":         {},
+		"decklog":          {},
+		"foghorn":          {},
+		"helmsman":         {},
+		"livepeer-gateway": {},
+		"livepeer-signer":  {},
+		"navigator":        {},
+		"periscope-ingest": {},
+		"periscope-query":  {},
+		"privateer":        {},
+		"purser":           {},
+		"quartermaster":    {},
+		"signalman":        {},
+		"skipper":          {},
+		"steward":          {},
+		"victoriametrics":  {},
+		"vmagent":          {},
+	}
+
+	type target struct {
+		name   string
+		port   int
+		path   string
+		labels map[string]string
+	}
+
+	var targets []target
+	addTarget := func(name string, svc inventory.ServiceConfig, source string) {
+		if !svc.Enabled {
+			return
+		}
+		if _, ok := metricsCapableServices[name]; !ok {
+			return
+		}
+		if svc.Host != hostName && !containsHost(svc.Hosts, hostName) {
+			return
+		}
+		port, err := resolvePort(name, svc)
+		if err != nil || port == 0 {
+			return
+		}
+		path := "/metrics"
+		if name == "victoriametrics" {
+			path = "/metrics"
+		}
+		targets = append(targets, target{
+			name: name,
+			port: port,
+			path: path,
+			labels: map[string]string{
+				"frameworks_service": name,
+				"frameworks_source":  source,
+				"node_id":            hostName,
+			},
+		})
+	}
+
+	for name, svc := range manifest.Services {
+		addTarget(name, svc, "services")
+	}
+	for name, svc := range manifest.Interfaces {
+		addTarget(name, svc, "interfaces")
+	}
+	for name, svc := range manifest.Observability {
+		if name == "grafana" {
+			continue
+		}
+		addTarget(name, svc, "observability")
+	}
+
+	if len(targets) == 0 {
+		return nil
+	}
+
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].name == targets[j].name {
+			return targets[i].port < targets[j].port
+		}
+		return targets[i].name < targets[j].name
+	})
+
+	result := make([]map[string]interface{}, 0, len(targets))
+	for _, tgt := range targets {
+		result = append(result, map[string]interface{}{
+			"job_name": tgt.name,
+			"targets":  []string{fmt.Sprintf("127.0.0.1:%d", tgt.port)},
+			"path":     tgt.path,
+			"labels":   tgt.labels,
+		})
+	}
+
+	return result
+}
+
+func defaultVictoriaMetricsHost(manifest *inventory.Manifest) (string, int) {
+	if manifest == nil {
+		return "", 0
+	}
+	obs, ok := manifest.Observability["victoriametrics"]
+	if !ok || !obs.Enabled {
+		return "", 0
+	}
+	hostName := obs.Host
+	if hostName == "" && len(obs.Hosts) > 0 {
+		hostName = obs.Hosts[0]
+	}
+	if hostName == "" {
+		return "", 0
+	}
+	port, err := resolvePort("victoriametrics", obs)
+	if err != nil || port == 0 {
+		port = provisioner.ServicePorts["victoriametrics"]
+	}
+	return manifestMeshHostname(manifest, hostName), port
+}
+
+func defaultVictoriaMetricsWriteURL(manifest *inventory.Manifest) string {
+	host, port := defaultVictoriaMetricsHost(manifest)
+	if host == "" || port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://%s:%d/api/v1/write", host, port)
+}
+
+func defaultVictoriaMetricsDatasourceURL(manifest *inventory.Manifest) string {
+	host, port := defaultVictoriaMetricsHost(manifest)
+	if host == "" || port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://%s:%d/prometheus", host, port)
+}
+
+func internalGRPCLeafServicesForHost(manifest *inventory.Manifest, hostName string) []string {
+	if manifest == nil || hostName == "" {
+		return nil
+	}
+
+	var services []string
+	for serviceName, svc := range manifest.Services {
+		if !svc.Enabled || !usesInternalGRPCLeaf(serviceName) {
+			continue
+		}
+		if svc.Host == hostName || containsHost(svc.Hosts, hostName) {
+			services = append(services, serviceName)
+		}
+	}
+
+	sort.Strings(services)
+	return services
+}
+
+func quartermasterHTTPURL(grpcAddr string) string {
+	host, _, err := net.SplitHostPort(grpcAddr)
+	if err == nil && host != "" {
+		return "http://" + host + ":18002"
+	}
+	if idx := strings.LastIndex(grpcAddr, ":"); idx > 0 {
+		return "http://" + grpcAddr[:idx] + ":18002"
+	}
+	return "http://quartermaster:18002"
+}
+
+var proxyRouteServiceNames = map[string]struct{}{
+	"bridge":    {},
+	"chandler":  {},
+	"chartroom": {},
+	"chatwoot":  {},
+	"foghorn":   {},
+	"foredeck":  {},
+	"logbook":   {},
+	"listmonk":  {},
+	"steward":   {},
+	"vmauth":    {},
+}
+
+func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, clusterID string) []map[string]interface{} {
+	if manifest == nil || hostName == "" || clusterID == "" {
+		return nil
+	}
+	vmauth, ok := manifest.Observability["vmauth"]
+	if !ok || !vmauth.Enabled {
+		return nil
+	}
+	if vmauth.Host != hostName && !containsHost(vmauth.Hosts, hostName) {
+		return nil
+	}
+	rootDomain := publicServiceRootDomain("telemetry", manifest, clusterID)
+	if rootDomain == "" {
+		return nil
+	}
+	fqdn, ok := pkgdns.ServiceFQDN("telemetry", rootDomain)
+	if !ok || fqdn == "" {
+		return nil
+	}
+	port, err := resolvePort("vmauth", vmauth)
+	if err != nil || port == 0 {
+		port = provisioner.ServicePorts["vmauth"]
+	}
+	return []map[string]interface{}{
+		{
+			"name":         "telemetry",
+			"server_names": []string{fqdn},
+			"upstream":     fmt.Sprintf("127.0.0.1:%d", port),
+		},
+	}
+}
+
+func addLocalProxyRoutes(routes map[string]interface{}, hostName string, services map[string]inventory.ServiceConfig, skipName string) {
+	for name, svc := range services {
+		if !svc.Enabled || name == skipName {
+			continue
+		}
+		if _, ok := proxyRouteServiceNames[name]; !ok {
+			continue
+		}
+		if svc.Host != hostName && !containsHost(svc.Hosts, hostName) {
+			continue
+		}
+		port, err := resolvePort(name, svc)
+		if err != nil || port == 0 {
+			continue
+		}
+		routes[name] = port
+	}
 }
 
 type zookeeperNodeConfig struct {
@@ -824,27 +1922,31 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface
 	return metadata
 }
 
-// loadInfraCredentials reads the manifest env_file and extracts database credentials
+// loadInfraCredentials reads the manifest env files and extracts database credentials
 // needed by infrastructure Initialize/Configure steps.
 func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) map[string]interface{} {
 	result := make(map[string]interface{})
-	if manifest.EnvFile == "" {
+	envFiles := manifest.SharedEnvFiles()
+	if len(envFiles) == 0 {
 		return result
-	}
-
-	envPath := manifest.EnvFile
-	if manifestDir != "" && !filepath.IsAbs(envPath) {
-		envPath = filepath.Join(manifestDir, envPath)
 	}
 
 	env := make(map[string]string)
-	if err := loadEnvFile(envPath, env); err != nil {
-		return result
+	for _, envFile := range envFiles {
+		envPath := envFile
+		if manifestDir != "" && !filepath.IsAbs(envPath) {
+			envPath = filepath.Join(manifestDir, envPath)
+		}
+		if err := loadEnvFile(envPath, env); err != nil {
+			return result
+		}
 	}
 
 	// Map env vars to metadata keys used by provisioners
 	if v := env["DATABASE_USER"]; v != "" {
 		result["postgres_user"] = v
+	} else {
+		result["postgres_user"] = "frameworks"
 	}
 	if v := env["DATABASE_PASSWORD"]; v != "" {
 		result["postgres_password"] = v
@@ -925,19 +2027,32 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 }
 
 // provisionTask provisions a single task
-func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string) error {
+func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string) (*taskProvisionOutcome, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	// Get provisioner from registry
 	prov, err := provisioner.GetProvisioner(task.Type, pool)
 	if err != nil {
-		return fmt.Errorf("failed to get provisioner: %w", err)
+		return nil, fmt.Errorf("failed to get provisioner: %w", err)
+	}
+
+	beforeState, err := prov.Detect(ctx, host)
+	if err != nil {
+		beforeState = nil
+	}
+	if task.Type == "privateer" && (force || !serviceRunning(beforeState)) {
+		if err = ensurePrivateerEnrollmentToken(ctx, manifest, runtimeData, task.ClusterID); err != nil {
+			return nil, err
+		}
+		if err = ensurePrivateerCertIssueToken(ctx, manifest, runtimeData, task.ClusterID, task.Host); err != nil {
+			return nil, err
+		}
 	}
 
 	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Preflight: check required external env vars
@@ -954,7 +2069,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 				fmt.Printf("      %s — %s\n", mk.Key, mk.SetupGuide)
 			}
 			if !ignoreValidation {
-				return fmt.Errorf("%s requires %d missing env var(s) — provide them in env_file or use --ignore-validation to deploy without starting", task.Name, len(missing))
+				return nil, fmt.Errorf("%s requires %d missing env var(s) — provide them in shared env files, a per-service env_file, or use --ignore-validation to deploy without starting", task.Name, len(missing))
 			}
 			config.DeferStart = true
 			fmt.Printf("  ⏸ %s: deploying without starting (--ignore-validation)\n", task.Name)
@@ -963,17 +2078,21 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 
 	// Provision
 	if err := prov.Provision(ctx, host, config); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Skip validation for deferred services
 	if config.DeferStart {
-		fmt.Printf("  ⏸ %s deployed but not started. Add missing config to env_file, then re-run.\n", task.Name)
-		return nil
+		fmt.Printf("  ⏸ %s deployed but not started. Add missing config to the shared env files or service env_file, then re-run.\n", task.Name)
+		return &taskProvisionOutcome{
+			config:            config,
+			previouslyRunning: serviceRunning(beforeState),
+			deferred:          true,
+		}, nil
 	}
 
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Validate
@@ -981,12 +2100,12 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		if ignoreValidation {
 			fmt.Printf("    Warning: validation failed (ignored due to --ignore-validation): %v\n", err)
 		} else {
-			return fmt.Errorf("validation failed for %s: %w (use --ignore-validation to continue anyway)", task.Name, err)
+			return nil, fmt.Errorf("validation failed for %s: %w (use --ignore-validation to continue anyway)", task.Name, err)
 		}
 	}
 
 	// Infrastructure tasks: run Initialize + Configure after Provision/Validate.
-	// Load credentials from manifest env_file so Initialize can create app users.
+	// Load credentials from manifest env files so Initialize can create app users.
 	if task.Phase == orchestrator.PhaseInfrastructure {
 		infraCreds := loadInfraCredentials(manifest, manifestDir)
 		for k, v := range infraCreds {
@@ -997,7 +2116,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 
 		if err := prov.Initialize(ctx, host, config); err != nil {
-			return fmt.Errorf("initialization failed for %s: %w", task.Name, err)
+			return nil, fmt.Errorf("initialization failed for %s: %w", task.Name, err)
 		}
 
 		// Configure deploys auth credentials (e.g. ClickHouse users.xml)
@@ -1006,63 +2125,41 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 		if c, ok := prov.(configurer); ok {
 			if err := c.Configure(ctx, host, config); err != nil {
-				return fmt.Errorf("configuration failed for %s: %w", task.Name, err)
+				return nil, fmt.Errorf("configuration failed for %s: %w", task.Name, err)
 			}
 		}
 	}
 
-	return nil
+	afterState, err := prov.Detect(ctx, host)
+	if err != nil {
+		afterState = nil
+	}
+
+	return &taskProvisionOutcome{
+		config:            config,
+		previouslyRunning: serviceRunning(beforeState),
+		running:           serviceRunning(afterState),
+	}, nil
 }
 
 // bootstrapResult holds the output of the cluster bootstrap process
 type bootstrapResult struct {
-	EnrollmentTokens map[string]string // clusterID -> token
-	ServiceToken     string
-	QMGRPCAddr       string
+	SystemTenantID string
+	ServiceToken   string
+	QMGRPCAddr     string
 }
 
 // runBootstrap connects to Quartermaster and generates infrastructure tokens
-func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrapResult, error) {
-	serviceToken := os.Getenv("SERVICE_TOKEN")
-	if serviceToken == "" {
-		if cfg, _, err := fwcfg.Load(); err == nil {
-			cliCtx := fwcfg.GetCurrent(cfg)
-			cliCtx.Auth = fwcfg.ResolveAuth(cliCtx)
-			serviceToken = cliCtx.Auth.ServiceToken
-		}
+func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir string) (*bootstrapResult, error) {
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	if err != nil {
+		return nil, err
 	}
-	if serviceToken == "" {
-		return nil, fmt.Errorf("service token required for bootstrapping (set SERVICE_TOKEN or run 'frameworks login')")
-	}
-
-	var qmHost string
-	var qmSvc inventory.ServiceConfig
-	for name, svc := range manifest.Services {
-		if name == "quartermaster" {
-			qmHost = svc.Host
-			qmSvc = svc
-			if qmHost == "" && len(svc.Hosts) > 0 {
-				qmHost = svc.Hosts[0]
-			}
-			break
-		}
-	}
-
-	host, ok := manifest.GetHost(qmHost)
-	if !ok {
-		return nil, fmt.Errorf("quartermaster host not found in manifest")
-	}
-
-	// Use gRPC client instead of HTTP
-	grpcPort := 19002
-	if qmSvc.GRPCPort != 0 {
-		grpcPort = qmSvc.GRPCPort
-	}
-	grpcAddr := fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort)
 	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:     grpcAddr,
-		Logger:       logging.NewLogger(),
-		ServiceToken: serviceToken,
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
@@ -1102,19 +2199,26 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrap
 	}
 
 	// 2. Register all clusters
-	clusterIDs := manifest.AllClusterIDs()
-	basePort := 18002
-	if qmSvc.Port != 0 {
-		basePort = qmSvc.Port
-	}
-	baseURL := fmt.Sprintf("http://%s:%d", host.ExternalIP, basePort)
-	if bridgeSvc, ok := manifest.Services["bridge"]; ok && bridgeSvc.Enabled {
-		if bridgeSvc.Port != 0 {
-			if bridgeHost, ok := manifest.GetHost(bridgeSvc.Host); ok {
-				baseURL = fmt.Sprintf("http://%s:%d", bridgeHost.ExternalIP, bridgeSvc.Port)
-			}
+	var qmHost string
+	var qmSvc inventory.ServiceConfig
+	for name, svc := range manifest.Services {
+		if name != "quartermaster" {
+			continue
 		}
+		qmHost = svc.Host
+		qmSvc = svc
+		if qmHost == "" && len(svc.Hosts) > 0 {
+			qmHost = svc.Hosts[0]
+		}
+		break
 	}
+	host, ok := manifest.GetHost(qmHost)
+	if !ok {
+		return nil, fmt.Errorf("quartermaster host not found in manifest")
+	}
+
+	clusterIDs := manifest.AllClusterIDs()
+	baseURL := desiredClusterBaseURL(manifest, host, qmSvc)
 
 	for _, clusterID := range clusterIDs {
 		clusterName := fmt.Sprintf("FrameWorks %s %s Cluster", manifest.Type, manifest.Profile)
@@ -1129,7 +2233,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrap
 			return nil, fmt.Errorf("cluster %q has unsupported cluster type %q (allowed: %s)", clusterID, clusterType, strings.Join(infra.ClusterTypeValues(), ", "))
 		}
 
-		_, err = client.GetCluster(ctx, clusterID)
+		clusterResp, err := client.GetCluster(ctx, clusterID)
 		if err != nil && status.Code(err) == codes.NotFound {
 			fmt.Printf("  Registering Cluster '%s'...\n", clusterID)
 			_, err = client.CreateCluster(ctx, &pb.CreateClusterRequest{
@@ -1145,7 +2249,26 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrap
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to check cluster '%s': %w", clusterID, err)
 		} else {
-			fmt.Printf("  ✓ Cluster '%s' already registered.\n", clusterID)
+			updateReq := &pb.UpdateClusterRequest{ClusterId: clusterID}
+			needsUpdate := false
+			if cluster := clusterResp.GetCluster(); cluster != nil {
+				if strings.TrimSpace(cluster.GetClusterName()) != clusterName {
+					updateReq.ClusterName = &clusterName
+					needsUpdate = true
+				}
+				if strings.TrimSpace(cluster.GetBaseUrl()) != baseURL {
+					updateReq.BaseUrl = &baseURL
+					needsUpdate = true
+				}
+			}
+			if needsUpdate {
+				if _, err := client.UpdateCluster(ctx, updateReq); err != nil {
+					return nil, fmt.Errorf("failed to update cluster '%s': %w", clusterID, err)
+				}
+				fmt.Printf("  ✓ Cluster '%s' already registered; updated metadata.\n", clusterID)
+			} else {
+				fmt.Printf("  ✓ Cluster '%s' already registered.\n", clusterID)
+			}
 		}
 	}
 
@@ -1189,97 +2312,37 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (*bootstrap
 		}
 	}
 
-	// 3b. Register service instances for public services on existing host nodes.
-	// Infrastructure nodes are already created above (step 3a).
-	// Services that self-register (bridge, foghorn) are skipped.
-	fmt.Printf("  Registering public service instances...\n")
-	registerServiceInstances := func(name string, svc inventory.ServiceConfig) {
-		serviceType, ok := publicServiceType(name)
-		if !ok {
-			return
-		}
-		if selfRegisters(name) {
-			return
-		}
-		svcDef, hasDef := servicedefs.Lookup(name)
-		if !hasDef {
-			return
-		}
-		hosts := svc.Hosts
-		if len(hosts) == 0 && svc.Host != "" {
-			hosts = []string{svc.Host}
-		}
-		for _, hostName := range hosts {
-			hostInfo, ok := manifest.GetHost(hostName)
-			if !ok {
-				continue
-			}
-			hostCluster := manifest.HostCluster(hostName)
-			if hostCluster == "" {
-				hostCluster = manifest.ResolveCluster(name)
-			}
-			externalIP := hostInfo.ExternalIP
-			healthPath := svcDef.HealthPath
-			effectivePort, _ := resolvePort(name, svc)
-			if effectivePort == 0 {
-				effectivePort = svcDef.DefaultPort
-			}
-			port := int32(effectivePort)
-			_, errBS := client.BootstrapService(ctx, &pb.BootstrapServiceRequest{
-				ServiceToken:   &serviceToken,
-				Type:           serviceType,
-				Version:        "cli-provisioned",
-				Protocol:       "http",
-				HealthEndpoint: &healthPath,
-				Port:           port,
-				AdvertiseHost:  &externalIP,
-				ClusterId:      &hostCluster,
-				NodeId:         &hostName,
-			})
-			if errBS != nil {
-				fmt.Printf("    Warning: failed to register service instance for %s/%s: %v\n", hostName, serviceType, errBS)
-			} else {
-				fmt.Printf("    ✓ Registered service instance: %s/%s (%s:%d)\n", hostName, serviceType, externalIP, port)
-			}
-		}
-	}
-	for name, svc := range manifest.Services {
-		if !svc.Enabled {
-			continue
-		}
-		registerServiceInstances(name, svc)
-	}
-	for name, iface := range manifest.Interfaces {
-		if !iface.Enabled {
-			continue
-		}
-		registerServiceInstances(name, iface)
-	}
-
-	// 4. Generate per-cluster enrollment tokens
-	enrollmentTokens := make(map[string]string)
-	fmt.Printf("  Generating Infrastructure Enrollment Tokens...\n")
-	for _, clusterID := range clusterIDs {
-		cid := clusterID
-		resp, errToken := client.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
-			Name:      fmt.Sprintf("Infrastructure Enrollment Token for %s", cid),
-			Kind:      "infrastructure_node",
-			Ttl:       "720h",
-			TenantId:  &systemTenantID,
-			ClusterId: &cid,
-		})
-		if errToken != nil {
-			return nil, fmt.Errorf("failed to create bootstrap token for cluster '%s': %w", cid, errToken)
-		}
-		enrollmentTokens[cid] = resp.Token.Token
-		fmt.Printf("    ✓ Generated token for cluster %s: %s\n", cid, resp.Token.Id)
-	}
-
 	return &bootstrapResult{
-		EnrollmentTokens: enrollmentTokens,
-		ServiceToken:     serviceToken,
-		QMGRPCAddr:       grpcAddr,
+		SystemTenantID: systemTenantID,
+		ServiceToken:   serviceToken,
+		QMGRPCAddr:     grpcAddr,
 	}, nil
+}
+
+func desiredClusterBaseURL(manifest *inventory.Manifest, quartermasterHost inventory.Host, quartermasterSvc inventory.ServiceConfig) string {
+	if manifest == nil {
+		return ""
+	}
+
+	if rootDomain := strings.TrimSpace(manifest.RootDomain); rootDomain != "" {
+		return rootDomain
+	}
+
+	basePort := 18002
+	if quartermasterSvc.Port != 0 {
+		basePort = quartermasterSvc.Port
+	}
+	baseURL := fmt.Sprintf("http://%s:%d", quartermasterHost.ExternalIP, basePort)
+
+	if bridgeSvc, ok := manifest.Services["bridge"]; ok && bridgeSvc.Enabled {
+		if bridgeSvc.Port != 0 {
+			if bridgeHost, ok := manifest.GetHost(bridgeSvc.Host); ok {
+				baseURL = fmt.Sprintf("http://%s:%d", bridgeHost.ExternalIP, bridgeSvc.Port)
+			}
+		}
+	}
+
+	return baseURL
 }
 
 // selfRegisters returns true for services that create their own
@@ -1298,6 +2361,8 @@ func publicServiceType(serviceName string) (string, bool) {
 	switch serviceName {
 	case "bridge":
 		return "bridge", true
+	case "chandler":
+		return "chandler", true
 	case "foghorn":
 		return "foghorn", true
 	case "chartroom":
@@ -1312,30 +2377,68 @@ func publicServiceType(serviceName string) (string, bool) {
 		return "listmonk", true
 	case "chatwoot":
 		return "chatwoot", true
+	case "livepeer-gateway":
+		return "livepeer-gateway", true
+	case "vmauth":
+		return "telemetry", true
 	default:
 		return "", false
 	}
 }
 
+func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]interface{}, manifestDir string) (map[string]string, error) {
+	if name != "livepeer-gateway" {
+		return nil, nil
+	}
+
+	task := &orchestrator.Task{
+		Name:      name,
+		Type:      name,
+		Host:      hostName,
+		ClusterID: clusterID,
+		Phase:     orchestrator.PhaseApplications,
+	}
+
+	config, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir)
+	if err != nil {
+		return nil, err
+	}
+
+	hostInfo, ok := manifest.GetHost(hostName)
+	if !ok {
+		return nil, fmt.Errorf("host %q not found in manifest", hostName)
+	}
+
+	metadata := map[string]string{
+		servicedefs.LivepeerGatewayMetadataPublicHost: gatewayPublicHost(config.EnvVars, manifest, clusterID),
+		servicedefs.LivepeerGatewayMetadataPublicPort: strconv.Itoa(portFromBindAddr(config.EnvVars["http_addr"], 8935)),
+		servicedefs.LivepeerGatewayMetadataAdminHost:  hostInfo.ExternalIP,
+		servicedefs.LivepeerGatewayMetadataAdminPort:  strconv.Itoa(portFromBindAddr(config.EnvVars["cli_addr"], 7935)),
+	}
+	if walletAddr := firstNonEmptyEnv(config.EnvVars, "eth_acct_addr", "LIVEPEER_ETH_ACCT_ADDR"); walletAddr != "" {
+		metadata[servicedefs.LivepeerGatewayMetadataWalletAddress] = walletAddr
+	}
+
+	return metadata, nil
+}
+
 // buildServiceEnvVars generates merged environment variables for a service.
-// Merge order (later wins): auto-generated → shared env_file → per-service env_file → inline config.
+// Merge order (later wins): auto-generated → shared env_files → per-service env_file → inline config.
 func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, perServiceEnvFile string, manifestDir string) (map[string]string, error) {
 	env := make(map[string]string)
 
 	// 1. Auto-generated infrastructure env vars
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
 		port := pg.EffectivePort()
-		var pgIP string
+		var pgHost string
 		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 			// Use first node for DATABASE_HOST (services need a single endpoint)
-			if h, ok := manifest.GetHost(pg.Nodes[0].Host); ok {
-				pgIP = h.ExternalIP
-			}
-		} else if h, ok := manifest.GetHost(pg.Host); ok {
-			pgIP = h.ExternalIP
+			pgHost = manifestMeshHostname(manifest, pg.Nodes[0].Host)
+		} else {
+			pgHost = manifestMeshHostname(manifest, pg.Host)
 		}
-		if pgIP != "" {
-			env["DATABASE_HOST"] = pgIP
+		if pgHost != "" {
+			env["DATABASE_HOST"] = pgHost
 			env["DATABASE_PORT"] = strconv.Itoa(port)
 		}
 	}
@@ -1343,12 +2446,13 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
 		var brokers []string
 		for _, b := range kafka.Brokers {
-			if bHost, ok := manifest.GetHost(b.Host); ok {
+			brokerHost := manifestMeshHostname(manifest, b.Host)
+			if brokerHost != "" {
 				port := b.Port
 				if port == 0 {
 					port = 9092
 				}
-				brokers = append(brokers, fmt.Sprintf("%s:%d", bHost.ExternalIP, port))
+				brokers = append(brokers, fmt.Sprintf("%s:%d", brokerHost, port))
 			}
 		}
 		if len(brokers) > 0 {
@@ -1363,13 +2467,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
-		if chHost, ok := manifest.GetHost(ch.Host); ok {
+		if chHost := manifestMeshHostname(manifest, ch.Host); chHost != "" {
 			port := ch.Port
 			if port == 0 {
 				port = 9000
 			}
-			env["CLICKHOUSE_ADDR"] = fmt.Sprintf("%s:%d", chHost.ExternalIP, port)
-			env["CLICKHOUSE_HOST"] = chHost.ExternalIP
+			env["CLICKHOUSE_ADDR"] = fmt.Sprintf("%s:%d", chHost, port)
 			env["CLICKHOUSE_PORT"] = strconv.Itoa(port)
 			env["CLICKHOUSE_DB"] = "periscope"
 			env["CLICKHOUSE_USER"] = "frameworks"
@@ -1381,20 +2484,20 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 
 	if redis := manifest.Infrastructure.Redis; redis != nil && redis.Enabled {
 		for _, inst := range redis.Instances {
-			if rHost, ok := manifest.GetHost(inst.Host); ok {
+			if rHost := manifestMeshHostname(manifest, inst.Host); rHost != "" {
 				port := inst.Port
 				if port == 0 {
 					port = 6379
 				}
 				// REDIS_{NAME}_ADDR for each named instance
 				key := fmt.Sprintf("REDIS_%s_ADDR", strings.ToUpper(inst.Name))
-				env[key] = fmt.Sprintf("%s:%d", rHost.ExternalIP, port)
+				env[key] = fmt.Sprintf("%s:%d", rHost, port)
 			}
 		}
 	}
 
-	// Service gRPC addresses — use mesh DNS FQDNs (resolved by Privateer after mesh is up).
-	// Infrastructure addresses above use external_ip; service-to-service uses mesh DNS.
+	// Backend dependencies use mesh-reachable DNS names (resolved by Privateer after mesh is up).
+	// Public/external access is handled separately by service registration and edge provisioning.
 	for _, grpc := range servicedefs.GRPCServices() {
 		svc, ok := manifest.Services[grpc.ServiceID]
 		if !ok || !svc.Enabled {
@@ -1415,21 +2518,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
 			env["REDIS_URL"] = fmt.Sprintf("redis://%s", addr)
 		}
-		// Chandler host/port for asset management
-		if chandler, ok := manifest.Services["chandler"]; ok && chandler.Enabled {
-			chHost := chandler.Host
-			if chHost == "" && len(chandler.Hosts) > 0 {
-				chHost = chandler.Hosts[0]
-			}
-			if h, ok := manifest.GetHost(chHost); ok {
-				chPort := chandler.Port
-				if chPort == 0 {
-					chPort = 18020
-				}
-				env["CHANDLER_HOST"] = h.ExternalIP
-				env["CHANDLER_PORT"] = strconv.Itoa(chPort)
-			}
-		}
 		// Instance ID for HA state sync — stable across restarts
 		if env["FOGHORN_INSTANCE_ID"] == "" {
 			if task.Host != "" {
@@ -1446,10 +2534,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if baseName == "navigator" {
 		env["NAVIGATOR_PORT"] = "18010"
 		env["NAVIGATOR_GRPC_PORT"] = "18011"
-		if manifest.RootDomain != "" && env["NAVIGATOR_ROOT_DOMAIN"] == "" {
-			env["NAVIGATOR_ROOT_DOMAIN"] = manifest.RootDomain
-		}
-		// BRAND_CONTACT_EMAIL comes from env_file (FROM_EMAIL in production.env)
 	}
 
 	// Listmonk URL — self-hosted, address from manifest
@@ -1458,12 +2542,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if lmHost == "" && len(listmonk.Hosts) > 0 {
 			lmHost = listmonk.Hosts[0]
 		}
-		if h, ok := manifest.GetHost(lmHost); ok {
+		if lmInternalHost := manifestMeshHostname(manifest, lmHost); lmInternalHost != "" {
 			lmPort := listmonk.Port
 			if lmPort == 0 {
 				lmPort = 9001
 			}
-			env["LISTMONK_URL"] = fmt.Sprintf("http://%s:%d", h.ExternalIP, lmPort)
+			env["LISTMONK_URL"] = fmt.Sprintf("http://%s:%d", lmInternalHost, lmPort)
 		}
 	}
 
@@ -1473,12 +2557,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if cwHost == "" && len(chatwoot.Hosts) > 0 {
 			cwHost = chatwoot.Hosts[0]
 		}
-		if h, ok := manifest.GetHost(cwHost); ok {
+		if cwInternalHost := manifestMeshHostname(manifest, cwHost); cwInternalHost != "" {
 			cwPort := chatwoot.Port
 			if cwPort == 0 {
 				cwPort = 18092
 			}
-			env["CHATWOOT_HOST"] = h.ExternalIP
+			env["CHATWOOT_HOST"] = cwInternalHost
 			env["CHATWOOT_PORT"] = strconv.Itoa(cwPort)
 		}
 	}
@@ -1489,6 +2573,17 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 	if task.Host != "" {
 		env["NODE_ID"] = task.Host
+	}
+	if region := manifestTaskRegion(manifest, task); region != "" && env["REGION"] == "" {
+		env["REGION"] = region
+	}
+	if _, ok := manifest.Services["navigator"]; ok {
+		env["GRPC_TLS_CA_PATH"] = "/etc/frameworks/pki/ca.crt"
+	}
+	if usesInternalGRPCLeaf(serviceNameFromTask(task.Name)) {
+		serviceName := serviceNameFromTask(task.Name)
+		env["GRPC_TLS_CERT_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.crt", serviceName)
+		env["GRPC_TLS_KEY_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.key", serviceName)
 	}
 
 	// Service token
@@ -1503,14 +2598,14 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// 2. Shared env_file from manifest root
-	if manifest.EnvFile != "" {
-		envPath := manifest.EnvFile
+	// 2. Shared env files from manifest root
+	for _, envFile := range manifest.SharedEnvFiles() {
+		envPath := envFile
 		if manifestDir != "" && !filepath.IsAbs(envPath) {
 			envPath = filepath.Join(manifestDir, envPath)
 		}
 		if err := loadEnvFile(envPath, env); err != nil {
-			return nil, fmt.Errorf("manifest env_file: %w", err)
+			return nil, fmt.Errorf("manifest env_files: %w", err)
 		}
 	}
 
@@ -1536,6 +2631,84 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			env[k] = v
 		}
 	}
+	if obs, ok := manifest.Observability[baseName]; ok {
+		for k, v := range obs.Config {
+			env[k] = v
+		}
+	}
+	if baseName == "foghorn" || baseName == "vmauth" {
+		if err := ensureEdgeTelemetryJWTKeypair(runtimeData); err != nil {
+			return nil, err
+		}
+		if env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"] == "" {
+			if value, ok := runtimeData["edge_telemetry_jwt_private_key_pem_b64"].(string); ok {
+				env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"] = value
+			}
+		}
+		if env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"] == "" {
+			if value, ok := runtimeData["edge_telemetry_jwt_public_key_pem_b64"].(string); ok {
+				env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"] = value
+			}
+		}
+	}
+	if baseName == "vmauth" && env["VMAUTH_UPSTREAM_WRITE_URL"] == "" {
+		if url := defaultVictoriaMetricsWriteURL(manifest); url != "" {
+			env["VMAUTH_UPSTREAM_WRITE_URL"] = url
+		}
+	}
+	if vmObs, ok := manifest.Observability["victoriametrics"]; ok {
+		if env["VM_HTTP_AUTH_USERNAME"] == "" {
+			env["VM_HTTP_AUTH_USERNAME"] = vmObs.Config["VM_HTTP_AUTH_USERNAME"]
+		}
+		if env["VM_HTTP_AUTH_PASSWORD"] == "" {
+			env["VM_HTTP_AUTH_PASSWORD"] = vmObs.Config["VM_HTTP_AUTH_PASSWORD"]
+		}
+	}
+
+	if manifest.GeoIP != nil && manifest.GeoIP.Enabled && (baseName == "foghorn" || baseName == "quartermaster") {
+		if env["GEOIP_MMDB_PATH"] == "" {
+			env["GEOIP_MMDB_PATH"] = effectiveGeoIPRemotePath(manifest, "")
+		}
+	}
+
+	if baseName == "victoriametrics" {
+		if env["VM_RETENTION_PERIOD"] == "" {
+			env["VM_RETENTION_PERIOD"] = "90d"
+		}
+	}
+
+	if baseName == "vmagent" {
+		if env["VMAGENT_REMOTE_WRITE_URL"] == "" {
+			if url := defaultVictoriaMetricsWriteURL(manifest); url != "" {
+				env["VMAGENT_REMOTE_WRITE_URL"] = url
+			}
+		}
+		if env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"] == "" && env["VM_HTTP_AUTH_USERNAME"] != "" {
+			env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"] = env["VM_HTTP_AUTH_USERNAME"]
+		}
+		if env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"] == "" && env["VM_HTTP_AUTH_PASSWORD"] != "" {
+			env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"] = env["VM_HTTP_AUTH_PASSWORD"]
+		}
+		if env["VMAGENT_SCRAPE_INTERVAL"] == "" {
+			env["VMAGENT_SCRAPE_INTERVAL"] = "30s"
+		}
+	}
+
+	if baseName == "grafana" && env["VICTORIAMETRICS_URL"] == "" {
+		if url := defaultVictoriaMetricsDatasourceURL(manifest); url != "" {
+			env["VICTORIAMETRICS_URL"] = url
+		}
+	}
+
+	applyProductionRuntimeDefaults(manifest, baseName, env)
+	if err := validateProductionServiceEnv(manifest, baseName, env); err != nil {
+		return nil, err
+	}
+
+	normalizeServiceEnvVars(baseName, env)
+	if baseName == "livepeer-gateway" {
+		applyDefaultLivepeerGatewayHost(env, manifest, task.ClusterID)
+	}
 
 	// 5. Auto-generate missing secrets (SERVICE_TOKEN, JWT_SECRET, etc.)
 	if _, err := credentials.GenerateIfMissing(env); err != nil {
@@ -1545,6 +2718,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// 6. Derive COOKIE_DOMAIN from manifest root_domain
 	if manifest.RootDomain != "" && env["COOKIE_DOMAIN"] == "" {
 		env["COOKIE_DOMAIN"] = manifest.RootDomain
+	}
+	if manifest.RootDomain != "" && env["BRAND_DOMAIN"] == "" {
+		env["BRAND_DOMAIN"] = manifest.RootDomain
+	}
+	if env["DATABASE_USER"] == "" {
+		env["DATABASE_USER"] = "frameworks"
 	}
 
 	// Construct DATABASE_URL from merged credentials (operator may have set
@@ -1569,6 +2748,318 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	return env, nil
+}
+
+func applyProductionRuntimeDefaults(manifest *inventory.Manifest, serviceID string, env map[string]string) {
+	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Profile), "production") {
+		return
+	}
+
+	env["BUILD_ENV"] = "production"
+	if strings.TrimSpace(env["GIN_MODE"]) == "" || strings.EqualFold(strings.TrimSpace(env["GIN_MODE"]), "debug") {
+		env["GIN_MODE"] = "release"
+	}
+
+	env["GRPC_ALLOW_INSECURE"] = "false"
+}
+
+func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string, env map[string]string) error {
+	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Profile), "production") {
+		return nil
+	}
+
+	if serviceID != "navigator" {
+		return nil
+	}
+
+	fileKeys := []string{
+		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE",
+	}
+	b64Keys := []string{
+		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64",
+	}
+
+	allFileKeysPresent := true
+	for _, key := range fileKeys {
+		if strings.TrimSpace(env[key]) == "" {
+			allFileKeysPresent = false
+			break
+		}
+	}
+	if allFileKeysPresent {
+		return nil
+	}
+
+	allB64KeysPresent := true
+	for _, key := range b64Keys {
+		if strings.TrimSpace(env[key]) == "" {
+			allB64KeysPresent = false
+			break
+		}
+	}
+	if allB64KeysPresent {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"service %s: production deploy requires managed internal CA env vars via either files (%s) or base64 PEM envs (%s)",
+		serviceID,
+		strings.Join(fileKeys, ", "),
+		strings.Join(b64Keys, ", "),
+	)
+}
+
+func normalizeServiceEnvVars(serviceID string, env map[string]string) {
+	switch serviceID {
+	case "livepeer-gateway":
+		normalizeLivepeerEnvVars(env)
+		setEnvIfEmpty(env, "auth_webhook_url", "LIVEPEER_AUTH_WEBHOOK_URL")
+		if strings.TrimSpace(env["auth_webhook_url"]) == "" {
+			env["auth_webhook_url"] = defaultLivepeerGatewayAuthWebhookURL
+		}
+	case "livepeer-signer":
+		normalizeLivepeerEnvVars(env)
+	}
+}
+
+func manifestTaskRegion(manifest *inventory.Manifest, task *orchestrator.Task) string {
+	if manifest == nil || task == nil {
+		return ""
+	}
+	if task.Host != "" {
+		if host, ok := manifest.Hosts[task.Host]; ok {
+			if region := strings.TrimSpace(host.Labels["region"]); region != "" {
+				return region
+			}
+			clusterID := strings.TrimSpace(host.Cluster)
+			if clusterID != "" {
+				if cluster, ok := manifest.Clusters[clusterID]; ok {
+					if region := strings.TrimSpace(cluster.Region); region != "" {
+						return region
+					}
+				}
+			}
+		}
+	}
+	if task.ClusterID != "" {
+		if cluster, ok := manifest.Clusters[task.ClusterID]; ok {
+			return strings.TrimSpace(cluster.Region)
+		}
+	}
+	return ""
+}
+
+const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webhooks/livepeer/auth"
+
+func normalizeLivepeerEnvVars(env map[string]string) {
+	setEnvIfEmpty(env, "eth_url", livepeerRPCEnvKeys(env)...)
+	setEnvIfEmpty(env, "eth_acct_addr", "LIVEPEER_ETH_ACCT_ADDR")
+	setEnvIfEmpty(env, "orch_webhook_url", "LIVEPEER_ORCH_WEBHOOK_URL")
+	setEnvIfEmpty(env, "remote_signer_url", "LIVEPEER_REMOTE_SIGNER_URL")
+	setEnvIfEmpty(env, "auth_webhook_url", "LIVEPEER_AUTH_WEBHOOK_URL")
+	setEnvIfEmpty(env, "gateway_host", "LIVEPEER_GATEWAY_HOST")
+}
+
+func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
+	gatewaySvc, ok := manifest.Services["livepeer-gateway"]
+	if !ok || !gatewaySvc.Enabled {
+		return nil
+	}
+
+	privateerSvc, ok := manifest.Services["privateer"]
+	if !ok || !privateerSvc.Enabled {
+		return fmt.Errorf("livepeer-gateway requires privateer to resolve foghorn.internal")
+	}
+
+	privateerHosts := make(map[string]struct{})
+	for _, hostName := range orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts) {
+		privateerHosts[hostName] = struct{}{}
+	}
+
+	var gatewayHosts []string
+	if len(gatewaySvc.Hosts) > 0 {
+		gatewayHosts = gatewaySvc.Hosts
+	} else if gatewaySvc.Host != "" {
+		gatewayHosts = []string{gatewaySvc.Host}
+	}
+
+	for _, hostName := range gatewayHosts {
+		if _, ok := privateerHosts[hostName]; !ok {
+			return fmt.Errorf("livepeer-gateway host %q is not covered by privateer; gateway auth webhook uses foghorn.internal", hostName)
+		}
+	}
+
+	return nil
+}
+
+func validateInternalGRPCTLSCoverage(manifest *inventory.Manifest) error {
+	internalHosts := make(map[string][]string)
+	for serviceName, svc := range manifest.Services {
+		if !svc.Enabled || !usesInternalGRPCLeaf(serviceName) {
+			continue
+		}
+		for _, hostName := range serviceHosts(svc) {
+			internalHosts[hostName] = append(internalHosts[hostName], serviceName)
+		}
+	}
+	if len(internalHosts) == 0 {
+		return nil
+	}
+
+	navigatorSvc, ok := manifest.Services["navigator"]
+	if !ok || !navigatorSvc.Enabled {
+		return fmt.Errorf("internal gRPC TLS requires navigator to issue CA bundles and service leaf certificates")
+	}
+
+	privateerSvc, ok := manifest.Services["privateer"]
+	if !ok || !privateerSvc.Enabled {
+		return fmt.Errorf("internal gRPC TLS requires privateer so nodes receive /etc/frameworks/pki materials")
+	}
+
+	privateerHosts := make(map[string]struct{})
+	for _, hostName := range orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts) {
+		privateerHosts[hostName] = struct{}{}
+	}
+
+	for hostName, services := range internalHosts {
+		if _, ok := privateerHosts[hostName]; ok {
+			continue
+		}
+		sort.Strings(services)
+		return fmt.Errorf("host %q runs internal gRPC services %s but is not covered by privateer", hostName, strings.Join(services, ", "))
+	}
+
+	return nil
+}
+
+func serviceHosts(svc inventory.ServiceConfig) []string {
+	if len(svc.Hosts) > 0 {
+		return svc.Hosts
+	}
+	if svc.Host != "" {
+		return []string{svc.Host}
+	}
+	return nil
+}
+
+func applyDefaultLivepeerGatewayHost(env map[string]string, manifest *inventory.Manifest, clusterID string) {
+	clusterHost := clusterScopedGatewayHost(manifest, clusterID)
+	if clusterHost == "" {
+		return
+	}
+
+	current := strings.TrimSpace(env["gateway_host"])
+	if current == "" {
+		env["gateway_host"] = clusterHost
+		return
+	}
+
+	globalHost := globalGatewayHost(manifest.RootDomain)
+	if current == globalHost {
+		env["gateway_host"] = clusterHost
+	}
+}
+
+func gatewayPublicHost(env map[string]string, manifest *inventory.Manifest, clusterID string) string {
+	if host := strings.TrimSpace(env["gateway_host"]); host != "" {
+		return host
+	}
+	return clusterScopedGatewayHost(manifest, clusterID)
+}
+
+func clusterScopedGatewayHost(manifest *inventory.Manifest, clusterID string) string {
+	if manifest == nil || manifest.RootDomain == "" || clusterID == "" {
+		return ""
+	}
+
+	clusterSlug := pkgdns.ClusterSlug(clusterID, manifest.Clusters[clusterID].Name)
+	if clusterSlug == "" {
+		return ""
+	}
+
+	fqdn, ok := pkgdns.ServiceFQDN("livepeer-gateway", clusterSlug+"."+manifest.RootDomain)
+	if !ok {
+		return ""
+	}
+	return fqdn
+}
+
+func globalGatewayHost(rootDomain string) string {
+	if rootDomain == "" {
+		return ""
+	}
+	fqdn, ok := pkgdns.ServiceFQDN("livepeer-gateway", rootDomain)
+	if !ok {
+		return ""
+	}
+	return fqdn
+}
+
+func portFromBindAddr(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	if strings.HasPrefix(raw, ":") {
+		if port, err := strconv.Atoi(strings.TrimPrefix(raw, ":")); err == nil && port > 0 {
+			return port
+		}
+		return fallback
+	}
+	if _, portStr, err := net.SplitHostPort(raw); err == nil {
+		if port, convErr := strconv.Atoi(portStr); convErr == nil && port > 0 {
+			return port
+		}
+	}
+	if port, err := strconv.Atoi(raw); err == nil && port > 0 {
+		return port
+	}
+	return fallback
+}
+
+func livepeerRPCEnvKeys(env map[string]string) []string {
+	keys := []string{"LIVEPEER_ETH_URL"}
+
+	switch strings.ToLower(strings.TrimSpace(env["network"])) {
+	case "", "arbitrum", "arbitrum-mainnet", "arbitrum-one-mainnet":
+		return append(keys, "ARBITRUM_RPC_ENDPOINT")
+	case "arbitrum-sepolia":
+		return append(keys, "ARBITRUM_SEPOLIA_RPC_ENDPOINT")
+	case "base", "base-mainnet":
+		return append(keys, "BASE_RPC_ENDPOINT")
+	case "base-sepolia":
+		return append(keys, "BASE_SEPOLIA_RPC_ENDPOINT")
+	case "ethereum", "ethereum-mainnet", "mainnet":
+		return append(keys, "ETH_RPC_ENDPOINT")
+	default:
+		return keys
+	}
+}
+
+func setEnvIfEmpty(env map[string]string, target string, sourceKeys ...string) {
+	if strings.TrimSpace(env[target]) != "" {
+		return
+	}
+
+	for _, key := range sourceKeys {
+		if v := strings.TrimSpace(env[key]); v != "" {
+			env[target] = v
+			return
+		}
+	}
+}
+
+func firstNonEmptyEnv(env map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(env[key]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // loadEnvFile reads a KEY=VALUE env file and merges values into the target map.
@@ -1643,4 +3134,19 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	fmt.Fprintln(cmd.OutOrStdout(), "    ✓ Mesh healthy on all privateer hosts")
 	return nil
+}
+
+// resolveManifestToRepoPath converts a manifest-relative file path to a
+// repo-root-relative path suitable for GitHub API fetch. For example, given
+// manifestDir="clusters/production" and relPath="../../secrets/production.env",
+// it returns "secrets/production.env".
+func resolveManifestToRepoPath(manifestDir, relPath string) (string, error) {
+	if filepath.IsAbs(relPath) {
+		return "", fmt.Errorf("absolute path %q is not valid in a repository manifest", relPath)
+	}
+	resolved := filepath.Clean(filepath.Join(manifestDir, relPath))
+	if strings.HasPrefix(resolved, "..") {
+		return "", fmt.Errorf("path %q resolves outside repository root (resolved to %q)", relPath, resolved)
+	}
+	return resolved, nil
 }

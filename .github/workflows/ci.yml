@@ -16,16 +16,19 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
             go:
               - '**/*.go'
+              - '**/*.proto'
               - '**/go.mod'
               - '**/go.sum'
               - 'Makefile'
               - 'pkg/proto/**'
+              - '.golangci.yml'
+              - '.golangci-baseline'
             frontend:
               - '**/*.ts'
               - '**/*.tsx'
@@ -45,13 +48,24 @@ jobs:
         with:
           go-version: "1.25"
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.1/protoc-34.1-linux-x86_64.zip -o /tmp/protoc.zip
+          sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
+          rm /tmp/protoc.zip
       - name: Install Go protoc plugins
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
       - name: Install gqlgen
         run: go install github.com/99designs/gqlgen@v0.17.86
+      - name: Check proto codegen is up to date
+        run: |
+          make proto
+          if ! git diff --quiet pkg/proto/; then
+            echo "ERROR: generated proto files are out of date. Run 'make proto' and commit the result."
+            git diff --stat pkg/proto/
+            exit 1
+          fi
       - run: make build
         env:
           CGO_ENABLED: "1"
@@ -67,7 +81,10 @@ jobs:
         with:
           go-version: "1.25"
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.1/protoc-34.1-linux-x86_64.zip -o /tmp/protoc.zip
+          sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
+          rm /tmp/protoc.zip
       - name: Install Go protoc plugins
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
@@ -86,7 +103,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./test-results/go-junit.xml
@@ -110,7 +127,7 @@ jobs:
       - name: Upload to Codecov
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/coverage.out
@@ -175,7 +192,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -191,7 +208,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -212,7 +229,7 @@ jobs:
       - name: Upload to Codecov
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./**/lcov.info
@@ -223,7 +240,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./npm_player/packages/core/test-results/junit.xml,./npm_player/packages/react/test-results/junit.xml,./npm_player/packages/svelte/test-results/junit.xml,./npm_studio/packages/core/test-results/junit.xml,./npm_studio/packages/react/test-results/junit.xml,./npm_studio/packages/svelte/test-results/junit.xml,./website_application/test-results/junit.xml
@@ -237,7 +254,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -256,7 +273,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Send Codecov notifications
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           run_command: send-notifications
           token: ${{ secrets.CODECOV_TOKEN }}

@@ -242,7 +242,7 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		// Don't fatal here, allow API to start without consumer if needed
 	}
 
-	includeTestnets := config.GetEnv("X402_INCLUDE_TESTNETS", "false") == "true"
+	includeTestnets := config.X402IncludeTestnetsEnabled()
 	emailSvc := NewEmailService(log)
 
 	return &JobManager{

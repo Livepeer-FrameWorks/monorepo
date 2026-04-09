@@ -55,16 +55,17 @@ By default, the CLI assumes `frameworks.network` if `--domain` is not provided.
 
 ### Public Endpoints (GeoDNS)
 
-| Subdomain                 | Purpose          | Service            |
-| ------------------------- | ---------------- | ------------------ |
-| `example.com`             | Marketing site   | Foredeck (Website) |
-| `chartroom.example.com`   | Web console      | Chartroom          |
-| `bridge.example.com`      | GraphQL API      | Bridge             |
-| `foghorn.example.com`     | Viewer routing   | Foghorn            |
-| `edge-ingest.example.com` | Stream ingest    | Edge nodes         |
-| `edge.example.com`        | Edge pool domain | Edge nodes         |
-| `logbook.example.com`     | Docs site        | Logbook            |
-| `steward.example.com`     | Forms API        | Steward            |
+| Subdomain                 | Purpose           | Service            |
+| ------------------------- | ----------------- | ------------------ |
+| `example.com`             | Marketing site    | Foredeck (Website) |
+| `chartroom.example.com`   | Web console       | Chartroom          |
+| `bridge.example.com`      | GraphQL API       | Bridge             |
+| `foghorn.example.com`     | Viewer routing    | Foghorn            |
+| `livepeer.example.com`    | Transcode gateway | Livepeer Gateway   |
+| `edge-ingest.example.com` | Stream ingest     | Edge nodes         |
+| `edge.example.com`        | Edge pool domain  | Edge nodes         |
+| `logbook.example.com`     | Docs site         | Logbook            |
+| `steward.example.com`     | Forms API         | Steward            |
 
 Navigator only manages subdomains for service types that exist in Quartermaster inventory. Granular subdomains like `edge-egress` and `edge-ingest` are only created when the cluster has a wildcard TLS certificate; otherwise all edge traffic routes through the `edge` pool.
 
@@ -88,7 +89,9 @@ export PURSER_URL=http://10.0.1.11:18003
 Navigator creates individual A records for each edge node, enabling direct node addressing:
 
 ```
-edge-{node_id}.{cluster_slug}.{base_domain}  →  A  →  {node_external_ip}
+{node_label}.{cluster_slug}.{base_domain}  →  A  →  {node_external_ip}
+
+`node_label` is the node ID with a single `edge-` prefix.
 ```
 
 For example, with cluster slug `production` and base domain `frameworks.network`:
@@ -109,6 +112,7 @@ In multi-cluster deployments, each cluster gets its own set of service subdomain
 | `edge-ingest.{slug}.{base}` | RTMP/SRT/WHIP ingest for this cluster's edges |
 | `edge.{slug}.{base}`        | Edge pool domain (any edge in cluster)        |
 | `foghorn.{slug}.{base}`     | Viewer routing / playback resolution          |
+| `livepeer.{slug}.{base}`    | Livepeer gateway for this cluster             |
 | `bridge.{slug}.{base}`      | GraphQL API                                   |
 
 Navigator applies smart record logic per subdomain: 0 nodes → records deleted, 1 node → A record, 2+ nodes → load balancer pool with geo-steering.

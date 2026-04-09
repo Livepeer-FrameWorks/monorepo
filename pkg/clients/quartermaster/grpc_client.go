@@ -7,11 +7,11 @@ import (
 
 	"frameworks/pkg/clients"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -25,6 +25,7 @@ type GRPCClient struct {
 	bootstrap       pb.BootstrapServiceClient
 	mesh            pb.MeshServiceClient
 	serviceRegistry pb.ServiceRegistryServiceClient
+	ingress         pb.IngressServiceClient
 	logger          logging.Logger
 }
 
@@ -37,7 +38,10 @@ type GRPCConfig struct {
 	// Logger for the client
 	Logger logging.Logger
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
-	ServiceToken string
+	ServiceToken  string
+	AllowInsecure bool
+	CACertFile    string
+	ServerName    string
 }
 
 // authInterceptor propagates authentication to gRPC metadata.
@@ -82,10 +86,20 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		config.Timeout = 30 * time.Second
 	}
 
+	tlsCfg := grpcutil.ClientTLSConfig{
+		CACertFile:    config.CACertFile,
+		ServerName:    config.ServerName,
+		AllowInsecure: config.AllowInsecure,
+	}
+	transport, err := grpcutil.ClientTLS(tlsCfg, config.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Quartermaster gRPC TLS: %w", err)
+	}
+
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
 	conn, err := grpc.NewClient(
 		config.GRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			authInterceptor(config.ServiceToken),
@@ -104,6 +118,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		bootstrap:       pb.NewBootstrapServiceClient(conn),
 		mesh:            pb.NewMeshServiceClient(conn),
 		serviceRegistry: pb.NewServiceRegistryServiceClient(conn),
+		ingress:         pb.NewIngressServiceClient(conn),
 		logger:          config.Logger,
 	}, nil
 }
@@ -250,6 +265,33 @@ func (c *GRPCClient) UnsubscribeFromCluster(ctx context.Context, req *pb.Unsubsc
 // ListMySubscriptions lists clusters the tenant is subscribed to
 func (c *GRPCClient) ListMySubscriptions(ctx context.Context, req *pb.ListMySubscriptionsRequest) (*pb.ListClustersResponse, error) {
 	return c.cluster.ListMySubscriptions(ctx, req)
+}
+
+// UpsertTLSBundle creates or updates desired ingress TLS state.
+func (c *GRPCClient) UpsertTLSBundle(ctx context.Context, bundle *pb.TLSBundle) (*pb.TLSBundleResponse, error) {
+	return c.ingress.UpsertTLSBundle(ctx, &pb.UpsertTLSBundleRequest{Bundle: bundle})
+}
+
+// ListTLSBundles lists desired ingress TLS bundles.
+func (c *GRPCClient) ListTLSBundles(ctx context.Context, clusterID string, pagination *pb.CursorPaginationRequest) (*pb.ListTLSBundlesResponse, error) {
+	return c.ingress.ListTLSBundles(ctx, &pb.ListTLSBundlesRequest{
+		ClusterId:  clusterID,
+		Pagination: pagination,
+	})
+}
+
+// UpsertIngressSite creates or updates a desired ingress site.
+func (c *GRPCClient) UpsertIngressSite(ctx context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error) {
+	return c.ingress.UpsertIngressSite(ctx, &pb.UpsertIngressSiteRequest{Site: site})
+}
+
+// ListIngressSites lists desired ingress sites.
+func (c *GRPCClient) ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListIngressSitesResponse, error) {
+	return c.ingress.ListIngressSites(ctx, &pb.ListIngressSitesRequest{
+		ClusterId:  clusterID,
+		NodeId:     nodeID,
+		Pagination: pagination,
+	})
 }
 
 // ============================================================================

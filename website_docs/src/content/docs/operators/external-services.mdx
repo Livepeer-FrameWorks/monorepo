@@ -14,7 +14,7 @@ External service credentials required by the platform.
 The CLI automatically delivers credentials to each host during provisioning. Environment variables are merged in this order (later wins):
 
 1. **CLI-derived** from manifest infrastructure config (`DATABASE_HOST`, `DATABASE_PORT`, `KAFKA_BROKERS`, `CLICKHOUSE_ADDR`, `CLUSTER_ID`, `NODE_ID`)
-2. **Shared env_file** from the manifest's top-level `env_file` field
+2. **Shared env_files** from the manifest's top-level `env_files` field
 3. **Per-service env_file** from each service's `env_file` field
 4. **Inline config** from the service's `config` map
 5. **CLI auto-generated** — missing security secrets are filled with cryptographic random values
@@ -26,27 +26,34 @@ The merged result is written to `/etc/frameworks/{service}.env` on each host.
 
 | Category               | Examples                                                      | Who Sets It                    |
 | ---------------------- | ------------------------------------------------------------- | ------------------------------ |
-| **Operator-provided**  | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP | You — in your env_file         |
+| **Operator-provided**  | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP | You — in shared env files      |
 | **CLI auto-generated** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`         | CLI — when left as `change-me` |
 | **CLI-derived**        | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`              | CLI — from manifest            |
 
-Auto-generated secrets use `crypto/rand` (64-char hex). The CLI generates them once and they persist across re-provisions via your env_file.
+Auto-generated secrets use `crypto/rand` (64-char hex). The CLI generates them once and they persist across re-provisions via your shared env files.
 
 ### Infrastructure Credential Flow
 
 During `frameworks cluster provision`, the CLI also provisions database users:
 
-- **Postgres/YugabyteDB**: Creates the `DATABASE_USER` role (from your env_file) with `DATABASE_PASSWORD`, grants access to all configured databases
+- **Postgres/YugabyteDB**: Creates the `DATABASE_USER` role with `DATABASE_PASSWORD`, grants access to all configured databases
 - **ClickHouse**: Deploys `users.xml` with a `frameworks` user (password from `CLICKHOUSE_PASSWORD`) and a `readonly_user` (rate-limited, password from `CLICKHOUSE_READONLY_PASSWORD`)
 
 This ensures runtime services can connect with the same credentials the CLI provisioned.
 
 **Setup:**
 
-1. Copy the template: `cp config/env/secrets.env.example gitops-private/secrets/production.env`
-2. Set at minimum: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD` (security secrets can be left as `change-me`)
-3. Reference it in your cluster manifest: `env_file: secrets/production.env`
-4. Run `frameworks cluster provision` — the CLI creates database users, generates missing secrets, and pushes merged env vars to all hosts
+1. Create `gitops/config/production.env` for non-secret operator config
+2. Copy the secret template: `cp config/env/secrets.env.example gitops/secrets/production.env`
+3. Set at minimum in `gitops/secrets/production.env`: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD` (security secrets can be left as `change-me`)
+4. Set your public URLs and other non-secret operator inputs in `gitops/config/production.env`
+5. Reference both files in your cluster manifest:
+   ```yaml
+   env_files:
+     - config/production.env
+     - secrets/production.env
+   ```
+6. Run `frameworks cluster provision` — the CLI creates database users, generates missing secrets, and pushes merged env vars to all hosts
 
 ### Encrypting secrets with SOPS + age
 
@@ -70,7 +77,11 @@ Create `.sops.yaml` in your gitops repo root:
 creation_rules:
   - path_regex: secrets/.*\.env$
     age: age1yourpublickeyhere
+  - path_regex: clusters/.*/hosts\.enc\.yaml$
+    age: age1yourpublickeyhere
 ```
+
+The second rule encrypts host inventory files (`hosts.enc.yaml`) that contain server IPs and SSH targets. See `hosts_file` below.
 
 **Encrypt your secrets file:**
 
@@ -83,10 +94,10 @@ git commit -m "Encrypt production secrets with SOPS/age"
 **Provisioning** decrypts automatically — the CLI detects SOPS-encrypted files and decrypts using the age key at `~/.config/sops/age/keys.txt` (or `SOPS_AGE_KEY_FILE`):
 
 ```bash
-frameworks cluster provision --repo org/gitops-private
+frameworks cluster provision --repo org/gitops
 
 # Or explicitly specify the key file:
-frameworks cluster provision --repo org/gitops-private --age-key /path/to/keys.txt
+frameworks cluster provision --repo org/gitops --age-key /path/to/keys.txt
 ```
 
 **Local development** with an encrypted `config/env/secrets.env`:
@@ -101,6 +112,43 @@ make encrypt   # Re-encrypt before committing
   Decrypted env vars are written to `/etc/frameworks/*.env` on each host with `chmod 600`. For
   runtime encryption at rest, consider full-disk encryption on your hosts.
 </Aside>
+
+### Separating host IPs from architecture (`hosts_file`)
+
+For public gitops repos, you can keep your cluster architecture in plaintext while encrypting server IPs and SSH targets in a separate SOPS-encrypted file. Set `hosts_file` in your cluster manifest:
+
+```yaml
+# cluster.yaml — plaintext architecture (safe to publish)
+version: v1
+type: cluster
+env_files:
+  - config/production.env
+  - secrets/production.env
+hosts_file: clusters/production/hosts.enc.yaml
+
+hosts:
+  central-eu-1:
+    cluster: core
+    roles: [infrastructure, services]
+  # No external_ip or user here — they come from hosts_file
+```
+
+The hosts file contains connection details:
+
+```yaml
+# clusters/production/hosts.enc.yaml — SOPS-encrypted
+hosts:
+  central-eu-1:
+    external_ip: "203.0.113.10"
+    user: root
+edge_nodes:
+  edge-eu-1:
+    ssh: "root@203.0.113.20"
+```
+
+Encrypt it: `sops -e -i clusters/production/hosts.enc.yaml`
+
+During provisioning, the CLI decrypts the hosts file, merges IPs and SSH targets into the manifest, then proceeds normally. Manifests with inline `external_ip` continue to work — `hosts_file` is optional.
 
 ---
 
@@ -132,10 +180,9 @@ Navigator automates DNS record management based on inventory. See [DNS Automatio
    export CLOUDFLARE_ZONE_ID="your-zone-id"
    export CLOUDFLARE_ACCOUNT_ID="your-account-id"
    ```
-5. Set your root domain:
-   ```bash
-   export NAVIGATOR_ROOT_DOMAIN="example.com"
-   export BRAND_DOMAIN="example.com"
+5. Set your root domain in the manifest:
+   ```yaml
+   root_domain: example.com
    ```
 
 **Future:** Self-hosted anycast DNS cluster (planned, requires ASN acquisition)
@@ -150,7 +197,7 @@ Navigator automates DNS record management based on inventory. See [DNS Automatio
 
 Navigator handles ACME certificate issuance and renewal via DNS-01. See [DNS Automation](/operators/dns) for details.
 
-**Required Setup:** Navigator needs Cloudflare credentials plus `NAVIGATOR_CERT_ALLOWED_SUFFIXES` or `NAVIGATOR_ROOT_DOMAIN`. In dev, the allowlist can be left empty.
+**Required Setup:** Navigator needs Cloudflare credentials plus `NAVIGATOR_CERT_ALLOWED_SUFFIXES` or the manifest `root_domain`. In dev, the allowlist can be left empty.
 
 **Alternative Options:**
 
@@ -190,7 +237,7 @@ frameworks cluster sync-geoip --source file --file /path/to/GeoLite2-City.mmdb
 frameworks cluster sync-geoip --license-key KEY --services foghorn,quartermaster --restart
 ```
 
-The CLI reads your cluster manifest to find hosts by role, uploads the MMDB via SSH, and optionally restarts the target containers.
+The CLI reads your cluster manifest to find the hosts running the target services, uploads the MMDB via SSH, and optionally restarts those workloads. You can also make GeoIP part of normal cluster provisioning with a `geoip:` block in the manifest so `frameworks cluster provision` stages the MMDB before Foghorn and Quartermaster start.
 
 **Manual Provisioning:**
 

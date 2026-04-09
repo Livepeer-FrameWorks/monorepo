@@ -1,4 +1,13 @@
-import { getStreamingConfig } from "$lib/stores/streaming-config";
+import { getStreamingConfig } from "$lib/stores/streaming-config.svelte";
+import {
+  GITHUB_URL,
+  STREAMING_RTMP_PORT,
+  STREAMING_SRT_PORT,
+  STREAMING_RTMP_PATH,
+  STREAMING_HLS_PATH,
+  STREAMING_WEBRTC_PATH,
+  STREAMING_EMBED_PATH,
+} from "@frameworks/site-config";
 
 // Parse a URL and extract components for building protocol-specific URLs
 interface ParsedStreamingUrl {
@@ -34,6 +43,8 @@ interface ResolvedEndpoints {
   playUseTls: boolean;
   edgeHostname: string;
   edgeUseTls: boolean;
+  chandlerHostname: string;
+  chandlerUseTls: boolean;
   srtPort: string;
   rtmpPort: string;
 }
@@ -48,6 +59,8 @@ function resolveEndpoints(): ResolvedEndpoints {
       playUseTls: true,
       edgeHostname: sc.edgeDomain ?? config.edgeHostname,
       edgeUseTls: true,
+      chandlerHostname: sc.chandlerDomain ?? "",
+      chandlerUseTls: true,
       srtPort: sc.srtPort != null ? String(sc.srtPort) : config.srtPort,
       rtmpPort: sc.rtmpPort != null ? String(sc.rtmpPort) : config.rtmpPort,
     };
@@ -59,6 +72,8 @@ function resolveEndpoints(): ResolvedEndpoints {
     playUseTls: config.playUseTls,
     edgeHostname: config.edgeHostname,
     edgeUseTls: config.edgeUseTls,
+    chandlerHostname: "",
+    chandlerUseTls: false,
     srtPort: config.srtPort,
     rtmpPort: config.rtmpPort,
   };
@@ -71,15 +86,15 @@ const rawConfig = {
   playUrl: import.meta.env.VITE_STREAMING_PLAY_URL, // Foghorn for HTTP 307 redirects
   edgeUrl: import.meta.env.VITE_STREAMING_EDGE_URL, // Direct edge for non-HTTP protocols
   graphqlUrl: import.meta.env.VITE_GRAPHQL_HTTP_URL,
-  rtmpPort: import.meta.env.VITE_STREAMING_RTMP_PORT || "1935",
-  srtPort: import.meta.env.VITE_STREAMING_SRT_PORT || "8889",
-  rtmpPath: import.meta.env.VITE_STREAMING_RTMP_PATH || "/live",
-  hlsPath: import.meta.env.VITE_STREAMING_HLS_PATH || "/hls",
-  webrtcPath: import.meta.env.VITE_STREAMING_WEBRTC_PATH || "/webrtc",
-  embedPath: import.meta.env.VITE_STREAMING_EMBED_PATH || "/",
+  rtmpPort: STREAMING_RTMP_PORT,
+  srtPort: STREAMING_SRT_PORT,
+  rtmpPath: STREAMING_RTMP_PATH,
+  hlsPath: STREAMING_HLS_PATH,
+  webrtcPath: STREAMING_WEBRTC_PATH,
+  embedPath: STREAMING_EMBED_PATH,
   marketingSiteUrl: import.meta.env.VITE_MARKETING_SITE_URL,
   docsSiteUrl: import.meta.env.VITE_DOCS_SITE_URL,
-  githubUrl: import.meta.env.VITE_GITHUB_URL,
+  githubUrl: GITHUB_URL,
 };
 
 // Parsed URLs for deriving hostnames and TLS mode
@@ -158,6 +173,21 @@ interface DeliveryUrls {
   mkv: string;
   mp4: string;
   embed: string;
+}
+
+/**
+ * Build a public Chandler URL for a thumbnail asset.
+ * In dev, falls back to relative /assets/ path (proxied by Vite).
+ */
+export function getAssetUrl(assetId: string, file: string): string {
+  if (!assetId) return "";
+  const ep = resolveEndpoints();
+  if (ep.chandlerHostname) {
+    const proto = ep.chandlerUseTls ? "https" : "http";
+    return `${proto}://${ep.chandlerHostname}/assets/${assetId}/${file}`;
+  }
+  if (isDev) return `/assets/${assetId}/${file}`;
+  return "";
 }
 
 export function getIngestUrls(streamKey: string): Partial<IngestUrls> {

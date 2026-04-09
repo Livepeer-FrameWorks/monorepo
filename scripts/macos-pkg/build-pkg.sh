@@ -16,6 +16,14 @@ VERSION="${1:?Usage: build-pkg.sh <version> <cli-binary> [tray-app-bundle]}"
 CLI_BIN="${2:?Missing CLI binary path}"
 TRAY_APP="${3:-}"
 
+if [ -n "${CI:-}" ]; then
+  : "${APPLE_DEVELOPER_ID:?Required in CI}"
+  : "${APPLE_INSTALLER_ID:?Required in CI}"
+  : "${APPLE_ID:?Required in CI}"
+  : "${APPLE_TEAM_ID:?Required in CI}"
+  : "${APPLE_APP_SPECIFIC_PASSWORD:?Required in CI}"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK_DIR="$(mktemp -d)"
 PKG_ROOT="${WORK_DIR}/root"
@@ -47,9 +55,7 @@ if [ -n "${TRAY_APP}" ] && [ -d "${TRAY_APP}" ]; then
   cp -R "${TRAY_APP}" "${PKG_ROOT}/Applications/FrameWorks.app"
   # App bundle should already be signed by xcodebuild; verify
   if [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
-    codesign --verify --verbose=2 "${PKG_ROOT}/Applications/FrameWorks.app" || {
-      echo "Warning: tray app signature verification failed"
-    }
+    codesign --verify --verbose=2 "${PKG_ROOT}/Applications/FrameWorks.app"
   fi
 fi
 

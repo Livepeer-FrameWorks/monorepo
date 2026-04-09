@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,10 +34,34 @@ func (p *LivepeerGatewayProvisioner) Detect(ctx context.Context, host inventory.
 }
 
 func (p *LivepeerGatewayProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	state, err := p.Detect(ctx, host)
+	if err != nil {
+		state = nil
+	}
+
 	switch config.Mode {
 	case "docker":
+		image := config.Image
+		if image == "" {
+			image = p.resolveImageFromManifest(config.Version)
+		}
+		if image == "" {
+			image = "ghcr.io/livepeer-frameworks/go-livepeer:latest"
+		}
+		if skip, reason := shouldSkipProvision(state, config, "", image); skip {
+			fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
+			return nil
+		}
 		return p.provisionDocker(ctx, host, config)
 	case "native":
+		desiredVersion := ""
+		if config.Version != "" && config.Version != "stable" {
+			desiredVersion = config.Version
+		}
+		if skip, reason := shouldSkipProvision(state, config, desiredVersion, ""); skip {
+			fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
+			return nil
+		}
 		return p.provisionNative(ctx, host, config)
 	default:
 		return fmt.Errorf("unsupported mode %q for livepeer-gateway (docker or native)", config.Mode)
@@ -52,6 +77,10 @@ func (p *LivepeerGatewayProvisioner) provisionDocker(ctx context.Context, host i
 	}
 	if image == "" {
 		image = "ghcr.io/livepeer-frameworks/go-livepeer:latest"
+	}
+
+	if err := p.ensureKeystore(ctx, host, &config); err != nil {
+		return fmt.Errorf("failed to ensure keystore: %w", err)
 	}
 
 	port := config.Port
@@ -91,6 +120,7 @@ func (p *LivepeerGatewayProvisioner) provisionDocker(ctx context.Context, host i
 		Ports: []string{
 			fmt.Sprintf("%d:%d", cliPortNum, cliPortNum),
 		},
+		Volumes: gatewayDockerVolumes(config),
 	}
 
 	composeYAML, err := GenerateDockerCompose(composeData)
@@ -139,11 +169,26 @@ func (p *LivepeerGatewayProvisioner) provisionDocker(ctx context.Context, host i
 	return nil
 }
 
+func gatewayDockerVolumes(config ServiceConfig) []string {
+	var volumes []string
+	if path := strings.TrimSpace(config.EnvVars["keystore_path"]); path != "" {
+		volumes = append(volumes, fmt.Sprintf("%s:%s:ro", path, path))
+	}
+	if password := strings.TrimSpace(config.EnvVars["eth_password"]); password != "" {
+		volumes = append(volumes, fmt.Sprintf("%s:%s:ro", password, password))
+	}
+	return volumes
+}
+
 func (p *LivepeerGatewayProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	fmt.Println("Provisioning livepeer-gateway in native mode...")
 
 	if err := p.installBinary(ctx, host, config); err != nil {
 		return fmt.Errorf("failed to install binary: %w", err)
+	}
+
+	if err := p.ensureKeystore(ctx, host, &config); err != nil {
+		return fmt.Errorf("failed to ensure keystore: %w", err)
 	}
 
 	flags := p.buildFlags(config)
@@ -217,6 +262,9 @@ func (p *LivepeerGatewayProvisioner) buildFlags(config ServiceConfig) map[string
 	p.setFlag(flags, config, "rtmp_addr", "rtmpAddr", "")
 	p.setFlag(flags, config, "eth_url", "ethUrl", "")
 	p.setFlag(flags, config, "gateway_host", "gatewayHost", "")
+	p.setFlag(flags, config, "keystore_path", "ethKeystorePath", "")
+	p.setFlag(flags, config, "eth_password", "ethPassword", "")
+	p.setFlag(flags, config, "eth_acct_addr", "ethAcctAddr", "")
 
 	// Remote signer
 	p.setFlag(flags, config, "remote_signer_url", "remoteSignerUrl", "")
@@ -328,6 +376,127 @@ rm -f /tmp/go-livepeer.tar.gz
 		return fmt.Errorf("binary install failed: %v", result.Stderr)
 	}
 	return nil
+}
+
+func (p *LivepeerGatewayProvisioner) ensureKeystore(ctx context.Context, host inventory.Host, config *ServiceConfig) error {
+	if config == nil {
+		return fmt.Errorf("missing config")
+	}
+
+	if config.EnvVars == nil {
+		config.EnvVars = map[string]string{}
+	}
+
+	keystoreSpec, err := gatewayKeystoreSpec(config.EnvVars)
+	if err != nil {
+		return err
+	}
+	if !keystoreSpec.Enabled {
+		return nil
+	}
+
+	mkdirCmd := fmt.Sprintf("mkdir -p %s && chmod 700 %s", keystoreSpec.Path, keystoreSpec.Path)
+	if result, err := p.RunCommand(ctx, host, mkdirCmd); err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("failed to create keystore dir: %w", err)
+	}
+
+	passwordWriteCmd := fmt.Sprintf(
+		"mkdir -p %s && cat > %s <<'EOF'\n%s\nEOF\nchmod 600 %s",
+		filepath.Dir(keystoreSpec.PasswordFile),
+		keystoreSpec.PasswordFile,
+		keystoreSpec.Password,
+		keystoreSpec.PasswordFile,
+	)
+	if result, err := p.RunCommand(ctx, host, passwordWriteCmd); err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("failed to write keystore password: %w", err)
+	}
+
+	if len(keystoreSpec.KeyJSON) > 0 {
+		tmpFile, err := os.CreateTemp("", "livepeer-gateway-keystore-*")
+		if err != nil {
+			return fmt.Errorf("failed to create temp keystore file: %w", err)
+		}
+		tmpPath := tmpFile.Name()
+		if _, err := tmpFile.Write(keystoreSpec.KeyJSON); err != nil {
+			tmpFile.Close()
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("failed to write temp keystore file: %w", err)
+		}
+		if err := tmpFile.Close(); err != nil {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("failed to close temp keystore file: %w", err)
+		}
+		defer os.Remove(tmpPath)
+
+		remoteKeyPath := filepath.Join(keystoreSpec.Path, keystoreSpec.Filename)
+		if err := p.UploadFile(ctx, host, ssh.UploadOptions{
+			LocalPath:  tmpPath,
+			RemotePath: remoteKeyPath,
+			Mode:       0600,
+		}); err != nil {
+			return fmt.Errorf("failed to upload keystore: %w", err)
+		}
+	}
+
+	config.EnvVars["keystore_path"] = keystoreSpec.Path
+	config.EnvVars["eth_password"] = keystoreSpec.PasswordFile
+
+	return nil
+}
+
+type livepeerGatewayKeystoreSpec struct {
+	Enabled      bool
+	Path         string
+	Password     string
+	PasswordFile string
+	Filename     string
+	KeyJSON      []byte
+}
+
+func gatewayKeystoreSpec(env map[string]string) (livepeerGatewayKeystoreSpec, error) {
+	const (
+		defaultPath         = "/etc/frameworks/livepeer-gateway-keystore"
+		defaultPasswordFile = "/etc/frameworks/.livepeer_gateway_keystore_password"
+		defaultFilename     = "UTC--shared-livepeer-gateway-key.json"
+	)
+
+	path := strings.TrimSpace(env["keystore_path"])
+	if path == "" {
+		path = defaultPath
+	}
+
+	passwordFile := strings.TrimSpace(env["eth_password"])
+	if passwordFile == "" || !strings.HasPrefix(passwordFile, "/") {
+		passwordFile = defaultPasswordFile
+	}
+
+	blob := strings.TrimSpace(env["LIVEPEER_ETH_KEYSTORE_B64"])
+	password := strings.TrimSpace(env["LIVEPEER_ETH_KEYSTORE_PASSWORD"])
+	if blob == "" && password == "" {
+		return livepeerGatewayKeystoreSpec{}, nil
+	}
+	if blob == "" || password == "" {
+		return livepeerGatewayKeystoreSpec{}, fmt.Errorf("LIVEPEER_ETH_KEYSTORE_B64 and LIVEPEER_ETH_KEYSTORE_PASSWORD must be set together")
+	}
+
+	keyJSON, err := base64.StdEncoding.DecodeString(blob)
+	if err != nil {
+		return livepeerGatewayKeystoreSpec{}, fmt.Errorf("decode LIVEPEER_ETH_KEYSTORE_B64: %w", err)
+	}
+
+	filename := strings.TrimSpace(env["LIVEPEER_ETH_KEYSTORE_FILENAME"])
+	if filename == "" {
+		filename = defaultFilename
+	}
+
+	return livepeerGatewayKeystoreSpec{
+		Enabled:      true,
+		Path:         path,
+		Password:     password,
+		PasswordFile: passwordFile,
+		Filename:     filename,
+		KeyJSON:      keyJSON,
+	}, nil
 }
 
 // writeFlagsEnv writes go-livepeer flags as LP_<FLAG>=<value> environment variables.

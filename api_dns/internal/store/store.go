@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	fieldcrypt "frameworks/pkg/crypto"
@@ -32,6 +34,38 @@ type ACMEAccount struct {
 	CreatedAt     time.Time
 }
 
+type TLSBundle struct {
+	ID        string
+	BundleID  string
+	Domains   []string
+	CertPEM   string
+	KeyPEM    string
+	ExpiresAt time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type InternalCA struct {
+	Role      string
+	CertPEM   string
+	KeyPEM    string
+	ExpiresAt time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type InternalCertificate struct {
+	ID          string
+	NodeID      string
+	ClusterID   string
+	ServiceType string
+	CertPEM     string
+	KeyPEM      string
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type Store struct {
 	db  *sql.DB
 	enc *fieldcrypt.FieldEncryptor // nil = no encryption (backward-compatible)
@@ -39,6 +73,26 @@ type Store struct {
 
 func NewStore(db *sql.DB, enc *fieldcrypt.FieldEncryptor) *Store {
 	return &Store{db: db, enc: enc}
+}
+
+func marshalDomains(domains []string) ([]byte, error) {
+	if len(domains) == 0 {
+		return []byte("[]"), nil
+	}
+	clean := append([]string(nil), domains...)
+	slices.Sort(clean)
+	return json.Marshal(clean)
+}
+
+func unmarshalDomains(raw []byte) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var domains []string
+	if err := json.Unmarshal(raw, &domains); err != nil {
+		return nil, err
+	}
+	return domains, nil
 }
 
 func (s *Store) encryptField(plaintext string) (string, error) {
@@ -244,4 +298,190 @@ func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) 
 		certs = append(certs, c)
 	}
 	return certs, nil
+}
+
+func (s *Store) GetTLSBundle(ctx context.Context, bundleID string) (*TLSBundle, error) {
+	query := `
+		SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at
+		FROM navigator.tls_bundles
+		WHERE bundle_id = $1
+	`
+
+	var bundle TLSBundle
+	var domainsJSON []byte
+	err := s.db.QueryRowContext(ctx, query, bundleID).Scan(
+		&bundle.ID, &bundle.BundleID, &domainsJSON, &bundle.CertPEM, &bundle.KeyPEM,
+		&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if bundle.KeyPEM, err = s.decryptField(bundle.KeyPEM); err != nil {
+		return nil, fmt.Errorf("decrypt tls bundle key: %w", err)
+	}
+	bundle.Domains, err = unmarshalDomains(domainsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode tls bundle domains: %w", err)
+	}
+	return &bundle, nil
+}
+
+func (s *Store) SaveTLSBundle(ctx context.Context, bundle *TLSBundle) error {
+	encryptedKey, err := s.encryptField(bundle.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("encrypt tls bundle key: %w", err)
+	}
+	domainsJSON, err := marshalDomains(bundle.Domains)
+	if err != nil {
+		return fmt.Errorf("encode tls bundle domains: %w", err)
+	}
+
+	query := `
+		INSERT INTO navigator.tls_bundles (bundle_id, domains, cert_pem, key_pem, expires_at, updated_at)
+		VALUES ($1, $2::jsonb, $3, $4, $5, NOW())
+		ON CONFLICT (bundle_id) DO UPDATE SET
+			domains = EXCLUDED.domains,
+			cert_pem = EXCLUDED.cert_pem,
+			key_pem = EXCLUDED.key_pem,
+			expires_at = EXCLUDED.expires_at,
+			updated_at = NOW()
+		RETURNING id, created_at
+	`
+	return s.db.QueryRowContext(ctx, query,
+		bundle.BundleID, string(domainsJSON), bundle.CertPEM, encryptedKey, bundle.ExpiresAt,
+	).Scan(&bundle.ID, &bundle.CreatedAt)
+}
+
+func (s *Store) ListExpiringTLSBundles(ctx context.Context, threshold time.Duration) ([]TLSBundle, error) {
+	expiryLimit := time.Now().Add(threshold)
+	query := `
+		SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at
+		FROM navigator.tls_bundles
+		WHERE expires_at < $1
+		ORDER BY expires_at ASC
+	`
+	rows, err := s.db.QueryContext(ctx, query, expiryLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bundles []TLSBundle
+	for rows.Next() {
+		var bundle TLSBundle
+		var domainsJSON []byte
+		if scanErr := rows.Scan(
+			&bundle.ID, &bundle.BundleID, &domainsJSON, &bundle.CertPEM, &bundle.KeyPEM,
+			&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		if bundle.KeyPEM, err = s.decryptField(bundle.KeyPEM); err != nil {
+			return nil, fmt.Errorf("decrypt tls bundle key for %s: %w", bundle.BundleID, err)
+		}
+		bundle.Domains, err = unmarshalDomains(domainsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode tls bundle domains for %s: %w", bundle.BundleID, err)
+		}
+		bundles = append(bundles, bundle)
+	}
+
+	return bundles, nil
+}
+
+func (s *Store) GetInternalCA(ctx context.Context, role string) (*InternalCA, error) {
+	query := `
+		SELECT role, cert_pem, key_pem, expires_at, created_at, updated_at
+		FROM navigator.internal_ca
+		WHERE role = $1
+	`
+
+	var ca InternalCA
+	err := s.db.QueryRowContext(ctx, query, role).Scan(
+		&ca.Role, &ca.CertPEM, &ca.KeyPEM, &ca.ExpiresAt, &ca.CreatedAt, &ca.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if ca.KeyPEM != "" {
+		if ca.KeyPEM, err = s.decryptField(ca.KeyPEM); err != nil {
+			return nil, fmt.Errorf("decrypt internal ca key: %w", err)
+		}
+	}
+	return &ca, nil
+}
+
+func (s *Store) SaveInternalCA(ctx context.Context, ca *InternalCA) error {
+	var encryptedKey *string
+	if ca.KeyPEM != "" {
+		encoded, err := s.encryptField(ca.KeyPEM)
+		if err != nil {
+			return fmt.Errorf("encrypt internal ca key: %w", err)
+		}
+		encryptedKey = &encoded
+	}
+
+	query := `
+		INSERT INTO navigator.internal_ca (role, cert_pem, key_pem, expires_at, updated_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (role) DO UPDATE SET
+			cert_pem = EXCLUDED.cert_pem,
+			key_pem = EXCLUDED.key_pem,
+			expires_at = EXCLUDED.expires_at,
+			updated_at = NOW()
+		RETURNING created_at
+	`
+	return s.db.QueryRowContext(ctx, query, ca.Role, ca.CertPEM, encryptedKey, ca.ExpiresAt).Scan(&ca.CreatedAt)
+}
+
+func (s *Store) GetInternalCertificate(ctx context.Context, nodeID, serviceType string) (*InternalCertificate, error) {
+	query := `
+		SELECT id, node_id, cluster_id, service_type, cert_pem, key_pem, expires_at, created_at, updated_at
+		FROM navigator.internal_certificates
+		WHERE node_id = $1 AND service_type = $2
+	`
+
+	var cert InternalCertificate
+	err := s.db.QueryRowContext(ctx, query, nodeID, serviceType).Scan(
+		&cert.ID, &cert.NodeID, &cert.ClusterID, &cert.ServiceType, &cert.CertPEM, &cert.KeyPEM,
+		&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if cert.KeyPEM, err = s.decryptField(cert.KeyPEM); err != nil {
+		return nil, fmt.Errorf("decrypt internal certificate key: %w", err)
+	}
+	return &cert, nil
+}
+
+func (s *Store) SaveInternalCertificate(ctx context.Context, cert *InternalCertificate) error {
+	encryptedKey, err := s.encryptField(cert.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("encrypt internal certificate key: %w", err)
+	}
+
+	query := `
+		INSERT INTO navigator.internal_certificates (node_id, cluster_id, service_type, cert_pem, key_pem, expires_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		ON CONFLICT (node_id, service_type) DO UPDATE SET
+			cluster_id = EXCLUDED.cluster_id,
+			cert_pem = EXCLUDED.cert_pem,
+			key_pem = EXCLUDED.key_pem,
+			expires_at = EXCLUDED.expires_at,
+			updated_at = NOW()
+		RETURNING id, created_at
+	`
+	return s.db.QueryRowContext(ctx, query,
+		cert.NodeID, cert.ClusterID, cert.ServiceType, cert.CertPEM, encryptedKey, cert.ExpiresAt,
+	).Scan(&cert.ID, &cert.CreatedAt)
 }

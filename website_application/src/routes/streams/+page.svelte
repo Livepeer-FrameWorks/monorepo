@@ -36,6 +36,8 @@
   import { formatDuration } from "$lib/utils/formatters.js";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import SpriteThumbnail from "$lib/components/shared/SpriteThumbnail.svelte";
+  import { getAssetUrl } from "$lib/config";
 
   // Houdini stores
   const streamsConnectionStore = new GetStreamsConnectionStore();
@@ -691,20 +693,10 @@
 
                           <TableCell class="px-4 py-2">
                             <div class="flex items-center gap-3">
-                              {#if stream.thumbnailUrl}
-                                <img
-                                  src={stream.thumbnailUrl}
-                                  alt=""
-                                  loading="lazy"
-                                  class="w-16 h-9 rounded object-cover bg-muted shrink-0"
-                                />
-                              {:else}
-                                <div
-                                  class="w-16 h-9 rounded bg-muted shrink-0 flex items-center justify-center"
-                                >
-                                  <VideoIcon class="w-4 h-4 text-muted-foreground/50" />
-                                </div>
-                              {/if}
+                              <SpriteThumbnail
+                                assetId={stream.streamId}
+                                posterUrl={getAssetUrl(stream.streamId, "poster.jpg")}
+                              />
                               <div class="flex flex-col min-w-0">
                                 <div
                                   class="text-sm font-medium text-foreground truncate max-w-xs group-hover:text-primary transition-colors"

@@ -225,7 +225,7 @@ func (j *OrphanCleanupJob) findOrphanedVODs(ctx context.Context) ([]orphanedVOD,
 	return orphans, rows.Err()
 }
 
-func (j *OrphanCleanupJob) retryClipDeletion(ctx context.Context, orphan orphanedClip) {
+func (j *OrphanCleanupJob) retryClipDeletion(_ctx context.Context, orphan orphanedClip) {
 	requestID := uuid.NewString()
 	deleteReq := &pb.ClipDeleteRequest{
 		ClipHash:  orphan.ClipHash,
@@ -249,7 +249,7 @@ func (j *OrphanCleanupJob) retryClipDeletion(ctx context.Context, orphan orphane
 	}).Info("Orphan cleanup: retried clip deletion")
 }
 
-func (j *OrphanCleanupJob) retryDVRDeletion(ctx context.Context, orphan orphanedDVR) {
+func (j *OrphanCleanupJob) retryDVRDeletion(_ctx context.Context, orphan orphanedDVR) {
 	requestID := uuid.NewString()
 	deleteReq := &pb.DVRDeleteRequest{
 		DvrHash:   orphan.DVRHash,
@@ -273,7 +273,7 @@ func (j *OrphanCleanupJob) retryDVRDeletion(ctx context.Context, orphan orphaned
 	}).Info("Orphan cleanup: retried DVR deletion")
 }
 
-func (j *OrphanCleanupJob) retryVODDeletion(ctx context.Context, orphan orphanedVOD) {
+func (j *OrphanCleanupJob) retryVODDeletion(_ctx context.Context, orphan orphanedVOD) {
 	requestID := uuid.NewString()
 	deleteReq := &pb.VodDeleteRequest{
 		VodHash:   orphan.VODHash,

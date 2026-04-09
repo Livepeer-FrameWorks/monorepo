@@ -32,8 +32,8 @@ if (image) {
 
 // Custom helper to handle subpath prefixing
 const BASE_URL = import.meta.env.BASE_URL;
-const WEBAPP_URL = import.meta.env.WEBAPP_PUBLIC_URL;
-const MARKETING_URL = import.meta.env.MARKETING_PUBLIC_URL;
+const WEBAPP_URL = import.meta.env.VITE_APP_URL;
+const MARKETING_URL = import.meta.env.VITE_MARKETING_SITE_URL;
 
 function withBase(href) {
   if (!href) return href;

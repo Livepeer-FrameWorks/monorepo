@@ -79,3 +79,28 @@ type InitializeResult struct {
 	Message      string
 	ItemsCreated []string // Databases, topics, tables created
 }
+
+// ProvisionerOption configures optional behavior for provisioner constructors.
+type ProvisionerOption interface {
+	applyPostgres(*PostgresProvisioner)
+	applyYugabyte(*YugabyteProvisioner)
+	applyClickHouse(*ClickHouseProvisioner)
+}
+
+type withSQLExecutor struct{ exec SQLExecutor }
+
+func (o withSQLExecutor) applyPostgres(p *PostgresProvisioner)     { p.sql = o.exec }
+func (o withSQLExecutor) applyYugabyte(p *YugabyteProvisioner)     { p.sql = o.exec }
+func (o withSQLExecutor) applyClickHouse(_ *ClickHouseProvisioner) {}
+
+// WithSQLExecutor overrides the default DirectExecutor for Postgres/YugabyteDB provisioners.
+func WithSQLExecutor(exec SQLExecutor) ProvisionerOption { return withSQLExecutor{exec: exec} }
+
+type withCHExecutor struct{ exec CHExecutor }
+
+func (o withCHExecutor) applyPostgres(_ *PostgresProvisioner)     {}
+func (o withCHExecutor) applyYugabyte(_ *YugabyteProvisioner)     {}
+func (o withCHExecutor) applyClickHouse(p *ClickHouseProvisioner) { p.ch = o.exec }
+
+// WithCHExecutor overrides the default DirectCHExecutor for ClickHouse provisioners.
+func WithCHExecutor(exec CHExecutor) ProvisionerOption { return withCHExecutor{exec: exec} }

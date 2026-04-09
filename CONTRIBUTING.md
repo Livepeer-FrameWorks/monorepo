@@ -157,8 +157,17 @@ vim api_analytics_query/internal/grpc/server.go
 
 - Branch from `development`
 - One feature or fix per PR
+- Keep PRs under 800 lines where possible — split large changes into reviewable chunks
+- Architectural changes require an RFC in `docs/rfcs/` first
+- Fully completed RFC's require merging into generic `/docs` architectural documents
 - Fill out the PR template
 - Make sure CI passes
+
+## AI-Assisted Development
+
+AI is part of our toolchain — we use it for development, code review, and issue triage. It's a tool, not an author. Every change goes through the same review and testing process regardless of how it was written.
+
+Contributors are free to use AI tools. Automated commits (e.g., from Codex) carry a `Co-Authored-By` trailer for transparency.
 
 ## RFCs
 

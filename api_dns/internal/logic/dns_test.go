@@ -199,16 +199,26 @@ func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {
 	}
 }
 
-func TestSyncService_NoActiveNodesLogsWarning(t *testing.T) {
+func TestSyncService_NoActiveNodesPreservesDNS(t *testing.T) {
 	qm := &fakeQuartermasterClient{
 		response: &proto.ListHealthyNodesForDNSResponse{},
 	}
 	cf := &fakeCloudflareClient{
 		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			t.Fatal("listLoadBalancers should not be called when preserving DNS")
 			return nil, nil
 		},
 		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			t.Fatal("listDNSRecords should not be called when preserving DNS")
 			return nil, nil
+		},
+		deleteLoadBalancer: func(id string) error {
+			t.Fatal("deleteLoadBalancer should not be called when preserving DNS")
+			return nil
+		},
+		deleteDNSRecord: func(id string) error {
+			t.Fatal("deleteDNSRecord should not be called when preserving DNS")
+			return nil
 		},
 	}
 	logger := logrus.New()
@@ -223,7 +233,7 @@ func TestSyncService_NoActiveNodesLogsWarning(t *testing.T) {
 
 	var warnEntry *logrus.Entry
 	for _, entry := range hook.AllEntries() {
-		if entry.Message == "No active nodes found, removing DNS records" {
+		if entry.Message == "No active nodes found, preserving existing DNS records" {
 			warnEntry = entry
 			break
 		}
@@ -1218,6 +1228,7 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 		{"edge-storage", "edge-storage.example.com"},
 		{"edge-processing", "edge-processing.example.com"},
 		{"foghorn", "foghorn.example.com"},
+		{"livepeer-gateway", "livepeer.example.com"},
 		{"bridge", "bridge.example.com"},
 		{"chartroom", "chartroom.example.com"},
 		{"foredeck", "example.com"},
@@ -1332,12 +1343,14 @@ func TestClusterServiceFQDN(t *testing.T) {
 		rootDomain  string
 		expected    string
 	}{
+		{"chandler", "c1.example.com", "chandler.c1.example.com"},
 		{"edge", "c1.example.com", "edge.c1.example.com"},
 		{"edge-egress", "c1.example.com", "edge-egress.c1.example.com"},
 		{"edge-ingest", "c1.example.com", "edge-ingest.c1.example.com"},
 		{"edge-storage", "c1.example.com", "edge-storage.c1.example.com"},
 		{"edge-processing", "c1.example.com", "edge-processing.c1.example.com"},
 		{"foghorn", "c1.example.com", "foghorn.c1.example.com"},
+		{"livepeer-gateway", "c1.example.com", "livepeer.c1.example.com"},
 		{"bridge", "c1.example.com", "bridge.c1.example.com"},
 		{"chartroom", "c1.example.com", "chartroom.c1.example.com"},
 		{"foredeck", "c1.example.com", "c1.example.com"},
@@ -1409,6 +1422,65 @@ func TestSyncServiceByCluster_EdgeEgressCreatesNodeRecords(t *testing.T) {
 	}
 	if !hasNodeRecord {
 		t.Fatalf("expected edge node A record, got records: %v", createdRecords)
+	}
+}
+
+func TestSyncServiceByCluster_EdgeEgressPreservesEdgePrefixedNodeIDs(t *testing.T) {
+	ip := "10.0.0.1"
+	var createdRecords []string
+
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{
+			Clusters: []*proto.InfrastructureCluster{
+				{ClusterId: "cluster-abc", ClusterName: "test-cluster", IsActive: true},
+			},
+		},
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{
+				{NodeId: "edge-eu-1", ClusterId: "cluster-abc", ExternalIp: strPtr(ip)},
+			},
+		},
+	}
+
+	cf := &fakeCloudflareClient{
+		createARecord: func(name, content string, proxied bool, ttl int) (*cloudflare.DNSRecord, error) {
+			createdRecords = append(createdRecords, name)
+			return &cloudflare.DNSRecord{Name: name, Content: content}, nil
+		},
+	}
+
+	m := &DNSManager{
+		cfClient:      cf,
+		qmClient:      qm,
+		logger:        logrus.New(),
+		domain:        "example.com",
+		proxy:         map[string]bool{},
+		recordTTL:     60,
+		lbTTL:         60,
+		staleAge:      5 * time.Minute,
+		monitorConfig: MonitorConfig{Interval: 60, Timeout: 5, Retries: 2},
+		servicePorts:  map[string]int{"edge-egress": 18008},
+	}
+
+	partialErrors, err := m.SyncServiceByCluster(context.Background(), "edge-egress")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if len(createdRecords) == 0 {
+		t.Fatal("expected edge node record to be created")
+	}
+	hasNodeRecord := false
+	for _, record := range createdRecords {
+		if record == "edge-eu-1.cluster-abc.example.com" {
+			hasNodeRecord = true
+			break
+		}
+	}
+	if !hasNodeRecord {
+		t.Fatalf("expected edge-prefixed node ID to be reused as-is, got %v", createdRecords)
 	}
 }
 
@@ -1553,12 +1625,13 @@ func TestDefaultServicePorts_MatchServicedefs(t *testing.T) {
 		servicedefsName string
 		wantPort        int
 	}{
-		"bridge":    {"bridge", 0},
-		"foghorn":   {"foghorn", 0},
-		"chartroom": {"chartroom", 0},
-		"foredeck":  {"foredeck", 0},
-		"logbook":   {"logbook", 0},
-		"steward":   {"steward", 0},
+		"bridge":           {"bridge", 0},
+		"foghorn":          {"foghorn", 0},
+		"livepeer-gateway": {"livepeer-gateway", 0},
+		"chartroom":        {"chartroom", 0},
+		"foredeck":         {"foredeck", 0},
+		"logbook":          {"logbook", 0},
+		"steward":          {"steward", 0},
 	}
 
 	for key, check := range checks {
@@ -1591,7 +1664,7 @@ func TestDefaultServicePorts_EdgeServicesUse18008(t *testing.T) {
 func TestDefaultServiceHealthPaths_MatchServicedefs(t *testing.T) {
 	paths := defaultServiceHealthPaths()
 
-	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward"} {
+	for _, name := range []string{"bridge", "foghorn", "livepeer-gateway", "chartroom", "foredeck", "logbook", "steward"} {
 		svc, ok := servicedefs.Lookup(name)
 		if !ok {
 			t.Fatalf("servicedefs missing entry for %q", name)
@@ -1624,6 +1697,18 @@ func TestSyncService_FoghornUsesServiceType(t *testing.T) {
 	_, _ = manager.SyncService(context.Background(), "foghorn", "")
 	if qm.serviceType != "foghorn" {
 		t.Fatalf("expected serviceType='foghorn', got %q", qm.serviceType)
+	}
+}
+
+func TestSyncService_LivepeerGatewayUsesServiceType(t *testing.T) {
+	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
+	cf := &fakeCloudflareClient{}
+	logger := logrus.New()
+	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
+
+	_, _ = manager.SyncService(context.Background(), "livepeer-gateway", "")
+	if qm.serviceType != "livepeer-gateway" {
+		t.Fatalf("expected serviceType='livepeer-gateway', got %q", qm.serviceType)
 	}
 }
 

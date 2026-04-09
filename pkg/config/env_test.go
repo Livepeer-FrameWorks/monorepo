@@ -67,3 +67,64 @@ func TestLoadEnv_NoFile(t *testing.T) {
 	logger := logrus.New()
 	LoadEnv(logger)
 }
+
+func TestIsProductionUsesBuildEnvOnly(t *testing.T) {
+	t.Setenv("BUILD_ENV", "production")
+	t.Setenv("NODE_ENV", "development")
+	t.Setenv("GO_ENV", "development")
+	if !IsProduction() {
+		t.Fatalf("expected BUILD_ENV=production to report production")
+	}
+
+	t.Setenv("BUILD_ENV", "development")
+	t.Setenv("NODE_ENV", "production")
+	t.Setenv("GO_ENV", "production")
+	if IsProduction() {
+		t.Fatalf("expected BUILD_ENV=development to win over NODE_ENV/GO_ENV")
+	}
+}
+
+func TestIsDevelopmentUsesBuildEnvOnly(t *testing.T) {
+	t.Setenv("BUILD_ENV", "")
+	if !IsDevelopment() {
+		t.Fatalf("expected empty BUILD_ENV to default to development")
+	}
+
+	t.Setenv("BUILD_ENV", "development")
+	if !IsDevelopment() {
+		t.Fatalf("expected BUILD_ENV=development to report development")
+	}
+
+	t.Setenv("BUILD_ENV", "production")
+	if IsDevelopment() {
+		t.Fatalf("expected BUILD_ENV=production to report non-development")
+	}
+}
+
+func TestGetCookieDomainNormalizesLeadingDot(t *testing.T) {
+	t.Setenv("COOKIE_DOMAIN", ".example.com")
+	if got := GetCookieDomain(); got != "example.com" {
+		t.Fatalf("expected example.com, got %q", got)
+	}
+}
+
+func TestGetGatewayPublicURLTrimsTrailingSlash(t *testing.T) {
+	t.Setenv("GATEWAY_PUBLIC_URL", "https://api.example.com/")
+	if got := GetGatewayPublicURL(); got != "https://api.example.com" {
+		t.Fatalf("expected trimmed gateway URL, got %q", got)
+	}
+}
+
+func TestGetGatewayGraphQLURLUsesGatewayPublicURL(t *testing.T) {
+	t.Setenv("GATEWAY_PUBLIC_URL", "https://api.example.com")
+	if got := GetGatewayGraphQLURL(); got != "https://api.example.com/graphql/" {
+		t.Fatalf("expected derived GraphQL URL, got %q", got)
+	}
+}
+
+func TestX402IncludeTestnetsEnabled(t *testing.T) {
+	t.Setenv("X402_INCLUDE_TESTNETS", "true")
+	if !X402IncludeTestnetsEnabled() {
+		t.Fatal("expected X402_INCLUDE_TESTNETS=true to enable testnets")
+	}
+}

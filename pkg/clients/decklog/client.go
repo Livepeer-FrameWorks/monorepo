@@ -2,17 +2,13 @@ package decklog
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"os"
 	"time"
 
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 
@@ -32,6 +28,7 @@ type ClientConfig struct {
 	Target        string
 	AllowInsecure bool
 	CACertFile    string
+	ServerName    string
 	Timeout       time.Duration
 }
 
@@ -40,25 +37,15 @@ func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 	var opts []grpc.DialOption
 	var connectParams *grpc.ConnectParams
 
-	if cfg.AllowInsecure {
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	} else {
-		// Load CA cert for server verification
-		caCert, err := os.ReadFile(cfg.CACertFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read CA cert: %w", err)
-		}
-
-		certPool := x509.NewCertPool()
-		if !certPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to append CA cert")
-		}
-
-		creds := credentials.NewTLS(&tls.Config{
-			RootCAs: certPool,
-		})
-		opts = append(opts, grpc.WithTransportCredentials(creds))
+	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
+		CACertFile:    cfg.CACertFile,
+		ServerName:    cfg.ServerName,
+		AllowInsecure: cfg.AllowInsecure,
+	}, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Decklog gRPC TLS: %w", err)
 	}
+	opts = append(opts, transport)
 
 	// Connect to server
 	if cfg.Timeout > 0 {
@@ -109,6 +96,7 @@ type BatchedClientConfig struct {
 	Target        string
 	AllowInsecure bool
 	CACertFile    string
+	ServerName    string
 	Timeout       time.Duration
 	Source        string // Source identifier for all events (e.g., "foghorn")
 	ServiceToken  string // Service token for authentication
@@ -119,25 +107,15 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 	var opts []grpc.DialOption
 	var connectParams *grpc.ConnectParams
 
-	if cfg.AllowInsecure {
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	} else {
-		// Load CA cert for server verification
-		caCert, err := os.ReadFile(cfg.CACertFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read CA cert: %w", err)
-		}
-
-		certPool := x509.NewCertPool()
-		if !certPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to append CA cert")
-		}
-
-		creds := credentials.NewTLS(&tls.Config{
-			RootCAs: certPool,
-		})
-		opts = append(opts, grpc.WithTransportCredentials(creds))
+	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
+		CACertFile:    cfg.CACertFile,
+		ServerName:    cfg.ServerName,
+		AllowInsecure: cfg.AllowInsecure,
+	}, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Decklog batched client TLS: %w", err)
 	}
+	opts = append(opts, transport)
 
 	// Connect to server
 	if cfg.Timeout > 0 {
@@ -329,6 +307,10 @@ func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
 		TriggerPayload: &pb.MistTrigger_VodLifecycleData{
 			VodLifecycleData: data,
 		},
+	}
+	if data.GetTenantId() != "" {
+		tenantID := data.GetTenantId()
+		trigger.TenantId = &tenantID
 	}
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {

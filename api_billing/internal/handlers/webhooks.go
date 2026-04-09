@@ -399,9 +399,9 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 
 	_, err := db.ExecContext(ctx, `
 		UPDATE purser.billing_payments
-		SET status = $1, updated_at = NOW(), confirmed_at = CASE WHEN $1 = 'confirmed' THEN NOW() ELSE confirmed_at END
+		SET status = $1, updated_at = NOW(), confirmed_at = CASE WHEN $3 = 'confirmed' THEN NOW() ELSE confirmed_at END
 		WHERE invoice_id = $2 AND method = 'stripe'
-	`, status, invoiceID)
+	`, status, invoiceID, status)
 	if err != nil {
 		return fmt.Errorf("failed to update payment status: %w", err)
 	}
@@ -509,7 +509,9 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 	}).Info("Updated subscription status from Stripe webhook")
 
 	subscriptionID := ""
-	_ = db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&subscriptionID)
+	if err := db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&subscriptionID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to look up internal subscription ID, falling back to Stripe ID")
+	}
 	if subscriptionID == "" {
 		subscriptionID = obj.ID
 	}
@@ -869,7 +871,9 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 
 	if newStatus == "confirmed" || newStatus == "failed" {
 		if tenantID == "" && invoiceID != "" {
-			_ = db.QueryRowContext(ctx, `SELECT tenant_id FROM purser.billing_invoices WHERE id = $1`, invoiceID).Scan(&tenantID)
+			if err := db.QueryRowContext(ctx, `SELECT tenant_id FROM purser.billing_invoices WHERE id = $1`, invoiceID).Scan(&tenantID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				logger.WithError(err).WithField("invoice_id", invoiceID).Warn("Failed to resolve tenant from invoice, billing event will be skipped")
+			}
 		}
 		if tenantID != "" {
 			amountCents, currency, err := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
@@ -971,7 +975,7 @@ func mollieEventID(resource, id, status string) string {
 
 func mollieMetadataString(meta any, key string) string {
 	switch m := meta.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		if val, ok := m[key]; ok {
 			return fmt.Sprint(val)
 		}
@@ -980,7 +984,7 @@ func mollieMetadataString(meta any, key string) string {
 			return val
 		}
 	case string:
-		var parsed map[string]interface{}
+		var parsed map[string]any
 		if err := json.Unmarshal([]byte(m), &parsed); err == nil {
 			if val, ok := parsed[key]; ok {
 				return fmt.Sprint(val)

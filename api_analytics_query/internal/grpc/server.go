@@ -2413,7 +2413,9 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 		countArgs = append(countArgs, eventType)
 	}
 	var totalCount int32
-	_ = s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount)
+	if countErr := s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount); countErr != nil {
+		s.logger.WithError(countErr).Warn("Failed to get federation events total count")
+	}
 
 	query := `
 		SELECT
@@ -3971,7 +3973,9 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 		FROM periscope.stream_analytics_daily
 		WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
 	`, tenantID, startTime, endTime)
-	_ = countRow.Scan(&totalCount)
+	if err := countRow.Scan(&totalCount); err != nil {
+		s.logger.WithError(err).Warn("Failed to get stream analytics summaries total count")
+	}
 
 	// Build keyset cursors using raw integer sort keys from proto fields
 	var startCursor, endCursor string
@@ -6146,11 +6150,14 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 // GRPCServerConfig contains configuration for creating a Periscope gRPC server
 // Note: All queries use ClickHouse only - no PostgreSQL dependency
 type GRPCServerConfig struct {
-	ClickHouse   database.ClickHouseConn
-	Logger       logging.Logger
-	ServiceToken string
-	JWTSecret    []byte
-	Metrics      *metrics.Metrics
+	ClickHouse    database.ClickHouseConn
+	Logger        logging.Logger
+	ServiceToken  string
+	JWTSecret     []byte
+	Metrics       *metrics.Metrics
+	CertFile      string
+	KeyFile       string
+	AllowInsecure bool
 }
 
 // NewGRPCServer creates a new gRPC server for Periscope
@@ -6168,6 +6175,23 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
+	}
+	tlsCfg := grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		AllowInsecure: cfg.AllowInsecure,
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+		cfg.Logger.WithError(err).Fatal("Timed out waiting for Periscope gRPC TLS files")
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
+	if err != nil {
+		cfg.Logger.WithError(err).Fatal("Failed to configure Periscope gRPC TLS")
+	}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
 	}
 
 	server := grpc.NewServer(opts...)

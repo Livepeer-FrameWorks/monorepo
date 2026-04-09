@@ -17,12 +17,10 @@ The server checks for file-based env vars first, then queries Navigator if
 available. Navigator returns the cluster wildcard cert which Foghorn stores
 atomically and rotates at runtime without restart.
 
-Client-side TLS is auto-detected in Helmsman: if the Foghorn address contains a
-dot (FQDN), TLS is enabled. Docker service names without dots default to insecure
-connections for local development.
-
-`GRPC_USE_TLS` is **not used**. TLS is determined by cert availability (server)
-and FQDN detection (client).
+Client-side TLS is auto-detected in Helmsman. TLS is used whenever the Foghorn
+address is an FQDN, trust material is provided via `GRPC_TLS_*`, or
+`GRPC_ALLOW_INSECURE=false`. Docker service names without dots can still use
+insecure connections for local development when explicitly allowed.
 
 **Implementation:** `api_balancing/internal/control` (server),
 `api_sidecar/internal/control` (client)
@@ -70,10 +68,10 @@ Before Helmsman connects, the CLI can call `EdgeProvisioningService.PreRegisterE
 to validate the enrollment token and receive node assignment data:
 
 1. Validates token via `ValidateBootstrapTokenEx` (with IP binding and consumption)
-2. Generates a 6-byte hex `node_id`
-3. Constructs edge FQDN: `edge-{node_id}.{cluster_slug}.{root_domain}`
+2. Uses the preferred human-readable node ID when provided and valid, otherwise generates a 6-byte hex fallback
+3. Constructs edge FQDN: `{node_label}.{cluster_slug}.{root_domain}` where `node_label` is the node ID with a single `edge-` prefix
 4. Constructs pool FQDN: `edge.{cluster_slug}.{root_domain}`
-5. Retrieves cluster wildcard TLS certificate from Navigator and returns it inline
+5. Returns the internal CA bundle for gRPC trust bootstrap
 
 The CLI uses this to stage certs and config before starting Caddy/Helmsman.
 

@@ -10,6 +10,7 @@ import (
 	"frameworks/api_gateway/internal/mcp/introspection"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,10 +23,7 @@ var (
 
 func init() {
 	// Initialize introspection client with GraphQL URL from environment
-	graphqlURL := os.Getenv("GRAPHQL_URL")
-	if graphqlURL == "" {
-		graphqlURL = "http://localhost:8080/graphql/"
-	}
+	graphqlURL := config.GetGatewayGraphQLURL()
 	introspectionClient = introspection.NewClient(graphqlURL, nil)
 
 	// Initialize and load templates
@@ -39,10 +37,7 @@ func init() {
 // RegisterAPIAssistantTools registers API integration assistant tools.
 func RegisterAPIAssistantTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	// Update the introspection client with logger
-	graphqlURL := os.Getenv("GRAPHQL_URL")
-	if graphqlURL == "" {
-		graphqlURL = "http://localhost:8080/graphql/"
-	}
+	graphqlURL := config.GetGatewayGraphQLURL()
 	introspectionClient = introspection.NewClient(graphqlURL, logger)
 
 	// introspect_schema - Progressive schema discovery

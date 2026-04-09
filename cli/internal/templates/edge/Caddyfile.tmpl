@@ -1,49 +1,20 @@
 {
   admin {{CADDY_ADMIN_ADDR}}
-  email {{ACME_EMAIL}}
   servers {
     protocols h1 h2 h3
   }
 }
 
-{{SITE_ADDRESS}} {
-  {{TLS_DIRECTIVE}}
-
-  @compressible {
-    not path *.ts *.m4s *.mp4 *.webm
-  }
-  encode @compressible zstd gzip
-
-  headers {
-    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-    X-Content-Type-Options "nosniff"
-    X-Frame-Options "SAMEORIGIN"
-    Referrer-Policy "strict-origin-when-cross-origin"
-    Permissions-Policy "geolocation=(), microphone=()"
-  }
+:443 {
+  tls internal
 
   handle_path /webhooks/* {
     reverse_proxy {{HELMSMAN_UPSTREAM}}
   }
 
-  handle /view/* {
-    reverse_proxy {{MIST_UPSTREAM}} {
-      flush_interval -1
-      transport http {
-        read_timeout 0
-        write_timeout 0
-        keepalive 64
-      }
-      header_up X-Forwarded-Proto {scheme}
-      header_up X-Forwarded-For {remote_host}
-    }
-  }
-
-  reverse_proxy {{MIST_UPSTREAM}}
-
-  log {
-    output stdout
-    format json
-  }
+  respond "Node bootstrapping - awaiting activation" 503
 }
 
+:80 {
+  respond "Node bootstrapping" 503
+}

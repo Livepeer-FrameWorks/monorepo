@@ -170,6 +170,8 @@ message ControlMessage {
     SyncComplete sync_complete = 49;
     // Incremental .dtsh sync (Foghorn -> Helmsman)
     DtshSyncRequest dtsh_sync_request = 50;
+    // Proactive freeze (Foghorn -> Helmsman: sync local artifact to S3)
+    FreezeRequest freeze_request = 51;
     // Transcode job operations (Foghorn <-> Helmsman)
     TranscodeJobRequest transcode_job_request = 60;
     TranscodeJobProgress transcode_job_progress = 61;
@@ -177,6 +179,7 @@ message ControlMessage {
     // VOD processing jobs (Foghorn <-> Helmsman)
     ProcessingJobRequest processing_job_request = 63;
     ProcessingJobResult processing_job_result = 64;
+    ProcessingJobProgress processing_job_progress = 65;
     // Session termination (Foghorn -> Helmsman for billing suspension)
     StopSessionsRequest stop_sessions_request = 70;
     // Node mode change request (Helmsman -> Foghorn, from local agent/CLI)
@@ -533,14 +536,15 @@ enum StorageLocation {
 // Foghorn generates presigned URLs - Helmsman never sees S3 credentials.
 message FreezeRequest {
   string request_id = 1;         // Request ID for tracking
-  string asset_type = 2;         // "clip" or "dvr"
-  string asset_hash = 3;         // clip_hash or dvr_hash
+  string asset_type = 2;         // "clip", "dvr", or "vod"
+  string asset_hash = 3;         // clip_hash, dvr_hash, or vod_hash
   string tenant_id = 4;          // Tenant owning the asset
   string internal_name = 5;      // Stream internal name
   string local_path = 6;         // Current local file/directory path
-  string presigned_put_url = 7;  // Presigned PUT URL for upload (time-limited, no creds needed)
+  string presigned_put_url = 7;  // Presigned PUT URL for single-file upload
   bool delete_after_upload = 8;  // Delete local copy after successful upload
   int64 url_expiry_seconds = 9;  // When the presigned URL expires
+  map<string, string> segment_urls = 10; // For DVR: relative path -> presigned PUT URL
 }
 
 // FreezeProgress reports upload progress for freezing operations
@@ -1035,7 +1039,7 @@ message NodeLifecycleUpdate {
   // Stored artifacts
   repeated StoredArtifact artifacts = 24;
   
-  // MistServer outputs configuration (parsed from koekjes endpoint)
+  // MistServer outputs configuration (parsed from the Mist metrics endpoint)
   string outputs_json = 25;
   
   // Enrichment fields added by Foghorn
@@ -1219,6 +1223,7 @@ message VodLifecycleData {
   optional int32 bitrate_kbps = 20;
   optional string origin_cluster_id = 21;  // Cluster where VOD was uploaded
   optional string serving_cluster_id = 22; // Cluster serving the VOD to the viewer
+  optional int32 progress_pct = 23;        // 0-100 processing progress (STATUS_PROCESSING only)
 }
 
 // MessageLifecycleData tracks support messaging events for real-time UI updates
@@ -1491,6 +1496,21 @@ message ConfigSeed {
   // Authoritative operational mode set by Foghorn. Helmsman must apply this.
   NodeOperationalMode operational_mode = 12;
   TLSCertBundle tls = 20;
+  // Public site configuration for Helmsman Caddyfile rendering (populated by Foghorn)
+  SiteConfig site = 21;
+  // Optional internal CA bundle for Helmsman gRPC trust bootstrap and rotation.
+  bytes ca_bundle = 22;
+  // Optional control-plane-managed edge telemetry remote_write settings.
+  common.EdgeTelemetryConfig telemetry = 23;
+}
+
+// SiteConfig carries the public-facing site parameters that Helmsman uses to
+// render the production Caddyfile after enrollment. Foghorn is the authority.
+message SiteConfig {
+  string site_address = 1;   // Caddy site block address, e.g. "*.us-west-1.frameworks.network"
+  string edge_domain = 2;    // e.g. "edge-abc123.us-west-1.frameworks.network"
+  string pool_domain = 3;    // e.g. "edge.us-west-1.frameworks.network"
+  string acme_email = 4;     // ACME email for auto-TLS fallback
 }
 
 // ==================== Transcode Job Messages ====================
@@ -1558,6 +1578,16 @@ message ProcessingJobResult {
   int64 output_size_bytes = 6;     // Size of processed output file
 }
 
+// ProcessingJobProgress is sent periodically by Helmsman while a processing
+// push is running. Foghorn uses it to refresh updated_at (preventing stale
+// recovery) and to emit VodLifecycleData progress events.
+message ProcessingJobProgress {
+  string job_id = 1;
+  int32 progress_pct = 2;         // 0-100 based on track position vs source duration
+  int64 last_ms = 3;              // Current output track position in milliseconds
+  int64 source_duration_ms = 4;   // Total source duration in milliseconds
+}
+
 // ==================== API Request Tracking ====================
 // Tracks GraphQL API requests for usage analytics (RFC: x402 Agent Access)
 // Gateway aggregates in-memory and flushes periodically (not per-request)
@@ -1611,12 +1641,12 @@ message ThumbnailUploadResponse {
     string s3_key = 3;
     string local_path = 4; // echoed from request so Helmsman can find the file
   }
-  string playback_id = 1;
+  string thumbnail_key = 1; // stream_id (UUID) for live, artifact_hash for artifacts
   repeated PresignedUpload uploads = 2;
 }
 
 // Helmsman -> Foghorn: confirm upload complete
 message ThumbnailUploaded {
-  string playback_id = 1;
+  string thumbnail_key = 1; // echoed from ThumbnailUploadResponse
   repeated string s3_keys = 2;
 }

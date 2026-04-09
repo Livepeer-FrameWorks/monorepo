@@ -12,7 +12,6 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
-	"frameworks/api_balancing/internal/storage"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -41,6 +40,16 @@ type ArtifactCommandHandler interface {
 	DeleteVodAsset(ctx context.Context, req *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error)
 }
 
+// FederationS3Client abstracts S3 operations used by federation so tests
+// can inject fakes without real AWS credentials.
+type FederationS3Client interface {
+	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
+	GeneratePresignedURLsForDVR(dvrPrefix string, isUpload bool, expiry time.Duration) (map[string]string, error)
+	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
+	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
+	BuildVodS3Key(tenantID, artifactHash, filename string) string
+}
+
 // FederationServer implements the FoghornFederation gRPC service.
 // It handles cross-cluster stream queries, origin-pull notifications,
 // artifact preparation, and bidirectional telemetry via PeerChannel.
@@ -51,7 +60,7 @@ type FederationServer struct {
 	clusterID       string
 	cache           *RemoteEdgeCache
 	db              *sql.DB
-	s3Client        *storage.S3Client
+	s3Client        FederationS3Client
 	clipCreator     ClipCreator
 	dvrCreator      DVRCreator
 	artifactHandler ArtifactCommandHandler
@@ -71,7 +80,7 @@ type FederationServerConfig struct {
 	ClusterID       string
 	Cache           *RemoteEdgeCache
 	DB              *sql.DB
-	S3Client        *storage.S3Client
+	S3Client        FederationS3Client
 	ClipCreator     ClipCreator
 	DVRCreator      DVRCreator
 	ArtifactHandler ArtifactCommandHandler

@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ func setMockValidator(t *testing.T, resp *pb.ValidateBootstrapTokenResponse) {
 
 func TestPreRegisterEdge_ValidToken(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "us_west_1")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -62,8 +63,48 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 		t.Errorf("expected pool_domain %q, got %q", "edge.us-west-1.example.com", resp.PoolDomain)
 	}
 
-	if resp.FoghornGrpcAddr != "foghorn.us-west-1.example.com:18008" {
-		t.Errorf("expected foghorn_grpc_addr %q, got %q", "foghorn.us-west-1.example.com:18008", resp.FoghornGrpcAddr)
+	if resp.FoghornGrpcAddr != "foghorn.us-west-1.example.com:18019" {
+		t.Errorf("expected foghorn_grpc_addr %q, got %q", "foghorn.us-west-1.example.com:18019", resp.FoghornGrpcAddr)
+	}
+
+	// Certs must NOT be returned from PreRegisterEdge (security: delivered via ConfigSeed only)
+	if resp.GetCertPem() != "" { //nolint:staticcheck // intentionally testing deprecated field is empty
+		t.Errorf("expected empty cert_pem, got %d bytes", len(resp.GetCertPem())) //nolint:staticcheck
+	}
+	if resp.GetKeyPem() != "" { //nolint:staticcheck // intentionally testing deprecated field is empty
+		t.Errorf("expected empty key_pem, got %d bytes", len(resp.GetKeyPem())) //nolint:staticcheck
+	}
+	if len(resp.GetInternalCaBundle()) != 0 {
+		t.Errorf("expected empty internal_ca_bundle by default, got %d bytes", len(resp.GetInternalCaBundle()))
+	}
+}
+
+func TestPreRegisterEdge_ReturnsConfiguredCABundle(t *testing.T) {
+	t.Setenv("CLUSTER_ID", "us_west_1")
+	t.Setenv("BRAND_DOMAIN", "example.com")
+	tmpDir := t.TempDir()
+	caPath := filepath.Join(tmpDir, "ca.crt")
+	want := "-----BEGIN CERTIFICATE-----\nTEST-CA\n-----END CERTIFICATE-----\n"
+	if err := os.WriteFile(caPath, []byte(want), 0o600); err != nil {
+		t.Fatalf("failed to write temp ca bundle: %v", err)
+	}
+	t.Setenv("GRPC_TLS_CA_PATH", caPath)
+
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid:     true,
+		Kind:      "edge_node",
+		ClusterId: "us_west_1",
+	})
+
+	srv := &EdgeProvisioningServer{}
+	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_validtoken",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := string(resp.GetInternalCaBundle()); got != want {
+		t.Fatalf("internal_ca_bundle = %q, want %q", got, want)
 	}
 }
 
@@ -146,7 +187,7 @@ func TestPreRegisterEdge_NoValidatorNoQM(t *testing.T) {
 
 func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 	os.Unsetenv("CLUSTER_ID")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "frameworks.network")
+	t.Setenv("BRAND_DOMAIN", "frameworks.network")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid: true,
@@ -175,7 +216,7 @@ func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 
 func TestPreRegisterEdge_TokenBoundCluster(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "env-cluster")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -198,7 +239,7 @@ func TestPreRegisterEdge_TokenBoundCluster(t *testing.T) {
 
 func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "test")
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid: true,
@@ -221,8 +262,35 @@ func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 	}
 }
 
+func TestPreRegisterEdge_UsesPreferredNodeIDWithoutDoublePrefix(t *testing.T) {
+	t.Setenv("CLUSTER_ID", "eu_west_1")
+	t.Setenv("BRAND_DOMAIN", "example.com")
+
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid:     true,
+		Kind:      "edge_node",
+		ClusterId: "eu_west_1",
+	})
+
+	srv := &EdgeProvisioningServer{}
+	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_named",
+		PreferredNodeId: "edge-eu-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.NodeId != "edge-eu-1" {
+		t.Fatalf("expected preferred node_id to be preserved, got %q", resp.NodeId)
+	}
+	if resp.EdgeDomain != "edge-eu-1.eu-west-1.example.com" {
+		t.Fatalf("expected non-double-prefixed edge_domain, got %q", resp.EdgeDomain)
+	}
+}
+
 func TestPreRegisterEdge_EmptySanitizedClusterSlugFallsBackToDefault(t *testing.T) {
-	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+	t.Setenv("BRAND_DOMAIN", "example.com")
 
 	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -239,7 +307,7 @@ func TestPreRegisterEdge_EmptySanitizedClusterSlugFallsBackToDefault(t *testing.
 	if resp.ClusterSlug != "default" {
 		t.Fatalf("expected default cluster slug, got %q", resp.ClusterSlug)
 	}
-	if !strings.Contains(resp.FoghornGrpcAddr, "foghorn.default.example.com:18008") {
+	if !strings.Contains(resp.FoghornGrpcAddr, "foghorn.default.example.com:18019") {
 		t.Fatalf("expected fallback foghorn addr with default slug, got %q", resp.FoghornGrpcAddr)
 	}
 }

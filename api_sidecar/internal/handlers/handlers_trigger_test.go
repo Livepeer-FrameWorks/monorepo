@@ -170,3 +170,34 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+
+	const streamName = "processing+artifact123"
+	const override = `[{"process":"AV","codec":"H264"}]`
+
+	setProcessingProcessOverride(streamName, override)
+	t.Cleanup(func() {
+		clearProcessingProcessOverride(streamName)
+	})
+
+	forwarded := false
+	stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+		forwarded = true
+		return &control.MistTriggerResult{Response: "should-not-be-used"}, nil
+	})
+
+	ctx, recorder := newWebhookContext(streamName)
+	HandleStreamProcess(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	if recorder.Body.String() != override {
+		t.Fatalf("expected override response %q, got %q", override, recorder.Body.String())
+	}
+	if forwarded {
+		t.Fatal("expected local override to bypass Foghorn forwarding")
+	}
+}

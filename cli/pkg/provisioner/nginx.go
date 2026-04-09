@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/pkg/maintenance"
 )
 
 // NginxProvisioner provisions the Nginx reverse proxy with generated config
@@ -29,6 +31,11 @@ func NewNginxProvisioner(pool *ssh.Pool) *NginxProvisioner {
 
 // Provision installs and configures Nginx
 func (n *NginxProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if err := ensurePublicProxyPortsSafe(ctx, n.BaseProvisioner, host, n.GetName(), config.Mode); err != nil {
+		return err
+	}
+	var err error
+
 	rootDomain, _ := config.Metadata["root_domain"].(string)
 	if rootDomain == "" {
 		return fmt.Errorf("nginx: root_domain is required (set root_domain in cluster manifest)")
@@ -39,76 +46,71 @@ func (n *NginxProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		listenAddr = fmt.Sprintf("%d", config.Port)
 	}
 
-	var routes map[string]int
-	if localServicesMap, ok := config.Metadata["local_services"].(map[string]interface{}); ok {
-		routes = make(map[string]int)
-		for svcName, svcPort := range localServicesMap {
-			if port, ok := svcPort.(int); ok {
-				routes[svcName] = port
-			}
-		}
-	} else {
-		routes = map[string]int{
-			"foredeck":  ServicePorts["foredeck"],
-			"chartroom": ServicePorts["chartroom"],
-			"bridge":    ServicePorts["bridge"],
-			"logbook":   ServicePorts["logbook"],
-			"steward":   ServicePorts["steward"],
-			"listmonk":  ServicePorts["listmonk"],
-			"chatwoot":  ServicePorts["chatwoot"],
-		}
-	}
-
-	confData := NginxConfData{
-		RootDomain:    rootDomain,
-		ListenAddress: listenAddr,
-		Routes:        routes,
-	}
-
-	confContent, err := GenerateNginxConf(confData)
-	if err != nil {
-		return fmt.Errorf("failed to generate nginx.conf: %w", err)
-	}
-
-	tmpFile := filepath.Join(os.TempDir(), "frameworks-nginx.conf")
-	if err = os.WriteFile(tmpFile, []byte(confContent), 0644); err != nil {
-		return err
-	}
-	defer os.Remove(tmpFile)
-
-	var remoteConfDir string
-	if config.Mode == "docker" {
-		remoteConfDir = "/etc/frameworks/nginx"
-	} else {
-		remoteConfDir = "/etc/nginx/conf.d"
-	}
-
-	if _, err = n.RunCommand(ctx, host, "mkdir -p "+remoteConfDir); err != nil {
-		return fmt.Errorf("failed to create remote nginx directory: %w", err)
-	}
-
-	var remoteConfName string
-	if config.Mode == "docker" {
-		remoteConfName = "default.conf"
-	} else {
-		remoteConfName = "frameworks.conf"
-	}
-
-	remotePath := filepath.Join(remoteConfDir, remoteConfName)
-	if err = n.UploadFile(ctx, host, ssh.UploadOptions{
-		LocalPath: tmpFile, RemotePath: remotePath, Mode: 0644,
-	}); err != nil {
-		return fmt.Errorf("failed to upload nginx config: %w", err)
-	}
-
 	if err = n.installNginx(ctx, host, config); err != nil {
 		return fmt.Errorf("failed to install nginx: %w", err)
 	}
 
 	if config.Mode == "native" {
-		if _, err = n.RunCommand(ctx, host, "nginx -t && nginx -s reload"); err != nil {
-			return fmt.Errorf("failed to reload nginx: %w", err)
+		if err = n.installIngressSync(ctx, host, config); err != nil {
+			return fmt.Errorf("failed to install ingress sync: %w", err)
 		}
+		if _, err = n.RunCommand(ctx, host, "/opt/frameworks/ingress-sync/nginx-sync.py"); err != nil {
+			return fmt.Errorf("failed to run ingress sync: %w", err)
+		}
+	} else {
+		routes := BuildLocalProxyRoutes(rootDomain, localServicePorts(config.Metadata))
+		routes = append(routes, BuildExtraProxyRoutes(config.Metadata["extra_proxy_routes"])...)
+		confData := NginxConfData{
+			RootDomain:    rootDomain,
+			ListenAddress: listenAddr,
+			Routes:        routes,
+		}
+		for _, route := range routes {
+			if route.GeoProxy {
+				confData.GeoIPDBPath = "/var/lib/GeoIP/GeoLite2-City.mmdb"
+				break
+			}
+		}
+
+		confContent, genErr := GenerateNginxConf(confData)
+		if genErr != nil {
+			return fmt.Errorf("failed to generate nginx.conf: %w", genErr)
+		}
+
+		tmpFile := filepath.Join(os.TempDir(), "frameworks-nginx.conf")
+		if err = os.WriteFile(tmpFile, []byte(confContent), 0644); err != nil {
+			return err
+		}
+		defer os.Remove(tmpFile)
+
+		remoteConfDir := "/etc/frameworks/nginx"
+		if _, err = n.RunCommand(ctx, host, "mkdir -p "+remoteConfDir); err != nil {
+			return fmt.Errorf("failed to create remote nginx directory: %w", err)
+		}
+
+		remotePath := filepath.Join(remoteConfDir, "default.conf")
+		if err = n.UploadFile(ctx, host, ssh.UploadOptions{
+			LocalPath: tmpFile, RemotePath: remotePath, Mode: 0644,
+		}); err != nil {
+			return fmt.Errorf("failed to upload nginx config: %w", err)
+		}
+	}
+
+	// Upload the maintenance/error page used by error_page directives.
+	maintTmp := filepath.Join(os.TempDir(), "frameworks-maintenance.html")
+	if err = os.WriteFile(maintTmp, maintenance.HTML, 0644); err != nil {
+		return fmt.Errorf("failed to write maintenance page: %w", err)
+	}
+	defer os.Remove(maintTmp)
+
+	remoteMaintPath := "/usr/share/nginx/html/maintenance.html"
+	if config.Mode == "docker" {
+		remoteMaintPath = "/etc/frameworks/nginx/maintenance.html"
+	}
+	if err = n.UploadFile(ctx, host, ssh.UploadOptions{
+		LocalPath: maintTmp, RemotePath: remoteMaintPath, Mode: 0644,
+	}); err != nil {
+		return fmt.Errorf("failed to upload maintenance page: %w", err)
 	}
 
 	fmt.Printf("✓ Nginx provisioned on %s\n", host.ExternalIP)
@@ -117,7 +119,7 @@ func (n *NginxProvisioner) Provision(ctx context.Context, host inventory.Host, c
 
 func (n *NginxProvisioner) installNginx(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	state, err := n.Detect(ctx, host)
-	if err == nil && state.Exists && state.Running {
+	if config.Mode == "docker" && err == nil && state.Exists && state.Running {
 		fmt.Printf("Service %s already running, skipping install...\n", n.GetName())
 		return nil
 	}
@@ -162,6 +164,7 @@ func (n *NginxProvisioner) provisionDocker(ctx context.Context, host inventory.H
 		Ports:    []string{"80:80"},
 		Volumes: []string{
 			"/etc/frameworks/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro",
+			"/etc/frameworks/nginx/maintenance.html:/usr/share/nginx/html/maintenance.html:ro",
 		},
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 	}
@@ -208,64 +211,82 @@ func (n *NginxProvisioner) provisionDocker(ctx context.Context, host inventory.H
 	return nil
 }
 
-func (n *NginxProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, svcInfo *gitops.ServiceInfo) error {
+func (n *NginxProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, _ *gitops.ServiceInfo) error {
 	fmt.Printf("Provisioning %s in native mode...\n", n.GetName())
-
-	remoteOS, remoteArch, archErr := n.DetectRemoteArch(ctx, host)
-	if archErr != nil {
-		return fmt.Errorf("failed to detect remote architecture: %w", archErr)
-	}
-	binaryURL, err := svcInfo.GetBinaryURL(remoteOS, remoteArch)
+	family, err := n.DetectDistroFamily(ctx, host)
 	if err != nil {
-		return fmt.Errorf("nginx binary not available: %w", err)
+		return fmt.Errorf("failed to detect distro family: %w", err)
+	}
+	requiresGeoIP := false
+	rootDomain, _ := config.Metadata["root_domain"].(string) //nolint:errcheck // zero value acceptable
+	for _, route := range BuildLocalProxyRoutes(rootDomain, localServicePorts(config.Metadata)) {
+		if route.GeoProxy {
+			requiresGeoIP = true
+			break
+		}
 	}
 
-	installScript := fmt.Sprintf(`#!/bin/bash
+	probeResult, err := n.RunCommand(ctx, host, `sh -c 'if ss -tlnp 2>/dev/null | grep -q "nginx"; then if command -v nginx >/dev/null 2>&1 && [ -f /etc/nginx/nginx.conf ]; then echo PACKAGED; else echo CUSTOM; fi; else echo ABSENT; fi'`)
+	if err != nil {
+		return fmt.Errorf("failed to inspect existing nginx runtime: %w", err)
+	}
+	if probeResult.ExitCode != 0 {
+		return fmt.Errorf("failed to inspect existing nginx runtime: %s", probeResult.Stderr)
+	}
+	switch runtime := strings.TrimSpace(probeResult.Stdout); runtime {
+	case "CUSTOM":
+		return fmt.Errorf("detected a running nginx outside the packaged /etc/nginx layout on %s; migrate it first with scripts/migrate-central-nginx.sh before CLI-managed ingress can take ownership", host.ExternalIP)
+	case "PACKAGED", "ABSENT":
+	default:
+		return fmt.Errorf("unexpected nginx runtime probe result: %q", runtime)
+	}
+
+	setupScript := fmt.Sprintf(`#!/bin/bash
 set -e
-wget -q -O /tmp/nginx.tar.gz "%s"
-mkdir -p /opt/frameworks/nginx
-tar -xzf /tmp/nginx.tar.gz -C /tmp/
-mv /tmp/nginx /opt/frameworks/nginx/nginx
-chmod +x /opt/frameworks/nginx/nginx
-rm /tmp/nginx.tar.gz
-`, binaryURL)
+if ! command -v nginx >/dev/null 2>&1; then
+  %s
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  %s
+fi
+export FRAMEWORKS_GEOIP2_MODULE="$(find /usr/lib64/nginx/modules /usr/lib/nginx/modules -maxdepth 1 -type f \( -name '*http_geoip2*.so' -o -name '*geoip2*.so' \) 2>/dev/null | head -n 1)"
+mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/frameworks-http.d
+python3 - <<'PY'
+import os
+from pathlib import Path
+path = Path("/etc/nginx/nginx.conf")
+text = path.read_text()
+module_path = os.environ.get("FRAMEWORKS_GEOIP2_MODULE", "").strip()
+include_line = "    include /etc/nginx/sites-enabled/*;\n"
+snippet_include_line = "    include /etc/nginx/frameworks-http.d/*.conf;\n"
+if module_path:
+    load_line = f"load_module {module_path};\n"
+    if load_line not in text:
+        text = load_line + text
+if "/etc/nginx/sites-enabled/*" not in text:
+    marker = "http {"
+    idx = text.find(marker)
+    if idx == -1:
+        raise SystemExit("http block not found in /etc/nginx/nginx.conf")
+    insert_at = idx + len(marker)
+    text = text[:insert_at] + "\n" + include_line + text[insert_at:]
+if "/etc/nginx/frameworks-http.d/*.conf" not in text:
+    marker = "http {"
+    idx = text.find(marker)
+    if idx == -1:
+        raise SystemExit("http block not found in /etc/nginx/nginx.conf")
+    insert_at = idx + len(marker)
+    text = text[:insert_at] + "\n" + snippet_include_line + text[insert_at:]
+path.write_text(text)
+PY
+rm -f /etc/nginx/sites-available/frameworks.conf /etc/nginx/sites-enabled/frameworks.conf /etc/nginx/conf.d/frameworks.conf
+systemctl enable nginx
+systemctl start nginx
+`, nginxPackageInstallCommand(family, requiresGeoIP), packageInstallCommand(family, distroPythonPackage(family)))
 
-	result, err := n.ExecuteScript(ctx, host, installScript)
+	result, err := n.ExecuteScript(ctx, host, setupScript)
 	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to install nginx binary: %w (stderr: %s)", err, result.Stderr)
-	}
-
-	unitData := SystemdUnitData{
-		ServiceName: "nginx",
-		Description: "FrameWorks Nginx Reverse Proxy",
-		WorkingDir:  "/etc/nginx",
-		ExecStart:   "/opt/frameworks/nginx/nginx -g 'daemon off;' -c /etc/nginx/nginx.conf",
-		User:        "www-data",
-		After:       []string{"network-online"},
-	}
-
-	unitContent, err := GenerateSystemdUnit(unitData)
-	if err != nil {
-		return fmt.Errorf("failed to generate systemd unit: %w", err)
-	}
-
-	tmpUnit := filepath.Join(os.TempDir(), "nginx.service")
-	if err = os.WriteFile(tmpUnit, []byte(unitContent), 0644); err != nil {
-		return fmt.Errorf("failed to write systemd unit: %w", err)
-	}
-	defer os.Remove(tmpUnit)
-
-	unitPath := "/etc/systemd/system/nginx.service"
-	if err = n.UploadFile(ctx, host, ssh.UploadOptions{
-		LocalPath: tmpUnit, RemotePath: unitPath, Mode: 0644,
-	}); err != nil {
-		return fmt.Errorf("failed to upload systemd unit: %w", err)
-	}
-
-	enableCmd := "systemctl daemon-reload && systemctl enable nginx && systemctl start nginx"
-	result, err = n.RunCommand(ctx, host, enableCmd)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to start nginx service: %w (stderr: %s)", err, result.Stderr)
+		return fmt.Errorf("failed to install packaged nginx: %w (stderr: %s)", err, result.Stderr)
 	}
 
 	fmt.Printf("✓ Nginx provisioned in native mode on %s\n", host.ExternalIP)
@@ -291,10 +312,96 @@ func (n *NginxProvisioner) Validate(ctx context.Context, host inventory.Host, co
 		return fmt.Errorf("nginx HTTP port check failed: %s", httpResult.Error)
 	}
 
+	publicTLS := &health.TCPChecker{
+		Timeout: 5 * time.Second,
+	}
+	tlsResult := publicTLS.Check(host.ExternalIP, 443)
+	if !tlsResult.OK {
+		return fmt.Errorf("nginx HTTPS port check failed: %s", tlsResult.Error)
+	}
+
 	return nil
 }
 
 // Initialize is a no-op
 func (n *NginxProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	return nil
+}
+
+func localServicePorts(metadata map[string]interface{}) map[string]int {
+	if localServicesMap, ok := metadata["local_services"].(map[string]interface{}); ok {
+		routes := make(map[string]int)
+		for svcName, svcPort := range localServicesMap {
+			switch port := svcPort.(type) {
+			case int:
+				routes[svcName] = port
+			case int32:
+				routes[svcName] = int(port)
+			case int64:
+				routes[svcName] = int(port)
+			case float64:
+				routes[svcName] = int(port)
+			}
+		}
+		return routes
+	}
+
+	return map[string]int{
+		"foredeck":  ServicePorts["foredeck"],
+		"chartroom": ServicePorts["chartroom"],
+		"bridge":    ServicePorts["bridge"],
+		"logbook":   ServicePorts["logbook"],
+		"steward":   ServicePorts["steward"],
+		"listmonk":  ServicePorts["listmonk"],
+		"chatwoot":  ServicePorts["chatwoot"],
+	}
+}
+
+func packageInstallCommand(family, pkg string) string {
+	switch family {
+	case "debian":
+		return fmt.Sprintf("apt-get update && apt-get install -y %s", pkg)
+	case "rhel":
+		return fmt.Sprintf("(dnf install -y %s || yum install -y %s)", pkg, pkg)
+	case "arch":
+		return fmt.Sprintf("pacman -Syu --noconfirm --needed %s", pkg)
+	default:
+		return "echo unsupported distro && exit 1"
+	}
+}
+
+func nginxPackageInstallCommand(family string, requiresGeoIP bool) string {
+	switch family {
+	case "debian":
+		return "apt-get update && apt-get install -y nginx libnginx-mod-http-geoip2 libnginx-mod-stream-geoip2"
+	case "rhel":
+		if !requiresGeoIP {
+			return "(dnf install -y nginx || yum install -y nginx)"
+		}
+		return `(dnf install -y nginx || yum install -y nginx)
+if command -v dnf >/dev/null 2>&1; then
+  dnf install -y nginx-module-geoip2 || dnf install -y nginx-mod-http-geoip2 || true
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y nginx-module-geoip2 || yum install -y nginx-mod-http-geoip2 || true
+fi
+MODULE_PATH=$(find /usr/lib64/nginx/modules /usr/lib/nginx/modules -maxdepth 1 -type f \( -name '*http_geoip2*.so' -o -name '*geoip2*.so' \) 2>/dev/null | head -n 1)
+[ -n "$MODULE_PATH" ] || { echo "GeoIP2 module required but not available on this RHEL host" >&2; exit 1; }`
+	case "arch":
+		return "pacman -Syu --noconfirm --needed nginx nginx-mod-geoip2"
+	default:
+		return "echo unsupported distro && exit 1"
+	}
+}
+
+func distroPythonPackage(family string) string {
+	switch family {
+	case "debian":
+		return "python3"
+	case "rhel":
+		return "python3"
+	case "arch":
+		return "python"
+	default:
+		return "python3"
+	}
 }

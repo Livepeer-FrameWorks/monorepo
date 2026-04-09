@@ -13,7 +13,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
@@ -453,13 +452,22 @@ type GRPCServerConfig struct {
 func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	var opts []grpc.ServerOption
 
-	if !cfg.AllowInsecure {
-		// Load TLS credentials
-		creds, err := credentials.NewServerTLSFromFile(cfg.CertFile, cfg.KeyFile)
-		if err != nil {
-			return nil, err
-		}
-		opts = append(opts, grpc.Creds(creds))
+	tlsCfg := grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		AllowInsecure: cfg.AllowInsecure,
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
+		return nil, fmt.Errorf("wait for Decklog gRPC TLS files: %w", err)
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
+	if err != nil {
+		return nil, err
+	}
+	if tlsOpt != nil {
+		opts = append(opts, tlsOpt)
 	}
 
 	// Chain auth interceptor with logging interceptor

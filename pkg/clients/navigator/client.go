@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto" // Import generated protobuf code
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -27,7 +27,10 @@ type Config struct {
 	Timeout time.Duration
 	Logger  logging.Logger
 	// ServiceToken for service-to-service auth (optional)
-	ServiceToken string
+	ServiceToken  string
+	AllowInsecure bool
+	CACertFile    string
+	ServerName    string
 }
 
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
@@ -56,9 +59,18 @@ func NewClient(config Config) (*Client, error) {
 		return nil, fmt.Errorf("navigator address is required")
 	}
 
+	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
+		CACertFile:    config.CACertFile,
+		ServerName:    config.ServerName,
+		AllowInsecure: config.AllowInsecure,
+	}, config.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Navigator gRPC TLS: %w", err)
+	}
+
 	conn, err := grpc.NewClient(
 		config.Addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport,
 		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
 	)
 	if err != nil {
@@ -123,6 +135,33 @@ func (c *Client) GetCertificate(ctx context.Context, req *pb.GetCertificateReque
 	resp, err := c.service.GetCertificate(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get certificate: %w", err)
+	}
+	return resp, nil
+}
+
+// GetTLSBundle retrieves an existing TLS bundle from Navigator.
+func (c *Client) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error) {
+	resp, err := c.service.GetTLSBundle(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tls bundle: %w", err)
+	}
+	return resp, nil
+}
+
+// GetCABundle retrieves the internal CA bundle from Navigator.
+func (c *Client) GetCABundle(ctx context.Context, req *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
+	resp, err := c.service.GetCABundle(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ca bundle: %w", err)
+	}
+	return resp, nil
+}
+
+// IssueInternalCert requests an internal certificate for a node-scoped service identity.
+func (c *Client) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
+	resp, err := c.service.IssueInternalCert(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to issue internal certificate: %w", err)
 	}
 	return resp, nil
 }

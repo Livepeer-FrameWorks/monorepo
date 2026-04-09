@@ -157,16 +157,17 @@ func TestSpoke_SearchKnowledge_MissingTenantID(t *testing.T) {
 	})
 	session := spokeClient(t, ts.URL)
 
-	// The SDK validates required fields before the handler runs,
-	// so a missing tenant_id returns a protocol-level error.
-	_, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "search_knowledge",
 		Arguments: map[string]any{
 			"query": "test",
 		},
 	})
-	if err == nil {
-		t.Fatal("expected error for missing required tenant_id")
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError for missing required tenant_id")
 	}
 }
 

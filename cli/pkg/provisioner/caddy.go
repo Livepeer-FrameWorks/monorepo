@@ -29,8 +29,10 @@ func NewCaddyProvisioner(pool *ssh.Pool) *CaddyProvisioner {
 
 // Provision installs and configures Caddy
 func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// 1. Generate Caddyfile
-	// RootDomain and Email from metadata
+	if err := ensurePublicProxyPortsSafe(ctx, c.BaseProvisioner, host, c.GetName(), config.Mode); err != nil {
+		return err
+	}
+
 	rootDomain, _ := config.Metadata["root_domain"].(string)
 	email, _ := config.Metadata["acme_email"].(string)
 	if rootDomain == "" {
@@ -43,36 +45,29 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		listenAddr = fmt.Sprintf(":%d", config.Port)
 	}
 
-	// Determine routes based on what services are planned/active on this host
-	// Since we don't have the full manifest or plan here, we rely on Metadata injected by the Planner
-	// containing the list of "local_services".
-	var routes map[string]int // Declared routes here
-	if localServicesMap, ok := config.Metadata["local_services"].(map[string]interface{}); ok {
-		routes = make(map[string]int) // Initialized here
-		for svcName, svcPort := range localServicesMap {
-			if port, ok := svcPort.(int); ok {
-				routes[svcName] = port
-			}
-		}
-	} else {
-		// Fallback: add all standard interfaces if no list provided (e.g. manual run)
-		// This covers the "single host" case without planner updates.
-		routes = map[string]int{ // Initialized here
-			"foredeck":  ServicePorts["foredeck"],
-			"chartroom": ServicePorts["chartroom"],
-			"bridge":    ServicePorts["bridge"],
-			"logbook":   ServicePorts["logbook"],
-			"steward":   ServicePorts["steward"],
-			"listmonk":  ServicePorts["listmonk"],
-			"chatwoot":  ServicePorts["chatwoot"],
-		}
+	if err := c.installCaddy(ctx, host, config); err != nil {
+		return fmt.Errorf("failed to install Caddy: %w", err)
 	}
 
+	if config.Mode == "native" {
+		if err := c.installIngressSync(ctx, host, config); err != nil {
+			return fmt.Errorf("failed to install caddy ingress sync: %w", err)
+		}
+		if _, err := c.RunCommand(ctx, host, "/opt/frameworks/ingress-sync/caddy-sync.py"); err != nil {
+			return fmt.Errorf("failed to run caddy ingress sync: %w", err)
+		}
+		fmt.Printf("✓ Caddy provisioned on %s\n", host.ExternalIP)
+		return nil
+	}
+
+	routes := localServicePorts(config.Metadata)
+	proxyRoutes := BuildLocalProxyRoutes(rootDomain, routes)
+	proxyRoutes = append(proxyRoutes, BuildExtraProxyRoutes(config.Metadata["extra_proxy_routes"])...)
 	caddyData := CaddyfileData{
 		Email:         email,
 		RootDomain:    rootDomain,
 		ListenAddress: listenAddr,
-		Routes:        routes,
+		Routes:        proxyRoutes,
 	}
 
 	caddyfileContent, err := GenerateCentralCaddyfile(caddyData)
@@ -80,44 +75,22 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		return fmt.Errorf("failed to generate Caddyfile: %w", err)
 	}
 
-	// 2. Upload Caddyfile
 	tmpFile := filepath.Join(os.TempDir(), "Caddyfile")
-	if err = os.WriteFile(tmpFile, []byte(caddyfileContent), 0644); err != nil { // Use = for err
+	if err = os.WriteFile(tmpFile, []byte(caddyfileContent), 0644); err != nil {
 		return err
 	}
 	defer os.Remove(tmpFile)
 
-	var remoteCaddyfileDir string
-	if config.Mode == "docker" {
-		remoteCaddyfileDir = "/etc/frameworks/caddy" // Mounted into container
-	} else {
-		remoteCaddyfileDir = "/etc/caddy" // Standard native path
-	}
-
-	// Ensure remote directory exists
-	if _, err = c.RunCommand(ctx, host, "mkdir -p "+remoteCaddyfileDir); err != nil { // Use = for err
+	remoteCaddyfileDir := "/etc/frameworks/caddy"
+	if _, err = c.RunCommand(ctx, host, "mkdir -p "+remoteCaddyfileDir); err != nil {
 		return fmt.Errorf("failed to create remote Caddy directory: %w", err)
 	}
 
-	// Upload Caddyfile
 	remotePath := filepath.Join(remoteCaddyfileDir, "Caddyfile")
 	if err = c.UploadFile(ctx, host, ssh.UploadOptions{
 		LocalPath: tmpFile, RemotePath: remotePath, Mode: 0644,
-	}); err != nil { // Use = for err
+	}); err != nil {
 		return fmt.Errorf("failed to upload Caddyfile: %w", err)
-	}
-
-	// 3. Install Caddy (Binary or Docker)
-	if err = c.installCaddy(ctx, host, config); err != nil { // Use = for err
-		return fmt.Errorf("failed to install Caddy: %w", err)
-	}
-
-	// 4. Reload Caddy if native install
-	if config.Mode == "native" {
-		_, err = c.RunCommand(ctx, host, "systemctl reload caddy") // Use = for err
-		if err != nil {
-			return fmt.Errorf("failed to reload caddy: %w", err)
-		}
 	}
 
 	fmt.Printf("✓ Caddy provisioned on %s\n", host.ExternalIP)
@@ -254,83 +227,33 @@ func (c *CaddyProvisioner) provisionDocker(ctx context.Context, host inventory.H
 }
 
 // provisionNative overrides FlexibleProvisioner.provisionNative
-func (c *CaddyProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, svcInfo *gitops.ServiceInfo) error {
+func (c *CaddyProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, _ *gitops.ServiceInfo) error {
 	fmt.Printf("Provisioning %s in native mode...\n", c.GetName())
-
-	// Download and install binary
-	remoteOS, remoteArch, archErr := c.DetectRemoteArch(ctx, host)
-	if archErr != nil {
-		return fmt.Errorf("failed to detect remote architecture: %w", archErr)
-	}
-	binaryURL, err := svcInfo.GetBinaryURL(remoteOS, remoteArch)
+	family, err := c.DetectDistroFamily(ctx, host)
 	if err != nil {
-		return fmt.Errorf("caddy binary not available: %w", err)
+		return fmt.Errorf("failed to detect distro family: %w", err)
 	}
 
-	installScript := fmt.Sprintf(`#!/bin/bash
+	setupScript := fmt.Sprintf(`#!/bin/bash
 set -e
-wget -q -O /tmp/caddy.tar.gz "%s"
-mkdir -p /opt/frameworks/caddy
-tar -xzf /tmp/caddy.tar.gz -C /tmp/
-mv /tmp/caddy /opt/frameworks/caddy/caddy # Caddy binary is usually just named caddy
-chmod +x /opt/frameworks/caddy/caddy
-rm /tmp/caddy.tar.gz
-`, binaryURL)
+if ! command -v caddy >/dev/null 2>&1; then
+  %s
+fi
+mkdir -p /etc/caddy/conf.d
+if [ ! -f /etc/caddy/Caddyfile ]; then
+  cat > /etc/caddy/Caddyfile <<'EOF'
+import /etc/caddy/conf.d/*.caddyfile
+EOF
+elif ! grep -q '/etc/caddy/conf.d/\*.caddyfile' /etc/caddy/Caddyfile; then
+  printf '\nimport /etc/caddy/conf.d/*.caddyfile\n' >> /etc/caddy/Caddyfile
+fi
+systemctl enable caddy
+systemctl start caddy
+`, packageInstallCommand(family, "caddy"))
 
-	result, err := c.ExecuteScript(ctx, host, installScript)
+	result, err := c.ExecuteScript(ctx, host, setupScript)
 	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to install Caddy binary: %w (stderr: %s)", err, result.Stderr)
-	}
-
-	// Generate Systemd unit
-	// Need to ensure Caddyfile is in /etc/caddy/Caddyfile
-	unitData := SystemdUnitData{
-		ServiceName: "caddy",
-		Description: "FrameWorks Caddy Reverse Proxy",
-		WorkingDir:  "/etc/caddy", // Caddy typically runs from its config directory
-		ExecStart:   "/opt/frameworks/caddy/caddy run --config /etc/caddy/Caddyfile",
-		User:        "caddy", // Caddy often runs as its own user
-		EnvFile:     "/etc/frameworks/caddy.env",
-		After:       []string{"network-online"},
-	}
-
-	unitContent, err := GenerateSystemdUnit(unitData)
-	if err != nil {
-		return fmt.Errorf("failed to generate systemd unit: %w", err)
-	}
-
-	// Upload systemd unit
-	tmpUnit := filepath.Join(os.TempDir(), "caddy.service")
-	if err = os.WriteFile(tmpUnit, []byte(unitContent), 0644); err != nil {
-		return fmt.Errorf("failed to write systemd unit: %w", err)
-	}
-	defer os.Remove(tmpUnit)
-
-	unitPath := "/etc/systemd/system/caddy.service" // Standard Caddy systemd unit name
-	if err = c.UploadFile(ctx, host, ssh.UploadOptions{
-		LocalPath: tmpUnit, RemotePath: unitPath, Mode: 0644,
-	}); err != nil {
-		return fmt.Errorf("failed to upload systemd unit: %w", err)
-	}
-
-	// Create caddy user/group
-	createUserCmd := "id -u caddy &>/dev/null || useradd -s /sbin/nologin -g caddy -d /var/www caddy"
-	_, err = c.RunCommand(ctx, host, createUserCmd)
-	if err != nil {
-		return fmt.Errorf("failed to create caddy user: %w", err)
-	}
-
-	// Ensure /etc/caddy and /var/lib/caddy exist and are owned by caddy
-	_, err = c.RunCommand(ctx, host, "mkdir -p /etc/caddy /var/lib/caddy && chown -R caddy:caddy /etc/caddy /var/lib/caddy")
-	if err != nil {
-		return fmt.Errorf("failed to set caddy dirs: %w", err)
-	}
-
-	// Enable and start service
-	enableCmd := "systemctl daemon-reload && systemctl enable caddy && systemctl start caddy"
-	result, err = c.RunCommand(ctx, host, enableCmd)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to start Caddy service: %w (stderr: %s)", err, result.Stderr)
+		return fmt.Errorf("failed to install packaged caddy: %w (stderr: %s)", err, result.Stderr)
 	}
 
 	fmt.Printf("✓ Caddy provisioned in native mode on %s\n", host.ExternalIP)

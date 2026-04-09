@@ -25,6 +25,9 @@ var ServicePorts = map[string]int{
 	"signalman":        18009,
 	"navigator":        18010,
 	"prometheus":       9090,
+	"victoriametrics":  8428,
+	"vmauth":           8427,
+	"vmagent":          8429,
 	"grafana":          3000,
 	"metabase":         3001,
 	"chartroom":        18030,
@@ -113,8 +116,14 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewListmonkProvisioner(pool), nil
 	case "prometheus":
 		return NewFlexibleProvisioner("prometheus", port, pool), nil
+	case "victoriametrics":
+		return NewVictoriaMetricsProvisioner(pool), nil
+	case "vmauth":
+		return NewVMAAuthProvisioner(pool), nil
+	case "vmagent":
+		return NewVMAgentProvisioner(pool), nil
 	case "grafana":
-		return NewFlexibleProvisioner("grafana", port, pool), nil
+		return NewGrafanaProvisioner(pool), nil
 	case "metabase":
 		return NewFlexibleProvisioner("metabase", port, pool), nil
 

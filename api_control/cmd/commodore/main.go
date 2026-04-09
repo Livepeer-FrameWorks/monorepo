@@ -72,10 +72,13 @@ func main() {
 	// Create Quartermaster gRPC client for tenant creation during registration
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	quartermasterGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     quartermasterGRPCAddr,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      quartermasterGRPCAddr,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - tenant creation will use fallback")
@@ -88,10 +91,13 @@ func main() {
 	// Create Purser gRPC client for user limit checking during registration
 	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserGRPCClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:     purserGRPCAddr,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
+		GRPCAddr:      purserGRPCAddr,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - user limit checks will be skipped")
@@ -105,7 +111,9 @@ func main() {
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       5 * time.Second,
 		Source:        "commodore",
 		ServiceToken:  serviceToken,
@@ -160,6 +168,9 @@ func main() {
 			TurnstileSecretKey:   config.GetEnv("TURNSTILE_AUTH_SECRET_KEY", ""),
 			TurnstileFailOpen:    config.GetEnvBool("TURNSTILE_FAIL_OPEN", false),
 			PasswordResetSecret:  []byte(config.GetEnv("PASSWORD_RESET_SECRET", "")),
+			CertFile:             config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:              config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure:        config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 

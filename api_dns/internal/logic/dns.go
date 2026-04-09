@@ -114,7 +114,10 @@ func defaultServicePorts() map[string]int {
 		"edge-storage":    18008,
 		"edge-processing": 18008,
 	}
-	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward", "listmonk", "chatwoot"} {
+	for _, name := range pkgdns.ManagedServiceTypes() {
+		if _, exists := ports[name]; exists {
+			continue
+		}
 		if svc, ok := servicedefs.Lookup(name); ok {
 			ports[name] = svc.DefaultPort
 		}
@@ -125,13 +128,16 @@ func defaultServicePorts() map[string]int {
 // defaultServiceHealthPaths returns the health check path for each service type.
 func defaultServiceHealthPaths() map[string]string {
 	paths := make(map[string]string)
-	for _, name := range []string{"bridge", "foghorn", "chartroom", "foredeck", "logbook", "steward", "listmonk", "chatwoot"} {
+	for _, e := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
+		paths[e] = "/health"
+	}
+	for _, name := range pkgdns.ManagedServiceTypes() {
+		if _, exists := paths[name]; exists {
+			continue
+		}
 		if svc, ok := servicedefs.Lookup(name); ok && svc.HealthPath != "" {
 			paths[name] = svc.HealthPath
 		}
-	}
-	for _, e := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
-		paths[e] = "/health"
 	}
 	return paths
 }
@@ -171,14 +177,19 @@ func ClusterSlug(cluster *proto.InfrastructureCluster) string {
 	if cluster == nil {
 		return "default"
 	}
-	if v := SanitizeLabel(cluster.GetClusterId()); v != "default" {
-		return v
-	}
-	return SanitizeLabel(cluster.GetClusterName())
+	return pkgdns.ClusterSlug(cluster.GetClusterId(), cluster.GetClusterName())
 }
 
 func (m *DNSManager) clusterSlug(cluster *proto.InfrastructureCluster) string {
 	return ClusterSlug(cluster)
+}
+
+func edgeNodeRecordName(nodeID, rootDomain string) string {
+	nodeLabel := SanitizeLabel(nodeID)
+	if strings.HasPrefix(nodeLabel, "edge-") {
+		return fmt.Sprintf("%s.%s", nodeLabel, rootDomain)
+	}
+	return fmt.Sprintf("edge-%s.%s", nodeLabel, rootDomain)
 }
 
 func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType string) (map[string]string, error) {
@@ -208,11 +219,38 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 	})
 
 	for _, cluster := range clustersResp.Clusters {
-		if !cluster.GetIsActive() {
-			continue
-		}
 		clusterSlug := m.clusterSlug(cluster)
 		rootDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
+
+		// Inactive clusters: tear down their DNS records instead of syncing.
+		if !cluster.GetIsActive() {
+			svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
+			if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
+				partialErrors[svcFQDN] = err.Error()
+			} else {
+				m.logger.WithFields(logging.Fields{
+					"service_type": serviceType,
+					"cluster":      clusterSlug,
+					"fqdn":         svcFQDN,
+				}).Info("Cleared DNS for inactive cluster")
+			}
+			// Also clean up per-node edge-<node_id> A records for this cluster.
+			if serviceType == "edge-egress" {
+				aRecords, listErr := m.cfClient.ListDNSRecords("A", "")
+				if listErr == nil {
+					prefix := "edge-"
+					suffix := "." + rootDomain
+					for _, rec := range aRecords {
+						if isEdgeNodeRecord(rec.Name, prefix, suffix) {
+							if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
+								partialErrors[rec.Name] = err.Error()
+							}
+						}
+					}
+				}
+			}
+			continue
+		}
 
 		// Granular edge services (edge-egress, edge-ingest, etc.) require a wildcard
 		// cert on the edge for TLS termination. Skip DNS records if no cert exists.
@@ -236,9 +274,13 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 
 		svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
 		if len(ips) == 0 {
-			if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
-				partialErrors[svcFQDN] = err.Error()
-			}
+			m.logger.WithFields(logging.Fields{
+				"service_type": serviceType,
+				"cluster":      clusterSlug,
+				"fqdn":         svcFQDN,
+			}).Warn("No healthy nodes for cluster; preserving existing DNS")
+			// Don't continue — edge cleanup below still needs to run so
+			// stale per-node records are removed when nodes are drained.
 		} else {
 			svcPartial, syncErr := m.syncClusterService(ctx, svcFQDN, serviceType, ips)
 			if syncErr != nil {
@@ -259,8 +301,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 			if node.ExternalIp == nil || *node.ExternalIp == "" {
 				continue
 			}
-			nodeLabel := SanitizeLabel(node.GetNodeId())
-			fqdn := fmt.Sprintf("edge-%s.%s", nodeLabel, rootDomain)
+			fqdn := edgeNodeRecordName(node.GetNodeId(), rootDomain)
 			desiredNodeRecords[fqdn] = *node.ExternalIp
 			if err := m.applySingleNodeConfig(ctx, fqdn, *node.ExternalIp, false); err != nil {
 				partialErrors[fqdn] = err.Error()
@@ -311,14 +352,10 @@ func isEdgeNodeRecord(recordName, prefix, suffix string) bool {
 }
 
 func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {
-	subdomain := serviceType
-	switch serviceType {
-	case "bridge":
-		subdomain = "bridge"
-	case "foredeck":
-		return rootDomain
+	if fqdn, ok := pkgdns.ServiceFQDN(serviceType, rootDomain); ok {
+		return fqdn
 	}
-	return fmt.Sprintf("%s.%s", subdomain, rootDomain)
+	return fmt.Sprintf("%s.%s", serviceType, rootDomain)
 }
 
 // syncClusterService applies DNS for a cluster-scoped service using pre-fetched IPs.
@@ -355,54 +392,22 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	}
 	log.WithField("count", len(activeIPs)).Info("Found active nodes")
 
-	// 3. Determine Subdomain
-	// Map internal service types to public subdomains
-	var subdomain string
-	switch serviceType {
-	case "edge":
-		subdomain = "edge"
-	case "edge-egress":
-		subdomain = "edge-egress"
-	case "edge-ingest":
-		subdomain = "edge-ingest"
-	case "edge-storage":
-		subdomain = "edge-storage"
-	case "edge-processing":
-		subdomain = "edge-processing"
-	case "foghorn":
-		subdomain = "foghorn"
-	case "bridge":
-		subdomain = "bridge"
-	case "chartroom":
-		subdomain = "chartroom"
-	case "foredeck":
-		subdomain = "@" // Root
-	case "logbook":
-		subdomain = "logbook"
-	case "steward":
-		subdomain = "steward"
-	case "listmonk":
-		subdomain = "listmonk"
-	case "chatwoot":
-		subdomain = "chatwoot"
-	default:
-		return nil, fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
-	}
-
 	domain := m.domain
 	if rootDomain != "" {
 		domain = rootDomain
 	}
-
-	fqdn := fmt.Sprintf("%s.%s", subdomain, domain)
-	if subdomain == "@" {
-		fqdn = domain
+	fqdn, ok := pkgdns.ServiceFQDN(serviceType, domain)
+	if !ok {
+		return nil, fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
 	}
 
 	// 4. Apply "Smart Record" Logic
 	if len(activeIPs) == 0 {
-		log.Warn("No active nodes found, removing DNS records")
-		return m.clearDNSConfig(ctx, fqdn)
+		// Fail-open: preserve existing DNS records during empty inventory windows
+		// (transient QM failures, first-deploy race). Records will be updated
+		// when positive inventory data arrives.
+		log.Warn("No active nodes found, preserving existing DNS records")
+		return nil, nil
 	}
 
 	if len(activeIPs) == 1 {
@@ -613,6 +618,15 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+// ClearServiceDNS is the explicit decommission path for removing all DNS
+// configuration for a service FQDN. Call this when a service is intentionally
+// drained — the periodic sync paths preserve existing records on empty
+// inventory to avoid accidental deletions during transient outages.
+func (m *DNSManager) ClearServiceDNS(ctx context.Context, fqdn string) (map[string]string, error) {
+	m.logger.WithField("fqdn", fqdn).Info("Explicit DNS teardown requested")
+	return m.clearDNSConfig(ctx, fqdn)
 }
 
 // clearDNSConfig removes all DNS configuration for a given FQDN (LB, A, CNAME records)

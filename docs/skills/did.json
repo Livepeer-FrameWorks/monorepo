@@ -9,7 +9,7 @@
       "id": "did:web:frameworks.network#x402",
       "type": "EcdsaSecp256k1RecoveryMethod2020",
       "controller": "did:web:frameworks.network",
-      "blockchainAccountId": "eip155:8453:{{PLATFORM_X402_ADDRESS}}"
+      "blockchainAccountId": "eip155:8453:{{X402_GAS_WALLET_ADDRESS}}"
     }
   ],
   "service": [

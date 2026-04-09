@@ -5,7 +5,7 @@ export type StreamingConfig = NonNullable<GetStreamingConfig$result["streamingCo
 
 const query = new GetStreamingConfigStore();
 
-let cached: StreamingConfig | null = null;
+let cached = $state<StreamingConfig | null>(null);
 let fetched = false;
 
 export async function loadStreamingConfig(force = false): Promise<void> {
