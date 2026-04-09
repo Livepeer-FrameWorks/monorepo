@@ -92,9 +92,7 @@ enum GQL {
     clipHash
     playbackId
     streamId
-    stream {
-      streamId
-    }
+    sourceStreamId
     title
     description
     startTime
@@ -158,9 +156,7 @@ enum GQL {
     dvrHash
     playbackId
     streamId
-    stream {
-      streamId
-    }
+    sourceStreamId
     title
     createdAt
     updatedAt

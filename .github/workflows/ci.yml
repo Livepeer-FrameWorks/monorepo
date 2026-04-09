@@ -16,7 +16,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -103,7 +103,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./test-results/go-junit.xml
@@ -127,7 +127,7 @@ jobs:
       - name: Upload to Codecov
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/coverage.out
@@ -192,7 +192,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -208,7 +208,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -229,7 +229,7 @@ jobs:
       - name: Upload to Codecov
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./**/lcov.info
@@ -240,7 +240,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./npm_player/packages/core/test-results/junit.xml,./npm_player/packages/react/test-results/junit.xml,./npm_player/packages/svelte/test-results/junit.xml,./npm_studio/packages/core/test-results/junit.xml,./npm_studio/packages/react/test-results/junit.xml,./npm_studio/packages/svelte/test-results/junit.xml,./website_application/test-results/junit.xml
@@ -254,7 +254,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -273,7 +273,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Send Codecov notifications
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           run_command: send-notifications
           token: ${{ secrets.CODECOV_TOKEN }}
