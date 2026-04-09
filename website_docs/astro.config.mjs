@@ -206,6 +206,11 @@ export default defineConfig({
           label: "X (Twitter)",
           href: TWITTER_URL,
         },
+        {
+          icon: "discord",
+          label: "Discord",
+          href: DISCORD_URL,
+        },
       ],
       customCss: [
         // Relative path to your custom CSS file

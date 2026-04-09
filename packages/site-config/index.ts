@@ -8,6 +8,7 @@ export const LIVEPEER_URL = "https://livepeer.org";
 export const LIVEPEER_EXPLORER_URL = "https://explorer.livepeer.org";
 export const FORUM_URL = "https://forum.frameworks.network";
 export const DISCORD_URL = "https://discord.gg/9J6haUjdAq";
+export const DISCORD_GUILD_ID = "1396822950421991495";
 export const TWITTER_URL = "https://x.com/GetFrames";
 
 export const DEMO_STREAM_NAME = "live+frameworks-demo";
