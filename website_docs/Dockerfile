@@ -31,7 +31,7 @@ RUN apk add --no-cache git ca-certificates tzdata \
 # copy workspace manifests first for better layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY patches/ patches/
-COPY packages/site-config/package.json packages/site-config/
+COPY packages/site-config/ packages/site-config/
 COPY website_docs/package.json website_docs/
 
 # install dependencies for the docs workspace (dev deps required for build)
@@ -43,7 +43,6 @@ RUN if [ "$BUILD_ENV" = "development" ]; then \
     fi
 
 # copy the remaining sources now that deps are cached
-COPY packages/site-config/ packages/site-config/
 COPY website_docs/ website_docs/
 COPY docs/skills/ docs/skills/
 

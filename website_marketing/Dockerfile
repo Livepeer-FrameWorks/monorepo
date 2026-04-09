@@ -42,7 +42,7 @@ COPY npm_studio/packages/core/package.json npm_studio/packages/core/
 COPY npm_studio/packages/react/package.json npm_studio/packages/react/
 COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
 COPY npm_studio/packages/wc/package.json npm_studio/packages/wc/
-COPY packages/site-config/package.json packages/site-config/
+COPY packages/site-config/ packages/site-config/
 COPY website_application/package.json website_application/
 COPY website_docs/package.json website_docs/
 COPY website_marketing/package.json website_marketing/
@@ -56,7 +56,6 @@ RUN if [ "$BUILD_ENV" = "development" ]; then \
     fi
 
 # copy the remaining sources now that deps are cached
-COPY packages/site-config/ packages/site-config/
 COPY npm_player/ npm_player/
 COPY website_marketing/ website_marketing/
 COPY docs/skills/ docs/skills/

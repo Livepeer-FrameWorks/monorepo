@@ -53,8 +53,9 @@ COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
 COPY npm_studio/packages/react/package.json npm_studio/packages/react/
 COPY npm_studio/packages/wc/package.json npm_studio/packages/wc/
 
-# shared workspace packages
-COPY packages/site-config/package.json packages/site-config/
+# shared workspace packages (site-config has no build step, so all source
+# files must be present before install for injection to capture them)
+COPY packages/site-config/ packages/site-config/
 
 # remaining workspace members (pnpm requires all manifests for graph resolution)
 COPY website_marketing/package.json website_marketing/
@@ -71,7 +72,6 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     fi
 
 # copy sources
-COPY packages/site-config/ packages/site-config/
 COPY npm_player/ npm_player/
 COPY npm_studio/ npm_studio/
 COPY website_application/ website_application/

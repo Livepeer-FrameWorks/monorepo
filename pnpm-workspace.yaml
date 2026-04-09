@@ -6,3 +6,7 @@ packages:
   - npm_player/playground
   - npm_studio/packages/*
   - website_docs
+
+injectWorkspacePackages: true
+syncInjectedDepsAfterScripts:
+  - build

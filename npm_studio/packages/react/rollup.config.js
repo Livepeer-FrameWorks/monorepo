@@ -1,22 +1,24 @@
+import { readFileSync } from "fs";
 import resolve from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
 import babel from "@rollup/plugin-babel";
 import typescript from "@rollup/plugin-typescript";
-import peerDepsExternal from "rollup-plugin-peer-deps-external";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
-const external = [
-  "@livepeer-frameworks/streamcrafter-core",
-  "react",
-  "react-dom",
-  "react/jsx-runtime",
-  /^@radix-ui\//,
-  "lucide-react",
+// Auto-externalize all dependencies and peerDependencies from package.json.
+// Library ESM builds must never resolve deps to filesystem paths.
+const pkg = JSON.parse(readFileSync("./package.json", "utf-8"));
+const allDeps = [
+  ...Object.keys(pkg.dependencies || {}),
+  ...Object.keys(pkg.peerDependencies || {}),
 ];
+const depsPattern = new RegExp(
+  `^(${allDeps.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})($|/)`
+);
+const external = (id) => depsPattern.test(id);
 
 const commonPlugins = [
-  peerDepsExternal(),
   commonjs({
     preferBuiltins: false,
     include: /node_modules/,
