@@ -4,14 +4,39 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { codecovVitePlugin } from "@codecov/vite-plugin";
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), "");
 
   const host = env.HOST ?? "0.0.0.0";
   const port = Number(env.PORT ?? 9004);
 
-  // Get backend URL for proxy target (same pattern as webapp)
-  const backendUrl = env.VITE_BACKEND_URL || "http://localhost:18090";
+  let devServer;
+  if (command === "serve") {
+    const proxyGatewayUrl = env.DEV_PROXY_GATEWAY_URL;
+    if (!proxyGatewayUrl) {
+      throw new Error("DEV_PROXY_GATEWAY_URL is required for website_marketing dev proxying");
+    }
+    devServer = {
+      host,
+      port,
+      proxy: {
+        // Proxy API routes to backend to avoid CORS in dev
+        "/auth": {
+          target: proxyGatewayUrl,
+          changeOrigin: true,
+        },
+        "/graphql": {
+          target: proxyGatewayUrl,
+          changeOrigin: true,
+          ws: true,
+        },
+        "/mcp": {
+          target: proxyGatewayUrl,
+          changeOrigin: true,
+        },
+      },
+    };
+  }
 
   return {
     plugins: [
@@ -29,22 +54,7 @@ export default defineConfig(({ mode }) => {
         "@": path.resolve(__dirname, "./src"),
       },
     },
-    server: {
-      host,
-      port,
-      proxy: {
-        // Proxy API routes to backend to avoid CORS in dev
-        "/auth": {
-          target: backendUrl,
-          changeOrigin: true,
-        },
-        "/graphql": {
-          target: backendUrl,
-          changeOrigin: true,
-          ws: true,
-        },
-      },
-    },
+    server: devServer,
     build: {
       outDir: "dist",
       sourcemap: false,

@@ -135,9 +135,11 @@ async function executeGraphQL(
   variables: Record<string, unknown> = {},
   headers: Record<string, string> = {}
 ): Promise<GraphQLResponse> {
-  const url = import.meta.env.VITE_GRAPHQL_HTTP_URL || "/graphql/";
+  if (!GRAPHQL_HTTP_URL) {
+    throw new Error("VITE_GRAPHQL_HTTP_URL is required");
+  }
 
-  const response = await fetch(url, {
+  const response = await fetch(GRAPHQL_HTTP_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

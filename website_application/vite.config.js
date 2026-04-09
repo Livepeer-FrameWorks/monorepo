@@ -4,20 +4,42 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, loadEnv } from "vite";
 import { codecovSvelteKitPlugin } from "@codecov/sveltekit-plugin";
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), "");
 
   const host = env.HOST ?? "0.0.0.0";
   const port = Number(env.PORT ?? 3000);
 
-  // Get backend URL from VITE_AUTH_URL for proxy target
-  const authUrl = env.VITE_AUTH_URL || "http://localhost:18090/auth";
-  let backendUrl = "http://localhost:18090";
-  try {
-    const parsed = new URL(authUrl);
-    backendUrl = `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    // authUrl is relative, use default
+  let devServer;
+  if (command === "serve") {
+    const proxyGatewayUrl = env.DEV_PROXY_GATEWAY_URL;
+    if (!proxyGatewayUrl) {
+      throw new Error("DEV_PROXY_GATEWAY_URL is required for website_application dev proxying");
+    }
+    devServer = {
+      host,
+      port,
+      proxy: {
+        // Proxy API routes to backend so cookies stay on same origin
+        "/auth": {
+          target: proxyGatewayUrl,
+          changeOrigin: true,
+        },
+        "/graphql": {
+          target: proxyGatewayUrl,
+          changeOrigin: true,
+          ws: true,
+        },
+        "/assets": {
+          target: "http://localhost:18020",
+          changeOrigin: true,
+        },
+      },
+      fs: {
+        // Allow serving files from the monorepo root (for pkg/graphql/operations/)
+        allow: [".."],
+      },
+    };
   }
 
   return {
@@ -32,30 +54,7 @@ export default defineConfig(({ mode }) => {
         uploadToken: process.env.CODECOV_TOKEN,
       }),
     ],
-    server: {
-      host,
-      port,
-      proxy: {
-        // Proxy API routes to backend so cookies stay on same origin
-        "/auth": {
-          target: backendUrl,
-          changeOrigin: true,
-        },
-        "/graphql": {
-          target: backendUrl,
-          changeOrigin: true,
-          ws: true,
-        },
-        "/assets": {
-          target: "http://localhost:18020",
-          changeOrigin: true,
-        },
-      },
-      fs: {
-        // Allow serving files from the monorepo root (for pkg/graphql/operations/)
-        allow: [".."],
-      },
-    },
+    server: devServer,
     ssr: {
       noExternal: ["graphql", "graphql-ws"],
     },

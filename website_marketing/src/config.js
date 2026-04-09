@@ -9,17 +9,26 @@ import {
   DEMO_STREAM_NAME,
 } from "@frameworks/site-config";
 
+function requireEnv(name) {
+  const value = import.meta.env[name];
+  if (!value) {
+    throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
 // Deployment-owned values from VITE_*, product constants from site-config.
-const marketingUrl = import.meta.env.VITE_MARKETING_SITE_URL ?? "";
-const domain = marketingUrl ? new URL(marketingUrl).hostname : "";
+const marketingUrl = requireEnv("VITE_MARKETING_SITE_URL");
+const domain = new URL(marketingUrl).hostname;
 
 const config = {
-  appUrl: import.meta.env.VITE_APP_URL ?? "",
-  docsUrl: import.meta.env.VITE_DOCS_SITE_URL ?? "",
-  contactApiUrl: import.meta.env.VITE_CONTACT_API_URL ?? "",
-  contactEmail: import.meta.env.VITE_CONTACT_EMAIL ?? "",
+  appUrl: requireEnv("VITE_APP_URL"),
+  docsUrl: requireEnv("VITE_DOCS_SITE_URL"),
+  contactApiUrl: requireEnv("VITE_CONTACT_API_URL"),
+  contactEmail: requireEnv("VITE_CONTACT_EMAIL"),
   turnstileSiteKey: import.meta.env.VITE_TURNSTILE_FORMS_SITE_KEY ?? "",
-  gatewayBaseUrl: import.meta.env.VITE_GATEWAY_URL ?? "",
+  gatewayUrl: requireEnv("VITE_GRAPHQL_HTTP_URL"),
+  mcpUrl: requireEnv("VITE_MCP_URL"),
 
   githubUrl: GITHUB_URL,
   livepeerUrl: LIVEPEER_URL,
@@ -31,9 +40,5 @@ const config = {
   companyName: BRAND_NAME,
   domain,
 };
-
-const gatewayBase = config.gatewayBaseUrl.replace(/\/$/, "");
-config.gatewayUrl = gatewayBase ? `${gatewayBase}/graphql` : "/graphql";
-config.mcpUrl = gatewayBase ? `${gatewayBase}/mcp` : "/mcp";
 
 export default config;
