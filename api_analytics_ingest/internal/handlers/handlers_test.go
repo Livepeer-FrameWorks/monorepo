@@ -1545,6 +1545,7 @@ func (f *fakeRows) Totals(dest ...any) error         { return nil }
 func (f *fakeRows) Columns() []string                { return nil }
 func (f *fakeRows) Close() error                     { return nil }
 func (f *fakeRows) Err() error                       { return nil }
+func (f *fakeRows) HasData() bool                    { return f.next }
 
 type fakeRow struct{}
 

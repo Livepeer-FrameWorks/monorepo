@@ -1,5 +1,6 @@
 import { sveltekit } from "@sveltejs/kit/vite";
 import houdini from "houdini/vite";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, loadEnv } from "vite";
 import { codecovSvelteKitPlugin } from "@codecov/sveltekit-plugin";
 
@@ -23,6 +24,7 @@ export default defineConfig(({ mode }) => {
     // IMPORTANT: houdini() must come before sveltekit()
     plugins: [
       houdini(),
+      tailwindcss(),
       sveltekit(),
       codecovSvelteKitPlugin({
         enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,

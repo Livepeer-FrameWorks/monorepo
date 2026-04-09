@@ -30,6 +30,5 @@ export default {
         return cssAliases[id] || id;
       },
     },
-    "@tailwindcss/postcss": {},
   },
 };
