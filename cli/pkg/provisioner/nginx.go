@@ -12,6 +12,7 @@ import (
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/pkg/maintenance"
 )
 
 // NginxProvisioner provisions the Nginx reverse proxy with generated config
@@ -95,6 +96,23 @@ func (n *NginxProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		}
 	}
 
+	// Upload the maintenance/error page used by error_page directives.
+	maintTmp := filepath.Join(os.TempDir(), "frameworks-maintenance.html")
+	if err = os.WriteFile(maintTmp, maintenance.HTML, 0644); err != nil {
+		return fmt.Errorf("failed to write maintenance page: %w", err)
+	}
+	defer os.Remove(maintTmp)
+
+	remoteMaintPath := "/usr/share/nginx/html/maintenance.html"
+	if config.Mode == "docker" {
+		remoteMaintPath = "/etc/frameworks/nginx/maintenance.html"
+	}
+	if err = n.UploadFile(ctx, host, ssh.UploadOptions{
+		LocalPath: maintTmp, RemotePath: remoteMaintPath, Mode: 0644,
+	}); err != nil {
+		return fmt.Errorf("failed to upload maintenance page: %w", err)
+	}
+
 	fmt.Printf("✓ Nginx provisioned on %s\n", host.ExternalIP)
 	return nil
 }
@@ -146,6 +164,7 @@ func (n *NginxProvisioner) provisionDocker(ctx context.Context, host inventory.H
 		Ports:    []string{"80:80"},
 		Volumes: []string{
 			"/etc/frameworks/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro",
+			"/etc/frameworks/nginx/maintenance.html:/usr/share/nginx/html/maintenance.html:ro",
 		},
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 	}

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Coming Soon — FrameWorks</title>
+    <title>FrameWorks</title>
     <link rel="icon" type="image/svg+xml" href="/frameworks-dark-logomark.svg" />
     <style>
       *,
@@ -440,7 +440,7 @@
     <div class="loading-container" id="container">
       <!-- Hero title -->
       <div class="hero-title">
-        <h1>Launching Soon</h1>
+        <h1 id="heroHeading">We'll Be Right Back</h1>
         <div class="countdown" id="countdown">00:00:00:00</div>
       </div>
 
@@ -658,6 +658,18 @@
       <div class="overlay-texture"></div>
     </div>
 
+    <!--# if expr="$status" -->
+    <script>
+      var __STATUS = <!--# echo var="status" -->;
+    </script>
+    <!--# else -->
+    <script>
+      var __STATUS = 503;
+    </script>
+    <!--# endif -->
+    <script>
+      if (typeof __STATUS !== "number" || isNaN(__STATUS)) __STATUS = 503;
+    </script>
     <script>
       (function () {
         var container = document.getElementById("container");
@@ -668,10 +680,22 @@
         var dvdLogo = document.getElementById("dvdLogo");
         var dvdSvg = document.getElementById("dvdSvg");
 
+        // --- Status-code-aware heading and title ---
+        var heroHeading = document.getElementById("heroHeading");
+        if (__STATUS === 502 || __STATUS === 503 || __STATUS === 504) {
+          heroHeading.textContent = "We'll Be Right Back";
+          document.title = "Temporarily Unavailable \u2014 FrameWorks";
+        } else if (__STATUS === 404) {
+          heroHeading.textContent = "Page Not Found";
+          document.title = "Not Found \u2014 FrameWorks";
+        } else {
+          heroHeading.textContent = "Something Went Wrong";
+          document.title = "Error \u2014 FrameWorks";
+        }
+
         // --- Chaotic countup timer ---
         var countdownEl = document.getElementById("countdown");
-        // Start at 1-2 days in seconds
-        var elapsed = (86400 + Math.random() * 86400) | 0;
+        var elapsed = 0;
         var velocity = 1;
         var velTimer = 0;
         var velDuration = 0;
@@ -754,19 +778,20 @@
         // --- Random message variations ---
         var messages = [
           {
-            title: "SYSTEMS COMING ONLINE",
-            status: "Initializing transcoding matrix\u2026",
-            body: "If you can read this, you're early. That makes you one of us.",
+            title: "SYSTEMS TEMPORARILY OFFLINE",
+            status: "Reticulating splines\u2026",
+            body: "Our servers are taking a quick breather. They've been streaming so hard they need a moment. We'll be back before you can say 'buffering'.",
           },
           {
-            title: "THE BIGGEST STREAM \u2014 TREMENDOUS, VERY LIVE",
-            status: "\ud83c\uddfa\ud83c\uddf8 Many people are saying this is the best launch ever.",
-            body: "We have the greatest streams. Everybody knows it. The other platforms? Losers. Total disasters. We're going to stream so hard, you'll be tired of streaming. Believe me.",
+            title: "THE BIGGEST MAINTENANCE \u2014 TREMENDOUS",
+            status:
+              "\ud83c\uddfa\ud83c\uddf8 Many people are saying this is the best maintenance ever.",
+            body: "We have the greatest uptime. Everybody knows it. The other platforms? They don't even maintain. Total disasters. We're going to maintain so hard, you'll be tired of reliability. Believe me.",
           },
           {
             title: "STREAMING, LITERALLY",
-            status: "A small creek of data is flowing toward your device.",
-            body: "We tried to dam it but the bits keep leaking through. Nature finds a way. Expect a light drizzle of packets followed by a full downpour of content.",
+            status: "The creek has temporarily dried up.",
+            body: "The dam is being reinforced and the bits are being rounded up. Nature finds a way, but today nature is on a coffee break. Expect a full downpour of content shortly.",
           },
           {
             title:
@@ -775,24 +800,24 @@
             body: "This \u2588\u2588\u2588\u2588\u2588 is currently undergoing \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588. All \u2588\u2588\u2588\u2588 will be \u2588\u2588\u2588\u2588\u2588\u2588 shortly. Do not \u2588\u2588\u2588\u2588 under any \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588. Thank you for your \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588.",
           },
           {
-            title: "SYNERGIZING THE CONTENT PIPELINE\u2122",
-            status: "Leveraging blockchain-adjacent streaming paradigms.",
-            body: "Our AI-powered, quantum-ready, Web5-enabled platform is disrupting the synergy space. We put streaming in the cloud, then put that cloud in another cloud. It's clouds all the way down.",
+            title: "OPTIMIZING THE SYNERGY MATRIX\u2122",
+            status: "Defragmenting the cloud-native content pipeline.",
+            body: "Our quantum-adjacent maintenance bots are recalibrating the streaming paradigm. We put the servers in the cloud, then put that cloud in maintenance mode. It's downtime all the way down.",
           },
           {
-            title: "NOW ENTERING: THE STREAM",
-            status: "Current water temperature: refreshing.",
-            body: "Please remove shoes before entering. No diving in the shallow end. Lifeguard is on break but the CDN is always watching.",
+            title: "POOL TEMPORARILY CLOSED",
+            status: "The lifeguard is performing routine maintenance.",
+            body: "Please do not tap on the glass. The CDN is being cleaned, the packets are being sorted, and the shallow end is being deepened. Normal swimming resumes shortly.",
           },
           {
-            title: "LAUNCH SEQUENCE INITIATED",
-            status: "All edge nodes deploying across the network.",
-            body: "Decentralized video infrastructure is being spun up worldwide. This is not a drill.",
+            title: "MAINTENANCE IN PROGRESS",
+            status: "All edge nodes are being updated across the network.",
+            body: "Decentralized video infrastructure is being tuned up worldwide. Everything is under control. This is not a drill, but it's not an emergency either.",
           },
           {
-            title: "DOWNSTREAM CONDITIONS: OPTIMAL",
-            status: "Salmon are reporting excellent bitrates.",
-            body: "The stream is being stocked with fresh content. Fishing permits not required. Catch and release policy applies to all packets.",
+            title: "DOWNSTREAM CONDITIONS: TURBULENT",
+            status: "Salmon are reporting temporary bitrate fluctuations.",
+            body: "The stream is being restocked with fresh packets. Fishing permits temporarily suspended. Normal catch and release policy resumes after maintenance.",
           },
         ];
 

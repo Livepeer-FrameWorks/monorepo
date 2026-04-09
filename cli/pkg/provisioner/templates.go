@@ -135,6 +135,7 @@ type ProxyRoute struct {
 	UpgradeAll    bool
 	WebsocketPath string
 	GeoProxy      bool
+	ErrorPage     bool // serve maintenance page for nginx-generated 502/503/504
 }
 
 // GenerateSystemdUnit creates a systemd unit file
@@ -361,6 +362,9 @@ geoip2 {{.GeoIPDBPath}} {
 server {
     listen {{.ListenAddress}};
     server_name {{join .ServerNames " "}};
+{{if .ErrorPage}}
+    error_page 502 503 504 /maintenance.html;
+{{end}}
 {{if .WebsocketPath}}
     location {{.WebsocketPath}} {
         proxy_pass http://{{.Upstream}}{{.WebsocketPath}};
@@ -390,6 +394,13 @@ server {
         proxy_set_header X-Longitude $geo_lon;
 {{end}}
     }
+{{if .ErrorPage}}
+    location = /maintenance.html {
+        ssi on;
+        root /usr/share/nginx/html;
+        internal;
+    }
+{{end}}
 }
 {{end}}`
 
@@ -444,6 +455,11 @@ func BuildLocalProxyRoutes(rootDomain string, localServices map[string]int) []Pr
 			route.GeoProxy = true
 		}
 
+		switch name {
+		case "foredeck", "chartroom", "logbook", "chatwoot", "listmonk":
+			route.ErrorPage = true
+		}
+
 		routes = append(routes, route)
 	}
 
@@ -490,6 +506,9 @@ func BuildExtraProxyRoutes(raw interface{}) []ProxyRoute {
 		}
 		if upgradeAll, _ := item["upgrade_all"].(bool); upgradeAll {
 			route.UpgradeAll = true
+		}
+		if errorPage, _ := item["error_page"].(bool); errorPage {
+			route.ErrorPage = true
 		}
 		routes = append(routes, route)
 	}
