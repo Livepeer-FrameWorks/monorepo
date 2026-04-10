@@ -1,6 +1,6 @@
 module frameworks/api_mesh
 
-go 1.25.0
+go 1.26.2
 
 require (
 	frameworks/pkg v0.0.0

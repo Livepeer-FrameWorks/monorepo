@@ -365,7 +365,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: .go-version
+        env:
+          GOTOOLCHAIN: local
 
       - name: Generate frontend build env
         id: frontend_env
@@ -522,7 +524,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: .go-version
+        env:
+          GOTOOLCHAIN: local
 
       - name: Generate frontend build env
         id: frontend_env
@@ -707,8 +711,10 @@ jobs:
           echo "value=${ver}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: .go-version
           cache-dependency-path: cli/go.sum
+        env:
+          GOTOOLCHAIN: local
       - name: Build CLI linux binaries
         run: |
           set -euo pipefail
@@ -742,8 +748,10 @@ jobs:
           echo "value=${ver}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: .go-version
           cache-dependency-path: cli/go.sum
+        env:
+          GOTOOLCHAIN: local
 
       - name: Build CLI darwin/arm64
         run: |
@@ -792,7 +800,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: .go-version
+        env:
+          GOTOOLCHAIN: local
 
       - name: Install zig (for CGO cross-compilation)
         uses: mlugg/setup-zig@v2
@@ -883,7 +893,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: .go-version
+        env:
+          GOTOOLCHAIN: local
 
       - name: Install zig (for CGO cross-compilation)
         uses: mlugg/setup-zig@v2
@@ -978,7 +990,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: .go-version
+        env:
+          GOTOOLCHAIN: local
 
       - name: Unlock keychain
         run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain

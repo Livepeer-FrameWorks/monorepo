@@ -1,6 +1,6 @@
 module frameworks/api_ticketing
 
-go 1.25.0
+go 1.26.2
 
 replace frameworks/pkg => ../pkg
 
