@@ -763,23 +763,26 @@ List and manage clusters.
 # List all clusters (shows name and ID)
 frameworks admin clusters list
 
-# Create a cluster
+# Create an internal cluster
 frameworks admin clusters create \
   --cluster-id central-production \
   --cluster-name "FrameWorks Central Production" \
   --cluster-type central \
   --base-url http://10.0.1.10:18002
 
-# Create a cluster and claim Foghorn instances from the pool
+# Create a customer-facing media cluster with Foghorn and platform flags
 frameworks admin clusters create \
   --cluster-id edge-eu \
   --cluster-name "EU Edge Cluster" \
-  --cluster-type cluster \
+  --cluster-type edge \
   --base-url eu.frameworks.network \
-  --foghorn-count 2
+  --foghorn-count 2 \
+  --is-platform-official \
+  --is-default-cluster
 
-# Update a cluster
-frameworks admin clusters update --cluster-id central-production --is-active
+# Update cluster flags
+frameworks admin clusters update --cluster-id edge-eu --is-platform-official
+frameworks admin clusters update --cluster-id edge-eu --is-default-cluster
 ```
 
 **Sample output:**
@@ -902,6 +905,7 @@ Billing tier and subscription management.
 - `tiers` - List billing tiers (shows default prepaid/postpaid flags)
 - `init-postpaid` - Initialize postpaid billing for a tenant (resolves default postpaid tier, provisions cluster access)
 - `promote` - Promote tenant from prepaid to postpaid billing (re-evaluates cluster subscriptions)
+- `set-cluster-pricing` - Set or update pricing config for a cluster
 
 ```bash
 # List billing tiers
@@ -912,7 +916,42 @@ frameworks admin billing init-postpaid --tenant-id <UUID>
 
 # Promote prepaid tenant to postpaid
 frameworks admin billing promote --tenant-id <UUID>
+
+# Set cluster pricing (for marketplace or custom cluster billing)
+frameworks admin billing set-cluster-pricing \
+  --cluster-id <id> \
+  --pricing-model tier_inherit \
+  --required-tier-level 0 \
+  --allow-free-tier
 ```
+
+---
+
+### frameworks admin users
+
+Manage users in existing tenants.
+
+**Subcommands:**
+
+- `create` - Create a user in an existing tenant (requires service token auth)
+
+```bash
+# Create an operator account in the platform tenant
+frameworks admin users create \
+  --tenant-id <UUID> \
+  --email admin@example.com \
+  --password <password> \
+  --role owner
+```
+
+**Flags:**
+
+- `--tenant-id` (required) - Existing tenant UUID
+- `--email` (required) - User email address
+- `--password` (required) - User password
+- `--first-name` - First name
+- `--last-name` - Last name
+- `--role` - `owner` or `member` (default: `owner`)
 
 ---
 

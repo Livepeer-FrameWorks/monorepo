@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 
 	fwsops "frameworks/cli/pkg/sops"
@@ -240,6 +241,7 @@ func (m *Manifest) Validate() error {
 	}
 
 	// Validate clusters
+	defaultClusterCount := 0
 	for id, cluster := range m.Clusters {
 		if id == "" {
 			return fmt.Errorf("cluster ID must be non-empty")
@@ -250,6 +252,27 @@ func (m *Manifest) Validate() error {
 		if cluster.Type == "" {
 			return fmt.Errorf("cluster '%s': type is required", id)
 		}
+		if cluster.Default {
+			defaultClusterCount++
+		}
+		if cluster.OwnerTenant != "" && cluster.OwnerTenant != "frameworks" {
+			uuidRe := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+			if !uuidRe.MatchString(cluster.OwnerTenant) {
+				return fmt.Errorf("cluster '%s': owner_tenant must be 'frameworks' or a valid UUID, got %q", id, cluster.OwnerTenant)
+			}
+		}
+		if cluster.Pricing != nil {
+			validModels := map[string]bool{"free_unmetered": true, "metered": true, "monthly": true, "tier_inherit": true, "custom": true}
+			if cluster.Pricing.Model == "" {
+				return fmt.Errorf("cluster '%s': pricing.model is required when pricing block is present", id)
+			}
+			if !validModels[cluster.Pricing.Model] {
+				return fmt.Errorf("cluster '%s': pricing.model must be one of free_unmetered, metered, monthly, tier_inherit, custom; got %q", id, cluster.Pricing.Model)
+			}
+		}
+	}
+	if defaultClusterCount > 1 {
+		return fmt.Errorf("at most one cluster may have default: true (found %d)", defaultClusterCount)
 	}
 
 	// Validate host cluster references

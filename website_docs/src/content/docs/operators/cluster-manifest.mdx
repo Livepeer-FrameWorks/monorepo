@@ -149,12 +149,20 @@ clusters:
   prod-platform:
     name: Production Platform
     type: central
+    owner_tenant: frameworks
     roles: [control, data, analytics, support, infra, mesh, interface, observability]
   prod-media:
     name: Production Media Plane
-    type: central
+    type: edge
+    default: true
+    platform_official: true
+    owner_tenant: frameworks
     region: us-east
     roles: [media]
+    pricing:
+      model: tier_inherit
+      required_tier_level: 0
+      allow_free_tier: true
 ```
 
 **Fields:**
@@ -163,6 +171,14 @@ clusters:
 - `type` (required) - Cluster type: `central`, `edge`, etc.
 - `region` (optional) - Region identifier
 - `roles` (optional) - Service roles that belong to this cluster. Used for automatic cluster resolution when services don't have an explicit `cluster` field.
+- `default` (optional) - Mark as the default cluster. New tenants auto-subscribe to this cluster on signup. At most one cluster may have `default: true`.
+- `platform_official` (optional) - Mark as a platform-operated cluster. Used by billing tier access and unauthenticated service discovery.
+- `owner_tenant` (optional) - Owning tenant. Use `frameworks` for the system tenant, or a tenant UUID.
+- `pricing` (optional) - Purser cluster pricing config. When present, provision reconciles it authoritatively. When absent, existing pricing is left untouched.
+  - `model` (required) - `free_unmetered`, `metered`, `monthly`, `tier_inherit`, or `custom`
+  - `required_tier_level` (optional) - Minimum billing tier level (0-5)
+  - `allow_free_tier` (optional) - Allow free-tier tenants
+  - `default_quotas` (optional) - Map of quota limits (`max_streams`, `max_viewers`, `max_bandwidth_mbps`, `retention_days`)
 
 **Role-based resolution:** When a service doesn't specify `cluster`, the CLI matches the service's role (from the built-in service registry) against each cluster's `roles` list. For example, `foghorn` has role `media`, so it resolves to whichever cluster lists `media` in its roles. Available roles: `control`, `data`, `analytics`, `media`, `support`, `infra`, `mesh`, `interface`, `observability`.
 

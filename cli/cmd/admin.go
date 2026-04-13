@@ -166,6 +166,7 @@ func newAdminCmd() *cobra.Command {
 	adm.AddCommand(newAdminNodesCmd())
 	adm.AddCommand(newAdminFoghornPoolCmd())
 	adm.AddCommand(newAdminBillingCmd())
+	adm.AddCommand(newAdminUsersCmd())
 	return adm
 }
 
@@ -736,6 +737,8 @@ func newAdminClustersCreateCmd() *cobra.Command {
 	var ownerTenantID string
 	var deploymentModel string
 	var foghornCount int
+	var isPlatformOfficial bool
+	var isDefaultCluster bool
 	cmd := &cobra.Command{Use: "create", Short: "Create a cluster", RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(clusterID) == "" {
 			return fmt.Errorf("--cluster-id is required")
@@ -795,6 +798,12 @@ func newAdminClustersCreateCmd() *cobra.Command {
 		if foghornCount > 0 {
 			req.FoghornCount = int32(foghornCount)
 		}
+		if cmd.Flags().Changed("is-platform-official") {
+			req.IsPlatformOfficial = &isPlatformOfficial
+		}
+		if cmd.Flags().Changed("is-default-cluster") {
+			req.IsDefaultCluster = &isDefaultCluster
+		}
 
 		resp, err := qm.CreateCluster(cctx, req)
 		if err != nil {
@@ -821,6 +830,8 @@ func newAdminClustersCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (UUID, optional)")
 	cmd.Flags().StringVar(&deploymentModel, "deployment-model", "managed", "deployment model: managed|shared")
 	cmd.Flags().IntVar(&foghornCount, "foghorn-count", 0, "claim N idle Foghorn instances from pool (0 = skip)")
+	cmd.Flags().BoolVar(&isPlatformOfficial, "is-platform-official", false, "mark as platform-operated cluster")
+	cmd.Flags().BoolVar(&isDefaultCluster, "is-default-cluster", false, "mark as default cluster for new tenant auto-subscription")
 	return cmd
 }
 
@@ -838,6 +849,8 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 	var isActive bool
 	var ownerTenantID string
 	var deploymentModel string
+	var isPlatformOfficial bool
+	var isDefaultCluster bool
 	cmd := &cobra.Command{Use: "update", Short: "Update a cluster", RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(clusterID) == "" {
 			return fmt.Errorf("--cluster-id is required")
@@ -901,6 +914,12 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 		if v := optionalStringFlag(cmd, "deployment-model", deploymentModel); v != nil {
 			req.DeploymentModel = v
 		}
+		if v := optionalBoolFlag(cmd, "is-platform-official", isPlatformOfficial); v != nil {
+			req.IsPlatformOfficial = v
+		}
+		if v := optionalBoolFlag(cmd, "is-default-cluster", isDefaultCluster); v != nil {
+			req.IsDefaultCluster = v
+		}
 
 		resp, err := qm.UpdateCluster(cctx, req)
 		if err != nil {
@@ -927,6 +946,8 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&isActive, "is-active", false, "set cluster active flag")
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (UUID, empty clears)")
 	cmd.Flags().StringVar(&deploymentModel, "deployment-model", "", "deployment model: managed|shared")
+	cmd.Flags().BoolVar(&isPlatformOfficial, "is-platform-official", false, "set platform-operated cluster flag")
+	cmd.Flags().BoolVar(&isDefaultCluster, "is-default-cluster", false, "set default cluster for new tenant auto-subscription")
 	return cmd
 }
 
@@ -1955,6 +1976,7 @@ func newAdminBillingCmd() *cobra.Command {
 	cmd.AddCommand(newAdminBillingTiersCmd())
 	cmd.AddCommand(newAdminBillingInitPostpaidCmd())
 	cmd.AddCommand(newAdminBillingPromoteCmd())
+	cmd.AddCommand(newAdminBillingSetClusterPricingCmd())
 	return cmd
 }
 
@@ -2077,6 +2099,147 @@ func newAdminBillingPromoteCmd() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
+	return cmd
+}
+
+func newAdminBillingSetClusterPricingCmd() *cobra.Command {
+	var clusterID string
+	var pricingModel string
+	var requiredTierLevel int
+	var allowFreeTier bool
+	var defaultQuotas string
+	cmd := &cobra.Command{Use: "set-cluster-pricing", Short: "Set or update pricing config for a cluster", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(clusterID) == "" {
+			return fmt.Errorf("--cluster-id is required")
+		}
+		if strings.TrimSpace(pricingModel) == "" {
+			return fmt.Errorf("--pricing-model is required")
+		}
+		validModels := map[string]bool{"free_unmetered": true, "metered": true, "monthly": true, "tier_inherit": true, "custom": true}
+		if !validModels[pricingModel] {
+			return fmt.Errorf("--pricing-model must be one of: free_unmetered, metered, monthly, tier_inherit, custom")
+		}
+
+		p, ctxCfg, err := purserGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = p.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		req := &pb.SetClusterPricingRequest{
+			ClusterId:    clusterID,
+			PricingModel: pricingModel,
+		}
+		if cmd.Flags().Changed("required-tier-level") {
+			v := int32(requiredTierLevel)
+			req.RequiredTierLevel = &v
+		}
+		if cmd.Flags().Changed("allow-free-tier") {
+			req.AllowFreeTier = &allowFreeTier
+		}
+		if defaultQuotas != "" {
+			quotas, parseErr := parseStructJSON(defaultQuotas)
+			if parseErr != nil {
+				return fmt.Errorf("--default-quotas: %w", parseErr)
+			}
+			req.DefaultQuotas = quotas
+		}
+
+		resp, err := p.SetClusterPricing(cctx, req)
+		if err != nil {
+			return err
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Set cluster pricing for %s (model=%s)\n", clusterID, resp.PricingModel)
+		return nil
+	}}
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
+	cmd.Flags().StringVar(&pricingModel, "pricing-model", "", "pricing model: free_unmetered|metered|monthly|tier_inherit|custom (required)")
+	cmd.Flags().IntVar(&requiredTierLevel, "required-tier-level", 0, "minimum tier level (0-5)")
+	cmd.Flags().BoolVar(&allowFreeTier, "allow-free-tier", false, "allow free-tier tenants to access this cluster")
+	cmd.Flags().StringVar(&defaultQuotas, "default-quotas", "", `default quotas as JSON (e.g. '{"max_streams":5,"max_viewers":500}')`)
+	return cmd
+}
+
+// === User Admin Commands ===
+
+func newAdminUsersCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "users", Short: "Manage users"}
+	cmd.AddCommand(newAdminUsersCreateCmd())
+	return cmd
+}
+
+func newAdminUsersCreateCmd() *cobra.Command {
+	var tenantID string
+	var email string
+	var password string
+	var firstName string
+	var lastName string
+	var role string
+	cmd := &cobra.Command{Use: "create", Short: "Create a user in an existing tenant", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(tenantID) == "" {
+			return fmt.Errorf("--tenant-id is required")
+		}
+		if err := validateUUID(tenantID); err != nil {
+			return fmt.Errorf("--tenant-id: %w", err)
+		}
+		if strings.TrimSpace(email) == "" {
+			return fmt.Errorf("--email is required")
+		}
+		if strings.TrimSpace(password) == "" {
+			return fmt.Errorf("--password is required")
+		}
+		allowedRoles := map[string]bool{"owner": true, "member": true}
+		if !allowedRoles[role] {
+			return fmt.Errorf("--role must be 'owner' or 'member', got %q", role)
+		}
+
+		cli, ctxCfg, err := commodoreGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = cli.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		resp, err := cli.CreateUserInTenant(cctx, &pb.CreateUserInTenantRequest{
+			TenantId:  tenantID,
+			Email:     email,
+			Password:  password,
+			FirstName: firstName,
+			LastName:  lastName,
+			Role:      role,
+		})
+		if err != nil {
+			return err
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created user %s (%s) in tenant %s with role %s\n",
+			resp.User.GetEmail(), resp.User.GetId(), tenantID, resp.User.GetRole())
+		return nil
+	}}
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "existing tenant UUID (required)")
+	cmd.Flags().StringVar(&email, "email", "", "user email address (required)")
+	cmd.Flags().StringVar(&password, "password", "", "user password (required)")
+	cmd.Flags().StringVar(&firstName, "first-name", "", "first name")
+	cmd.Flags().StringVar(&lastName, "last-name", "", "last name")
+	cmd.Flags().StringVar(&role, "role", "owner", "user role: owner|member")
 	return cmd
 }
 

@@ -119,6 +119,10 @@ service InternalService {
 
   // Get primary user info for a tenant (for billing notifications/invoices)
   rpc GetTenantPrimaryUser(GetTenantPrimaryUserRequest) returns (GetTenantPrimaryUserResponse);
+
+  // Create a user in an existing tenant (bootstrap/admin provisioning)
+  // Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
+  rpc CreateUserInTenant(CreateUserInTenantRequest) returns (CreateUserInTenantResponse);
 }
 
 // ============================================================================
@@ -477,6 +481,25 @@ message GetTenantPrimaryUserResponse {
   string user_id = 1;                   // UUID of primary user
   string email = 2;                     // Email address (for billing notifications)
   string name = 3;                      // Display name (first_name + last_name)
+}
+
+// ============================================================================
+// BOOTSTRAP USER CREATION (CLI/provision → Commodore)
+// Creates a user in an existing tenant without triggering tenant creation
+// or billing initialization. Requires SERVICE_TOKEN.
+// ============================================================================
+
+message CreateUserInTenantRequest {
+  string tenant_id = 1;                 // Existing tenant UUID
+  string email = 2;                     // Email address (required)
+  string password = 3;                  // Plaintext password (hashed server-side)
+  string first_name = 4;               // First name
+  string last_name = 5;                // Last name
+  string role = 6;                      // "owner" or "member" (defaults to "owner")
+}
+
+message CreateUserInTenantResponse {
+  User user = 1;
 }
 
 // ============================================================================

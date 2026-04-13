@@ -40,6 +40,7 @@ const (
 	InternalService_InvalidateTenantCache_FullMethodName       = "/commodore.InternalService/InvalidateTenantCache"
 	InternalService_GetTenantUserCount_FullMethodName          = "/commodore.InternalService/GetTenantUserCount"
 	InternalService_GetTenantPrimaryUser_FullMethodName        = "/commodore.InternalService/GetTenantPrimaryUser"
+	InternalService_CreateUserInTenant_FullMethodName          = "/commodore.InternalService/CreateUserInTenant"
 )
 
 // InternalServiceClient is the client API for InternalService service.
@@ -103,6 +104,9 @@ type InternalServiceClient interface {
 	GetTenantUserCount(ctx context.Context, in *GetTenantUserCountRequest, opts ...grpc.CallOption) (*GetTenantUserCountResponse, error)
 	// Get primary user info for a tenant (for billing notifications/invoices)
 	GetTenantPrimaryUser(ctx context.Context, in *GetTenantPrimaryUserRequest, opts ...grpc.CallOption) (*GetTenantPrimaryUserResponse, error)
+	// Create a user in an existing tenant (bootstrap/admin provisioning)
+	// Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
+	CreateUserInTenant(ctx context.Context, in *CreateUserInTenantRequest, opts ...grpc.CallOption) (*CreateUserInTenantResponse, error)
 }
 
 type internalServiceClient struct {
@@ -313,6 +317,16 @@ func (c *internalServiceClient) GetTenantPrimaryUser(ctx context.Context, in *Ge
 	return out, nil
 }
 
+func (c *internalServiceClient) CreateUserInTenant(ctx context.Context, in *CreateUserInTenantRequest, opts ...grpc.CallOption) (*CreateUserInTenantResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateUserInTenantResponse)
+	err := c.cc.Invoke(ctx, InternalService_CreateUserInTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InternalServiceServer is the server API for InternalService service.
 // All implementations must embed UnimplementedInternalServiceServer
 // for forward compatibility.
@@ -374,6 +388,9 @@ type InternalServiceServer interface {
 	GetTenantUserCount(context.Context, *GetTenantUserCountRequest) (*GetTenantUserCountResponse, error)
 	// Get primary user info for a tenant (for billing notifications/invoices)
 	GetTenantPrimaryUser(context.Context, *GetTenantPrimaryUserRequest) (*GetTenantPrimaryUserResponse, error)
+	// Create a user in an existing tenant (bootstrap/admin provisioning)
+	// Requires SERVICE_TOKEN auth. Skips tenant creation and verification.
+	CreateUserInTenant(context.Context, *CreateUserInTenantRequest) (*CreateUserInTenantResponse, error)
 	mustEmbedUnimplementedInternalServiceServer()
 }
 
@@ -443,6 +460,9 @@ func (UnimplementedInternalServiceServer) GetTenantUserCount(context.Context, *G
 }
 func (UnimplementedInternalServiceServer) GetTenantPrimaryUser(context.Context, *GetTenantPrimaryUserRequest) (*GetTenantPrimaryUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantPrimaryUser not implemented")
+}
+func (UnimplementedInternalServiceServer) CreateUserInTenant(context.Context, *CreateUserInTenantRequest) (*CreateUserInTenantResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateUserInTenant not implemented")
 }
 func (UnimplementedInternalServiceServer) mustEmbedUnimplementedInternalServiceServer() {}
 func (UnimplementedInternalServiceServer) testEmbeddedByValue()                         {}
@@ -825,6 +845,24 @@ func _InternalService_GetTenantPrimaryUser_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_CreateUserInTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateUserInTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).CreateUserInTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_CreateUserInTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).CreateUserInTenant(ctx, req.(*CreateUserInTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InternalService_ServiceDesc is the grpc.ServiceDesc for InternalService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -911,6 +949,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantPrimaryUser",
 			Handler:    _InternalService_GetTenantPrimaryUser_Handler,
+		},
+		{
+			MethodName: "CreateUserInTenant",
+			Handler:    _InternalService_CreateUserInTenant_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

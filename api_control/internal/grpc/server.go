@@ -6876,3 +6876,86 @@ func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *pb.GetT
 		Name:   name,
 	}, nil
 }
+
+// CreateUserInTenant creates a user in an existing tenant without triggering
+// tenant creation or billing initialization. SERVICE_TOKEN auth only.
+func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *pb.CreateUserInTenantRequest) (*pb.CreateUserInTenantResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "CreateUserInTenant requires service token auth")
+	}
+
+	tenantID := req.GetTenantId()
+	email := req.GetEmail()
+	password := req.GetPassword()
+
+	if tenantID == "" || email == "" || password == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, email, and password are required")
+	}
+
+	role := req.GetRole()
+	if role == "" {
+		role = "owner"
+	}
+	allowedRoles := map[string]bool{"owner": true, "member": true}
+	if !allowedRoles[role] {
+		return nil, status.Errorf(codes.InvalidArgument, "role must be 'owner' or 'member', got %q", role)
+	}
+
+	// Verify tenant exists via Quartermaster
+	if s.quartermasterClient == nil {
+		return nil, status.Error(codes.FailedPrecondition, "Quartermaster client not available, cannot verify tenant exists")
+	}
+	if _, tenantErr := s.quartermasterClient.GetTenant(ctx, tenantID); tenantErr != nil {
+		return nil, status.Errorf(codes.NotFound, "tenant %s not found in Quartermaster: %v", tenantID, tenantErr)
+	}
+
+	// Check email uniqueness
+	var existingID string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM commodore.users WHERE email = $1`, email).Scan(&existingID)
+	if err == nil {
+		return nil, status.Error(codes.AlreadyExists, "user with this email already exists")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	hashedPassword, err := auth.HashPassword(password)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to hash password: %v", err)
+	}
+
+	userID := uuid.New().String()
+	now := time.Now()
+	permissions := getDefaultPermissions(role)
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO commodore.users (id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, true, $9, $9)
+	`, userID, tenantID, email, hashedPassword, req.GetFirstName(), req.GetLastName(), role, pq.Array(permissions), now)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create user: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"user_id":   userID,
+		"tenant_id": tenantID,
+		"email":     email,
+		"role":      role,
+	}).Info("User created in existing tenant via CreateUserInTenant")
+
+	return &pb.CreateUserInTenantResponse{
+		User: &pb.User{
+			Id:          userID,
+			TenantId:    tenantID,
+			Email:       &email,
+			FirstName:   req.GetFirstName(),
+			LastName:    req.GetLastName(),
+			Role:        role,
+			Permissions: permissions,
+			IsActive:    true,
+			IsVerified:  true,
+			CreatedAt:   timestamppb.New(now),
+			UpdatedAt:   timestamppb.New(now),
+		},
+	}, nil
+}

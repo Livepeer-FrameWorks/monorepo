@@ -2291,6 +2291,7 @@ type CreateClusterRequest struct {
 	DeploymentModel    string  `protobuf:"bytes,21,opt,name=deployment_model,json=deploymentModel,proto3" json:"deployment_model,omitempty"`                   // json:"deployment_model" - 'shared' or 'managed' (default: 'managed')
 	FoghornCount       int32   `protobuf:"varint,22,opt,name=foghorn_count,json=foghornCount,proto3" json:"foghorn_count,omitempty"`                           // Claim N idle Foghorn instances from pool (0 = skip)
 	IsPlatformOfficial *bool   `protobuf:"varint,23,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"` // Platform-operated cluster
+	IsDefaultCluster   *bool   `protobuf:"varint,24,opt,name=is_default_cluster,json=isDefaultCluster,proto3,oneof" json:"is_default_cluster,omitempty"`       // Auto-subscribe new tenants to this cluster
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2423,6 +2424,13 @@ func (x *CreateClusterRequest) GetIsPlatformOfficial() bool {
 	return false
 }
 
+func (x *CreateClusterRequest) GetIsDefaultCluster() bool {
+	if x != nil && x.IsDefaultCluster != nil {
+		return *x.IsDefaultCluster
+	}
+	return false
+}
+
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
 type UpdateClusterRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
@@ -2440,6 +2448,7 @@ type UpdateClusterRequest struct {
 	OwnerTenantId        *string                `protobuf:"bytes,12,opt,name=owner_tenant_id,json=ownerTenantId,proto3,oneof" json:"owner_tenant_id,omitempty"`                      // json:"owner_tenant_id,omitempty" - Set/clear ownership (empty string clears)
 	DeploymentModel      *string                `protobuf:"bytes,13,opt,name=deployment_model,json=deploymentModel,proto3,oneof" json:"deployment_model,omitempty"`                  // json:"deployment_model,omitempty" - Change isolation level
 	IsPlatformOfficial   *bool                  `protobuf:"varint,14,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"`      // json:"is_platform_official,omitempty" - Platform-operated cluster
+	IsDefaultCluster     *bool                  `protobuf:"varint,15,opt,name=is_default_cluster,json=isDefaultCluster,proto3,oneof" json:"is_default_cluster,omitempty"`            // json:"is_default_cluster,omitempty" - Set/clear default cluster flag
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2568,6 +2577,13 @@ func (x *UpdateClusterRequest) GetDeploymentModel() string {
 func (x *UpdateClusterRequest) GetIsPlatformOfficial() bool {
 	if x != nil && x.IsPlatformOfficial != nil {
 		return *x.IsPlatformOfficial
+	}
+	return false
+}
+
+func (x *UpdateClusterRequest) GetIsDefaultCluster() bool {
+	if x != nil && x.IsDefaultCluster != nil {
+		return *x.IsDefaultCluster
 	}
 	return false
 }
@@ -10730,7 +10746,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\bclusters\x18\x01 \x03(\v2$.quartermaster.InfrastructureClusterR\bclusters\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xab\x05\n" +
+	"pagination\"\xf5\x05\n" +
 	"\x14CreateClusterRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
@@ -10747,11 +10763,13 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x0fowner_tenant_id\x18\x14 \x01(\tH\x02R\rownerTenantId\x88\x01\x01\x12)\n" +
 	"\x10deployment_model\x18\x15 \x01(\tR\x0fdeploymentModel\x12#\n" +
 	"\rfoghorn_count\x18\x16 \x01(\x05R\ffoghornCount\x125\n" +
-	"\x14is_platform_official\x18\x17 \x01(\bH\x03R\x12isPlatformOfficial\x88\x01\x01B\x0f\n" +
+	"\x14is_platform_official\x18\x17 \x01(\bH\x03R\x12isPlatformOfficial\x88\x01\x01\x121\n" +
+	"\x12is_default_cluster\x18\x18 \x01(\bH\x04R\x10isDefaultCluster\x88\x01\x01B\x0f\n" +
 	"\r_database_urlB\x10\n" +
 	"\x0e_periscope_urlB\x12\n" +
 	"\x10_owner_tenant_idB\x17\n" +
-	"\x15_is_platform_official\"\xed\x06\n" +
+	"\x15_is_platform_officialB\x15\n" +
+	"\x13_is_default_cluster\"\xb7\a\n" +
 	"\x14UpdateClusterRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12&\n" +
@@ -10769,7 +10787,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x0fowner_tenant_id\x18\f \x01(\tH\tR\rownerTenantId\x88\x01\x01\x12.\n" +
 	"\x10deployment_model\x18\r \x01(\tH\n" +
 	"R\x0fdeploymentModel\x88\x01\x01\x125\n" +
-	"\x14is_platform_official\x18\x0e \x01(\bH\vR\x12isPlatformOfficial\x88\x01\x01B\x0f\n" +
+	"\x14is_platform_official\x18\x0e \x01(\bH\vR\x12isPlatformOfficial\x88\x01\x01\x121\n" +
+	"\x12is_default_cluster\x18\x0f \x01(\bH\fR\x10isDefaultCluster\x88\x01\x01B\x0f\n" +
 	"\r_cluster_nameB\v\n" +
 	"\t_base_urlB\x0f\n" +
 	"\r_database_urlB\x10\n" +
@@ -10782,7 +10801,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"_is_activeB\x12\n" +
 	"\x10_owner_tenant_idB\x13\n" +
 	"\x11_deployment_modelB\x17\n" +
-	"\x15_is_platform_official\"|\n" +
+	"\x15_is_platform_officialB\x15\n" +
+	"\x13_is_default_cluster\"|\n" +
 	"\x1cListClustersForTenantRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12?\n" +
 	"\n" +

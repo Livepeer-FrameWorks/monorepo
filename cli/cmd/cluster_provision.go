@@ -23,6 +23,8 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/githubapp"
 	fwsops "frameworks/cli/pkg/sops"
+	commodoreCli "frameworks/pkg/clients/commodore"
+	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
 	infra "frameworks/pkg/models"
@@ -98,6 +100,17 @@ Use --repo to fetch manifests from a private GitHub repo via GitHub App credenti
 	cmd.Flags().Int64Var(&githubInstallID, "github-installation-id", 0, "GitHub Installation ID (overrides config)")
 	cmd.Flags().StringVar(&githubKeyPath, "github-private-key", "", "Path to GitHub App private key PEM (overrides config)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted env files (default: $SOPS_AGE_KEY_FILE or ~/.config/sops/age/keys.txt)")
+
+	// Bootstrap admin user creation
+	cmd.Flags().String("bootstrap-admin-email", "", "Create an initial operator user with this email")
+	cmd.Flags().String("bootstrap-admin-password", "", "Plaintext password for bootstrap admin (prefer --bootstrap-admin-password-env or --bootstrap-admin-password-file)")
+	cmd.Flags().String("bootstrap-admin-password-env", "", "Read bootstrap admin password from this environment variable")
+	cmd.Flags().String("bootstrap-admin-password-file", "", "Read bootstrap admin password from this file")
+	cmd.Flags().String("bootstrap-admin-first-name", "Admin", "First name for bootstrap admin")
+	cmd.Flags().String("bootstrap-admin-last-name", "User", "Last name for bootstrap admin")
+
+	// Control-plane validation
+	cmd.Flags().Bool("strict-control-plane", false, "Fail (exit 1) if post-provision control-plane validation has warnings")
 
 	return cmd
 }
@@ -464,7 +477,296 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		fmt.Fprintln(cmd.OutOrStdout(), "")
 	}
 
+	// Post-provision: bootstrap Purser cluster pricing, admin user, control-plane validation
+	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// postProvisionFinalize handles Purser pricing bootstrap, optional admin user creation,
+// and control-plane validation after all service batches are complete.
+func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+	systemTenantID, ok := runtimeData["system_tenant_id"].(string)
+	serviceToken, stOK := runtimeData["service_token"].(string)
+
+	if !ok || !stOK || systemTenantID == "" || serviceToken == "" {
+		// Bootstrap didn't run (e.g. --only=interfaces), skip finalization
+		return nil
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "  Control-plane finalization...")
+
+	// 1. Bootstrap Purser cluster pricing for clusters with manifest pricing config
+	if err := maybeBootstrapClusterPricing(ctx, cmd, manifest, serviceToken); err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: cluster pricing bootstrap failed: %v\n", err)
+	}
+
+	// 2. Optional bootstrap admin user
+	if err := maybeBootstrapAdminUser(ctx, cmd, manifest, systemTenantID, serviceToken); err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: bootstrap admin user creation failed: %v\n", err)
+	}
+
+	// 3. Control-plane validation
+	return validateControlPlane(ctx, cmd, manifest, runtimeData)
+}
+
+func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, serviceToken string) error {
+	hasPricingClusters := false
+	for _, cc := range manifest.Clusters {
+		if cc.Pricing != nil {
+			hasPricingClusters = true
+			break
+		}
+	}
+	if !hasPricingClusters {
+		return nil
+	}
+
+	purserAddr, err := resolveServiceGRPCAddr(manifest, "purser", 19003)
+	if err != nil {
+		return fmt.Errorf("cannot resolve Purser address: %w", err)
+	}
+
+	p, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
+		GRPCAddr:      purserAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to connect to Purser gRPC: %w", err)
+	}
+	defer p.Close()
+
+	for clusterID, cc := range manifest.Clusters {
+		if cc.Pricing == nil {
+			continue
+		}
+		req := &pb.SetClusterPricingRequest{
+			ClusterId:    clusterID,
+			PricingModel: cc.Pricing.Model,
+		}
+		if cc.Pricing.RequiredTierLevel != nil {
+			v := int32(*cc.Pricing.RequiredTierLevel)
+			req.RequiredTierLevel = &v
+		}
+		if cc.Pricing.AllowFreeTier != nil {
+			req.AllowFreeTier = cc.Pricing.AllowFreeTier
+		}
+		if len(cc.Pricing.DefaultQuotas) > 0 {
+			m := make(map[string]interface{}, len(cc.Pricing.DefaultQuotas))
+			for k, v := range cc.Pricing.DefaultQuotas {
+				m[k] = float64(v)
+			}
+			s, sErr := structpb.NewStruct(m)
+			if sErr == nil {
+				req.DefaultQuotas = s
+			}
+		}
+		if _, err := p.SetClusterPricing(ctx, req); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "    Warning: failed to set pricing for cluster %s: %v\n", clusterID, err)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Cluster pricing set for %s (model=%s)\n", clusterID, cc.Pricing.Model)
+		}
+	}
+	return nil
+}
+
+func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, systemTenantID, serviceToken string) error {
+	email, err := cmd.Flags().GetString("bootstrap-admin-email")
+	if err != nil || email == "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "\n  To create your first operator account:\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "    frameworks admin users create --tenant-id %s --email <email> --password <pw>\n\n", systemTenantID)
+		return nil
+	}
+
+	// Resolve password: file > env > plaintext
+	password := ""
+	if pwFile, fErr := cmd.Flags().GetString("bootstrap-admin-password-file"); fErr == nil && pwFile != "" {
+		data, readErr := os.ReadFile(pwFile)
+		if readErr != nil {
+			return fmt.Errorf("failed to read password file: %w", readErr)
+		}
+		password = strings.TrimSpace(string(data))
+	}
+	if password == "" {
+		if pwEnv, eErr := cmd.Flags().GetString("bootstrap-admin-password-env"); eErr == nil && pwEnv != "" {
+			password = os.Getenv(pwEnv)
+		}
+	}
+	if password == "" {
+		if pw, pErr := cmd.Flags().GetString("bootstrap-admin-password"); pErr == nil {
+			password = pw
+		}
+	}
+	if password == "" {
+		return fmt.Errorf("--bootstrap-admin-email requires a password (use --bootstrap-admin-password, --bootstrap-admin-password-env, or --bootstrap-admin-password-file)")
+	}
+
+	firstName, _ := cmd.Flags().GetString("bootstrap-admin-first-name") //nolint:errcheck // flag always exists
+	lastName, _ := cmd.Flags().GetString("bootstrap-admin-last-name")   //nolint:errcheck // flag always exists
+
+	commodoreAddr, err := resolveServiceGRPCAddr(manifest, "commodore", 19001)
+	if err != nil {
+		return fmt.Errorf("cannot resolve Commodore address: %w", err)
+	}
+
+	cli, err := commodoreCli.NewGRPCClient(commodoreCli.GRPCConfig{
+		GRPCAddr:      commodoreAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to connect to Commodore gRPC: %w", err)
+	}
+	defer cli.Close()
+
+	resp, err := cli.CreateUserInTenant(ctx, &pb.CreateUserInTenantRequest{
+		TenantId:  systemTenantID,
+		Email:     email,
+		Password:  password,
+		FirstName: firstName,
+		LastName:  lastName,
+		Role:      "owner",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create bootstrap admin: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Created operator account: %s (user_id: %s) in tenant %s\n",
+		resp.User.GetEmail(), resp.User.GetId(), systemTenantID)
+	return nil
+}
+
+func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+	systemTenantID, stOk := runtimeData["system_tenant_id"].(string)
+	serviceToken, tkOk := runtimeData["service_token"].(string)
+	grpcAddr, gaOk := runtimeData["quartermaster_grpc_addr"].(string)
+
+	if !stOk || !tkOk || !gaOk || systemTenantID == "" || serviceToken == "" || grpcAddr == "" {
+		return nil
+	}
+
+	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: true,
+	})
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: could not connect to Quartermaster for validation: %v\n", err)
+		return nil
+	}
+	defer client.Close()
+
+	var warnings []string
+
+	// Check clusters for default and official flags
+	clustersResp, err := client.ListClusters(ctx, nil)
+	if err == nil {
+		hasDefault := false
+		hasOfficial := false
+		for _, c := range clustersResp.GetClusters() {
+			if c.GetIsDefaultCluster() {
+				hasDefault = true
+			}
+			if c.GetIsPlatformOfficial() {
+				hasOfficial = true
+			}
+		}
+		if !hasDefault {
+			warnings = append(warnings, "No default cluster - new tenant signups will not auto-subscribe")
+		}
+		if !hasOfficial {
+			warnings = append(warnings, "No platform-official cluster - billing tier access will not work")
+		}
+	}
+
+	// Check for platform tenant user
+	commodoreAddr, commodoreErr := resolveServiceGRPCAddr(manifest, "commodore", 19001)
+	if commodoreErr == nil {
+		cli, cliErr := commodoreCli.NewGRPCClient(commodoreCli.GRPCConfig{
+			GRPCAddr:      commodoreAddr,
+			Logger:        logging.NewLogger(),
+			ServiceToken:  serviceToken,
+			AllowInsecure: true,
+		})
+		if cliErr == nil {
+			defer cli.Close()
+			countResp, countErr := cli.GetTenantUserCount(ctx, systemTenantID)
+			if countErr == nil && countResp.GetActiveCount() == 0 {
+				warnings = append(warnings, "No users in platform tenant - use 'frameworks admin users create --role owner' or re-run with --bootstrap-admin-email")
+			} else if countErr != nil {
+				warnings = append(warnings, fmt.Sprintf("Could not check platform tenant users: %v", countErr))
+			}
+		}
+	}
+
+	// Check cluster pricing for official clusters
+	purserAddr, purserErr := resolveServiceGRPCAddr(manifest, "purser", 19003)
+	if purserErr == nil {
+		p, pErr := purserclient.NewGRPCClient(purserclient.GRPCConfig{
+			GRPCAddr:      purserAddr,
+			Logger:        logging.NewLogger(),
+			ServiceToken:  serviceToken,
+			AllowInsecure: true,
+		})
+		if pErr == nil {
+			defer p.Close()
+			for clusterID, cc := range manifest.Clusters {
+				if cc.Pricing == nil {
+					continue
+				}
+				pricing, pricingErr := p.GetClusterPricing(ctx, clusterID)
+				if pricingErr != nil || pricing == nil || pricing.GetPricingModel() == "" {
+					warnings = append(warnings, fmt.Sprintf("No pricing config for cluster %s (manifest declares pricing but Purser has none)", clusterID))
+				}
+			}
+		}
+	}
+
+	if len(warnings) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "\n  Control-plane validation warnings:\n")
+		for _, w := range warnings {
+			fmt.Fprintf(cmd.OutOrStdout(), "    - %s\n", w)
+		}
+		strict, _ := cmd.Flags().GetBool("strict-control-plane") //nolint:errcheck // flag always exists
+		if strict {
+			return fmt.Errorf("control-plane validation failed with %d warning(s) (--strict-control-plane is set)", len(warnings))
+		}
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "    ✓ Control-plane validation passed")
+	}
+
+	return nil
+}
+
+// resolveServiceGRPCAddr resolves a service's gRPC address from the manifest,
+// using the same host→ExternalIP pattern as resolveQuartermasterRuntimeData.
+func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, defaultGRPCPort int) (string, error) {
+	svc, ok := manifest.Services[serviceName]
+	if !ok {
+		return "", fmt.Errorf("%s service not found in manifest", serviceName)
+	}
+
+	hostKey := svc.Host
+	if hostKey == "" && len(svc.Hosts) > 0 {
+		hostKey = svc.Hosts[0]
+	}
+
+	host, ok := manifest.GetHost(hostKey)
+	if !ok {
+		return "", fmt.Errorf("%s host %q not found in manifest", serviceName, hostKey)
+	}
+
+	grpcPort := defaultGRPCPort
+	if svc.GRPCPort != 0 {
+		grpcPort = svc.GRPCPort
+	}
+
+	return fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort), nil
 }
 
 func maybeReconcileBatchFoghornAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
@@ -2223,7 +2525,8 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 	for _, clusterID := range clusterIDs {
 		clusterName := fmt.Sprintf("FrameWorks %s %s Cluster", manifest.Type, manifest.Profile)
 		clusterType := infra.ClusterTypeCentral
-		if cc, ok := manifest.Clusters[clusterID]; ok {
+		cc, hasClusterConfig := manifest.Clusters[clusterID]
+		if hasClusterConfig {
 			clusterName = cc.Name
 			clusterType = cc.Type
 		} else if manifest.Type == infra.ClusterTypeEdge {
@@ -2233,15 +2536,35 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 			return nil, fmt.Errorf("cluster %q has unsupported cluster type %q (allowed: %s)", clusterID, clusterType, strings.Join(infra.ClusterTypeValues(), ", "))
 		}
 
+		// Resolve manifest bootstrap metadata
+		var ownerTenantID *string
+		isPlatformOfficial := false
+		isDefaultCluster := false
+		if hasClusterConfig {
+			isPlatformOfficial = cc.PlatformOfficial
+			isDefaultCluster = cc.Default
+			if cc.OwnerTenant == "frameworks" {
+				ownerTenantID = &systemTenantID
+			} else if cc.OwnerTenant != "" {
+				ownerTenantID = &cc.OwnerTenant
+			}
+		}
+
 		clusterResp, err := client.GetCluster(ctx, clusterID)
 		if err != nil && status.Code(err) == codes.NotFound {
 			fmt.Printf("  Registering Cluster '%s'...\n", clusterID)
-			_, err = client.CreateCluster(ctx, &pb.CreateClusterRequest{
-				ClusterId:   clusterID,
-				ClusterName: clusterName,
-				ClusterType: clusterType,
-				BaseUrl:     baseURL,
-			})
+			createReq := &pb.CreateClusterRequest{
+				ClusterId:          clusterID,
+				ClusterName:        clusterName,
+				ClusterType:        clusterType,
+				BaseUrl:            baseURL,
+				IsPlatformOfficial: &isPlatformOfficial,
+				IsDefaultCluster:   &isDefaultCluster,
+			}
+			if ownerTenantID != nil {
+				createReq.OwnerTenantId = ownerTenantID
+			}
+			_, err = client.CreateCluster(ctx, createReq)
 			if err != nil {
 				return nil, fmt.Errorf("failed to register cluster '%s': %w", clusterID, err)
 			}
@@ -2258,6 +2581,26 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 				}
 				if strings.TrimSpace(cluster.GetBaseUrl()) != baseURL {
 					updateReq.BaseUrl = &baseURL
+					needsUpdate = true
+				}
+				if cluster.GetIsPlatformOfficial() != isPlatformOfficial {
+					updateReq.IsPlatformOfficial = &isPlatformOfficial
+					needsUpdate = true
+				}
+				if cluster.GetIsDefaultCluster() != isDefaultCluster {
+					updateReq.IsDefaultCluster = &isDefaultCluster
+					needsUpdate = true
+				}
+				currentOwner := ""
+				if cluster.OwnerTenantId != nil {
+					currentOwner = *cluster.OwnerTenantId
+				}
+				desiredOwner := ""
+				if ownerTenantID != nil {
+					desiredOwner = *ownerTenantID
+				}
+				if currentOwner != desiredOwner {
+					updateReq.OwnerTenantId = &desiredOwner
 					needsUpdate = true
 				}
 			}

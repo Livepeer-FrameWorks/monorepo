@@ -68,12 +68,26 @@ type IngressSiteConfig struct {
 	Metadata    map[string]string `yaml:"metadata,omitempty"`
 }
 
+// ClusterPricingConfig defines Purser cluster pricing for platform-official clusters.
+// When present in the manifest, provision reconciles it authoritatively.
+// When absent, existing pricing is left untouched.
+type ClusterPricingConfig struct {
+	Model             string         `yaml:"model"`                         // free_unmetered, metered, monthly, tier_inherit, custom
+	RequiredTierLevel *int           `yaml:"required_tier_level,omitempty"` // 0-5 (0 = no subscription required)
+	AllowFreeTier     *bool          `yaml:"allow_free_tier,omitempty"`
+	DefaultQuotas     map[string]int `yaml:"default_quotas,omitempty"` // max_streams, max_viewers, max_bandwidth_mbps, retention_days
+}
+
 // ClusterConfig defines a cluster to register in Quartermaster during provisioning
 type ClusterConfig struct {
-	Name   string   `yaml:"name"`
-	Type   string   `yaml:"type"` // central, edge
-	Region string   `yaml:"region,omitempty"`
-	Roles  []string `yaml:"roles,omitempty"` // control, data, analytics, media, mesh, interface, infra, support, observability
+	Name             string                `yaml:"name"`
+	Type             string                `yaml:"type"` // central, edge
+	Region           string                `yaml:"region,omitempty"`
+	Roles            []string              `yaml:"roles,omitempty"`             // control, data, analytics, media, mesh, interface, infra, support, observability
+	Default          bool                  `yaml:"default,omitempty"`           // is_default_cluster — auto-subscribe new tenants
+	PlatformOfficial bool                  `yaml:"platform_official,omitempty"` // is_platform_official — platform-operated cluster
+	OwnerTenant      string                `yaml:"owner_tenant,omitempty"`      // "frameworks" (system tenant) or tenant UUID
+	Pricing          *ClusterPricingConfig `yaml:"pricing,omitempty"`           // Purser cluster pricing (reconciled authoritatively when present)
 }
 
 // Host represents a target machine

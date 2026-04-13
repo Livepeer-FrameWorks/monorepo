@@ -909,6 +909,12 @@ func (c *GRPCClient) GetTenantPrimaryUser(ctx context.Context, tenantID string) 
 	})
 }
 
+// CreateUserInTenant creates a user in an existing tenant.
+// Used by CLI provisioning and admin operations. Requires service token auth.
+func (c *GRPCClient) CreateUserInTenant(ctx context.Context, req *pb.CreateUserInTenantRequest) (*pb.CreateUserInTenantResponse, error) {
+	return c.internal.CreateUserInTenant(ctx, req)
+}
+
 // ============================================================================
 // NODE MANAGEMENT (Gateway → Commodore → Foghorn proxy)
 // ============================================================================

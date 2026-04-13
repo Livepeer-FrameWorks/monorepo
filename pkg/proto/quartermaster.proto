@@ -548,6 +548,7 @@ message CreateClusterRequest {
   string deployment_model = 21;         // json:"deployment_model" - 'shared' or 'managed' (default: 'managed')
   int32 foghorn_count = 22;             // Claim N idle Foghorn instances from pool (0 = skip)
   optional bool is_platform_official = 23; // Platform-operated cluster
+  optional bool is_default_cluster = 24;   // Auto-subscribe new tenants to this cluster
 }
 
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
@@ -566,6 +567,7 @@ message UpdateClusterRequest {
   optional string owner_tenant_id = 12; // json:"owner_tenant_id,omitempty" - Set/clear ownership (empty string clears)
   optional string deployment_model = 13; // json:"deployment_model,omitempty" - Change isolation level
   optional bool is_platform_official = 14; // json:"is_platform_official,omitempty" - Platform-operated cluster
+  optional bool is_default_cluster = 15;   // json:"is_default_cluster,omitempty" - Set/clear default cluster flag
 }
 
 message ListClustersForTenantRequest {

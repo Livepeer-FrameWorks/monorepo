@@ -2658,17 +2658,29 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		isPlatformOfficial = *req.IsPlatformOfficial
 	}
 
+	isDefaultCluster := false
+	if req.IsDefaultCluster != nil {
+		isDefaultCluster = *req.IsDefaultCluster
+	}
+
+	// At most one cluster can be the default — clear existing before setting.
+	if isDefaultCluster {
+		if _, err := s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET is_default_cluster = false WHERE is_default_cluster = true`); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to clear existing default cluster: %v", err)
+		}
+	}
+
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_clusters (id, cluster_id, cluster_name, cluster_type, deployment_model,
 		                                                   owner_tenant_id, base_url, database_url, periscope_url, kafka_brokers,
 		                                                   max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-		                                                   health_status, is_active, is_platform_official, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $15)
+		                                                   health_status, is_active, is_platform_official, is_default_cluster, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $16, $16)
 	`, id, clusterID, req.GetClusterName(), clusterType, deploymentModel,
 		ownerTenantID, req.GetBaseUrl(),
 		req.DatabaseUrl, req.PeriscopeUrl, pq.Array(req.GetKafkaBrokers()),
 		req.GetMaxConcurrentStreams(), req.GetMaxConcurrentViewers(), req.GetMaxBandwidthMbps(),
-		isPlatformOfficial, now)
+		isPlatformOfficial, isDefaultCluster, now)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
@@ -2783,6 +2795,17 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 	if req.IsPlatformOfficial != nil {
 		updates = append(updates, fmt.Sprintf("is_platform_official = $%d", argIdx))
 		args = append(args, *req.IsPlatformOfficial)
+		argIdx++
+	}
+	if req.IsDefaultCluster != nil {
+		if *req.IsDefaultCluster {
+			// At most one cluster can be the default — clear existing before setting.
+			if _, err := s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET is_default_cluster = false WHERE is_default_cluster = true`); err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to clear existing default cluster: %v", err)
+			}
+		}
+		updates = append(updates, fmt.Sprintf("is_default_cluster = $%d", argIdx))
+		args = append(args, *req.IsDefaultCluster)
 		argIdx++
 	}
 

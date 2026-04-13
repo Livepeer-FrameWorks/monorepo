@@ -200,26 +200,54 @@ Run schemas in order:
 \i pkg/database/sql/seeds/static/purser_tiers.sql
 ```
 
-Bootstrap a platform tenant and cluster:
+Bootstrap the platform tenant, clusters, pricing, and operator account. The recommended approach is to use manifest-driven provisioning with `frameworks cluster provision`, which handles all of this automatically from the cluster manifest's `clusters` section (see [Cluster Manifest Reference](/operators/cluster-manifest/)).
+
+For manual bootstrap or when provisioning without the CLI:
+
+```bash
+# Provision handles tenant creation, cluster flags, pricing, and optional admin user
+frameworks cluster provision --manifest cluster.yaml \
+  --bootstrap-admin-email admin@example.com \
+  --bootstrap-admin-password-env ADMIN_PASSWORD
+
+# Or create the operator account separately after provision
+frameworks admin users create \
+  --tenant-id <system-tenant-id> \
+  --email admin@example.com \
+  --password <password>
+```
+
+The manifest should define cluster roles explicitly:
+
+- **Central/core clusters**: `owner_tenant: frameworks` — internal infrastructure, not customer-facing
+- **Media clusters**: `default: true`, `platform_official: true`, `pricing.model: tier_inherit` — customer-facing, access governed by billing tier
+
+If you need to bootstrap via SQL instead (e.g. before the CLI is available):
 
 ```sql
 -- Create platform owner tenant
 INSERT INTO quartermaster.tenants (id, name, subdomain, is_provider, deployment_tier, deployment_model)
 VALUES ('<owner-tenant-uuid>', 'Platform Owner', 'platform', TRUE, 'enterprise', 'shared');
 
--- Create default cluster (CLUSTER_ID must match env var)
+-- Create media cluster (customer-facing, default for new tenants)
 INSERT INTO quartermaster.infrastructure_clusters (
   cluster_id, cluster_name, cluster_type, base_url, owner_tenant_id,
-  deployment_model, visibility, pricing_model, is_default_cluster
+  deployment_model, visibility, is_default_cluster, is_platform_official
 )
 VALUES (
-  '<cluster-id>', 'Primary Cluster', 'central', 'your-domain.com',
-  '<owner-tenant-uuid>', 'shared', 'public', 'free_unmetered', TRUE
+  '<media-cluster-id>', 'Media Cluster', 'edge', 'your-domain.com',
+  '<owner-tenant-uuid>', 'shared', 'public', TRUE, TRUE
 );
 
--- Assign tenant to cluster
-INSERT INTO quartermaster.tenant_cluster_assignments (tenant_id, cluster_id, deployment_tier, is_primary)
-VALUES ('<owner-tenant-uuid>', '<cluster-id>', 'enterprise', TRUE);
+-- Set cluster pricing (tier_inherit = billing driven by tenant tier)
+INSERT INTO purser.cluster_pricing (cluster_id, pricing_model, required_tier_level, allow_free_tier)
+VALUES ('<media-cluster-id>', 'tier_inherit', 0, TRUE)
+ON CONFLICT (cluster_id) DO NOTHING;
+
+-- Grant tenant access to cluster (runtime routing reads this table)
+INSERT INTO quartermaster.tenant_cluster_access (tenant_id, cluster_id, access_level, subscription_status, is_active)
+VALUES ('<owner-tenant-uuid>', '<media-cluster-id>', 'owner', 'active', TRUE)
+ON CONFLICT (tenant_id, cluster_id) DO NOTHING;
 ```
 
 ### ClickHouse
