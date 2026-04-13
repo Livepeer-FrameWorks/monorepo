@@ -12,18 +12,18 @@ infrastructure:
     notes: "Dev uses PostgreSQL 15.14. Prod uses YugabyteDB (PostgreSQL 15.12 compatible)"
 
   - name: kafka
-    tested_version: "7.4.0"
-    minimum_version: "3.4.0"
-    image: confluentinc/cp-kafka:7.4.0
-    dev_version: "7.4.0 (Confluent Platform)"
-    prod_version: "3.9.1"
-    notes: "Dev uses Confluent Platform 7.4.0. Prod uses Apache Kafka 3.9.1"
+    tested_version: "4.2.0"
+    minimum_version: "4.0.0"
+    image: apache/kafka:4.2.0
+    dev_version: "4.2.0"
+    prod_version: "4.2.0"
+    notes: "KRaft-only (no ZooKeeper). Uses combined broker+controller mode."
 
   - name: zookeeper
-    tested_version: "7.4.0"
-    minimum_version: "3.4.0"
-    image: confluentinc/cp-zookeeper:7.4.0
-    notes: "Required for Kafka. Confluent Platform includes Zookeeper"
+    tested_version: "3.9.5"
+    minimum_version: "3.9.2"
+    image: n/a
+    notes: "No longer required for Kafka. Available as standalone infrastructure if needed."
 
   - name: clickhouse
     tested_version: "25.9.2.1"

@@ -1627,11 +1627,13 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if brokerID, ok := findKafkaBrokerID(task, manifest); ok {
 					config.Metadata["broker_id"] = brokerID
 				}
-				if manifest.Infrastructure.Kafka.ZookeeperConnect != "" {
-					config.Metadata["zookeeper_connect"] = manifest.Infrastructure.Kafka.ZookeeperConnect
-				} else if zkConnect, ok := buildZookeeperConnect(manifest); ok {
-					config.Metadata["zookeeper_connect"] = zkConnect
+				config.Metadata["cluster_id"] = manifest.Infrastructure.Kafka.ClusterID
+				config.Metadata["controller_quorum_voters"] = buildControllerQuorum(manifest)
+				controllerPort := manifest.Infrastructure.Kafka.ControllerPort
+				if controllerPort == 0 {
+					controllerPort = 9093
 				}
+				config.Metadata["controller_port"] = controllerPort
 				if len(manifest.Infrastructure.Kafka.Topics) > 0 {
 					config.Metadata["topics"] = kafkaTopicsToMetadata(manifest.Infrastructure.Kafka.Topics)
 				}
@@ -2189,26 +2191,23 @@ func findKafkaBrokerID(task *orchestrator.Task, manifest *inventory.Manifest) (i
 	return 0, false
 }
 
-func buildZookeeperConnect(manifest *inventory.Manifest) (string, bool) {
-	if manifest == nil || manifest.Infrastructure.Zookeeper == nil || !manifest.Infrastructure.Zookeeper.Enabled {
-		return "", false
+func buildControllerQuorum(manifest *inventory.Manifest) string {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return ""
 	}
-	if len(manifest.Infrastructure.Zookeeper.Ensemble) == 0 {
-		return "", false
+	port := manifest.Infrastructure.Kafka.ControllerPort
+	if port == 0 {
+		port = 9093
 	}
-	parts := make([]string, 0, len(manifest.Infrastructure.Zookeeper.Ensemble))
-	for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
-		host := node.Host
-		if hostInfo, ok := manifest.Hosts[node.Host]; ok && hostInfo.ExternalIP != "" {
+	voters := make([]string, 0, len(manifest.Infrastructure.Kafka.Brokers))
+	for _, b := range manifest.Infrastructure.Kafka.Brokers {
+		host := b.Host
+		if hostInfo, ok := manifest.Hosts[b.Host]; ok && hostInfo.ExternalIP != "" {
 			host = hostInfo.ExternalIP
 		}
-		port := node.Port
-		if port == 0 {
-			port = 2181
-		}
-		parts = append(parts, fmt.Sprintf("%s:%d", host, port))
+		voters = append(voters, fmt.Sprintf("%d@%s:%d", b.ID, host, port))
 	}
-	return strings.Join(parts, ","), true
+	return strings.Join(voters, ",")
 }
 
 func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface{} {

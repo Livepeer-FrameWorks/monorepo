@@ -434,11 +434,14 @@ systemctl restart postgresql
 	return playbook
 }
 
-// GenerateKafkaPlaybook creates an Ansible playbook for Kafka.
-func GenerateKafkaPlaybook(version string, brokerID int, host string, port int, zkConnect string, metadata map[string]interface{}) *Playbook {
+// GenerateKafkaKRaftPlaybook creates an Ansible playbook for Kafka in KRaft mode (no ZooKeeper).
+func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port int, controllerPort int, controllerQuorum string, clusterID string, metadata map[string]interface{}) *Playbook {
 	playbook := NewPlaybook("Provision Kafka", host)
 	if port == 0 {
 		port = 9092
+	}
+	if controllerPort == 0 {
+		controllerPort = 9093
 	}
 	kafkaVersion := strings.TrimSpace(version)
 	if kafkaVersion == "" {
@@ -474,10 +477,12 @@ func GenerateKafkaPlaybook(version string, brokerID int, host string, port int, 
 	installScript := fmt.Sprintf(`set -euo pipefail
 
 KAFKA_VERSION="%s"
-BROKER_ID="%d"
+NODE_ID="%d"
 LISTENER_HOST="%s"
 LISTENER_PORT="%d"
-ZOOKEEPER_CONNECT="%s"
+CONTROLLER_PORT="%d"
+CONTROLLER_QUORUM_VOTERS="%s"
+CLUSTER_ID="%s"
 MIN_INSYNC_REPLICAS="%d"
 OFFSETS_RF="%d"
 TX_RF="%d"
@@ -548,9 +553,14 @@ if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
 fi
 
 cat > /etc/kafka/server.properties <<EOF
-broker.id=${BROKER_ID}
-listeners=PLAINTEXT://0.0.0.0:${LISTENER_PORT}
+node.id=${NODE_ID}
+process.roles=broker,controller
+controller.quorum.voters=${CONTROLLER_QUORUM_VOTERS}
+controller.listener.names=CONTROLLER
+listeners=PLAINTEXT://0.0.0.0:${LISTENER_PORT},CONTROLLER://0.0.0.0:${CONTROLLER_PORT}
 advertised.listeners=PLAINTEXT://${LISTENER_HOST}:${LISTENER_PORT}
+inter.broker.listener.name=PLAINTEXT
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
 num.network.threads=3
 num.io.threads=8
 socket.send.buffer.bytes=102400
@@ -564,17 +574,21 @@ offsets.topic.replication.factor=${OFFSETS_RF}
 transaction.state.log.replication.factor=${TX_RF}
 transaction.state.log.min.isr=${TX_MIN_ISR}
 log.retention.hours=168
-zookeeper.connect=${ZOOKEEPER_CONNECT}
-zookeeper.connection.timeout.ms=18000
 group.initial.rebalance.delay.ms=0
 auto.create.topics.enable=false
 delete.topic.enable=${DELETE_TOPICS}
 EOF
 
+if [ ! -f /var/lib/kafka/logs/meta.properties ]; then
+  /opt/kafka/bin/kafka-storage.sh format \
+    -t "${CLUSTER_ID}" \
+    -c /etc/kafka/server.properties
+fi
+
 cat > /etc/systemd/system/frameworks-kafka.service <<'EOF'
 [Unit]
 Description=FrameWorks Kafka Broker
-After=network-online.target zookeeper.service frameworks-zookeeper.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -593,7 +607,7 @@ EOF
 
 chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
-`, kafkaVersion, brokerID, host, port, zkConnect, minISR, offsetsRF, txRF, txMinISR, deleteTopics)
+`, kafkaVersion, nodeID, host, port, controllerPort, controllerQuorum, clusterID, minISR, offsetsRF, txRF, txMinISR, deleteTopics)
 
 	play := Play{
 		Name:        "Install and configure Kafka",

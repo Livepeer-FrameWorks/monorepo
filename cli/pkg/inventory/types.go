@@ -232,13 +232,14 @@ type ZookeeperNode struct {
 	Port int    `yaml:"port"`
 }
 
-// KafkaConfig represents Kafka cluster configuration
+// KafkaConfig represents Kafka cluster configuration (KRaft-only, no ZooKeeper).
 type KafkaConfig struct {
 	Enabled                              bool          `yaml:"enabled"`
 	Mode                                 string        `yaml:"mode"` // native
 	Version                              string        `yaml:"version"`
+	ClusterID                            string        `yaml:"cluster_id"`                // KRaft cluster UUID (required)
+	ControllerPort                       int           `yaml:"controller_port,omitempty"` // KRaft controller port (default 9093)
 	Brokers                              []KafkaBroker `yaml:"brokers,omitempty"`
-	ZookeeperConnect                     string        `yaml:"zookeeper_connect"`
 	Topics                               []KafkaTopic  `yaml:"topics,omitempty"`
 	DeleteTopicEnable                    *bool         `yaml:"delete_topic_enable,omitempty"`
 	MinInSyncReplicas                    int           `yaml:"min_insync_replicas,omitempty"`

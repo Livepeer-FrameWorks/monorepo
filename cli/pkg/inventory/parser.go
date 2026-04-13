@@ -231,12 +231,18 @@ func (m *Manifest) Validate() error {
 				return fmt.Errorf("kafka.broker host '%s' not found in hosts", broker.Host)
 			}
 		}
-		if m.Infrastructure.Zookeeper == nil || !m.Infrastructure.Zookeeper.Enabled {
-			if m.Infrastructure.Kafka.ZookeeperConnect == "" {
-				return fmt.Errorf("kafka is enabled but zookeeper is disabled and zookeeper_connect is empty")
+		if len(m.Infrastructure.Kafka.Brokers) < 1 {
+			return fmt.Errorf("kafka requires at least 1 broker")
+		}
+		if m.Infrastructure.Kafka.ClusterID == "" {
+			return fmt.Errorf("kafka.cluster_id is required (generate with: kafka-storage.sh random-uuid)")
+		}
+		seenBrokerIDs := make(map[int]bool)
+		for _, broker := range m.Infrastructure.Kafka.Brokers {
+			if seenBrokerIDs[broker.ID] {
+				return fmt.Errorf("duplicate kafka broker id: %d", broker.ID)
 			}
-		} else if m.Infrastructure.Kafka.ZookeeperConnect == "" && len(m.Infrastructure.Zookeeper.Ensemble) == 0 {
-			return fmt.Errorf("kafka is enabled with zookeeper but zookeeper ensemble is empty")
+			seenBrokerIDs[broker.ID] = true
 		}
 	}
 

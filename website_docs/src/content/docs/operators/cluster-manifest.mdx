@@ -292,7 +292,9 @@ infrastructure:
 
 ### kafka
 
-Apache Kafka message broker.
+Apache Kafka message broker. Kafka native mode is **KRaft-only** — ZooKeeper is not used. Each broker runs in combined broker+controller mode.
+
+Production clusters should use 3+ brokers for controller quorum fault tolerance.
 
 **Format:**
 
@@ -301,12 +303,20 @@ infrastructure:
   kafka:
     enabled: true
     mode: native
-    version: "3.6.0"
+    version: "4.2.0"
+    cluster_id: "iwNix2BLQny7Z9tlyna7Qw"
+    controller_port: 9093
+    min_insync_replicas: 2
     brokers:
       - host: central-01
         id: 1
         port: 9092
-    zookeeper_connect: central-01:2181
+      - host: media-01
+        id: 2
+        port: 9092
+      - host: media-02
+        id: 3
+        port: 9092
     topics:
       - name: analytics_events
         partitions: 10
@@ -317,37 +327,28 @@ infrastructure:
 
 - `enabled` (required)
 - `mode` (required) - `native`
-- `version` (required)
-- `brokers` (required)
-- `zookeeper_connect` (required)
+- `version` (required) - Apache Kafka version (4.x+)
+- `cluster_id` (required) - KRaft cluster UUID. Generate with `kafka-storage.sh random-uuid`
+- `controller_port` (optional) - KRaft inter-controller port, default `9093`
+- `brokers` (required) - at least 1; use 3+ for production
 - `topics` (optional)
+- `min_insync_replicas` (optional)
 
 ---
 
 ### zookeeper
 
-Zookeeper ensemble (Kafka coordination).
+Standalone ZooKeeper ensemble. **No longer required for Kafka** — Kafka native mode uses KRaft.
+
+ZooKeeper remains available as an independent infrastructure component if needed for other purposes.
 
 **Format:**
 
 ```yaml
 infrastructure:
   zookeeper:
-    enabled: true
-    mode: native
-    version: "3.9.2"
-    ensemble:
-      - host: central-01
-        id: 1
-        port: 2181
+    enabled: false
 ```
-
-**Fields:**
-
-- `enabled` (required)
-- `mode` (required) - `native`
-- `version` (required)
-- `ensemble` (required)
 
 ---
 

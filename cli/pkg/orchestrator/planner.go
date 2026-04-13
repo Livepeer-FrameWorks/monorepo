@@ -128,22 +128,15 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		}
 	}
 
-	// Add Kafka (depends on Zookeeper)
+	// Add Kafka (KRaft — no ZooKeeper dependency)
 	if p.manifest.Infrastructure.Kafka != nil && p.manifest.Infrastructure.Kafka.Enabled {
-		zkDeps := []string{}
-		if p.manifest.Infrastructure.Zookeeper != nil && p.manifest.Infrastructure.Zookeeper.Enabled {
-			for _, node := range p.manifest.Infrastructure.Zookeeper.Ensemble {
-				zkDeps = append(zkDeps, fmt.Sprintf("zookeeper-%d", node.ID))
-			}
-		}
-
 		for _, broker := range p.manifest.Infrastructure.Kafka.Brokers {
 			taskName := fmt.Sprintf("kafka-broker-%d", broker.ID)
 			graph.AddTask(&Task{
 				Name:       taskName,
 				Type:       "kafka",
 				Host:       broker.Host,
-				DependsOn:  zkDeps,
+				DependsOn:  []string{},
 				Phase:      PhaseInfrastructure,
 				Idempotent: true,
 			})

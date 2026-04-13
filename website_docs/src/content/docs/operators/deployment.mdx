@@ -62,7 +62,7 @@ This fetches the cluster manifest and referenced files (env files, host inventor
 <Aside type="note" title="Provisioning Phases">
 The CLI provisions in dependency order:
 
-1. **Infrastructure** — Postgres, Kafka, Zookeeper, ClickHouse (parallel)
+1. **Infrastructure** — Postgres, Kafka, ClickHouse (parallel)
 2. **Quartermaster** — Control plane bootstrap (tenant, clusters, nodes, tokens)
 3. **Privateer** — Mesh agent on ALL hosts → mesh health verification
 4. **Application services** — All other services (parallel)

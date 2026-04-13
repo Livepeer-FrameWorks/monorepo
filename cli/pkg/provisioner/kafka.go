@@ -36,30 +36,30 @@ func (k *KafkaProvisioner) Detect(ctx context.Context, host inventory.Host) (*de
 	return k.CheckExists(ctx, host, "kafka")
 }
 
-// Provision installs Kafka using Ansible
+// Provision installs Kafka using Ansible (KRaft mode).
 func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Check if already installed
 	state, err := k.Detect(ctx, host)
 	if err == nil && state.Exists && state.Running {
-		return nil // Already provisioned
+		return nil
 	}
 
-	// Get broker ID and Zookeeper connection from config
 	brokerID, ok := config.Metadata["broker_id"].(int)
 	if !ok {
 		return fmt.Errorf("broker_id not found in config")
 	}
 
-	zkConnect, ok := config.Metadata["zookeeper_connect"].(string)
-	if !ok {
-		return fmt.Errorf("zookeeper_connect not found in config")
+	clusterID, _ := config.Metadata["cluster_id"].(string)                      //nolint:errcheck // metadata validated by schema
+	controllerQuorum, _ := config.Metadata["controller_quorum_voters"].(string) //nolint:errcheck // metadata validated by schema
+	controllerPort, _ := config.Metadata["controller_port"].(int)               //nolint:errcheck // zero value handled below
+	if controllerPort == 0 {
+		controllerPort = 9093
 	}
+
 	err = validateApacheKafkaVersion(config.Version)
 	if err != nil {
 		return err
 	}
 
-	// Generate Ansible playbook (use address as identifier)
 	hostID := host.ExternalIP
 	if hostID == "" {
 		hostID = "localhost"
@@ -70,7 +70,7 @@ func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		port = 9092
 	}
 
-	playbook := ansible.GenerateKafkaPlaybook(config.Version, brokerID, hostID, port, zkConnect, config.Metadata)
+	playbook := ansible.GenerateKafkaKRaftPlaybook(config.Version, brokerID, hostID, port, controllerPort, controllerQuorum, clusterID, config.Metadata)
 
 	// Generate inventory
 	inv := ansible.NewInventory()

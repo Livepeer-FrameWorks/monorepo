@@ -9,8 +9,6 @@ volumes:
   postgres_data:
   foghorn_redis_data:
   mistserver_data:
-  zookeeper_data:
-  zookeeper_logs:
   kafka_data:
   clickhouse_data:
   platform_redis_data:
@@ -333,61 +331,29 @@ services:
     networks:
       - frameworks
 
-  # Add Kafka infrastructure for event-driven analytics
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
-    container_name: frameworks-zookeeper
-    hostname: zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-      # Reduce ZooKeeper log noise.
-      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
-    volumes:
-      - zookeeper_data:/var/lib/zookeeper/data
-      - zookeeper_logs:/var/lib/zookeeper/log
-    networks:
-      - frameworks
-    ulimits:
-      nofile:
-        soft: 65536
-        hard: 65536
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 1.0
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
-    healthcheck:
-      test: echo stat | nc localhost 2181 || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
+  # Kafka (KRaft mode — no ZooKeeper)
   kafka:
-    image: confluentinc/cp-kafka:7.4.0
+    image: apache/kafka:4.2.0
     container_name: frameworks-kafka
     hostname: kafka
-    depends_on:
-      zookeeper:
-        condition: service_healthy
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
-      # Reduce Kafka startup log spam (partition/leader state chatter).
       KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
       KAFKA_LOG4J_LOGGERS: "kafka.controller=ERROR,kafka.coordinator.group=ERROR,kafka.cluster=ERROR,state.change.logger=ERROR,kafka.log=ERROR"
+      CLUSTER_ID: "a0251mS1RpS7wwOfKTYlDA"
     volumes:
       - kafka_data:/var/lib/kafka/data
     ports:
@@ -407,7 +373,7 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: kafka-topics --bootstrap-server localhost:9092 --list || exit 1
+      test: /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1
       interval: 10s
       timeout: 5s
       retries: 5
@@ -415,7 +381,7 @@ services:
 
   # Kafka Topic Initialization
   kafka-init:
-    image: confluentinc/cp-kafka:7.4.0
+    image: apache/kafka:4.2.0
     container_name: frameworks-kafka-init
     depends_on:
       kafka:
@@ -426,10 +392,10 @@ services:
     command: |
       "
       echo 'Creating Kafka topics...'
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${ANALYTICS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${SERVICE_EVENTS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${BILLING_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${DECKLOG_DLQ_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${ANALYTICS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${SERVICE_EVENTS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${BILLING_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${DECKLOG_DLQ_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
       echo 'Topics created successfully'
       "
     networks:
