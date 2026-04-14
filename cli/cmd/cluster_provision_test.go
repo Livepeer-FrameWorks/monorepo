@@ -131,7 +131,7 @@ func TestMaybeReconcileBatchFoghornAssignmentsSkipsBatchWithoutFoghorn(t *testin
 		},
 	}
 	batch := []*orchestrator.Task{
-		{Name: "bridge@core-1", Type: "bridge", Host: "core-1"},
+		{Name: "bridge@core-1", Type: "bridge", ServiceID: "bridge", InstanceID: "core-1", Host: "core-1"},
 	}
 
 	if err := maybeReconcileBatchFoghornAssignments(context.Background(), cmd, batch, manifest, map[string]interface{}{}); err != nil {
@@ -151,7 +151,7 @@ func TestMaybeReconcileBatchFoghornAssignmentsRequiresQuartermasterRuntimeData(t
 		},
 	}
 	batch := []*orchestrator.Task{
-		{Name: "foghorn@core-1", Type: "foghorn", Host: "core-1"},
+		{Name: "foghorn@core-1", Type: "foghorn", ServiceID: "foghorn", InstanceID: "core-1", Host: "core-1"},
 	}
 
 	err := maybeReconcileBatchFoghornAssignments(context.Background(), cmd, batch, manifest, map[string]interface{}{})
@@ -237,6 +237,7 @@ func TestRegisterIngressDesiredStateWithClientRegistersClusterScopedChandler(t *
 	task := &orchestrator.Task{
 		Name:      "nginx",
 		Type:      "nginx",
+		ServiceID: "nginx",
 		Host:      "central-eu-1",
 		ClusterID: "media-central-primary",
 	}
@@ -388,6 +389,7 @@ func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 	env, err := buildServiceEnvVars(&orchestrator.Task{
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
 	}, manifest, map[string]interface{}{}, "", "")
 	if err != nil {
@@ -420,8 +422,9 @@ func TestBuildServiceEnvVarsDerivesSharedRuntimeValues(t *testing.T) {
 	}
 
 	env, err := buildServiceEnvVars(&orchestrator.Task{
-		Name: "foghorn",
-		Type: "foghorn",
+		Name:      "foghorn",
+		Type:      "foghorn",
+		ServiceID: "foghorn",
 	}, manifest, map[string]interface{}{}, "", "")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
@@ -456,9 +459,10 @@ func TestBuildServiceEnvVarsDerivesRegionFromHostLabels(t *testing.T) {
 	}
 
 	env, err := buildServiceEnvVars(&orchestrator.Task{
-		Name: "foghorn",
-		Type: "foghorn",
-		Host: "regional-us-1",
+		Name:      "foghorn",
+		Type:      "foghorn",
+		ServiceID: "foghorn",
+		Host:      "regional-us-1",
 	}, manifest, map[string]interface{}{}, "", "")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
@@ -513,6 +517,7 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 	task := &orchestrator.Task{
 		Name:      "foghorn",
 		Type:      "foghorn",
+		ServiceID: "foghorn",
 		Host:      "core-1",
 		ClusterID: "cluster-a",
 		Phase:     orchestrator.PhaseApplications,
@@ -550,6 +555,7 @@ func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
 	task := &orchestrator.Task{
 		Name:      "navigator",
 		Type:      "navigator",
+		ServiceID: "navigator",
 		Host:      "core-1",
 		ClusterID: "cluster-a",
 		Phase:     orchestrator.PhaseApplications,
@@ -585,6 +591,7 @@ func TestBuildServiceEnvVarsProductionAcceptsNavigatorManagedCABase64Env(t *test
 	task := &orchestrator.Task{
 		Name:      "navigator",
 		Type:      "navigator",
+		ServiceID: "navigator",
 		Host:      "core-1",
 		ClusterID: "cluster-a",
 		Phase:     orchestrator.PhaseApplications,
@@ -642,6 +649,7 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	task := &orchestrator.Task{
 		Name:      "foghorn",
 		Type:      "foghorn",
+		ServiceID: "foghorn",
 		Host:      "central-eu-1",
 		ClusterID: "cluster-a",
 		Phase:     orchestrator.PhaseApplications,
@@ -706,6 +714,7 @@ func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *t
 	task := &orchestrator.Task{
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
 		Host:      "core-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseApplications,

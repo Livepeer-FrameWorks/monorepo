@@ -44,17 +44,17 @@ func TestCollectUpgradeableServices_DeduplicatesMultiHost(t *testing.T) {
 	plan := &orchestrator.ExecutionPlan{
 		Batches: [][]*orchestrator.Task{
 			{
-				{Name: "postgres", Phase: orchestrator.PhaseInfrastructure},
-				{Name: "kafka", Phase: orchestrator.PhaseInfrastructure},
+				{Name: "postgres", ServiceID: "postgres", Phase: orchestrator.PhaseInfrastructure},
+				{Name: "kafka", ServiceID: "kafka", Phase: orchestrator.PhaseInfrastructure},
 			},
 			{
-				{Name: "privateer@host-a", Phase: orchestrator.PhaseApplications},
-				{Name: "privateer@host-b", Phase: orchestrator.PhaseApplications},
+				{Name: "privateer@host-a", ServiceID: "privateer", InstanceID: "host-a", Phase: orchestrator.PhaseApplications},
+				{Name: "privateer@host-b", ServiceID: "privateer", InstanceID: "host-b", Phase: orchestrator.PhaseApplications},
 			},
 			{
-				{Name: "bridge@host-a", Phase: orchestrator.PhaseApplications},
-				{Name: "bridge@host-b", Phase: orchestrator.PhaseApplications},
-				{Name: "commodore", Phase: orchestrator.PhaseApplications},
+				{Name: "bridge@host-a", ServiceID: "bridge", InstanceID: "host-a", Phase: orchestrator.PhaseApplications},
+				{Name: "bridge@host-b", ServiceID: "bridge", InstanceID: "host-b", Phase: orchestrator.PhaseApplications},
+				{Name: "commodore", ServiceID: "commodore", Phase: orchestrator.PhaseApplications},
 			},
 		},
 	}
@@ -76,8 +76,8 @@ func TestCollectUpgradeableServices_SingleHost(t *testing.T) {
 	plan := &orchestrator.ExecutionPlan{
 		Batches: [][]*orchestrator.Task{
 			{
-				{Name: "privateer", Phase: orchestrator.PhaseApplications},
-				{Name: "bridge", Phase: orchestrator.PhaseApplications},
+				{Name: "privateer", ServiceID: "privateer", Phase: orchestrator.PhaseApplications},
+				{Name: "bridge", ServiceID: "bridge", Phase: orchestrator.PhaseApplications},
 			},
 		},
 	}

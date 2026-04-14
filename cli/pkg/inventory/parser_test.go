@@ -72,6 +72,115 @@ func TestManifestValidateKafkaUniqueBrokerIDs(t *testing.T) {
 	}
 }
 
+func TestManifestValidateKafkaControllersMinThree(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"host-1": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-2": {ExternalIP: "10.0.0.2", User: "root"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "test-cluster-id",
+				Brokers:   []KafkaBroker{{Host: "host-1", ID: 1}},
+				Controllers: []KafkaController{
+					{Host: "host-1", ID: 100, DirID: "dir-a"},
+					{Host: "host-2", ID: 101, DirID: "dir-b"},
+				},
+			},
+		},
+	}
+
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("expected validation error for fewer than 3 controllers")
+	}
+}
+
+func TestManifestValidateKafkaControllerBrokerIDConflict(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"host-1": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-2": {ExternalIP: "10.0.0.2", User: "root"},
+			"host-3": {ExternalIP: "10.0.0.3", User: "root"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "test-cluster-id",
+				Brokers:   []KafkaBroker{{Host: "host-1", ID: 1}},
+				Controllers: []KafkaController{
+					{Host: "host-1", ID: 1, DirID: "dir-a"},
+					{Host: "host-2", ID: 101, DirID: "dir-b"},
+					{Host: "host-3", ID: 102, DirID: "dir-c"},
+				},
+			},
+		},
+	}
+
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("expected validation error for controller ID conflicting with broker ID")
+	}
+}
+
+func TestManifestValidateKafkaControllerDirIDRequired(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"host-1": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-2": {ExternalIP: "10.0.0.2", User: "root"},
+			"host-3": {ExternalIP: "10.0.0.3", User: "root"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "test-cluster-id",
+				Brokers:   []KafkaBroker{{Host: "host-1", ID: 1}},
+				Controllers: []KafkaController{
+					{Host: "host-1", ID: 100, DirID: "dir-a"},
+					{Host: "host-2", ID: 101, DirID: ""},
+					{Host: "host-3", ID: 102, DirID: "dir-c"},
+				},
+			},
+		},
+	}
+
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("expected validation error for missing controller dir_id")
+	}
+}
+
+func TestManifestValidateKafkaControllerHostExists(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"host-1": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-2": {ExternalIP: "10.0.0.2", User: "root"},
+		},
+		Infrastructure: InfrastructureConfig{
+			Kafka: &KafkaConfig{
+				Enabled:   true,
+				ClusterID: "test-cluster-id",
+				Brokers:   []KafkaBroker{{Host: "host-1", ID: 1}},
+				Controllers: []KafkaController{
+					{Host: "host-1", ID: 100, DirID: "dir-a"},
+					{Host: "host-2", ID: 101, DirID: "dir-b"},
+					{Host: "nonexistent", ID: 102, DirID: "dir-c"},
+				},
+			},
+		},
+	}
+
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("expected validation error for controller host not in hosts map")
+	}
+}
+
 func TestMergeHostInventory(t *testing.T) {
 	manifest := &Manifest{
 		Hosts: map[string]Host{

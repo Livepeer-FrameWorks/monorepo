@@ -244,6 +244,28 @@ func (m *Manifest) Validate() error {
 			}
 			seenBrokerIDs[broker.ID] = true
 		}
+
+		if len(m.Infrastructure.Kafka.Controllers) > 0 {
+			if len(m.Infrastructure.Kafka.Controllers) < 3 {
+				return fmt.Errorf("kafka dedicated controllers require at least 3 for quorum fault tolerance")
+			}
+			seenControllerIDs := make(map[int]bool)
+			for _, ctrl := range m.Infrastructure.Kafka.Controllers {
+				if _, ok := m.Hosts[ctrl.Host]; !ok {
+					return fmt.Errorf("kafka.controller host '%s' not found in hosts", ctrl.Host)
+				}
+				if seenControllerIDs[ctrl.ID] {
+					return fmt.Errorf("duplicate kafka controller id: %d", ctrl.ID)
+				}
+				if seenBrokerIDs[ctrl.ID] {
+					return fmt.Errorf("kafka controller id %d conflicts with broker id", ctrl.ID)
+				}
+				seenControllerIDs[ctrl.ID] = true
+				if ctrl.DirID == "" {
+					return fmt.Errorf("kafka.controllers[%d].dir_id is required (generate with: kafka-storage.sh random-uuid)", ctrl.ID)
+				}
+			}
+		}
 	}
 
 	// Validate clusters

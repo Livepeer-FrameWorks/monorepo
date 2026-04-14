@@ -16,15 +16,58 @@ const (
 	PhaseAll            Phase = "all"            // All phases
 )
 
-// Task represents a provisioning task
+// Task represents a provisioning task.
+//
+// Identity model:
+//   - Type:       deploy slug for provisioner dispatch (e.g. "kafka", "kafka-controller", "yugabyte", "bridge")
+//   - ServiceID:  canonical manifest key (e.g. "kafka", "postgres", "bridge") — used for manifest lookups
+//   - InstanceID: per-instance identity (e.g. "1", "100", "regional-eu-1", "" for singletons)
+//   - Name:       derived display/graph key — do not parse for identity; use ServiceID and InstanceID instead
 type Task struct {
-	Name       string
-	Type       string   // "postgres", "kafka", "quartermaster", etc.
+	Name       string   // Derived: Type + "-" + InstanceID (or ServiceID + "@" + InstanceID for app tasks)
+	Type       string   // Deploy slug for provisioner dispatch
+	ServiceID  string   // Canonical manifest key for lookups and business logic
+	InstanceID string   // Per-instance identity ("1", "foghorn", "regional-eu-1", "" for singletons)
 	Host       string   // Host name from manifest
 	ClusterID  string   // Resolved cluster for this task (empty for infrastructure)
 	DependsOn  []string // Task names this depends on
 	Phase      Phase
 	Idempotent bool // Can be run multiple times safely
+}
+
+// NewTask creates a task with a derived Name. Use for infrastructure tasks where Name = Type-InstanceID.
+func NewTask(taskType, serviceID, instanceID, host string, phase Phase) *Task {
+	name := taskType
+	if instanceID != "" {
+		name = taskType + "-" + instanceID
+	}
+	return &Task{
+		Name:       name,
+		Type:       taskType,
+		ServiceID:  serviceID,
+		InstanceID: instanceID,
+		Host:       host,
+		Phase:      phase,
+		Idempotent: true,
+	}
+}
+
+// NewServiceTask creates a task for app/interface/observability services.
+// For multi-host services, Name = ServiceID@InstanceID. For singletons, Name = ServiceID.
+func NewServiceTask(taskType, serviceID, instanceID, host string, phase Phase) *Task {
+	name := serviceID
+	if instanceID != "" {
+		name = serviceID + "@" + instanceID
+	}
+	return &Task{
+		Name:       name,
+		Type:       taskType,
+		ServiceID:  serviceID,
+		InstanceID: instanceID,
+		Host:       host,
+		Phase:      phase,
+		Idempotent: true,
+	}
 }
 
 // TaskResult represents the result of executing a task

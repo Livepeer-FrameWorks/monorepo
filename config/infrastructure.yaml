@@ -17,7 +17,7 @@ infrastructure:
     image: apache/kafka:4.2.0
     dev_version: "4.2.0"
     prod_version: "4.2.0"
-    notes: "KRaft-only (no ZooKeeper). Uses combined broker+controller mode."
+    notes: "KRaft-only (no ZooKeeper). Supports dedicated controllers (prod) and combined mode (dev)."
 
   - name: zookeeper
     tested_version: "3.9.5"

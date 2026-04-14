@@ -23,10 +23,12 @@ func TestBuildTaskConfig_RedisEngineFromManifest(t *testing.T) {
 	}
 
 	cfg, err := buildTaskConfig(&orchestrator.Task{
-		Name:  "redis-foghorn",
-		Type:  "redis",
-		Host:  "media-1",
-		Phase: orchestrator.PhaseInfrastructure,
+		Name:       "redis-foghorn",
+		Type:       "redis",
+		ServiceID:  "redis",
+		InstanceID: "foghorn",
+		Host:       "media-1",
+		Phase:      orchestrator.PhaseInfrastructure,
 	}, manifest, map[string]interface{}{}, false, "")
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
@@ -58,10 +60,12 @@ func TestBuildTaskConfig_RedisInstanceEngineOverridesManifest(t *testing.T) {
 	}
 
 	cfg, err := buildTaskConfig(&orchestrator.Task{
-		Name:  "redis-platform",
-		Type:  "redis",
-		Host:  "control-1",
-		Phase: orchestrator.PhaseInfrastructure,
+		Name:       "redis-platform",
+		Type:       "redis",
+		ServiceID:  "redis",
+		InstanceID: "platform",
+		Host:       "control-1",
+		Phase:      orchestrator.PhaseInfrastructure,
 	}, manifest, map[string]interface{}{}, false, "")
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)

@@ -10,6 +10,7 @@ import (
 var ServicePorts = map[string]int{
 	"postgres":         5432,
 	"kafka":            9092,
+	"kafka-controller": 9093,
 	"zookeeper":        2181,
 	"clickhouse":       9000,
 	"listmonk":         9001,
@@ -69,6 +70,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewPostgresProvisioner(pool)
 	case "kafka":
 		return NewKafkaProvisioner(pool)
+	case "kafka-controller":
+		return NewKafkaControllerProvisioner(pool)
 	case "zookeeper":
 		return NewZookeeperProvisioner(pool)
 	case "clickhouse":

@@ -233,19 +233,30 @@ type ZookeeperNode struct {
 }
 
 // KafkaConfig represents Kafka cluster configuration (KRaft-only, no ZooKeeper).
+// If Controllers is non-empty, dedicated controller mode is used (separate controller + broker processes).
+// If Controllers is empty, combined broker+controller mode is used on each broker node.
 type KafkaConfig struct {
-	Enabled                              bool          `yaml:"enabled"`
-	Mode                                 string        `yaml:"mode"` // native
-	Version                              string        `yaml:"version"`
-	ClusterID                            string        `yaml:"cluster_id"`                // KRaft cluster UUID (required)
-	ControllerPort                       int           `yaml:"controller_port,omitempty"` // KRaft controller port (default 9093)
-	Brokers                              []KafkaBroker `yaml:"brokers,omitempty"`
-	Topics                               []KafkaTopic  `yaml:"topics,omitempty"`
-	DeleteTopicEnable                    *bool         `yaml:"delete_topic_enable,omitempty"`
-	MinInSyncReplicas                    int           `yaml:"min_insync_replicas,omitempty"`
-	OffsetsTopicReplicationFactor        int           `yaml:"offsets_topic_replication_factor,omitempty"`
-	TransactionStateLogReplicationFactor int           `yaml:"transaction_state_log_replication_factor,omitempty"`
-	TransactionStateLogMinISR            int           `yaml:"transaction_state_log_min_isr,omitempty"`
+	Enabled                              bool              `yaml:"enabled"`
+	Mode                                 string            `yaml:"mode"` // native
+	Version                              string            `yaml:"version"`
+	ClusterID                            string            `yaml:"cluster_id"`                // KRaft cluster UUID (required)
+	ControllerPort                       int               `yaml:"controller_port,omitempty"` // Combined mode: controller port (default 9093)
+	Controllers                          []KafkaController `yaml:"controllers,omitempty"`     // Dedicated controllers (if absent → combined mode)
+	Brokers                              []KafkaBroker     `yaml:"brokers,omitempty"`
+	Topics                               []KafkaTopic      `yaml:"topics,omitempty"`
+	DeleteTopicEnable                    *bool             `yaml:"delete_topic_enable,omitempty"`
+	MinInSyncReplicas                    int               `yaml:"min_insync_replicas,omitempty"`
+	OffsetsTopicReplicationFactor        int               `yaml:"offsets_topic_replication_factor,omitempty"`
+	TransactionStateLogReplicationFactor int               `yaml:"transaction_state_log_replication_factor,omitempty"`
+	TransactionStateLogMinISR            int               `yaml:"transaction_state_log_min_isr,omitempty"`
+}
+
+// KafkaController represents a dedicated KRaft controller node.
+type KafkaController struct {
+	Host  string `yaml:"host"`   // Host name from Hosts map
+	ID    int    `yaml:"id"`     // Controller node ID (must not overlap with broker IDs)
+	Port  int    `yaml:"port"`   // Controller listener port (default 9093)
+	DirID string `yaml:"dir_id"` // Directory UUID for dynamic quorum bootstrap (generate with kafka-storage.sh random-uuid)
 }
 
 // KafkaBroker represents a Kafka broker

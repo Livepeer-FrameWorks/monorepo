@@ -543,10 +543,7 @@ func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
 			if task.Phase == orchestrator.PhaseInfrastructure {
 				continue
 			}
-			svcID := task.Name
-			if idx := strings.Index(svcID, "@"); idx != -1 {
-				svcID = svcID[:idx]
-			}
+			svcID := task.ServiceID
 			if !seen[svcID] {
 				seen[svcID] = true
 				services = append(services, svcID)

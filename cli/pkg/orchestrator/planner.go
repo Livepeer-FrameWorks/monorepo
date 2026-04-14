@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 
 	"frameworks/cli/pkg/inventory"
 	infra "frameworks/pkg/models"
@@ -77,82 +78,52 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
 		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 			for _, node := range pg.Nodes {
-				graph.AddTask(&Task{
-					Name:       fmt.Sprintf("yugabyte-node-%d", node.ID),
-					Type:       "yugabyte",
-					Host:       node.Host,
-					DependsOn:  []string{},
-					Phase:      PhaseInfrastructure,
-					Idempotent: true,
-				})
+				task := NewTask("yugabyte", "postgres", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure)
+				task.Name = "yugabyte-node-" + strconv.Itoa(node.ID)
+				graph.AddTask(task)
 			}
 		} else {
-			graph.AddTask(&Task{
-				Name:       "postgres",
-				Type:       "postgres",
-				Host:       pg.Host,
-				DependsOn:  []string{},
-				Phase:      PhaseInfrastructure,
-				Idempotent: true,
-			})
+			graph.AddTask(NewTask("postgres", "postgres", "", pg.Host, PhaseInfrastructure))
 		}
 	}
 
 	// Add Redis
 	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
 		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
-			taskName := fmt.Sprintf("redis-%s", instance.Name)
-			graph.AddTask(&Task{
-				Name:       taskName,
-				Type:       "redis",
-				Host:       instance.Host,
-				DependsOn:  []string{},
-				Phase:      PhaseInfrastructure,
-				Idempotent: true,
-			})
+			graph.AddTask(NewTask("redis", "redis", instance.Name, instance.Host, PhaseInfrastructure))
 		}
 	}
 
 	// Add Zookeeper
 	if p.manifest.Infrastructure.Zookeeper != nil && p.manifest.Infrastructure.Zookeeper.Enabled {
 		for _, node := range p.manifest.Infrastructure.Zookeeper.Ensemble {
-			taskName := fmt.Sprintf("zookeeper-%d", node.ID)
-			graph.AddTask(&Task{
-				Name:       taskName,
-				Type:       "zookeeper",
-				Host:       node.Host,
-				DependsOn:  []string{},
-				Phase:      PhaseInfrastructure,
-				Idempotent: true,
-			})
+			graph.AddTask(NewTask("zookeeper", "zookeeper", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure))
 		}
 	}
 
-	// Add Kafka (KRaft — no ZooKeeper dependency)
+	// Add Kafka (KRaft)
 	if p.manifest.Infrastructure.Kafka != nil && p.manifest.Infrastructure.Kafka.Enabled {
+		controllerDeps := []string{}
+
+		// Dedicated controllers (if defined)
+		for _, ctrl := range p.manifest.Infrastructure.Kafka.Controllers {
+			task := NewTask("kafka-controller", "kafka", strconv.Itoa(ctrl.ID), ctrl.Host, PhaseInfrastructure)
+			graph.AddTask(task)
+			controllerDeps = append(controllerDeps, task.Name)
+		}
+
+		// Brokers depend on all controllers (if dedicated mode)
 		for _, broker := range p.manifest.Infrastructure.Kafka.Brokers {
-			taskName := fmt.Sprintf("kafka-broker-%d", broker.ID)
-			graph.AddTask(&Task{
-				Name:       taskName,
-				Type:       "kafka",
-				Host:       broker.Host,
-				DependsOn:  []string{},
-				Phase:      PhaseInfrastructure,
-				Idempotent: true,
-			})
+			task := NewTask("kafka", "kafka", strconv.Itoa(broker.ID), broker.Host, PhaseInfrastructure)
+			task.Name = "kafka-broker-" + strconv.Itoa(broker.ID)
+			task.DependsOn = controllerDeps
+			graph.AddTask(task)
 		}
 	}
 
 	// Add ClickHouse
 	if p.manifest.Infrastructure.ClickHouse != nil && p.manifest.Infrastructure.ClickHouse.Enabled {
-		graph.AddTask(&Task{
-			Name:       "clickhouse",
-			Type:       "clickhouse",
-			Host:       p.manifest.Infrastructure.ClickHouse.Host,
-			DependsOn:  []string{},
-			Phase:      PhaseInfrastructure,
-			Idempotent: true,
-		})
+		graph.AddTask(NewTask("clickhouse", "clickhouse", "", p.manifest.Infrastructure.ClickHouse.Host, PhaseInfrastructure))
 	}
 
 	return nil
@@ -166,7 +137,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
 		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 			for _, node := range pg.Nodes {
-				infraDeps = append(infraDeps, fmt.Sprintf("yugabyte-node-%d", node.ID))
+				infraDeps = append(infraDeps, "yugabyte-node-"+strconv.Itoa(node.ID))
 			}
 		} else {
 			infraDeps = append(infraDeps, "postgres")
@@ -175,13 +146,13 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 
 	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
 		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
-			infraDeps = append(infraDeps, fmt.Sprintf("redis-%s", instance.Name))
+			infraDeps = append(infraDeps, NewTask("redis", "redis", instance.Name, "", PhaseInfrastructure).Name)
 		}
 	}
 
 	if p.manifest.Infrastructure.Kafka != nil && p.manifest.Infrastructure.Kafka.Enabled {
 		for _, broker := range p.manifest.Infrastructure.Kafka.Brokers {
-			infraDeps = append(infraDeps, fmt.Sprintf("kafka-broker-%d", broker.ID))
+			infraDeps = append(infraDeps, "kafka-broker-"+strconv.Itoa(broker.ID))
 		}
 	}
 
@@ -192,15 +163,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 		if !ok {
 			return fmt.Errorf("unknown service id: quartermaster")
 		}
-		graph.AddTask(&Task{
-			Name:       "quartermaster",
-			Type:       deploy,
-			Host:       svc.Host,
-			ClusterID:  p.manifest.HostCluster(svc.Host),
-			DependsOn:  infraDeps,
-			Phase:      PhaseApplications,
-			Idempotent: true,
-		})
+		task := NewServiceTask(deploy, "quartermaster", "", svc.Host, PhaseApplications)
+		task.ClusterID = p.manifest.HostCluster(svc.Host)
+		task.DependsOn = infraDeps
+		graph.AddTask(task)
 	}
 
 	// 2. Privateer (System Mesh)
@@ -217,24 +183,17 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			qmDep = append(qmDep, "quartermaster")
 		}
 
-		// Deploy to explicitly listed hosts, or all non-edge manifest hosts if none specified.
-		// Privateer runs on core nodes only; edge nodes enroll through Foghorn.
 		privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
 
 		for _, hostName := range privateerHosts {
-			taskName := "privateer"
+			instanceID := ""
 			if len(privateerHosts) > 1 {
-				taskName = fmt.Sprintf("privateer@%s", hostName)
+				instanceID = hostName
 			}
-			graph.AddTask(&Task{
-				Name:       taskName,
-				Type:       deploy,
-				Host:       hostName,
-				ClusterID:  p.manifest.HostCluster(hostName),
-				DependsOn:  qmDep,
-				Phase:      PhaseApplications,
-				Idempotent: true,
-			})
+			task := NewServiceTask(deploy, "privateer", instanceID, hostName, PhaseApplications)
+			task.ClusterID = p.manifest.HostCluster(hostName)
+			task.DependsOn = qmDep
+			graph.AddTask(task)
 		}
 	}
 
@@ -250,7 +209,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			coreDeps = append(coreDeps, "privateer")
 		} else {
 			for _, h := range privateerHosts {
-				coreDeps = append(coreDeps, fmt.Sprintf("privateer@%s", h))
+				coreDeps = append(coreDeps, NewServiceTask("", "privateer", h, "", PhaseApplications).Name)
 			}
 		}
 	}
@@ -269,19 +228,14 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 
 		hosts := resolveHosts(svc)
 		for _, hostName := range hosts {
-			taskName := name
+			instanceID := ""
 			if len(hosts) > 1 {
-				taskName = fmt.Sprintf("%s@%s", name, hostName)
+				instanceID = hostName
 			}
-			graph.AddTask(&Task{
-				Name:       taskName,
-				Type:       deploy,
-				Host:       hostName,
-				ClusterID:  p.manifest.HostCluster(hostName),
-				DependsOn:  coreDeps,
-				Phase:      PhaseApplications,
-				Idempotent: true,
-			})
+			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseApplications)
+			task.ClusterID = p.manifest.HostCluster(hostName)
+			task.DependsOn = coreDeps
+			graph.AddTask(task)
 		}
 	}
 
@@ -352,7 +306,7 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 		}
 		if len(hosts) > 1 {
 			for _, h := range hosts {
-				appDeps = append(appDeps, fmt.Sprintf("%s@%s", name, h))
+				appDeps = append(appDeps, NewServiceTask("", name, h, "", PhaseApplications).Name)
 			}
 		} else {
 			appDeps = append(appDeps, name)
@@ -371,19 +325,14 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 
 		hosts := resolveHosts(iface)
 		for _, hostName := range hosts {
-			taskName := name
+			instanceID := ""
 			if len(hosts) > 1 {
-				taskName = fmt.Sprintf("%s@%s", name, hostName)
+				instanceID = hostName
 			}
-			graph.AddTask(&Task{
-				Name:       taskName,
-				Type:       deploy,
-				Host:       hostName,
-				ClusterID:  p.manifest.HostCluster(hostName),
-				DependsOn:  appDeps,
-				Phase:      PhaseInterfaces,
-				Idempotent: true,
-			})
+			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseInterfaces)
+			task.ClusterID = p.manifest.HostCluster(hostName)
+			task.DependsOn = appDeps
+			graph.AddTask(task)
 		}
 	}
 
@@ -402,19 +351,14 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 			hosts = EffectiveVMAgentHosts(obs, p.manifest.Hosts)
 		}
 		for _, hostName := range hosts {
-			taskName := name
+			instanceID := ""
 			if len(hosts) > 1 {
-				taskName = fmt.Sprintf("%s@%s", name, hostName)
+				instanceID = hostName
 			}
-			graph.AddTask(&Task{
-				Name:       taskName,
-				Type:       deploy,
-				Host:       hostName,
-				ClusterID:  p.manifest.HostCluster(hostName),
-				DependsOn:  appDeps,
-				Phase:      PhaseInterfaces,
-				Idempotent: true,
-			})
+			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseInterfaces)
+			task.ClusterID = p.manifest.HostCluster(hostName)
+			task.DependsOn = appDeps
+			graph.AddTask(task)
 		}
 	}
 

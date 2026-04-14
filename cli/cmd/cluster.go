@@ -156,6 +156,10 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 	}
 
 	if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
+		for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+			serviceName := fmt.Sprintf("kafka-controller-%d", ctrl.ID)
+			detectServiceWithTimeout(cmd, manifest, serviceName, "kafka-controller", ctrl.Host)
+		}
 		for _, broker := range manifest.Infrastructure.Kafka.Brokers {
 			serviceName := fmt.Sprintf("kafka-broker-%d", broker.ID)
 			detectServiceWithTimeout(cmd, manifest, serviceName, "kafka", broker.Host)

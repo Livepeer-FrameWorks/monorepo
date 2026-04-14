@@ -78,6 +78,32 @@ func (m *Manifest) validatePortCollisions() error {
 				return err
 			}
 		}
+
+		// Dedicated controllers
+		for _, ctrl := range m.Infrastructure.Kafka.Controllers {
+			port := ctrl.Port
+			if port == 0 {
+				port = 9093
+			}
+			owner := fmt.Sprintf("kafka-controller-%d", ctrl.ID)
+			if err := addPort(ctrl.Host, port, owner); err != nil {
+				return err
+			}
+		}
+
+		// Combined mode: each broker also listens on the controller port
+		if len(m.Infrastructure.Kafka.Controllers) == 0 {
+			ctrlPort := m.Infrastructure.Kafka.ControllerPort
+			if ctrlPort == 0 {
+				ctrlPort = 9093
+			}
+			for _, broker := range m.Infrastructure.Kafka.Brokers {
+				owner := fmt.Sprintf("kafka-broker-%d-controller", broker.ID)
+				if err := addPort(broker.Host, ctrlPort, owner); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	if err := m.registerServicePorts(addPort, m.Services, "service"); err != nil {

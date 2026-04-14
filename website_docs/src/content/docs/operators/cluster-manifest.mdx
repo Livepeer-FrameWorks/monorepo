@@ -292,11 +292,14 @@ infrastructure:
 
 ### kafka
 
-Apache Kafka message broker. Kafka native mode is **KRaft-only** — ZooKeeper is not used. Each broker runs in combined broker+controller mode.
+Apache Kafka message broker. Kafka native mode is **KRaft-only** — ZooKeeper is not used.
 
-Production clusters should use 3+ brokers for controller quorum fault tolerance.
+Two modes are supported:
 
-**Format:**
+- **Dedicated controllers** (recommended for production): Add a `controllers` list. Controllers run the metadata quorum as separate processes; brokers handle client traffic only. Controllers are provisioned first, then brokers join via dynamic discovery.
+- **Combined mode** (suitable for dev): Omit `controllers`. Each broker runs both broker and controller roles in a single process.
+
+**Production format (dedicated controllers):**
 
 ```yaml
 infrastructure:
@@ -305,8 +308,20 @@ infrastructure:
     mode: native
     version: "4.2.0"
     cluster_id: "iwNix2BLQny7Z9tlyna7Qw"
-    controller_port: 9093
     min_insync_replicas: 2
+    controllers:
+      - host: central-01
+        id: 100
+        port: 9093
+        dir_id: "2uBL_MXZSAe-9agF6p5aMQ"
+      - host: media-01
+        id: 101
+        port: 9093
+        dir_id: "2AyDvMsASN26Tk7joXgJ6Q"
+      - host: media-02
+        id: 102
+        port: 9093
+        dir_id: "ZTJH65OoRGqcxUYwht1RSw"
     brokers:
       - host: central-01
         id: 1
@@ -329,7 +344,12 @@ infrastructure:
 - `mode` (required) - `native`
 - `version` (required) - Apache Kafka version (4.x+)
 - `cluster_id` (required) - KRaft cluster UUID. Generate with `kafka-storage.sh random-uuid`
-- `controller_port` (optional) - KRaft inter-controller port, default `9093`
+- `controllers` (optional) - dedicated controller nodes. If present, requires at least 3. Controller IDs must not overlap with broker IDs
+  - `host` (required) - host name from hosts map
+  - `id` (required) - controller node ID
+  - `port` (optional) - controller listener port, default `9093`
+  - `dir_id` (required) - directory UUID for dynamic quorum bootstrap. Generate with `kafka-storage.sh random-uuid`
+- `controller_port` (optional) - combined mode only, default `9093`
 - `brokers` (required) - at least 1; use 3+ for production
 - `topics` (optional)
 - `min_insync_replicas` (optional)

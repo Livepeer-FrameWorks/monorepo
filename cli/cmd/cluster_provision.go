@@ -784,20 +784,11 @@ func batchContainsPrivateer(batch []*orchestrator.Task) bool {
 
 func batchContainsService(batch []*orchestrator.Task, serviceName string) bool {
 	for _, task := range batch {
-		if serviceNameFromTask(task.Name) == serviceName {
+		if task.ServiceID == serviceName {
 			return true
 		}
 	}
 	return false
-}
-
-// serviceNameFromTask extracts the base service name from a task name.
-// Multi-host tasks use "name@host" format; this returns "name".
-func serviceNameFromTask(taskName string) string {
-	if idx := strings.IndexByte(taskName, '@'); idx != -1 {
-		return taskName[:idx]
-	}
-	return taskName
 }
 
 func meshHostname(name string) string {
@@ -1064,7 +1055,7 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 		return nil
 	}
 
-	serviceName := serviceNameFromTask(task.Name)
+	serviceName := task.ServiceID
 	if _, ok := publicServiceType(serviceName); !ok || selfRegisters(serviceName) {
 		return nil
 	}
@@ -1118,7 +1109,7 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 }
 
 func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, registrar publicServiceRegistrar) error {
-	serviceName := serviceNameFromTask(task.Name)
+	serviceName := task.ServiceID
 	serviceType, ok := publicServiceType(serviceName)
 	if !ok || selfRegisters(serviceName) {
 		return nil
@@ -1505,7 +1496,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 
 	// Use base service name for manifest lookups (handles "bridge@host" → "bridge")
-	baseName := serviceNameFromTask(task.Name)
+	baseName := task.ServiceID
 
 	if manifest != nil {
 		// Service overrides
@@ -1624,16 +1615,27 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if manifest.Infrastructure.Kafka.Version != "" {
 					config.Version = manifest.Infrastructure.Kafka.Version
 				}
-				if brokerID, ok := findKafkaBrokerID(task, manifest); ok {
-					config.Metadata["broker_id"] = brokerID
+				if task.InstanceID != "" {
+					if brokerID, err := strconv.Atoi(task.InstanceID); err == nil {
+						config.Metadata["broker_id"] = brokerID
+					}
 				}
 				config.Metadata["cluster_id"] = manifest.Infrastructure.Kafka.ClusterID
-				config.Metadata["controller_quorum_voters"] = buildControllerQuorum(manifest)
-				controllerPort := manifest.Infrastructure.Kafka.ControllerPort
-				if controllerPort == 0 {
-					controllerPort = 9093
+
+				if len(manifest.Infrastructure.Kafka.Controllers) > 0 {
+					// Dedicated mode: broker-only
+					config.Metadata["role"] = "broker"
+					config.Metadata["bootstrap_servers"] = buildBootstrapServers(manifest)
+				} else {
+					// Combined mode
+					config.Metadata["controller_quorum_voters"] = buildControllerQuorum(manifest)
+					controllerPort := manifest.Infrastructure.Kafka.ControllerPort
+					if controllerPort == 0 {
+						controllerPort = 9093
+					}
+					config.Metadata["controller_port"] = controllerPort
 				}
-				config.Metadata["controller_port"] = controllerPort
+
 				if len(manifest.Infrastructure.Kafka.Topics) > 0 {
 					config.Metadata["topics"] = kafkaTopicsToMetadata(manifest.Infrastructure.Kafka.Topics)
 				}
@@ -1657,6 +1659,35 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Metadata["transaction_state_log_min_isr"] = manifest.Infrastructure.Kafka.TransactionStateLogMinISR
 				}
 			}
+		case "kafka-controller":
+			if manifest.Infrastructure.Kafka != nil {
+				if manifest.Infrastructure.Kafka.Mode != "" {
+					config.Mode = manifest.Infrastructure.Kafka.Mode
+				}
+				if manifest.Infrastructure.Kafka.Version != "" {
+					config.Version = manifest.Infrastructure.Kafka.Version
+				}
+				config.Metadata["role"] = "controller"
+				config.Metadata["cluster_id"] = manifest.Infrastructure.Kafka.ClusterID
+				config.Metadata["bootstrap_servers"] = buildBootstrapServers(manifest)
+				config.Metadata["initial_controllers"] = buildInitialControllers(manifest)
+				if task.InstanceID != "" {
+					if ctrlID, err := strconv.Atoi(task.InstanceID); err == nil {
+						config.Metadata["broker_id"] = ctrlID
+						// Look up port from manifest controller with matching ID
+						for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+							if ctrl.ID == ctrlID {
+								if ctrl.Port != 0 {
+									config.Port = ctrl.Port
+								} else {
+									config.Port = 9093
+								}
+								break
+							}
+						}
+					}
+				}
+			}
 		case "zookeeper":
 			if manifest.Infrastructure.Zookeeper != nil {
 				if manifest.Infrastructure.Zookeeper.Mode != "" {
@@ -1665,7 +1696,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if manifest.Infrastructure.Zookeeper.Version != "" {
 					config.Version = manifest.Infrastructure.Zookeeper.Version
 				}
-				if nodeConfig := resolveZookeeperNodeConfig(task.Name, manifest); nodeConfig != nil {
+				if nodeConfig := resolveZookeeperNodeByID(task.InstanceID, manifest); nodeConfig != nil {
 					if nodeConfig.Port != 0 {
 						config.Port = nodeConfig.Port
 					}
@@ -1685,7 +1716,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if manifest.Infrastructure.Redis.Version != "" {
 					config.Version = manifest.Infrastructure.Redis.Version
 				}
-				if inst := resolveRedisInstance(task.Name, manifest); inst != nil {
+				if inst := resolveRedisInstanceByID(task.InstanceID, manifest); inst != nil {
 					engine := manifest.Infrastructure.Redis.Engine
 					if inst.Engine != "" {
 						engine = inst.Engine
@@ -1711,9 +1742,10 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				config.Version = pg.Version
 				config.Metadata["master_addresses"] = pg.MasterAddresses(manifest.Hosts)
 				config.Metadata["replication_factor"] = pg.EffectiveReplicationFactor()
-				// Resolve node ID from task name (yugabyte-node-N)
-				if nodeID, ok := resolveYugabyteNodeID(task.Name, pg); ok {
-					config.Metadata["node_id"] = nodeID
+				if task.InstanceID != "" {
+					if nodeID, err := strconv.Atoi(task.InstanceID); err == nil {
+						config.Metadata["node_id"] = nodeID
+					}
 				}
 				if len(pg.Databases) > 0 {
 					databases := make([]map[string]string, 0, len(pg.Databases))
@@ -1732,8 +1764,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	// Override for infrastructure (Redis uses manifest mode, not forced native)
 	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "zookeeper" && task.Type != "redis" {
 		config.Mode = "native"
-		// Keep manifest-specified version for yugabyte; default to "latest" for others
-		if task.Type != "yugabyte" || config.Version == "" {
+		// Keep manifest-specified version for yugabyte, kafka, kafka-controller; default to "latest" for others
+		keepVersion := task.Type == "yugabyte" || task.Type == "kafka" || task.Type == "kafka-controller"
+		if !keepVersion || config.Version == "" {
 			config.Version = "latest"
 		}
 	}
@@ -2095,17 +2128,12 @@ type zookeeperNodeConfig struct {
 	Servers  []string
 }
 
-func resolveZookeeperNodeConfig(taskName string, manifest *inventory.Manifest) *zookeeperNodeConfig {
-	if manifest.Infrastructure.Zookeeper == nil {
+func resolveZookeeperNodeByID(instanceID string, manifest *inventory.Manifest) *zookeeperNodeConfig {
+	if manifest.Infrastructure.Zookeeper == nil || instanceID == "" {
 		return nil
 	}
 
-	const prefix = "zookeeper-"
-	if !strings.HasPrefix(taskName, prefix) {
-		return nil
-	}
-
-	id, err := strconv.Atoi(strings.TrimPrefix(taskName, prefix))
+	id, err := strconv.Atoi(instanceID)
 	if err != nil {
 		return nil
 	}
@@ -2139,56 +2167,16 @@ func resolveZookeeperNodeConfig(taskName string, manifest *inventory.Manifest) *
 	}
 }
 
-func resolveRedisInstance(taskName string, manifest *inventory.Manifest) *inventory.RedisInstance {
-	if manifest.Infrastructure.Redis == nil {
+func resolveRedisInstanceByID(instanceID string, manifest *inventory.Manifest) *inventory.RedisInstance {
+	if manifest.Infrastructure.Redis == nil || instanceID == "" {
 		return nil
 	}
-	const prefix = "redis-"
-	if !strings.HasPrefix(taskName, prefix) {
-		return nil
-	}
-	name := strings.TrimPrefix(taskName, prefix)
 	for i := range manifest.Infrastructure.Redis.Instances {
-		if manifest.Infrastructure.Redis.Instances[i].Name == name {
+		if manifest.Infrastructure.Redis.Instances[i].Name == instanceID {
 			return &manifest.Infrastructure.Redis.Instances[i]
 		}
 	}
 	return nil
-}
-
-func findKafkaBrokerID(task *orchestrator.Task, manifest *inventory.Manifest) (int, bool) {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
-		return 0, false
-	}
-
-	// Prefer the task name (kafka-broker-N) since multiple brokers may share a host.
-	const prefix = "kafka-broker-"
-	if strings.HasPrefix(task.Name, prefix) {
-		id, err := strconv.Atoi(strings.TrimPrefix(task.Name, prefix))
-		if err == nil {
-			return id, true
-		}
-	}
-
-	var (
-		matchedID   int
-		matchCount  int
-		haveMatched bool
-	)
-	for _, broker := range manifest.Infrastructure.Kafka.Brokers {
-		if broker.Host != task.Host {
-			continue
-		}
-		matchedID = broker.ID
-		haveMatched = true
-		matchCount++
-	}
-	if haveMatched && matchCount == 1 {
-		return matchedID, true
-	}
-
-	// Ambiguous (multiple brokers on same host) or no match.
-	return 0, false
 }
 
 func buildControllerQuorum(manifest *inventory.Manifest) string {
@@ -2208,6 +2196,44 @@ func buildControllerQuorum(manifest *inventory.Manifest) string {
 		voters = append(voters, fmt.Sprintf("%d@%s:%d", b.ID, host, port))
 	}
 	return strings.Join(voters, ",")
+}
+
+func buildBootstrapServers(manifest *inventory.Manifest) string {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return ""
+	}
+	servers := make([]string, 0, len(manifest.Infrastructure.Kafka.Controllers))
+	for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+		host := ctrl.Host
+		if hostInfo, ok := manifest.Hosts[ctrl.Host]; ok && hostInfo.ExternalIP != "" {
+			host = hostInfo.ExternalIP
+		}
+		port := ctrl.Port
+		if port == 0 {
+			port = 9093
+		}
+		servers = append(servers, fmt.Sprintf("%s:%d", host, port))
+	}
+	return strings.Join(servers, ",")
+}
+
+func buildInitialControllers(manifest *inventory.Manifest) string {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(manifest.Infrastructure.Kafka.Controllers))
+	for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+		host := ctrl.Host
+		if hostInfo, ok := manifest.Hosts[ctrl.Host]; ok && hostInfo.ExternalIP != "" {
+			host = hostInfo.ExternalIP
+		}
+		port := ctrl.Port
+		if port == 0 {
+			port = 9093
+		}
+		parts = append(parts, fmt.Sprintf("%d@%s:%d:%s", ctrl.ID, host, port, ctrl.DirID))
+	}
+	return strings.Join(parts, ",")
 }
 
 func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface{} {
@@ -2260,18 +2286,6 @@ func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) map[
 	}
 
 	return result
-}
-
-// resolveYugabyteNodeID extracts the node ID from a "yugabyte-node-N" task name
-func resolveYugabyteNodeID(taskName string, pg *inventory.PostgresConfig) (int, bool) {
-	const prefix = "yugabyte-node-"
-	if strings.HasPrefix(taskName, prefix) {
-		id, err := strconv.Atoi(strings.TrimPrefix(taskName, prefix))
-		if err == nil {
-			return id, true
-		}
-	}
-	return 0, false
 }
 
 func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interval time.Duration) func() {
@@ -2736,6 +2750,7 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 	task := &orchestrator.Task{
 		Name:      name,
 		Type:      name,
+		ServiceID: name,
 		Host:      hostName,
 		ClusterID: clusterID,
 		Phase:     orchestrator.PhaseApplications,
@@ -2853,7 +2868,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	// Service-specific required env vars
-	baseName := serviceNameFromTask(task.Name)
+	baseName := task.ServiceID
 	if baseName == "foghorn" {
 		env["FOGHORN_CONTROL_BIND_ADDR"] = ":18019"
 		// Wire REDIS_URL from the foghorn Redis instance for HA state sync
@@ -2922,8 +2937,8 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if _, ok := manifest.Services["navigator"]; ok {
 		env["GRPC_TLS_CA_PATH"] = "/etc/frameworks/pki/ca.crt"
 	}
-	if usesInternalGRPCLeaf(serviceNameFromTask(task.Name)) {
-		serviceName := serviceNameFromTask(task.Name)
+	if usesInternalGRPCLeaf(task.ServiceID) {
+		serviceName := task.ServiceID
 		env["GRPC_TLS_CERT_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.crt", serviceName)
 		env["GRPC_TLS_KEY_PATH"] = fmt.Sprintf("/etc/frameworks/pki/services/%s/tls.key", serviceName)
 	}

@@ -639,6 +639,362 @@ systemctl daemon-reload
 	return playbook
 }
 
+// GenerateKafkaControllerPlaybook creates an Ansible playbook for a dedicated KRaft controller.
+func GenerateKafkaControllerPlaybook(version string, nodeID int, host string, controllerPort int, bootstrapServers string, clusterID string, initialControllers string) *Playbook {
+	playbook := NewPlaybook("Provision Kafka Controller", host)
+	if controllerPort == 0 {
+		controllerPort = 9093
+	}
+	kafkaVersion := strings.TrimSpace(version)
+	if kafkaVersion == "" {
+		kafkaVersion = defaultApacheKafkaVersion
+	}
+
+	installScript := fmt.Sprintf(`set -euo pipefail
+
+KAFKA_VERSION="%s"
+NODE_ID="%d"
+CONTROLLER_PORT="%d"
+BOOTSTRAP_SERVERS="%s"
+CLUSTER_ID="%s"
+INITIAL_CONTROLLERS="%s"
+
+checksum_value() {
+  awk 'NF { print $1; exit }' "$1"
+}
+
+verify_checksum() {
+  local algorithm="$1" file="$2" checksum_file="$3" expected actual
+  expected="$(checksum_value "$checksum_file")"
+  [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
+  case "$algorithm" in
+    sha512)
+      if command -v sha512sum >/dev/null 2>&1; then
+        actual="$(sha512sum "$file" | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 512 "$file" | awk '{print $1}')"
+      else
+        actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
+      fi
+      ;;
+    *)
+      echo "unsupported checksum algorithm: $algorithm" >&2
+      exit 1
+      ;;
+  esac
+  [ "$actual" = "$expected" ] || {
+    echo "checksum mismatch for $file" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  }
+}
+
+shell=/usr/bin/nologin
+[ ! -x "$shell" ] && shell=/sbin/nologin
+[ ! -x "$shell" ] && shell=/bin/false
+
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates default-jre-headless
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y curl java-17-openjdk-headless
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y curl java-17-openjdk-headless
+elif command -v pacman >/dev/null 2>&1; then
+  pacman -Syu --noconfirm --needed curl jre-openjdk-headless
+else
+  echo "unsupported package manager" >&2
+  exit 1
+fi
+
+getent group kafka >/dev/null || groupadd --system kafka
+id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
+
+mkdir -p /opt /etc/kafka-controller /var/lib/kafka-controller/logs
+if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
+  rm -rf /opt/kafka /tmp/kafka_2.13-${KAFKA_VERSION}
+  curl -fsSL -o /tmp/kafka.tgz "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz"
+  curl -fsSL -o /tmp/kafka.tgz.sha512 "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz.sha512"
+  verify_checksum sha512 /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+  tar -xzf /tmp/kafka.tgz -C /tmp
+  mv /tmp/kafka_2.13-${KAFKA_VERSION} /opt/kafka
+  rm -f /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+fi
+
+cat > /etc/kafka-controller/server.properties <<EOF
+process.roles=controller
+node.id=${NODE_ID}
+controller.listener.names=CONTROLLER
+listeners=CONTROLLER://0.0.0.0:${CONTROLLER_PORT}
+listener.security.protocol.map=CONTROLLER:PLAINTEXT
+controller.quorum.bootstrap.servers=${BOOTSTRAP_SERVERS}
+log.dirs=/var/lib/kafka-controller/logs
+EOF
+
+if [ ! -f /var/lib/kafka-controller/logs/meta.properties ]; then
+  /opt/kafka/bin/kafka-storage.sh format \
+    --cluster-id "${CLUSTER_ID}" \
+    --initial-controllers "${INITIAL_CONTROLLERS}" \
+    --config /etc/kafka-controller/server.properties
+fi
+
+cat > /etc/systemd/system/frameworks-kafka-controller.service <<'EOF'
+[Unit]
+Description=FrameWorks Kafka Controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kafka
+Group=kafka
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka-controller/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=always
+RestartSec=5
+LimitNOFILE=100000
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+chown -R kafka:kafka /opt/kafka /etc/kafka-controller /var/lib/kafka-controller
+systemctl daemon-reload
+`, kafkaVersion, nodeID, controllerPort, bootstrapServers, clusterID, initialControllers)
+
+	play := Play{
+		Name:        "Install and configure Kafka Controller",
+		Hosts:       host,
+		Become:      true,
+		GatherFacts: true,
+		Tasks: []Task{
+			{
+				Name:   "Install Kafka controller runtime and configuration",
+				Module: "shell",
+				Args: map[string]interface{}{
+					"cmd":        installScript,
+					"executable": "/bin/bash",
+				},
+			},
+			{
+				Name:   "Enable and start Kafka Controller",
+				Module: "systemd",
+				Args: map[string]interface{}{
+					"name":    "frameworks-kafka-controller",
+					"enabled": true,
+					"state":   "started",
+				},
+			},
+		},
+	}
+
+	playbook.AddPlay(play)
+	return playbook
+}
+
+// GenerateKafkaBrokerPlaybook creates an Ansible playbook for a broker-only Kafka node (dedicated controller mode).
+func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port int, bootstrapServers string, clusterID string, metadata map[string]interface{}) *Playbook {
+	playbook := NewPlaybook("Provision Kafka Broker", host)
+	if port == 0 {
+		port = 9092
+	}
+	kafkaVersion := strings.TrimSpace(version)
+	if kafkaVersion == "" {
+		kafkaVersion = defaultApacheKafkaVersion
+	}
+
+	brokerCount := metadataInt(metadata, "broker_count", 1)
+	if brokerCount < 1 {
+		brokerCount = 1
+	}
+	defaultRF := brokerCount
+	if defaultRF > 3 {
+		defaultRF = 3
+	}
+	minISR := metadataInt(metadata, "min_insync_replicas", defaultRF-1)
+	if minISR < 1 {
+		minISR = 1
+	}
+	offsetsRF := metadataInt(metadata, "offsets_topic_replication_factor", defaultRF)
+	if offsetsRF < 1 {
+		offsetsRF = 1
+	}
+	txRF := metadataInt(metadata, "transaction_state_log_replication_factor", defaultRF)
+	if txRF < 1 {
+		txRF = 1
+	}
+	txMinISR := metadataInt(metadata, "transaction_state_log_min_isr", txRF-1)
+	if txMinISR < 1 {
+		txMinISR = 1
+	}
+	deleteTopics := metadataBool(metadata, "delete_topic_enable", false)
+
+	installScript := fmt.Sprintf(`set -euo pipefail
+
+KAFKA_VERSION="%s"
+NODE_ID="%d"
+LISTENER_HOST="%s"
+LISTENER_PORT="%d"
+BOOTSTRAP_SERVERS="%s"
+CLUSTER_ID="%s"
+MIN_INSYNC_REPLICAS="%d"
+OFFSETS_RF="%d"
+TX_RF="%d"
+TX_MIN_ISR="%d"
+DELETE_TOPICS="%t"
+
+checksum_value() {
+  awk 'NF { print $1; exit }' "$1"
+}
+
+verify_checksum() {
+  local algorithm="$1" file="$2" checksum_file="$3" expected actual
+  expected="$(checksum_value "$checksum_file")"
+  [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
+  case "$algorithm" in
+    sha512)
+      if command -v sha512sum >/dev/null 2>&1; then
+        actual="$(sha512sum "$file" | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 512 "$file" | awk '{print $1}')"
+      else
+        actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
+      fi
+      ;;
+    *)
+      echo "unsupported checksum algorithm: $algorithm" >&2
+      exit 1
+      ;;
+  esac
+  [ "$actual" = "$expected" ] || {
+    echo "checksum mismatch for $file" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  }
+}
+
+shell=/usr/bin/nologin
+[ ! -x "$shell" ] && shell=/sbin/nologin
+[ ! -x "$shell" ] && shell=/bin/false
+
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates default-jre-headless
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y curl java-17-openjdk-headless
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y curl java-17-openjdk-headless
+elif command -v pacman >/dev/null 2>&1; then
+  pacman -Syu --noconfirm --needed curl jre-openjdk-headless
+else
+  echo "unsupported package manager" >&2
+  exit 1
+fi
+
+getent group kafka >/dev/null || groupadd --system kafka
+id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
+
+mkdir -p /opt /etc/kafka /var/lib/kafka/logs
+if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
+  rm -rf /opt/kafka /tmp/kafka_2.13-${KAFKA_VERSION}
+  curl -fsSL -o /tmp/kafka.tgz "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz"
+  curl -fsSL -o /tmp/kafka.tgz.sha512 "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz.sha512"
+  verify_checksum sha512 /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+  tar -xzf /tmp/kafka.tgz -C /tmp
+  mv /tmp/kafka_2.13-${KAFKA_VERSION} /opt/kafka
+  rm -f /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+fi
+
+cat > /etc/kafka/server.properties <<EOF
+process.roles=broker
+node.id=${NODE_ID}
+listeners=PLAINTEXT://0.0.0.0:${LISTENER_PORT}
+advertised.listeners=PLAINTEXT://${LISTENER_HOST}:${LISTENER_PORT}
+inter.broker.listener.name=PLAINTEXT
+controller.listener.names=CONTROLLER
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+controller.quorum.bootstrap.servers=${BOOTSTRAP_SERVERS}
+num.network.threads=3
+num.io.threads=8
+socket.send.buffer.bytes=102400
+socket.receive.buffer.bytes=102400
+socket.request.max.bytes=104857600
+log.dirs=/var/lib/kafka/logs
+num.partitions=3
+num.recovery.threads.per.data.dir=1
+min.insync.replicas=${MIN_INSYNC_REPLICAS}
+offsets.topic.replication.factor=${OFFSETS_RF}
+transaction.state.log.replication.factor=${TX_RF}
+transaction.state.log.min.isr=${TX_MIN_ISR}
+log.retention.hours=168
+group.initial.rebalance.delay.ms=0
+auto.create.topics.enable=false
+delete.topic.enable=${DELETE_TOPICS}
+EOF
+
+if [ ! -f /var/lib/kafka/logs/meta.properties ]; then
+  /opt/kafka/bin/kafka-storage.sh format \
+    --cluster-id "${CLUSTER_ID}" \
+    --no-initial-controllers \
+    --config /etc/kafka/server.properties
+fi
+
+cat > /etc/systemd/system/frameworks-kafka.service <<'EOF'
+[Unit]
+Description=FrameWorks Kafka Broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kafka
+Group=kafka
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=always
+RestartSec=5
+LimitNOFILE=100000
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
+systemctl daemon-reload
+`, kafkaVersion, nodeID, host, port, bootstrapServers, clusterID, minISR, offsetsRF, txRF, txMinISR, deleteTopics)
+
+	play := Play{
+		Name:        "Install and configure Kafka Broker",
+		Hosts:       host,
+		Become:      true,
+		GatherFacts: true,
+		Tasks: []Task{
+			{
+				Name:   "Install Kafka broker runtime and configuration",
+				Module: "shell",
+				Args: map[string]interface{}{
+					"cmd":        installScript,
+					"executable": "/bin/bash",
+				},
+			},
+			{
+				Name:   "Enable and start Kafka Broker",
+				Module: "systemd",
+				Args: map[string]interface{}{
+					"name":    "frameworks-kafka",
+					"enabled": true,
+					"state":   "started",
+				},
+			},
+		},
+	}
+
+	playbook.AddPlay(play)
+	return playbook
+}
+
 func metadataInt(metadata map[string]interface{}, key string, fallback int) int {
 	if metadata == nil {
 		return fallback

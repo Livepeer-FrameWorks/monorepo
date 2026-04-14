@@ -25,8 +25,9 @@ func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 	}
 
 	env, err := buildServiceEnvVars(&orchestrator.Task{
-		Name: "livepeer-gateway",
-		Type: "livepeer-gateway",
+		Name:      "livepeer-gateway",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
 	}, manifest, map[string]interface{}{}, "", "")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
@@ -54,8 +55,9 @@ func TestBuildServiceEnvVarsPrefersExplicitLivepeerConfig(t *testing.T) {
 	}
 
 	env, err := buildServiceEnvVars(&orchestrator.Task{
-		Name: "livepeer-gateway",
-		Type: "livepeer-gateway",
+		Name:      "livepeer-gateway",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
 	}, manifest, map[string]interface{}{}, "", "")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
@@ -88,8 +90,9 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 	}
 
 	env, err := buildServiceEnvVars(&orchestrator.Task{
-		Name: "livepeer-gateway",
-		Type: "livepeer-gateway",
+		Name:      "livepeer-gateway",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
 	}, manifest, map[string]interface{}{}, "", "")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
@@ -131,6 +134,7 @@ func TestBuildServiceEnvVarsDefaultsGatewayHostToClusterScopedDNS(t *testing.T) 
 	env, err := buildServiceEnvVars(&orchestrator.Task{
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
 	}, manifest, map[string]interface{}{}, "", "")
 	if err != nil {
@@ -161,6 +165,7 @@ func TestBuildServiceEnvVarsRewritesGlobalGatewayHostToClusterScopedDNS(t *testi
 	env, err := buildServiceEnvVars(&orchestrator.Task{
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
 	}, manifest, map[string]interface{}{}, "", "")
 	if err != nil {
