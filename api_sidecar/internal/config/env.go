@@ -120,7 +120,7 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		WebhookURL: config.GetEnv("HELMSMAN_WEBHOOK_URL", ""),
 
 		// gRPC TLS / trust
-		GRPCAllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		GRPCAllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		GRPCTLSCertPath:   config.GetEnv("GRPC_TLS_CERT_PATH", ""),
 		GRPCTLSKeyPath:    config.GetEnv("GRPC_TLS_KEY_PATH", ""),
 		GRPCTLSCAPath:     config.GetEnv("GRPC_TLS_CA_PATH", ""),

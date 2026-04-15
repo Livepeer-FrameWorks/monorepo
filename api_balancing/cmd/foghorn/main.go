@@ -272,7 +272,7 @@ func main() {
 	// --- Initialize Clients (Lifted from Handlers) ---
 
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
-	allowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", true)
+	allowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
 	decklogConfig := decklog.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
 		AllowInsecure: allowInsecure,
@@ -294,7 +294,7 @@ func main() {
 		Timeout:       30 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
@@ -349,7 +349,7 @@ func main() {
 		Logger:        logger,
 		Cache:         commodoreCache,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
@@ -373,7 +373,7 @@ func main() {
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
@@ -391,7 +391,7 @@ func main() {
 		Timeout:       30 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
@@ -865,7 +865,7 @@ func reconnectQuartermaster(
 			Timeout:       30 * time.Second,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
@@ -908,7 +908,7 @@ func reconnectCommodore(
 			Logger:        logger,
 			Cache:         commodoreCache,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})

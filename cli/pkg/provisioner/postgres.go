@@ -148,11 +148,32 @@ func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		}
 	}
 
-	pgUser, _ := config.Metadata["postgres_user"].(string)
 	pgPass, _ := config.Metadata["postgres_password"].(string)
-	if pgUser != "" && pgPass != "" {
-		if err := pgCreateApplicationUser(ctx, p.sql, conn, pgUser, pgPass, dbNames); err != nil {
-			return fmt.Errorf("failed to create application user: %w", err)
+	if pgPass != "" {
+		// Create per-database roles from the owner field in each database entry.
+		// Each owner role gets access to its own database only.
+		ownerDBs := make(map[string][]string) // owner -> list of db names
+		for _, db := range dbList {
+			owner := db["owner"]
+			if owner == "" {
+				owner = db["name"]
+			}
+			ownerDBs[owner] = append(ownerDBs[owner], db["name"])
+		}
+		for owner, dbs := range ownerDBs {
+			if err := pgCreateApplicationUser(ctx, p.sql, conn, owner, pgPass, dbs); err != nil {
+				return fmt.Errorf("failed to create application user %s: %w", owner, err)
+			}
+		}
+
+		// Also create a legacy shared role if explicitly set in metadata,
+		// for backward compatibility with manifests that don't use per-db owners.
+		if pgUser, ok := config.Metadata["postgres_user"].(string); ok && pgUser != "" {
+			if _, exists := ownerDBs[pgUser]; !exists {
+				if err := pgCreateApplicationUser(ctx, p.sql, conn, pgUser, pgPass, dbNames); err != nil {
+					return fmt.Errorf("failed to create legacy application user: %w", err)
+				}
+			}
 		}
 	}
 

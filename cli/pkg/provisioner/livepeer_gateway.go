@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -192,10 +193,15 @@ func (p *LivepeerGatewayProvisioner) provisionNative(ctx context.Context, host i
 		return fmt.Errorf("failed to write env file: %w", err)
 	}
 
-	// Build the command line from flags
+	// Build the command line from flags (sorted for deterministic output)
+	flagKeys := make([]string, 0, len(flags))
+	for k := range flags {
+		flagKeys = append(flagKeys, k)
+	}
+	sort.Strings(flagKeys)
 	var args []string
-	for k, v := range flags {
-		args = append(args, fmt.Sprintf("-%s %s", k, v))
+	for _, k := range flagKeys {
+		args = append(args, fmt.Sprintf("-%s=%s", k, flags[k]))
 	}
 
 	unitData := SystemdUnitData{
@@ -497,9 +503,15 @@ func gatewayKeystoreSpec(env map[string]string) (livepeerGatewayKeystoreSpec, er
 // go-livepeer reads flags from env vars prefixed with LP_ (undocumented but works via pflag).
 // We also write a LIVEPEER_CLI_FLAGS var with the full flag string for systemd ExecStart.
 func (p *LivepeerGatewayProvisioner) writeFlagsEnv(ctx context.Context, host inventory.Host, envFilePath string, flags map[string]string) error {
+	keys := make([]string, 0, len(flags))
+	for k := range flags {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	var lines []string
 	var flagParts []string
-	for k, v := range flags {
+	for _, k := range keys {
+		v := flags[k]
 		lines = append(lines, fmt.Sprintf("LP_%s=%s", strings.ToUpper(k), v))
 		flagParts = append(flagParts, fmt.Sprintf("-%s=%s", k, v))
 	}

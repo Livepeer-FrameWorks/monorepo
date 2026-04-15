@@ -125,7 +125,7 @@ func (sm *SubscriptionManager) GetOrCreateConnection(ctx context.Context, config
 		UserID:        config.UserID,
 		TenantID:      config.TenantID,
 		ServiceToken:  sm.serviceToken,
-		AllowInsecure: pkgconfig.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: pkgconfig.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    pkgconfig.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    pkgconfig.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})

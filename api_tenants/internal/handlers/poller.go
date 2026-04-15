@@ -418,7 +418,7 @@ func grpcHealthDialOption() (grpc.DialOption, error) {
 	return grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:    strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH")),
 		ServerName:    strings.TrimSpace(os.Getenv("GRPC_TLS_SERVER_NAME")),
-		AllowInsecure: getenvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: getenvBool("GRPC_ALLOW_INSECURE", false),
 	}, logger)
 }
 

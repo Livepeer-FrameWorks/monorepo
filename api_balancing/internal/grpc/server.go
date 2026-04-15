@@ -394,7 +394,7 @@ func StartGRPCServer(ctx context.Context, addr string, server *FoghornGRPCServer
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      strings.TrimSpace(os.Getenv("GRPC_TLS_CERT_PATH")),
 		KeyFile:       strings.TrimSpace(os.Getenv("GRPC_TLS_KEY_PATH")),
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

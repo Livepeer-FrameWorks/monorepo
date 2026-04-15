@@ -15,7 +15,7 @@ type SystemdResolvedConfig struct {
 func GenerateSystemdResolvedConfig(port int) (string, error) {
 	const tmpl = `[Resolve]
 DNS=127.0.0.1:{{.Port}}
-Domains=internal
+Domains=~internal
 DNSStubListener=yes
 `
 	t, err := template.New("resolved").Parse(tmpl)
@@ -76,13 +76,13 @@ func ConfigureResolvConf() string {
 # Fallback: direct modification of /etc/resolv.conf
 # This is less robust as it might be overwritten by other tools
 
-if grep -q "search internal" /etc/resolv.conf; then
+if grep -q "nameserver 127.0.0.1" /etc/resolv.conf; then
     echo "resolv.conf already configured"
     exit 0
 fi
 
-# Prepend localhost to nameservers and add search domain
-sed -i '1s/^/nameserver 127.0.0.1\noptions ndots:1\nsearch internal\n/' /etc/resolv.conf
+# Prepend localhost to nameservers for .internal routing
+sed -i '1s/^/nameserver 127.0.0.1\noptions ndots:1\n/' /etc/resolv.conf
 echo "Modified /etc/resolv.conf"
 `
 }

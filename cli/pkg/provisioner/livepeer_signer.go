@@ -2,9 +2,11 @@ package provisioner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"frameworks/cli/pkg/detect"
@@ -80,10 +82,15 @@ func (p *LivepeerSignerProvisioner) provisionNative(ctx context.Context, host in
 
 	flags := p.buildFlags(config, keystorePath)
 
-	// Build CLI args for ExecStart
+	// Build CLI args for ExecStart (sorted for deterministic output)
+	flagKeys := make([]string, 0, len(flags))
+	for k := range flags {
+		flagKeys = append(flagKeys, k)
+	}
+	sort.Strings(flagKeys)
 	var args []string
-	for k, v := range flags {
-		args = append(args, fmt.Sprintf("-%s=%s", k, v))
+	for _, k := range flagKeys {
+		args = append(args, fmt.Sprintf("-%s=%s", k, flags[k]))
 	}
 
 	envFile := "/etc/frameworks/livepeer-signer.env"
@@ -96,7 +103,7 @@ func (p *LivepeerSignerProvisioner) provisionNative(ctx context.Context, host in
 		Description: "Livepeer Remote Transaction Signer",
 		WorkingDir:  "/opt/frameworks/livepeer-signer",
 		ExecStart:   "/opt/frameworks/livepeer-signer/livepeer " + strings.Join(args, " "),
-		User:        "root",
+		User:        "frameworks",
 		EnvFile:     envFile,
 		Restart:     "always",
 	}
@@ -272,8 +279,8 @@ func (p *LivepeerSignerProvisioner) ensureKeystore(ctx context.Context, host inv
 	}
 	passwordFile := "/etc/frameworks/.livepeer_keystore_password"
 
-	// Ensure keystore directory exists
-	mkdirCmd := fmt.Sprintf("mkdir -p %s && chmod 700 %s", keystorePath, keystorePath)
+	// Ensure keystore directory exists with frameworks ownership
+	mkdirCmd := fmt.Sprintf("mkdir -p %s && chmod 700 %s && chown frameworks:frameworks %s", keystorePath, keystorePath, keystorePath)
 	if result, err := p.RunCommand(ctx, host, mkdirCmd); err != nil || result.ExitCode != 0 {
 		return "", fmt.Errorf("failed to create keystore dir: %w", err)
 	}
@@ -282,11 +289,79 @@ func (p *LivepeerSignerProvisioner) ensureKeystore(ctx context.Context, host inv
 	result, err := p.RunCommand(ctx, host, fmt.Sprintf("cat %s 2>/dev/null", passwordFile))
 	if err != nil || result.ExitCode != 0 || strings.TrimSpace(result.Stdout) == "" {
 		result, err = p.RunCommand(ctx, host, fmt.Sprintf(
-			"openssl rand -hex 32 | tee %s && chmod 600 %s", passwordFile, passwordFile))
+			"openssl rand -hex 32 | tee %s && chmod 600 %s && chown frameworks:frameworks %s", passwordFile, passwordFile, passwordFile))
 		if err != nil || result.ExitCode != 0 {
 			return "", fmt.Errorf("failed to generate keystore password: %w", err)
 		}
 		fmt.Println("    Generated new keystore password")
+	}
+
+	// Check for explicit keystore import via env vars (same pattern as gateway)
+	keystoreB64 := strings.TrimSpace(config.EnvVars["LIVEPEER_ETH_KEYSTORE_B64"])
+	keystorePassword := strings.TrimSpace(config.EnvVars["LIVEPEER_ETH_KEYSTORE_PASSWORD"])
+	if keystoreB64 != "" && keystorePassword != "" {
+		keyJSON, decodeErr := base64.StdEncoding.DecodeString(keystoreB64)
+		if decodeErr != nil {
+			return "", fmt.Errorf("decode LIVEPEER_ETH_KEYSTORE_B64: %w", decodeErr)
+		}
+
+		// Upload the provided password via SCP to avoid exposing it in the SSH command string.
+		tmpPw, tmpPwErr := os.CreateTemp("", "livepeer-signer-pw-*")
+		if tmpPwErr != nil {
+			return "", fmt.Errorf("create signer password temp file: %w", tmpPwErr)
+		}
+		if _, writeErr := tmpPw.WriteString(keystorePassword); writeErr != nil {
+			tmpPw.Close()
+			os.Remove(tmpPw.Name())
+			return "", fmt.Errorf("write signer password: %w", writeErr)
+		}
+		tmpPw.Close()
+		defer os.Remove(tmpPw.Name())
+
+		if uploadErr := p.UploadFile(ctx, host, ssh.UploadOptions{
+			LocalPath:  tmpPw.Name(),
+			RemotePath: passwordFile,
+			Mode:       0600,
+		}); uploadErr != nil {
+			return "", fmt.Errorf("upload signer keystore password: %w", uploadErr)
+		}
+		if result, err = p.RunCommand(ctx, host, fmt.Sprintf("chown frameworks:frameworks %s", passwordFile)); err != nil || result.ExitCode != 0 {
+			return "", fmt.Errorf("chown signer keystore password: %w", err)
+		}
+
+		filename := strings.TrimSpace(config.EnvVars["LIVEPEER_ETH_KEYSTORE_FILENAME"])
+		if filename == "" {
+			filename = "imported-keystore.json"
+		}
+		tmpFile, tmpErr := os.CreateTemp("", "livepeer-signer-keystore-*")
+		if tmpErr != nil {
+			return "", fmt.Errorf("create temp keystore file: %w", tmpErr)
+		}
+		if _, writeErr := tmpFile.Write(keyJSON); writeErr != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return "", fmt.Errorf("write temp keystore: %w", writeErr)
+		}
+		tmpFile.Close()
+		defer os.Remove(tmpFile.Name())
+
+		remoteKeyPath := filepath.Join(keystorePath, filename)
+		if uploadErr := p.UploadFile(ctx, host, ssh.UploadOptions{
+			LocalPath:  tmpFile.Name(),
+			RemotePath: remoteKeyPath,
+			Mode:       0600,
+		}); uploadErr != nil {
+			return "", fmt.Errorf("upload signer keystore: %w", uploadErr)
+		}
+		// Ensure frameworks ownership on uploaded keystore
+		if result, err = p.RunCommand(ctx, host, fmt.Sprintf("chown frameworks:frameworks %s", remoteKeyPath)); err != nil || result.ExitCode != 0 {
+			return "", fmt.Errorf("chown signer keystore: %w", err)
+		}
+		fmt.Println("    Imported keystore from LIVEPEER_ETH_KEYSTORE_B64")
+		return keystorePath, nil
+	}
+	if (keystoreB64 != "") != (keystorePassword != "") {
+		return "", fmt.Errorf("LIVEPEER_ETH_KEYSTORE_B64 and LIVEPEER_ETH_KEYSTORE_PASSWORD must be set together")
 	}
 
 	// Check if keystore has any key files
@@ -296,12 +371,11 @@ func (p *LivepeerSignerProvisioner) ensureKeystore(ctx context.Context, host inv
 		return keystorePath, nil
 	}
 
-	// No keystore exists — generate a new ETH account using geth-style keystore.
-	// We use the livepeer binary itself if available, or openssl + python as fallback.
-	// The go-livepeer binary creates a keystore on first run if none exists,
-	// so we can also just let it create one on startup.
-	fmt.Println("    No existing keystore found — will be created on first signer startup")
+	if strings.EqualFold(config.EnvVars["BUILD_ENV"], "production") {
+		return "", fmt.Errorf("signer keystore required for non-dev profiles — set LIVEPEER_ETH_KEYSTORE_B64 and LIVEPEER_ETH_KEYSTORE_PASSWORD, or place a UTC--* keystore file at %s", keystorePath)
+	}
 
+	fmt.Println("    No existing keystore found — will be created on first signer startup")
 	return keystorePath, nil
 }
 

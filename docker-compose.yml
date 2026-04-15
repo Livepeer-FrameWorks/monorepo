@@ -103,7 +103,7 @@ services:
       - ./pkg/database/sql/schema/skipper.sql:/docker-entrypoint-initdb.d/78_init_skipper.sql:ro
       # Static Seeds (Prod)
       - ./pkg/database/sql/seeds/static/purser_tiers.sql:/docker-entrypoint-initdb.d/80_seed_purser_tiers.sql:ro
-      # Demo Seeds (Dev/Demo only - loaded by default in this compose profile)
+      # Demo Seeds (Dev/Demo only - loaded by default for local development)
       - ./pkg/database/sql/seeds/demo/demo_data.sql:/docker-entrypoint-initdb.d/99_init_demo.sql:ro
       # - ./database/migrations:/docker-entrypoint-initdb.d/migrations:ro
     ports:

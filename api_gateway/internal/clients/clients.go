@@ -41,7 +41,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
 	}
-	grpcAllowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", true)
+	grpcAllowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
 	grpcCACertFile := config.GetEnv("GRPC_TLS_CA_PATH", "")
 	grpcServerName := config.GetEnv("GRPC_TLS_SERVER_NAME", "")
 

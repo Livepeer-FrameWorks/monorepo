@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 // secretSpec defines a secret key and its generation parameters.
@@ -61,6 +62,23 @@ func Keys() []string {
 		out[i] = s.Key
 	}
 	return out
+}
+
+// ValidateShared checks that all shared platform secrets are present in env.
+// Returns an error listing any missing keys. For use in non-dev provisioning
+// where shared secrets must come from manifest env_files, not auto-generation.
+func ValidateShared(env map[string]string) error {
+	var missing []string
+	for _, spec := range generatable {
+		if isMissing(env[spec.Key]) {
+			missing = append(missing, spec.Key)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing shared platform secrets: %s — set them in your manifest env_files",
+			strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func randomHex(n int) (string, error) {

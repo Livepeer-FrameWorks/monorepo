@@ -81,7 +81,7 @@ func main() {
 			Timeout:       5 * time.Second,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})
@@ -98,7 +98,7 @@ func main() {
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       5 * time.Second,
@@ -121,7 +121,7 @@ func main() {
 		Timeout:       5 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
@@ -229,7 +229,7 @@ func main() {
 			Metrics:         serverMetrics,
 			CertFile:        config.GetEnv("GRPC_TLS_CERT_PATH", ""),
 			KeyFile:         config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure:   config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			AllowInsecure:   config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 
@@ -251,7 +251,7 @@ func main() {
 			Timeout:       10 * time.Second,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})

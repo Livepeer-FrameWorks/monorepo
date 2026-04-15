@@ -266,6 +266,22 @@ func (m *Manifest) Validate() error {
 				}
 			}
 		}
+
+		brokerCount := len(m.Infrastructure.Kafka.Brokers)
+		for _, topic := range m.Infrastructure.Kafka.Topics {
+			if topic.ReplicationFactor > brokerCount {
+				return fmt.Errorf("kafka topic %q: replication_factor (%d) exceeds broker count (%d)",
+					topic.Name, topic.ReplicationFactor, brokerCount)
+			}
+		}
+		if m.Infrastructure.Kafka.MinInSyncReplicas > 0 {
+			for _, topic := range m.Infrastructure.Kafka.Topics {
+				if topic.ReplicationFactor > 0 && m.Infrastructure.Kafka.MinInSyncReplicas > topic.ReplicationFactor {
+					return fmt.Errorf("kafka topic %q: min_insync_replicas (%d) exceeds topic replication_factor (%d)",
+						topic.Name, m.Infrastructure.Kafka.MinInSyncReplicas, topic.ReplicationFactor)
+				}
+			}
+		}
 	}
 
 	// Validate clusters

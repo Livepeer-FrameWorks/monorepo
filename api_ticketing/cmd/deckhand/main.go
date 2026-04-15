@@ -85,7 +85,7 @@ func main() {
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
@@ -100,7 +100,7 @@ func main() {
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 	})
@@ -112,7 +112,7 @@ func main() {
 	// Create Decklog gRPC client (for real-time events)
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		Timeout:       5 * time.Second,
@@ -198,7 +198,7 @@ func main() {
 		tlsCfg := grpcutil.ServerTLSConfig{
 			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
 			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		}
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()

@@ -21,16 +21,25 @@ func (n *NginxProvisioner) installIngressSync(ctx context.Context, host inventor
 		return fmt.Errorf("nginx ingress sync requires node_id metadata")
 	}
 
+	quartermasterCAFile, _ := config.Metadata["quartermaster_http_ca_file"].(string) //nolint:errcheck // zero value acceptable
+	navigatorCAFile, _ := config.Metadata["navigator_http_ca_file"].(string)         //nolint:errcheck // zero value acceptable
+
 	quartermasterURL, ok := config.Metadata["quartermaster_http_url"].(string)
 	if !ok || quartermasterURL == "" {
-		quartermasterURL = "http://quartermaster:18002"
+		if quartermasterCAFile != "" {
+			quartermasterURL = "https://quartermaster.internal:18002"
+		} else {
+			quartermasterURL = "http://quartermaster:18002"
+		}
 	}
 	navigatorURL, ok := config.Metadata["navigator_http_url"].(string)
 	if !ok || navigatorURL == "" {
-		navigatorURL = "http://navigator:18010"
+		if navigatorCAFile != "" {
+			navigatorURL = "https://navigator.internal:18010"
+		} else {
+			navigatorURL = "http://navigator:18010"
+		}
 	}
-	quartermasterCAFile, _ := config.Metadata["quartermaster_http_ca_file"].(string) //nolint:errcheck // zero value acceptable
-	navigatorCAFile, _ := config.Metadata["navigator_http_ca_file"].(string)         //nolint:errcheck // zero value acceptable
 
 	envContent := fmt.Sprintf(`SERVICE_TOKEN=%s
 NODE_ID=%s

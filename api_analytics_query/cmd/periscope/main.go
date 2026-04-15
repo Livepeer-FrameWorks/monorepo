@@ -103,7 +103,7 @@ func main() {
 			Metrics:       serviceMetrics,
 			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
 			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 
@@ -123,7 +123,7 @@ func main() {
 			Timeout:       10 * time.Second,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
 			ServerName:    config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		})

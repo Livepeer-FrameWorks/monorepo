@@ -13,6 +13,7 @@ func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 	envFile := writeTestEnvFile(t, "ARBITRUM_RPC_ENDPOINT=https://arb.example\n")
 
 	manifest := &inventory.Manifest{
+		Profile:  "dev",
 		EnvFiles: []string{envFile},
 		Services: map[string]inventory.ServiceConfig{
 			"livepeer-gateway": {
@@ -42,6 +43,7 @@ func TestBuildServiceEnvVarsPrefersExplicitLivepeerConfig(t *testing.T) {
 	envFile := writeTestEnvFile(t, "ARBITRUM_RPC_ENDPOINT=https://arb.example\n")
 
 	manifest := &inventory.Manifest{
+		Profile:  "dev",
 		EnvFiles: []string{envFile},
 		Services: map[string]inventory.ServiceConfig{
 			"livepeer-gateway": {
@@ -78,6 +80,7 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 		"LIVEPEER_GATEWAY_HOST=livepeer.example\n")
 
 	manifest := &inventory.Manifest{
+		Profile:  "dev",
 		EnvFiles: []string{envFile},
 		Services: map[string]inventory.ServiceConfig{
 			"livepeer-gateway": {
@@ -117,6 +120,7 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 
 func TestBuildServiceEnvVarsDefaultsGatewayHostToClusterScopedDNS(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		Clusters: map[string]inventory.ClusterConfig{
 			"media-central-primary": {Name: "Media Central Primary"},
@@ -150,6 +154,7 @@ func TestBuildServiceEnvVarsRewritesGlobalGatewayHostToClusterScopedDNS(t *testi
 	envFile := writeTestEnvFile(t, "LIVEPEER_GATEWAY_HOST=livepeer.frameworks.network\n")
 
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		EnvFiles:   []string{envFile},
 		Clusters: map[string]inventory.ClusterConfig{

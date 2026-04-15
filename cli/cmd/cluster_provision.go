@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
@@ -38,6 +39,7 @@ import (
 	"frameworks/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -377,47 +379,102 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	// Execute each batch sequentially
 	runtimeData := make(map[string]interface{})
+
 	if err := ensureProvisionGeoIP(ctx, cmd.OutOrStdout(), manifest, manifestDir, sshPool); err != nil {
 		return err
 	}
 
+	// Pre-generate edge telemetry keypair so all foghorn/vmauth tasks in
+	// parallel batches share the same key material.
+	if err := ensureEdgeTelemetryJWTKeypair(runtimeData); err != nil {
+		return fmt.Errorf("pre-generate edge telemetry keypair: %w", err)
+	}
+
+	const perTaskTimeout = 10 * time.Minute
+
 	for batchNum, batch := range plan.Batches {
 		fmt.Fprintf(cmd.OutOrStdout(), "Executing Batch %d/%d:\n", batchNum+1, len(plan.Batches))
 
-		// Execute tasks in batch (could be parallelized)
-		for _, task := range batch {
-			if err := ctx.Err(); err != nil {
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
-				return fmt.Errorf("provisioning halted before %s: %w", task.Name, err)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
+		type batchResult struct {
+			task        *orchestrator.Task
+			host        inventory.Host
+			outcome     *taskProvisionOutcome
+			runtimeData map[string]interface{} // per-task copy; new keys merged back after batch
+		}
 
-			// Get host config
+		var (
+			mu      sync.Mutex
+			results []batchResult
+		)
+
+		g, gCtx := errgroup.WithContext(ctx)
+		for _, task := range batch {
+			task := task
 			host, ok := manifest.GetHost(task.Host)
 			if !ok {
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 				return fmt.Errorf("host %s not found in manifest", task.Host)
 			}
 
-			// Provision based on task type
-			stopProgress := startTaskProgressLogger(cmd, task, 30*time.Second)
-			outcome, err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, runtimeData, manifestDir)
-			if err != nil {
+			// Snapshot runtimeData so each goroutine has its own copy.
+			// New keys written by provisioning helpers (enrollment tokens,
+			// telemetry keys) are collected per-task and merged back sequentially.
+			taskRD := make(map[string]interface{}, len(runtimeData))
+			for k, v := range runtimeData {
+				taskRD[k] = v
+			}
+
+			g.Go(func() error {
+				taskCtx, taskCancel := context.WithTimeout(gCtx, perTaskTimeout)
+				defer taskCancel()
+
+				fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
+				stopProgress := startTaskProgressLogger(cmd, task, 30*time.Second)
+				outcome, err := provisionTask(taskCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir)
 				stopProgress()
-				fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Provisioning failed for %s: %v\n", task.Name, err)
-				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
-				return fmt.Errorf("failed to provision %s: %w", task.Name, err)
-			}
-			stopProgress()
+				if err != nil {
+					return fmt.Errorf("failed to provision %s: %w", task.Name, err)
+				}
 
-			// Only roll back services this run actually started from a stopped/nonexistent state.
-			if !outcome.previouslyRunning {
-				completed = append(completed, provisionedTask{task: task, host: host, config: outcome.config})
-			}
+				mu.Lock()
+				results = append(results, batchResult{task: task, host: host, outcome: outcome, runtimeData: taskRD})
+				if !outcome.previouslyRunning {
+					completed = append(completed, provisionedTask{task: task, host: host, config: outcome.config})
+				}
+				mu.Unlock()
 
-			// Bootstrap Logic: Run after Quartermaster is healthy
-			if task.Type == "quartermaster" {
+				fmt.Fprintf(cmd.OutOrStdout(), "    ✓ %s provisioned\n", task.Name)
+				return nil
+			})
+		}
+
+		if err := g.Wait(); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Batch failed: %v\n", err)
+			fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
+			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+			return err
+		}
+
+		// Merge per-task runtimeData back into the shared map.
+		// Map-valued keys (enrollment_tokens, cert_issue_tokens) need deep
+		// merging so tokens from all parallel privateer tasks are preserved.
+		for _, r := range results {
+			for k, v := range r.runtimeData {
+				if newMap, ok := v.(map[string]string); ok {
+					if existing, exists := runtimeData[k].(map[string]string); exists {
+						for mk, mv := range newMap {
+							existing[mk] = mv
+						}
+						continue
+					}
+				}
+				runtimeData[k] = v
+			}
+		}
+
+		// Post-batch side effects run sequentially after all tasks complete.
+		for _, r := range results {
+			if r.task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
 				result, err := runBootstrap(ctx, manifest, manifestDir)
 				if err != nil {
@@ -427,7 +484,6 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 					return fmt.Errorf("bootstrap failed: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "    ✓ System Tenant bootstrapped")
-				// Store Quartermaster runtime data for downstream services.
 				if result.SystemTenantID != "" {
 					runtimeData["system_tenant_id"] = result.SystemTenantID
 				}
@@ -439,14 +495,12 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				}
 			}
 
-			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, task, host, outcome, runtimeData, manifestDir); err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", task.Name, err)
+			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, manifestDir); err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", r.task.Name, err)
 			}
-			if err := maybeRegisterIngressDesiredState(ctx, cmd.OutOrStdout(), manifest, task, host, outcome); err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: ingress desired state registration skipped for %s: %v\n", task.Name, err)
+			if err := maybeRegisterIngressDesiredState(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome); err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: ingress desired state registration skipped for %s: %v\n", r.task.Name, err)
 			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "    ✓ %s provisioned\n", task.Name)
 		}
 
 		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData); err != nil {
@@ -733,7 +787,7 @@ func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inv
 			fmt.Fprintf(cmd.OutOrStdout(), "    - %s\n", w)
 		}
 		strict, _ := cmd.Flags().GetBool("strict-control-plane") //nolint:errcheck // flag always exists
-		if strict {
+		if strict || !isDevProfile(manifest) {
 			return fmt.Errorf("control-plane validation failed with %d warning(s) (--strict-control-plane is set)", len(warnings))
 		}
 	} else {
@@ -1829,10 +1883,21 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		if routes := buildExtraProxyRoutesForHost(manifest, task.Host, clusterID); len(routes) > 0 {
 			config.Metadata["extra_proxy_routes"] = routes
 		}
+		hasPKI := manifest.Services["navigator"].Enabled
 		if grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string); ok && grpcAddr != "" {
-			config.Metadata["quartermaster_http_url"] = quartermasterHTTPURL(grpcAddr)
+			if hasPKI {
+				config.Metadata["quartermaster_http_url"] = "https://quartermaster.internal:18002"
+				config.Metadata["quartermaster_http_ca_file"] = "/etc/frameworks/pki/ca.crt"
+			} else {
+				config.Metadata["quartermaster_http_url"] = quartermasterHTTPURL(grpcAddr)
+			}
 		}
-		config.Metadata["navigator_http_url"] = "http://navigator:18010"
+		if hasPKI {
+			config.Metadata["navigator_http_url"] = "https://navigator.internal:18010"
+			config.Metadata["navigator_http_ca_file"] = "/etc/frameworks/pki/ca.crt"
+		} else {
+			config.Metadata["navigator_http_url"] = "http://navigator:18010"
+		}
 		if serviceToken, ok := runtimeData["service_token"].(string); ok && serviceToken != "" {
 			config.Metadata["service_token"] = serviceToken
 		}
@@ -2251,29 +2316,30 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface
 
 // loadInfraCredentials reads the manifest env files and extracts database credentials
 // needed by infrastructure Initialize/Configure steps.
-func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) map[string]interface{} {
+func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 	envFiles := manifest.SharedEnvFiles()
 	if len(envFiles) == 0 {
-		return result
+		return result, nil
 	}
 
 	env := make(map[string]string)
 	for _, envFile := range envFiles {
+		if manifestDir != "" && filepath.IsAbs(envFile) {
+			return nil, fmt.Errorf("infrastructure env_files: absolute path %q is not allowed", envFile)
+		}
 		envPath := envFile
-		if manifestDir != "" && !filepath.IsAbs(envPath) {
+		if manifestDir != "" {
 			envPath = filepath.Join(manifestDir, envPath)
 		}
 		if err := loadEnvFile(envPath, env); err != nil {
-			return result
+			return nil, fmt.Errorf("infrastructure env_files: %w", err)
 		}
 	}
 
 	// Map env vars to metadata keys used by provisioners
 	if v := env["DATABASE_USER"]; v != "" {
 		result["postgres_user"] = v
-	} else {
-		result["postgres_user"] = "frameworks"
 	}
 	if v := env["DATABASE_PASSWORD"]; v != "" {
 		result["postgres_password"] = v
@@ -2285,7 +2351,7 @@ func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) map[
 		result["clickhouse_readonly_password"] = v
 	}
 
-	return result
+	return result, nil
 }
 
 func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interval time.Duration) func() {
@@ -2311,13 +2377,16 @@ func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interv
 	}
 }
 
-// rollbackProvisionedTasks stops previously provisioned services in reverse order
+// rollbackProvisionedTasks stops previously provisioned services in reverse order.
+// Cleanup errors are collected and reported, not swallowed.
 func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh.Pool, tasks []provisionedTask) {
 	if len(tasks) == 0 {
 		return
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "  Stopping %d previously provisioned services...\n", len(tasks))
+
+	var rollbackFailures []string
 
 	// Rollback in reverse order (most recent first)
 	for i := len(tasks) - 1; i >= 0; i-- {
@@ -2326,18 +2395,30 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 
 		prov, err := provisioner.GetProvisioner(t.task.Type, pool)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "      Warning: could not get provisioner: %v\n", err)
+			msg := fmt.Sprintf("%s on %s: could not get provisioner: %v", t.task.Name, t.task.Host, err)
+			rollbackFailures = append(rollbackFailures, msg)
+			fmt.Fprintf(cmd.OutOrStdout(), "      ✗ %s\n", msg)
 			continue
 		}
 
 		if err := prov.Cleanup(ctx, t.host, t.config); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "      Warning: cleanup failed: %v\n", err)
+			msg := fmt.Sprintf("%s on %s: cleanup failed: %v", t.task.Name, t.task.Host, err)
+			rollbackFailures = append(rollbackFailures, msg)
+			fmt.Fprintf(cmd.OutOrStdout(), "      ✗ %s\n", msg)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "      ✓ Stopped\n")
 		}
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "  Rollback complete. Cluster may be in inconsistent state.")
+	if len(rollbackFailures) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "\n  ⚠ Rollback completed with %d failure(s):\n", len(rollbackFailures))
+		for _, f := range rollbackFailures {
+			fmt.Fprintf(cmd.OutOrStdout(), "    - %s\n", f)
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "  Cluster is in inconsistent state. Manual cleanup may be required.")
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "  Rollback complete — all services stopped.")
+	}
 	fmt.Fprintln(cmd.OutOrStdout(), "  Fix the issue and re-run provisioning.")
 }
 
@@ -2422,7 +2503,10 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	// Infrastructure tasks: run Initialize + Configure after Provision/Validate.
 	// Load credentials from manifest env files so Initialize can create app users.
 	if task.Phase == orchestrator.PhaseInfrastructure {
-		infraCreds := loadInfraCredentials(manifest, manifestDir)
+		infraCreds, infraErr := loadInfraCredentials(manifest, manifestDir)
+		if infraErr != nil {
+			return nil, fmt.Errorf("load infrastructure credentials: %w", infraErr)
+		}
 		for k, v := range infraCreds {
 			if config.Metadata == nil {
 				config.Metadata = make(map[string]interface{})
@@ -2703,7 +2787,7 @@ func desiredClusterBaseURL(manifest *inventory.Manifest, quartermasterHost inven
 	}
 
 	if rootDomain := strings.TrimSpace(manifest.RootDomain); rootDomain != "" {
-		return rootDomain
+		return "https://" + rootDomain
 	}
 
 	basePort := 18002
@@ -2979,6 +3063,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 
 	// 2. Shared env files from manifest root
 	for _, envFile := range manifest.SharedEnvFiles() {
+		if manifestDir != "" && filepath.IsAbs(envFile) {
+			return nil, fmt.Errorf("manifest env_files: absolute path %q is not allowed — use a relative path from the manifest directory", envFile)
+		}
 		envPath := envFile
 		if manifestDir != "" && !filepath.IsAbs(envPath) {
 			envPath = filepath.Join(manifestDir, envPath)
@@ -2990,8 +3077,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 
 	// 3. Per-service env_file override
 	if perServiceEnvFile != "" {
+		if manifestDir != "" && filepath.IsAbs(perServiceEnvFile) {
+			return nil, fmt.Errorf("service env_file: absolute path %q is not allowed — use a relative path from the manifest directory", perServiceEnvFile)
+		}
 		envPath := perServiceEnvFile
-		if manifestDir != "" && !filepath.IsAbs(envPath) {
+		if manifestDir != "" {
 			envPath = filepath.Join(manifestDir, envPath)
 		}
 		if err := loadEnvFile(envPath, env); err != nil {
@@ -3089,9 +3179,17 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		applyDefaultLivepeerGatewayHost(env, manifest, task.ClusterID)
 	}
 
-	// 5. Auto-generate missing secrets (SERVICE_TOKEN, JWT_SECRET, etc.)
-	if _, err := credentials.GenerateIfMissing(env); err != nil {
-		return nil, fmt.Errorf("auto-generate secrets: %w", err)
+	// 5. Validate shared platform secrets for non-dev, or auto-generate for dev.
+	// Shared secrets (SERVICE_TOKEN, JWT_SECRET, etc.) must come from manifest
+	// env_files for non-dev profiles — they are not generated at runtime.
+	if !isDevProfile(manifest) {
+		if err := credentials.ValidateShared(env); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := credentials.GenerateIfMissing(env); err != nil {
+			return nil, fmt.Errorf("auto-generate secrets: %w", err)
+		}
 	}
 
 	// 6. Derive COOKIE_DOMAIN from manifest root_domain
@@ -3102,7 +3200,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		env["BRAND_DOMAIN"] = manifest.RootDomain
 	}
 	if env["DATABASE_USER"] == "" {
-		env["DATABASE_USER"] = "frameworks"
+		env["DATABASE_USER"] = strings.ReplaceAll(task.ServiceID, "-", "_")
 	}
 
 	// Construct DATABASE_URL from merged credentials (operator may have set
@@ -3110,9 +3208,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// Skip if operator explicitly provided DATABASE_URL.
 	if env["DATABASE_HOST"] != "" && env["DATABASE_URL"] == "" {
 		dbUser := env["DATABASE_USER"]
-		if dbUser == "" {
-			dbUser = "frameworks"
-		}
 		dbPass := env["DATABASE_PASSWORD"]
 		dbHost := env["DATABASE_HOST"]
 		dbPort := env["DATABASE_PORT"]
@@ -3123,7 +3218,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if dbPass != "" {
 			userInfo = dbUser + ":" + dbPass
 		}
-		env["DATABASE_URL"] = fmt.Sprintf("postgres://%s@%s:%s/postgres?sslmode=disable", userInfo, dbHost, dbPort)
+		dbName := strings.ReplaceAll(task.ServiceID, "-", "_")
+		if env["DATABASE_NAME"] != "" {
+			dbName = env["DATABASE_NAME"]
+		}
+		env["DATABASE_URL"] = fmt.Sprintf("postgres://%s@%s:%s/%s?sslmode=disable", userInfo, dbHost, dbPort, dbName)
 	}
 
 	return env, nil
@@ -3151,14 +3250,23 @@ func applyProductionRuntimeDefaults(manifest *inventory.Manifest, serviceID stri
 }
 
 func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string, env map[string]string) error {
-	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Profile), "production") {
+	if isDevProfile(manifest) {
 		return nil
 	}
 
-	if serviceID != "navigator" {
-		return nil
+	switch serviceID {
+	case "navigator":
+		return validateNavigatorProductionEnv(env)
+	case "quartermaster", "commodore", "purser":
+		if strings.TrimSpace(env["DATABASE_HOST"]) == "" {
+			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_HOST", serviceID)
+		}
 	}
 
+	return nil
+}
+
+func validateNavigatorProductionEnv(env map[string]string) error {
 	fileKeys := []string{
 		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE",
@@ -3193,8 +3301,7 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 	}
 
 	return fmt.Errorf(
-		"service %s: production deploy requires managed internal CA env vars via either files (%s) or base64 PEM envs (%s)",
-		serviceID,
+		"service navigator: non-dev deploy requires managed internal CA env vars via either files (%s) or base64 PEM envs (%s)",
 		strings.Join(fileKeys, ", "),
 		strings.Join(b64Keys, ", "),
 	)
@@ -3467,7 +3574,12 @@ func loadEnvFile(path string, target map[string]string) error {
 		if !ok {
 			continue
 		}
-		target[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		k := strings.TrimSpace(key)
+		v := strings.TrimSpace(value)
+		if prev, exists := target[k]; exists && prev != v {
+			fmt.Printf("    env override: %s changed by %s\n", k, filepath.Base(path))
+		}
+		target[k] = v
 	}
 	return nil
 }
@@ -3501,12 +3613,16 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 		}
 
 		// Check mesh DNS can resolve quartermaster
-		result, err = base.RunCommand(ctx, hostInfo, "dig @127.0.0.1 quartermaster.internal +short +timeout=3 2>/dev/null")
+		result, err = base.RunCommand(ctx, hostInfo, "command -v dig >/dev/null 2>&1 || { echo 'MISSING_DIG'; exit 0; }; dig @127.0.0.1 quartermaster.internal +short +timeout=3 2>/dev/null")
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: DNS check failed: %v", hostName, err))
 			continue
 		}
 		resolved := strings.TrimSpace(result.Stdout)
+		if resolved == "MISSING_DIG" {
+			failures = append(failures, fmt.Sprintf("%s: 'dig' is not installed — required for mesh DNS verification", hostName))
+			continue
+		}
 		if resolved == "" {
 			failures = append(failures, fmt.Sprintf("%s: mesh DNS cannot resolve 'quartermaster'", hostName))
 			continue

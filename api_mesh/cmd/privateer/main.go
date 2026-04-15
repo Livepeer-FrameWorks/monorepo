@@ -112,7 +112,7 @@ func main() {
 		ServiceToken:          serviceToken,
 		EnrollmentToken:       enrollmentToken,
 		CertIssueToken:        os.Getenv("CERT_ISSUANCE_TOKEN"),
-		AllowInsecure:         config.GetEnvBool("GRPC_ALLOW_INSECURE", true),
+		AllowInsecure:         config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:            config.GetEnv("GRPC_TLS_CA_PATH", ""),
 		ServerName:            config.GetEnv("GRPC_TLS_SERVER_NAME", ""),
 		PKIBasePath:           config.GetEnv("GRPC_TLS_PKI_DIR", "/etc/frameworks/pki"),

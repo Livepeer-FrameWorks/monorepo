@@ -15,6 +15,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// testSharedSecrets provides the required shared platform secrets for test env files.
+const testSharedSecrets = "SERVICE_TOKEN=test-token\nJWT_SECRET=test-jwt\nPASSWORD_RESET_SECRET=test-reset\nFIELD_ENCRYPTION_KEY=test-enc\nUSAGE_HASH_SECRET=test-hash\n"
+
 type fakeFoghornClusterAssigner struct {
 	calls  []string
 	errFor map[string]error
@@ -75,6 +78,7 @@ func (f *fakeIngressDesiredStateRegistrar) UpsertIngressSite(_ context.Context, 
 
 func TestReconcileFoghornClusterAssignmentsWithClientAssignsAllManifestClusters(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Clusters: map[string]inventory.ClusterConfig{
 			"media-central-primary": {},
 			"core-central-primary":  {},
@@ -102,6 +106,7 @@ func TestReconcileFoghornClusterAssignmentsWithClientAssignsAllManifestClusters(
 
 func TestReconcileFoghornClusterAssignmentsWithClientReturnsClusterError(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Clusters: map[string]inventory.ClusterConfig{
 			"core-central-primary":  {},
 			"media-central-primary": {},
@@ -126,6 +131,7 @@ func TestMaybeReconcileBatchFoghornAssignmentsSkipsBatchWithoutFoghorn(t *testin
 	var out bytes.Buffer
 	cmd := newTestCommandWithOutput(&out)
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Clusters: map[string]inventory.ClusterConfig{
 			"core-central-primary": {},
 		},
@@ -146,6 +152,7 @@ func TestMaybeReconcileBatchFoghornAssignmentsRequiresQuartermasterRuntimeData(t
 	var out bytes.Buffer
 	cmd := newTestCommandWithOutput(&out)
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Clusters: map[string]inventory.ClusterConfig{
 			"core-central-primary": {},
 		},
@@ -185,6 +192,7 @@ func TestPublicServiceTypeIncludesChandler(t *testing.T) {
 
 func TestAutoIngressDomainsUsesClusterScopedDomainForChandler(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		Clusters: map[string]inventory.ClusterConfig{
 			"media-central-primary": {Name: "Media Central Primary"},
@@ -202,6 +210,7 @@ func TestAutoIngressDomainsUsesClusterScopedDomainForChandler(t *testing.T) {
 
 func TestDesiredClusterBaseURLPrefersRootDomain(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		Hosts: map[string]inventory.Host{
 			"central-eu-1":  {ExternalIP: "10.0.0.10"},
@@ -213,13 +222,14 @@ func TestDesiredClusterBaseURLPrefersRootDomain(t *testing.T) {
 	}
 
 	got := desiredClusterBaseURL(manifest, manifest.Hosts["central-eu-1"], inventory.ServiceConfig{Port: 18002})
-	if got != "frameworks.network" {
+	if got != "https://frameworks.network" {
 		t.Fatalf("expected root_domain-backed cluster base_url, got %q", got)
 	}
 }
 
 func TestRegisterIngressDesiredStateWithClientRegistersClusterScopedChandler(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		Hosts: map[string]inventory.Host{
 			"central-eu-1": {ExternalIP: "10.0.0.10", Cluster: "media-central-primary"},
@@ -279,6 +289,7 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 	envFile := writeTestEnvFile(t, "LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
 
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		EnvFiles:   []string{envFile},
 		Hosts: map[string]inventory.Host{
@@ -345,10 +356,14 @@ func TestLoadInfraCredentialsLoadsSplitManifestEnvFiles(t *testing.T) {
 	}, "\n")+"\n")
 
 	manifest := &inventory.Manifest{
+		Profile:  "dev",
 		EnvFiles: []string{baseEnv, secretsEnv},
 	}
 
-	creds := loadInfraCredentials(manifest, "")
+	creds, credErr := loadInfraCredentials(manifest, "")
+	if credErr != nil {
+		t.Fatalf("loadInfraCredentials returned error: %v", credErr)
+	}
 	if got := creds["postgres_user"]; got != "frameworks" {
 		t.Fatalf("expected postgres_user from first env file, got %v", got)
 	}
@@ -371,6 +386,7 @@ func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 	secretsEnv := writeTestEnvFile(t, "LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
 
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		EnvFiles:   []string{baseEnv, secretsEnv},
 		Clusters: map[string]inventory.ClusterConfig{
@@ -414,6 +430,7 @@ func TestBuildServiceEnvVarsDerivesSharedRuntimeValues(t *testing.T) {
 	}, "\n")+"\n")
 
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		EnvFiles:   []string{baseEnv},
 		Services: map[string]inventory.ServiceConfig{
@@ -439,13 +456,14 @@ func TestBuildServiceEnvVarsDerivesSharedRuntimeValues(t *testing.T) {
 	if got := env["X402_GAS_WALLET_ADDRESS"]; got != "0xabc123" {
 		t.Fatalf("expected X402_GAS_WALLET_ADDRESS from env files, got %q", got)
 	}
-	if got := env["DATABASE_USER"]; got != "frameworks" {
-		t.Fatalf("expected DATABASE_USER default, got %q", got)
+	if got := env["DATABASE_USER"]; got != "foghorn" {
+		t.Fatalf("expected DATABASE_USER to default to service name, got %q", got)
 	}
 }
 
 func TestBuildServiceEnvVarsDerivesRegionFromHostLabels(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"regional-us-1": {
 				Labels: map[string]string{
@@ -475,6 +493,7 @@ func TestBuildServiceEnvVarsDerivesRegionFromHostLabels(t *testing.T) {
 
 func TestValidateInternalGRPCTLSCoverageRejectsHostWithoutPrivateer(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"core-1": {ExternalIP: "10.0.0.1", Roles: []string{"control"}},
 			"core-2": {ExternalIP: "10.0.0.2", Roles: []string{"control"}},
@@ -496,7 +515,7 @@ func TestValidateInternalGRPCTLSCoverageRejectsHostWithoutPrivateer(t *testing.T
 }
 
 func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
-	envFile := writeTestEnvFile(t, strings.Join([]string{
+	envFile := writeTestEnvFile(t, testSharedSecrets+strings.Join([]string{
 		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE=/etc/frameworks/ca/root.crt",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE=/etc/frameworks/ca/intermediate.crt",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE=/etc/frameworks/ca/intermediate.key",
@@ -542,9 +561,11 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 }
 
 func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
+	envFile := writeTestEnvFile(t, testSharedSecrets)
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
+		EnvFiles:   []string{envFile},
 		Hosts: map[string]inventory.Host{
 			"core-1": {ExternalIP: "10.0.0.1", Roles: []string{"control"}},
 		},
@@ -571,7 +592,7 @@ func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
 }
 
 func TestBuildServiceEnvVarsProductionAcceptsNavigatorManagedCABase64Env(t *testing.T) {
-	envFile := writeTestEnvFile(t, strings.Join([]string{
+	envFile := writeTestEnvFile(t, testSharedSecrets+strings.Join([]string{
 		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64=cm9vdA==",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64=aW50ZXJtZWRpYXRl",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64=a2V5",
@@ -604,6 +625,7 @@ func TestBuildServiceEnvVarsProductionAcceptsNavigatorManagedCABase64Env(t *test
 
 func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		Hosts: map[string]inventory.Host{
 			"central-eu-1":  {ExternalIP: "10.0.0.10", Roles: []string{"control"}},
@@ -663,8 +685,8 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	if env["DATABASE_HOST"] != "yuga-eu-1.internal" {
 		t.Fatalf("expected DATABASE_HOST to use mesh host, got %q", env["DATABASE_HOST"])
 	}
-	if env["DATABASE_URL"] != "postgres://frameworks@yuga-eu-1.internal:5433/postgres?sslmode=disable" {
-		t.Fatalf("expected DATABASE_URL to use mesh host, got %q", env["DATABASE_URL"])
+	if env["DATABASE_URL"] != "postgres://foghorn@yuga-eu-1.internal:5433/foghorn?sslmode=disable" {
+		t.Fatalf("expected DATABASE_URL to use mesh host with service-level user and database, got %q", env["DATABASE_URL"])
 	}
 	if env["KAFKA_BROKERS"] != "central-eu-1.internal:9092,regional-eu-1.internal:9093" {
 		t.Fatalf("expected KAFKA_BROKERS to use mesh hosts, got %q", env["KAFKA_BROKERS"])
@@ -692,6 +714,7 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *testing.T) {
 	envFile := writeTestEnvFile(t, "LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
 	manifest := &inventory.Manifest{
+		Profile:    "dev",
 		RootDomain: "frameworks.network",
 		EnvFiles:   []string{envFile},
 		Hosts: map[string]inventory.Host{
@@ -747,6 +770,7 @@ func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *t
 
 func TestValidateGatewayMeshCoverageRejectsGatewayOutsidePrivateerHosts(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"core-1": {ExternalIP: "10.0.0.10", Roles: []string{"control"}},
 			"core-2": {ExternalIP: "10.0.0.11", Roles: []string{"control"}},
@@ -774,6 +798,7 @@ func TestValidateGatewayMeshCoverageRejectsGatewayOutsidePrivateerHosts(t *testi
 
 func TestValidateGatewayMeshCoverageAllowsGatewayOnPrivateerHost(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"core-1": {ExternalIP: "10.0.0.10", Roles: []string{"control"}},
 		},

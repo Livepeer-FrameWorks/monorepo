@@ -330,11 +330,28 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		}
 	}
 
-	pgUser, _ := config.Metadata["postgres_user"].(string)
 	pgPass, _ := config.Metadata["postgres_password"].(string)
-	if pgUser != "" && pgPass != "" {
-		if err := pgCreateApplicationUser(ctx, y.sql, conn, pgUser, pgPass, dbNames); err != nil {
-			return fmt.Errorf("failed to create application user: %w", err)
+	if pgPass != "" {
+		ownerDBs := make(map[string][]string)
+		for _, db := range databases {
+			owner := db["owner"]
+			if owner == "" {
+				owner = db["name"]
+			}
+			ownerDBs[owner] = append(ownerDBs[owner], db["name"])
+		}
+		for owner, dbs := range ownerDBs {
+			if err := pgCreateApplicationUser(ctx, y.sql, conn, owner, pgPass, dbs); err != nil {
+				return fmt.Errorf("failed to create application user %s: %w", owner, err)
+			}
+		}
+
+		if pgUser, ok := config.Metadata["postgres_user"].(string); ok && pgUser != "" {
+			if _, exists := ownerDBs[pgUser]; !exists {
+				if err := pgCreateApplicationUser(ctx, y.sql, conn, pgUser, pgPass, dbNames); err != nil {
+					return fmt.Errorf("failed to create legacy application user: %w", err)
+				}
+			}
 		}
 	}
 
