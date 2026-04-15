@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	fwssh "frameworks/cli/pkg/ssh"
 )
 
 func TestConnParamsConnStr(t *testing.T) {
@@ -333,22 +335,50 @@ func TestSSHExecutorSkipsPsqlrc(t *testing.T) {
 	}
 }
 
-func TestSSHExecutorTCPAuth_PGPASSWORD(t *testing.T) {
+func TestSSHExecutorTCPAuth_PgpassFile(t *testing.T) {
 	runner := &mockRunner{}
 	exec := &SSHExecutor{Runner: runner, UsePeerAuth: false, Password: "s3cret"}
 	conn := ConnParams{Host: "db", Port: 5433, User: "yugabyte", Database: "test"}
 
 	_ = exec.Exec(context.Background(), conn, "SELECT 1")
 
-	if !strings.Contains(runner.lastCmd, "PGPASSWORD='s3cret'") {
-		t.Fatalf("expected PGPASSWORD env var, got: %s", runner.lastCmd)
+	// Find the psql command (not the cleanup rm -f from deferred pgpass cleanup)
+	var psqlCmd string
+	for _, cmd := range runner.allCmds {
+		if strings.Contains(cmd, "PGPASSFILE=") {
+			psqlCmd = cmd
+			break
+		}
 	}
-	if strings.Contains(runner.lastCmd, "sudo") {
+	if psqlCmd == "" {
+		t.Fatalf("expected a command with PGPASSFILE reference, got commands: %v", runner.allCmds)
+	}
+	if strings.Contains(psqlCmd, "s3cret") {
+		t.Fatalf("password must not appear in shell command string, got: %s", psqlCmd)
+	}
+	if strings.Contains(psqlCmd, "PGPASSWORD") {
+		t.Fatalf("should not use PGPASSWORD env var, got: %s", psqlCmd)
+	}
+	if strings.Contains(psqlCmd, "sudo") {
 		t.Fatal("TCP auth should not use sudo")
+	}
+	// Pgpass file uploaded via SCP with correct content and permissions
+	var pgpassUpload *fwssh.UploadOptions
+	for i := range runner.allUploads {
+		if strings.Contains(runner.allUploads[i].RemotePath, ".pgpass") {
+			pgpassUpload = &runner.allUploads[i]
+			break
+		}
+	}
+	if pgpassUpload == nil {
+		t.Fatal("expected a pgpass file upload")
+	}
+	if pgpassUpload.Mode != 0600 {
+		t.Fatalf("pgpass file should be uploaded with mode 0600, got: %o", pgpassUpload.Mode)
 	}
 }
 
-func TestSSHExecutorTCPAuth_NoPGPASSWORD_WhenEmpty(t *testing.T) {
+func TestSSHExecutorTCPAuth_NoPassword_WhenEmpty(t *testing.T) {
 	runner := &mockRunner{}
 	exec := &SSHExecutor{Runner: runner, UsePeerAuth: false}
 	conn := ConnParams{Host: "db", Port: 5433, User: "yugabyte", Database: "test"}
@@ -357,6 +387,9 @@ func TestSSHExecutorTCPAuth_NoPGPASSWORD_WhenEmpty(t *testing.T) {
 
 	if strings.Contains(runner.lastCmd, "PGPASSWORD") {
 		t.Fatalf("should not set PGPASSWORD when empty, got: %s", runner.lastCmd)
+	}
+	if strings.Contains(runner.lastCmd, "PGPASSFILE") {
+		t.Fatalf("should not create pgpass file when no password, got: %s", runner.lastCmd)
 	}
 }
 

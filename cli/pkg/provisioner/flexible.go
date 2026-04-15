@@ -202,19 +202,13 @@ func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventor
 	}
 
 	// Pull and start with docker compose
-	commands := []string{
-		fmt.Sprintf("cd /opt/frameworks/%s", f.serviceName),
-		"docker compose pull",
-	}
+	composeCmd := fmt.Sprintf("cd /opt/frameworks/%s && docker compose pull", f.serviceName)
 	if !config.DeferStart {
-		commands = append(commands, "docker compose up -d")
+		composeCmd += " && docker compose up -d"
 	}
-
-	for _, cmd := range commands {
-		result, err := f.RunCommand(ctx, host, cmd)
-		if err != nil || result.ExitCode != 0 {
-			return fmt.Errorf("docker compose command failed: %s\nStderr: %s", cmd, result.Stderr)
-		}
+	result, err := f.RunCommand(ctx, host, composeCmd)
+	if err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("docker compose failed: %s\nStderr: %s", composeCmd, result.Stderr)
 	}
 
 	if config.DeferStart {
@@ -250,26 +244,53 @@ func (f *FlexibleProvisioner) provisionNative(ctx context.Context, host inventor
 		return fmt.Errorf("binary not available: %w", err)
 	}
 
-	// Download and install binary
+	// Download and install binary with checksum verification
+	checksumURL := binaryURL + ".sha256"
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -e
 
-# Download binary
-wget -q -O /tmp/%s.tar.gz "%s"
+checksum_value() {
+  awk '{print $1}' "$1" | tr -d '[:space:]'
+}
 
-# Extract
-mkdir -p /opt/frameworks/%s
-tar -xzf /tmp/%s.tar.gz -C /tmp/
+verify_checksum() {
+  local algorithm="$1" file="$2" checksum_file="$3" expected actual
+  expected="$(checksum_value "$checksum_file")"
+  [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
+  case "$algorithm" in
+    sha256)
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$file" | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+      else
+        actual="$(openssl dgst -sha256 "$file" | awk '{print $NF}')"
+      fi
+      ;;
+    *) echo "unsupported checksum algorithm: $algorithm" >&2; exit 1 ;;
+  esac
+  [ "$actual" = "$expected" ] || {
+    echo "checksum mismatch for $file" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  }
+}
 
-# Move binary to installation directory
-mv /tmp/frameworks-%s-* /opt/frameworks/%s/%s
-chmod +x /opt/frameworks/%s/%s
+wget -q -O /tmp/%[1]s.tar.gz "%[2]s"
 
-# Cleanup
-rm /tmp/%s.tar.gz
+wget -q -O /tmp/%[1]s.tar.gz.sha256 "%[3]s"
+verify_checksum sha256 /tmp/%[1]s.tar.gz /tmp/%[1]s.tar.gz.sha256
+rm -f /tmp/%[1]s.tar.gz.sha256
+
+mkdir -p /opt/frameworks/%[1]s
+tar -xzf /tmp/%[1]s.tar.gz -C /tmp/
+mv /tmp/frameworks-%[1]s-* /opt/frameworks/%[1]s/%[1]s
+chmod +x /opt/frameworks/%[1]s/%[1]s
+rm /tmp/%[1]s.tar.gz
 
 echo "Binary installed"
-`, f.serviceName, binaryURL, f.serviceName, f.serviceName, f.serviceName, f.serviceName, f.serviceName, f.serviceName, f.serviceName, f.serviceName)
+`, f.serviceName, binaryURL, checksumURL)
 
 	result, errExec := f.ExecuteScript(ctx, host, installScript)
 	if errExec != nil || result.ExitCode != 0 {
@@ -363,7 +384,7 @@ func (f *FlexibleProvisioner) writeServiceEnvFile(ctx context.Context, host inve
 
 	// Write atomically: create file with all env vars (not append)
 	content := strings.Join(lines, "\n") + "\n"
-	writeCmd := fmt.Sprintf("mkdir -p /etc/frameworks && cat > %s << 'ENVEOF'\n%sENVEOF", envFilePath, content)
+	writeCmd := fmt.Sprintf("mkdir -p /etc/frameworks && cat > %s << 'ENVEOF'\n%sENVEOF\nchmod 0600 %s", envFilePath, content, envFilePath)
 	result, err := f.RunCommand(ctx, host, writeCmd)
 	if err != nil {
 		return fmt.Errorf("failed to write env file: %w", err)

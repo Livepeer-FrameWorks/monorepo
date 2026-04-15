@@ -194,17 +194,11 @@ func (n *NginxProvisioner) provisionDocker(ctx context.Context, host inventory.H
 		return fmt.Errorf("failed to upload docker-compose.yml: %w", err)
 	}
 
-	commands := []string{
-		fmt.Sprintf("cd %s", remoteComposePath),
-		"docker compose pull",
-		"docker compose up -d",
-	}
-
-	for _, cmd := range commands {
-		result, err := n.RunCommand(ctx, host, cmd)
-		if err != nil || result.ExitCode != 0 {
-			return fmt.Errorf("docker compose command failed: %s\nStderr: %s", cmd, result.Stderr)
-		}
+	composeCmd := fmt.Sprintf("cd %s && docker compose pull && docker compose up -d",
+		filepath.Dir(remoteComposePath))
+	result, err := n.RunCommand(ctx, host, composeCmd)
+	if err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("docker compose failed: %s\nStderr: %s", composeCmd, result.Stderr)
 	}
 
 	fmt.Printf("✓ Nginx provisioned in Docker mode on %s\n", host.ExternalIP)

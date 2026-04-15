@@ -198,7 +198,10 @@ func (c *ClickHouseProvisioner) Validate(ctx context.Context, host inventory.Hos
 	return nil
 }
 
-// Initialize creates databases and tables
+// Initialize creates databases and tables.
+// Connects as "default" with no password because this runs before Configure
+// sets up authenticated users. Callers must ensure Initialize runs before
+// Configure to avoid an unauthenticated-access window after auth is applied.
 func (c *ClickHouseProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	databases, ok := config.Metadata["databases"].([]string)
 	if !ok {

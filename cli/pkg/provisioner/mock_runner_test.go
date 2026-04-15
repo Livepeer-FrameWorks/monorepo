@@ -14,12 +14,15 @@ type mockRunner struct {
 	stderr          string
 	exitCode        int
 	lastCmd         string
+	allCmds         []string // all commands in execution order
 	lastUpload      ssh.UploadOptions
+	allUploads      []ssh.UploadOptions
 	uploadedContent string // content of the last uploaded file
 }
 
 func (m *mockRunner) Run(_ context.Context, command string) (*ssh.CommandResult, error) {
 	m.lastCmd = command
+	m.allCmds = append(m.allCmds, command)
 	return &ssh.CommandResult{
 		Command:  command,
 		ExitCode: m.exitCode,
@@ -42,6 +45,7 @@ func (m *mockRunner) RunScript(_ context.Context, script string) (*ssh.CommandRe
 
 func (m *mockRunner) Upload(_ context.Context, opts ssh.UploadOptions) error {
 	m.lastUpload = opts
+	m.allUploads = append(m.allUploads, opts)
 	data, err := os.ReadFile(opts.LocalPath)
 	if err != nil {
 		return err

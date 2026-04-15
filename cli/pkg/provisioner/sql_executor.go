@@ -140,7 +140,7 @@ func (t *directTxExecutor) Exec(ctx context.Context, sqlText string) error {
 //
 // Auth strategy:
 //   - UsePeerAuth=true (Postgres): sudo -u <user> psql via Unix socket (peer auth)
-//   - UsePeerAuth=false (YugabyteDB): ysqlsh -h localhost via TCP with PGPASSWORD
+//   - UsePeerAuth=false (YugabyteDB): ysqlsh -h localhost via TCP with .pgpass file
 type SSHExecutor struct {
 	Runner      ssh.Runner
 	BinaryPath  string // defaults to "psql"
@@ -187,16 +187,59 @@ func (s *SSHExecutor) uploadSQL(ctx context.Context, sqlContent string) (remoteP
 	return remotePath, cleanup, nil
 }
 
+// uploadPgpass creates a remote .pgpass file via SCP so the password never
+// appears in any shell command string. Returns the remote path and cleanup func.
+// Cleanup removes both the local temp file and the remote .pgpass file.
+func (s *SSHExecutor) uploadPgpass(ctx context.Context, conn ConnParams) (string, func(), error) {
+	entry := fmt.Sprintf("localhost:%d:*:%s:%s\n", conn.Port, conn.User, s.Password)
+
+	localFile, err := os.CreateTemp("", ".pgpass-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create pgpass temp file: %w", err)
+	}
+	localPath := localFile.Name()
+
+	if _, err := localFile.WriteString(entry); err != nil {
+		localFile.Close()
+		os.Remove(localPath)
+		return "", nil, fmt.Errorf("write pgpass: %w", err)
+	}
+	localFile.Close()
+
+	remotePath := fmt.Sprintf("/tmp/.pgpass-%d", time.Now().UnixNano())
+	if err := s.Runner.Upload(ctx, ssh.UploadOptions{
+		LocalPath:  localPath,
+		RemotePath: remotePath,
+		Mode:       0600,
+	}); err != nil {
+		os.Remove(localPath)
+		return "", nil, fmt.Errorf("upload pgpass: %w", err)
+	}
+
+	cleanup := func() {
+		os.Remove(localPath)
+		// Best-effort remote cleanup in case the shell trap did not fire.
+		//nolint:errcheck // intentionally ignoring cleanup errors
+		s.Runner.Run(context.Background(), fmt.Sprintf("rm -f %s", remotePath))
+	}
+	return remotePath, cleanup, nil
+}
+
 // buildCommand constructs the full shell command with trap-based cleanup,
 // correct auth mode, and optional extra psql flags (e.g. "-tA").
 // Always passes -X to skip user startup files (.psqlrc / .ysqlshrc).
-func (s *SSHExecutor) buildCommand(conn ConnParams, remotePath string, extraFlags ...string) string {
+// If pgpassFile is non-empty, sets PGPASSFILE and adds it to the cleanup trap.
+func (s *SSHExecutor) buildCommand(conn ConnParams, remotePath, pgpassFile string, extraFlags ...string) string {
 	extra := ""
 	if len(extraFlags) > 0 {
 		extra = " " + strings.Join(extraFlags, " ")
 	}
 
-	trap := fmt.Sprintf("trap 'rm -f %s' EXIT", shellQuote(remotePath))
+	cleanupFiles := shellQuote(remotePath)
+	if pgpassFile != "" {
+		cleanupFiles += " " + pgpassFile
+	}
+	trap := fmt.Sprintf("trap 'rm -f %s' EXIT", cleanupFiles)
 
 	if s.UsePeerAuth {
 		return fmt.Sprintf("%s; sudo -u %s %s -X -p %d -d %s -v ON_ERROR_STOP=1%s -f %s",
@@ -209,14 +252,14 @@ func (s *SSHExecutor) buildCommand(conn ConnParams, remotePath string, extraFlag
 			shellQuote(remotePath))
 	}
 
-	pgpassword := ""
-	if s.Password != "" {
-		pgpassword = fmt.Sprintf("PGPASSWORD=%s ", shellQuote(s.Password))
+	pgpassEnv := ""
+	if pgpassFile != "" {
+		pgpassEnv = fmt.Sprintf("PGPASSFILE=%s ", pgpassFile)
 	}
 
 	return fmt.Sprintf("%s; %s%s -X -h localhost -p %d -U %s -d %s -v ON_ERROR_STOP=1%s -f %s",
 		trap,
-		pgpassword,
+		pgpassEnv,
 		s.binaryPath(),
 		conn.Port,
 		shellQuote(conn.User),
@@ -232,7 +275,17 @@ func (s *SSHExecutor) Exec(ctx context.Context, conn ConnParams, sqlText string)
 	}
 	defer cleanup()
 
-	cmd := s.buildCommand(conn, remotePath)
+	var pgpassFile string
+	if s.Password != "" && !s.UsePeerAuth {
+		pf, pfCleanup, pfErr := s.uploadPgpass(ctx, conn)
+		if pfErr != nil {
+			return pfErr
+		}
+		defer pfCleanup()
+		pgpassFile = pf
+	}
+
+	cmd := s.buildCommand(conn, remotePath, pgpassFile)
 	result, err := s.Runner.Run(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("ssh exec: %w", err)
@@ -255,7 +308,17 @@ func (s *SSHExecutor) QueryRow(ctx context.Context, conn ConnParams, query strin
 	}
 	defer cleanup()
 
-	cmd := s.buildCommand(conn, remotePath, "-tA")
+	var pgpassFile string
+	if s.Password != "" && !s.UsePeerAuth {
+		pf, pfCleanup, pfErr := s.uploadPgpass(ctx, conn)
+		if pfErr != nil {
+			return pfErr
+		}
+		defer pfCleanup()
+		pgpassFile = pf
+	}
+
+	cmd := s.buildCommand(conn, remotePath, pgpassFile, "-tA")
 	result, err := s.Runner.Run(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("ssh query: %w", err)
@@ -294,7 +357,17 @@ func (s *SSHExecutor) QueryRows(ctx context.Context, conn ConnParams, query stri
 	}
 	defer cleanup()
 
-	cmd := s.buildCommand(conn, remotePath, "-tA")
+	var pgpassFile string
+	if s.Password != "" && !s.UsePeerAuth {
+		pf, pfCleanup, pfErr := s.uploadPgpass(ctx, conn)
+		if pfErr != nil {
+			return pfErr
+		}
+		defer pfCleanup()
+		pgpassFile = pf
+	}
+
+	cmd := s.buildCommand(conn, remotePath, pgpassFile, "-tA")
 	result, err := s.Runner.Run(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("ssh query rows: %w", err)

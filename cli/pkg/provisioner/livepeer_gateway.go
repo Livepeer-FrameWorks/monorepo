@@ -146,19 +146,13 @@ func (p *LivepeerGatewayProvisioner) provisionDocker(ctx context.Context, host i
 		return err
 	}
 
-	commands := []string{
-		"cd /opt/frameworks/livepeer-gateway",
-		"docker compose pull",
-	}
+	composeCmd := "cd /opt/frameworks/livepeer-gateway && docker compose pull"
 	if !config.DeferStart {
-		commands = append(commands, "docker compose up -d")
+		composeCmd += " && docker compose up -d"
 	}
-
-	for _, cmd := range commands {
-		result, err := p.RunCommand(ctx, host, cmd)
-		if err != nil || result.ExitCode != 0 {
-			return fmt.Errorf("docker compose failed: %s\nStderr: %s", cmd, result.Stderr)
-		}
+	result, err := p.RunCommand(ctx, host, composeCmd)
+	if err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("docker compose failed: %s\nStderr: %s", composeCmd, result.Stderr)
 	}
 
 	if config.DeferStart {

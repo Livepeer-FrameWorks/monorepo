@@ -92,15 +92,17 @@ func (r *RedisProvisioner) provisionDocker(ctx context.Context, host inventory.H
 
 	password, _ := config.Metadata["password"].(string)
 
-	// Build redis-server command args
-	cmdArgs := buildRedisCommandArgs(engine, config.Metadata, password)
+	// Build redis-server command args (password handled via config file, not CLI)
+	cmdArgs := buildRedisCommandArgs(engine, config.Metadata)
 
 	serviceName := fmt.Sprintf("redis-%s", instanceName)
 
-	// Generate env file (for password reference if needed)
+	// Generate env file with password and REDISCLI_AUTH for the healthcheck.
+	// Uploaded via SCP with 0600 permissions — never in compose YAML.
 	envVars := map[string]string{}
 	if password != "" {
 		envVars["REDIS_PASSWORD"] = password
+		envVars["REDISCLI_AUTH"] = password
 	}
 
 	envFileContent := GenerateEnvFile(serviceName, envVars)
@@ -119,12 +121,41 @@ func (r *RedisProvisioner) provisionDocker(ctx context.Context, host inventory.H
 		return uploadErr
 	}
 
-	// Build health check command
-	healthTest := []string{"CMD", redisCLIName(engine)}
-	if password != "" {
-		healthTest = append(healthTest, "-a", password)
+	// Healthcheck uses REDISCLI_AUTH from the env file (already uploaded via
+	// SCP with 0600 permissions) so the password never appears in compose YAML.
+	healthTest := []string{"CMD", redisCLIName(engine), "ping"}
+
+	volumes := []string{
+		fmt.Sprintf("/var/lib/frameworks/%s:/data", serviceName),
 	}
-	healthTest = append(healthTest, "ping")
+
+	// Write password to a config file uploaded via SCP, mounted into the
+	// container. Keeps credentials out of the compose YAML and process args.
+	redisConf := buildRedisConf(password)
+	if redisConf != "" {
+		confPath := fmt.Sprintf("/etc/frameworks/%s.conf", serviceName)
+		tmpConf, confErr := os.CreateTemp("", serviceName+"-conf-*")
+		if confErr != nil {
+			return fmt.Errorf("create redis conf temp file: %w", confErr)
+		}
+		if _, confErr = tmpConf.WriteString(redisConf); confErr != nil {
+			tmpConf.Close()
+			os.Remove(tmpConf.Name())
+			return fmt.Errorf("write redis conf: %w", confErr)
+		}
+		tmpConf.Close()
+		defer os.Remove(tmpConf.Name())
+
+		if uploadErr := r.UploadFile(ctx, host, ssh.UploadOptions{
+			LocalPath:  tmpConf.Name(),
+			RemotePath: confPath,
+			Mode:       0600,
+		}); uploadErr != nil {
+			return fmt.Errorf("upload redis config: %w", uploadErr)
+		}
+		volumes = append(volumes, fmt.Sprintf("%s:/etc/redis/redis.conf:ro", confPath))
+		cmdArgs += " /etc/redis/redis.conf"
+	}
 
 	composeData := DockerComposeData{
 		ServiceName: serviceName,
@@ -138,9 +169,7 @@ func (r *RedisProvisioner) provisionDocker(ctx context.Context, host inventory.H
 			Retries:  5,
 		},
 		Networks: []string{"frameworks"},
-		Volumes: []string{
-			fmt.Sprintf("/var/lib/frameworks/%s:/data", serviceName),
-		},
+		Volumes:  volumes,
 	}
 
 	composeYAML, err := GenerateDockerCompose(composeData)
@@ -178,17 +207,10 @@ func (r *RedisProvisioner) provisionDocker(ctx context.Context, host inventory.H
 		return fmt.Errorf("failed to upload docker-compose.yml: %w", err)
 	}
 
-	commands := []string{
-		fmt.Sprintf("cd %s", remotePath),
-		"docker compose pull",
-		"docker compose up -d",
-	}
-
-	for _, cmd := range commands {
-		result, err := r.RunCommand(ctx, host, cmd)
-		if err != nil || result.ExitCode != 0 {
-			return fmt.Errorf("docker compose command failed: %s\nStderr: %s", cmd, result.Stderr)
-		}
+	composeCmd := fmt.Sprintf("cd %s && docker compose pull && docker compose up -d", remotePath)
+	result, err := r.RunCommand(ctx, host, composeCmd)
+	if err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("docker compose failed: %s\nStderr: %s", composeCmd, result.Stderr)
 	}
 
 	fmt.Printf("✓ Redis instance %q provisioned in Docker mode\n", instanceName)
@@ -299,12 +321,8 @@ func (r *RedisProvisioner) Initialize(ctx context.Context, host inventory.Host, 
 }
 
 // buildRedisCommandArgs constructs server CLI flags from metadata.
-func buildRedisCommandArgs(engine string, metadata map[string]interface{}, password string) string {
+func buildRedisCommandArgs(engine string, metadata map[string]interface{}) string {
 	args := []string{redisServerName(engine), "--appendonly", "yes"}
-
-	if password != "" {
-		args = append(args, "--requirepass", password)
-	}
 
 	// Extract redis_* config keys from metadata
 	for key, val := range metadata {
@@ -318,6 +336,15 @@ func buildRedisCommandArgs(engine string, metadata map[string]interface{}, passw
 	}
 
 	return strings.Join(args, " ")
+}
+
+// buildRedisConf generates a redis.conf snippet for directives that should
+// not appear on the command line (e.g. requirepass).
+func buildRedisConf(password string) string {
+	if password == "" {
+		return ""
+	}
+	return fmt.Sprintf("requirepass %s\n", password)
 }
 
 func redisServerName(engine string) string {

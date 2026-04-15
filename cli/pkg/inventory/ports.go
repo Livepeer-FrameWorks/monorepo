@@ -36,6 +36,12 @@ func (m *Manifest) validatePortCollisions() error {
 		if err := addPort(m.Infrastructure.Postgres.Host, port, "postgres"); err != nil {
 			return err
 		}
+		for _, node := range m.Infrastructure.Postgres.Nodes {
+			owner := fmt.Sprintf("postgres-node-%d", node.ID)
+			if err := addPort(node.Host, port, owner); err != nil {
+				return err
+			}
+		}
 	}
 
 	if m.Infrastructure.ClickHouse != nil && m.Infrastructure.ClickHouse.Enabled {

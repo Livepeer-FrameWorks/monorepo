@@ -106,7 +106,6 @@ func TestBuildRedisCommandArgs(t *testing.T) {
 	tests := []struct {
 		name     string
 		engine   string
-		password string
 		metadata map[string]interface{}
 		want     string
 	}{
@@ -121,21 +120,30 @@ func TestBuildRedisCommandArgs(t *testing.T) {
 			want:   "valkey-server --appendonly yes",
 		},
 		{
-			name:     "with password and directives",
+			name:     "with directives",
 			engine:   "valkey",
-			password: "secret",
 			metadata: map[string]interface{}{"redis_maxmemory": "256mb"},
-			want:     "valkey-server --appendonly yes --requirepass secret --maxmemory 256mb",
+			want:     "valkey-server --appendonly yes --maxmemory 256mb",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildRedisCommandArgs(tc.engine, tc.metadata, tc.password)
+			got := buildRedisCommandArgs(tc.engine, tc.metadata)
 			if got != tc.want {
 				t.Fatalf("expected %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestBuildRedisConf(t *testing.T) {
+	if got := buildRedisConf(""); got != "" {
+		t.Fatalf("expected empty conf for no password, got: %q", got)
+	}
+	got := buildRedisConf("s3cret")
+	if got != "requirepass s3cret\n" {
+		t.Fatalf("expected requirepass directive, got: %q", got)
 	}
 }
 

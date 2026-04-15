@@ -255,7 +255,7 @@ def main():
 
             bundle_id = site["tls_bundle_id"]
             if bundle_id not in bundle_cache:
-            bundle_cache[bundle_id] = fetch_json(f"{NAV_URL}/internal/tls-bundles/{urllib.parse.quote(bundle_id)}", NAV_CA_FILE)
+                bundle_cache[bundle_id] = fetch_json(f"{NAV_URL}/internal/tls-bundles/{urllib.parse.quote(bundle_id)}", NAV_CA_FILE)
             bundle = bundle_cache[bundle_id]
             if not bundle.get("bundle_id"):
                 raise RuntimeError(f"missing tls bundle {bundle_id}")

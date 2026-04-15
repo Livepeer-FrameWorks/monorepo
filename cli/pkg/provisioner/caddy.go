@@ -209,17 +209,11 @@ func (c *CaddyProvisioner) provisionDocker(ctx context.Context, host inventory.H
 	}
 
 	// Pull and start with docker compose
-	commands := []string{
-		fmt.Sprintf("cd %s", remoteComposePath), // cd to dir with compose file
-		"docker compose pull",
-		"docker compose up -d",
-	}
-
-	for _, cmd := range commands {
-		result, err := c.RunCommand(ctx, host, cmd)
-		if err != nil || result.ExitCode != 0 {
-			return fmt.Errorf("docker compose command failed: %s\nStderr: %s", cmd, result.Stderr)
-		}
+	composeCmd := fmt.Sprintf("cd %s && docker compose pull && docker compose up -d",
+		filepath.Dir(remoteComposePath))
+	result, err := c.RunCommand(ctx, host, composeCmd)
+	if err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("docker compose failed: %s\nStderr: %s", composeCmd, result.Stderr)
 	}
 
 	fmt.Printf("✓ Caddy provisioned in Docker mode on %s\n", host.ExternalIP)

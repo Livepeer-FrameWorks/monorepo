@@ -130,17 +130,10 @@ func (z *ZookeeperProvisioner) provisionDocker(ctx context.Context, host invento
 		return fmt.Errorf("failed to upload docker-compose.yml: %w", err)
 	}
 
-	commands := []string{
-		"cd /opt/frameworks/zookeeper",
-		"docker compose pull",
-		"docker compose up -d",
-	}
-
-	for _, cmd := range commands {
-		result, err := z.RunCommand(ctx, host, cmd)
-		if err != nil || result.ExitCode != 0 {
-			return fmt.Errorf("docker compose command failed: %s\nStderr: %s", cmd, result.Stderr)
-		}
+	composeCmd := "cd /opt/frameworks/zookeeper && docker compose pull && docker compose up -d"
+	result, err := z.RunCommand(ctx, host, composeCmd)
+	if err != nil || result.ExitCode != 0 {
+		return fmt.Errorf("docker compose failed: %s\nStderr: %s", composeCmd, result.Stderr)
 	}
 
 	return nil

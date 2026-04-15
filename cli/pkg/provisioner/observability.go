@@ -282,7 +282,7 @@ func (p *VMAAuthProvisioner) Provision(ctx context.Context, host inventory.Host,
 	if err != nil {
 		return err
 	}
-	if err := uploadContent(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmauth.yml", authConfig, 0o644); err != nil {
+	if err := uploadContent(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmauth.yml", authConfig, 0o600); err != nil {
 		return err
 	}
 
@@ -587,6 +587,9 @@ func buildVMAAuthConfig(upstreamWriteURL, publicKeyB64, upstreamUsername, upstre
 	return b.String(), nil
 }
 
+// vmauthProxyURL builds the upstream URL with credentials embedded in userinfo.
+// VMAuth's url_prefix requires credentials in the URL for basic-auth forwarding;
+// there is no separate auth directive. The resulting vmauth.yml must be 0600.
 func vmauthProxyURL(upstreamWriteURL, upstreamUsername, upstreamPassword string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(upstreamWriteURL))
 	if err != nil {

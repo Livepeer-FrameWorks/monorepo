@@ -77,12 +77,12 @@ type EdgeProvisionConfig struct {
 }
 
 // generateEdgePassword returns a random 32-char hex string for edge-local auth.
-func generateEdgePassword() string {
+func generateEdgePassword() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "frameworks-edge-fallback"
+		return "", fmt.Errorf("generate edge password: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 func (c *EdgeProvisionConfig) primaryDomain() string {
@@ -456,7 +456,11 @@ func (e *EdgeProvisioner) stageCABundleAt(ctx context.Context, host inventory.Ho
 func (e *EdgeProvisioner) installDocker(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	vars := e.buildEdgeVars(config, "linux") // Docker containers are always Linux
 	vars.Mode = "docker"
-	vars.MistAPIPassword = generateEdgePassword()
+	mistPass, err := generateEdgePassword()
+	if err != nil {
+		return err
+	}
+	vars.MistAPIPassword = mistPass
 	vars.SetModeDefaults()
 
 	// Write templates to local temp dir
@@ -1023,7 +1027,10 @@ type scriptRunner func(string) (*ssh.CommandResult, error)
 type fileUploader func(ssh.UploadOptions) error
 
 func (e *EdgeProvisioner) installDarwinMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader) (string, error) {
-	mistPass := generateEdgePassword()
+	mistPass, err := generateEdgePassword()
+	if err != nil {
+		return "", err
+	}
 
 	var binaryURL string
 	if manifest != nil {
@@ -1127,7 +1134,7 @@ echo "Helmsman installed"
 		envLines = append(envLines, fmt.Sprintf("GRPC_TLS_CA_PATH=%s", vars.GRPCTLSCAPath))
 	}
 	envContent := strings.Join(envLines, "\n") + "\n"
-	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/helmsman.env", envContent, 0644); err != nil {
+	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/helmsman.env", envContent, 0600); err != nil {
 		return err
 	}
 
@@ -1205,7 +1212,7 @@ echo "Caddy installed"
 	}
 
 	envContent := fmt.Sprintf("# Caddy edge environment\nCADDY_EMAIL=%s\n", vars.AcmeEmail)
-	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/caddy.env", envContent, 0644); err != nil {
+	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/caddy.env", envContent, 0600); err != nil {
 		return err
 	}
 
@@ -1325,7 +1332,10 @@ systemctl start frameworks-helmsman
 }
 
 func (e *EdgeProvisioner) installNativeMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string) (string, error) {
-	mistPass := generateEdgePassword()
+	mistPass, err := generateEdgePassword()
+	if err != nil {
+		return "", err
+	}
 
 	var binaryURL string
 	if manifest != nil {
@@ -1432,7 +1442,7 @@ echo "Helmsman installed"
 		envLines = append(envLines, fmt.Sprintf("GRPC_TLS_CA_PATH=%s", vars.GRPCTLSCAPath))
 	}
 	envContent := strings.Join(envLines, "\n") + "\n"
-	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/helmsman.env", envContent, 0644); err != nil {
+	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/helmsman.env", envContent, 0600); err != nil {
 		return err
 	}
 
@@ -1525,7 +1535,7 @@ echo "Caddy installed"
 
 	// Generate caddy env file
 	envContent := fmt.Sprintf("# Caddy edge environment\nCADDY_EMAIL=%s\n", vars.AcmeEmail)
-	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/caddy.env", envContent, 0644); err != nil {
+	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/caddy.env", envContent, 0600); err != nil {
 		return err
 	}
 

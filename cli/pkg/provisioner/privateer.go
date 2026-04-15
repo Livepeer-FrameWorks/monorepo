@@ -276,7 +276,8 @@ func (p *PrivateerProvisioner) waitForInitialPKISync(ctx context.Context, host i
 		return nil
 	}
 
-	paths := initialPKIPaths()
+	expectedServices := metadataStringSlice(config.Metadata["expected_internal_grpc_services"])
+	paths := initialPKIPaths(expectedServices)
 
 	script := "#!/bin/bash\nset -e\npaths=(\n"
 	for _, path := range paths {
@@ -294,8 +295,13 @@ func (p *PrivateerProvisioner) waitForInitialPKISync(ctx context.Context, host i
 	return nil
 }
 
-func initialPKIPaths() []string {
-	return []string{"/etc/frameworks/pki/ca.crt"}
+func initialPKIPaths(expectedServices []string) []string {
+	paths := []string{"/etc/frameworks/pki/ca.crt"}
+	for _, svc := range expectedServices {
+		base := fmt.Sprintf("/etc/frameworks/pki/services/%s", svc)
+		paths = append(paths, base+"/tls.crt", base+"/tls.key")
+	}
+	return paths
 }
 
 func metadataStringSlice(raw interface{}) []string {

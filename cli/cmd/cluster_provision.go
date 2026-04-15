@@ -533,7 +533,7 @@ func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manif
 		GRPCAddr:      purserAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to Purser gRPC: %w", err)
@@ -617,7 +617,7 @@ func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *
 		GRPCAddr:      commodoreAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to Commodore gRPC: %w", err)
@@ -653,7 +653,7 @@ func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inv
 		GRPCAddr:      grpcAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: could not connect to Quartermaster for validation: %v\n", err)
@@ -691,7 +691,7 @@ func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inv
 			GRPCAddr:      commodoreAddr,
 			Logger:        logging.NewLogger(),
 			ServiceToken:  serviceToken,
-			AllowInsecure: true,
+			AllowInsecure: isDevProfile(manifest),
 		})
 		if cliErr == nil {
 			defer cli.Close()
@@ -711,7 +711,7 @@ func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inv
 			GRPCAddr:      purserAddr,
 			Logger:        logging.NewLogger(),
 			ServiceToken:  serviceToken,
-			AllowInsecure: true,
+			AllowInsecure: isDevProfile(manifest),
 		})
 		if pErr == nil {
 			defer p.Close()
@@ -942,7 +942,7 @@ func ensurePrivateerEnrollmentToken(ctx context.Context, manifest *inventory.Man
 		GRPCAddr:      grpcAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for privateer enrollment token: %w", err)
@@ -1010,7 +1010,7 @@ func ensurePrivateerCertIssueToken(ctx context.Context, manifest *inventory.Mani
 		GRPCAddr:      grpcAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for privateer cert issue token: %w", err)
@@ -1069,7 +1069,7 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 		GRPCAddr:      grpcAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for public service registration: %w", err)
@@ -1098,7 +1098,7 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 		GRPCAddr:      grpcAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for ingress desired state: %w", err)
@@ -1422,7 +1422,7 @@ func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command,
 		GRPCAddr:      grpcAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for foghorn reconciliation: %w", err)
@@ -2474,7 +2474,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 		GRPCAddr:      grpcAddr,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  serviceToken,
-		AllowInsecure: true,
+		AllowInsecure: isDevProfile(manifest),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
@@ -2652,19 +2652,41 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 		}
 
 		nodeCluster := hostClusters[hostName]
-
 		externalIP := hostInfo.ExternalIP
-		_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
-			NodeId:     hostName,
-			ClusterId:  nodeCluster,
-			NodeName:   hostName,
-			NodeType:   nodeType,
-			ExternalIp: &externalIP,
-		})
-		if errCreate != nil {
-			return nil, fmt.Errorf("failed to register node %s: %w", hostName, errCreate)
-		} else {
+
+		nodeResp, err := client.GetNode(ctx, hostName)
+		if err != nil && status.Code(err) == codes.NotFound {
+			_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
+				NodeId:     hostName,
+				ClusterId:  nodeCluster,
+				NodeName:   hostName,
+				NodeType:   nodeType,
+				ExternalIp: &externalIP,
+			})
+			if errCreate != nil {
+				return nil, fmt.Errorf("failed to register node %s: %w", hostName, errCreate)
+			}
 			fmt.Printf("    ✓ Registered node: %s (%s) -> cluster %s\n", hostName, nodeType, nodeCluster)
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to check node %s: %w", hostName, err)
+		} else {
+			existing := nodeResp.GetNode()
+			existingIP := existing.GetExternalIp()
+			var drifts []string
+			if existing.GetClusterId() != nodeCluster {
+				drifts = append(drifts, fmt.Sprintf("cluster: have %q, want %q", existing.GetClusterId(), nodeCluster))
+			}
+			if existing.GetNodeType() != nodeType {
+				drifts = append(drifts, fmt.Sprintf("type: have %q, want %q", existing.GetNodeType(), nodeType))
+			}
+			if existingIP != externalIP {
+				drifts = append(drifts, fmt.Sprintf("external_ip: have %q, want %q", existingIP, externalIP))
+			}
+			if len(drifts) > 0 {
+				return nil, fmt.Errorf("node %s already registered but has drifted from manifest (%s) — no UpdateNode RPC available; delete and re-register the node manually",
+					hostName, strings.Join(drifts, "; "))
+			}
+			fmt.Printf("    ✓ Node %s already registered.\n", hostName)
 		}
 	}
 
@@ -3107,8 +3129,16 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	return env, nil
 }
 
+func isDevProfile(manifest *inventory.Manifest) bool {
+	if manifest == nil {
+		return false
+	}
+	p := strings.ToLower(strings.TrimSpace(manifest.Profile))
+	return p == "dev" || p == "development"
+}
+
 func applyProductionRuntimeDefaults(manifest *inventory.Manifest, serviceID string, env map[string]string) {
-	if manifest == nil || !strings.EqualFold(strings.TrimSpace(manifest.Profile), "production") {
+	if isDevProfile(manifest) {
 		return
 	}
 
