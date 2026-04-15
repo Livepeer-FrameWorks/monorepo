@@ -1900,11 +1900,13 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to insert tenant attribution")
 		}
 		if attribution.GetReferralCode() != "" {
-			_, _ = tx.ExecContext(ctx, `
+			if _, refErr := tx.ExecContext(ctx, `
 				UPDATE quartermaster.referral_codes
 				SET current_uses = current_uses + 1
 				WHERE code = $1 AND is_active = true
-			`, attribution.GetReferralCode())
+			`, attribution.GetReferralCode()); refErr != nil {
+				s.logger.WithError(refErr).WithField("referral_code", attribution.GetReferralCode()).Warn("Failed to increment referral code usage")
+			}
 		}
 	}
 
@@ -1938,9 +1940,15 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		}
 
 		// 4. Set official_cluster_id to the default cluster (billing-tier coverage)
-		_, _ = tx.ExecContext(ctx, `
+		if _, clusterErr := tx.ExecContext(ctx, `
 			UPDATE quartermaster.tenants SET official_cluster_id = $1 WHERE id = $2
-		`, defaultClusterID.String, tenantID)
+		`, defaultClusterID.String, tenantID); clusterErr != nil {
+			s.logger.WithError(clusterErr).WithFields(logging.Fields{
+				"tenant_id":  tenantID,
+				"cluster_id": defaultClusterID.String,
+			}).Error("Failed to set official_cluster_id for new tenant")
+			return nil, status.Errorf(codes.Internal, "failed to set official_cluster_id: %v", clusterErr)
+		}
 	}
 
 	// Commit the transaction
@@ -2705,14 +2713,18 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		`, clusterID, foghornCount)
 		if claimErr != nil {
 			s.logger.WithError(claimErr).Warn("Failed to assign Foghorn instances to cluster")
-			_, _ = s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET health_status = 'provisioning' WHERE cluster_id = $1`, clusterID)
+			if _, hsErr := s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET health_status = 'provisioning' WHERE cluster_id = $1`, clusterID); hsErr != nil {
+				s.logger.WithError(hsErr).WithField("cluster_id", clusterID).Warn("Failed to update cluster health_status to provisioning")
+			}
 		} else if claimed, _ := res.RowsAffected(); claimed < int64(foghornCount) {
 			s.logger.WithFields(logging.Fields{
 				"cluster_id": clusterID,
 				"requested":  foghornCount,
 				"claimed":    claimed,
 			}).Warn("Assigned fewer Foghorn instances than requested")
-			_, _ = s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET health_status = 'provisioning' WHERE cluster_id = $1`, clusterID)
+			if _, hsErr := s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET health_status = 'provisioning' WHERE cluster_id = $1`, clusterID); hsErr != nil {
+				s.logger.WithError(hsErr).WithField("cluster_id", clusterID).Warn("Failed to update cluster health_status to provisioning")
+			}
 		} else {
 			s.logger.WithFields(logging.Fields{
 				"cluster_id": clusterID,

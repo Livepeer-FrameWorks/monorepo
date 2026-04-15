@@ -396,7 +396,7 @@
   let uploadStage = $state<"idle" | "initializing" | "uploading" | "completing" | "done">("idle");
   let currentUploadId = $state<string | null>(null);
 
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
   });
 
@@ -408,6 +408,7 @@
   });
 
   onDestroy(() => {
+    unsubscribeAuth();
     clipLifecycleSub.unlisten();
     dvrLifecycleSub.unlisten();
     vodLifecycleSub.unlisten();

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,7 +16,7 @@ var privateCIDRs []*net.IPNet
 
 // ssrfAllowedHosts holds hostnames that bypass the private-IP SSRF check.
 // Set once at startup via SetSSRFAllowedHosts; read concurrently.
-var ssrfAllowedHosts map[string]bool
+var ssrfAllowedHosts atomic.Value
 
 // SetSSRFAllowedHosts registers hostnames that are allowed to resolve to
 // private/reserved addresses (e.g. Docker-internal services in dev).
@@ -26,7 +27,12 @@ func SetSSRFAllowedHosts(hosts []string) {
 			m[strings.ToLower(h)] = true
 		}
 	}
-	ssrfAllowedHosts = m
+	ssrfAllowedHosts.Store(m)
+}
+
+func isSSRFAllowedHost(host string) bool {
+	hosts, ok := ssrfAllowedHosts.Load().(map[string]bool)
+	return ok && hosts[strings.ToLower(host)]
 }
 
 const dnsLookupTimeout = 5 * time.Second
@@ -74,7 +80,7 @@ func validateCrawlURLWithContext(ctx context.Context, rawURL string) (*url.URL, 
 	if err != nil {
 		return nil, fmt.Errorf("dns lookup failed for %s: %w", host, err)
 	}
-	if !ssrfAllowedHosts[strings.ToLower(host)] {
+	if !isSSRFAllowedHost(host) {
 		for _, ipStr := range ips {
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
@@ -117,7 +123,7 @@ func NewSSRFSafeTransport() *http.Transport {
 				return nil, fmt.Errorf("ssrf dialer: dns lookup %s: %w", host, err)
 			}
 
-			if !ssrfAllowedHosts[strings.ToLower(host)] {
+			if !isSSRFAllowedHost(host) {
 				for _, ipStr := range ips {
 					ip := net.ParseIP(ipStr)
 					if ip == nil {

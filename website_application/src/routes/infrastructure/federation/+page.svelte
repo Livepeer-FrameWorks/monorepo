@@ -211,7 +211,7 @@
     ["24h", "7d", "30d"].includes(option.value)
   );
 
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
   });
 
@@ -224,6 +224,7 @@
   });
 
   onDestroy(() => {
+    unsubscribeAuth();
     if (pollTimer) clearInterval(pollTimer);
   });
 

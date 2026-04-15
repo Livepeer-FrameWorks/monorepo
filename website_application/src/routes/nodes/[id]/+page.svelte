@@ -183,7 +183,7 @@
     },
   ]);
 
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
   });
 
@@ -195,6 +195,7 @@
   });
 
   onDestroy(() => {
+    unsubscribeAuth();
     systemHealthSub.unlisten();
   });
 

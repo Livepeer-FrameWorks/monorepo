@@ -466,7 +466,7 @@ func main() {
 			socialLLM = llmProvider
 		}
 		if socialLLM != nil {
-			socialStore := social.NewPostStore(db)
+			socialStore := social.NewPostStore(db, globalTenantID)
 			socialDetector := social.NewDetector(social.DetectorConfig{
 				Store:     socialStore,
 				Collector: socialCollector,

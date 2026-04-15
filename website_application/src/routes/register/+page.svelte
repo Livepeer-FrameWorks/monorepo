@@ -1,7 +1,7 @@
 <script>
   import { preventDefault } from "svelte/legacy";
 
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
@@ -90,9 +90,13 @@
   };
 
   // Subscribe to auth store
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     authLoading = authState.loading;
     error = authState.error;
+  });
+
+  onDestroy(() => {
+    unsubscribeAuth();
   });
 
   onMount(() => {

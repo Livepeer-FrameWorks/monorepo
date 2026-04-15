@@ -150,7 +150,7 @@ CREATE INDEX IF NOT EXISTS skipper_page_cache_staleness_idx
 
 CREATE TABLE IF NOT EXISTS skipper.skipper_reports (
     id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
+    tenant_id UUID NOT NULL,
     trigger TEXT,
     summary TEXT,
     metrics_reviewed JSONB,
@@ -168,7 +168,7 @@ CREATE INDEX IF NOT EXISTS skipper_reports_tenant_created_idx
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS skipper.skipper_baselines (
-    tenant_id TEXT NOT NULL,
+    tenant_id UUID NOT NULL,
     stream_id TEXT NOT NULL DEFAULT '',
     metric_name TEXT NOT NULL,
     avg_value DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_baselines (
 
 CREATE TABLE IF NOT EXISTS skipper.skipper_posts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
     content_type TEXT NOT NULL,
     tweet_text TEXT NOT NULL,
     context_summary TEXT,
@@ -193,5 +194,5 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_posts (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS skipper_posts_status_created_idx
-    ON skipper.skipper_posts (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS skipper_posts_tenant_status_idx
+    ON skipper.skipper_posts (tenant_id, status, created_at DESC);

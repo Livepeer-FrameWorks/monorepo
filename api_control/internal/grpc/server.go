@@ -852,6 +852,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		return nil, status.Error(codes.InvalidArgument, "playback_id required")
 	}
 
+	// playback_id is globally UNIQUE (commodore.sql), so no tenant_id filter needed
 	var streamID, internalName, tenantID string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, internal_name, tenant_id FROM commodore.streams WHERE playback_id = $1
@@ -897,6 +898,7 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
 	}
 
+	// internal_name is globally UNIQUE (commodore.sql), so no tenant_id filter needed
 	var streamID, tenantID, userID string
 	var isRecordingEnabled bool
 	err := s.db.QueryRowContext(ctx, `

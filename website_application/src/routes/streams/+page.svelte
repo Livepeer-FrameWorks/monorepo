@@ -151,7 +151,7 @@
   );
 
   // Subscribe to auth store
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
   });
 
@@ -191,6 +191,7 @@
 
   // Cleanup on unmount
   onDestroy(() => {
+    unsubscribeAuth();
     streamEventsSub.unlisten();
   });
 

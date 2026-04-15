@@ -17,11 +17,12 @@ type PostStore interface {
 }
 
 type SQLPostStore struct {
-	db *sql.DB
+	db       *sql.DB
+	tenantID string
 }
 
-func NewPostStore(db *sql.DB) *SQLPostStore {
-	return &SQLPostStore{db: db}
+func NewPostStore(db *sql.DB, tenantID string) *SQLPostStore {
+	return &SQLPostStore{db: db, tenantID: tenantID}
 }
 
 func (s *SQLPostStore) Save(ctx context.Context, record PostRecord) (PostRecord, error) {
@@ -43,6 +44,7 @@ func (s *SQLPostStore) Save(ctx context.Context, record PostRecord) (PostRecord,
 	var id string
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO skipper.skipper_posts (
+			tenant_id,
 			content_type,
 			tweet_text,
 			context_summary,
@@ -50,9 +52,10 @@ func (s *SQLPostStore) Save(ctx context.Context, record PostRecord) (PostRecord,
 			status,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, NOW())
 		RETURNING id, created_at
 	`,
+		s.tenantID,
 		string(record.ContentType),
 		record.TweetText,
 		record.ContextSummary,
@@ -77,9 +80,10 @@ func (s *SQLPostStore) CountToday(ctx context.Context) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM skipper.skipper_posts
-		WHERE status IN ('draft', 'sent', 'posted')
+		WHERE tenant_id = $1
+		AND status IN ('draft', 'sent', 'posted')
 		AND created_at >= (CURRENT_DATE AT TIME ZONE 'UTC')
-	`).Scan(&count)
+	`, s.tenantID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count today posts: %w", err)
 	}
@@ -104,10 +108,11 @@ func (s *SQLPostStore) ListRecent(ctx context.Context, limit int) ([]PostRecord,
 			sent_at,
 			created_at
 		FROM skipper.skipper_posts
-		WHERE status IN ('draft', 'sent', 'posted', 'baseline')
+		WHERE tenant_id = $1
+		AND status IN ('draft', 'sent', 'posted', 'baseline')
 		ORDER BY created_at DESC
-		LIMIT $1
-	`, limit)
+		LIMIT $2
+	`, s.tenantID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list recent posts: %w", err)
 	}
@@ -133,8 +138,8 @@ func (s *SQLPostStore) MarkSent(ctx context.Context, id string) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE skipper.skipper_posts SET status = 'sent', sent_at = NOW() WHERE id = $1`,
-		id,
+		`UPDATE skipper.skipper_posts SET status = 'sent', sent_at = NOW() WHERE id = $1 AND tenant_id = $2`,
+		id, s.tenantID,
 	)
 	if err != nil {
 		return fmt.Errorf("mark post sent: %w", err)

@@ -160,8 +160,6 @@ func verifyStripeSignature(payload []byte, signature, secret string) bool {
 	}
 
 	logger.WithFields(logging.Fields{
-		"expected":    expectedSignature,
-		"provided":    signatures,
 		"timestamp":   timestamp,
 		"payload_len": len(payload),
 	}).Warn("Stripe signature verification failed")
@@ -299,9 +297,7 @@ func ProcessStripeWebhookGRPC(body []byte, headers map[string]string) (bool, str
 		logger.Error("STRIPE_WEBHOOK_SECRET not configured; rejecting webhook")
 		return false, "Webhook verification not configured", 503
 	} else if !verifyStripeSignature(body, signature, webhookSecret) {
-		logger.WithFields(logging.Fields{
-			"signature": signature,
-		}).Warn("Invalid Stripe webhook signature")
+		logger.Warn("Invalid Stripe webhook signature")
 		recordWebhookSignatureFailure("stripe")
 		return false, "Invalid signature", 401
 	}
@@ -825,11 +821,13 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 			return "", fmt.Errorf("missing Mollie customer or mandate ID")
 		}
 
-		_, _ = db.ExecContext(ctx, `
+		if _, err := db.ExecContext(ctx, `
 			INSERT INTO purser.mollie_customers (tenant_id, mollie_customer_id)
 			VALUES ($1, $2)
 			ON CONFLICT (tenant_id) DO UPDATE SET mollie_customer_id = $2
-		`, tenantID, payment.CustomerID)
+		`, tenantID, payment.CustomerID); err != nil {
+			return "", fmt.Errorf("failed to upsert Mollie customer mapping: %w", err)
+		}
 
 		mandate, err := mollieClient.GetMandate(ctx, payment.CustomerID, payment.MandateID)
 		if err != nil {

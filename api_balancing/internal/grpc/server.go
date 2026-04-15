@@ -644,8 +644,8 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		// Mark artifact as failed since we couldn't send to Helmsman
 		_, _ = s.db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW()
-			WHERE artifact_hash = $2
-		`, fmt.Sprintf("storage node unavailable: %v", err), clipHash)
+			WHERE artifact_hash = $2 AND tenant_id = $3
+		`, fmt.Sprintf("storage node unavailable: %v", err), clipHash, req.TenantId)
 
 		// Emit FAILED event to Decklog
 		if s.decklogClient != nil {
@@ -766,8 +766,8 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	// Soft delete in foghorn.artifacts
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'clip'
-	`, req.ClipHash)
+		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
+	`, req.ClipHash, req.GetTenantId())
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete clip")
 		return nil, status.Error(codes.Internal, "failed to delete clip")
@@ -1002,8 +1002,8 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		// Mark artifact as failed since we couldn't send to Helmsman
 		_, _ = s.db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW()
-			WHERE artifact_hash = $2
-		`, fmt.Sprintf("storage node unavailable: %v", err), dvrHash)
+			WHERE artifact_hash = $2 AND tenant_id = $3
+		`, fmt.Sprintf("storage node unavailable: %v", err), dvrHash, req.TenantId)
 
 		// Emit FAILED event to Decklog
 		if s.decklogClient != nil {
@@ -1176,8 +1176,8 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 	// Update status in foghorn.artifacts
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, req.DvrHash)
+		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
+	`, req.DvrHash, req.GetTenantId())
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to update DVR status to stopping")
 	}

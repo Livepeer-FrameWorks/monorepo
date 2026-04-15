@@ -2,7 +2,7 @@
   import { run } from "svelte/legacy";
 
   import "../app.css";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import { base, resolve } from "$app/paths";
@@ -85,7 +85,7 @@
   ];
 
   // Subscribe to auth store
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     const wasAuthenticated = isAuthenticated;
     isAuthenticated = authState.isAuthenticated;
     user = authState.user || null;
@@ -123,6 +123,10 @@
   onMount(async () => {
     await auth.checkAuth();
     loadStreamingConfig();
+  });
+
+  onDestroy(() => {
+    unsubscribeAuth();
   });
 
   function logout() {

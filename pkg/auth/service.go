@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/subtle"
 	"errors"
 	"os"
 )
@@ -16,7 +17,7 @@ func ValidateServiceToken(token string, expectedToken string) error {
 		return ErrMissingServiceToken
 	}
 
-	if token != expectedToken {
+	if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
 		return ErrInvalidServiceToken
 	}
 

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.2-alpine AS builder
 
 WORKDIR /workspace
 
@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -ldflags="-s -w -X frameworks/pkg/version.Version=${VERSION:-dev} -X frameworks/pkg/version.GitCommit=${GIT_COMMIT:-unknown}" \
     -o /deckhand ./cmd/deckhand
 
-FROM alpine:latest
+FROM alpine:3.19
 
 RUN apk --no-cache add ca-certificates tzdata wget
 

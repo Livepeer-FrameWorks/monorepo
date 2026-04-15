@@ -10,7 +10,7 @@
   let isAuthenticated = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-  auth.subscribe((s) => {
+  const unsubscribeAuth = auth.subscribe((s) => {
     isAuthenticated = s.isAuthenticated;
   });
 
@@ -22,6 +22,7 @@
   });
 
   onDestroy(() => {
+    unsubscribeAuth();
     if (pollTimer) clearInterval(pollTimer);
   });
 

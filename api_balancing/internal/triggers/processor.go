@@ -956,7 +956,9 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				return
 			}
 			userID := streamValidation.UserId
-			dvrResponse, err := p.dvrService.StartDVR(context.Background(), &pb.StartDVRRequest{
+			dvrCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			dvrResponse, err := p.dvrService.StartDVR(dvrCtx, &pb.StartDVRRequest{
 				TenantId:     streamValidation.TenantId,
 				InternalName: streamValidation.InternalName,
 				UserId:       &userID,

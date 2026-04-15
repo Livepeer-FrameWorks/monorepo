@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { get } from "svelte/store";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
@@ -520,8 +520,12 @@
     ["24h", "7d", "30d"].includes(option.value)
   );
 
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
+  });
+
+  onDestroy(() => {
+    unsubscribeAuth();
   });
 
   onMount(async () => {

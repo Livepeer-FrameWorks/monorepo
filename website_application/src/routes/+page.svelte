@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { get } from "svelte/store";
   import { resolve } from "$app/paths";
   import { goto } from "$app/navigation";
@@ -159,17 +159,25 @@
   let dailyStats = $derived($platformOverviewStore.data?.analytics?.overview?.dailyStats ?? []);
 
   // Subscribe to auth store (user info only, streams fetched separately)
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
     user = (authState.user as unknown as UserData) || null;
     loading = authState.loading;
+  });
+
+  onDestroy(() => {
+    unsubscribeAuth();
+    unsubscribeRealtimeStreams();
+    unsubscribeStreamMetrics();
+    unsubscribeRealtimeViewers();
+    unsubscribeConnectionStatus();
   });
 
   // Track previous stream statuses to detect changes
   let prevStreamStatuses = $state<Record<string, string>>({});
 
   // Subscribe to real-time data
-  realtimeStreams.subscribe((data) => {
+  const unsubscribeRealtimeStreams = realtimeStreams.subscribe((data) => {
     const newData = data as Array<{ status?: string; name?: string }>;
     // Check for status changes
     newData.forEach((stream) => {
@@ -188,15 +196,15 @@
     realtimeData = newData;
   });
 
-  streamMetrics.subscribe((data) => {
+  const unsubscribeStreamMetrics = streamMetrics.subscribe((data) => {
     liveMetrics = data as Record<string, StreamMetrics>;
   });
 
-  realtimeViewers.subscribe((data) => {
+  const unsubscribeRealtimeViewers = realtimeViewers.subscribe((data) => {
     totalRealtimeViewers = data;
   });
 
-  connectionStatus.subscribe((status) => {
+  const unsubscribeConnectionStatus = connectionStatus.subscribe((status) => {
     // Log connection status changes to platform events
     if (wsConnectionStatus.status !== status.status) {
       if (status.status === "connected") {

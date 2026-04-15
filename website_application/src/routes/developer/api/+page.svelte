@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { GetAPITokensConnectionStore, CreateAPITokenStore, RevokeAPITokenStore } from "$houdini";
@@ -57,8 +57,12 @@
   let totalTokenCount = $derived($tokensStore.data?.developerTokensConnection?.totalCount ?? 0);
 
   // Subscribe to auth store
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
+  });
+
+  onDestroy(() => {
+    unsubscribeAuth();
   });
 
   onMount(async () => {
