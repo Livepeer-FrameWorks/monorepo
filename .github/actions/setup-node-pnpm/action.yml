@@ -1,0 +1,26 @@
+name: Setup Node.js and pnpm
+description: Bootstraps Node + Corepack + pnpm, then runs a frozen install.
+
+inputs:
+  node-version:
+    description: Node.js version
+    required: false
+    default: "24"
+
+runs:
+  using: composite
+  steps:
+    # must run before setup-node so its `cache: pnpm` can resolve pnpm on PATH
+    - name: Enable pnpm via bundled Corepack
+      shell: bash
+      run: corepack enable pnpm
+
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: pnpm-lock.yaml
+
+    - name: Frozen install
+      shell: bash
+      run: pnpm install --frozen-lockfile

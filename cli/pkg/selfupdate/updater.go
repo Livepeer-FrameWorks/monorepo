@@ -1,12 +1,17 @@
 package selfupdate
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,7 +21,6 @@ import (
 
 const (
 	defaultRepo = "Livepeer-FrameWorks/monorepo"
-	binaryFmt   = "frameworks-%s-%s"
 )
 
 type Release struct {
@@ -78,13 +82,151 @@ func findAsset(assets []Asset, name string) *Asset {
 	return nil
 }
 
+func assetCandidates(tagName string) []string {
+	version := strings.TrimPrefix(tagName, "v")
+	osArch := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
+
+	if runtime.GOOS == "darwin" {
+		return []string{fmt.Sprintf("frameworks-cli-v%s-%s.zip", version, osArch)}
+	}
+
+	return []string{fmt.Sprintf("frameworks-cli-v%s-%s.tar.gz", version, osArch)}
+}
+
+func findReleaseAsset(assets []Asset, tagName string) (*Asset, string) {
+	for _, candidate := range assetCandidates(tagName) {
+		if asset := findAsset(assets, candidate); asset != nil {
+			return asset, candidate
+		}
+	}
+	return nil, ""
+}
+
+func extractArchive(assetName, archivePath, destDir string) error {
+	switch {
+	case strings.HasSuffix(assetName, ".zip"):
+		return extractZip(archivePath, destDir)
+	case strings.HasSuffix(assetName, ".tar.gz"):
+		return extractTarGz(archivePath, destDir)
+	default:
+		src, err := os.Open(archivePath)
+		if err != nil {
+			return err
+		}
+		defer src.Close()
+
+		dst, err := os.Create(filepath.Join(destDir, "frameworks"))
+		if err != nil {
+			return err
+		}
+		defer dst.Close()
+
+		_, err = io.Copy(dst, src)
+		return err
+	}
+}
+
+func extractZip(archivePath, destDir string) error {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+
+		targetPath := filepath.Join(destDir, filepath.Base(file.Name))
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+
+		src, err := file.Open()
+		if err != nil {
+			return err
+		}
+
+		dst, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode(file.Mode()))
+		if err != nil {
+			src.Close()
+			return err
+		}
+
+		_, copyErr := io.Copy(dst, src)
+		closeErr := dst.Close()
+		src.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+
+	return nil
+}
+
+func extractTarGz(archivePath, destDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+	for {
+		header, nextErr := tarReader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			return nil
+		}
+		if nextErr != nil {
+			return nextErr
+		}
+		if header.FileInfo().IsDir() {
+			continue
+		}
+
+		targetPath := filepath.Join(destDir, filepath.Base(header.Name))
+		if mkdirErr := os.MkdirAll(filepath.Dir(targetPath), 0o755); mkdirErr != nil {
+			return mkdirErr
+		}
+
+		dst, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileMode(header.FileInfo().Mode()))
+		if err != nil {
+			return err
+		}
+
+		_, copyErr := io.Copy(dst, tarReader)
+		closeErr := dst.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+}
+
+func fileMode(mode fs.FileMode) fs.FileMode {
+	if mode == 0 {
+		return 0o755
+	}
+	return mode
+}
+
 // Update downloads the latest binary and atomically replaces the current executable.
 func Update(ctx context.Context, release *Release) (*UpdateResult, error) {
-	binaryName := fmt.Sprintf(binaryFmt, runtime.GOOS, runtime.GOARCH)
-
-	asset := findAsset(release.Assets, binaryName)
+	asset, assetName := findReleaseAsset(release.Assets, release.TagName)
 	if asset == nil {
-		return nil, fmt.Errorf("no release asset for %s/%s (expected %s)", runtime.GOOS, runtime.GOARCH, binaryName)
+		return nil, fmt.Errorf("no release asset for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
 	execPath, err := os.Executable()
@@ -111,25 +253,40 @@ func Update(ctx context.Context, release *Release) (*UpdateResult, error) {
 		os.Remove(tmpPath)
 	}()
 
-	if err := downloadFile(ctx, asset.BrowserDownloadURL, tmp); err != nil {
-		return nil, fmt.Errorf("download failed: %w", err)
+	if downloadErr := downloadFile(ctx, asset.BrowserDownloadURL, tmp); downloadErr != nil {
+		return nil, fmt.Errorf("download failed: %w", downloadErr)
 	}
 	tmp.Close()
 
 	// Verify checksum if available
-	checksumAsset := findAsset(release.Assets, binaryName+".sha256")
+	checksumAsset := findAsset(release.Assets, assetName+".sha256")
 	if checksumAsset != nil {
-		if err := verifyChecksum(ctx, checksumAsset.BrowserDownloadURL, tmpPath); err != nil {
-			return nil, err
+		if checksumErr := verifyChecksum(ctx, checksumAsset.BrowserDownloadURL, tmpPath); checksumErr != nil {
+			return nil, checksumErr
 		}
 	}
 
-	if err := os.Chmod(tmpPath, 0o755); err != nil {
+	extractDir, err := os.MkdirTemp(dir, ".frameworks-update-extract-*")
+	if err != nil {
+		return nil, fmt.Errorf("cannot create extract dir: %w", err)
+	}
+	defer os.RemoveAll(extractDir)
+
+	if err := extractArchive(assetName, tmpPath, extractDir); err != nil {
+		return nil, fmt.Errorf("failed to extract update asset: %w", err)
+	}
+
+	newBinaryPath := filepath.Join(extractDir, "frameworks")
+	if _, err := os.Stat(newBinaryPath); err != nil {
+		return nil, fmt.Errorf("update asset did not contain frameworks binary: %w", err)
+	}
+
+	if err := os.Chmod(newBinaryPath, 0o755); err != nil {
 		return nil, fmt.Errorf("chmod failed: %w", err)
 	}
 
 	// Atomic replace
-	if err := os.Rename(tmpPath, execPath); err != nil {
+	if err := os.Rename(newBinaryPath, execPath); err != nil {
 		if os.IsPermission(err) {
 			return nil, fmt.Errorf("permission denied replacing %s (try: sudo frameworks update)", execPath)
 		}

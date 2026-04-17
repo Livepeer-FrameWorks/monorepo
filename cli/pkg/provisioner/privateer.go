@@ -137,12 +137,34 @@ func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory
 
 	script := fmt.Sprintf(`#!/bin/bash
 set -e
-wget -q -O /tmp/privateer.tar.gz "%s"
+ASSET_URL=%q
+ASSET_PATH=/tmp/privateer.asset
+EXTRACT_DIR="$(mktemp -d)"
+trap 'rm -rf "$EXTRACT_DIR" "$ASSET_PATH"' EXIT
+
+extract_zip() {
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$1" -d "$2"
+  elif command -v ditto >/dev/null 2>&1; then
+    ditto -x -k "$1" "$2"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -m zipfile -e "$1" "$2"
+  else
+    echo "zip extractor not available" >&2
+    exit 1
+  fi
+}
+
+wget -q -O "$ASSET_PATH" "$ASSET_URL"
 mkdir -p /opt/frameworks/privateer
-tar -xzf /tmp/privateer.tar.gz -C /tmp/
-mv /tmp/frameworks-privateer-* /opt/frameworks/privateer/privateer
+if [[ "$ASSET_URL" == *.zip ]]; then
+  extract_zip "$ASSET_PATH" "$EXTRACT_DIR"
+  mv "$EXTRACT_DIR"/frameworks-privateer-* /opt/frameworks/privateer/privateer 2>/dev/null || mv "$EXTRACT_DIR"/privateer /opt/frameworks/privateer/privateer
+else
+  tar -xzf "$ASSET_PATH" -C "$EXTRACT_DIR"
+  mv "$EXTRACT_DIR"/frameworks-privateer-* /opt/frameworks/privateer/privateer
+fi
 chmod +x /opt/frameworks/privateer/privateer
-rm /tmp/privateer.tar.gz
 `, url)
 
 	result, err := p.ExecuteScript(ctx, host, script)

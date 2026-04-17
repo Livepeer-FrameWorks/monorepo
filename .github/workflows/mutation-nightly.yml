@@ -24,6 +24,13 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.scope || 'changed' }}-${{ inputs.run_frontend || false }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   CRITICAL_PACKAGES: "pkg/auth pkg/x402 api_gateway/internal/errors"
 
@@ -213,12 +220,7 @@ jobs:
             slug: streamcrafter-core
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install
+      - uses: ./.github/actions/setup-node-pnpm
       - name: Run Stryker mutation tests
         working-directory: ${{ matrix.package }}
         run: pnpm test:mutation

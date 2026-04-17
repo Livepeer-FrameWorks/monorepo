@@ -1,0 +1,147 @@
+{
+  "services": [
+    {
+      "name": "bridge",
+      "context": "api_gateway",
+      "cmd": "./cmd/bridge",
+      "dockerfile": "api_gateway/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "quartermaster",
+      "context": "api_tenants",
+      "cmd": "./cmd/quartermaster",
+      "dockerfile": "api_tenants/Dockerfile",
+      "cgo": true,
+      "darwin_binary": false
+    },
+    {
+      "name": "commodore",
+      "context": "api_control",
+      "cmd": "./cmd/commodore",
+      "dockerfile": "api_control/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "purser",
+      "context": "api_billing",
+      "cmd": "./cmd/purser",
+      "dockerfile": "api_billing/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "foghorn",
+      "context": "api_balancing",
+      "cmd": "./cmd/foghorn",
+      "dockerfile": "api_balancing/Dockerfile",
+      "cgo": true,
+      "darwin_binary": false
+    },
+    {
+      "name": "decklog",
+      "context": "api_firehose",
+      "cmd": "cmd/decklog/main.go",
+      "dockerfile": "api_firehose/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "periscope-ingest",
+      "context": "api_analytics_ingest",
+      "cmd": "./cmd/periscope",
+      "dockerfile": "api_analytics_ingest/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "periscope-query",
+      "context": "api_analytics_query",
+      "cmd": "./cmd/periscope",
+      "dockerfile": "api_analytics_query/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "signalman",
+      "context": "api_realtime",
+      "cmd": "./cmd/signalman",
+      "dockerfile": "api_realtime/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "helmsman",
+      "context": "api_sidecar",
+      "cmd": "./cmd/helmsman",
+      "dockerfile": "api_sidecar/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "steward",
+      "context": "api_forms",
+      "cmd": "./cmd/steward",
+      "dockerfile": "api_forms/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "navigator",
+      "context": "api_dns",
+      "cmd": "./cmd/navigator",
+      "dockerfile": "api_dns/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "deckhand",
+      "context": "api_ticketing",
+      "cmd": "./cmd/deckhand",
+      "dockerfile": "api_ticketing/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "privateer",
+      "context": "api_mesh",
+      "cmd": "./cmd/privateer",
+      "dockerfile": null,
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "skipper",
+      "context": "api_consultant",
+      "cmd": "./cmd/skipper",
+      "dockerfile": "api_consultant/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "chandler",
+      "context": "api_assets",
+      "cmd": "./cmd/chandler",
+      "dockerfile": "api_assets/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    }
+  ],
+  "webapps": [
+    {
+      "name": "chartroom",
+      "context": "website_application",
+      "env_prefix": "VITE",
+      "build_dir": "build"
+    },
+    {
+      "name": "foredeck",
+      "context": "website_marketing",
+      "env_prefix": "VITE",
+      "build_dir": "dist"
+    },
+    { "name": "logbook", "context": "website_docs", "env_prefix": "VITE", "build_dir": "dist" }
+  ]
+}

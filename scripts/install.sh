@@ -67,6 +67,59 @@ download() {
   fi
 }
 
+extract_asset() {
+  asset_name="$1"
+  asset_path="$2"
+  out_dir="$3"
+
+  case "$asset_name" in
+    *.tar.gz)
+      tar -xzf "$asset_path" -C "$out_dir"
+      ;;
+    *.zip)
+      if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$asset_path" -d "$out_dir"
+      elif command -v ditto >/dev/null 2>&1; then
+        ditto -x -k "$asset_path" "$out_dir"
+      else
+        err "A zip extractor is required to install macOS release assets"
+      fi
+      ;;
+    *)
+      cp "$asset_path" "$out_dir/frameworks"
+      ;;
+  esac
+}
+
+resolve_asset_name() {
+  os="$1"
+  arch="$2"
+  version="$3"
+  version_no_v=$(printf '%s' "$version" | sed 's/^v//')
+
+  case "$os" in
+    darwin)
+      printf '%s\n' "frameworks-cli-v${version_no_v}-${os}-${arch}.zip"
+      ;;
+    *)
+      printf '%s\n' "frameworks-cli-v${version_no_v}-${os}-${arch}.tar.gz"
+      ;;
+  esac
+}
+
+find_extracted_binary() {
+  out_dir="$1"
+
+  if [ -f "$out_dir/frameworks" ]; then
+    printf '%s\n' "$out_dir/frameworks"
+    return 0
+  fi
+
+  found=$(find "$out_dir" -maxdepth 2 -type f \( -name frameworks -o -name 'frameworks-*' \) | head -n 1)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
 main() {
   os=$(detect_os)
   arch=$(detect_arch)
@@ -76,7 +129,6 @@ main() {
     VERSION=$(resolve_latest)
   fi
 
-  binary="frameworks-${os}-${arch}"
   base_url="https://github.com/${REPO}/releases/download/${VERSION}"
 
   log "Installing frameworks ${VERSION} (${os}/${arch})..."
@@ -84,13 +136,14 @@ main() {
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
 
-  log "Downloading ${binary}..."
-  download "${base_url}/${binary}" "${tmpdir}/frameworks" || err "Download failed. Check that version ${VERSION} exists."
+  asset_name=$(resolve_asset_name "$os" "$arch" "$VERSION")
+  log "Downloading ${asset_name}..."
+  download "${base_url}/${asset_name}" "${tmpdir}/asset" || err "Download failed. Check that version ${VERSION} exists."
 
   # Verify checksum if available
-  if download "${base_url}/${binary}.sha256" "${tmpdir}/frameworks.sha256" 2>/dev/null; then
-    expected=$(awk '{print $1}' "${tmpdir}/frameworks.sha256")
-    actual=$(sha256_check "${tmpdir}/frameworks") || {
+  if download "${base_url}/${asset_name}.sha256" "${tmpdir}/asset.sha256" 2>/dev/null; then
+    expected=$(awk '{print $1}' "${tmpdir}/asset.sha256")
+    actual=$(sha256_check "${tmpdir}/asset") || {
       log "Warning: no sha256sum/shasum available, skipping checksum verification"
       expected=""
     }
@@ -102,14 +155,17 @@ main() {
     log "No checksum file available, skipping verification."
   fi
 
-  chmod +x "${tmpdir}/frameworks"
+  mkdir -p "${tmpdir}/extract"
+  extract_asset "$asset_name" "${tmpdir}/asset" "${tmpdir}/extract"
+  binary_path=$(find_extracted_binary "${tmpdir}/extract") || err "Installed asset did not contain a frameworks binary"
+  chmod +x "$binary_path"
 
   # Install to target directory
   if [ -w "$INSTALL_DIR" ]; then
-    mv "${tmpdir}/frameworks" "${INSTALL_DIR}/frameworks"
+    mv "$binary_path" "${INSTALL_DIR}/frameworks"
   else
     log "Elevated permissions required to install to ${INSTALL_DIR}"
-    sudo mv "${tmpdir}/frameworks" "${INSTALL_DIR}/frameworks"
+    sudo mv "$binary_path" "${INSTALL_DIR}/frameworks"
   fi
 
   # Verify

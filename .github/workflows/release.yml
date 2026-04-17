@@ -5,47 +5,45 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
-  contents: write # create release, upload assets
-  packages: write # push images to GHCR
+  contents: read
 
 env:
   REGISTRY: ghcr.io/livepeer-frameworks
 
 jobs:
+  define-release-components:
+    name: Define Release Components
+    runs-on: ubuntu-latest
+    outputs:
+      image_matrix: ${{ steps.components.outputs.image_matrix }}
+      webapp_matrix: ${{ steps.components.outputs.webapp_matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: components
+        run: |
+          set -euo pipefail
+          COMPONENTS_FILE=".github/release-components.json"
+          printf 'image_matrix=%s\n' "$(jq -c '{service:[.services[] | select(.dockerfile != null) | {name, context, dockerfile}]}' "$COMPONENTS_FILE")" >> "$GITHUB_OUTPUT"
+          printf 'webapp_matrix=%s\n' "$(jq -c '{webapp:.webapps}' "$COMPONENTS_FILE")" >> "$GITHUB_OUTPUT"
+
   # ---------------------------------------------------------------------------
   # Service Docker images — split amd64 (ubuntu) + arm64 (native self-hosted)
   # ---------------------------------------------------------------------------
   build-images-amd64:
     name: Build Images (amd64)
+    needs: [define-release-components]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
-      matrix:
-        service:
-          - { name: bridge, context: api_gateway, dockerfile: api_gateway/Dockerfile }
-          - { name: quartermaster, context: api_tenants, dockerfile: api_tenants/Dockerfile }
-          - { name: commodore, context: api_control, dockerfile: api_control/Dockerfile }
-          - { name: purser, context: api_billing, dockerfile: api_billing/Dockerfile }
-          - { name: foghorn, context: api_balancing, dockerfile: api_balancing/Dockerfile }
-          - { name: decklog, context: api_firehose, dockerfile: api_firehose/Dockerfile }
-          - {
-              name: periscope-ingest,
-              context: api_analytics_ingest,
-              dockerfile: api_analytics_ingest/Dockerfile,
-            }
-          - {
-              name: periscope-query,
-              context: api_analytics_query,
-              dockerfile: api_analytics_query/Dockerfile,
-            }
-          - { name: signalman, context: api_realtime, dockerfile: api_realtime/Dockerfile }
-          - { name: helmsman, context: api_sidecar, dockerfile: api_sidecar/Dockerfile }
-          - { name: steward, context: api_forms, dockerfile: api_forms/Dockerfile }
-          - { name: deckhand, context: api_ticketing, dockerfile: api_ticketing/Dockerfile }
-          - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
-          - { name: skipper, context: api_consultant, dockerfile: api_consultant/Dockerfile }
-          - { name: chandler, context: api_assets, dockerfile: api_assets/Dockerfile }
+      matrix: ${{ fromJson(needs.define-release-components.outputs.image_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -120,34 +118,14 @@ jobs:
 
   build-images-arm64:
     name: Build Images (arm64)
+    needs: [define-release-components]
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
-      matrix:
-        service:
-          - { name: bridge, context: api_gateway, dockerfile: api_gateway/Dockerfile }
-          - { name: quartermaster, context: api_tenants, dockerfile: api_tenants/Dockerfile }
-          - { name: commodore, context: api_control, dockerfile: api_control/Dockerfile }
-          - { name: purser, context: api_billing, dockerfile: api_billing/Dockerfile }
-          - { name: foghorn, context: api_balancing, dockerfile: api_balancing/Dockerfile }
-          - { name: decklog, context: api_firehose, dockerfile: api_firehose/Dockerfile }
-          - {
-              name: periscope-ingest,
-              context: api_analytics_ingest,
-              dockerfile: api_analytics_ingest/Dockerfile,
-            }
-          - {
-              name: periscope-query,
-              context: api_analytics_query,
-              dockerfile: api_analytics_query/Dockerfile,
-            }
-          - { name: signalman, context: api_realtime, dockerfile: api_realtime/Dockerfile }
-          - { name: helmsman, context: api_sidecar, dockerfile: api_sidecar/Dockerfile }
-          - { name: steward, context: api_forms, dockerfile: api_forms/Dockerfile }
-          - { name: deckhand, context: api_ticketing, dockerfile: api_ticketing/Dockerfile }
-          - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
-          - { name: skipper, context: api_consultant, dockerfile: api_consultant/Dockerfile }
-          - { name: chandler, context: api_assets, dockerfile: api_assets/Dockerfile }
+      matrix: ${{ fromJson(needs.define-release-components.outputs.image_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -223,28 +201,15 @@ jobs:
   # Merge per-arch images into multi-arch manifests
   merge-image-manifests:
     name: Merge Image Manifests
-    needs: [build-images-amd64, build-images-arm64]
+    needs: [define-release-components, build-images-amd64, build-images-arm64]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service:
-          - bridge
-          - quartermaster
-          - commodore
-          - purser
-          - foghorn
-          - decklog
-          - periscope-ingest
-          - periscope-query
-          - signalman
-          - helmsman
-          - steward
-          - deckhand
-          - navigator
-          - skipper
-          - chandler
+    permissions:
+      contents: read
+      packages: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -261,57 +226,58 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Download amd64 digest
+      - name: Download amd64 digests
         uses: actions/download-artifact@v8
         with:
-          name: arch-digest-${{ matrix.service }}-amd64
+          pattern: arch-digest-*-amd64
           path: dist/
+          merge-multiple: true
 
-      - name: Download arm64 digest
+      - name: Download arm64 digests
         uses: actions/download-artifact@v8
         with:
-          name: arch-digest-${{ matrix.service }}-arm64
+          pattern: arch-digest-*-arm64
           path: dist/
+          merge-multiple: true
 
-      - name: Create multi-arch manifest
+      - name: Create multi-arch manifests
         run: |
           set -euo pipefail
           TAG="${{ github.ref_name }}"
-          SVC="${{ matrix.service }}"
-          GHCR="${{ env.REGISTRY }}/frameworks-${SVC}"
-          DH="livepeerframeworks/frameworks-${SVC}"
-
-          # Determine track tag from version suffix
-          TRACK=""
-          case "${TAG}" in
-            *-beta*) TRACK="beta" ;;
-            *-rc*)   TRACK="rc" ;;
-            v[0-9]*) TRACK="latest" ;;
-          esac
-
-          GHCR_TAGS=("-t" "${GHCR}:${TAG}")
-          DH_TAGS=("-t" "${DH}:${TAG}")
-          if [[ -n "${TRACK}" ]]; then
-            GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
-            DH_TAGS+=("-t" "${DH}:${TRACK}")
-          fi
-
-          docker buildx imagetools create \
-            "${GHCR_TAGS[@]}" \
-            "${GHCR}:${TAG}-amd64" \
-            "${GHCR}:${TAG}-arm64"
-
-          docker buildx imagetools create \
-            "${DH_TAGS[@]}" \
-            "${DH}:${TAG}-amd64" \
-            "${DH}:${TAG}-arm64"
-
-          # Get the combined manifest digest
-          DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
-          SVCVER=$(jq -r .service_version dist/arch-digest-${SVC}-amd64.json)
-
+          COMPONENTS_FILE=".github/release-components.json"
           mkdir -p final
-          cat > final/image-${SVC}.json <<JSON
+          jq -r '.services[] | select(.dockerfile != null) | .name' "$COMPONENTS_FILE" | while read -r SVC; do
+            GHCR="${{ env.REGISTRY }}/frameworks-${SVC}"
+            DH="livepeerframeworks/frameworks-${SVC}"
+
+            TRACK=""
+            case "${TAG}" in
+              *-beta*) TRACK="beta" ;;
+              *-rc*)   TRACK="rc" ;;
+              v[0-9]*) TRACK="latest" ;;
+            esac
+
+            GHCR_TAGS=("-t" "${GHCR}:${TAG}")
+            DH_TAGS=("-t" "${DH}:${TAG}")
+            if [[ -n "${TRACK}" ]]; then
+              GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
+              DH_TAGS+=("-t" "${DH}:${TRACK}")
+            fi
+
+            docker buildx imagetools create \
+              "${GHCR_TAGS[@]}" \
+              "${GHCR}:${TAG}-amd64" \
+              "${GHCR}:${TAG}-arm64"
+
+            docker buildx imagetools create \
+              "${DH_TAGS[@]}" \
+              "${DH}:${TAG}-amd64" \
+              "${DH}:${TAG}-arm64"
+
+            DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+            SVCVER=$(jq -r .service_version "dist/arch-digest-${SVC}-amd64.json")
+
+            cat > "final/image-${SVC}.json" <<JSON
           {
             "name": "${SVC}",
             "image": "${GHCR}:${TAG}",
@@ -320,26 +286,27 @@ jobs:
             "git_commit": "${{ github.sha }}"
           }
           JSON
+          done
 
-      - name: Upload merged digest
+      - name: Upload merged digests
         uses: actions/upload-artifact@v7
         with:
-          name: image-digest-${{ matrix.service }}
-          path: final/image-${{ matrix.service }}.json
+          name: image-digest-services
+          path: final/image-*.json
 
   # ---------------------------------------------------------------------------
   # Webapp Docker images — split amd64 (ubuntu) + arm64 (native self-hosted)
   # ---------------------------------------------------------------------------
   build-webapps-amd64:
     name: Build Webapps (amd64)
+    needs: [define-release-components]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
-      matrix:
-        webapp:
-          - { name: chartroom, context: website_application, env_prefix: VITE, build_dir: build }
-          - { name: foredeck, context: website_marketing, env_prefix: VITE, build_dir: dist }
-          - { name: logbook, context: website_docs, env_prefix: VITE, build_dir: dist }
+      matrix: ${{ fromJson(needs.define-release-components.outputs.webapp_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -366,6 +333,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
+          cache: false
         env:
           GOTOOLCHAIN: local
 
@@ -398,18 +366,8 @@ jobs:
             echo EOF
           } >> "$GITHUB_OUTPUT"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "pnpm"
-          cache-dependency-path: "pnpm-lock.yaml"
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Setup Node.js + pnpm
+        uses: ./.github/actions/setup-node-pnpm
 
       - name: Build player package
         run: |
@@ -491,14 +449,14 @@ jobs:
 
   build-webapps-arm64:
     name: Build Webapps (arm64)
+    needs: [define-release-components]
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
-      matrix:
-        webapp:
-          - { name: chartroom, context: website_application }
-          - { name: foredeck, context: website_marketing }
-          - { name: logbook, context: website_docs }
+      matrix: ${{ fromJson(needs.define-release-components.outputs.webapp_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -525,6 +483,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
+          cache: false
         env:
           GOTOOLCHAIN: local
 
@@ -609,16 +568,15 @@ jobs:
   # Merge per-arch webapp images into multi-arch manifests
   merge-webapp-manifests:
     name: Merge Webapp Manifests
-    needs: [build-webapps-amd64, build-webapps-arm64]
+    needs: [define-release-components, build-webapps-amd64, build-webapps-arm64]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        webapp:
-          - chartroom
-          - foredeck
-          - logbook
+    permissions:
+      contents: read
+      packages: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -635,55 +593,57 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Download amd64 digest
+      - name: Download amd64 digests
         uses: actions/download-artifact@v8
         with:
-          name: arch-digest-${{ matrix.webapp }}-amd64
+          pattern: arch-digest-*-amd64
           path: dist/
+          merge-multiple: true
 
-      - name: Download arm64 digest
+      - name: Download arm64 digests
         uses: actions/download-artifact@v8
         with:
-          name: arch-digest-${{ matrix.webapp }}-arm64
+          pattern: arch-digest-*-arm64
           path: dist/
+          merge-multiple: true
 
-      - name: Create multi-arch manifest
+      - name: Create multi-arch manifests
         run: |
           set -euo pipefail
           TAG="${{ github.ref_name }}"
-          APP="${{ matrix.webapp }}"
-          GHCR="${{ env.REGISTRY }}/frameworks-${APP}"
-          DH="livepeerframeworks/frameworks-${APP}"
-
-          # Determine track tag from version suffix
-          TRACK=""
-          case "${TAG}" in
-            *-beta*) TRACK="beta" ;;
-            *-rc*)   TRACK="rc" ;;
-            v[0-9]*) TRACK="latest" ;;
-          esac
-
-          GHCR_TAGS=("-t" "${GHCR}:${TAG}")
-          DH_TAGS=("-t" "${DH}:${TAG}")
-          if [[ -n "${TRACK}" ]]; then
-            GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
-            DH_TAGS+=("-t" "${DH}:${TRACK}")
-          fi
-
-          docker buildx imagetools create \
-            "${GHCR_TAGS[@]}" \
-            "${GHCR}:${TAG}-amd64" \
-            "${GHCR}:${TAG}-arm64"
-
-          docker buildx imagetools create \
-            "${DH_TAGS[@]}" \
-            "${DH}:${TAG}-amd64" \
-            "${DH}:${TAG}-arm64"
-
-          DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
-
+          COMPONENTS_FILE=".github/release-components.json"
           mkdir -p final
-          cat > final/image-${APP}.json <<JSON
+          jq -r '.webapps[].name' "$COMPONENTS_FILE" | while read -r APP; do
+            GHCR="${{ env.REGISTRY }}/frameworks-${APP}"
+            DH="livepeerframeworks/frameworks-${APP}"
+
+            TRACK=""
+            case "${TAG}" in
+              *-beta*) TRACK="beta" ;;
+              *-rc*)   TRACK="rc" ;;
+              v[0-9]*) TRACK="latest" ;;
+            esac
+
+            GHCR_TAGS=("-t" "${GHCR}:${TAG}")
+            DH_TAGS=("-t" "${DH}:${TAG}")
+            if [[ -n "${TRACK}" ]]; then
+              GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
+              DH_TAGS+=("-t" "${DH}:${TRACK}")
+            fi
+
+            docker buildx imagetools create \
+              "${GHCR_TAGS[@]}" \
+              "${GHCR}:${TAG}-amd64" \
+              "${GHCR}:${TAG}-arm64"
+
+            docker buildx imagetools create \
+              "${DH_TAGS[@]}" \
+              "${DH}:${TAG}-amd64" \
+              "${DH}:${TAG}-arm64"
+
+            DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+
+            cat > "final/image-${APP}.json" <<JSON
           {
             "name": "${APP}",
             "image": "${GHCR}:${TAG}",
@@ -691,12 +651,13 @@ jobs:
             "git_commit": "${{ github.sha }}"
           }
           JSON
+          done
 
-      - name: Upload merged digest
+      - name: Upload merged digests
         uses: actions/upload-artifact@v7
         with:
-          name: image-digest-${{ matrix.webapp }}
-          path: final/image-${{ matrix.webapp }}.json
+          name: image-digest-webapps
+          path: final/image-*.json
 
   # CLI linux/amd64 — built on GitHub-hosted ubuntu runner
   build-cli:
@@ -762,32 +723,43 @@ jobs:
             go build -ldflags "-X frameworks/pkg/version.Version=${{ github.ref_name }} -X frameworks/pkg/version.GitCommit=${{ github.sha }} -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X frameworks/pkg/version.ComponentName=cli -X frameworks/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}" -o "frameworks-darwin-arm64" .
           mv "frameworks-darwin-arm64" "../dist/cli/frameworks-darwin-arm64"
 
-      - name: Unlock keychain
-        run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
+      - name: Setup signing keychain
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: ./scripts/ci/setup-signing-keychain.sh
 
-      - name: Sign and notarize darwin CLI binary
+      - name: Sign and notarize darwin CLI artifact
         run: |
           set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
           binary="dist/cli/frameworks-darwin-arm64"
+          release_zip="dist/cli/frameworks-cli-v${VERSION}-darwin-arm64.zip"
+          staging_dir="$(mktemp -d)"
+          trap 'rm -rf "$staging_dir"' EXIT
 
           codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
                    --timestamp --options runtime \
                    "$binary"
           codesign --verify --verbose=2 "$binary"
 
-          ditto -c -k --keepParent "$binary" "${binary}.zip"
-          xcrun notarytool submit "${binary}.zip" \
+          cp "$binary" "$staging_dir/frameworks"
+          ditto -c -k --keepParent "$staging_dir/frameworks" "$release_zip"
+          xcrun notarytool submit "$release_zip" \
             --apple-id "${{ secrets.APPLE_ID }}" \
             --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
             --team-id "${{ secrets.APPLE_TEAM_ID }}" \
             --wait
-          rm "${binary}.zip"
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v7
         with:
           name: cli-darwin-arm64
           path: dist/cli/*
+
+      - name: Clean up signing keychain
+        if: always()
+        run: ./scripts/ci/cleanup-signing-keychain.sh
 
   # Linux/amd64 service binaries — built on GitHub-hosted ubuntu runner
   build-service-binaries-amd64:
@@ -813,30 +785,12 @@ jobs:
           GOARCH: amd64
         run: |
           set -euo pipefail
+          COMPONENTS_FILE=".github/release-components.json"
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
 
-          SERVICES='[
-            {"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge","cgo":false},
-            {"name":"quartermaster","context":"api_tenants","cmd":"./cmd/quartermaster","cgo":true},
-            {"name":"commodore","context":"api_control","cmd":"./cmd/commodore","cgo":false},
-            {"name":"purser","context":"api_billing","cmd":"./cmd/purser","cgo":false},
-            {"name":"foghorn","context":"api_balancing","cmd":"./cmd/foghorn","cgo":true},
-            {"name":"decklog","context":"api_firehose","cmd":"cmd/decklog/main.go","cgo":false},
-            {"name":"periscope-ingest","context":"api_analytics_ingest","cmd":"./cmd/periscope","cgo":false},
-            {"name":"periscope-query","context":"api_analytics_query","cmd":"./cmd/periscope","cgo":false},
-            {"name":"signalman","context":"api_realtime","cmd":"./cmd/signalman","cgo":false},
-            {"name":"helmsman","context":"api_sidecar","cmd":"./cmd/helmsman","cgo":false},
-            {"name":"steward","context":"api_forms","cmd":"./cmd/steward","cgo":false},
-            {"name":"navigator","context":"api_dns","cmd":"./cmd/navigator","cgo":false},
-            {"name":"deckhand","context":"api_ticketing","cmd":"./cmd/deckhand","cgo":false},
-            {"name":"privateer","context":"api_mesh","cmd":"./cmd/privateer","cgo":false},
-            {"name":"skipper","context":"api_consultant","cmd":"./cmd/skipper","cgo":false},
-            {"name":"chandler","context":"api_assets","cmd":"./cmd/chandler","cgo":false}
-          ]'
-
-          echo "$SERVICES" | jq -c '.[]' | while read -r svc; do
+          jq -c '.services[] | {name, context, cmd, cgo}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
             context=$(echo "$svc" | jq -r .context)
             cmd=$(echo "$svc" | jq -r .cmd)
@@ -906,30 +860,12 @@ jobs:
           GOARCH: arm64
         run: |
           set -euo pipefail
+          COMPONENTS_FILE=".github/release-components.json"
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
 
-          SERVICES='[
-            {"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge","cgo":false},
-            {"name":"quartermaster","context":"api_tenants","cmd":"./cmd/quartermaster","cgo":true},
-            {"name":"commodore","context":"api_control","cmd":"./cmd/commodore","cgo":false},
-            {"name":"purser","context":"api_billing","cmd":"./cmd/purser","cgo":false},
-            {"name":"foghorn","context":"api_balancing","cmd":"./cmd/foghorn","cgo":true},
-            {"name":"decklog","context":"api_firehose","cmd":"cmd/decklog/main.go","cgo":false},
-            {"name":"periscope-ingest","context":"api_analytics_ingest","cmd":"./cmd/periscope","cgo":false},
-            {"name":"periscope-query","context":"api_analytics_query","cmd":"./cmd/periscope","cgo":false},
-            {"name":"signalman","context":"api_realtime","cmd":"./cmd/signalman","cgo":false},
-            {"name":"helmsman","context":"api_sidecar","cmd":"./cmd/helmsman","cgo":false},
-            {"name":"steward","context":"api_forms","cmd":"./cmd/steward","cgo":false},
-            {"name":"navigator","context":"api_dns","cmd":"./cmd/navigator","cgo":false},
-            {"name":"deckhand","context":"api_ticketing","cmd":"./cmd/deckhand","cgo":false},
-            {"name":"privateer","context":"api_mesh","cmd":"./cmd/privateer","cgo":false},
-            {"name":"skipper","context":"api_consultant","cmd":"./cmd/skipper","cgo":false},
-            {"name":"chandler","context":"api_assets","cmd":"./cmd/chandler","cgo":false}
-          ]'
-
-          echo "$SERVICES" | jq -c '.[]' | while read -r svc; do
+          jq -c '.services[] | {name, context, cmd, cgo}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
             context=$(echo "$svc" | jq -r .context)
             cmd=$(echo "$svc" | jq -r .cmd)
@@ -994,35 +930,21 @@ jobs:
         env:
           GOTOOLCHAIN: local
 
-      - name: Unlock keychain
-        run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
+      - name: Setup signing keychain
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: ./scripts/ci/setup-signing-keychain.sh
 
       - name: Build, sign, and notarize all darwin binaries
         run: |
           set -euo pipefail
+          COMPONENTS_FILE=".github/release-components.json"
           VERSION="${{ github.ref_name }}"
           BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           mkdir -p dist/binaries
 
-          # Non-CGO services only (CGO services have no darwin binary)
-          SERVICES='[
-            {"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge"},
-            {"name":"commodore","context":"api_control","cmd":"./cmd/commodore"},
-            {"name":"purser","context":"api_billing","cmd":"./cmd/purser"},
-            {"name":"decklog","context":"api_firehose","cmd":"cmd/decklog/main.go"},
-            {"name":"periscope-ingest","context":"api_analytics_ingest","cmd":"./cmd/periscope"},
-            {"name":"periscope-query","context":"api_analytics_query","cmd":"./cmd/periscope"},
-            {"name":"signalman","context":"api_realtime","cmd":"./cmd/signalman"},
-            {"name":"helmsman","context":"api_sidecar","cmd":"./cmd/helmsman"},
-            {"name":"steward","context":"api_forms","cmd":"./cmd/steward"},
-            {"name":"navigator","context":"api_dns","cmd":"./cmd/navigator"},
-            {"name":"deckhand","context":"api_ticketing","cmd":"./cmd/deckhand"},
-            {"name":"privateer","context":"api_mesh","cmd":"./cmd/privateer"},
-            {"name":"skipper","context":"api_consultant","cmd":"./cmd/skipper"},
-            {"name":"chandler","context":"api_assets","cmd":"./cmd/chandler"}
-          ]'
-
-          echo "$SERVICES" | jq -c '.[]' | while read -r svc; do
+          jq -c '.services[] | select(.darwin_binary) | {name, context, cmd}' "$COMPONENTS_FILE" | while read -r svc; do
             name=$(echo "$svc" | jq -r .name)
             context=$(echo "$svc" | jq -r .context)
             cmd=$(echo "$svc" | jq -r .cmd)
@@ -1036,7 +958,7 @@ jobs:
             fi
 
             BINARY="frameworks-${name}-darwin-arm64"
-            OUTPUT="frameworks-${name}-${VERSION}-darwin-arm64"
+            OUTPUT="frameworks-${name}-${VERSION}-darwin-arm64.zip"
 
             (cd "$context" && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "\
               -X frameworks/pkg/version.Version=${VERSION} \
@@ -1054,17 +976,13 @@ jobs:
                      "${context}/${BINARY}"
             codesign --verify --verbose=2 "${context}/${BINARY}"
 
-            # Notarize
-            ditto -c -k --keepParent "${context}/${BINARY}" "${context}/${BINARY}.zip"
-            xcrun notarytool submit "${context}/${BINARY}.zip" \
+            # Notarize the final shipped zip artifact
+            ditto -c -k --keepParent "${context}/${BINARY}" "dist/binaries/${OUTPUT}"
+            xcrun notarytool submit "dist/binaries/${OUTPUT}" \
               --apple-id "${{ secrets.APPLE_ID }}" \
               --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
               --team-id "${{ secrets.APPLE_TEAM_ID }}" \
               --wait
-            rm "${context}/${BINARY}.zip"
-
-            # Package signed binary
-            tar czf "dist/binaries/${OUTPUT}.tar.gz" -C "${context}" "${BINARY}"
             rm "${context}/${BINARY}"
           done
 
@@ -1072,7 +990,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: binary-all-darwin-arm64
-          path: dist/binaries/*.tar.gz
+          path: dist/binaries/*.zip
+
+      - name: Clean up signing keychain
+        if: always()
+        run: ./scripts/ci/cleanup-signing-keychain.sh
 
   # macOS tray app — FrameWorks desktop client (menu bar app).
   # Built with Xcode via XcodeGen, signed and notarized on the Mac runner.
@@ -1086,8 +1008,11 @@ jobs:
       - name: Add Homebrew to PATH
         run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
 
-      - name: Unlock keychain
-        run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
+      - name: Setup signing keychain
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: ./scripts/ci/setup-signing-keychain.sh
 
       - name: Generate GQL Swift constants
         run: ./scripts/generate-swift-gql.sh
@@ -1195,6 +1120,10 @@ jobs:
             app_mac/build/FrameWorks-v*.dmg
             app_mac/build/FrameWorks-v*.dmg.sha256
 
+      - name: Clean up signing keychain
+        if: always()
+        run: ./scripts/ci/cleanup-signing-keychain.sh
+
   # macOS .pkg installer — bundles CLI + optional tray app.
   build-darwin-pkg:
     name: Build macOS .pkg
@@ -1219,8 +1148,13 @@ jobs:
           cp frameworks-darwin-arm64 frameworks
           chmod 755 frameworks
 
-      - name: Unlock keychain
-        run: security unlock-keychain -p "${{ secrets.LOGIN_KEYCHAIN_PASSWORD }}" login.keychain
+      - name: Setup signing keychain
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_P12: ${{ secrets.APPLE_INSTALLER_P12 }}
+          APPLE_INSTALLER_PASSWORD: ${{ secrets.APPLE_INSTALLER_PASSWORD }}
+        run: ./scripts/ci/setup-signing-keychain.sh
 
       - name: Download tray app
         uses: actions/download-artifact@v8
@@ -1263,6 +1197,10 @@ jobs:
           name: darwin-pkg
           path: dist/pkg/frameworks-*.pkg*
 
+      - name: Clean up signing keychain
+        if: always()
+        run: ./scripts/ci/cleanup-signing-keychain.sh
+
   manifest:
     name: Generate & Publish Manifest
     needs:
@@ -1276,6 +1214,9 @@ jobs:
       - build-tray-app
       - build-darwin-pkg
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # softprops/action-gh-release uploads release assets
+      packages: read # docker login to pull image digests for manifest generation
     steps:
       - uses: actions/checkout@v6
       - name: Generate release metadata GitHub App token
@@ -1400,6 +1341,10 @@ jobs:
       - name: Generate manifest
         run: |
           set -euo pipefail
+          COMPONENTS_FILE=".github/release-components.json"
+          WEBAPP_NAMES="$(jq -r '.webapps[].name' "$COMPONENTS_FILE")"
+          CGO_SERVICES="$(jq -r '.services[] | select(.cgo) | .name' "$COMPONENTS_FILE")"
+          BINARY_ONLY_SERVICES="$(jq -r '.services[] | select(.dockerfile == null) | .name' "$COMPONENTS_FILE")"
 
           # Header
           cat > dist/manifest.yaml <<YAML
@@ -1414,7 +1359,7 @@ jobs:
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
             # Skip interfaces - they go in interfaces section
-            if [[ "$name" == "chartroom" || "$name" == "foredeck" || "$name" == "logbook" ]]; then
+            if echo "$WEBAPP_NAMES" | grep -qx "$name"; then
               continue
             fi
 
@@ -1435,13 +1380,10 @@ jobs:
           echo "" >> dist/manifest.yaml
           echo "native_binaries:" >> dist/manifest.yaml
 
-          # CGO services only have linux binaries (can't cross-compile to darwin)
-          CGO_SERVICES="quartermaster foghorn"
-
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
             # Skip interfaces - they don't have native binaries
-            if [[ "$name" == "chartroom" || "$name" == "foredeck" || "$name" == "logbook" ]]; then
+            if echo "$WEBAPP_NAMES" | grep -qx "$name"; then
               continue
             fi
 
@@ -1457,17 +1399,17 @@ jobs:
           YAML
 
             # Non-CGO services also have darwin binaries
-            if ! echo "$CGO_SERVICES" | grep -qw "$name"; then
+            if ! echo "$CGO_SERVICES" | grep -qx "$name"; then
               cat >> dist/manifest.yaml <<YAML
                 - arch: darwin-arm64
-                  file: frameworks-${name}-${{ github.ref_name }}-darwin-arm64.tar.gz
-                  url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-darwin-arm64.tar.gz
+                  file: frameworks-${name}-${{ github.ref_name }}-darwin-arm64.zip
+                  url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-darwin-arm64.zip
           YAML
             fi
           done
 
           # Binary-only services (no Docker image, only native binaries)
-          for svc in privateer; do
+          for svc in $BINARY_ONLY_SERVICES; do
             cat >> dist/manifest.yaml <<YAML
             - name: ${svc}
               artifacts:
@@ -1478,8 +1420,8 @@ jobs:
                   file: frameworks-${svc}-${{ github.ref_name }}-linux-arm64.tar.gz
                   url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-linux-arm64.tar.gz
                 - arch: darwin-arm64
-                  file: frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.tar.gz
-                  url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.tar.gz
+                  file: frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.zip
+                  url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.zip
           YAML
           done
 
@@ -1489,7 +1431,7 @@ jobs:
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
             # Only include interfaces
-            if [[ "$name" != "chartroom" && "$name" != "foredeck" && "$name" != "logbook" ]]; then
+            if ! echo "$WEBAPP_NAMES" | grep -qx "$name"; then
               continue
             fi
 
@@ -1553,16 +1495,25 @@ jobs:
           merge-multiple: true
       - name: Package CLI binaries as tarballs
         run: |
+          set -euo pipefail
           cd dist/cli
           VERSION="${GITHUB_REF_NAME#v}"
+          shopt -s nullglob
           for f in frameworks-*; do
             [[ "$f" == *.sha256 ]] && continue
             [[ "$f" == *.tar.gz ]] && continue
+            [[ "$f" == *.zip ]] && continue
+            [[ "$f" == *darwin-arm64 ]] && { rm -f "$f"; continue; }
             tarball="frameworks-cli-v${VERSION}-${f#frameworks-}.tar.gz"
             cp "$f" frameworks
             tar czf "$tarball" frameworks
             rm frameworks
-            sha256sum "$tarball" > "${tarball}.sha256"
+            rm -f "$f"
+          done
+
+          for artifact in frameworks-cli-v${VERSION}-linux-*.tar.gz frameworks-cli-v${VERSION}-darwin-arm64.zip; do
+            [ -f "$artifact" ] || continue
+            sha256sum "$artifact" > "${artifact}.sha256"
           done
       - name: Download service binary artifacts
         uses: actions/download-artifact@v8
@@ -1574,9 +1525,9 @@ jobs:
         run: |
           set -euo pipefail
           cd dist/binaries
-          for tarball in *.tar.gz; do
-            [ -f "$tarball" ] || continue
-            sha256sum "$tarball" > "${tarball}.sha256"
+          for artifact in *.tar.gz *.zip; do
+            [ -f "$artifact" ] || continue
+            sha256sum "$artifact" > "${artifact}.sha256"
           done
       - name: Download chartroom bundle
         uses: actions/download-artifact@v8
@@ -1624,6 +1575,8 @@ jobs:
             dist/cli/*
             dist/binaries/*.tar.gz
             dist/binaries/*.tar.gz.sha256
+            dist/binaries/*.zip
+            dist/binaries/*.zip.sha256
             dist/pkg/*
             dist/tray/*
             dist/chartroom-build.tar.gz

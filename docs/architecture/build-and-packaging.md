@@ -109,8 +109,10 @@ productsign --sign "$APPLE_INSTALLER_ID" unsigned.pkg signed.pkg
 
 Every tagged release publishes:
 
-- `frameworks-cli-v*-{linux-amd64,linux-arm64,darwin-arm64}.tar.gz`
-- `frameworks-{service}-v*-{linux-amd64,linux-arm64,darwin-arm64}.tar.gz`
+- `frameworks-cli-v*-{linux-amd64,linux-arm64}.tar.gz`
+- `frameworks-cli-v*-darwin-arm64.zip` (primary macOS CLI artifact)
+- `frameworks-{service}-v*-{linux-amd64,linux-arm64}.tar.gz`
+- `frameworks-{service}-v*-darwin-arm64.zip`
 - `frameworks-v*.pkg` (macOS installer: CLI + tray app)
 - `manifest.yaml` (machine-readable release metadata)
 - Docker images pushed to registry
@@ -133,7 +135,7 @@ Auto-bumped on each release by `scripts/bump.sh` in the tap repo, triggered from
 
 ### Install Script
 
-`scripts/install.sh` — curl-pipe-sh installer for CLI binary. Detects OS and arch, downloads from GitHub Release.
+`scripts/install.sh` — curl-pipe-sh installer for CLI binary. Detects OS and arch and downloads the packaged release asset (`.zip` on macOS, `.tar.gz` on Linux).
 
 ## Key Files
 
@@ -141,10 +143,12 @@ Auto-bumped on each release by `scripts/bump.sh` in the tap repo, triggered from
 - `scripts/macos-pkg/build-pkg.sh` — .pkg build + sign + notarize
 - `scripts/macos-pkg/Distribution.xml` — Installer metadata
 - `scripts/install.sh` — curl-pipe-sh CLI installer
+- `cli/pkg/selfupdate/updater.go` — packaged asset selection and in-place CLI update logic
 
 ## Gotchas
 
 - MistServer linux/arm64 binary is built inside a Docker container on the Mac, not cross-compiled. Docker Desktop must be running.
 - Homebrew tap bump is `continue-on-error: true` — a failed tap update doesn't block the release.
+- The macOS CLI zip is the shipped notarized container and the only supported macOS CLI release asset.
 - The `GITOPS_APP_ID` variable (not secret) is reused for both gitops and homebrew-tap repo access. The app needs `repositories: homebrew-tap` in the token scope.
 - `libsrtp` Homebrew package is called `srtp`, not `libsrtp`.
