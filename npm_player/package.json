@@ -30,7 +30,7 @@
     "postcss-import": "^16.1.1",
     "postcss-prefix-selector": "^2.1.1",
     "svelte-eslint-parser": "^1.5.1",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.58.1"
   },
   "author": "Livepeer FrameWorks",
