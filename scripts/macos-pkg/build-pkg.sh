@@ -49,7 +49,7 @@ if [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
     "${PKG_ROOT}/usr/local/bin/frameworks"
 fi
 
-# Tray app (optional — omitted until Phase 5b delivers it)
+# Tray app (optional — bundled when the release workflow provides it)
 if [ -n "${TRAY_APP}" ] && [ -d "${TRAY_APP}" ]; then
   mkdir -p "${PKG_ROOT}/Applications"
   cp -R "${TRAY_APP}" "${PKG_ROOT}/Applications/FrameWorks.app"

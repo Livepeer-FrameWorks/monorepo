@@ -1095,11 +1095,32 @@ func (e *EdgeProvisioner) installDarwinHelmsman(ctx context.Context, host invent
 
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -e
-curl -sSfL -o /tmp/helmsman.tar.gz "%s"
-tar -xzf /tmp/helmsman.tar.gz -C /tmp/
-mv /tmp/frameworks-helmsman-* %[2]s/helmsman/helmsman 2>/dev/null || mv /tmp/helmsman %[2]s/helmsman/helmsman 2>/dev/null || true
+ASSET_URL=%[1]q
+ASSET_PATH=/tmp/helmsman.asset
+EXTRACT_DIR="$(mktemp -d)"
+trap 'rm -rf "$EXTRACT_DIR" "$ASSET_PATH"' EXIT
+
+extract_zip() {
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$1" -d "$2"
+  elif command -v ditto >/dev/null 2>&1; then
+    ditto -x -k "$1" "$2"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -m zipfile -e "$1" "$2"
+  else
+    echo "zip extractor not available" >&2
+    exit 1
+  fi
+}
+
+curl -sSfL -o "$ASSET_PATH" "$ASSET_URL"
+if [[ "$ASSET_URL" == *.zip ]]; then
+  extract_zip "$ASSET_PATH" "$EXTRACT_DIR"
+else
+  tar -xzf "$ASSET_PATH" -C "$EXTRACT_DIR"
+fi
+mv "$EXTRACT_DIR"/frameworks-helmsman-* %[2]s/helmsman/helmsman 2>/dev/null || mv "$EXTRACT_DIR"/helmsman %[2]s/helmsman/helmsman 2>/dev/null || mv "$EXTRACT_DIR"/frameworks %[2]s/helmsman/helmsman 2>/dev/null || true
 chmod +x %[2]s/helmsman/helmsman
-rm -f /tmp/helmsman.tar.gz
 echo "Helmsman installed"
 `, binaryURL, dirs.baseDir)
 
@@ -1400,12 +1421,33 @@ func (e *EdgeProvisioner) installNativeHelmsman(ctx context.Context, host invent
 
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -e
+ASSET_URL=%[1]q
+ASSET_PATH=/tmp/helmsman.asset
+EXTRACT_DIR="$(mktemp -d)"
+trap 'rm -rf "$EXTRACT_DIR" "$ASSET_PATH"' EXIT
+
+extract_zip() {
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$1" -d "$2"
+  elif command -v ditto >/dev/null 2>&1; then
+    ditto -x -k "$1" "$2"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -m zipfile -e "$1" "$2"
+  else
+    echo "zip extractor not available" >&2
+    exit 1
+  fi
+}
+
 mkdir -p /opt/frameworks/helmsman
-wget -q -O /tmp/helmsman.tar.gz "%s"
-tar -xzf /tmp/helmsman.tar.gz -C /tmp/
-mv /tmp/frameworks-helmsman-* /opt/frameworks/helmsman/helmsman 2>/dev/null || mv /tmp/helmsman /opt/frameworks/helmsman/helmsman 2>/dev/null || true
+wget -q -O "$ASSET_PATH" "$ASSET_URL"
+if [[ "$ASSET_URL" == *.zip ]]; then
+  extract_zip "$ASSET_PATH" "$EXTRACT_DIR"
+else
+  tar -xzf "$ASSET_PATH" -C "$EXTRACT_DIR"
+fi
+mv "$EXTRACT_DIR"/frameworks-helmsman-* /opt/frameworks/helmsman/helmsman 2>/dev/null || mv "$EXTRACT_DIR"/helmsman /opt/frameworks/helmsman/helmsman 2>/dev/null || mv "$EXTRACT_DIR"/frameworks /opt/frameworks/helmsman/helmsman 2>/dev/null || true
 chmod +x /opt/frameworks/helmsman/helmsman
-rm -f /tmp/helmsman.tar.gz
 echo "Helmsman installed"
 `, binaryURL)
 

@@ -276,18 +276,38 @@ verify_checksum() {
     exit 1
   }
 }
+ASSET_URL=%[2]q
+ASSET_PATH=/tmp/%[1]s.asset
+CHECKSUM_PATH="${ASSET_PATH}.sha256"
+EXTRACT_DIR="$(mktemp -d)"
+trap 'rm -rf "$EXTRACT_DIR" "$ASSET_PATH" "$CHECKSUM_PATH"' EXIT
 
-wget -q -O /tmp/%[1]s.tar.gz "%[2]s"
+extract_zip() {
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$1" -d "$2"
+  elif command -v ditto >/dev/null 2>&1; then
+    ditto -x -k "$1" "$2"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -m zipfile -e "$1" "$2"
+  else
+    echo "zip extractor not available" >&2
+    exit 1
+  fi
+}
 
-wget -q -O /tmp/%[1]s.tar.gz.sha256 "%[3]s"
-verify_checksum sha256 /tmp/%[1]s.tar.gz /tmp/%[1]s.tar.gz.sha256
-rm -f /tmp/%[1]s.tar.gz.sha256
+wget -q -O "$ASSET_PATH" "$ASSET_URL"
+wget -q -O "$CHECKSUM_PATH" "%[3]s"
+verify_checksum sha256 "$ASSET_PATH" "$CHECKSUM_PATH"
+rm -f "$CHECKSUM_PATH"
 
 mkdir -p /opt/frameworks/%[1]s
-tar -xzf /tmp/%[1]s.tar.gz -C /tmp/
-mv /tmp/frameworks-%[1]s-* /opt/frameworks/%[1]s/%[1]s
+if [[ "$ASSET_URL" == *.zip ]]; then
+  extract_zip "$ASSET_PATH" "$EXTRACT_DIR"
+else
+  tar -xzf "$ASSET_PATH" -C "$EXTRACT_DIR"
+fi
+mv "$EXTRACT_DIR"/frameworks-%[1]s-* /opt/frameworks/%[1]s/%[1]s 2>/dev/null || mv "$EXTRACT_DIR"/%[1]s /opt/frameworks/%[1]s/%[1]s 2>/dev/null || mv "$EXTRACT_DIR"/frameworks /opt/frameworks/%[1]s/%[1]s
 chmod +x /opt/frameworks/%[1]s/%[1]s
-rm /tmp/%[1]s.tar.gz
 
 echo "Binary installed"
 `, f.serviceName, binaryURL, checksumURL)

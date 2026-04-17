@@ -24,6 +24,13 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.scope || 'changed' }}-${{ inputs.run_frontend || false }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   CRITICAL_PACKAGES: "pkg/auth pkg/x402 api_gateway/internal/errors"
 

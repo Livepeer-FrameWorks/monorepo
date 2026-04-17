@@ -7,6 +7,13 @@ on:
     branches: [master]
   workflow_dispatch: # manual trigger from Actions UI
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   changes:
     name: Detect changes
@@ -277,7 +284,6 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
       - name: Send Codecov notifications
         uses: codecov/codecov-action@v6
         with:
