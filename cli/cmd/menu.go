@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	fwcfg "frameworks/cli/internal/config"
+
 	"github.com/spf13/cobra"
 )
 
@@ -338,7 +340,11 @@ func settingsMenu(cmd *cobra.Command, r *bufio.Reader) {
 			cc.SetArgs([]string{name})
 			_ = cc.Execute()
 		case "4":
-			fmt.Fprintln(cmd.OutOrStdout(), "Config: $HOME/.frameworks/config.yaml (if present)")
+			path, err := fwcfg.ConfigPath()
+			if err != nil {
+				path = "(unavailable)"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Config: %s (if present)\n", path)
 		case "0":
 			return
 		default:

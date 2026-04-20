@@ -2136,6 +2136,11 @@ func (r *mutationResolver) CreateEnrollmentToken(ctx context.Context, clusterID 
 	return r.DoCreateEnrollmentToken(ctx, clusterID, name, ttl)
 }
 
+// BootstrapEdge is the resolver for the bootstrapEdge field.
+func (r *mutationResolver) BootstrapEdge(ctx context.Context, input model.BootstrapEdgeInput) (model.BootstrapEdgeResult, error) {
+	return r.DoBootstrapEdge(ctx, input)
+}
+
 // UpdateClusterMarketplace is the resolver for the updateClusterMarketplace field.
 func (r *mutationResolver) UpdateClusterMarketplace(ctx context.Context, clusterID string, input model.UpdateClusterMarketplaceInput) (model.UpdateClusterResult, error) {
 	rawID, err := globalid.DecodeExpected(clusterID, globalid.TypeCluster)

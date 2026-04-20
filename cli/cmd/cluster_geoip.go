@@ -21,13 +21,12 @@ import (
 
 func newClusterSyncGeoIPCmd() *cobra.Command {
 	var (
-		manifestPath string
-		licenseKey   string
-		source       string
-		filePath     string
-		remotePath   string
-		services     []string
-		restart      bool
+		licenseKey string
+		source     string
+		filePath   string
+		remotePath string
+		services   []string
+		restart    bool
 	)
 
 	cmd := &cobra.Command{
@@ -37,26 +36,23 @@ func newClusterSyncGeoIPCmd() *cobra.Command {
 that need geolocation data (Foghorn and Quartermaster).
 
 Sources:
-  maxmind  - Download from MaxMind (requires --license-key or MAXMIND_LICENSE_KEY)
+  maxmind  - Download from MaxMind. Requires MAXMIND_LICENSE_KEY in the
+             manifest's env_files, or --license-key for ad-hoc overrides.
   file     - Use a local .mmdb file (requires --file)`,
-		Example: `  # Download from MaxMind and distribute
-  frameworks cluster sync-geoip --license-key YOUR_KEY
-
-  # Use a local file
+		Example: `  frameworks cluster sync-geoip
   frameworks cluster sync-geoip --source file --file /path/to/GeoLite2-City.mmdb
-
-  # Target specific services and restart after upload
   frameworks cluster sync-geoip --license-key KEY --services foghorn,quartermaster --restart`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if licenseKey == "" {
-				licenseKey = os.Getenv("MAXMIND_LICENSE_KEY")
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
 			}
-			return runSyncGeoIP(cmd, manifestPath, licenseKey, source, filePath, remotePath, services, restart)
+			defer rc.Cleanup()
+			return runSyncGeoIP(cmd, rc, licenseKey, source, filePath, remotePath, services, restart)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
-	cmd.Flags().StringVar(&licenseKey, "license-key", "", "MaxMind license key (or MAXMIND_LICENSE_KEY env)")
+	cmd.Flags().StringVar(&licenseKey, "license-key", "", "MaxMind license key (ad-hoc override; normally sourced from manifest env_files)")
 	cmd.Flags().StringVar(&source, "source", "maxmind", "Source: maxmind or file")
 	cmd.Flags().StringVar(&filePath, "file", "", "Local .mmdb file path (when source=file)")
 	cmd.Flags().StringVar(&remotePath, "remote-path", "/var/lib/GeoIP/GeoLite2-City.mmdb", "Target path on hosts")
@@ -66,21 +62,27 @@ Sources:
 	return cmd
 }
 
-func runSyncGeoIP(_ *cobra.Command, manifestPath, licenseKey, source, filePath, remotePath string, services []string, restart bool) error {
+func runSyncGeoIP(_ *cobra.Command, rc *resolvedCluster, licenseKey, source, filePath, remotePath string, services []string, restart bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
-	manifestDir := filepath.Dir(manifestPath)
-	licenseKey = effectiveGeoIPLicenseKey(manifest, licenseKey)
+	manifest := rc.Manifest
+	manifestDir := filepath.Dir(rc.ManifestPath)
 	source = effectiveGeoIPSource(manifest, source)
 	services = effectiveGeoIPServices(manifest, services)
 	remotePath = effectiveGeoIPRemotePath(manifest, remotePath)
 	filePath = effectiveGeoIPFilePath(manifest, filePath, manifestDir)
+
+	// Only decrypt manifest env_files when we actually need the MaxMind key:
+	// source=maxmind AND no explicit --license-key. This preserves --source=file
+	// and --license-key override flows when SOPS state is unavailable.
+	if licenseKey == "" && source == "maxmind" {
+		sharedEnv, err := rc.SharedEnv()
+		if err != nil {
+			return fmt.Errorf("load manifest env_files: %w", err)
+		}
+		licenseKey = effectiveGeoIPLicenseKey(sharedEnv, licenseKey)
+	}
 
 	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, manifest, source, filePath, licenseKey)
 	if err != nil {
@@ -101,14 +103,18 @@ func runSyncGeoIP(_ *cobra.Command, manifestPath, licenseKey, source, filePath, 
 	return nil
 }
 
-func effectiveGeoIPLicenseKey(manifest *inventory.Manifest, explicit string) string {
+// effectiveGeoIPLicenseKey resolves the MaxMind license key in priority order:
+// explicit flag (sync-geoip --license-key) → sharedEnv["MAXMIND_LICENSE_KEY"]
+// from manifest env_files → "". Never reads process env: platform secrets
+// for cluster operations live in gitops, not the operator's shell.
+func effectiveGeoIPLicenseKey(sharedEnv map[string]string, explicit string) string {
 	if explicit != "" {
 		return explicit
 	}
-	if manifest != nil && manifest.GeoIP != nil && manifest.GeoIP.LicenseKeyEnv != "" {
-		return os.Getenv(manifest.GeoIP.LicenseKeyEnv)
+	if sharedEnv != nil {
+		return sharedEnv["MAXMIND_LICENSE_KEY"]
 	}
-	return os.Getenv("MAXMIND_LICENSE_KEY")
+	return ""
 }
 
 func effectiveGeoIPSource(manifest *inventory.Manifest, explicit string) string {
@@ -164,7 +170,7 @@ func resolveGeoIPMMDBPath(ctx context.Context, manifest *inventory.Manifest, sou
 		return filePath, func() {}, nil
 	case "maxmind":
 		if licenseKey == "" {
-			return "", func() {}, fmt.Errorf("geoip source=maxmind requires --license-key or MAXMIND_LICENSE_KEY")
+			return "", func() {}, fmt.Errorf("geoip source=maxmind requires MAXMIND_LICENSE_KEY in manifest env_files (or --license-key on sync-geoip) — add it to your gitops secrets")
 		}
 		tmpPath, err := downloadMaxMindDB(ctx, licenseKey)
 		if err != nil {

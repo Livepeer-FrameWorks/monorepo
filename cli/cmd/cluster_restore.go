@@ -16,7 +16,6 @@ import (
 
 // newClusterRestoreCmd creates the restore command
 func newClusterRestoreCmd() *cobra.Command {
-	var manifestPath string
 	var backupPath string
 	var skipValidation bool
 	var yes bool
@@ -34,24 +33,21 @@ Supported components:
 
 WARNING: Restore operations will STOP services and OVERWRITE existing data!
 Always backup current state before restoring.`,
-		Example: `  # Restore Postgres from backup
-  frameworks cluster restore postgres --from /backups/postgres-20250117-143000.sql
-
-  # Restore ClickHouse
+		Example: `  frameworks cluster restore postgres --from /backups/postgres-20250117-143000.sql
   frameworks cluster restore clickhouse --from /backups/clickhouse-20250117-143000/
-
-  # Restore volumes
   frameworks cluster restore volumes --from /backups/volumes-20250117-143000.tar.gz
-
-  # Skip confirmation prompt
   frameworks cluster restore postgres --from backup.sql --yes`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRestore(cmd, manifestPath, args[0], backupPath, skipValidation, yes)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runRestore(cmd, rc.Manifest, args[0], backupPath, skipValidation, yes)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	cmd.Flags().StringVar(&backupPath, "from", "", "Path to backup file or directory (required)")
 	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip health validation after restore")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt (DANGEROUS)")
@@ -61,14 +57,8 @@ Always backup current state before restoring.`,
 	return cmd
 }
 
-// runRestore executes the restore command
-func runRestore(cmd *cobra.Command, manifestPath, component, backupPath string, skipValidation, yes bool) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+// runRestore executes the restore command against an already-loaded manifest.
+func runRestore(cmd *cobra.Command, manifest *inventory.Manifest, component, backupPath string, skipValidation, yes bool) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "⚠  WARNING: Restore will STOP services and OVERWRITE data!\n")
 	fmt.Fprintf(cmd.OutOrStdout(), "Component: %s\n", component)
 	fmt.Fprintf(cmd.OutOrStdout(), "Backup: %s\n\n", backupPath)

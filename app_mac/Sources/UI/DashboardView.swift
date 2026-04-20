@@ -12,7 +12,7 @@ struct DashboardView: View {
           .fill(appState.edgeHealthy ? Color.tnGreen : Color.tnAccent)
           .frame(width: 8, height: 8)
         Text("FrameWorks").font(.headline)
-        if appState.cliAvailable {
+        if appState.cliAvailable, !appState.currentContext.isEmpty {
           Text(appState.currentContext)
             .font(.caption2.bold())
             .padding(.horizontal, 6)

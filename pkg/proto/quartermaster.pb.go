@@ -7243,15 +7243,19 @@ func (x *ValidateBootstrapTokenRequest) GetConsume() bool {
 }
 
 type ValidateBootstrapTokenResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Valid         bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`                         // json:"valid"
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`                            // json:"kind" — "edge_node", "service", etc.
-	ClusterId     string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"` // json:"cluster_id,omitempty" — bound cluster if any
-	TenantId      string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`    // json:"tenant_id,omitempty"
-	Reason        string                 `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`                        // json:"reason,omitempty" — if invalid: "expired", "revoked", "usage_exceeded", "not_found"
-	Metadata      *structpb.Struct       `protobuf:"bytes,6,opt,name=metadata,proto3" json:"metadata,omitempty"`                    // json:"metadata,omitempty"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Valid     bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`                         // json:"valid"
+	Kind      string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`                            // json:"kind" — "edge_node", "service", etc.
+	ClusterId string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"` // json:"cluster_id,omitempty" — bound cluster if any
+	TenantId  string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`    // json:"tenant_id,omitempty"
+	Reason    string                 `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`                        // json:"reason,omitempty" — if invalid: "expired", "revoked", "usage_exceeded", "not_found"
+	Metadata  *structpb.Struct       `protobuf:"bytes,6,opt,name=metadata,proto3" json:"metadata,omitempty"`                    // json:"metadata,omitempty"
+	// Foghorn gRPC advertise addr for the token's bound cluster, populated
+	// for cluster-bound tokens so a stateless rendezvous (Bridge bootstrapEdge)
+	// can route without a second lookup. Empty for non-cluster tokens.
+	FoghornGrpcAddr string `protobuf:"bytes,7,opt,name=foghorn_grpc_addr,json=foghornGrpcAddr,proto3" json:"foghorn_grpc_addr,omitempty"` // json:"foghorn_grpc_addr,omitempty"
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ValidateBootstrapTokenResponse) Reset() {
@@ -7324,6 +7328,13 @@ func (x *ValidateBootstrapTokenResponse) GetMetadata() *structpb.Struct {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *ValidateBootstrapTokenResponse) GetFoghornGrpcAddr() string {
+	if x != nil {
+		return x.FoghornGrpcAddr
+	}
+	return ""
 }
 
 // Matches pkg/api/quartermaster/types.go:InfrastructureSyncRequest (lines 440-444)
@@ -11415,7 +11426,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x1dValidateBootstrapTokenRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1b\n" +
 	"\tclient_ip\x18\x02 \x01(\tR\bclientIp\x12\x18\n" +
-	"\aconsume\x18\x03 \x01(\bR\aconsume\"\xd3\x01\n" +
+	"\aconsume\x18\x03 \x01(\bR\aconsume\"\xff\x01\n" +
 	"\x1eValidateBootstrapTokenResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1d\n" +
@@ -11423,7 +11434,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x1b\n" +
 	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06reason\x18\x05 \x01(\tR\x06reason\x123\n" +
-	"\bmetadata\x18\x06 \x01(\v2\x17.google.protobuf.StructR\bmetadata\"t\n" +
+	"\bmetadata\x18\x06 \x01(\v2\x17.google.protobuf.StructR\bmetadata\x12*\n" +
+	"\x11foghorn_grpc_addr\x18\a \x01(\tR\x0ffoghornGrpcAddr\"t\n" +
 	"\x19InfrastructureSyncRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1d\n" +
 	"\n" +

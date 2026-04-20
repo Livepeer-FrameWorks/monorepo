@@ -16,13 +16,34 @@ The FrameWorks CLI is your swiss-army knife for platform management. Provisionin
 ## Global Flags
 
 ```bash
---config string     Config file (default: $HOME/.frameworks/config.yaml)
+--config string     Path to config.yaml (default: $XDG_CONFIG_HOME/frameworks/config.yaml,
+                    which resolves to ~/.config/frameworks/config.yaml when XDG is unset)
+--context string    Context name for this invocation; overrides the saved current context
 --output string     Output format: json|text (default: text)
 --verbose, -v       Enable verbose logging
---context string    Context name (default: "default")
 ```
 
-Note: The `--manifest` flag is used by cluster subcommands and `frameworks edge provision` only. It is not global.
+Run `frameworks config path --kind config` to print the canonical path the CLI is using right now, honoring any `--config` override.
+
+Note: the manifest-source flags (`--manifest`, `--gitops-dir`, `--github-repo`, `--github-ref`, `--cluster`, `--age-key`, `--github-app-id`, `--github-installation-id`, `--github-private-key`) are persistent on the `frameworks cluster` command group — set on any `cluster *` subcommand. They are not global.
+
+## Cluster Manifest-Source Flags
+
+All `frameworks cluster *` subcommands share a persistent flag set for selecting the cluster manifest. The resolver picks the highest-priority input the operator provided (flag > env > the active context's saved default > cwd heuristic).
+
+| Flag                       | Env var                             | Meaning                                                               |
+| -------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
+| `--manifest`               | `FRAMEWORKS_MANIFEST`               | Path to a single `cluster.yaml`                                       |
+| `--gitops-dir`             | `FRAMEWORKS_GITOPS_DIR`             | Local gitops repo root (uses `<dir>/clusters/<cluster>/cluster.yaml`) |
+| `--github-repo`            | `FRAMEWORKS_GITHUB_REPO`            | `owner/repo` to fetch from via GitHub App                             |
+| `--github-ref`             | `FRAMEWORKS_GITHUB_REF`             | Branch/tag for `--github-repo` (default `main`)                       |
+| `--cluster`                | `FRAMEWORKS_CLUSTER`                | Cluster name within the gitops repo                                   |
+| `--age-key`                | `SOPS_AGE_KEY_FILE`                 | Age private key for SOPS-encrypted files                              |
+| `--github-app-id`          | `FRAMEWORKS_GITHUB_APP_ID`          | GitHub App ID (for `--github-repo`)                                   |
+| `--github-installation-id` | `FRAMEWORKS_GITHUB_INSTALLATION_ID` | GitHub Installation ID                                                |
+| `--github-private-key`     | `FRAMEWORKS_GITHUB_PRIVATE_KEY`     | Path to GitHub App private-key PEM                                    |
+
+Save defaults once with `frameworks setup` (interactive) or the non-interactive equivalents (`frameworks context create <name>` + `frameworks context set-gitops-*`). Explicit flags on a specific invocation always win over saved defaults.
 
 ## Detection & Health Commands
 
@@ -53,21 +74,19 @@ frameworks cluster detect [flags]
 ✗ signalman (regional-01): not found
 ```
 
-**Flags:**
-
-- `--manifest string` - Cluster manifest file (default: cluster.yaml)
+**Flags:** inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 
 **Examples:**
 
 ```bash
-# Detect all services
+# Detect all services (uses the active context's saved manifest source)
 frameworks cluster detect
 
-# Detect with custom manifest
+# Detect against a specific manifest
 frameworks cluster detect --manifest production.yaml
 
-# Verbose output
-frameworks cluster detect --verbose
+# Detect against a local gitops repo
+frameworks cluster detect --gitops-dir ~/work/gitops --cluster production
 ```
 
 ---
@@ -115,15 +134,16 @@ Recommendations:
   - Verify network connectivity between hosts
 ```
 
-**Flags:**
-
-- `--manifest string` - Cluster manifest file
+**Flags:** inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 
 **Examples:**
 
 ```bash
-# Full health check
+# Full health check against the active context
 frameworks cluster doctor
+
+# Against a GitHub-sourced manifest
+frameworks cluster doctor --github-repo org/gitops --cluster production
 
 # With verbose output
 frameworks cluster doctor --verbose
@@ -158,11 +178,12 @@ frameworks cluster provision [flags]
 
 **Flags:**
 
-- `--manifest string` - Cluster manifest file
+- Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 - `--only string` - Phase to provision (`infrastructure`, `applications`, `interfaces`, `all`)
 - `--dry-run` - Show what would be deployed without actually deploying
 - `--force` - Force re-provision even if services exist
 - `--ignore-validation` - Continue even if health validation fails (dangerous)
+- `--bootstrap-admin-*` / `--strict-control-plane` - Optional bootstrap controls; see `frameworks cluster provision --help` for the full list.
 
 **Examples:**
 
@@ -184,7 +205,7 @@ frameworks cluster provision --dry-run
 
 During provisioning, the CLI automatically bootstraps the system tenant and clusters:
 
-1. **Service Token Required:** Set `SERVICE_TOKEN` or log in with `frameworks login` so the CLI can authenticate to Quartermaster.
+1. **Service Token:** `SERVICE_TOKEN` is loaded from your manifest `env_files` (gitops, SOPS-encrypted) — the CLI decrypts with `--age-key` or `SOPS_AGE_KEY_FILE` and uses the token to authenticate to Quartermaster. No separate login or env var is required; the token is platform configuration, not operator identity.
 
 2. **System Tenant Creation:** If the "FrameWorks" system tenant doesn't exist, it's created with deployment tier `global`.
 
@@ -1017,8 +1038,12 @@ frameworks edge deploy --cluster-id my-edge-prod --ssh ubuntu@edge-1
 **Mode B — Pre-existing token:**
 
 ```bash
-frameworks edge deploy --enrollment-token <token> --foghorn-addr foghorn.cluster.example.com:18019 --ssh ubuntu@edge-1
+frameworks edge deploy --enrollment-token <token> --ssh ubuntu@edge-1
 ```
+
+The token is the only credential you need. Bridge resolves the cluster's
+Foghorn via the public `bootstrapEdge` mutation and proxies the
+pre-registration. No Foghorn address required.
 
 **Flags:**
 
@@ -1026,7 +1051,7 @@ frameworks edge deploy --enrollment-token <token> --foghorn-addr foghorn.cluster
 - `--cluster-name` - Name for new private cluster if one needs to be created
 - `--region` - Region for new private cluster
 - `--enrollment-token` - Pre-existing enrollment token (skips login/VPC setup)
-- `--foghorn-addr` - Foghorn gRPC address (required with `--enrollment-token`)
+- `--foghorn-addr` - Explicit Foghorn gRPC override; debug only. Bridge resolves the addr by default; use this when you need to talk to a specific Foghorn directly.
 - `--ssh` - SSH target (user@host) for remote deployment
 - `--ssh-key` - SSH private key path
 - `--mode` - Deployment mode: `docker` (default) or `native`
@@ -1174,20 +1199,24 @@ frameworks edge provision --manifest edges.yaml
 - `--manifest string` - Path to edge manifest file
 - `--parallel int` - Number of concurrent provisions (default: 1)
 - `--tune` - Apply sysctl/limits tuning
-- `--register` - Register node in Quartermaster
+- `--register` - Register node in Quartermaster (manual/admin path only — see note below)
 - `--fetch-cert` - Fetch TLS certificate from Navigator
 - `--skip-preflight` - Skip preflight checks
+
+`--register` is for the manual provisioning path, where an admin supplies `--pool-domain`/`--node-domain` directly without an enrollment token and wants to create the Quartermaster node row in the same step. It is rejected when combined with `--enrollment-token` (the token path already registers the node via Foghorn's `PreRegisterEdge`) and when the active context uses the `edge` persona (which intentionally does not have Quartermaster reachability — only Bridge). Manifest entries that set `register_qm: true` together with an enrollment token are rejected the same way.
 
 **Examples:**
 
 ```bash
-# Provision single node with explicit domains
+# Provision single node with explicit domains (manual/admin path; requires
+# a platform or self-hosted context with Quartermaster reachability)
 frameworks edge provision --ssh ubuntu@10.0.0.5 \
   --pool-domain edge.example.com \
   --node-domain edge-1.example.com \
   --register --fetch-cert --email admin@example.com
 
-# Provision with enrollment token (auto-assigns domain via PreRegisterEdge)
+# Provision with enrollment token (auto-assigns domain via PreRegisterEdge,
+# registers the node row as a side effect — do NOT pass --register)
 frameworks edge provision --ssh ubuntu@10.0.0.5 \
   --enrollment-token enroll_abc123 \
   --email admin@example.com
@@ -1525,17 +1554,49 @@ frameworks services discover --type foghorn --cluster-id central-production
 
 ## Context Commands
 
-Manage CLI contexts (endpoints, authentication, executor settings).
+Manage CLI contexts (endpoints, persona, gitops defaults). A context bundles
+everything the CLI needs to know for one environment: which control-plane
+endpoints to call, what kind of operator you are (platform / self-hosted /
+edge), and where your cluster manifests live.
 
-### frameworks context init
+**Recommended onboarding:** run `frameworks setup` for an interactive wizard
+that captures all of the above at once. For CI or scripted provisioning, use
+`context create` + the `context set-*` commands below.
 
-Create a default configuration with local development endpoints.
+### frameworks context create
+
+Create a new (empty) context with default localhost endpoints. Does not
+switch to it — pair with `context use <name>`.
 
 ```bash
-frameworks context init
+frameworks context create platform-prod
 ```
 
-Creates the local CLI config with a "local" context pointing to `localhost` endpoints.
+This is the non-interactive entry point the setup wizard is built on. Use
+it when you want to bootstrap a context from a script without going through
+the TTY prompts.
+
+---
+
+### frameworks context set-\*
+
+Non-interactive setters for the fields the setup wizard captures
+interactively. Each targets the active context, or `--context <name>` for a
+specific one. They error if the target context doesn't exist — use
+`context create` first.
+
+```bash
+frameworks context set-persona platform --context platform-prod
+frameworks context set-gitops-source local --context platform-prod
+frameworks context set-gitops-path /path/to/gitops --context platform-prod
+frameworks context set-gitops-cluster production --context platform-prod
+frameworks context set-age-key ~/.config/sops/age/keys.txt --context platform-prod
+```
+
+Available setters: `set-persona`, `set-gitops-source`, `set-gitops-path`,
+`set-gitops-repo`, `set-gitops-ref`, `set-gitops-cluster`,
+`set-gitops-manifest`, `set-age-key`. Plus the existing `set-url` and
+`set-cluster` for endpoints.
 
 ---
 
@@ -1620,21 +1681,31 @@ frameworks context check
 
 ### frameworks login
 
-Authenticate with the FrameWorks platform.
+Authenticate with the FrameWorks platform using your user session token
+(the same credential the macOS tray uses).
 
 ```bash
-# Login with API token (for user operations)
 frameworks login
-
-# Login with service token (for automation)
-frameworks login --service-account
 ```
 
-**Flags:**
+**Token storage.** The session is written to the platform-native credential store and never appears in shell history:
 
-- `--service-account` - Use service token instead of API token
+- **macOS:** Keychain service `com.livepeer.frameworks`, account `user_session`.
+- **Other platforms:** `$XDG_DATA_HOME/frameworks/credentials` with mode `0600`.
 
-Tokens are stored in `~/.frameworks/.env` and never appear in shell history.
+For CI/automation, set `FW_USER_TOKEN` in the environment — it overrides whatever the store holds. Run `frameworks config path --kind credentials` to print the active backend (e.g. `keychain:com.livepeer.frameworks` on macOS).
+
+The platform `SERVICE_TOKEN` is **not** a user credential. It is loaded from your manifest `env_files` (gitops) during `cluster provision` and admin commands. There is no `login --service-account`.
+
+### frameworks logout
+
+Clear the stored user session.
+
+```bash
+frameworks logout
+```
+
+Deletes both `user_session` and `refresh_token` so a running tray can't silently repopulate them. The gitops-sourced `SERVICE_TOKEN` is unaffected — logout does not touch platform configuration.
 
 ---
 

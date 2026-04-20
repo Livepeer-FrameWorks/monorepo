@@ -2573,18 +2573,34 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 	telemetry := buildEdgeTelemetryConfig(nodeID, resolvedClusterID, ownerTenantID)
 
 	return &pb.ConfigSeed{
-		NodeId:          nodeID,
-		Latitude:        lat,
-		Longitude:       lon,
-		LocationName:    loc,
-		Templates:       templates,
-		OperationalMode: operationalMode,
-		Tls:             tlsBundle,
-		Site:            siteConfig,
-		CaBundle:        caBundle,
-		TenantId:        ownerTenantID,
-		Telemetry:       telemetry,
+		NodeId:              nodeID,
+		Latitude:            lat,
+		Longitude:           lon,
+		LocationName:        loc,
+		Templates:           templates,
+		OperationalMode:     operationalMode,
+		Tls:                 tlsBundle,
+		Site:                siteConfig,
+		CaBundle:            caBundle,
+		TenantId:            ownerTenantID,
+		Telemetry:           telemetry,
+		FoghornBalancerBase: foghornBalancerBase(),
 	}
+}
+
+// foghornBalancerBase returns the public HTTP base URL Helmsman should use
+// for MistServer's balance:<base> source. FOGHORN_PUBLIC_BASE is the explicit
+// override (used when Foghorn sits behind a load balancer); otherwise we
+// derive https://${FOGHORN_HOST}:18008 if the advertise host is set; the
+// final fallback is the in-cluster docker-compose service name.
+func foghornBalancerBase() string {
+	if v := strings.TrimSpace(os.Getenv("FOGHORN_PUBLIC_BASE")); v != "" {
+		return v
+	}
+	if h := strings.TrimSpace(os.Getenv("FOGHORN_HOST")); h != "" {
+		return fmt.Sprintf("https://%s:18008", h)
+	}
+	return "http://foghorn:18008"
 }
 
 type edgeTelemetryClaims struct {

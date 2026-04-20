@@ -1315,6 +1315,16 @@ type Mutation {
   ): CreateEnrollmentTokenResult!
 
   """
+  Bootstrap a new edge using only an opaque bootstrap token.
+
+  Public — the bootstrap token is itself the credential. Bridge resolves
+  the token's cluster via Quartermaster, finds the cluster's assigned
+  Foghorn, and proxies a PreRegisterEdge call so the operator never has
+  to know cluster topology.
+  """
+  bootstrapEdge(input: BootstrapEdgeInput!): BootstrapEdgeResult!
+
+  """
   Update marketplace settings for a cluster.
   """
   updateClusterMarketplace(
@@ -1687,6 +1697,7 @@ union RevokeBootstrapTokenResult = DeleteSuccess | NotFoundError | AuthError
 union CreatePrivateClusterResult = CreatePrivateClusterResponse | ValidationError | AuthError
 union CreateEdgeClusterResult = CreateEdgeClusterResponse | ValidationError | AuthError
 union CreateEnrollmentTokenResult = CreateEnrollmentTokenResponse | ValidationError | AuthError
+union BootstrapEdgeResult = BootstrapEdgeResponse | ValidationError | AuthError
 union UpdateClusterResult = Cluster | ValidationError | NotFoundError | AuthError
 union CreateClusterInviteResult = ClusterInvite | ValidationError | NotFoundError | AuthError
 union RevokeClusterInviteResult = DeleteSuccess | NotFoundError | AuthError
@@ -4730,6 +4741,40 @@ type CreateEdgeClusterResponse {
 
 type CreateEnrollmentTokenResponse {
   bootstrapToken: BootstrapToken!
+}
+
+input BootstrapEdgeInput {
+  "Bootstrap token issued by createEdgeCluster or createEnrollmentToken."
+  token: String!
+  "External IP of the edge being bootstrapped (helps Foghorn assign a domain)."
+  externalIp: String
+  "Caller-supplied node id hint; Foghorn may ignore."
+  preferredNodeId: String
+}
+
+type EdgeTelemetrySetup {
+  enabled: Boolean!
+  writeUrl: String
+  bearerToken: String
+}
+
+"""
+Result of a successful bootstrapEdge call. Carries everything the edge
+needs to come online: its identity, its assigned Foghorn for runtime
+traffic, and (if the cluster issues per-node certs) its initial TLS
+material plus the cluster's internal CA bundle.
+"""
+type BootstrapEdgeResponse {
+  nodeId: String!
+  edgeDomain: String!
+  poolDomain: String
+  clusterSlug: String!
+  clusterId: String!
+  foghornGrpcAddr: String!
+  certPem: String
+  keyPem: String
+  internalCaBundle: String
+  telemetry: EdgeTelemetrySetup
 }
 
 """

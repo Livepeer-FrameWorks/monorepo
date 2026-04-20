@@ -17,6 +17,8 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	fwcredentials "frameworks/cli/internal/credentials"
+	"frameworks/cli/internal/platformauth"
 	"frameworks/cli/internal/preflight"
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/xexec"
@@ -27,6 +29,7 @@ import (
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/clients/navigator"
 	"frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/ctxkeys"
 	pkgdns "frameworks/pkg/dns"
 	infra "frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
@@ -174,11 +177,15 @@ func newEdgeInitCmd() *cobra.Command {
 	var telemetryURL string
 	var telemetryToken string
 	cmd := &cobra.Command{Use: "init", Short: ".edge.env + templates (compose, Caddyfile)", RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, _, err := fwcfg.Load()
+		cfg, err := fwcfg.Load()
 		if err != nil {
 			return err
 		}
-		cliCtx := fwcfg.GetCurrent(cfg)
+		rt := fwcfg.GetRuntimeOverrides()
+		cliCtx, err := fwcfg.MaybeActiveContext(rt, fwcfg.OSEnv{}, cfg)
+		if err != nil {
+			return err
+		}
 		if target == "" {
 			target = "."
 		}
@@ -189,15 +196,17 @@ func newEdgeInitCmd() *cobra.Command {
 		var preRegFoghornAddr string
 		var preRegCABundle string
 		if enrollmentToken != "" {
-			addr := foghornAddr
-			if addr == "" {
-				addr = cliCtx.Endpoints.FoghornGRPCAddr
-			}
-			if addr == "" {
-				return fmt.Errorf("--foghorn-addr is required when using --enrollment-token")
-			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
-			resp, preRegErr := preRegisterEdgeLocal(cmd.Context(), addr, enrollmentToken, deriveEdgeNodeName("", "", "", true))
+			var (
+				resp      *pb.PreRegisterEdgeResponse
+				preRegErr error
+			)
+			if foghornAddr != "" {
+				// Explicit override: dial Foghorn directly. For admin debug only.
+				resp, preRegErr = preRegisterEdgeLocal(cmd.Context(), foghornAddr, enrollmentToken, deriveEdgeNodeName("", "", "", true))
+			} else {
+				resp, preRegErr = bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, "", "", deriveEdgeNodeName("", "", "", true))
+			}
 			if preRegErr != nil {
 				return fmt.Errorf("pre-registration failed: %w", preRegErr)
 			}
@@ -234,7 +243,6 @@ func newEdgeInitCmd() *cobra.Command {
 			NodeID:          preRegNodeID,
 			EdgeDomain:      domain,
 			AcmeEmail:       email,
-			FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 			FoghornGRPCAddr: foghornGRPC,
 			EnrollmentToken: enrollmentToken,
 			GRPCTLSCAPath:   "/etc/frameworks/pki/ca.crt",
@@ -435,24 +443,38 @@ Local (user LaunchAgent, no admin required):
 Multi-node manifest example:
   frameworks edge provision --manifest edges.yaml --parallel 4`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Load config for control plane endpoints
-			cfg, _, err := fwcfg.Load()
+			cfg, err := fwcfg.Load()
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
-			cliCtx := fwcfg.GetCurrent(cfg)
+			rt := fwcfg.GetRuntimeOverrides()
+			cliCtx, err := fwcfg.MaybeActiveContext(rt, fwcfg.OSEnv{}, cfg)
+			if err != nil {
+				return err
+			}
 
 			// Check if using manifest mode
 			if manifestPath != "" {
 				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, ageKeyFile, dryRun)
 			}
 
-			// Default --cluster-id and --foghorn-addr from context
+			// Default --cluster-id from context. --foghorn-addr is intentionally
+			// NOT defaulted here; the bootstrap branch below must distinguish
+			// "operator explicitly passed --foghorn-addr" (debug override → direct
+			// dial) from "context happens to have a Foghorn addr" (still → Bridge).
 			if clusterID == "" {
 				clusterID = cliCtx.ClusterID
 			}
-			if foghornAddr == "" {
-				foghornAddr = cliCtx.Endpoints.FoghornGRPCAddr
+			foghornAddrExplicit := cmd.Flags().Changed("foghorn-addr")
+
+			// --register belongs to the manual/admin path. The token path
+			// already registers the node via Foghorn's PreRegisterEdge, and
+			// the edge persona doesn't have Quartermaster reachability.
+			if registerNode && enrollmentToken != "" {
+				return fmt.Errorf("--register is for the manual provisioning path; the token path already registers the node via Foghorn")
+			}
+			if registerNode && cliCtx.Persona == fwcfg.PersonaEdge {
+				return fmt.Errorf("--register requires Quartermaster access; the edge persona only has Bridge — use a platform or self-hosted context for manual node registration")
 			}
 
 			// Single node mode - require ssh target or --local
@@ -467,21 +489,21 @@ Multi-node manifest example:
 			var preRegFoghornAddr string
 			var preRegCABundle string
 			if enrollmentToken != "" {
-				addr := foghornAddr
-				if addr == "" {
-					addr = cliCtx.Endpoints.FoghornGRPCAddr
-				}
-				if addr == "" {
-					return fmt.Errorf("--foghorn-addr is required when using --enrollment-token")
-				}
-
 				fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
 				preRegTarget := sshTarget
 				if isLocal {
 					preRegTarget = "localhost"
 				}
 				preferredNodeID := deriveEdgeNodeName(nodeName, "", sshTarget, isLocal)
-				preRegResp, preRegErr := preRegisterEdge(cmd.Context(), addr, enrollmentToken, preRegTarget, sshKey, preferredNodeID)
+				var (
+					preRegResp *pb.PreRegisterEdgeResponse
+					preRegErr  error
+				)
+				if foghornAddrExplicit && foghornAddr != "" {
+					preRegResp, preRegErr = preRegisterEdge(cmd.Context(), foghornAddr, enrollmentToken, preRegTarget, sshKey, preferredNodeID)
+				} else {
+					preRegResp, preRegErr = bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, preRegTarget, sshKey, preferredNodeID)
+				}
 				if preRegErr != nil {
 					return fmt.Errorf("pre-registration failed: %w", preRegErr)
 				}
@@ -560,10 +582,16 @@ Multi-node manifest example:
 				}
 			}
 
-			// Build EdgeProvisionConfig and delegate to EdgeProvisioner
-			foghornGRPC := foghornAddr // user flag, already defaulted from context at line 400-402
-			if preRegFoghornAddr != "" {
-				foghornGRPC = preRegFoghornAddr
+			// Build EdgeProvisionConfig and delegate to EdgeProvisioner.
+			// Order: pre-reg response (authoritative when token bootstrap ran) →
+			// explicit --foghorn-addr → context default. The provisioner needs an
+			// addr to plant in FOGHORN_CONTROL_ADDR for Helmsman's first dial.
+			foghornGRPC := preRegFoghornAddr
+			if foghornGRPC == "" {
+				foghornGRPC = foghornAddr
+			}
+			if foghornGRPC == "" {
+				foghornGRPC = cliCtx.Endpoints.FoghornGRPCAddr
 			}
 
 			var host inventory.Host
@@ -593,7 +621,6 @@ Multi-node manifest example:
 				Email:           email,
 				EnrollmentToken: enrollmentToken,
 				FoghornGRPCAddr: foghornGRPC,
-				FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 				NodeID:          preRegNodeID,
 				CertPEM:         certPEM,
 				KeyPEM:          keyPEM,
@@ -602,7 +629,6 @@ Multi-node manifest example:
 				TelemetryToken:  telemetryToken,
 				SkipPreflight:   skipPreflight,
 				ApplyTuning:     applyTuning,
-				RegisterNode:    registerNode,
 				Timeout:         timeout,
 				Version:         version,
 				DarwinDomain:    darwinDomain,
@@ -807,15 +833,21 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 
 // provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.
 func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version, telemetryURL, telemetryToken string) error {
+	// Same --register guards the single-node provision RunE applies. Manifest
+	// mode reaches this helper without going through that RunE, so duplicate
+	// the contract here to keep the rule single-source.
+	if registerNode && enrollmentToken != "" {
+		return fmt.Errorf("register_qm is for the manual provisioning path; the token path already registers the node via Foghorn")
+	}
+	if registerNode && cliCtx.Persona == fwcfg.PersonaEdge {
+		return fmt.Errorf("register_qm requires Quartermaster access; the edge persona only has Bridge — use a platform or self-hosted context for manual node registration")
+	}
+
 	var preRegFoghornAddr string
 	var preRegCABundle string
 	if enrollmentToken != "" {
-		addr := cliCtx.Endpoints.FoghornGRPCAddr
-		if addr == "" {
-			return fmt.Errorf("foghorn gRPC address is required when using enrollment tokens")
-		}
 		preferredNodeID := deriveEdgeNodeName(nodeName, nodeDomain, sshTarget, false)
-		preRegResp, err := preRegisterEdge(cmd.Context(), addr, enrollmentToken, sshTarget, sshKey, preferredNodeID)
+		preRegResp, err := bootstrapEdgeViaBridge(cmd.Context(), cliCtx, enrollmentToken, sshTarget, sshKey, preferredNodeID)
 		if err != nil {
 			return fmt.Errorf("pre-registration failed: %w", err)
 		}
@@ -872,7 +904,6 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		Email:           email,
 		EnrollmentToken: enrollmentToken,
 		FoghornGRPCAddr: firstNonEmpty(preRegFoghornAddr, cliCtx.Endpoints.FoghornGRPCAddr),
-		FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 		CertPEM:         certPEM,
 		KeyPEM:          keyPEM,
 		CABundlePEM:     preRegCABundle,
@@ -880,7 +911,6 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		TelemetryToken:  telemetryToken,
 		SkipPreflight:   false, // Preflight always runs for manifest mode
 		ApplyTuning:     applyTuning,
-		RegisterNode:    registerNode,
 		Timeout:         timeout,
 		Version:         version,
 	}
@@ -1024,9 +1054,24 @@ func getRemoteExternalIP(ctx context.Context, sshTarget, sshKey string) (string,
 	return "", fmt.Errorf("could not detect external IP via any method")
 }
 
-// registerEdgeNode registers an edge node in Quartermaster
+// registerEdgeNode registers an edge node in Quartermaster.
+// Platform-admin direct path — uses the gitops-sourced SERVICE_TOKEN for
+// Quartermaster auth. The normal edge bootstrap flow (Bridge +
+// enrollment token) does not need this function.
 func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, clusterID, externalIP, region string) error {
-	cliCtx.Auth = fwcfg.ResolveAuth(cliCtx)
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return err
+	}
+	jwt, err := fwcredentials.ResolveUserAuth(fwcfg.OSEnv{}, fwcredentials.DefaultStore())
+	if err != nil {
+		return err
+	}
+	token, err := platformauth.ResolveManifestServiceToken(cmd.Context(), cliCtx, cfg)
+	if err != nil {
+		return err
+	}
+	cliCtx.Auth = fwcfg.Auth{JWT: jwt, ServiceToken: token}
 	// Create Quartermaster gRPC client
 	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
 		GRPCAddr:      cliCtx.Endpoints.QuartermasterGRPCAddr,
@@ -1060,11 +1105,12 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 		req.Region = &region
 	}
 
-	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if cliCtx.Auth.JWT != "" {
+		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, cliCtx.Auth.JWT)
+	}
 
-	// Register the node
 	resp, err := qmClient.CreateNode(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to create node: %w", err)

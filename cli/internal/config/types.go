@@ -6,7 +6,6 @@ type Endpoints struct {
 	QuartermasterGRPCAddr string `yaml:"quartermaster_grpc_addr" json:"quartermaster_grpc_addr"` // gRPC address (host:port)
 	ControlURL            string `yaml:"control_url" json:"control_url"`                         // deprecated: use CommodoreGRPCAddr
 	CommodoreGRPCAddr     string `yaml:"commodore_grpc_addr" json:"commodore_grpc_addr"`         // gRPC address (host:port)
-	FoghornHTTPURL        string `yaml:"foghorn_http_url" json:"foghorn_http_url"`               // deprecated
 	FoghornGRPCAddr       string `yaml:"foghorn_grpc_addr" json:"foghorn_grpc_addr"`
 	DecklogGRPCAddr       string `yaml:"decklog_grpc_addr" json:"decklog_grpc_addr"`
 	PeriscopeQueryURL     string `yaml:"periscope_query_url" json:"periscope_query_url"`   // deprecated: use PeriscopeGRPCAddr
@@ -43,6 +42,40 @@ type Context struct {
 	Endpoints Endpoints `yaml:"endpoints" json:"endpoints"`
 	Executor  Executor  `yaml:"executor" json:"executor"`
 	Auth      Auth      `yaml:"auth" json:"-"`
+	Persona   Persona   `yaml:"persona,omitempty" json:"persona,omitempty"`
+	Gitops    *Gitops   `yaml:"gitops,omitempty" json:"gitops,omitempty"`
+}
+
+// Persona labels a context by operator intent. Shapes setup prompts and
+// first-run hints only; commands do not branch on persona.
+type Persona string
+
+const (
+	PersonaPlatform   Persona = "platform"
+	PersonaSelfHosted Persona = "selfhosted"
+	PersonaEdge       Persona = "edge"
+)
+
+// GitopsSource names the manifest-sourcing strategy for a context.
+type GitopsSource string
+
+const (
+	GitopsLocal    GitopsSource = "local"
+	GitopsGitHub   GitopsSource = "github"
+	GitopsManifest GitopsSource = "manifest"
+)
+
+// Gitops captures persisted defaults for the manifest resolver.
+// LocalPath applies when Source=local; Repo/Ref apply when Source=github;
+// ManifestPath applies when Source=manifest (or as an explicit override).
+type Gitops struct {
+	Source       GitopsSource `yaml:"source" json:"source"`
+	LocalPath    string       `yaml:"local_path,omitempty" json:"local_path,omitempty"`
+	Repo         string       `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Ref          string       `yaml:"ref,omitempty" json:"ref,omitempty"`
+	ManifestPath string       `yaml:"manifest_path,omitempty" json:"manifest_path,omitempty"`
+	Cluster      string       `yaml:"cluster,omitempty" json:"cluster,omitempty"`
+	AgeKeyPath   string       `yaml:"age_key_path,omitempty" json:"age_key_path,omitempty"`
 }
 
 type GitHubApp struct {

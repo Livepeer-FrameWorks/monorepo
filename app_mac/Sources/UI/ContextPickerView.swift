@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContextPickerView: View {
@@ -34,7 +35,7 @@ struct ContextPickerView: View {
             .font(.largeTitle).foregroundStyle(.secondary)
           Text("No contexts found")
             .font(.headline).foregroundStyle(.secondary)
-          Text("Run 'frameworks context init' to create one.")
+          Text("Run 'frameworks setup' to create one.")
             .font(.caption).foregroundStyle(.tertiary)
         }
         Spacer()
@@ -111,12 +112,10 @@ struct ContextPickerView: View {
     Task {
       let ok = await ConfigBridge.shared.switchContext(name)
       if ok {
-        if let ctx = await ConfigBridge.shared.loadCurrentContext() {
-          await MainActor.run {
-            appState.currentContext = ctx.name
-            appState.gatewayBaseURL = ctx.endpoints.bridgeURL
-            GatewayClient.shared.baseURL = ctx.endpoints.bridgeURL
-          }
+        let ctx = await ConfigBridge.shared.loadCurrentContext()
+        let entries = await ConfigBridge.shared.loadContexts()
+        if let appDelegate = await MainActor.run(body: { NSApp.delegate as? AppDelegate }) {
+          await appDelegate.applyHydratedContext(ctx, contextNames: entries.map(\.name))
         }
       }
       await MainActor.run {

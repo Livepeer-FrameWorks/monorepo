@@ -1123,6 +1123,10 @@ message ValidateBootstrapTokenResponse {
   string tenant_id = 4;         // json:"tenant_id,omitempty"
   string reason = 5;            // json:"reason,omitempty" — if invalid: "expired", "revoked", "usage_exceeded", "not_found"
   google.protobuf.Struct metadata = 6; // json:"metadata,omitempty"
+  // Foghorn gRPC advertise addr for the token's bound cluster, populated
+  // for cluster-bound tokens so a stateless rendezvous (Bridge bootstrapEdge)
+  // can route without a second lookup. Empty for non-cluster tokens.
+  string foghorn_grpc_addr = 7; // json:"foghorn_grpc_addr,omitempty"
 }
 
 // ============================================================================

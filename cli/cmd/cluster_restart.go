@@ -15,7 +15,6 @@ import (
 
 // newClusterRestartCmd creates the restart command
 func newClusterRestartCmd() *cobra.Command {
-	var manifestPath string
 	var validate bool
 
 	cmd := &cobra.Command{
@@ -34,30 +33,27 @@ the appropriate restart method.
 
 After restart, the command can optionally validate that the service
 is healthy using health checks.`,
-		Example: `  # Restart quartermaster
-  frameworks cluster restart quartermaster
-
-  # Restart and validate health
+		Example: `  frameworks cluster restart quartermaster
   frameworks cluster restart bridge --validate`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRestart(cmd, manifestPath, args[0], validate)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runRestart(cmd, rc.Manifest, args[0], validate)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	cmd.Flags().BoolVar(&validate, "validate", false, "Validate service health after restart")
 
 	return cmd
 }
 
-// runRestart executes the restart command
-func runRestart(cmd *cobra.Command, manifestPath, serviceName string, validate bool) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
+// runRestart executes the restart command against an already-loaded manifest.
+func runRestart(cmd *cobra.Command, manifest *inventory.Manifest, serviceName string, validate bool) error {
+	var err error
 
 	// Resolve deploy name
 	var deployName string

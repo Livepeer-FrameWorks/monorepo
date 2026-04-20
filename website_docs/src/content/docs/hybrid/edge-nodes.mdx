@@ -66,11 +66,12 @@ This configures:
 ```bash
 frameworks edge init --dir /opt/frameworks-edge \
   --enrollment-token enroll_xxx \
-  --foghorn-addr foghorn.example.com:18019 \
   --email ops@yourdomain.com
 ```
 
-When using `--enrollment-token`, the CLI calls Foghorn's `PreRegisterEdge` RPC to get an assigned domain, node ID, cluster slug, and the internal CA bundle used for gRPC trust bootstrap. You still need `--foghorn-addr` (or have it set in your CLI context) to reach Foghorn. If you already have a domain and don't need auto-assignment, use `--domain` instead:
+When using `--enrollment-token`, the CLI sends the token to Bridge's public `bootstrapEdge` mutation. Bridge resolves the cluster, finds its Foghorn, and proxies the pre-registration. The response carries the assigned domain, node ID, cluster slug, the runtime Foghorn address, and the internal CA bundle for gRPC trust bootstrap. The operator only ever needs the token and the SSH target; Foghorn discovery happens server-side.
+
+If you already have a domain and don't need auto-assignment, use `--domain` instead:
 
 ```bash
 frameworks edge init --dir /opt/frameworks-edge \
@@ -91,15 +92,13 @@ The edge environment file contains the required settings:
 ```bash
 NODE_ID=edge-us-sea-1
 EDGE_PUBLIC_URL=https://stream.yourdomain.com/view
-FOGHORN_URL=https://foghorn.example.com
 FOGHORN_CONTROL_ADDR=foghorn.example.com:18019
-FOGHORN_HTTP_BASE=https://foghorn.example.com
 EDGE_ENROLLMENT_TOKEN=your-enrollment-token
 EDGE_DOMAIN=stream.yourdomain.com
 ACME_EMAIL=ops@yourdomain.com
 ```
 
-`NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path.
+`NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path. `FOGHORN_CONTROL_ADDR` is the only Foghorn endpoint Helmsman needs at boot — the HTTP balancer base, TLS bundle, telemetry, and SiteConfig all arrive over the live gRPC `ConfigSeed` stream once Helmsman connects.
 
 When using `--enrollment-token` with `edge init`, the CLI populates `NODE_ID`, `EDGE_DOMAIN`, and `FOGHORN_CONTROL_ADDR` from the PreRegisterEdge response. It also stages the internal CA bundle so Helmsman can trust Foghorn immediately; public wildcard TLS still arrives later through ConfigSeed.
 
@@ -205,10 +204,11 @@ frameworks edge cert --dir /opt/frameworks-edge --reload
 
 **"Helmsman can't reach Foghorn"**
 
-Network issue or firewall blocking outbound gRPC/HTTPS.
+Network issue or firewall blocking outbound gRPC. The dial target is whatever `FOGHORN_CONTROL_ADDR` is set to in `.edge.env`; check the helmsman log for the exact failure:
 
 ```bash
-curl -I $FOGHORN_URL/health
+frameworks edge logs helmsman --tail 100
+frameworks edge status --dir /opt/frameworks-edge
 ```
 
 ## Next Steps

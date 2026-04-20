@@ -14,8 +14,6 @@ import (
 
 // newClusterInitCmd creates the init command
 func newClusterInitCmd() *cobra.Command {
-	var manifestPath string
-
 	cmd := &cobra.Command{
 		Use:   "init [service]",
 		Short: "Initialize databases, topics, and tables",
@@ -29,14 +27,9 @@ Available Services:
 
 Initialization is idempotent - safe to run multiple times.
 Existing databases/topics/tables will be skipped.`,
-		Example: `  # Initialize all databases
-  frameworks cluster init postgres --manifest cluster.yaml
-
-  # Initialize Kafka topics
-  frameworks cluster init kafka --manifest cluster.yaml
-
-  # Initialize everything
-  frameworks cluster init all --manifest cluster.yaml`,
+		Example: `  frameworks cluster init postgres
+  frameworks cluster init kafka
+  frameworks cluster init all`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := "all"
@@ -44,24 +37,22 @@ Existing databases/topics/tables will be skipped.`,
 				service = args[0]
 			}
 
-			return runInit(cmd, manifestPath, service)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runInit(cmd, rc, service)
 		},
 	}
-
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 
 	return cmd
 }
 
-// runInit executes the init command
-func runInit(cmd *cobra.Command, manifestPath, service string) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "Initializing %s from manifest: %s\n\n", service, manifestPath)
+// runInit executes the init command against an already-loaded manifest.
+func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
+	manifest := rc.Manifest
+	fmt.Fprintf(cmd.OutOrStdout(), "Initializing %s from manifest: %s\n\n", service, rc.ManifestPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -73,7 +64,7 @@ func runInit(cmd *cobra.Command, manifestPath, service string) error {
 	// Initialize services based on argument
 	switch service {
 	case "postgres", "all":
-		if err := initPostgres(ctx, cmd, manifest, sshPool); err != nil {
+		if err := initPostgres(ctx, cmd, rc, sshPool); err != nil {
 			return fmt.Errorf("failed to initialize postgres: %w", err)
 		}
 	}
@@ -97,7 +88,8 @@ func runInit(cmd *cobra.Command, manifestPath, service string) error {
 }
 
 // initPostgres initializes Postgres databases
-func initPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
+func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, pool *ssh.Pool) error {
+	manifest := rc.Manifest
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
 		fmt.Fprintln(cmd.OutOrStdout(), "Postgres not enabled, skipping...")
@@ -137,23 +129,38 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory.M
 		},
 	}
 
-	sqlExec, execErr := newSQLExecutor(pg.SQLAccess, host, pool, pg.IsYugabyte(), resolveYugabytePassword(pg))
+	// Only decrypt manifest env_files when Yugabyte actually needs a password
+	// (i.e. IsYugabyte and no yaml pg.Password). Vanilla Postgres uses peer
+	// auth and doesn't need any secret.
+	var sharedEnv map[string]string
+	if pg.IsYugabyte() && pg.Password == "" {
+		env, err := rc.SharedEnv()
+		if err != nil {
+			return fmt.Errorf("load manifest env_files: %w", err)
+		}
+		sharedEnv = env
+	}
+	password, err := resolveYugabytePassword(pg, sharedEnv)
+	if err != nil {
+		return err
+	}
+	sqlExec, execErr := newSQLExecutor(pg.SQLAccess, host, pool, pg.IsYugabyte(), password)
 	if execErr != nil {
 		return fmt.Errorf("create sql executor: %w", execErr)
 	}
 	opt := provisioner.WithSQLExecutor(sqlExec)
 
 	if pg.IsYugabyte() {
-		prov, err := provisioner.NewYugabyteProvisioner(pool, opt)
-		if err != nil {
-			return err
+		prov, provErr := provisioner.NewYugabyteProvisioner(pool, opt)
+		if provErr != nil {
+			return provErr
 		}
 		return prov.Initialize(ctx, host, config)
 	}
 
-	prov, err := provisioner.NewPostgresProvisioner(pool, opt)
-	if err != nil {
-		return err
+	prov, provErr := provisioner.NewPostgresProvisioner(pool, opt)
+	if provErr != nil {
+		return provErr
 	}
 	return prov.Initialize(ctx, host, config)
 }

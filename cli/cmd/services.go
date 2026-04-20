@@ -37,12 +37,10 @@ func newServicesCmd() *cobra.Command {
 }
 
 func newQMGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
-	cfg, _, err := fwcfg.Load()
+	ctxCfg, err := activeContextWithAuth()
 	if err != nil {
 		return nil, fwcfg.Context{}, err
 	}
-	ctxCfg := fwcfg.GetCurrent(cfg)
-	ctxCfg.Auth = fwcfg.ResolveAuth(ctxCfg)
 
 	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "quartermaster_grpc_addr", ctxCfg.Endpoints.QuartermasterGRPCAddr, false)
 	if err != nil {

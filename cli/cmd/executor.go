@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
-	internalconfig "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
@@ -51,25 +49,27 @@ func newCHExecutor(sqlAccess string, host inventory.Host, pool *ssh.Pool) (provi
 	return &provisioner.SSHCHExecutor{Runner: runner}, nil
 }
 
-// resolveYugabytePassword resolves the Yugabyte superuser password from
-// manifest config, YUGABYTE_PASSWORD env var, or .env file (in that order).
-// Returns "" for vanilla Postgres (uses peer auth, not passwords).
-func resolveYugabytePassword(pg *inventory.PostgresConfig) string {
+// resolveYugabytePassword resolves the Yugabyte superuser password in
+// priority order: manifest pg.Password (yaml) → sharedEnv["DATABASE_PASSWORD"]
+// (gitops env_files, matching provision's extractInfraCredentials convention).
+// Returns ("", nil) for vanilla Postgres (uses peer auth, not passwords).
+// Returns a clear error for Yugabyte when neither source provides the secret
+// — mirrors the GeoIP/ClickHouse fail-fast pattern so operators get the same
+// "add it to your gitops secrets" guidance instead of a downstream SQL auth
+// failure. Does not read process env: platform secrets live in gitops.
+func resolveYugabytePassword(pg *inventory.PostgresConfig, sharedEnv map[string]string) (string, error) {
 	if !pg.IsYugabyte() {
-		return ""
+		return "", nil
 	}
 	if pg.Password != "" {
-		return pg.Password
+		return pg.Password, nil
 	}
-	if v := os.Getenv("YUGABYTE_PASSWORD"); v != "" {
-		return v
-	}
-	if envMap, err := internalconfig.LoadEnvFile(); err == nil {
-		if v := envMap["YUGABYTE_PASSWORD"]; v != "" {
-			return v
+	if sharedEnv != nil {
+		if pw := sharedEnv["DATABASE_PASSWORD"]; pw != "" {
+			return pw, nil
 		}
 	}
-	return ""
+	return "", fmt.Errorf("DATABASE_PASSWORD missing from manifest env_files — add it to your gitops secrets (or set postgres.password in the manifest)")
 }
 
 // getRunner is defined in cluster_backup.go

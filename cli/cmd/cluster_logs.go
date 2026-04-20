@@ -17,7 +17,6 @@ import (
 
 // newClusterLogsCmd creates the logs command
 func newClusterLogsCmd() *cobra.Command {
-	var manifestPath string
 	var follow bool
 	var tail int
 
@@ -34,34 +33,29 @@ For native mode (systemd):
 
 The logs command automatically detects the service mode and uses
 the appropriate log viewing method.`,
-		Example: `  # Show last 50 lines of quartermaster logs
-  frameworks cluster logs quartermaster
-
-  # Follow logs in real-time
+		Example: `  frameworks cluster logs quartermaster
   frameworks cluster logs quartermaster --follow
-
-  # Show last 100 lines and follow
   frameworks cluster logs bridge --tail 100 --follow`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLogs(cmd, manifestPath, args[0], follow, tail)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runLogs(cmd, rc.Manifest, args[0], follow, tail)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Follow log output")
 	cmd.Flags().IntVarP(&tail, "tail", "n", 50, "Number of lines to show from the end")
 
 	return cmd
 }
 
-// runLogs executes the logs command
-func runLogs(cmd *cobra.Command, manifestPath, serviceName string, follow bool, tail int) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
+// runLogs executes the logs command against an already-loaded manifest.
+func runLogs(cmd *cobra.Command, manifest *inventory.Manifest, serviceName string, follow bool, tail int) error {
+	var err error
 
 	// Find host for service
 	var host inventory.Host

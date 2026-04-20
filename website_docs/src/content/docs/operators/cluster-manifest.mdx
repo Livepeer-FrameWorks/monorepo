@@ -513,8 +513,9 @@ Instead of managing manifests locally, you can store them in a private GitHub re
 
 ### Setup
 
+Credentials are written to the canonical CLI config (`$XDG_CONFIG_HOME/frameworks/config.yaml` by default; run `frameworks config path --kind config` to confirm):
+
 ```bash
-# Configure credentials (stored in ~/.frameworks/config.yaml)
 frameworks config set github.app-id 12345
 frameworks config set github.installation-id 67890
 frameworks config set github.private-key /path/to/app-private-key.pem
@@ -522,20 +523,24 @@ frameworks config set github.repo your-org/infra-repo
 frameworks config set github.ref main  # optional, defaults to main
 ```
 
+For CI or one-shot automation, the same values can be passed via environment variables: `FRAMEWORKS_GITHUB_APP_ID`, `FRAMEWORKS_GITHUB_INSTALLATION_ID`, `FRAMEWORKS_GITHUB_PRIVATE_KEY`, `FRAMEWORKS_GITHUB_REPO`, `FRAMEWORKS_GITHUB_REF`. Env values beat the stored config; per-invocation flags beat both.
+
 ### Usage
 
 ```bash
-# Provision using the remote manifest
-frameworks cluster provision --repo your-org/infra-repo
+# Provision using the remote manifest (cluster name required)
+frameworks cluster provision --github-repo your-org/infra-repo --cluster production
 
 # Override credentials via flags
-frameworks cluster provision --repo your-org/infra-repo \
+frameworks cluster provision \
+  --github-repo your-org/infra-repo \
+  --cluster production \
   --github-app-id 12345 \
   --github-installation-id 67890 \
   --github-private-key /path/to/key.pem
 ```
 
-The CLI fetches `cluster.yaml` (or whichever file `--manifest` specifies) from the repo, along with all referenced `env_files` and per-service `env_file` paths. The standard provision pipeline then runs with the fetched data.
+The CLI fetches `clusters/<cluster>/cluster.yaml` from the repo, along with all referenced `env_files`, per-service `env_file` paths, and `hosts_file`. The standard provision pipeline then runs with the fetched data inside a tempdir that's cleaned up when the command exits.
 
 ### Configuration Keys
 

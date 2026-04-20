@@ -10,16 +10,26 @@ import (
 
 var allowlistedOperations = []string{"serviceinstanceshealth", "resolveviewerendpoint", "resolveingestendpoint", "networkstatus"}
 
-var allowlistedOperationSet = func() map[string]struct{} {
-	out := make(map[string]struct{}, len(allowlistedOperations))
-	for _, op := range allowlistedOperations {
-		out[op] = struct{}{}
+// allowlistedMutationOperations is the set of write fields that may be
+// invoked without a JWT. Each entry needs its own per-call credential —
+// e.g. bootstrapEdge accepts a one-time bootstrap token in the input
+// itself, validated server-side via Quartermaster.
+var allowlistedMutationOperations = []string{"bootstrapedge"}
+
+var allowlistedOperationSet = toLowerSet(allowlistedOperations)
+var allowlistedMutationSet = toLowerSet(allowlistedMutationOperations)
+
+func toLowerSet(items []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(items))
+	for _, op := range items {
+		out[strings.ToLower(op)] = struct{}{}
 	}
 	return out
-}()
+}
 
 // isAllowlistedQuery returns true when the GraphQL payload selects only
-// allowlisted top-level query fields.
+// allowlisted top-level fields for its operation type (read-only queries
+// or the explicitly public-by-design mutations).
 func isAllowlistedQuery(body []byte) bool {
 	var req struct {
 		Query         string `json:"query"`
@@ -43,7 +53,16 @@ func isAllowlistedOperation(query, operationName string) bool {
 	}
 
 	op := selectGraphQLOperation(doc, operationName)
-	if op == nil || op.Operation != ast.Query {
+	if op == nil {
+		return false
+	}
+	var allowed map[string]struct{}
+	switch op.Operation {
+	case ast.Query:
+		allowed = allowlistedOperationSet
+	case ast.Mutation:
+		allowed = allowlistedMutationSet
+	default:
 		return false
 	}
 
@@ -52,7 +71,7 @@ func isAllowlistedOperation(query, operationName string) bool {
 		fragments[fragment.Name] = fragment
 	}
 
-	return selectionSetAllowlisted(op.SelectionSet, fragments, map[string]bool{})
+	return selectionSetAllowlisted(op.SelectionSet, fragments, allowed, map[string]bool{})
 }
 
 func selectGraphQLOperation(doc *ast.QueryDocument, operationName string) *ast.OperationDefinition {
@@ -79,6 +98,7 @@ func selectGraphQLOperation(doc *ast.QueryDocument, operationName string) *ast.O
 func selectionSetAllowlisted(
 	selectionSet ast.SelectionSet,
 	fragments map[string]*ast.FragmentDefinition,
+	allowed map[string]struct{},
 	visited map[string]bool,
 ) bool {
 	if len(selectionSet) == 0 {
@@ -91,7 +111,7 @@ func selectionSetAllowlisted(
 			if fieldName == "__typename" {
 				continue
 			}
-			if _, ok := allowlistedOperationSet[fieldName]; !ok {
+			if _, ok := allowed[fieldName]; !ok {
 				return false
 			}
 		case *ast.FragmentSpread:
@@ -100,13 +120,13 @@ func selectionSetAllowlisted(
 				return false
 			}
 			visited[node.Name] = true
-			ok := selectionSetAllowlisted(fragment.SelectionSet, fragments, visited)
+			ok := selectionSetAllowlisted(fragment.SelectionSet, fragments, allowed, visited)
 			delete(visited, node.Name)
 			if !ok {
 				return false
 			}
 		case *ast.InlineFragment:
-			if !selectionSetAllowlisted(node.SelectionSet, fragments, visited) {
+			if !selectionSetAllowlisted(node.SelectionSet, fragments, allowed, visited) {
 				return false
 			}
 		default:

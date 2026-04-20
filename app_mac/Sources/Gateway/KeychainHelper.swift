@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 enum KeychainHelper {
-  private static let service = "com.livepeer.frameworks.desktop"
+  private static let service = "com.livepeer.frameworks"
 
   static func save(key: String, value: String) throws {
     guard let data = value.data(using: .utf8) else { return }

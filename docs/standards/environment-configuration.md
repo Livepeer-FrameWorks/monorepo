@@ -126,11 +126,13 @@ These are outputs and should not be treated as first-class editable config:
 
 - `DATABASE_URL`
 - `KAFKA_BROKERS`
-- `COMMODORE_URL`, `QUARTERMASTER_URL`, `PURSER_URL`, `PERISCOPE_QUERY_URL`, `PERISCOPE_INGEST_URL`, `MISTSERVER_URL`, `FOGHORN_URL`, `HELMSMAN_WEBHOOK_URL`
+- `COMMODORE_URL`, `QUARTERMASTER_URL`, `PURSER_URL`, `PERISCOPE_QUERY_URL`, `PERISCOPE_INGEST_URL`, `MISTSERVER_URL`, `HELMSMAN_WEBHOOK_URL`
 - `COMMODORE_GRPC_ADDR`, `QUARTERMASTER_GRPC_ADDR`, `PURSER_GRPC_ADDR`, `PERISCOPE_GRPC_ADDR`, `SIGNALMAN_GRPC_ADDR`, `DECKHAND_GRPC_ADDR`, `SKIPPER_GRPC_ADDR`
 - `FOGHORN_CONTROL_ADDR`, `FOGHORN_CONTROL_BIND_ADDR`
 - All `VITE_*` (derived by configgen from canonical public URLs)
 - `AUTH_PUBLIC_URL` (derived from `GATEWAY_PUBLIC_URL + /auth`)
+
+> Foghorn's HTTP balancer base (the value MistServer's `balance:<base>` source consumes on every edge) is not an environment variable on Helmsman. Foghorn derives it once from `FOGHORN_PUBLIC_BASE` (explicit override) or `https://${FOGHORN_HOST}:18008`, falling back to `http://foghorn:18008` for in-cluster docker-compose, and ships it to every connected edge over the gRPC `ConfigSeed` stream.
 
 ### Canonical environment selectors
 

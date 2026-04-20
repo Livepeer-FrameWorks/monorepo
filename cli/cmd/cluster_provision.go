@@ -19,10 +19,8 @@ import (
 	"sync"
 	"time"
 
-	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/githubapp"
 	fwsops "frameworks/cli/pkg/sops"
 	commodoreCli "frameworks/pkg/clients/commodore"
 	purserclient "frameworks/pkg/clients/purser"
@@ -45,18 +43,11 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// newClusterProvisionCmd creates the provision command
 func newClusterProvisionCmd() *cobra.Command {
-	var manifestPath string
 	var only string
 	var dryRun bool
 	var force bool
 	var ignoreValidation bool
-	var repo string
-	var githubAppID int64
-	var githubInstallID int64
-	var githubKeyPath string
-	var ageKeyFile string
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -72,38 +63,35 @@ Phase Options (--only):
 Provisioning is idempotent - safe to run multiple times.
 Existing services will be detected and skipped unless --force is used.
 
-Use --repo to fetch manifests from a private GitHub repo via GitHub App credentials.`,
-		Example: `  # Provision all infrastructure
-  frameworks cluster provision --only infrastructure --manifest cluster.yaml
+The manifest source (single file, local gitops repo, or GitHub repo) is
+chosen by the persistent cluster-group flags. Run 'frameworks setup' to
+save a default, or pass them explicitly.`,
+		Example: `  # Provision everything using the configured context defaults
+  frameworks cluster provision
 
-  # Dry-run to see what would be provisioned
-  frameworks cluster provision --manifest cluster.yaml --dry-run
+  # Dry-run against a local manifest
+  frameworks cluster provision --manifest ./cluster.yaml --dry-run
 
-  # Provision from a GitHub repo (uses configured GitHub App credentials)
-  frameworks cluster provision --repo org/infra-repo
+  # Provision from a GitHub repo (requires github-app-id/installation-id/private-key)
+  frameworks cluster provision --github-repo org/infra-repo --cluster production
 
   # Force re-provision even if services exist
-  frameworks cluster provision --force --manifest cluster.yaml`,
+  frameworks cluster provision --force`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if repo != "" {
-				return runProvisionFromRepo(cmd, repo, githubAppID, githubInstallID, githubKeyPath, ageKeyFile, manifestPath, only, dryRun, force, ignoreValidation)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
 			}
-			return runProvision(cmd, manifestPath, ageKeyFile, only, dryRun, force, ignoreValidation)
+			defer rc.Cleanup()
+			return runProvision(cmd, rc, only, dryRun, force, ignoreValidation)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file (or filename within repo)")
 	cmd.Flags().StringVar(&only, "only", "all", "Phase to provision (infrastructure|applications|interfaces|all)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if health validation fails (DANGEROUS)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo (owner/repo) to fetch manifest from")
-	cmd.Flags().Int64Var(&githubAppID, "github-app-id", 0, "GitHub App ID (overrides config)")
-	cmd.Flags().Int64Var(&githubInstallID, "github-installation-id", 0, "GitHub Installation ID (overrides config)")
-	cmd.Flags().StringVar(&githubKeyPath, "github-private-key", "", "Path to GitHub App private key PEM (overrides config)")
-	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted env files (default: $SOPS_AGE_KEY_FILE or ~/.config/sops/age/keys.txt)")
 
-	// Bootstrap admin user creation
 	cmd.Flags().String("bootstrap-admin-email", "", "Create an initial operator user with this email")
 	cmd.Flags().String("bootstrap-admin-password", "", "Plaintext password for bootstrap admin (prefer --bootstrap-admin-password-env or --bootstrap-admin-password-file)")
 	cmd.Flags().String("bootstrap-admin-password-env", "", "Read bootstrap admin password from this environment variable")
@@ -111,172 +99,14 @@ Use --repo to fetch manifests from a private GitHub repo via GitHub App credenti
 	cmd.Flags().String("bootstrap-admin-first-name", "Admin", "First name for bootstrap admin")
 	cmd.Flags().String("bootstrap-admin-last-name", "User", "Last name for bootstrap admin")
 
-	// Control-plane validation
 	cmd.Flags().Bool("strict-control-plane", false, "Fail (exit 1) if post-provision control-plane validation has warnings")
 
 	return cmd
 }
 
-// runProvisionFromRepo fetches the manifest from a GitHub repo and provisions.
-func runProvisionFromRepo(cmd *cobra.Command, repo string, appID, installID int64, keyPath, ageKeyFile, manifestFile, only string, dryRun, force, ignoreValidation bool) error {
-	cfg, _, err := fwcfg.Load()
-	if err != nil {
-		return err
-	}
-
-	// Resolve credentials: flags > config
-	gh := cfg.GitHub
-	if gh == nil {
-		gh = &fwcfg.GitHubApp{}
-	}
-	if appID == 0 {
-		appID = gh.AppID
-	}
-	if installID == 0 {
-		installID = gh.InstallationID
-	}
-	if keyPath == "" {
-		keyPath = gh.PrivateKeyPath
-	}
-	if repo == "" {
-		repo = gh.Repo
-	}
-	ref := gh.Ref
-
-	if appID == 0 || installID == 0 || keyPath == "" {
-		return fmt.Errorf("GitHub App credentials required: set via flags or 'frameworks config set github.*'")
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "Fetching manifest from %s...\n", repo)
-
-	ghClient, err := githubapp.NewClient(cmd.Context(), githubapp.Config{
-		AppID:          appID,
-		InstallationID: installID,
-		PrivateKeyPath: keyPath,
-		Repo:           repo,
-		Ref:            ref,
-	})
-	if err != nil {
-		return fmt.Errorf("GitHub App authentication failed: %w", err)
-	}
-
-	// Fetch the cluster manifest
-	data, err := ghClient.Fetch(cmd.Context(), manifestFile)
-	if err != nil {
-		return fmt.Errorf("failed to fetch %s from %s: %w", manifestFile, repo, err)
-	}
-
-	// Parse manifest structure (validation happens after host inventory merge in runProvision)
-	manifest, err := inventory.ParseManifest(data)
-	if err != nil {
-		return fmt.Errorf("failed to parse manifest from %s: %w", repo, err)
-	}
-
-	// Write manifest to a temp directory so all fetched files resolve correctly
-	tmpDir, err := os.MkdirTemp("", "frameworks-provision-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Resolve manifest-relative paths to repo-relative for GitHub fetch.
-	manifestDir := filepath.Dir(manifestFile)
-
-	// Collect all referenced file paths (env files + host inventory)
-	filesToFetch := []string{}
-	for _, envFile := range manifest.SharedEnvFiles() {
-		repoPath, pathErr := resolveManifestToRepoPath(manifestDir, envFile)
-		if pathErr != nil {
-			return pathErr
-		}
-		filesToFetch = append(filesToFetch, repoPath)
-	}
-	if manifest.HostsFile != "" {
-		repoPath, pathErr := resolveManifestToRepoPath(manifestDir, manifest.HostsFile)
-		if pathErr != nil {
-			return pathErr
-		}
-		filesToFetch = append(filesToFetch, repoPath)
-	}
-	for _, svc := range manifest.Services {
-		if svc.EnvFile != "" {
-			repoPath, pathErr := resolveManifestToRepoPath(manifestDir, svc.EnvFile)
-			if pathErr != nil {
-				return pathErr
-			}
-			filesToFetch = append(filesToFetch, repoPath)
-		}
-	}
-	for _, iface := range manifest.Interfaces {
-		if iface.EnvFile != "" {
-			repoPath, pathErr := resolveManifestToRepoPath(manifestDir, iface.EnvFile)
-			if pathErr != nil {
-				return pathErr
-			}
-			filesToFetch = append(filesToFetch, repoPath)
-		}
-	}
-
-	// Deduplicate
-	seen := make(map[string]bool)
-	unique := filesToFetch[:0]
-	for _, f := range filesToFetch {
-		if !seen[f] {
-			seen[f] = true
-			unique = append(unique, f)
-		}
-	}
-
-	for _, name := range unique {
-		fileData, fetchErr := ghClient.Fetch(cmd.Context(), name)
-		if fetchErr != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not fetch %s: %v\n", name, fetchErr)
-			continue
-		}
-
-		// Decrypt SOPS-encrypted files transparently (format inferred from extension)
-		if fwsops.IsEncrypted(fileData) {
-			plain, decErr := fwsops.DecryptData(fileData, fwsops.FormatFromPath(name), ageKeyFile)
-			if decErr != nil {
-				return fmt.Errorf("decrypt %s: %w", name, decErr)
-			}
-			fileData = plain
-			fmt.Fprintf(cmd.OutOrStdout(), "Decrypted %s (SOPS/age)\n", name)
-		}
-
-		localPath := filepath.Join(tmpDir, name)
-		if err := os.MkdirAll(filepath.Dir(localPath), 0o700); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not create dir for %s: %v\n", name, err)
-			continue
-		}
-		if writeErr := os.WriteFile(localPath, fileData, 0o600); writeErr != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not write %s: %v\n", name, writeErr)
-		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "Fetched %s\n", name)
-		}
-	}
-
-	// Write fetched manifest preserving its directory structure so that
-	// manifest-relative paths (env_files, hosts_file) resolve correctly.
-	tmpManifest := filepath.Join(tmpDir, manifestFile)
-	if err := os.MkdirAll(filepath.Dir(tmpManifest), 0o700); err != nil {
-		return fmt.Errorf("failed to create manifest dir: %w", err)
-	}
-	if err := os.WriteFile(tmpManifest, data, 0o600); err != nil {
-		return fmt.Errorf("failed to write temp manifest: %w", err)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning cluster from %s/%s\n", repo, manifestFile)
-	return runProvision(cmd, tmpManifest, ageKeyFile, only, dryRun, force, ignoreValidation)
-}
-
-// runProvision executes the provision command
-func runProvision(cmd *cobra.Command, manifestPath, ageKeyFile, only string, dryRun, force, ignoreValidation bool) error {
-	// Load manifest (merges host inventory from hosts_file if set)
-	manifest, err := inventory.LoadWithHosts(manifestPath, ageKeyFile)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
+func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, force, ignoreValidation bool) error {
+	manifest := rc.Manifest
+	manifestPath := rc.ManifestPath
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning cluster from manifest: %s\n", manifestPath)
 	fmt.Fprintf(cmd.OutOrStdout(), "Cluster type: %s, Profile: %s\n", manifest.Type, manifest.Profile)
@@ -289,7 +119,6 @@ func runProvision(cmd *cobra.Command, manifestPath, ageKeyFile, only string, dry
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	// Convert only flag to phase
 	var phase orchestrator.Phase
 	switch only {
 	case "infrastructure":
@@ -305,15 +134,33 @@ func runProvision(cmd *cobra.Command, manifestPath, ageKeyFile, only string, dry
 	}
 
 	if phaseRequiresGatewayMeshValidation(phase) {
-		if err = validateGatewayMeshCoverage(manifest); err != nil {
+		if err := validateGatewayMeshCoverage(manifest); err != nil {
 			return fmt.Errorf("invalid manifest: %w", err)
 		}
-		if err = validateInternalGRPCTLSCoverage(manifest); err != nil {
+		if err := validateInternalGRPCTLSCoverage(manifest); err != nil {
 			return fmt.Errorf("invalid manifest: %w", err)
 		}
 	}
 
-	// Create execution plan
+	// Load and validate shared env_files up front. SERVICE_TOKEN and other
+	// shared platform secrets live in gitops (SOPS-encrypted); this is the
+	// single source of truth for the entire provision run — bootstrap auth,
+	// infrastructure credentials, and per-service env merges all read from
+	// here. Running before the dry-run exit also catches missing age keys
+	// and missing secrets before the operator commits to a live run.
+	manifestDir := filepath.Dir(manifestPath)
+	sharedEnv, err := rc.SharedEnv()
+	if err != nil {
+		return fmt.Errorf("load manifest env_files: %w", err)
+	}
+	if isDevProfile(manifest) {
+		if _, genErr := credentials.GenerateIfMissing(sharedEnv); genErr != nil {
+			return fmt.Errorf("auto-generate dev secrets: %w", genErr)
+		}
+	} else if valErr := credentials.ValidateShared(sharedEnv); valErr != nil {
+		return valErr
+	}
+
 	planner := orchestrator.NewPlanner(manifest)
 	plan, err := planner.Plan(ctx, orchestrator.ProvisionOptions{
 		Phase:    phase,
@@ -344,9 +191,7 @@ func runProvision(cmd *cobra.Command, manifestPath, ageKeyFile, only string, dry
 		return nil
 	}
 
-	// Execute provisioning
-	manifestDir := filepath.Dir(manifestPath)
-	if err := executeProvision(ctx, cmd, manifest, plan, force, ignoreValidation, manifestDir); err != nil {
+	if err := executeProvision(ctx, cmd, manifest, plan, force, ignoreValidation, manifestDir, sharedEnv); err != nil {
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
@@ -369,7 +214,7 @@ type taskProvisionOutcome struct {
 }
 
 // executeProvision runs the provisioning tasks
-func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, force, ignoreValidation bool, manifestDir string) error {
+func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string) error {
 	// Create SSH pool
 	sshPool := ssh.NewPool(30 * time.Second)
 	defer sshPool.Close()
@@ -380,7 +225,13 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	// Execute each batch sequentially
 	runtimeData := make(map[string]interface{})
 
-	if err := ensureProvisionGeoIP(ctx, cmd.OutOrStdout(), manifest, manifestDir, sshPool); err != nil {
+	// Seed service_token from the preloaded shared env. All downstream callers
+	// (bootstrap auth, privateer enrollment, service env builders) read this key.
+	if token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]); token != "" {
+		runtimeData["service_token"] = token
+	}
+
+	if err := ensureProvisionGeoIP(ctx, cmd.OutOrStdout(), manifest, manifestDir, sharedEnv, sshPool); err != nil {
 		return err
 	}
 
@@ -430,7 +281,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 				fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
 				stopProgress := startTaskProgressLogger(cmd, task, 30*time.Second)
-				outcome, err := provisionTask(taskCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir)
+				outcome, err := provisionTask(taskCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv)
 				stopProgress()
 				if err != nil {
 					return fmt.Errorf("failed to provision %s: %w", task.Name, err)
@@ -476,7 +327,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		for _, r := range results {
 			if r.task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-				result, err := runBootstrap(ctx, manifest, manifestDir)
+				result, err := runBootstrap(ctx, manifest, runtimeData)
 				if err != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Bootstrap failed: %v\n", err)
 					fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
@@ -487,18 +338,15 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				if result.SystemTenantID != "" {
 					runtimeData["system_tenant_id"] = result.SystemTenantID
 				}
-				if result.ServiceToken != "" {
-					runtimeData["service_token"] = result.ServiceToken
-				}
 				if result.QMGRPCAddr != "" {
 					runtimeData["quartermaster_grpc_addr"] = result.QMGRPCAddr
 				}
 			}
 
-			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, manifestDir); err != nil {
+			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, manifestDir, sharedEnv); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", r.task.Name, err)
 			}
-			if err := maybeRegisterIngressDesiredState(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome); err != nil {
+			if err := maybeRegisterIngressDesiredState(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: ingress desired state registration skipped for %s: %v\n", r.task.Name, err)
 			}
 		}
@@ -901,17 +749,13 @@ type ingressDesiredStateRegistrar interface {
 	UpsertIngressSite(ctx context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error)
 }
 
-func resolveQuartermasterRuntimeData(manifest *inventory.Manifest) (string, string, error) {
-	serviceToken := os.Getenv("SERVICE_TOKEN")
-	if serviceToken == "" {
-		if cfg, _, err := fwcfg.Load(); err == nil {
-			cliCtx := fwcfg.GetCurrent(cfg)
-			cliCtx.Auth = fwcfg.ResolveAuth(cliCtx)
-			serviceToken = cliCtx.Auth.ServiceToken
-		}
+func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData map[string]interface{}) (string, string, error) {
+	var serviceToken string
+	if v, ok := runtimeData["service_token"].(string); ok {
+		serviceToken = strings.TrimSpace(v)
 	}
 	if serviceToken == "" {
-		return "", "", fmt.Errorf("service token required for bootstrapping (set SERVICE_TOKEN or run 'frameworks login')")
+		return "", "", fmt.Errorf("SERVICE_TOKEN missing from manifest env_files — add it to your gitops secrets")
 	}
 
 	var qmHost string
@@ -983,7 +827,7 @@ func ensurePrivateerEnrollmentToken(ctx context.Context, manifest *inventory.Man
 		runtimeData["enrollment_tokens"] = map[string]string{}
 	}
 
-	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
 	if err != nil {
 		return err
 	}
@@ -1051,7 +895,7 @@ func ensurePrivateerCertIssueToken(ctx context.Context, manifest *inventory.Mani
 		}
 	}
 
-	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
 	if err != nil {
 		return err
 	}
@@ -1104,7 +948,7 @@ func ensurePrivateerCertIssueTokenWithClient(ctx context.Context, runtimeData ma
 	return nil
 }
 
-func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}, manifestDir string) error {
+func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string) error {
 	if outcome == nil || outcome.deferred || !outcome.running {
 		return nil
 	}
@@ -1114,7 +958,7 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 		return nil
 	}
 
-	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
 	if err != nil {
 		return err
 	}
@@ -1130,12 +974,11 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 	}
 	defer client.Close()
 
-	runtimeData["service_token"] = serviceToken
 	runtimeData["quartermaster_grpc_addr"] = grpcAddr
-	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, host, runtimeData, manifestDir, client)
+	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, host, runtimeData, manifestDir, sharedEnv, client)
 }
 
-func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome) error {
+func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}) error {
 	if outcome == nil || outcome.deferred || !outcome.running {
 		return nil
 	}
@@ -1143,7 +986,7 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 		return nil
 	}
 
-	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
 	if err != nil {
 		return err
 	}
@@ -1162,7 +1005,7 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 	return registerIngressDesiredStateWithClient(ctx, out, manifest, task, host, client)
 }
 
-func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, registrar publicServiceRegistrar) error {
+func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, registrar publicServiceRegistrar) error {
 	serviceName := task.ServiceID
 	serviceType, ok := publicServiceType(serviceName)
 	if !ok || selfRegisters(serviceName) {
@@ -1213,7 +1056,7 @@ func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer,
 		ClusterId:      &hostCluster,
 		NodeId:         &task.Host,
 	}
-	if metadata, err := serviceRegistrationMetadata(serviceName, task.Host, hostCluster, manifest, runtimeData, manifestDir); err != nil {
+	if metadata, err := serviceRegistrationMetadata(serviceName, task.Host, hostCluster, manifest, runtimeData, manifestDir, sharedEnv); err != nil {
 		return fmt.Errorf("resolve metadata: %w", err)
 	} else if len(metadata) > 0 {
 		req.Metadata = metadata
@@ -1525,7 +1368,7 @@ func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 }
 
 // buildTaskConfig creates a ServiceConfig for a task
-func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, force bool, manifestDir string) (provisioner.ServiceConfig, error) {
+func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, force bool, manifestDir string, sharedEnv map[string]string) (provisioner.ServiceConfig, error) {
 	config := provisioner.ServiceConfig{
 		Mode:     "docker",
 		Version:  "stable",
@@ -1906,7 +1749,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	// Generate merged env vars for application/interface services.
 	// Infrastructure services (postgres, kafka, etc.) manage their own config.
 	if task.Phase != orchestrator.PhaseInfrastructure && manifest != nil {
-		envVars, err := buildServiceEnvVars(task, manifest, runtimeData, config.EnvFile, manifestDir)
+		envVars, err := buildServiceEnvVars(task, manifest, runtimeData, config.EnvFile, manifestDir, sharedEnv)
 		if err != nil {
 			return config, fmt.Errorf("service %s: %w", task.Name, err)
 		}
@@ -1925,7 +1768,7 @@ func containsHost(hosts []string, target string) bool {
 	return false
 }
 
-func ensureProvisionGeoIP(ctx context.Context, out io.Writer, manifest *inventory.Manifest, manifestDir string, pool *ssh.Pool) error {
+func ensureProvisionGeoIP(ctx context.Context, out io.Writer, manifest *inventory.Manifest, manifestDir string, sharedEnv map[string]string, pool *ssh.Pool) error {
 	if manifest == nil || manifest.GeoIP == nil || !manifest.GeoIP.Enabled {
 		return nil
 	}
@@ -1937,7 +1780,7 @@ func ensureProvisionGeoIP(ctx context.Context, out io.Writer, manifest *inventor
 
 	source := effectiveGeoIPSource(manifest, "")
 	filePath := effectiveGeoIPFilePath(manifest, "", manifestDir)
-	licenseKey := effectiveGeoIPLicenseKey(manifest, "")
+	licenseKey := effectiveGeoIPLicenseKey(sharedEnv, "")
 	remotePath := effectiveGeoIPRemotePath(manifest, "")
 
 	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, manifest, source, filePath, licenseKey)
@@ -2314,30 +2157,10 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface
 	return metadata
 }
 
-// loadInfraCredentials reads the manifest env files and extracts database credentials
-// needed by infrastructure Initialize/Configure steps.
-func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) (map[string]interface{}, error) {
+// extractInfraCredentials picks database credentials out of the preloaded
+// shared env for infrastructure Initialize/Configure steps.
+func extractInfraCredentials(env map[string]string) map[string]interface{} {
 	result := make(map[string]interface{})
-	envFiles := manifest.SharedEnvFiles()
-	if len(envFiles) == 0 {
-		return result, nil
-	}
-
-	env := make(map[string]string)
-	for _, envFile := range envFiles {
-		if manifestDir != "" && filepath.IsAbs(envFile) {
-			return nil, fmt.Errorf("infrastructure env_files: absolute path %q is not allowed", envFile)
-		}
-		envPath := envFile
-		if manifestDir != "" {
-			envPath = filepath.Join(manifestDir, envPath)
-		}
-		if err := loadEnvFile(envPath, env); err != nil {
-			return nil, fmt.Errorf("infrastructure env_files: %w", err)
-		}
-	}
-
-	// Map env vars to metadata keys used by provisioners
 	if v := env["DATABASE_USER"]; v != "" {
 		result["postgres_user"] = v
 	}
@@ -2350,8 +2173,7 @@ func loadInfraCredentials(manifest *inventory.Manifest, manifestDir string) (map
 	if v := env["CLICKHOUSE_READONLY_PASSWORD"]; v != "" {
 		result["clickhouse_readonly_password"] = v
 	}
-
-	return result, nil
+	return result
 }
 
 func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interval time.Duration) func() {
@@ -2423,7 +2245,7 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 }
 
 // provisionTask provisions a single task
-func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string) (*taskProvisionOutcome, error) {
+func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string) (*taskProvisionOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -2446,7 +2268,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 	}
 
-	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir)
+	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -2501,12 +2323,10 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}
 
 	// Infrastructure tasks: run Initialize + Configure after Provision/Validate.
-	// Load credentials from manifest env files so Initialize can create app users.
+	// Credentials come from the preloaded shared env (same source used by every
+	// other provisioning step) so Initialize can create app users.
 	if task.Phase == orchestrator.PhaseInfrastructure {
-		infraCreds, infraErr := loadInfraCredentials(manifest, manifestDir)
-		if infraErr != nil {
-			return nil, fmt.Errorf("load infrastructure credentials: %w", infraErr)
-		}
+		infraCreds := extractInfraCredentials(sharedEnv)
 		for k, v := range infraCreds {
 			if config.Metadata == nil {
 				config.Metadata = make(map[string]interface{})
@@ -2541,16 +2361,18 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}, nil
 }
 
-// bootstrapResult holds the output of the cluster bootstrap process
+// bootstrapResult holds the output of the cluster bootstrap process.
+// ServiceToken is intentionally absent — the caller already holds the token
+// (it was passed in via runtimeData); copying it through the result struct
+// would duplicate a critical secret for no reason.
 type bootstrapResult struct {
 	SystemTenantID string
-	ServiceToken   string
 	QMGRPCAddr     string
 }
 
 // runBootstrap connects to Quartermaster and generates infrastructure tokens
-func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir string) (*bootstrapResult, error) {
-	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest)
+func runBootstrap(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}) (*bootstrapResult, error) {
+	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
 	if err != nil {
 		return nil, err
 	}
@@ -2776,7 +2598,6 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, manifestDir
 
 	return &bootstrapResult{
 		SystemTenantID: systemTenantID,
-		ServiceToken:   serviceToken,
 		QMGRPCAddr:     grpcAddr,
 	}, nil
 }
@@ -2848,7 +2669,7 @@ func publicServiceType(serviceName string) (string, bool) {
 	}
 }
 
-func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]interface{}, manifestDir string) (map[string]string, error) {
+func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string) (map[string]string, error) {
 	if name != "livepeer-gateway" {
 		return nil, nil
 	}
@@ -2862,7 +2683,7 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	config, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir)
+	config, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir, sharedEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -2887,7 +2708,7 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 
 // buildServiceEnvVars generates merged environment variables for a service.
 // Merge order (later wins): auto-generated → shared env_files → per-service env_file → inline config.
-func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, perServiceEnvFile string, manifestDir string) (map[string]string, error) {
+func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, perServiceEnvFile string, manifestDir string, sharedEnv map[string]string) (map[string]string, error) {
 	env := make(map[string]string)
 
 	// 1. Auto-generated infrastructure env vars
@@ -3061,18 +2882,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// 2. Shared env files from manifest root
-	for _, envFile := range manifest.SharedEnvFiles() {
-		if manifestDir != "" && filepath.IsAbs(envFile) {
-			return nil, fmt.Errorf("manifest env_files: absolute path %q is not allowed — use a relative path from the manifest directory", envFile)
-		}
-		envPath := envFile
-		if manifestDir != "" && !filepath.IsAbs(envPath) {
-			envPath = filepath.Join(manifestDir, envPath)
-		}
-		if err := loadEnvFile(envPath, env); err != nil {
-			return nil, fmt.Errorf("manifest env_files: %w", err)
-		}
+	// 2. Shared env (preloaded once per provision run from manifest env_files)
+	for k, v := range sharedEnv {
+		env[k] = v
 	}
 
 	// 3. Per-service env_file override
@@ -3179,18 +2991,8 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		applyDefaultLivepeerGatewayHost(env, manifest, task.ClusterID)
 	}
 
-	// 5. Validate shared platform secrets for non-dev, or auto-generate for dev.
-	// Shared secrets (SERVICE_TOKEN, JWT_SECRET, etc.) must come from manifest
-	// env_files for non-dev profiles — they are not generated at runtime.
-	if !isDevProfile(manifest) {
-		if err := credentials.ValidateShared(env); err != nil {
-			return nil, err
-		}
-	} else {
-		if _, err := credentials.GenerateIfMissing(env); err != nil {
-			return nil, fmt.Errorf("auto-generate secrets: %w", err)
-		}
-	}
+	// Shared platform secrets are validated (non-dev) or generated (dev) once
+	// in runProvision before tasks run — not per-task.
 
 	// 6. Derive COOKIE_DOMAIN from manifest root_domain
 	if manifest.RootDomain != "" && env["COOKIE_DOMAIN"] == "" {
@@ -3639,10 +3441,11 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 	return nil
 }
 
-// resolveManifestToRepoPath converts a manifest-relative file path to a
-// repo-root-relative path suitable for GitHub API fetch. For example, given
-// manifestDir="clusters/production" and relPath="../../secrets/production.env",
-// it returns "secrets/production.env".
+// resolveManifestToRepoPath rejects absolute paths and paths that
+// escape the repo root ("../..") — GitHub API fetches must stay inside
+// the checkout.
+//
+//nolint:unused // exercised by cluster_provision_test.go
 func resolveManifestToRepoPath(manifestDir, relPath string) (string, error) {
 	if filepath.IsAbs(relPath) {
 		return "", fmt.Errorf("absolute path %q is not valid in a repository manifest", relPath)

@@ -11481,9 +11481,13 @@ type ConfigSeed struct {
 	// Optional internal CA bundle for Helmsman gRPC trust bootstrap and rotation.
 	CaBundle []byte `protobuf:"bytes,22,opt,name=ca_bundle,json=caBundle,proto3" json:"ca_bundle,omitempty"`
 	// Optional control-plane-managed edge telemetry remote_write settings.
-	Telemetry     *EdgeTelemetryConfig `protobuf:"bytes,23,opt,name=telemetry,proto3" json:"telemetry,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Telemetry *EdgeTelemetryConfig `protobuf:"bytes,23,opt,name=telemetry,proto3" json:"telemetry,omitempty"`
+	// Foghorn's public HTTP balancer base (e.g. "https://foghorn-us-west.example.com"
+	// or "http://foghorn:18008" in-cluster). Helmsman uses this to wire the
+	// MistServer "balance:<base>?fallback=push://" source on stream templates.
+	FoghornBalancerBase string `protobuf:"bytes,24,opt,name=foghorn_balancer_base,json=foghornBalancerBase,proto3" json:"foghorn_balancer_base,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ConfigSeed) Reset() {
@@ -11598,6 +11602,13 @@ func (x *ConfigSeed) GetTelemetry() *EdgeTelemetryConfig {
 		return x.Telemetry
 	}
 	return nil
+}
+
+func (x *ConfigSeed) GetFoghornBalancerBase() string {
+	if x != nil {
+		return x.FoghornBalancerBase
+	}
+	return ""
 }
 
 // SiteConfig carries the public-facing site parameters that Helmsman uses to
@@ -14448,7 +14459,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\akey_pem\x18\x02 \x01(\tR\x06keyPem\x12\x16\n" +
 	"\x06domain\x18\x03 \x01(\tR\x06domain\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\x03R\texpiresAt\"\xaf\x04\n" +
+	"expires_at\x18\x04 \x01(\x03R\texpiresAt\"\xe3\x04\n" +
 	"\n" +
 	"ConfigSeed\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1a\n" +
@@ -14465,7 +14476,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x03tls\x18\x14 \x01(\v2\x1e.helmsmancontrol.TLSCertBundleR\x03tls\x12/\n" +
 	"\x04site\x18\x15 \x01(\v2\x1b.helmsmancontrol.SiteConfigR\x04site\x12\x1b\n" +
 	"\tca_bundle\x18\x16 \x01(\fR\bcaBundle\x129\n" +
-	"\ttelemetry\x18\x17 \x01(\v2\x1b.common.EdgeTelemetryConfigR\ttelemetry\"\x90\x01\n" +
+	"\ttelemetry\x18\x17 \x01(\v2\x1b.common.EdgeTelemetryConfigR\ttelemetry\x122\n" +
+	"\x15foghorn_balancer_base\x18\x18 \x01(\tR\x13foghornBalancerBase\"\x90\x01\n" +
 	"\n" +
 	"SiteConfig\x12!\n" +
 	"\fsite_address\x18\x01 \x01(\tR\vsiteAddress\x12\x1f\n" +

@@ -15,8 +15,6 @@ import (
 
 // newClusterDiagnoseCmd creates the diagnose command
 func newClusterDiagnoseCmd() *cobra.Command {
-	var manifestPath string
-
 	cmd := &cobra.Command{
 		Use:   "diagnose <component>",
 		Short: "Run diagnostics on cluster components",
@@ -30,33 +28,25 @@ Supported diagnostics:
 
 Diagnostics help troubleshoot issues and identify problems before they
 cause outages.`,
-		Example: `  # Check network connectivity
-  frameworks cluster diagnose network
-
-  # Check resource usage
+		Example: `  frameworks cluster diagnose network
   frameworks cluster diagnose resources
-
-  # Check Kafka health
   frameworks cluster diagnose kafka`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDiagnose(cmd, manifestPath, args[0])
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runDiagnose(cmd, rc.Manifest, args[0])
 		},
 	}
-
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 
 	return cmd
 }
 
-// runDiagnose executes diagnostic checks
-func runDiagnose(cmd *cobra.Command, manifestPath, component string) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+// runDiagnose executes diagnostic checks against an already-loaded manifest.
+func runDiagnose(cmd *cobra.Command, manifest *inventory.Manifest, component string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

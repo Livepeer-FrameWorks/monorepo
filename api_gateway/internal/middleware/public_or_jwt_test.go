@@ -118,6 +118,62 @@ func TestPublicOrJWTAuthRejectsUnauthenticatedMutation(t *testing.T) {
 	}
 }
 
+// bootstrapEdge is the one mutation that may run without a JWT — the
+// bootstrap token in the input IS the credential, validated via
+// Quartermaster downstream.
+func TestPublicOrJWTAuthAllowsBootstrapEdgeMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	body := []byte(`{"query":"mutation { bootstrapEdge(input: {token: \"bt_abc\"}) { ... on BootstrapEdgeResponse { nodeId } } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for public bootstrapEdge, got %d", w.Code)
+	}
+}
+
+// Aliasing the public field must not change the allowlist decision —
+// resolved field name (NOT alias) is what matters.
+func TestPublicOrJWTAuthAliasedBootstrapEdgeStillPublic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	body := []byte(`{"query":"mutation { boot: bootstrapEdge(input: {token: \"bt_abc\"}) { ... on BootstrapEdgeResponse { nodeId } } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for aliased bootstrapEdge, got %d", w.Code)
+	}
+}
+
+// Batching the public field with a private field must require auth —
+// otherwise the public allowlist would let any caller smuggle private
+// mutations under the same operation.
+func TestPublicOrJWTAuthRejectsBatchedPublicAndPrivateMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	body := []byte(`{"query":"mutation { bootstrapEdge(input: {token: \"bt_abc\"}) { __typename } updateStream(id: \"1\") { id } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for batched public+private mutation, got %d", w.Code)
+	}
+}
+
 func TestPublicOrJWTAuthAllowlistIgnoresInvalidToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

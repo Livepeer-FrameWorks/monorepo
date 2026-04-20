@@ -210,18 +210,19 @@ frameworks admin bootstrap-tokens create \
 frameworks edge provision \
   --ssh ubuntu@edge-1.example.com \
   --enrollment-token enroll_xxx \
-  --foghorn-addr foghorn.example.com:18019 \
   --email ops@example.com
 ```
 
-The CLI calls Foghorn's `PreRegisterEdge` RPC, which returns:
+The CLI sends the token to Bridge via the public `bootstrapEdge` mutation. Bridge validates the token via Quartermaster, finds the cluster's assigned Foghorn, and proxies `PreRegisterEdge`. The response carries:
 
 - Assigned node ID and edge domain (`{node_label}.{cluster_slug}.{base}`, where `node_label` is the node ID with a single `edge-` prefix)
 - Pool domain for the cluster
-- Foghorn gRPC address for Helmsman's control stream
+- Foghorn gRPC address the edge will use at runtime for Helmsman's control stream
 - Internal CA bundle for initial gRPC trust bootstrap
 
-The `--foghorn-addr` flag (or CLI context) is required — the edge must know Foghorn's address to call PreRegisterEdge. Edge nodes communicate only with Foghorn over the public internet; they do not join the WireGuard mesh.
+The operator never needs to know cluster topology — the bootstrap token IS the cluster selector. After bootstrap, the edge talks directly to its assigned Foghorn over the public internet; it never joins the WireGuard mesh.
+
+If you need to dial a specific Foghorn directly (for debugging), pass `--foghorn-addr` and the CLI bypasses Bridge for that one call.
 
 ---
 

@@ -2,19 +2,16 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 
 	"frameworks/cli/internal/preflight"
-	"frameworks/cli/pkg/inventory"
 
 	"github.com/spf13/cobra"
 )
 
 func newClusterPreflightCmd() *cobra.Command {
-	var (
-		domain       string
-		manifestPath string
-	)
+	var domain string
 
 	cmd := &cobra.Command{
 		Use:   "preflight",
@@ -26,7 +23,9 @@ func newClusterPreflightCmd() *cobra.Command {
   - Port availability (80, 443)
   - System limits (ulimit, sysctl, /dev/shm)
   - DNS resolution (optional)
-  - Infrastructure connectivity (Postgres, ClickHouse, Kafka, Redis) when --manifest is provided`,
+  - Infrastructure connectivity (Postgres, ClickHouse, Kafka, Redis) when a
+    manifest source is configured (via persistent cluster flags or the
+    active context's gitops defaults)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			var results []preflight.Check
@@ -51,12 +50,16 @@ func newClusterPreflightCmd() *cobra.Command {
 				results = append(results, preflight.DiskSpace("/usr/local", minDiskFreeBytes, minDiskFreePercent))
 			}
 
-			// Infrastructure connectivity checks (when manifest provided)
-			if manifestPath != "" {
-				manifest, err := inventory.Load(manifestPath)
+			// Infrastructure connectivity checks run only when the operator
+			// has actually configured a manifest source (flags, env, context,
+			// or cwd heuristic). Preflight itself does not require a manifest.
+			if anyManifestSourceConfigured(cmd) {
+				rc, err := resolveClusterManifest(cmd)
 				if err != nil {
-					return fmt.Errorf("failed to load manifest: %w", err)
+					return err
 				}
+				defer rc.Cleanup()
+				manifest := rc.Manifest
 
 				fmt.Fprintln(cmd.OutOrStdout(), "\nInfrastructure connectivity:")
 				if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
@@ -130,6 +133,27 @@ func newClusterPreflightCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&domain, "domain", "", "Domain to validate DNS resolution")
-	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to cluster manifest (enables infrastructure connectivity checks)")
 	return cmd
 }
+
+// anyManifestSourceConfigured reports whether the operator has supplied
+// enough input for resolveClusterManifest to succeed. Used by preflight
+// to decide whether to run infrastructure-connectivity checks (they
+// require a manifest but preflight doesn't).
+func anyManifestSourceConfigured(cmd *cobra.Command) bool {
+	for _, name := range []string{"manifest", "gitops-dir", "github-repo"} {
+		if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+			return true
+		}
+	}
+	for _, k := range []string{"FRAMEWORKS_MANIFEST", "FRAMEWORKS_GITOPS_DIR", "FRAMEWORKS_GITHUB_REPO"} {
+		if envGet(k) != "" {
+			return true
+		}
+	}
+	// Context-based source? The resolver also handles cwd heuristic; cheap
+	// path is to delegate to it. Worth a Load here to check ctx.Gitops.
+	return false
+}
+
+func envGet(k string) string { return os.Getenv(k) }

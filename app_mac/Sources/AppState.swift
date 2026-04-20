@@ -27,12 +27,12 @@ class AppState: ObservableObject {
   @Published var skipperConversationId: String?
 
   // Gateway
-  var gatewayBaseURL = "https://bridge.frameworks.network"
+  @Published var gatewayBaseURL: String = ""
 
   // CLI Integration
   @Published var cliAvailable = false
   @Published var cliVersion: String?
-  @Published var currentContext: String = "local"
+  @Published var currentContext: String = ""
   @Published var availableContexts: [String] = []
   @Published var diagnosticOutput: String = ""
   @Published var isDiagnosticRunning = false

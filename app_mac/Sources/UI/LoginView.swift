@@ -68,14 +68,6 @@ struct LoginView: View {
       .disabled(true)
 
       Spacer()
-
-      HStack {
-        Text("Gateway:")
-          .font(.caption).foregroundStyle(.secondary)
-        TextField("URL", text: $appState.gatewayBaseURL)
-          .font(.caption)
-          .textFieldStyle(.roundedBorder)
-      }
     }
     .padding()
     .frame(width: 380, height: 420)
@@ -83,10 +75,16 @@ struct LoginView: View {
   }
 
   private func login() {
+    let trimmed = appState.gatewayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      errorMessage = "No active context. Run 'frameworks setup' in a terminal, then reopen."
+      return
+    }
+
     isLoading = true
     errorMessage = nil
 
-    GatewayClient.shared.baseURL = appState.gatewayBaseURL
+    GatewayClient.shared.baseURL = trimmed
 
     Task {
       do {

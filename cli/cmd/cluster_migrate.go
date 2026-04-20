@@ -13,10 +13,7 @@ import (
 )
 
 func newClusterMigrateCmd() *cobra.Command {
-	var (
-		manifestPath string
-		dryRun       bool
-	)
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -26,28 +23,25 @@ func newClusterMigrateCmd() *cobra.Command {
 Migrations are tracked in a _migrations table per database.
 Each migration runs inside a transaction and is recorded on success.
 Safe to run multiple times — already-applied migrations are skipped.`,
-		Example: `  # List pending migrations without applying
-  frameworks cluster migrate --dry-run --manifest cluster.yaml
-
-  # Apply all pending migrations
-  frameworks cluster migrate --manifest cluster.yaml`,
+		Example: `  frameworks cluster migrate --dry-run
+  frameworks cluster migrate`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMigrate(cmd, manifestPath, dryRun)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runMigrate(cmd, rc, dryRun)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "List pending migrations without applying")
 
 	return cmd
 }
 
-func runMigrate(cmd *cobra.Command, manifestPath string, dryRun bool) error {
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool) error {
+	manifest := rc.Manifest
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
 		fmt.Fprintln(cmd.OutOrStdout(), "Postgres not enabled, nothing to migrate.")
@@ -77,7 +71,21 @@ func runMigrate(cmd *cobra.Command, manifestPath string, dryRun bool) error {
 	sshPool := ssh.NewPool(30 * time.Second)
 	defer sshPool.Close()
 
-	exec, err := newSQLExecutor(pg.SQLAccess, pgHost, sshPool, pg.IsYugabyte(), resolveYugabytePassword(pg))
+	// Only decrypt manifest env_files when Yugabyte actually needs a password.
+	// Vanilla Postgres uses peer auth and needs no secret.
+	var sharedEnv map[string]string
+	if pg.IsYugabyte() && pg.Password == "" {
+		env, sErr := rc.SharedEnv()
+		if sErr != nil {
+			return fmt.Errorf("load manifest env_files: %w", sErr)
+		}
+		sharedEnv = env
+	}
+	password, err := resolveYugabytePassword(pg, sharedEnv)
+	if err != nil {
+		return err
+	}
+	exec, err := newSQLExecutor(pg.SQLAccess, pgHost, sshPool, pg.IsYugabyte(), password)
 	if err != nil {
 		return err
 	}

@@ -316,9 +316,6 @@ func computeDerived(env map[string]string) error {
 	if errSet := setHTTPURL(env, "HELMSMAN_WEBHOOK_URL", "HELMSMAN_HOST", "HELMSMAN_PORT"); errSet != nil {
 		return errSet
 	}
-	if errSet := setHTTPURL(env, "FOGHORN_URL", "FOGHORN_HOST", "FOGHORN_PORT"); errSet != nil {
-		return errSet
-	}
 	if errSet := setHTTPURL(env, "MISTSERVER_URL", "MISTSERVER_HOST", "MISTSERVER_PORT"); errSet != nil {
 		return errSet
 	}

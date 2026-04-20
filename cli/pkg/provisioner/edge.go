@@ -56,7 +56,6 @@ type EdgeProvisionConfig struct {
 	Email           string
 	EnrollmentToken string
 	FoghornGRPCAddr string
-	FoghornHTTPBase string
 	NodeID          string // From PreRegisterEdge
 	CertPEM         string // Pre-staged wildcard cert
 	KeyPEM          string
@@ -67,7 +66,6 @@ type EdgeProvisionConfig struct {
 	// Step toggles
 	SkipPreflight bool
 	ApplyTuning   bool
-	RegisterNode  bool
 	FetchCert     bool
 
 	Timeout      time.Duration
@@ -1138,9 +1136,7 @@ echo "Helmsman installed"
 		"# Helmsman edge environment",
 		fmt.Sprintf("NODE_ID=%s", vars.NodeID),
 		fmt.Sprintf("EDGE_PUBLIC_URL=https://%s/view", domain),
-		fmt.Sprintf("FOGHORN_URL=%s", vars.FoghornHTTPBase),
 		fmt.Sprintf("FOGHORN_CONTROL_ADDR=%s", vars.FoghornGRPCAddr),
-		fmt.Sprintf("FOGHORN_HTTP_BASE=%s", vars.FoghornHTTPBase),
 		fmt.Sprintf("EDGE_ENROLLMENT_TOKEN=%s", vars.EnrollmentToken),
 		fmt.Sprintf("EDGE_DOMAIN=%s", domain),
 		fmt.Sprintf("ACME_EMAIL=%s", vars.AcmeEmail),
@@ -1466,9 +1462,7 @@ echo "Helmsman installed"
 		"# Helmsman edge environment",
 		fmt.Sprintf("NODE_ID=%s", vars.NodeID),
 		fmt.Sprintf("EDGE_PUBLIC_URL=https://%s/view", domain),
-		fmt.Sprintf("FOGHORN_URL=%s", vars.FoghornHTTPBase),
 		fmt.Sprintf("FOGHORN_CONTROL_ADDR=%s", vars.FoghornGRPCAddr),
-		fmt.Sprintf("FOGHORN_HTTP_BASE=%s", vars.FoghornHTTPBase),
 		fmt.Sprintf("EDGE_ENROLLMENT_TOKEN=%s", vars.EnrollmentToken),
 		fmt.Sprintf("EDGE_DOMAIN=%s", domain),
 		fmt.Sprintf("ACME_EMAIL=%s", vars.AcmeEmail),
@@ -1710,7 +1704,6 @@ func (e *EdgeProvisioner) buildEdgeVars(config EdgeProvisionConfig, remoteOS str
 		NodeID:          config.NodeID,
 		EdgeDomain:      domain,
 		AcmeEmail:       config.Email,
-		FoghornHTTPBase: config.FoghornHTTPBase,
 		FoghornGRPCAddr: config.FoghornGRPCAddr,
 		EnrollmentToken: config.EnrollmentToken,
 		GRPCTLSCAPath:   config.helmsmanCAPath(remoteOS),

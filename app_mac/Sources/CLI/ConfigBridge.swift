@@ -25,12 +25,20 @@ struct CLIContextEntry: Decodable {
   let current: Bool
 }
 
+struct CLIPath: Decodable {
+  let kind: String
+  let path: String
+}
+
 actor ConfigBridge {
   static let shared = ConfigBridge()
 
   private var fileWatcher: DispatchSourceFileSystemObject?
+  private var cachedConfigPath: String?
+  private var pendingOnChange: (@Sendable () -> Void)?
 
   func loadContexts() async -> [CLIContextEntry] {
+    await rearmIfDeferred()
     guard let entries: [CLIContextEntry] = try? await CLIRunner.shared.runJSON(
       ["context", "list"], as: [CLIContextEntry].self
     ) else { return [] }
@@ -38,6 +46,7 @@ actor ConfigBridge {
   }
 
   func loadCurrentContext() async -> CLIContext? {
+    await rearmIfDeferred()
     return try? await CLIRunner.shared.runJSON(
       ["context", "show"], as: CLIContext.self
     )
@@ -50,15 +59,36 @@ actor ConfigBridge {
     return result.exitCode == 0
   }
 
-  func startWatching(onChange: @escaping @Sendable () -> Void) {
-    armWatcher(onChange: onChange)
+  // rearmIfDeferred picks up the config file once `frameworks setup`
+  // has created it on a fresh install, without requiring a tray
+  // restart. armWatcher returns early when the file doesn't exist yet
+  // and records the handler in pendingOnChange; every refresh path
+  // retries until the watcher is live.
+  private func rearmIfDeferred() async {
+    guard fileWatcher == nil, let handler = pendingOnChange else { return }
+    await armWatcher(onChange: handler)
   }
 
-  private func armWatcher(onChange: @escaping @Sendable () -> Void) {
+  func resolveConfigPath() async -> String? {
+    if let cached = cachedConfigPath { return cached }
+    guard
+      let out: CLIPath = try? await CLIRunner.shared.runJSON(
+        ["config", "path", "--kind", "config"], as: CLIPath.self)
+    else { return nil }
+    cachedConfigPath = out.path
+    return out.path
+  }
+
+  func startWatching(onChange: @escaping @Sendable () -> Void) {
+    Task { await self.armWatcher(onChange: onChange) }
+  }
+
+  private func armWatcher(onChange: @escaping @Sendable () -> Void) async {
     fileWatcher?.cancel()
     fileWatcher = nil
+    pendingOnChange = onChange
 
-    let configPath = NSHomeDirectory() + "/.frameworks/config.yaml"
+    guard let configPath = await resolveConfigPath() else { return }
     guard FileManager.default.fileExists(atPath: configPath) else { return }
 
     let fd = open(configPath, O_EVTONLY)
@@ -79,10 +109,12 @@ actor ConfigBridge {
     source.setCancelHandler { close(fd) }
     source.resume()
     fileWatcher = source
+    pendingOnChange = nil
   }
 
   func stopWatching() {
     fileWatcher?.cancel()
     fileWatcher = nil
+    pendingOnChange = nil
   }
 }

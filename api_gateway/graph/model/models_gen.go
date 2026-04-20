@@ -15,6 +15,10 @@ type AbortVodUploadResult interface {
 	IsAbortVodUploadResult()
 }
 
+type BootstrapEdgeResult interface {
+	IsBootstrapEdgeResult()
+}
+
 type ClusterSubscriptionResult interface {
 	IsClusterSubscriptionResult()
 }
@@ -290,6 +294,8 @@ func (AuthError) IsCreateEdgeClusterResult() {}
 
 func (AuthError) IsCreateEnrollmentTokenResult() {}
 
+func (AuthError) IsBootstrapEdgeResult() {}
+
 func (AuthError) IsUpdateClusterResult() {}
 
 func (AuthError) IsCreateClusterInviteResult() {}
@@ -373,6 +379,34 @@ type BillingFeaturesInput struct {
 	// SLA guarantees.
 	SLA *bool `json:"sla,omitempty"`
 }
+
+type BootstrapEdgeInput struct {
+	// Bootstrap token issued by createEdgeCluster or createEnrollmentToken.
+	Token string `json:"token"`
+	// External IP of the edge being bootstrapped (helps Foghorn assign a domain).
+	ExternalIP *string `json:"externalIp,omitempty"`
+	// Caller-supplied node id hint; Foghorn may ignore.
+	PreferredNodeID *string `json:"preferredNodeId,omitempty"`
+}
+
+// Result of a successful bootstrapEdge call. Carries everything the edge
+// needs to come online: its identity, its assigned Foghorn for runtime
+// traffic, and (if the cluster issues per-node certs) its initial TLS
+// material plus the cluster's internal CA bundle.
+type BootstrapEdgeResponse struct {
+	NodeID           string              `json:"nodeId"`
+	EdgeDomain       string              `json:"edgeDomain"`
+	PoolDomain       *string             `json:"poolDomain,omitempty"`
+	ClusterSlug      string              `json:"clusterSlug"`
+	ClusterID        string              `json:"clusterId"`
+	FoghornGrpcAddr  string              `json:"foghornGrpcAddr"`
+	CertPem          *string             `json:"certPem,omitempty"`
+	KeyPem           *string             `json:"keyPem,omitempty"`
+	InternalCaBundle *string             `json:"internalCaBundle,omitempty"`
+	Telemetry        *EdgeTelemetrySetup `json:"telemetry,omitempty"`
+}
+
+func (BootstrapEdgeResponse) IsBootstrapEdgeResult() {}
 
 type BootstrapTokenConnection struct {
 	Edges      []*BootstrapTokenEdge   `json:"edges"`
@@ -875,6 +909,12 @@ type DeveloperTokensConnection struct {
 	Nodes      []*proto.APITokenInfo `json:"nodes"`
 	PageInfo   *PageInfo             `json:"pageInfo"`
 	TotalCount int                   `json:"totalCount"`
+}
+
+type EdgeTelemetrySetup struct {
+	Enabled     bool    `json:"enabled"`
+	WriteURL    *string `json:"writeUrl,omitempty"`
+	BearerToken *string `json:"bearerToken,omitempty"`
 }
 
 type FederationEventEdge struct {
@@ -1644,6 +1684,8 @@ func (ValidationError) IsCreatePrivateClusterResult() {}
 func (ValidationError) IsCreateEdgeClusterResult() {}
 
 func (ValidationError) IsCreateEnrollmentTokenResult() {}
+
+func (ValidationError) IsBootstrapEdgeResult() {}
 
 func (ValidationError) IsUpdateClusterResult() {}
 

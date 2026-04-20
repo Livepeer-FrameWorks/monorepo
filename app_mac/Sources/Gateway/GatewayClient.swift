@@ -3,8 +3,11 @@ import Foundation
 class GatewayClient {
   static let shared = GatewayClient()
 
-  var baseURL = "https://bridge.frameworks.network"
-  var accessToken: String?
+  var baseURL: String = ""
+
+  // Computed so the shared Keychain stays the single source of truth —
+  // caching would let CLI logout go unnoticed until the next refresh.
+  var accessToken: String? { KeychainHelper.load(key: "user_session") }
 
   private let session: URLSession
 
@@ -22,7 +25,11 @@ class GatewayClient {
     body: Data? = nil,
     authenticated: Bool = true
   ) async throws -> Data {
-    guard let url = URL(string: baseURL + path) else {
+    let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      throw GatewayError.notConfigured
+    }
+    guard let url = URL(string: trimmed + path) else {
       throw GatewayError.invalidURL(path)
     }
 
@@ -90,6 +97,7 @@ struct GraphQLError: Decodable {
 }
 
 enum GatewayError: LocalizedError {
+  case notConfigured
   case invalidURL(String)
   case invalidResponse
   case httpError(Int, Data)
@@ -98,6 +106,7 @@ enum GatewayError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
+    case .notConfigured: return "Gateway URL not configured — run 'frameworks setup' to create a context"
     case .invalidURL(let path): return "Invalid URL: \(path)"
     case .invalidResponse: return "Invalid response"
     case .httpError(let code, _): return "HTTP \(code)"

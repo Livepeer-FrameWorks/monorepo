@@ -42,12 +42,11 @@ func (m *Manifest) SharedEnvFiles() []string {
 }
 
 type GeoIPConfig struct {
-	Enabled       bool     `yaml:"enabled"`
-	Source        string   `yaml:"source,omitempty"`          // maxmind | file
-	File          string   `yaml:"file,omitempty"`            // Local MMDB path when source=file
-	LicenseKeyEnv string   `yaml:"license_key_env,omitempty"` // Env var containing the MaxMind key
-	RemotePath    string   `yaml:"remote_path,omitempty"`     // Remote MMDB location
-	Services      []string `yaml:"services,omitempty"`        // Defaults to foghorn,quartermaster
+	Enabled    bool     `yaml:"enabled"`
+	Source     string   `yaml:"source,omitempty"`      // maxmind | file
+	File       string   `yaml:"file,omitempty"`        // Local MMDB path when source=file
+	RemotePath string   `yaml:"remote_path,omitempty"` // Remote MMDB location
+	Services   []string `yaml:"services,omitempty"`    // Defaults to foghorn,quartermaster
 }
 
 type TLSBundleConfig struct {

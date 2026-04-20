@@ -99,9 +99,9 @@ This:
 
 The enrollment token carries `tenant_id` and `cluster_id`, so your node is enrolled into the correct cluster automatically. After enrollment, your node appears in the dashboard under **Infrastructure → Network**.
 
-### PreRegisterEdge (Token-Based Provisioning)
+### Bootstrap (Token-Based Provisioning)
 
-If you used `--enrollment-token` during `frameworks edge init`, the CLI called Foghorn's `PreRegisterEdge` RPC before generating templates. This returned:
+If you used `--enrollment-token` during `frameworks edge init`, the CLI sent the token to Bridge's public `bootstrapEdge` mutation. Bridge validates the token via Quartermaster, finds the cluster's assigned Foghorn, and proxies a `PreRegisterEdge` call. The response carries:
 
 - **Node ID** — a stable, unique identifier for your node
 - **Edge domain** — `{node_label}.{cluster_slug}.{base_domain}` where `node_label` is the node ID with a single `edge-` prefix (Navigator creates the A record)
@@ -109,7 +109,7 @@ If you used `--enrollment-token` during `frameworks edge init`, the CLI called F
 - **Foghorn gRPC address** — for Helmsman's ongoing control stream
 - **Internal CA bundle** — staged locally so Helmsman can trust internal gRPC before the first control stream connects
 
-The CLI needs `--foghorn-addr` (or a configured CLI context) to reach Foghorn for this call. Edge nodes only communicate with Foghorn — they do not join the internal WireGuard mesh.
+The operator only ever needs the token. Bridge is the rendezvous; the cluster's Foghorn is resolved server-side. After bootstrap, the edge talks directly to its assigned Foghorn — it does not join the internal WireGuard mesh.
 
 ### Certificate Renewal (ConfigSeed)
 

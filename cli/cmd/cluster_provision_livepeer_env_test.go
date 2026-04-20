@@ -29,7 +29,7 @@ func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "")
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestBuildServiceEnvVarsPrefersExplicitLivepeerConfig(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "")
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "")
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestBuildServiceEnvVarsDefaultsGatewayHostToClusterScopedDNS(t *testing.T) 
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "")
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestBuildServiceEnvVarsRewritesGlobalGatewayHostToClusterScopedDNS(t *testi
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "")
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -190,4 +190,16 @@ func writeTestEnvFile(t *testing.T, content string) string {
 		t.Fatalf("write env file: %v", err)
 	}
 	return path
+}
+
+// testLoadSharedEnv mimics the runProvision preload step so tests that
+// previously relied on per-task env_file loading keep passing after the
+// refactor that moved the load to the top of the provision run.
+func testLoadSharedEnv(t *testing.T, m *inventory.Manifest) map[string]string {
+	t.Helper()
+	env, err := inventory.LoadSharedEnv(m, "", "")
+	if err != nil {
+		t.Fatalf("LoadSharedEnv: %v", err)
+	}
+	return env
 }

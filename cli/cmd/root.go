@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 
+	fwcfg "frameworks/cli/internal/config"
+
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var (
@@ -23,20 +25,33 @@ func NewRootCmd() *cobra.Command {
 		Long:          "Frameworks CLI — manage Edge nodes, services, and infrastructure across the Frameworks platform.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Parse flags + env once into typed RuntimeOverrides so the
+			// config / credentials / inventory packages don't need to
+			// know about cobra.
+			fwcfg.SetRuntimeOverrides(fwcfg.RuntimeOverrides{
+				ContextName:        contextName,
+				ContextExplicit:    cmd.Flags().Changed("context"),
+				ConfigPath:         cfgFile,
+				ConfigPathExplicit: cmd.Flags().Changed("config"),
+				OutputJSON:         output == "json",
+				NoHints:            os.Getenv("CI") != "" || os.Getenv("FRAMEWORKS_NO_HINTS") != "",
+			})
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Default action: show help and hint about interactive menu
 			_ = cmd.Help()
-			fmt.Fprintln(cmd.OutOrStdout(), "\nTip: run 'frameworks menu' for an interactive start.")
+			if isatty.IsTerminal(os.Stdout.Fd()) {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nTip: run 'frameworks setup' to configure the CLI, or 'frameworks menu' for an interactive start.")
+			}
 			return nil
 		},
 	}
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.frameworks/config.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "path to config.yaml (default: $XDG_CONFIG_HOME/frameworks/config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&output, "output", "", "output format: json|text (default: text)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose logging")
-	rootCmd.PersistentFlags().StringVar(&contextName, "context", "default", "context name (e.g., default|dev|staging|prod)")
-
-	cobra.OnInitialize(initConfig)
+	rootCmd.PersistentFlags().StringVar(&contextName, "context", "", "context name to use for this invocation (overrides the saved current context)")
 
 	// Subcommands (groups)
 	rootCmd.AddCommand(newMenuCmd())
@@ -45,6 +60,8 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newServicesCmd())
 	rootCmd.AddCommand(newContextCmd())
 	rootCmd.AddCommand(newLoginCmd())
+	rootCmd.AddCommand(newLogoutCmd())
+	rootCmd.AddCommand(newSetupCmd())
 	rootCmd.AddCommand(newAdminCmd())
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newConfigCmd())
@@ -53,23 +70,4 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newUpdateCmd())
 	rootCmd.AddCommand(newLivepeerCmd())
 	return rootCmd
-}
-
-func initConfig() {
-	if cfgFile != "" {
-		viper.SetConfigFile(cfgFile)
-	} else {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			viper.AddConfigPath(home + "/.frameworks")
-			viper.SetConfigName("config")
-		}
-		viper.SetConfigType("yaml")
-	}
-
-	viper.SetEnvPrefix("FRAMEWORKS")
-	viper.AutomaticEnv()
-
-	// Ignore missing config
-	_ = viper.ReadInConfig()
 }

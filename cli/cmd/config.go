@@ -1,40 +1,26 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	fwcfg "frameworks/cli/internal/config"
+	fwcredentials "frameworks/cli/internal/credentials"
 
 	"github.com/spf13/cobra"
 )
 
 func newConfigCmd() *cobra.Command {
 	cfg := &cobra.Command{Use: "config", Short: "Configuration helpers"}
-	cfg.AddCommand(newConfigInitCmd())
 	cfg.AddCommand(newConfigEnvCmd())
 	cfg.AddCommand(newConfigSetCmd())
 	cfg.AddCommand(newConfigGetCmd())
+	cfg.AddCommand(newConfigPathCmd())
 	return cfg
-}
-
-func newConfigInitCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "init",
-		Short: "Create default configuration file",
-		Long:  `Create ~/.frameworks/config.yaml with default settings if it does not exist.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, cfgPath, err := fwcfg.Load()
-			if err != nil {
-				return err
-			}
-			if err := fwcfg.Save(cfg, cfgPath); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Config ready at %s\n", cfgPath)
-			return nil
-		},
-	}
 }
 
 func newConfigSetCmd() *cobra.Command {
@@ -48,12 +34,15 @@ Supported keys:
   github.installation-id   GitHub App Installation ID
   github.private-key       Path to GitHub App private key PEM
   github.repo              GitHub repo (owner/repo)
-  github.ref               Git ref for manifest fetch (default: main)`,
+  github.ref               Git ref for manifest fetch (default: main)
+
+For per-context gitops defaults (manifest source, cluster, age key),
+use 'frameworks context set-gitops-*' instead.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key, value := args[0], args[1]
 
-			cfg, cfgPath, err := fwcfg.Load()
+			cfg, err := fwcfg.Load()
 			if err != nil {
 				return err
 			}
@@ -85,7 +74,7 @@ Supported keys:
 				return fmt.Errorf("unknown key: %s", key)
 			}
 
-			if err := fwcfg.Save(cfg, cfgPath); err != nil {
+			if err := fwcfg.Save(cfg); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Set %s = %s\n", key, value)
@@ -102,7 +91,7 @@ func newConfigGetCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
 
-			cfg, _, err := fwcfg.Load()
+			cfg, err := fwcfg.Load()
 			if err != nil {
 				return err
 			}
@@ -131,5 +120,86 @@ func newConfigGetCmd() *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout(), value)
 			return nil
 		},
+	}
+}
+
+func newConfigPathCmd() *cobra.Command {
+	var kind string
+	cmd := &cobra.Command{
+		Use:   "path",
+		Short: "Print the canonical location for CLI state",
+		Long: `Print the canonical location for a given state kind.
+
+  config       Filesystem path to config.yaml.
+  credentials  Backend + identifier for the credential store. On macOS
+               this is 'keychain:<service>'; on other platforms it is a
+               filesystem path with mode 0600. JSON output carries both
+               'backend' and 'location' fields.
+
+The location is returned whether or not the underlying file exists yet.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt := fwcfg.GetRuntimeOverrides()
+			switch kind {
+			case "config":
+				path, err := fwcfg.ConfigPath()
+				if err != nil {
+					return err
+				}
+				return emitPath(cmd, rt, map[string]string{
+					"kind":     kind,
+					"backend":  "file",
+					"location": path,
+					"path":     path,
+				}, path)
+			case "credentials":
+				backend, location := credentialsLocation()
+				display := location
+				if backend == "keychain" {
+					display = "keychain:" + location
+				}
+				return emitPath(cmd, rt, map[string]string{
+					"kind":     kind,
+					"backend":  backend,
+					"location": location,
+					"path":     display,
+				}, display)
+			default:
+				return fmt.Errorf("unknown --kind %q (want config|credentials)", kind)
+			}
+		},
+	}
+	cmd.Flags().StringVar(&kind, "kind", "config", "which location to print: config|credentials")
+	return cmd
+}
+
+func emitPath(cmd *cobra.Command, rt fwcfg.RuntimeOverrides, payload map[string]string, textOut string) error {
+	if rt.OutputJSON {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), string(b))
+		return nil
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), textOut)
+	return nil
+}
+
+// credentialsLocation returns the backend name and its identifier. For
+// keychain the identifier is the service name; for file it's the
+// filesystem path.
+func credentialsLocation() (backend, location string) {
+	store := fwcredentials.DefaultStore()
+	switch store.Name() {
+	case "keychain":
+		return "keychain", fwcredentials.ServiceName
+	default:
+		base := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+		if base == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				base = filepath.Join(home, ".local", "share")
+			}
+		}
+		return store.Name(), filepath.Join(base, "frameworks", "credentials")
 	}
 }

@@ -20,7 +20,6 @@ import (
 
 // newClusterUpgradeCmd creates the upgrade command
 func newClusterUpgradeCmd() *cobra.Command {
-	var manifestPath string
 	var version string
 	var dryRun bool
 	var skipValidation bool
@@ -31,7 +30,7 @@ func newClusterUpgradeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrade [service]",
 		Short: "Upgrade a service (or all services) to a new version",
-		Long: `Upgrade a service to a new version using GitOps manifests.
+		Long: `Upgrade a service to a new version using GitOps release manifests.
 
 The upgrade process:
   1. Detect current version and mode (Docker or native)
@@ -50,24 +49,11 @@ Version can be:
   - Channel: stable, rc (uses latest from channel)
   - Default: cluster channel (or stable)
 
-Use --all to upgrade all enabled services in dependency order.
-
-Environment variables:
-  FRAMEWORKS_GITOPS_REPO - Override GitOps repository URL or local path`,
-		Example: `  # Upgrade quartermaster using cluster's channel
-  frameworks cluster upgrade quartermaster
-
-  # Upgrade to specific version
+Use --all to upgrade all enabled services in dependency order.`,
+		Example: `  frameworks cluster upgrade quartermaster
   frameworks cluster upgrade commodore --version v0.0.0-rc2
-
-  # Dry run to see what would happen
   frameworks cluster upgrade bridge --version rc --dry-run
-
-  # Upgrade all services in dependency order
-  frameworks cluster upgrade --all --yes
-
-  # Upgrade all services, dry run
-  frameworks cluster upgrade --all --dry-run`,
+  frameworks cluster upgrade --all --yes`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all && len(args) > 0 {
 				return fmt.Errorf("--all and a service name are mutually exclusive")
@@ -78,14 +64,18 @@ Environment variables:
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if all {
-				return runUpgradeAll(cmd, manifestPath, version, dryRun, skipValidation, yes, noRollback)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
 			}
-			return runUpgrade(cmd, manifestPath, args[0], version, dryRun, skipValidation, yes, noRollback)
+			defer rc.Cleanup()
+			if all {
+				return runUpgradeAll(cmd, rc, version, dryRun, skipValidation, yes, noRollback)
+			}
+			return runUpgrade(cmd, rc, args[0], version, dryRun, skipValidation, yes, noRollback)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	cmd.Flags().StringVar(&version, "version", "", "Version to upgrade to (stable, rc, v1.2.3); defaults to cluster channel")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be upgraded without executing")
 	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip health validation after upgrade")
@@ -111,14 +101,11 @@ func resolveUpgradeVersion(cmd *cobra.Command, manifest *inventory.Manifest, ver
 	return version
 }
 
-// runUpgrade executes the upgrade command
-func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, dryRun, skipValidation, yes, noRollback bool) error {
-	// Load cluster manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+// runUpgrade executes the upgrade command against an already-resolved manifest.
+func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback bool) error {
+	manifest := rc.Manifest
+	manifestPath := rc.ManifestPath
+	var err error
 	version = resolveUpgradeVersion(cmd, manifest, version)
 
 	// Resolve deploy name (services/interfaces) or use serviceName for infrastructure
@@ -370,7 +357,9 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[6/6] Upgrade complete!\n")
 	fmt.Fprintf(cmd.OutOrStdout(), "✓ %s upgraded from %s to %s\n", serviceName, previousVersion, svcInfo.Version)
 
-	// Persist the new version back to the cluster manifest
+	// Persist the new version back to the cluster manifest. The resolver
+	// hands us the on-disk path of whichever source it chose; writing
+	// into a github-sourced tempdir is harmless (discarded on Cleanup).
 	saveUpgradedVersion(manifest, serviceName, svcInfo.Version, manifestPath, cmd)
 
 	return nil
@@ -400,12 +389,9 @@ func saveUpgradedVersion(manifest *inventory.Manifest, serviceName, newVersion, 
 }
 
 // runUpgradeAll upgrades all enabled services in dependency order.
-func runUpgradeAll(cmd *cobra.Command, manifestPath, version string, dryRun, skipValidation, yes, noRollback bool) error {
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryRun, skipValidation, yes, noRollback bool) error {
+	manifest := rc.Manifest
+	var err error
 	version = resolveUpgradeVersion(cmd, manifest, version)
 
 	// Build dependency-ordered execution plan
@@ -452,7 +438,7 @@ func runUpgradeAll(cmd *cobra.Command, manifestPath, version string, dryRun, ski
 	var succeeded, failed []string
 	for i, svc := range services {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[%d/%d] Upgrading %s...\n", i+1, len(services), svc)
-		if err := runUpgrade(cmd, manifestPath, svc, version, false, skipValidation, true, noRollback); err != nil {
+		if err := runUpgrade(cmd, rc, svc, version, false, skipValidation, true, noRollback); err != nil {
 			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ %s failed: %v\n", svc, err)
 			failed = append(failed, svc)
 			fmt.Fprintf(cmd.OutOrStderr(), "\nStopping upgrade sequence. Succeeded: %v, Failed: %v, Remaining: %v\n",

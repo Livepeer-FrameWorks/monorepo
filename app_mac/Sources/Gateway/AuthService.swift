@@ -17,10 +17,8 @@ class AuthService {
     let data = try await gateway.request(method: "POST", path: "/auth/login", body: body, authenticated: false)
     let response = try JSONDecoder().decode(AuthResponse.self, from: data)
 
-    try KeychainHelper.save(key: "access_token", value: response.token)
+    try KeychainHelper.save(key: "user_session", value: response.token)
     try KeychainHelper.save(key: "refresh_token", value: response.refreshToken)
-
-    gateway.accessToken = response.token
 
     await MainActor.run {
       appState.isAuthenticated = true
@@ -46,10 +44,8 @@ class AuthService {
     let data = try await gateway.request(method: "POST", path: "/auth/refresh", body: body, authenticated: false)
     let response = try JSONDecoder().decode(AuthResponse.self, from: data)
 
-    try KeychainHelper.save(key: "access_token", value: response.token)
+    try KeychainHelper.save(key: "user_session", value: response.token)
     try KeychainHelper.save(key: "refresh_token", value: response.refreshToken)
-
-    gateway.accessToken = response.token
 
     scheduleTokenRefresh(expiresAt: response.expiresAt, appState: appState)
   }
@@ -57,11 +53,9 @@ class AuthService {
   // MARK: - Session Restore
 
   func restoreSession(appState: AppState) async -> Bool {
-    guard let token = KeychainHelper.load(key: "access_token") else {
+    guard KeychainHelper.load(key: "user_session") != nil else {
       return false
     }
-
-    gateway.accessToken = token
 
     do {
       let data = try await gateway.request(method: "GET", path: "/auth/me")
@@ -90,9 +84,8 @@ class AuthService {
 
   func logout(appState: AppState) async {
     try? await gateway.request(method: "POST", path: "/auth/logout")
-    KeychainHelper.delete(key: "access_token")
+    KeychainHelper.delete(key: "user_session")
     KeychainHelper.delete(key: "refresh_token")
-    gateway.accessToken = nil
 
     await MainActor.run {
       appState.isAuthenticated = false

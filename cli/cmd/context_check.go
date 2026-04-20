@@ -31,11 +31,15 @@ func newContextCheckCmd() *cobra.Command {
 		Use:   "check",
 		Short: "Check reachability of services in current context",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, err := fwcfg.Load()
+			cfg, err := fwcfg.Load()
 			if err != nil {
 				return err
 			}
-			ctx := fwcfg.GetCurrent(cfg)
+			rt := fwcfg.GetRuntimeOverrides()
+			ctx, err := fwcfg.ResolveActiveContext(rt, fwcfg.OSEnv{}, cfg)
+			if err != nil {
+				return err
+			}
 			results := runReachabilityChecks(ctx, timeout)
 			if output == "json" {
 				enc := json.NewEncoder(cmd.OutOrStdout())
@@ -152,7 +156,6 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 	res = append(res, checkHTTP("bridge", ep.BridgeURL))
 	res = append(res, checkHTTP("quartermaster", ep.QuartermasterURL))
 	res = append(res, checkHTTP("commodore", ep.ControlURL))
-	res = append(res, checkHTTP("foghorn", ep.FoghornHTTPURL))
 	res = append(res, checkHTTP("periscope-query", ep.PeriscopeQueryURL))
 	res = append(res, checkHTTP("periscope-ingest", ep.PeriscopeIngestURL))
 	res = append(res, checkHTTP("purser", ep.PurserURL))

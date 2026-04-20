@@ -13,6 +13,8 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	fwcredentials "frameworks/cli/internal/credentials"
+	"frameworks/cli/internal/platformauth"
 	commodore "frameworks/pkg/clients/commodore"
 	fhclient "frameworks/pkg/clients/foghorn"
 	purserclient "frameworks/pkg/clients/purser"
@@ -178,16 +180,38 @@ func newAdminTokensCmd() *cobra.Command {
 	return tok
 }
 
+// activeContextWithAuth is the shared entry point for admin gRPC client
+// factories. It loads config, resolves the active context strictly
+// (errors when none configured), fills JWT from the credential store
+// (user identity), and resolves SERVICE_TOKEN from the active context's
+// manifest/gitops source (platform configuration). Service tokens are
+// never read from the credential store or env vars.
+func activeContextWithAuth() (fwcfg.Context, error) {
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	rt := fwcfg.GetRuntimeOverrides()
+	ctxCfg, err := fwcfg.ResolveActiveContext(rt, fwcfg.OSEnv{}, cfg)
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	jwt, err := fwcredentials.ResolveUserAuth(fwcfg.OSEnv{}, fwcredentials.DefaultStore())
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	token, err := platformauth.ResolveManifestServiceToken(context.Background(), ctxCfg, cfg)
+	if err != nil {
+		return fwcfg.Context{}, err
+	}
+	ctxCfg.Auth = fwcfg.Auth{JWT: jwt, ServiceToken: token}
+	return ctxCfg, nil
+}
+
 func commodoreGRPCClientFromContext() (*commodore.GRPCClient, fwcfg.Context, error) {
-	cfg, _, err := fwcfg.Load()
+	ctxCfg, err := activeContextWithAuth()
 	if err != nil {
 		return nil, fwcfg.Context{}, err
-	}
-	ctxCfg := fwcfg.GetCurrent(cfg)
-	ctxCfg.Auth = fwcfg.ResolveAuth(ctxCfg)
-
-	if ctxCfg.Auth.ServiceToken == "" {
-		return nil, fwcfg.Context{}, fmt.Errorf("API token required; run 'frameworks login' first")
 	}
 
 	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "commodore_grpc_addr", ctxCfg.Endpoints.CommodoreGRPCAddr, false)
@@ -362,12 +386,10 @@ func newAdminBootstrapTokensCmd() *cobra.Command {
 }
 
 func qmGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
-	cfg, _, err := fwcfg.Load()
+	ctxCfg, err := activeContextWithAuth()
 	if err != nil {
 		return nil, fwcfg.Context{}, err
 	}
-	ctxCfg := fwcfg.GetCurrent(cfg)
-	ctxCfg.Auth = fwcfg.ResolveAuth(ctxCfg)
 
 	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "quartermaster_grpc_addr", ctxCfg.Endpoints.QuartermasterGRPCAddr, false)
 	if err != nil {
@@ -388,12 +410,10 @@ func qmGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
 }
 
 func foghornGRPCClientFromContext() (*fhclient.GRPCClient, fwcfg.Context, error) {
-	cfg, _, err := fwcfg.Load()
+	ctxCfg, err := activeContextWithAuth()
 	if err != nil {
 		return nil, fwcfg.Context{}, err
 	}
-	ctxCfg := fwcfg.GetCurrent(cfg)
-	ctxCfg.Auth = fwcfg.ResolveAuth(ctxCfg)
 
 	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "foghorn_grpc_addr", ctxCfg.Endpoints.FoghornGRPCAddr, false)
 	if err != nil {
@@ -413,12 +433,10 @@ func foghornGRPCClientFromContext() (*fhclient.GRPCClient, fwcfg.Context, error)
 }
 
 func purserGRPCClientFromContext() (*purserclient.GRPCClient, fwcfg.Context, error) {
-	cfg, _, err := fwcfg.Load()
+	ctxCfg, err := activeContextWithAuth()
 	if err != nil {
 		return nil, fwcfg.Context{}, err
 	}
-	ctxCfg := fwcfg.GetCurrent(cfg)
-	ctxCfg.Auth = fwcfg.ResolveAuth(ctxCfg)
 
 	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "purser_grpc_addr", ctxCfg.Endpoints.PurserGRPCAddr, false)
 	if err != nil {
@@ -487,9 +505,6 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 			return err
 		}
 		defer func() { _ = qm.Close() }()
-		if strings.TrimSpace(ctxCfg.Auth.ServiceToken) == "" && strings.TrimSpace(ctxCfg.Auth.JWT) == "" {
-			return fmt.Errorf("service token or JWT required; run 'frameworks login' first")
-		}
 		req := &pb.CreateBootstrapTokenRequest{
 			Name: name,
 			Kind: kind,

@@ -29,7 +29,7 @@ func TestBuildTaskConfig_RedisEngineFromManifest(t *testing.T) {
 		InstanceID: "foghorn",
 		Host:       "media-1",
 		Phase:      orchestrator.PhaseInfrastructure,
-	}, manifest, map[string]interface{}{}, false, "")
+	}, manifest, map[string]interface{}{}, false, "", nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestBuildTaskConfig_RedisInstanceEngineOverridesManifest(t *testing.T) {
 		InstanceID: "platform",
 		Host:       "control-1",
 		Phase:      orchestrator.PhaseInfrastructure,
-	}, manifest, map[string]interface{}{}, false, "")
+	}, manifest, map[string]interface{}{}, false, "", nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}

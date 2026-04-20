@@ -37,7 +37,6 @@ type BackupFile struct {
 
 // newClusterBackupCmd creates the backup command
 func newClusterBackupCmd() *cobra.Command {
-	var manifestPath string
 	var outputDir string
 	var skipUpload bool
 
@@ -55,35 +54,27 @@ Supported components:
 
 Backups are stored in the output directory with timestamps.
 Optionally upload to S3/GCS after backup (requires --upload flag).`,
-		Example: `  # Backup Postgres
-  frameworks cluster backup postgres --output /backups
-
-  # Backup everything
-  frameworks cluster backup all --output /backups
-
-  # Backup and upload to S3
-  frameworks cluster backup postgres --upload s3://my-bucket/backups`,
+		Example: `  frameworks cluster backup postgres --output /backups
+  frameworks cluster backup all --output /backups`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBackup(cmd, manifestPath, args[0], outputDir, skipUpload)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runBackup(cmd, rc.Manifest, args[0], outputDir, skipUpload)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	cmd.Flags().StringVarP(&outputDir, "output", "o", "./backups", "Output directory for backups")
 	cmd.Flags().BoolVar(&skipUpload, "skip-upload", true, "Skip upload to remote storage")
 
 	return cmd
 }
 
-// runBackup executes the backup command
-func runBackup(cmd *cobra.Command, manifestPath, component, outputDir string, skipUpload bool) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+// runBackup executes the backup command against an already-loaded manifest.
+func runBackup(cmd *cobra.Command, manifest *inventory.Manifest, component, outputDir string, skipUpload bool) error {
 	timestamp := time.Now().Format("20060102-150405")
 	fmt.Fprintf(cmd.OutOrStdout(), "Starting backup: %s (timestamp: %s)\n", component, timestamp)
 	fmt.Fprintf(cmd.OutOrStdout(), "Output directory: %s\n\n", outputDir)

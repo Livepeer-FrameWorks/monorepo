@@ -11,8 +11,6 @@ import (
 var validChannels = []string{"stable", "rc"}
 
 func newClusterSetChannelCmd() *cobra.Command {
-	var manifestPath string
-
 	cmd := &cobra.Command{
 		Use:   "set-channel <channel>",
 		Short: "Set the release channel for this cluster",
@@ -24,30 +22,25 @@ Valid channels:
 
 The channel controls which release track 'frameworks cluster upgrade' uses
 when no explicit version is given.`,
-		Example: `  # Switch to release candidates
-  frameworks cluster set-channel rc
-
-  # Switch back to stable
+		Example: `  frameworks cluster set-channel rc
   frameworks cluster set-channel stable --manifest /etc/frameworks/cluster.yaml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSetChannel(cmd, manifestPath, args[0])
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runSetChannel(cmd, rc.Manifest, rc.ManifestPath, args[0])
 		},
 	}
-
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 
 	return cmd
 }
 
-func runSetChannel(cmd *cobra.Command, manifestPath, channel string) error {
+func runSetChannel(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath, channel string) error {
 	if !isValidChannel(channel) {
 		return fmt.Errorf("invalid channel %q: must be one of %v", channel, validChannels)
-	}
-
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
 	}
 
 	current := manifest.ResolvedChannel()

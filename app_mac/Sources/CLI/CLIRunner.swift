@@ -36,8 +36,13 @@ actor CLIRunner {
     process.arguments = fullArgs
 
     var env = ProcessInfo.processInfo.environment
-    if let token = KeychainHelper.load(key: "access_token") {
-      env["FW_JWT"] = token
+    // The credential contract is: env > store. Only inject the Keychain
+    // value when the caller has NOT already set FW_USER_TOKEN, otherwise
+    // we'd invert the precedence and make Keychain override an explicit
+    // env override.
+    if (env["FW_USER_TOKEN"] ?? "").isEmpty,
+       let token = KeychainHelper.load(key: "user_session") {
+      env["FW_USER_TOKEN"] = token
     }
     if let extra = environment {
       env.merge(extra) { _, new in new }
@@ -72,8 +77,9 @@ actor CLIRunner {
     process.arguments = args
 
     var env = ProcessInfo.processInfo.environment
-    if let token = KeychainHelper.load(key: "access_token") {
-      env["FW_JWT"] = token
+    if (env["FW_USER_TOKEN"] ?? "").isEmpty,
+       let token = KeychainHelper.load(key: "user_session") {
+      env["FW_USER_TOKEN"] = token
     }
     process.environment = env
 

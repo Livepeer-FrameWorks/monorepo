@@ -306,7 +306,7 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 		},
 	}
 
-	metadata, err := serviceRegistrationMetadata("livepeer-gateway", "central-eu-1", "media-central-primary", manifest, map[string]interface{}{}, "")
+	metadata, err := serviceRegistrationMetadata("livepeer-gateway", "central-eu-1", "media-central-primary", manifest, map[string]interface{}{}, "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("serviceRegistrationMetadata returned error: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestEnsurePrivateerEnrollmentTokenWithClientStoresClusterToken(t *testing.T
 	}
 }
 
-func TestLoadInfraCredentialsLoadsSplitManifestEnvFiles(t *testing.T) {
+func TestExtractInfraCredentialsFromSplitManifestEnvFiles(t *testing.T) {
 	baseEnv := writeTestEnvFile(t, "DATABASE_USER=frameworks\n")
 	secretsEnv := writeTestEnvFile(t, strings.Join([]string{
 		"DATABASE_PASSWORD=test-db-pass",
@@ -360,10 +360,11 @@ func TestLoadInfraCredentialsLoadsSplitManifestEnvFiles(t *testing.T) {
 		EnvFiles: []string{baseEnv, secretsEnv},
 	}
 
-	creds, credErr := loadInfraCredentials(manifest, "")
-	if credErr != nil {
-		t.Fatalf("loadInfraCredentials returned error: %v", credErr)
+	sharedEnv, err := inventory.LoadSharedEnv(manifest, "", "")
+	if err != nil {
+		t.Fatalf("LoadSharedEnv: %v", err)
 	}
+	creds := extractInfraCredentials(sharedEnv)
 	if got := creds["postgres_user"]; got != "frameworks" {
 		t.Fatalf("expected postgres_user from first env file, got %v", got)
 	}
@@ -407,7 +408,7 @@ func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "")
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -442,7 +443,7 @@ func TestBuildServiceEnvVarsDerivesSharedRuntimeValues(t *testing.T) {
 		Name:      "foghorn",
 		Type:      "foghorn",
 		ServiceID: "foghorn",
-	}, manifest, map[string]interface{}{}, "", "")
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -481,7 +482,7 @@ func TestBuildServiceEnvVarsDerivesRegionFromHostLabels(t *testing.T) {
 		Type:      "foghorn",
 		ServiceID: "foghorn",
 		Host:      "regional-us-1",
-	}, manifest, map[string]interface{}{}, "", "")
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -542,7 +543,7 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "")
+	env, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -582,7 +583,7 @@ func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	_, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "")
+	_, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err == nil {
 		t.Fatal("expected managed CA env validation to fail")
 	}
@@ -618,7 +619,7 @@ func TestBuildServiceEnvVarsProductionAcceptsNavigatorManagedCABase64Env(t *test
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	if _, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", ""); err != nil {
+	if _, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest)); err != nil {
 		t.Fatalf("expected base64 CA envs to satisfy prod validation, got %v", err)
 	}
 }
@@ -677,7 +678,7 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "")
+	env, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -748,7 +749,7 @@ func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *t
 	registrar := &fakePublicServiceRegistrar{}
 
 	var out bytes.Buffer
-	if err := registerPublicServiceInstanceWithClient(context.Background(), &out, manifest, task, manifest.Hosts["core-1"], runtimeData, "", registrar); err != nil {
+	if err := registerPublicServiceInstanceWithClient(context.Background(), &out, manifest, task, manifest.Hosts["core-1"], runtimeData, "", testLoadSharedEnv(t, manifest), registrar); err != nil {
 		t.Fatalf("registerPublicServiceInstanceWithClient returned error: %v", err)
 	}
 	if len(registrar.reqs) != 1 {

@@ -1502,6 +1502,10 @@ message ConfigSeed {
   bytes ca_bundle = 22;
   // Optional control-plane-managed edge telemetry remote_write settings.
   common.EdgeTelemetryConfig telemetry = 23;
+  // Foghorn's public HTTP balancer base (e.g. "https://foghorn-us-west.example.com"
+  // or "http://foghorn:18008" in-cluster). Helmsman uses this to wire the
+  // MistServer "balance:<base>?fallback=push://" source on stream templates.
+  string foghorn_balancer_base = 24;
 }
 
 // SiteConfig carries the public-facing site parameters that Helmsman uses to

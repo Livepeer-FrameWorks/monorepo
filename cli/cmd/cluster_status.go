@@ -25,7 +25,6 @@ type serviceStatus struct {
 }
 
 func newClusterStatusCmd() *cobra.Command {
-	var manifestPath string
 	var jsonOutput bool
 
 	cmd := &cobra.Command{
@@ -38,31 +37,25 @@ Fetches the release manifest for the cluster's configured channel (default:
 stable) and detects each enabled service on its configured host. The table
 shows whether each service is up to date, has an upgrade available, is not
 running, or is not installed.`,
-		Example: `  # Check status against cluster.yaml
-  frameworks cluster status
-
-  # Use a different manifest file
+		Example: `  frameworks cluster status
   frameworks cluster status --manifest /etc/frameworks/cluster.yaml
-
-  # Machine-readable JSON output
   frameworks cluster status --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runClusterStatus(cmd, manifestPath, jsonOutput)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runClusterStatus(cmd, rc.Manifest, jsonOutput)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON output")
 
 	return cmd
 }
 
-func runClusterStatus(cmd *cobra.Command, manifestPath string, jsonOutput bool) error {
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+func runClusterStatus(cmd *cobra.Command, manifest *inventory.Manifest, jsonOutput bool) error {
 	channel := manifest.ResolvedChannel()
 	gitopsChannel, gitopsVersion := gitops.ResolveVersion(channel)
 

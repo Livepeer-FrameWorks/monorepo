@@ -136,8 +136,8 @@ Network diagnostics:
 # Check connectivity to control plane
 frameworks context check
 
-# Test Foghorn HTTP endpoint
-curl -I $FOGHORN_URL/health
+# Inspect Helmsman's gRPC connection to Foghorn (any dial errors land here)
+frameworks edge logs helmsman --tail 100
 ```
 
 ## Resource Usage

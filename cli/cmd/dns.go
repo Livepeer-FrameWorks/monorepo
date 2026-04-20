@@ -188,12 +188,10 @@ func newDNSDoctorCmd() *cobra.Command {
 }
 
 func getQuartermasterGRPCClient() (*quartermaster.GRPCClient, error) {
-	cfg, _, err := config.Load()
+	ctxConfig, err := activeContextWithAuth()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+		return nil, err
 	}
-	ctxConfig := config.GetCurrent(cfg)
-	ctxConfig.Auth = config.ResolveAuth(ctxConfig)
 
 	grpcAddr, err := config.RequireEndpoint(ctxConfig, "quartermaster_grpc_addr", ctxConfig.Endpoints.QuartermasterGRPCAddr, false)
 	if err != nil {

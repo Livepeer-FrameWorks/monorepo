@@ -30,9 +30,6 @@ type HelmsmanConfig struct {
 	MistAPIUsername string
 	MistAPIPassword string
 
-	// Foghorn URL for balance source in MistServer config
-	FoghornURL string
-
 	// Storage configuration
 	StorageLocalPath     string
 	StorageS3Bucket      string
@@ -88,9 +85,6 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		MistServerURL:   config.RequireEnv("MISTSERVER_URL"),
 		MistAPIUsername: config.GetEnv("MIST_API_USERNAME", ""),
 		MistAPIPassword: config.GetEnv("MIST_API_PASSWORD", ""),
-
-		// Foghorn URL for balance source
-		FoghornURL: config.RequireEnv("FOGHORN_URL"),
 
 		// Storage (optional - empty disables local storage features)
 		StorageLocalPath:     config.GetEnv("HELMSMAN_STORAGE_LOCAL_PATH", ""),

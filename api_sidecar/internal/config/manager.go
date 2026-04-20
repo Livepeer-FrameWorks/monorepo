@@ -602,9 +602,9 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 	if seed == nil || len(seed.GetTemplates()) == 0 {
 		return nil
 	}
-	base := os.Getenv("FOGHORN_URL")
+	base := strings.TrimSpace(seed.GetFoghornBalancerBase())
 	if base == "" {
-		base = "http://foghorn:18008"
+		return fmt.Errorf("ConfigSeed missing foghorn_balancer_base; cannot wire MistServer balancer")
 	}
 	source := "balance:" + base + "?fallback=push://"
 

@@ -33,9 +33,15 @@ struct SettingsView: View {
 
         Section("Connection") {
           if appState.cliAvailable {
-            LabeledContent("Context", value: appState.currentContext)
+            LabeledContent(
+              "Context",
+              value: appState.currentContext.isEmpty ? "(no context — run 'frameworks setup')" : appState.currentContext
+            )
           }
-          TextField("Gateway URL", text: $appState.gatewayBaseURL)
+          LabeledContent(
+            "Bridge URL",
+            value: appState.gatewayBaseURL.isEmpty ? "(no context)" : appState.gatewayBaseURL
+          )
         }
 
         if appState.cliAvailable {

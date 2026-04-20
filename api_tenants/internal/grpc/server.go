@@ -4622,6 +4622,11 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	}
 	if clusterID.Valid {
 		resp.ClusterId = clusterID.String
+		// Resolve the cluster's assigned Foghorn so a stateless rendezvous
+		// (Bridge bootstrapEdge) can route without a second RPC.
+		if addr, lookupErr := s.lookupClusterFoghornGRPC(ctx, clusterID.String); lookupErr == nil {
+			resp.FoghornGrpcAddr = addr
+		}
 	}
 	if len(metadataJSON) > 0 {
 		var metadataMap map[string]interface{}
@@ -4630,6 +4635,35 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 		}
 	}
 	return resp, nil
+}
+
+// lookupClusterFoghornGRPC returns the gRPC advertise addr of the
+// Foghorn instance currently assigned to the given cluster. Returns an
+// empty string with nil error when no active assignment exists yet
+// (caller decides whether that's fatal). Used by ValidateBootstrapToken
+// so a stateless rendezvous (Bridge bootstrapEdge) can route on a
+// single QM call.
+func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clusterID string) (string, error) {
+	var addr string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT si.advertise_host || ':' || si.port
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.foghorn_cluster_assignments fca ON fca.foghorn_instance_id = si.id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE fca.cluster_id = $1
+		  AND fca.is_active = true
+		  AND si.status = 'running'
+		  AND si.protocol = 'grpc'
+		  AND svc.type = 'foghorn'
+		LIMIT 1
+	`, clusterID).Scan(&addr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return addr, nil
 }
 
 // ============================================================================

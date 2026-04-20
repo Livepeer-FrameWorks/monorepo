@@ -622,7 +622,6 @@ services:
       dockerfile: api_sidecar/Dockerfile
     environment:
       HELMSMAN_WEBHOOK_URL: ${HELMSMAN_WEBHOOK_URL}
-      FOGHORN_URL: ${FOGHORN_URL}
       FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
       EDGE_PUBLIC_URL: ${EDGE_PUBLIC_URL}
       MISTSERVER_URL: ${MISTSERVER_URL}

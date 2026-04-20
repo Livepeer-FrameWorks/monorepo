@@ -3,10 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
-	internalconfig "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
@@ -16,9 +14,8 @@ import (
 
 func newClusterSeedCmd() *cobra.Command {
 	var (
-		manifestPath string
-		demo         bool
-		force        bool
+		demo  bool
+		force bool
 	)
 
 	cmd := &cobra.Command{
@@ -31,28 +28,26 @@ are applied. Use --demo to also apply demo data (sample tenant, user, stream)
 for development and testing.
 
 Seed operations are idempotent (ON CONFLICT guards).`,
-		Example: `  # Apply demo data for development
-  frameworks cluster seed --demo --manifest cluster.yaml
-
-  # Re-apply static seeds after schema changes
-  frameworks cluster seed --manifest cluster.yaml`,
+		Example: `  frameworks cluster seed --demo
+  frameworks cluster seed`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSeed(cmd, manifestPath, demo, force)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runSeed(cmd, rc, demo, force)
 		},
 	}
 
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	cmd.Flags().BoolVar(&demo, "demo", false, "Include demo data (sample tenant, user, stream)")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
 
 	return cmd
 }
 
-func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
+func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
+	manifest := rc.Manifest
 
 	if demo && !force {
 		fmt.Fprint(cmd.OutOrStdout(), "This will insert demo data (sample tenant, user, stream). Continue? [y/N] ")
@@ -86,7 +81,21 @@ func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
 			return fmt.Errorf("postgres host not found in manifest")
 		}
 
-		sqlExec, execErr := newSQLExecutor(pg.SQLAccess, pgHost, sshPool, pg.IsYugabyte(), resolveYugabytePassword(pg))
+		// Only decrypt manifest env_files when Yugabyte actually needs a
+		// password. Vanilla Postgres uses peer auth.
+		var sharedEnv map[string]string
+		if pg.IsYugabyte() && pg.Password == "" {
+			env, sErr := rc.SharedEnv()
+			if sErr != nil {
+				return fmt.Errorf("load manifest env_files: %w", sErr)
+			}
+			sharedEnv = env
+		}
+		password, pwErr := resolveYugabytePassword(pg, sharedEnv)
+		if pwErr != nil {
+			return pwErr
+		}
+		sqlExec, execErr := newSQLExecutor(pg.SQLAccess, pgHost, sshPool, pg.IsYugabyte(), password)
 		if execErr != nil {
 			return fmt.Errorf("create sql executor: %w", execErr)
 		}
@@ -130,30 +139,6 @@ func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
 				return fmt.Errorf("clickhouse host not found in manifest")
 			}
 
-			chExec, chExecErr := newCHExecutor(ch.SQLAccess, chHost, sshPool)
-			if chExecErr != nil {
-				return fmt.Errorf("create ch executor: %w", chExecErr)
-			}
-
-			chProv, chErr := provisioner.NewClickHouseProvisioner(sshPool, provisioner.WithCHExecutor(chExec))
-			if chErr != nil {
-				return fmt.Errorf("create clickhouse provisioner: %w", chErr)
-			}
-			chPort := ch.Port
-			if chPort == 0 {
-				chPort = 9000
-			}
-			chPassword := os.Getenv("CLICKHOUSE_PASSWORD")
-			if chPassword == "" {
-				if envMap, envErr := internalconfig.LoadEnvFile(); envErr == nil {
-					chPassword = envMap["CLICKHOUSE_PASSWORD"]
-				}
-			}
-			config := provisioner.ServiceConfig{
-				Port:     chPort,
-				Metadata: map[string]any{"clickhouse_password": chPassword},
-			}
-
 			chDBs := ch.Databases
 			if len(chDBs) == 0 {
 				chDBs = []string{"periscope"}
@@ -165,14 +150,42 @@ func runSeed(cmd *cobra.Command, manifestPath string, demo, force bool) error {
 					break
 				}
 			}
-			if hasPeriscope {
+			if !hasPeriscope {
+				fmt.Fprintln(cmd.OutOrStdout(), "  Skipping ClickHouse demo seeds (periscope not in manifest)")
+			} else {
+				// Only decrypt manifest env_files when we're actually going
+				// to apply ClickHouse demo seeds.
+				chEnv, envErr := rc.SharedEnv()
+				if envErr != nil {
+					return fmt.Errorf("load manifest env_files: %w", envErr)
+				}
+				chPassword := chEnv["CLICKHOUSE_PASSWORD"]
+				if chPassword == "" {
+					return fmt.Errorf("CLICKHOUSE_PASSWORD missing from manifest env_files — add it to your gitops secrets")
+				}
+
+				chExec, chExecErr := newCHExecutor(ch.SQLAccess, chHost, sshPool)
+				if chExecErr != nil {
+					return fmt.Errorf("create ch executor: %w", chExecErr)
+				}
+				chProv, chErr := provisioner.NewClickHouseProvisioner(sshPool, provisioner.WithCHExecutor(chExec))
+				if chErr != nil {
+					return fmt.Errorf("create clickhouse provisioner: %w", chErr)
+				}
+				chPort := ch.Port
+				if chPort == 0 {
+					chPort = 9000
+				}
+				config := provisioner.ServiceConfig{
+					Port:     chPort,
+					Metadata: map[string]any{"clickhouse_password": chPassword},
+				}
+
 				fmt.Fprintln(cmd.OutOrStdout(), "Applying ClickHouse demo seeds...")
 				if err := chProv.ApplyDemoSeeds(ctx, chHost, config); err != nil {
 					return fmt.Errorf("clickhouse demo seeds: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "  ✓ ClickHouse demo seeds applied")
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "  Skipping ClickHouse demo seeds (periscope not in manifest)")
 			}
 		}
 	}

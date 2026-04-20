@@ -12,6 +12,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	fhclient "frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
@@ -1361,6 +1362,102 @@ func (r *Resolver) DoCreateEnrollmentToken(ctx context.Context, clusterID string
 	return &model.CreateEnrollmentTokenResponse{
 		BootstrapToken: resp.Token,
 	}, nil
+}
+
+// DoBootstrapEdge resolves a bootstrap token to its assigned cluster's
+// Foghorn (via Quartermaster) and proxies a PreRegisterEdge call. The
+// bootstrap token is itself the credential — no JWT is required. The
+// Bridge auth middleware allowlists this single field for public access.
+func (r *Resolver) DoBootstrapEdge(ctx context.Context, input model.BootstrapEdgeInput) (model.BootstrapEdgeResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		demoField := "demo"
+		return &model.ValidationError{
+			Message: "Cannot bootstrap edges in demo mode",
+			Field:   &demoField,
+		}, nil
+	}
+
+	token := strings.TrimSpace(input.Token)
+	if token == "" {
+		field := "token"
+		return &model.ValidationError{Message: "token required", Field: &field}, nil
+	}
+
+	val, err := r.Clients.Quartermaster.ValidateBootstrapToken(ctx, token)
+	if err != nil {
+		r.Logger.WithError(err).Error("ValidateBootstrapToken failed")
+		return &model.ValidationError{Message: "Failed to validate bootstrap token"}, nil
+	}
+	if !val.GetValid() {
+		reason := val.GetReason()
+		if reason == "" {
+			reason = "invalid"
+		}
+		return &model.ValidationError{Message: "Bootstrap token rejected: " + reason}, nil
+	}
+	if val.GetKind() != "edge_node" {
+		return &model.ValidationError{Message: "Token is not an edge bootstrap token"}, nil
+	}
+	addr := val.GetFoghornGrpcAddr()
+	if addr == "" {
+		return &model.ValidationError{Message: "Cluster has no Foghorn assignment yet"}, nil
+	}
+
+	fh, err := fhclient.NewGRPCClient(fhclient.GRPCConfig{
+		GRPCAddr: addr,
+		Timeout:  30 * time.Second,
+		Logger:   r.Logger,
+	})
+	if err != nil {
+		r.Logger.WithError(err).WithField("foghorn_addr", addr).Error("dial Foghorn for bootstrapEdge")
+		return &model.ValidationError{Message: "Failed to reach assigned Foghorn"}, nil
+	}
+	defer func() { _ = fh.Close() }()
+
+	preReq := &pb.PreRegisterEdgeRequest{EnrollmentToken: token}
+	if input.ExternalIP != nil {
+		preReq.ExternalIp = *input.ExternalIP
+	}
+	if input.PreferredNodeID != nil {
+		preReq.PreferredNodeId = *input.PreferredNodeID
+	}
+
+	preResp, err := fh.PreRegisterEdge(ctx, preReq)
+	if err != nil {
+		r.Logger.WithError(err).Error("Foghorn PreRegisterEdge failed")
+		return &model.ValidationError{Message: fmt.Sprintf("PreRegisterEdge failed: %v", err)}, nil
+	}
+
+	out := &model.BootstrapEdgeResponse{
+		NodeID:          preResp.GetNodeId(),
+		EdgeDomain:      preResp.GetEdgeDomain(),
+		ClusterSlug:     preResp.GetClusterSlug(),
+		ClusterID:       preResp.GetClusterId(),
+		FoghornGrpcAddr: preResp.GetFoghornGrpcAddr(),
+	}
+	if v := preResp.GetPoolDomain(); v != "" {
+		out.PoolDomain = &v
+	}
+	if v := string(preResp.GetCertPem()); v != "" {
+		out.CertPem = &v
+	}
+	if v := string(preResp.GetKeyPem()); v != "" {
+		out.KeyPem = &v
+	}
+	if v := string(preResp.GetInternalCaBundle()); v != "" {
+		out.InternalCaBundle = &v
+	}
+	if t := preResp.GetTelemetry(); t != nil {
+		setup := &model.EdgeTelemetrySetup{Enabled: t.GetEnabled()}
+		if v := t.GetWriteUrl(); v != "" {
+			setup.WriteURL = &v
+		}
+		if v := t.GetBearerToken(); v != "" {
+			setup.BearerToken = &v
+		}
+		out.Telemetry = setup
+	}
+	return out, nil
 }
 
 // DoUpdateClusterMarketplace updates cluster marketplace settings

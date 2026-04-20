@@ -3,17 +3,22 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
+	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/detect"
+	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/pkg/servicedefs"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
-// newClusterCmd returns the cluster command group for central/regional infrastructure management
 func newClusterCmd() *cobra.Command {
 	cluster := &cobra.Command{
 		Use:   "cluster",
@@ -21,8 +26,22 @@ func newClusterCmd() *cobra.Command {
 		Long: `Manage central and regional FrameWorks clusters including:
   - Infrastructure tier (Postgres, Kafka, Zookeeper, ClickHouse)
   - Application services (Quartermaster, Commodore, Bridge, Periscope, etc.)
-  - Interface services (Nginx/Caddy, Chartroom, Foredeck, Logbook)`,
+  - Interface services (Nginx/Caddy, Chartroom, Foredeck, Logbook)
+
+Manifest-source selection is shared across all subcommands via these
+persistent flags. Set a default via 'frameworks setup' or pass them per
+invocation. Explicit flags always win over saved context defaults.`,
 	}
+
+	cluster.PersistentFlags().String("manifest", "", "path to a single cluster.yaml (overrides gitops sources)")
+	cluster.PersistentFlags().String("gitops-dir", "", "path to a local gitops repo (uses <dir>/clusters/<cluster>/cluster.yaml)")
+	cluster.PersistentFlags().String("github-repo", "", "GitHub repo (owner/repo) to fetch the manifest from")
+	cluster.PersistentFlags().String("github-ref", "", "branch/tag for --github-repo (default 'main')")
+	cluster.PersistentFlags().String("cluster", "", "cluster name within the gitops repo (e.g. 'production')")
+	cluster.PersistentFlags().String("age-key", "", "path to an age private key for SOPS-encrypted files (default: $SOPS_AGE_KEY_FILE)")
+	cluster.PersistentFlags().Int64("github-app-id", 0, "GitHub App ID (for --github-repo)")
+	cluster.PersistentFlags().Int64("github-installation-id", 0, "GitHub Installation ID (for --github-repo)")
+	cluster.PersistentFlags().String("github-private-key", "", "path to GitHub App private key PEM (for --github-repo)")
 
 	cluster.AddCommand(newClusterDetectCmd())
 	cluster.AddCommand(newClusterDoctorCmd())
@@ -41,20 +60,131 @@ func newClusterCmd() *cobra.Command {
 	cluster.AddCommand(newClusterMigrateCmd())
 	cluster.AddCommand(newClusterSeedCmd())
 
-	// Future commands
-	// cluster.AddCommand(newClusterPlanCmd())
-	// cluster.AddCommand(newClusterScaleCmd())
-
-	// Export/Integration commands
-	// cluster.AddCommand(newClusterExportCmd())
-
 	return cluster
 }
 
-// newClusterDetectCmd implements: frameworks cluster detect --manifest cluster.yaml
-func newClusterDetectCmd() *cobra.Command {
-	var manifestPath string
+type resolvedCluster struct {
+	Manifest     *inventory.Manifest
+	ManifestPath string
+	AgeKey       string
+	Source       inventory.ManifestSource
+	Cleanup      func()
 
+	sharedEnvOnce sync.Once
+	sharedEnv     map[string]string
+	sharedEnvErr  error
+}
+
+// SharedEnv decrypts and merges the manifest's top-level env_files on first
+// call and caches the result. Only call from commands that consume platform
+// secrets — read-only commands (status/logs/detect/diagnose/doctor/backup/
+// restore/channel) must not trigger SOPS decryption here.
+func (rc *resolvedCluster) SharedEnv() (map[string]string, error) {
+	rc.sharedEnvOnce.Do(func() {
+		rc.sharedEnv, rc.sharedEnvErr = inventory.LoadSharedEnv(
+			rc.Manifest, filepath.Dir(rc.ManifestPath), rc.AgeKey,
+		)
+	})
+	return rc.sharedEnv, rc.sharedEnvErr
+}
+
+func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return nil, err
+	}
+	rt := fwcfg.GetRuntimeOverrides()
+	ctxCfg, err := fwcfg.MaybeActiveContext(rt, fwcfg.OSEnv{}, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		cwd = ""
+	}
+	in := inventory.ResolveInput{
+		Manifest:    stringFlag(cmd, "manifest"),
+		GitopsDir:   stringFlag(cmd, "gitops-dir"),
+		GithubRepo:  stringFlag(cmd, "github-repo"),
+		GithubRef:   stringFlag(cmd, "github-ref"),
+		Cluster:     stringFlag(cmd, "cluster"),
+		AgeKey:      stringFlag(cmd, "age-key"),
+		GithubAppID: int64Flag(cmd, "github-app-id"),
+		GithubInst:  int64Flag(cmd, "github-installation-id"),
+		GithubKey:   stringFlag(cmd, "github-private-key"),
+		Env:         fwcfg.OSEnv{},
+		Context:     ctxCfg,
+		GitHubCfg:   cfg.GitHub,
+		Cwd:         cwd,
+		GithubFetch: fwgitops.NewGithubAppFetcher(),
+		Stdout:      cmd.OutOrStdout(),
+		Ctx:         cmd.Context(),
+	}
+
+	rm, err := inventory.ResolveManifestSource(in)
+	if err != nil {
+		return nil, err
+	}
+
+	manifest, err := inventory.LoadWithHosts(rm.Path, rm.AgeKey)
+	if err != nil {
+		if rm.Cleanup != nil {
+			rm.Cleanup()
+		}
+		return nil, fmt.Errorf("load manifest %s: %w", rm.Path, err)
+	}
+
+	maybePrintSetupHint(cmd, rm, ctxCfg, rt)
+
+	return &resolvedCluster{
+		Manifest:     manifest,
+		ManifestPath: rm.Path,
+		AgeKey:       rm.AgeKey,
+		Source:       rm.Source,
+		Cleanup:      rm.Cleanup,
+	}, nil
+}
+
+func stringFlag(cmd *cobra.Command, name string) inventory.StringFlag {
+	f := cmd.Flags().Lookup(name)
+	if f == nil {
+		return inventory.StringFlag{}
+	}
+	return inventory.StringFlag{Value: f.Value.String(), Changed: f.Changed}
+}
+
+func int64Flag(cmd *cobra.Command, name string) inventory.Int64Flag {
+	f := cmd.Flags().Lookup(name)
+	if f == nil {
+		return inventory.Int64Flag{}
+	}
+	var v int64
+	if _, err := fmt.Sscanf(f.Value.String(), "%d", &v); err != nil {
+		v = 0
+	}
+	return inventory.Int64Flag{Value: v, Changed: f.Changed}
+}
+
+func maybePrintSetupHint(cmd *cobra.Command, rm inventory.Resolved, ctx fwcfg.Context, rt fwcfg.RuntimeOverrides) {
+	if rm.Source != inventory.SourceCwdHeuristic {
+		return
+	}
+	if ctx.Gitops != nil {
+		return
+	}
+	if rt.OutputJSON || rt.NoHints {
+		return
+	}
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		return
+	}
+	fmt.Fprintln(cmd.ErrOrStderr(), "Tip: run 'frameworks setup' to configure manifest defaults.")
+}
+
+const perHostTimeout = 15 * time.Second
+
+func newClusterDetectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "detect",
 		Short: "Detect current state of all services in the cluster",
@@ -62,33 +192,25 @@ func newClusterDetectCmd() *cobra.Command {
   - Which services are running (docker, native, or unknown)
   - Service versions
   - Health status
-  - Configuration state
+  - Configuration state`,
+		Example: `  # Detect all services in the current context's cluster
+  frameworks cluster detect
 
-This command uses multi-method detection:
-  1. Check inventory file (/etc/frameworks/inventory.json)
-  2. Check Docker containers
-  3. Check systemd services
-  4. Check listening ports
-  5. Try health endpoints
-  6. Try direct connections (DB, Kafka, etc.)`,
-		Example: `  # Detect all services
-  frameworks cluster detect --manifest cluster.yaml
-
-  # Detect with verbose output
-  frameworks cluster detect --manifest cluster.yaml --verbose`,
+  # Detect using an explicit manifest
+  frameworks cluster detect --manifest ./cluster.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDetect(cmd, manifestPath)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runDetect(cmd, rc.Manifest, rc.ManifestPath)
 		},
 	}
-
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	return cmd
 }
 
-// newClusterDoctorCmd implements: frameworks cluster doctor --manifest cluster.yaml
 func newClusterDoctorCmd() *cobra.Command {
-	var manifestPath string
-
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Comprehensive health check of all cluster services",
@@ -117,36 +239,25 @@ Data Initialization:
   - ClickHouse tables
 
 Reports critical issues and provides actionable recommendations.`,
-		Example: `  # Run full health check
-  frameworks cluster doctor --manifest cluster.yaml
-
-  # Verbose output with detailed checks
-  frameworks cluster doctor --manifest cluster.yaml --verbose`,
+		Example: `  frameworks cluster doctor
+  frameworks cluster doctor --manifest ./cluster.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDoctor(cmd, manifestPath)
+			rc, err := resolveClusterManifest(cmd)
+			if err != nil {
+				return err
+			}
+			defer rc.Cleanup()
+			return runDoctor(cmd, rc.Manifest, rc.ManifestPath)
 		},
 	}
-
-	cmd.Flags().StringVar(&manifestPath, "manifest", "cluster.yaml", "Path to cluster manifest file")
 	return cmd
 }
 
-// perHostTimeout is the detection timeout for each individual service check.
-const perHostTimeout = 15 * time.Second
-
-// runDetect executes the detect command
-func runDetect(cmd *cobra.Command, manifestPath string) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath string) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "Detecting cluster state from manifest: %s\n", manifestPath)
 	fmt.Fprintf(cmd.OutOrStdout(), "Cluster type: %s, Profile: %s\n", manifest.Type, manifest.Profile)
 	fmt.Fprintf(cmd.OutOrStdout(), "Hosts: %d\n\n", len(manifest.Hosts))
 
-	// Detect infrastructure services
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
 		detectServiceWithTimeout(cmd, manifest, "postgres", "postgres", manifest.Infrastructure.Postgres.Host)
 	}
@@ -173,7 +284,6 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 		}
 	}
 
-	// Detect application services
 	for name, svc := range manifest.Services {
 		if !svc.Enabled {
 			continue
@@ -198,7 +308,6 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 		}
 	}
 
-	// Detect interface services
 	for name, iface := range manifest.Interfaces {
 		if !iface.Enabled {
 			continue
@@ -213,7 +322,6 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 		}
 	}
 
-	// Detect observability services
 	for name, obs := range manifest.Observability {
 		if !obs.Enabled {
 			continue
@@ -231,7 +339,6 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 	return nil
 }
 
-// detectServiceWithTimeout wraps detectService with a per-host timeout.
 func detectServiceWithTimeout(cmd *cobra.Command, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), perHostTimeout)
 	defer cancel()
@@ -249,7 +356,6 @@ func detectServiceWithTimeout(cmd *cobra.Command, manifest *inventory.Manifest, 
 	}
 }
 
-// detectService detects a single service on a host
 func detectService(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
 	host, ok := manifest.GetHost(hostName)
 	if !ok {
@@ -270,7 +376,6 @@ func detectService(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		return
 	}
 
-	// Print detection results
 	status := "✓"
 	if !state.Running {
 		status = "⚠"
@@ -289,7 +394,6 @@ func detectService(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %s (%s): %s [%s, detected by: %s]\n",
 		status, serviceName, hostName, runningStr, modeStr, state.DetectedBy)
 
-	// Show metadata if verbose
 	if verbose && len(state.Metadata) > 0 {
 		for k, v := range state.Metadata {
 			fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", k, v)
@@ -297,25 +401,16 @@ func detectService(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	}
 }
 
-// runDoctor executes comprehensive health checks
-func runDoctor(cmd *cobra.Command, manifestPath string) error {
-	// Load manifest
-	manifest, err := inventory.Load(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to load manifest: %w", err)
-	}
-
+func runDoctor(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath string) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "Running cluster health checks\n")
 	fmt.Fprintf(cmd.OutOrStdout(), "Manifest: %s (type: %s, profile: %s)\n\n", manifestPath, manifest.Type, manifest.Profile)
 
 	totalChecks := 0
 	passedChecks := 0
 
-	// Infrastructure Health Checks
 	fmt.Fprintln(cmd.OutOrStdout(), "Infrastructure Health:")
 	fmt.Fprintln(cmd.OutOrStdout(), "")
 
-	// Check Postgres/YugabyteDB
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
 		host, ok := manifest.GetHost(manifest.Infrastructure.Postgres.Host)
 		if !ok {
@@ -323,7 +418,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 		} else {
 			totalChecks++
 			checker := &health.PostgresChecker{
-				User:     "postgres", // TODO: Get from config
+				User:     "postgres",
 				Password: "",
 				Database: "postgres",
 			}
@@ -335,7 +430,6 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 		}
 	}
 
-	// Check ClickHouse
 	if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
 		host, ok := manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
 		if !ok {
@@ -343,7 +437,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 		} else {
 			totalChecks++
 			checker := &health.ClickHouseChecker{
-				User:     "default", // TODO: Get from config
+				User:     "default",
 				Password: "",
 				Database: "default",
 			}
@@ -355,7 +449,6 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 		}
 	}
 
-	// Check Kafka brokers
 	if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
 		for _, broker := range manifest.Infrastructure.Kafka.Brokers {
 			host, ok := manifest.GetHost(broker.Host)
@@ -374,8 +467,6 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
-
-	// Application Services Health Checks
 	fmt.Fprintln(cmd.OutOrStdout(), "Application Services:")
 	fmt.Fprintln(cmd.OutOrStdout(), "")
 
@@ -386,7 +477,7 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 
 		hostName := svc.Host
 		if hostName == "" && len(svc.Hosts) > 0 {
-			hostName = svc.Hosts[0] // Check first replica
+			hostName = svc.Hosts[0]
 		}
 
 		if hostName == "" {
@@ -421,8 +512,6 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
-
-	// Interface Services Health Checks
 	fmt.Fprintln(cmd.OutOrStdout(), "Interface Services:")
 	fmt.Fprintln(cmd.OutOrStdout(), "")
 
@@ -464,7 +553,6 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
 
-	// Observability Services Health Checks
 	if len(manifest.Observability) > 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "Observability Services:")
 		fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -503,7 +591,6 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 		fmt.Fprintln(cmd.OutOrStdout(), "")
 	}
 
-	// Summary
 	fmt.Fprintf(cmd.OutOrStdout(), "Summary: %d/%d checks passed\n", passedChecks, totalChecks)
 
 	if passedChecks < totalChecks {
@@ -516,7 +603,6 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 	return nil
 }
 
-// printHealthResult prints a health check result
 func printHealthResult(cmd *cobra.Command, serviceName string, result *health.CheckResult) {
 	mark := "✗"
 	if result.OK {
@@ -534,7 +620,6 @@ func printHealthResult(cmd *cobra.Command, serviceName string, result *health.Ch
 
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %-20s: %s\n", mark, serviceName, statusStr)
 
-	// Show metadata if verbose
 	if verbose && len(result.Metadata) > 0 {
 		for k, v := range result.Metadata {
 			fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", k, v)
