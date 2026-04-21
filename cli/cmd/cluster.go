@@ -13,6 +13,7 @@ import (
 	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
+	fwssh "frameworks/cli/pkg/ssh"
 	"frameworks/pkg/servicedefs"
 
 	"github.com/mattn/go-isatty"
@@ -39,6 +40,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.PersistentFlags().String("github-ref", "", "branch/tag for --github-repo (default 'main')")
 	cluster.PersistentFlags().String("cluster", "", "cluster name within the gitops repo (e.g. 'production')")
 	cluster.PersistentFlags().String("age-key", "", "path to an age private key for SOPS-encrypted files (default: $SOPS_AGE_KEY_FILE)")
+	cluster.PersistentFlags().String("ssh-key", "", "SSH private key path (overrides ssh-agent/ssh_config defaults)")
 	cluster.PersistentFlags().Int64("github-app-id", 0, "GitHub App ID (for --github-repo)")
 	cluster.PersistentFlags().Int64("github-installation-id", 0, "GitHub Installation ID (for --github-repo)")
 	cluster.PersistentFlags().String("github-private-key", "", "path to GitHub App private key PEM (for --github-repo)")
@@ -258,29 +260,33 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 	fmt.Fprintf(cmd.OutOrStdout(), "Cluster type: %s, Profile: %s\n", manifest.Type, manifest.Profile)
 	fmt.Fprintf(cmd.OutOrStdout(), "Hosts: %d\n\n", len(manifest.Hosts))
 
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := fwssh.NewPool(30*time.Second, sshKey)
+	defer sshPool.Close()
+
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
-		detectServiceWithTimeout(cmd, manifest, "postgres", "postgres", manifest.Infrastructure.Postgres.Host)
+		detectServiceWithTimeout(cmd, sshPool, manifest, "postgres", "postgres", manifest.Infrastructure.Postgres.Host)
 	}
 
 	if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
-		detectServiceWithTimeout(cmd, manifest, "clickhouse", "clickhouse", manifest.Infrastructure.ClickHouse.Host)
+		detectServiceWithTimeout(cmd, sshPool, manifest, "clickhouse", "clickhouse", manifest.Infrastructure.ClickHouse.Host)
 	}
 
 	if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
 		for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
 			serviceName := fmt.Sprintf("kafka-controller-%d", ctrl.ID)
-			detectServiceWithTimeout(cmd, manifest, serviceName, "kafka-controller", ctrl.Host)
+			detectServiceWithTimeout(cmd, sshPool, manifest, serviceName, "kafka-controller", ctrl.Host)
 		}
 		for _, broker := range manifest.Infrastructure.Kafka.Brokers {
 			serviceName := fmt.Sprintf("kafka-broker-%d", broker.ID)
-			detectServiceWithTimeout(cmd, manifest, serviceName, "kafka", broker.Host)
+			detectServiceWithTimeout(cmd, sshPool, manifest, serviceName, "kafka", broker.Host)
 		}
 	}
 
 	if manifest.Infrastructure.Zookeeper != nil && manifest.Infrastructure.Zookeeper.Enabled {
 		for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
 			serviceName := fmt.Sprintf("zookeeper-%d", node.ID)
-			detectServiceWithTimeout(cmd, manifest, serviceName, "zookeeper", node.Host)
+			detectServiceWithTimeout(cmd, sshPool, manifest, serviceName, "zookeeper", node.Host)
 		}
 	}
 
@@ -294,7 +300,7 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
 				continue
 			}
-			detectServiceWithTimeout(cmd, manifest, name, deploy, svc.Host)
+			detectServiceWithTimeout(cmd, sshPool, manifest, name, deploy, svc.Host)
 		} else if len(svc.Hosts) > 0 {
 			for i, hostName := range svc.Hosts {
 				deploy, err := resolveDeployName(name, svc)
@@ -303,7 +309,7 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 					continue
 				}
 				serviceName := fmt.Sprintf("%s-%d", name, i+1)
-				detectServiceWithTimeout(cmd, manifest, serviceName, deploy, hostName)
+				detectServiceWithTimeout(cmd, sshPool, manifest, serviceName, deploy, hostName)
 			}
 		}
 	}
@@ -318,7 +324,7 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
 				continue
 			}
-			detectServiceWithTimeout(cmd, manifest, name, deploy, iface.Host)
+			detectServiceWithTimeout(cmd, sshPool, manifest, name, deploy, iface.Host)
 		}
 	}
 
@@ -332,20 +338,20 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
 				continue
 			}
-			detectServiceWithTimeout(cmd, manifest, name, deploy, obs.Host)
+			detectServiceWithTimeout(cmd, sshPool, manifest, name, deploy, obs.Host)
 		}
 	}
 
 	return nil
 }
 
-func detectServiceWithTimeout(cmd *cobra.Command, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
+func detectServiceWithTimeout(cmd *cobra.Command, sshPool *fwssh.Pool, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), perHostTimeout)
 	defer cancel()
 
 	done := make(chan struct{})
 	go func() {
-		detectService(ctx, cmd, manifest, serviceName, deployName, hostName)
+		detectService(ctx, cmd, sshPool, manifest, serviceName, deployName, hostName)
 		close(done)
 	}()
 
@@ -356,14 +362,14 @@ func detectServiceWithTimeout(cmd *cobra.Command, manifest *inventory.Manifest, 
 	}
 }
 
-func detectService(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
+func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
 	host, ok := manifest.GetHost(hostName)
 	if !ok {
 		fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: host '%s' not found\n", serviceName, hostName)
 		return
 	}
 
-	detector := detect.NewDetector(host)
+	detector := detect.NewDetector(sshPool, host)
 	state, err := detector.Detect(ctx, deployName)
 
 	if err != nil {

@@ -10,7 +10,7 @@ import (
 func TestGetHealthyClientReconnectsAfterPingFailure(t *testing.T) {
 	t.Parallel()
 
-	pool := NewPool(2 * time.Second)
+	pool := NewPool(2*time.Second, "")
 
 	var created []*Client
 	pool.newClient = func(config *ConnectionConfig) (*Client, error) {

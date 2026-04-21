@@ -11,6 +11,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
+	fwssh "frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
 )
@@ -77,6 +78,10 @@ func runClusterStatus(cmd *cobra.Command, manifest *inventory.Manifest, jsonOutp
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := fwssh.NewPool(30*time.Second, sshKey)
+	defer sshPool.Close()
+
 	var results []serviceStatus
 
 	collectStatus := func(name string, svc inventory.ServiceConfig) {
@@ -102,7 +107,7 @@ func runClusterStatus(cmd *cobra.Command, manifest *inventory.Manifest, jsonOutp
 			return
 		}
 
-		detector := detect.NewDetector(host)
+		detector := detect.NewDetector(sshPool, host)
 		state, detectErr := detector.Detect(ctx, deployName)
 
 		deployed := ""

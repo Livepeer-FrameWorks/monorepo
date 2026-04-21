@@ -128,13 +128,8 @@ func FromManifest(manifest *inventory.Manifest) *Inventory {
 			Vars:    make(map[string]string),
 		}
 
-		// Add SSH connection vars
 		if host.User != "" {
 			invHost.Vars["ansible_user"] = host.User
-		}
-
-		if host.SSHKey != "" {
-			invHost.Vars["ansible_ssh_private_key_file"] = host.SSHKey
 		}
 
 		// Add labels as vars

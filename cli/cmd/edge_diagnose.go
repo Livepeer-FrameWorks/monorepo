@@ -247,7 +247,7 @@ func makeEdgeRunner(sshTarget, sshKey string) (fwssh.Runner, func(), error) {
 		return fwssh.NewLocalRunner(""), func() {}, nil
 	}
 
-	pool := fwssh.NewPool(30 * time.Second)
+	pool := fwssh.NewPool(30*time.Second, sshKey)
 	cleanup := func() { pool.Close() }
 
 	// Parse user@host

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	fwssh "frameworks/cli/pkg/ssh"
 )
 
 // RunSSH executes the equivalent of: ssh <target> 'cd <workdir> && <cmd> <args...>'
@@ -16,12 +18,9 @@ func RunSSH(ctx context.Context, target string, cmd string, args []string, workd
 
 // RunSSHWithKey executes ssh with an optional private key.
 func RunSSHWithKey(ctx context.Context, target, keyPath string, cmd string, args []string, workdir string) (int, string, string, error) {
-	// Build remote shell command
-	// Use sh -lc to have a login-like shell with PATH and && chaining
 	var remoteCmd strings.Builder
 	if workdir != "" {
 		remoteCmd.WriteString("cd ")
-		// naive escaping for spaces
 		remoteCmd.WriteString(shellQuote(workdir))
 		remoteCmd.WriteString(" && ")
 	}
@@ -31,11 +30,13 @@ func RunSSHWithKey(ctx context.Context, target, keyPath string, cmd string, args
 		remoteCmd.WriteString(shellQuote(a))
 	}
 
-	sshArgs := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
-	if strings.TrimSpace(keyPath) != "" {
-		sshArgs = append(sshArgs, "-i", keyPath)
-	}
+	// Reuse the shared ssh flag builder so cli/pkg/ssh and xexec always emit
+	// identical options (batch mode, accept-new, timeouts, -i, etc.).
+	cfg := &fwssh.ConnectionConfig{KeyPath: keyPath}
+	res := fwssh.Resolution{Target: target}
+	sshArgs := fwssh.BuildSSHArgs(cfg, res)
 	sshArgs = append(sshArgs, target, "sh", "-lc", remoteCmd.String())
+
 	c := exec.CommandContext(ctx, "ssh", sshArgs...)
 	var outBuf, errBuf bytes.Buffer
 	c.Stdout = &outBuf
@@ -61,7 +62,6 @@ func shellQuote(s string) string {
 		return "''"
 	}
 	if strings.ContainsAny(s, " \t\n\"'\\$`|&;<>(){}[]*") {
-		// simple single-quote wrapping with escape for single quotes
 		return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 	}
 	return s

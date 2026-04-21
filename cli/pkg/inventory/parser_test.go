@@ -192,7 +192,7 @@ func TestMergeHostInventory(t *testing.T) {
 	inv := &HostInventory{
 		Hosts: map[string]HostConnection{
 			"node-1": {ExternalIP: "10.0.0.1", User: "admin"},
-			"node-2": {ExternalIP: "10.0.0.2", User: "deploy", SSHKey: "/keys/id"},
+			"node-2": {ExternalIP: "10.0.0.2", User: "deploy"},
 		},
 	}
 
@@ -200,14 +200,17 @@ func TestMergeHostInventory(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if manifest.Hosts["node-1"].Name != "node-1" {
+		t.Errorf("node-1 Name = %q, want %q", manifest.Hosts["node-1"].Name, "node-1")
+	}
 	if manifest.Hosts["node-1"].ExternalIP != "10.0.0.1" {
 		t.Errorf("node-1 ExternalIP = %q, want %q", manifest.Hosts["node-1"].ExternalIP, "10.0.0.1")
 	}
 	if manifest.Hosts["node-1"].User != "admin" {
 		t.Errorf("node-1 User = %q, want %q", manifest.Hosts["node-1"].User, "admin")
 	}
-	if manifest.Hosts["node-2"].SSHKey != "/keys/id" {
-		t.Errorf("node-2 SSHKey = %q, want %q", manifest.Hosts["node-2"].SSHKey, "/keys/id")
+	if manifest.Hosts["node-2"].User != "deploy" {
+		t.Errorf("node-2 User = %q, want %q", manifest.Hosts["node-2"].User, "deploy")
 	}
 }
 

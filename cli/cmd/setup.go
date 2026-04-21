@@ -209,14 +209,6 @@ func promptControlPlaneHost(reader *bufio.Reader, out interface{ Write([]byte) (
 	ep.FoghornGRPCAddr = replaceHost(ep.FoghornGRPCAddr, host)
 	ep.NavigatorGRPCAddr = replaceHost(ep.NavigatorGRPCAddr, host)
 	ep.SignalmanWSURL = replaceHost(ep.SignalmanWSURL, host)
-	// HTTP endpoints are still consumed by context check, edge flows,
-	// and a handful of legacy gRPC fallbacks; they must follow the same
-	// host rewrite or `setup` leaves them pointed at localhost.
-	ep.QuartermasterURL = replaceHost(ep.QuartermasterURL, host)
-	ep.ControlURL = replaceHost(ep.ControlURL, host)
-	ep.PeriscopeQueryURL = replaceHost(ep.PeriscopeQueryURL, host)
-	ep.PeriscopeIngestURL = replaceHost(ep.PeriscopeIngestURL, host)
-	ep.PurserURL = replaceHost(ep.PurserURL, host)
 	return nil
 }
 

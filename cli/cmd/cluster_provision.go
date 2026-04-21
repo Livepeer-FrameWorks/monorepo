@@ -215,8 +215,8 @@ type taskProvisionOutcome struct {
 
 // executeProvision runs the provisioning tasks
 func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string) error {
-	// Create SSH pool
-	sshPool := ssh.NewPool(30 * time.Second)
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
 	// Track successfully provisioned tasks for rollback
@@ -2161,9 +2161,6 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface
 // shared env for infrastructure Initialize/Configure steps.
 func extractInfraCredentials(env map[string]string) map[string]interface{} {
 	result := make(map[string]interface{})
-	if v := env["DATABASE_USER"]; v != "" {
-		result["postgres_user"] = v
-	}
 	if v := env["DATABASE_PASSWORD"]; v != "" {
 		result["postgres_password"] = v
 	}

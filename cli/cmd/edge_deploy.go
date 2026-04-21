@@ -241,8 +241,8 @@ func loadActiveContextLax() (fwcfg.Context, error) {
 }
 
 func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp *pb.PreRegisterEdgeResponse, foghornGRPC string) error {
-	host := sshTargetToHost(cfg.sshTarget, cfg.sshKey)
-	pool := fwssh.NewPool(30 * time.Second)
+	host := sshTargetToHost(cfg.sshTarget)
+	pool := fwssh.NewPool(30*time.Second, cfg.sshKey)
 
 	epConfig := provisioner.EdgeProvisionConfig{
 		Mode:            cfg.mode,
@@ -292,7 +292,7 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		DarwinDomain:    provisioner.DomainUser,
 	}
 
-	pool := fwssh.NewPool(30 * time.Second)
+	pool := fwssh.NewPool(30*time.Second, "")
 	ep := provisioner.NewEdgeProvisioner(pool)
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Provisioning edge locally (user LaunchAgent, no admin required)...")

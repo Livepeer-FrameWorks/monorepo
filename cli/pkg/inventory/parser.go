@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,13 +13,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// strictUnmarshal rejects any YAML field that isn't declared on the target
+// struct. This enforces the schema at parse time — removed fields (ssh_key,
+// etc.) and typos fail loudly rather than being silently dropped.
+func strictUnmarshal(data []byte, into any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	return dec.Decode(into)
+}
+
 // ParseManifest parses a cluster manifest from raw YAML bytes without validation.
 // Use this when you need the parsed structure (e.g. to inspect HostsFile or EnvFiles)
 // before full validation.
 func ParseManifest(data []byte) (*Manifest, error) {
 	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
+	if err := strictUnmarshal(data, &manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse manifest YAML: %w", err)
+	}
+	for name, host := range manifest.Hosts {
+		host.Name = name
+		manifest.Hosts[name] = host
 	}
 	return &manifest, nil
 }
@@ -104,13 +118,13 @@ func LoadHostInventory(path, ageKeyFile string) (*HostInventory, error) {
 	}
 
 	var inv HostInventory
-	if err := yaml.Unmarshal(data, &inv); err != nil {
+	if err := strictUnmarshal(data, &inv); err != nil {
 		return nil, fmt.Errorf("failed to parse host inventory YAML: %w", err)
 	}
 	return &inv, nil
 }
 
-// MergeHostInventory populates ExternalIP, User, and SSHKey on manifest hosts
+// MergeHostInventory populates Name, ExternalIP, and User on manifest hosts
 // from the given host inventory.
 func (m *Manifest) MergeHostInventory(inv *HostInventory) error {
 	for name, host := range m.Hosts {
@@ -118,12 +132,10 @@ func (m *Manifest) MergeHostInventory(inv *HostInventory) error {
 		if !ok {
 			return fmt.Errorf("host '%s' not found in host inventory", name)
 		}
+		host.Name = name
 		host.ExternalIP = conn.ExternalIP
 		if conn.User != "" {
 			host.User = conn.User
-		}
-		if conn.SSHKey != "" {
-			host.SSHKey = conn.SSHKey
 		}
 		m.Hosts[name] = host
 	}
@@ -151,7 +163,7 @@ func LoadEdgeWithHosts(path, ageKeyFile string) (*EdgeManifest, error) {
 	}
 
 	var manifest EdgeManifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
+	if err := strictUnmarshal(data, &manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse edge manifest YAML: %w", err)
 	}
 
@@ -526,11 +538,10 @@ func LoadEdgeManifest(path string) (*EdgeManifest, error) {
 	}
 
 	var manifest EdgeManifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
+	if err := strictUnmarshal(data, &manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse edge manifest YAML: %w", err)
 	}
 
-	// Validate
 	if err := manifest.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid edge manifest: %w", err)
 	}

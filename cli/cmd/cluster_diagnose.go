@@ -51,7 +51,8 @@ func runDiagnose(cmd *cobra.Command, manifest *inventory.Manifest, component str
 	defer cancel()
 
 	// Create SSH pool
-	sshPool := ssh.NewPool(30 * time.Second)
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
 	// Execute diagnostic based on component

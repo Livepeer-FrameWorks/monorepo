@@ -71,7 +71,7 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, host inventory.Host
 		Address: host.ExternalIP,
 		Vars: map[string]string{
 			"ansible_user":                 host.User,
-			"ansible_ssh_private_key_file": host.SSHKey,
+			"ansible_ssh_private_key_file": p.sshPool.DefaultKeyPath(),
 		},
 	})
 
@@ -163,16 +163,6 @@ func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		for owner, dbs := range ownerDBs {
 			if err := pgCreateApplicationUser(ctx, p.sql, conn, owner, pgPass, dbs); err != nil {
 				return fmt.Errorf("failed to create application user %s: %w", owner, err)
-			}
-		}
-
-		// Also create a legacy shared role if explicitly set in metadata,
-		// for backward compatibility with manifests that don't use per-db owners.
-		if pgUser, ok := config.Metadata["postgres_user"].(string); ok && pgUser != "" {
-			if _, exists := ownerDBs[pgUser]; !exists {
-				if err := pgCreateApplicationUser(ctx, p.sql, conn, pgUser, pgPass, dbNames); err != nil {
-					return fmt.Errorf("failed to create legacy application user: %w", err)
-				}
 			}
 		}
 	}

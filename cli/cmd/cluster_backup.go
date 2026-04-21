@@ -83,7 +83,8 @@ func runBackup(cmd *cobra.Command, manifest *inventory.Manifest, component, outp
 	defer cancel()
 
 	// Create SSH pool
-	sshPool := ssh.NewPool(30 * time.Second)
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
 	// Track backup files for manifest
@@ -435,11 +436,11 @@ func getRunner(host inventory.Host, pool *ssh.Pool) (ssh.Runner, error) {
 	}
 
 	sshConfig := &ssh.ConnectionConfig{
-		Address: host.ExternalIP,
-		Port:    22,
-		User:    host.User,
-		KeyPath: host.SSHKey,
-		Timeout: 30 * time.Second,
+		Address:  host.ExternalIP,
+		Port:     22,
+		User:     host.User,
+		HostName: host.Name,
+		Timeout:  30 * time.Second,
 	}
 
 	return pool.Get(sshConfig)

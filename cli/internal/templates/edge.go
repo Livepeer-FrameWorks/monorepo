@@ -179,7 +179,7 @@ scrape_configs:
 		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
 		content = strings.ReplaceAll(content, "{{VMAGENT_EDGE_SERVICE}}", vmagentServiceBlock)
 		content = strings.ReplaceAll(content, "{{TELEMETRY_TOKEN}}", vars.TelemetryToken)
-		// TLS directive placeholder (kept for backward compat with any templates that reference it)
+		// Populate {{TLS_DIRECTIVE}} only when explicit certificate paths are available.
 		if vars.CertPath != "" && vars.KeyPath != "" {
 			tlsDirective := fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath)
 			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", tlsDirective)

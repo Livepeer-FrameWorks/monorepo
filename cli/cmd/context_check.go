@@ -154,11 +154,6 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 
 	// HTTP services
 	res = append(res, checkHTTP("bridge", ep.BridgeURL))
-	res = append(res, checkHTTP("quartermaster", ep.QuartermasterURL))
-	res = append(res, checkHTTP("commodore", ep.ControlURL))
-	res = append(res, checkHTTP("periscope-query", ep.PeriscopeQueryURL))
-	res = append(res, checkHTTP("periscope-ingest", ep.PeriscopeIngestURL))
-	res = append(res, checkHTTP("purser", ep.PurserURL))
 	res = append(res, checkHTTP("signalman", ep.SignalmanWSURL))
 
 	// gRPC services

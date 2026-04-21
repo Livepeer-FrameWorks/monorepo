@@ -14,16 +14,11 @@ import (
 func defaultEndpoints() Endpoints {
 	return Endpoints{
 		BridgeURL:             "http://localhost:18000",
-		QuartermasterURL:      "http://localhost:18002", // deprecated
 		QuartermasterGRPCAddr: "localhost:19002",
-		ControlURL:            "http://localhost:18001", // deprecated
 		CommodoreGRPCAddr:     "localhost:19001",
 		FoghornGRPCAddr:       "localhost:18019",
 		DecklogGRPCAddr:       "localhost:18006",
-		PeriscopeQueryURL:     "http://localhost:18004", // deprecated
 		PeriscopeGRPCAddr:     "localhost:19004",
-		PeriscopeIngestURL:    "http://localhost:18005", // deprecated
-		PurserURL:             "http://localhost:18003", // deprecated
 		PurserGRPCAddr:        "localhost:19003",
 		SignalmanWSURL:        "ws://localhost:18009",
 		SignalmanGRPCAddr:     "localhost:19005",

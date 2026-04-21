@@ -242,11 +242,6 @@ func newContextShowCmd() *cobra.Command {
 			}
 			ep := c.Endpoints
 			fmt.Fprintf(cmd.OutOrStdout(), "  bridge (http):       %s\n", ep.BridgeURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "  quartermaster http:  %s\n", ep.QuartermasterURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "  commodore http:      %s\n", ep.ControlURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "  periscope query:     %s\n", ep.PeriscopeQueryURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "  periscope ingest:    %s\n", ep.PeriscopeIngestURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "  purser http:         %s\n", ep.PurserURL)
 			fmt.Fprintf(cmd.OutOrStdout(), "  signalman ws:        %s\n", ep.SignalmanWSURL)
 			fmt.Fprintf(cmd.OutOrStdout(), "  commodore grpc:      %s\n", ep.CommodoreGRPCAddr)
 			fmt.Fprintf(cmd.OutOrStdout(), "  quartermaster grpc:  %s\n", ep.QuartermasterGRPCAddr)
@@ -287,16 +282,6 @@ func setEndpointURL(ep *fwcfg.Endpoints, svc, url string) error {
 	switch svc {
 	case "bridge":
 		ep.BridgeURL = url
-	case "quartermaster":
-		ep.QuartermasterURL = url
-	case "commodore":
-		ep.ControlURL = url
-	case "periscope-query":
-		ep.PeriscopeQueryURL = url
-	case "periscope-ingest":
-		ep.PeriscopeIngestURL = url
-	case "purser":
-		ep.PurserURL = url
 	case "signalman-ws":
 		ep.SignalmanWSURL = url
 	case "commodore-grpc":

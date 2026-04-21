@@ -58,7 +58,8 @@ func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
 	defer cancel()
 
 	// Create SSH pool
-	sshPool := ssh.NewPool(30 * time.Second)
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
 	// Initialize services based on argument

@@ -68,7 +68,8 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool) error {
 		dbUser = "yugabyte"
 	}
 
-	sshPool := ssh.NewPool(30 * time.Second)
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
 	// Only decrypt manifest env_files when Yugabyte actually needs a password.

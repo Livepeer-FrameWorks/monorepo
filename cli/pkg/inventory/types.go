@@ -91,9 +91,9 @@ type ClusterConfig struct {
 
 // Host represents a target machine
 type Host struct {
+	Name       string            `yaml:"-"` // Populated from the Hosts map key, not from YAML
 	ExternalIP string            `yaml:"external_ip"`
 	User       string            `yaml:"user"`
-	SSHKey     string            `yaml:"ssh_key,omitempty"`
 	Cluster    string            `yaml:"cluster,omitempty"` // Explicit cluster membership
 	Roles      []string          `yaml:"roles,omitempty"`
 	Labels     map[string]string `yaml:"labels,omitempty"`
@@ -342,7 +342,7 @@ type EdgeManifest struct {
 type EdgeNode struct {
 	Name       string            `yaml:"name"`                  // Unique node name (e.g., edge-us-east-1)
 	SSH        string            `yaml:"ssh"`                   // SSH target (user@host)
-	SSHKey     string            `yaml:"ssh_key,omitempty"`     // Path to SSH key
+	SSHKey     string            `yaml:"-"`                     // Populated from --ssh-key flag, not from YAML
 	Subdomain  string            `yaml:"subdomain,omitempty"`   // Individual subdomain (e.g., edge-us-east-1 -> edge-us-east-1.example.com)
 	Region     string            `yaml:"region,omitempty"`      // Region for registration
 	Labels     map[string]string `yaml:"labels,omitempty"`      // Additional labels
@@ -369,7 +369,6 @@ type HostInventory struct {
 type HostConnection struct {
 	ExternalIP string `yaml:"external_ip"`
 	User       string `yaml:"user,omitempty"`
-	SSHKey     string `yaml:"ssh_key,omitempty"`
 }
 
 // EdgeConnection holds the sensitive SSH target for an edge node.

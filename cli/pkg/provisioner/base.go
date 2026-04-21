@@ -25,7 +25,7 @@ type BaseProvisioner struct {
 // NewBaseProvisioner creates a new base provisioner
 func NewBaseProvisioner(name string, pool *ssh.Pool) *BaseProvisioner {
 	if pool == nil {
-		pool = ssh.NewPool(30 * time.Second)
+		pool = ssh.NewPool(30*time.Second, "")
 	}
 
 	return &BaseProvisioner{
@@ -47,13 +47,12 @@ func (b *BaseProvisioner) GetRunner(host inventory.Host) (ssh.Runner, error) {
 		return ssh.NewLocalRunner(""), nil
 	}
 
-	// Get SSH client from pool
 	sshConfig := &ssh.ConnectionConfig{
-		Address: host.ExternalIP,
-		Port:    22, // Default SSH port
-		User:    host.User,
-		KeyPath: host.SSHKey,
-		Timeout: 10 * time.Second,
+		Address:  host.ExternalIP,
+		Port:     22,
+		User:     host.User,
+		HostName: host.Name,
+		Timeout:  10 * time.Second,
 	}
 
 	return b.sshPool.Get(sshConfig)
@@ -71,7 +70,7 @@ func (b *BaseProvisioner) RunCommand(ctx context.Context, host inventory.Host, c
 
 // CheckExists checks if a service exists using detector
 func (b *BaseProvisioner) CheckExists(ctx context.Context, host inventory.Host, serviceName string) (*detect.ServiceState, error) {
-	detector := detect.NewDetector(host)
+	detector := detect.NewDetector(b.sshPool, host)
 	return detector.Detect(ctx, serviceName)
 }
 

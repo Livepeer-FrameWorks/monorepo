@@ -11,10 +11,13 @@ type ConnectionConfig struct {
 	Port               int
 	User               string
 	KeyPath            string
-	Password           string // Optional, prefer key-based auth
 	Timeout            time.Duration
 	InsecureSkipVerify bool   // Skip host key verification (DANGEROUS - dev only)
-	KnownHostsPath     string // Path to known_hosts file (default: ~/.frameworks/known_hosts)
+	KnownHostsPath     string // When set, maps to -o UserKnownHostsFile
+	// HostName is the logical manifest key (e.g. "central-eu-1"). When non-empty,
+	// `ssh -G <HostName>` and `ssh -G frameworks-<HostName>` are consulted and
+	// accepted if they resolve to Address. When empty, target is User@Address.
+	HostName string
 }
 
 // CommandResult holds the result of a command execution

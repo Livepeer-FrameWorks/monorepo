@@ -168,7 +168,7 @@ func (k *KafkaProvisioner) executePlaybook(ctx context.Context, host inventory.H
 		Address: host.ExternalIP,
 		Vars: map[string]string{
 			"ansible_user":                 host.User,
-			"ansible_ssh_private_key_file": host.SSHKey,
+			"ansible_ssh_private_key_file": k.sshPool.DefaultKeyPath(),
 		},
 	})
 

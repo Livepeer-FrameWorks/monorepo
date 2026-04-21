@@ -348,9 +348,8 @@ func TestEnsurePrivateerEnrollmentTokenWithClientStoresClusterToken(t *testing.T
 }
 
 func TestExtractInfraCredentialsFromSplitManifestEnvFiles(t *testing.T) {
-	baseEnv := writeTestEnvFile(t, "DATABASE_USER=frameworks\n")
+	baseEnv := writeTestEnvFile(t, "DATABASE_PASSWORD=test-db-pass\n")
 	secretsEnv := writeTestEnvFile(t, strings.Join([]string{
-		"DATABASE_PASSWORD=test-db-pass",
 		"CLICKHOUSE_PASSWORD=test-ch-pass",
 		"CLICKHOUSE_READONLY_PASSWORD=test-ch-ro-pass",
 	}, "\n")+"\n")
@@ -365,17 +364,17 @@ func TestExtractInfraCredentialsFromSplitManifestEnvFiles(t *testing.T) {
 		t.Fatalf("LoadSharedEnv: %v", err)
 	}
 	creds := extractInfraCredentials(sharedEnv)
-	if got := creds["postgres_user"]; got != "frameworks" {
-		t.Fatalf("expected postgres_user from first env file, got %v", got)
-	}
 	if got := creds["postgres_password"]; got != "test-db-pass" {
-		t.Fatalf("expected postgres_password from second env file, got %v", got)
+		t.Fatalf("expected postgres_password from first env file, got %v", got)
 	}
 	if got := creds["clickhouse_password"]; got != "test-ch-pass" {
 		t.Fatalf("expected clickhouse_password from second env file, got %v", got)
 	}
 	if got := creds["clickhouse_readonly_password"]; got != "test-ch-ro-pass" {
 		t.Fatalf("expected clickhouse_readonly_password from second env file, got %v", got)
+	}
+	if _, ok := creds["postgres_user"]; ok {
+		t.Fatalf("postgres_user should not be populated from env")
 	}
 }
 

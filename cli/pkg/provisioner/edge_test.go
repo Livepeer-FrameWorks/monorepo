@@ -79,11 +79,11 @@ func TestBuildEdgeVars_Docker(t *testing.T) {
 	if vars.GRPCTLSCAPath != "/etc/frameworks/pki/ca.crt" {
 		t.Errorf("GRPCTLSCAPath = %q, want /etc/frameworks/pki/ca.crt", vars.GRPCTLSCAPath)
 	}
-	// Certs are no longer staged by CLI — delivered via ConfigSeed after enrollment
+	// Bootstrap leaves cert paths empty until ConfigSeed delivers the tenant certs.
 	if vars.CertPath != "" || vars.KeyPath != "" {
 		t.Error("CertPath/KeyPath should be empty (certs delivered via ConfigSeed)")
 	}
-	// SiteAddress is the primary domain; wildcard is now Helmsman's job
+	// Bootstrap config targets the primary domain. Helmsman manages wildcard routing.
 	if vars.SiteAddress != "edge.example.com" {
 		t.Errorf("SiteAddress = %q, want edge.example.com (bootstrap uses primary domain)", vars.SiteAddress)
 	}

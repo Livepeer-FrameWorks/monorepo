@@ -345,14 +345,6 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 				return fmt.Errorf("failed to create application user %s: %w", owner, err)
 			}
 		}
-
-		if pgUser, ok := config.Metadata["postgres_user"].(string); ok && pgUser != "" {
-			if _, exists := ownerDBs[pgUser]; !exists {
-				if err := pgCreateApplicationUser(ctx, y.sql, conn, pgUser, pgPass, dbNames); err != nil {
-					return fmt.Errorf("failed to create legacy application user: %w", err)
-				}
-			}
-		}
 	}
 
 	return nil

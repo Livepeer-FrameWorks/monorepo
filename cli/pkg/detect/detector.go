@@ -7,19 +7,57 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/inventory"
+	fwssh "frameworks/cli/pkg/ssh"
 	"frameworks/pkg/servicedefs"
 )
 
+// sshRunner is the minimal interface Detector needs. Production wraps a
+// *fwssh.Pool; tests inject a stub.
+type sshRunner interface {
+	runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string)
+}
+
 // Detector performs multi-method service detection
 type Detector struct {
+	host   inventory.Host
+	runner sshRunner
+}
+
+// NewDetector creates a new detector that routes SSH calls through the given
+// pool — this ensures alias resolution, host-key policy, and identity
+// selection match the rest of the provisioner stack.
+func NewDetector(pool *fwssh.Pool, host inventory.Host) *Detector {
+	return &Detector{host: host, runner: &poolRunner{pool: pool, host: host}}
+}
+
+// runSSH delegates to the configured runner.
+func (d *Detector) runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string) {
+	return d.runner.runSSH(ctx, cmd)
+}
+
+// poolRunner is the production sshRunner backed by *fwssh.Pool.
+type poolRunner struct {
+	pool *fwssh.Pool
 	host inventory.Host
 }
 
-// NewDetector creates a new detector for a host
-func NewDetector(host inventory.Host) *Detector {
-	return &Detector{host: host}
+// runSSH invokes a command via the shared pool. Non-zero exit codes are
+// reported in ExitCode rather than propagated as errors so the detection
+// chain can treat "command ran but said no" as "try next method."
+func (r *poolRunner) runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string) {
+	cfg := &fwssh.ConnectionConfig{
+		Address:  r.host.ExternalIP,
+		Port:     22,
+		User:     r.host.User,
+		HostName: r.host.Name,
+		Timeout:  10 * time.Second,
+	}
+	result, _ := r.pool.Run(ctx, cfg, cmd) //nolint:errcheck // detection reads ExitCode; see type doc
+	if result == nil {
+		return -1, "", ""
+	}
+	return result.ExitCode, result.Stdout, result.Stderr
 }
 
 // Detect attempts to detect a service using multiple methods
@@ -55,13 +93,10 @@ func (d *Detector) Detect(ctx context.Context, serviceName string) (*ServiceStat
 
 // detectFromInventory checks /etc/frameworks/inventory.json
 func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
-	// Read remote inventory file via SSH
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
-	exitCode, stdout, _, err := xexec.RunSSH(ctx, target, "cat", []string{"/etc/frameworks/inventory.json"}, "")
+	exitCode, stdout, _ := d.runSSH(ctx, "cat /etc/frameworks/inventory.json")
 
-	if exitCode != 0 || err != nil {
-		//nolint:nilerr // detection failure is not an error, returned in result
-		return &DetectionResult{Method: "inventory", Success: false, Error: err}, nil
+	if exitCode != 0 {
+		return &DetectionResult{Method: "inventory", Success: false}, nil
 	}
 
 	var inv struct {
@@ -101,9 +136,6 @@ func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, 
 
 // detectFromDocker checks for Docker container
 func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
-
-	// Try both naming patterns
 	containerNames := []string{
 		fmt.Sprintf("frameworks-%s", serviceName),
 		serviceName,
@@ -112,9 +144,9 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 
 	for _, containerName := range containerNames {
 		cmd := fmt.Sprintf("docker ps -a --filter name=%s --format '{{.Names}}|{{.State}}|{{.Image}}'", containerName)
-		exitCode, stdout, _, err := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
+		exitCode, stdout, _ := d.runSSH(ctx, cmd)
 
-		if exitCode != 0 || err != nil {
+		if exitCode != 0 {
 			continue
 		}
 
@@ -151,9 +183,6 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 
 // detectFromSystemd checks for systemd service
 func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
-
-	// Try both naming patterns
 	serviceNames := []string{
 		fmt.Sprintf("frameworks-%s", serviceName),
 		serviceName,
@@ -161,9 +190,9 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 
 	for _, svcName := range serviceNames {
 		cmd := fmt.Sprintf("systemctl show %s --property=LoadState,ActiveState,SubState", svcName)
-		exitCode, stdout, _, err := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
+		exitCode, stdout, _ := d.runSSH(ctx, cmd)
 
-		if exitCode != 0 || err != nil {
+		if exitCode != 0 {
 			continue
 		}
 
@@ -201,12 +230,10 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 		return &DetectionResult{Method: "port", Success: false}, nil
 	}
 
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	cmd := fmt.Sprintf("ss -tlnp | grep ':%d ' || lsof -iTCP:%d -sTCP:LISTEN", port, port)
-	exitCode, stdout, _, err := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
+	exitCode, stdout, _ := d.runSSH(ctx, cmd)
 
-	if exitCode != 0 || err != nil || strings.TrimSpace(stdout) == "" {
-		//nolint:nilerr // detection failure is not an error
+	if exitCode != 0 || strings.TrimSpace(stdout) == "" {
 		return &DetectionResult{Method: "port", Success: false}, nil
 	}
 
@@ -220,13 +247,10 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 	return &DetectionResult{Method: "port", Success: true, State: state}, nil
 }
 
-// Helper methods
-
 func (d *Detector) checkDockerRunning(ctx context.Context, serviceName string, state *ServiceState) {
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	containerName := fmt.Sprintf("frameworks-%s", serviceName)
 	cmd := fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s", containerName)
-	exitCode, stdout, _, _ := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
+	exitCode, stdout, _ := d.runSSH(ctx, cmd)
 
 	if exitCode == 0 {
 		state.Running = strings.TrimSpace(stdout) == "true"
@@ -234,10 +258,9 @@ func (d *Detector) checkDockerRunning(ctx context.Context, serviceName string, s
 }
 
 func (d *Detector) checkSystemdRunning(ctx context.Context, serviceName string, state *ServiceState) {
-	target := fmt.Sprintf("%s@%s", d.host.User, d.host.ExternalIP)
 	svcName := fmt.Sprintf("frameworks-%s", serviceName)
 	cmd := fmt.Sprintf("systemctl is-active %s", svcName)
-	exitCode, stdout, _, _ := xexec.RunSSH(ctx, target, "sh", []string{"-c", cmd}, "")
+	exitCode, stdout, _ := d.runSSH(ctx, cmd)
 
 	if exitCode == 0 {
 		state.Running = strings.TrimSpace(stdout) == "active"

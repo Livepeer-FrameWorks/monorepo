@@ -607,7 +607,7 @@ Multi-node manifest example:
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "  launchd domain: user (no admin required)")
 			} else {
-				host = sshTargetToHost(sshTarget, sshKey)
+				host = sshTargetToHost(sshTarget)
 				darwinDomain = provisioner.DomainSystem
 			}
 
@@ -634,7 +634,7 @@ Multi-node manifest example:
 				DarwinDomain:    darwinDomain,
 			}
 
-			pool := fwssh.NewPool(30 * time.Second)
+			pool := fwssh.NewPool(30*time.Second, sshKey)
 			ep := provisioner.NewEdgeProvisioner(pool)
 
 			// Registration handled before EdgeProvisioner (needs QM client)
@@ -770,11 +770,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 
 			fmt.Fprintf(cmd.OutOrStdout(), "\n[%s] Starting provisioning...\n", n.Name)
 
-			// Run provisioning steps
-			sshKey := n.SSHKey
-			if sshKey == "" {
-				sshKey = defaultSSHKey
-			}
+			sshKey := defaultSSHKey
 			token := enrollmentToken
 			if token == "" {
 				token = manifest.EnrollmentToken
@@ -891,7 +887,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	}
 
 	// Parse SSH target (user@host) into inventory.Host
-	host := sshTargetToHost(sshTarget, sshKey)
+	host := sshTargetToHost(sshTarget)
 
 	// Build EdgeProvisionConfig
 	config := provisioner.EdgeProvisionConfig{
@@ -915,7 +911,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		Version:         version,
 	}
 
-	pool := fwssh.NewPool(30 * time.Second)
+	pool := fwssh.NewPool(30*time.Second, sshKey)
 	ep := provisioner.NewEdgeProvisioner(pool)
 	return ep.Provision(cmd.Context(), host, config)
 }
@@ -930,7 +926,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 // sshTargetToHost converts a "user@host" string into an inventory.Host.
-func sshTargetToHost(sshTarget, sshKey string) inventory.Host {
+func sshTargetToHost(sshTarget string) inventory.Host {
 	parts := strings.SplitN(sshTarget, "@", 2)
 	user := "root"
 	address := sshTarget
@@ -941,7 +937,6 @@ func sshTargetToHost(sshTarget, sshKey string) inventory.Host {
 	return inventory.Host{
 		ExternalIP: address,
 		User:       user,
-		SSHKey:     sshKey,
 	}
 }
 

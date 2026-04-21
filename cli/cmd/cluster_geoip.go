@@ -62,7 +62,7 @@ Sources:
 	return cmd
 }
 
-func runSyncGeoIP(_ *cobra.Command, rc *resolvedCluster, licenseKey, source, filePath, remotePath string, services []string, restart bool) error {
+func runSyncGeoIP(cmd *cobra.Command, rc *resolvedCluster, licenseKey, source, filePath, remotePath string, services []string, restart bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -90,7 +90,8 @@ func runSyncGeoIP(_ *cobra.Command, rc *resolvedCluster, licenseKey, source, fil
 	}
 	defer cleanup()
 
-	pool := ssh.NewPool(0)
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	pool := ssh.NewPool(0, sshKey)
 	defer pool.Close()
 
 	uploaded, err := uploadGeoIPToHosts(ctx, manifest, pool, mmdbPath, remotePath, services, restart, os.Stdout)
@@ -237,9 +238,9 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 	for _, hostName := range targetHosts {
 		host := manifest.Hosts[hostName]
 		connCfg := &ssh.ConnectionConfig{
-			Address: host.ExternalIP,
-			User:    host.User,
-			KeyPath: host.SSHKey,
+			Address:  host.ExternalIP,
+			User:     host.User,
+			HostName: host.Name,
 		}
 
 		fmt.Fprintf(out, "Uploading GeoIP MMDB to %s (%s)...\n", hostName, host.ExternalIP)

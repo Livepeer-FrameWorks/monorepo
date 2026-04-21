@@ -10,35 +10,58 @@ import (
 	"time"
 )
 
-// Pool manages SSH connections to multiple hosts
+// Pool manages SSH connections to multiple hosts. It also carries the
+// per-invocation default SSH key path (from the --ssh-key flag), which is
+// injected into any ConnectionConfig that doesn't set one explicitly.
 type Pool struct {
-	connections map[string]*Client
-	mu          sync.RWMutex
-	timeout     time.Duration
-	newClient   func(config *ConnectionConfig) (*Client, error)
+	connections    map[string]*Client
+	mu             sync.RWMutex
+	timeout        time.Duration
+	defaultKeyPath string
+	newClient      func(config *ConnectionConfig) (*Client, error)
 }
 
-// NewPool creates a new connection pool
-func NewPool(timeout time.Duration) *Pool {
+// NewPool creates a new connection pool. keyPath is the default SSH key
+// applied when a ConnectionConfig does not set one; pass "" to rely solely
+// on ssh-agent, ~/.ssh/config, and default identities.
+func NewPool(timeout time.Duration, keyPath string) *Pool {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
 
 	return &Pool{
-		connections: make(map[string]*Client),
-		timeout:     timeout,
-		newClient:   NewClient,
+		connections:    make(map[string]*Client),
+		timeout:        timeout,
+		defaultKeyPath: keyPath,
+		newClient:      NewClient,
 	}
 }
 
-// Get retrieves or creates an SSH connection for a host
+// DefaultKeyPath returns the pool's default SSH key path (empty if unset).
+func (p *Pool) DefaultKeyPath() string {
+	return p.defaultKeyPath
+}
+
+// cacheKey identifies a cached client by every field that affects transport
+// behavior (target resolution, auth, host-key policy). Two calls that would
+// produce different ssh argv must not share a cached client.
+func cacheKey(c *ConnectionConfig) string {
+	return fmt.Sprintf("%s|%s@%s:%d|key=%s|kh=%s|insecure=%t",
+		c.HostName, c.User, c.Address, c.Port,
+		c.KeyPath, c.KnownHostsPath, c.InsecureSkipVerify)
+}
+
+// Get retrieves or creates an SSH connection for a host. Caller's config is
+// treated as read-only: pool defaults are applied to an internal copy, and
+// the cache key is computed from that copy so subsequent Get/CloseHost calls
+// with the same caller config always hit the same cache entry.
 func (p *Pool) Get(config *ConnectionConfig) (*Client, error) {
-	key := fmt.Sprintf("%s@%s:%d", config.User, config.Address, config.Port)
+	effective := p.effectiveConfig(config)
+	key := cacheKey(&effective)
 	if p.newClient == nil {
 		p.newClient = NewClient
 	}
 
-	// Try to get existing connection (read lock)
 	p.mu.RLock()
 	if client, exists := p.connections[key]; exists {
 		p.mu.RUnlock()
@@ -46,22 +69,14 @@ func (p *Pool) Get(config *ConnectionConfig) (*Client, error) {
 	}
 	p.mu.RUnlock()
 
-	// Create new connection (write lock)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Double-check after acquiring write lock (another goroutine might have created it)
 	if client, exists := p.connections[key]; exists {
 		return client, nil
 	}
 
-	// Set timeout if not configured
-	if config.Timeout == 0 {
-		config.Timeout = p.timeout
-	}
-
-	// Create new client
-	client, err := p.newClient(config)
+	client, err := p.newClient(&effective)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SSH client for %s: %w", key, err)
 	}
@@ -70,12 +85,17 @@ func (p *Pool) Get(config *ConnectionConfig) (*Client, error) {
 	return client, nil
 }
 
-func (p *Pool) pingTimeout() time.Duration {
-	timeout := 5 * time.Second
-	if p.timeout > 0 && p.timeout < timeout {
-		timeout = p.timeout
+// effectiveConfig applies pool-level defaults (Timeout, KeyPath) to a copy of
+// the caller's config, without mutating the original.
+func (p *Pool) effectiveConfig(in *ConnectionConfig) ConnectionConfig {
+	c := *in
+	if c.Timeout == 0 {
+		c.Timeout = p.timeout
 	}
-	return timeout
+	if c.KeyPath == "" {
+		c.KeyPath = p.defaultKeyPath
+	}
+	return c
 }
 
 func (p *Pool) getHealthyClient(ctx context.Context, config *ConnectionConfig) (*Client, error) {
@@ -84,7 +104,7 @@ func (p *Pool) getHealthyClient(ctx context.Context, config *ConnectionConfig) (
 		return nil, err
 	}
 
-	pingCtx, cancel := context.WithTimeout(ctx, p.pingTimeout())
+	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout(config))
 	defer cancel()
 	if err := client.Ping(pingCtx); err != nil {
 		_ = p.CloseHost(config)
@@ -174,7 +194,8 @@ func (p *Pool) Close() error {
 
 // CloseHost closes the connection to a specific host
 func (p *Pool) CloseHost(config *ConnectionConfig) error {
-	key := fmt.Sprintf("%s@%s:%d", config.User, config.Address, config.Port)
+	effective := p.effectiveConfig(config)
+	key := cacheKey(&effective)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -2,20 +2,15 @@ package config
 
 type Endpoints struct {
 	BridgeURL             string `yaml:"bridge_url" json:"bridge_url"`
-	QuartermasterURL      string `yaml:"quartermaster_url" json:"quartermaster_url"`             // deprecated: use QuartermasterGRPCAddr
-	QuartermasterGRPCAddr string `yaml:"quartermaster_grpc_addr" json:"quartermaster_grpc_addr"` // gRPC address (host:port)
-	ControlURL            string `yaml:"control_url" json:"control_url"`                         // deprecated: use CommodoreGRPCAddr
-	CommodoreGRPCAddr     string `yaml:"commodore_grpc_addr" json:"commodore_grpc_addr"`         // gRPC address (host:port)
+	QuartermasterGRPCAddr string `yaml:"quartermaster_grpc_addr" json:"quartermaster_grpc_addr"`
+	CommodoreGRPCAddr     string `yaml:"commodore_grpc_addr" json:"commodore_grpc_addr"`
 	FoghornGRPCAddr       string `yaml:"foghorn_grpc_addr" json:"foghorn_grpc_addr"`
 	DecklogGRPCAddr       string `yaml:"decklog_grpc_addr" json:"decklog_grpc_addr"`
-	PeriscopeQueryURL     string `yaml:"periscope_query_url" json:"periscope_query_url"`   // deprecated: use PeriscopeGRPCAddr
-	PeriscopeGRPCAddr     string `yaml:"periscope_grpc_addr" json:"periscope_grpc_addr"`   // gRPC address (host:port)
-	PeriscopeIngestURL    string `yaml:"periscope_ingest_url" json:"periscope_ingest_url"` // deprecated
-	PurserURL             string `yaml:"purser_url" json:"purser_url"`                     // deprecated: use PurserGRPCAddr
-	PurserGRPCAddr        string `yaml:"purser_grpc_addr" json:"purser_grpc_addr"`         // gRPC address (host:port)
+	PeriscopeGRPCAddr     string `yaml:"periscope_grpc_addr" json:"periscope_grpc_addr"`
+	PurserGRPCAddr        string `yaml:"purser_grpc_addr" json:"purser_grpc_addr"`
 	SignalmanWSURL        string `yaml:"signalman_ws_url" json:"signalman_ws_url"`
-	SignalmanGRPCAddr     string `yaml:"signalman_grpc_addr" json:"signalman_grpc_addr"` // gRPC address (host:port)
-	NavigatorGRPCAddr     string `yaml:"navigator_grpc_addr" json:"navigator_grpc_addr"` // gRPC address for DNS/cert service (host:port)
+	SignalmanGRPCAddr     string `yaml:"signalman_grpc_addr" json:"signalman_grpc_addr"`
+	NavigatorGRPCAddr     string `yaml:"navigator_grpc_addr" json:"navigator_grpc_addr"`
 
 	// TLS configuration for external (non-mesh) connections
 	UseTLS        bool   `yaml:"use_tls" json:"use_tls"`                 // Enable TLS for gRPC connections (via Caddy proxy)
