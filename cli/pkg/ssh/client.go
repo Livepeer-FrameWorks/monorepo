@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var execCommandContext = exec.CommandContext
+
 // Client runs commands on a remote host by invoking the system `ssh` and
 // `scp` binaries, so operator ~/.ssh/config, ssh-agent, default identities,
 // ProxyJump, ProxyCommand, macOS keychain, and multiplexing all apply.
@@ -59,9 +61,15 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 	defer func() { result.Duration = time.Since(start) }()
 
 	args := BuildSSHArgs(c.config, c.resolution)
-	args = append(args, c.resolution.Target, "sh", "-lc", command)
+	// OpenSSH joins argv after the target with single spaces and ships that as
+	// one string to the remote login shell. Passing command as its own argv
+	// element would be re-split: `sh -c mkdir -p /path` makes -c consume only
+	// `mkdir` and the rest become positional parameters. ShellQuote keeps it
+	// as a single token across the wire. `sh -c` (not `-lc`) stays portable
+	// across dash, ash, and BusyBox sh.
+	args = append(args, c.resolution.Target, "sh", "-c", ShellQuote(command))
 
-	cmd := exec.CommandContext(ctx, "ssh", args...)
+	cmd := execCommandContext(ctx, "ssh", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -79,11 +87,33 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 			result.ExitCode = -1
 		}
 		result.Error = err
-		return result, err
+		return result, wrapRunError(c.resolution.Target, command, result.ExitCode, result.Stderr, err)
 	}
 
 	result.ExitCode = 0
 	return result, nil
+}
+
+// wrapRunError builds a readable error from a failed ssh command execution.
+// Cause is wrapped with %w so callers can still reach *exec.ExitError via
+// errors.As. Stderr is capped so a rogue command can't bloat error chains.
+func wrapRunError(target, command string, exitCode int, stderr string, cause error) error {
+	const stderrCap = 2048
+	stderr = strings.TrimSpace(stderr)
+	if len(stderr) > stderrCap {
+		stderr = stderr[:stderrCap] + "… [truncated]"
+	}
+
+	if exitCode > 0 {
+		if stderr == "" {
+			return fmt.Errorf("ssh %s: %q exited %d (no stderr): %w", target, command, exitCode, cause)
+		}
+		return fmt.Errorf("ssh %s: %q exited %d: %s: %w", target, command, exitCode, stderr, cause)
+	}
+	if stderr == "" {
+		return fmt.Errorf("ssh %s: %q: %w", target, command, cause)
+	}
+	return fmt.Errorf("ssh %s: %q: %s: %w", target, command, stderr, cause)
 }
 
 // Ping validates that ssh can reach the host.
@@ -96,7 +126,7 @@ func (c *Client) Ping(ctx context.Context) error {
 
 	args := BuildSSHArgs(c.config, c.resolution)
 	args = append(args, c.resolution.Target, "true")
-	cmd := exec.CommandContext(pingCtx, "ssh", args...)
+	cmd := execCommandContext(pingCtx, "ssh", args...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("ssh ping failed: %w", err)
 	}
@@ -150,15 +180,20 @@ func (c *Client) RunScript(ctx context.Context, script string) (*CommandResult, 
 func (c *Client) Upload(ctx context.Context, opts UploadOptions) error {
 	remoteDir := filepath.Dir(opts.RemotePath)
 	if _, err := c.Run(ctx, fmt.Sprintf("mkdir -p %s", ShellQuote(remoteDir))); err != nil {
-		return fmt.Errorf("failed to create remote directory: %w", err)
+		return fmt.Errorf("prepare remote directory %s: %w", remoteDir, err)
 	}
 
 	scpArgs := BuildSCPArgs(c.config, c.resolution, opts.LocalPath, opts.RemotePath)
-	cmd := exec.CommandContext(ctx, "scp", scpArgs...)
+	cmd := execCommandContext(ctx, "scp", scpArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("scp failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+		exitCode := -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+		return wrapScpError(c.resolution.Target, opts.LocalPath, opts.RemotePath, exitCode, stderr.String(), err)
 	}
 
 	// scp preserves source mode by default; explicit chmod lets callers enforce
@@ -166,21 +201,43 @@ func (c *Client) Upload(ctx context.Context, opts UploadOptions) error {
 	if opts.Mode != 0 {
 		chmodCmd := fmt.Sprintf("chmod %o %s", opts.Mode, ShellQuote(opts.RemotePath))
 		if _, err := c.Run(ctx, chmodCmd); err != nil {
-			return fmt.Errorf("failed to chmod uploaded file: %w", err)
+			return fmt.Errorf("chmod %o on %s: %w", opts.Mode, opts.RemotePath, err)
 		}
 	}
 
 	if opts.Owner != "" {
 		chownCmd := fmt.Sprintf("chown %s %s", ShellQuote(opts.Owner), ShellQuote(opts.RemotePath))
+		ownerSpec := opts.Owner
 		if opts.Group != "" {
 			chownCmd = fmt.Sprintf("chown %s:%s %s", ShellQuote(opts.Owner), ShellQuote(opts.Group), ShellQuote(opts.RemotePath))
+			ownerSpec = opts.Owner + ":" + opts.Group
 		}
 		if _, err := c.Run(ctx, chownCmd); err != nil {
-			return fmt.Errorf("failed to change ownership: %w", err)
+			return fmt.Errorf("chown %s on %s: %w", ownerSpec, opts.RemotePath, err)
 		}
 	}
 
 	return nil
+}
+
+// wrapScpError mirrors wrapRunError for scp failures: exit code, target,
+// paths, and trimmed stderr in a single readable message.
+func wrapScpError(target, local, remote string, exitCode int, stderr string, cause error) error {
+	const stderrCap = 2048
+	stderr = strings.TrimSpace(stderr)
+	if len(stderr) > stderrCap {
+		stderr = stderr[:stderrCap] + "… [truncated]"
+	}
+	if exitCode > 0 {
+		if stderr == "" {
+			return fmt.Errorf("scp %s → %s:%s exited %d (no stderr): %w", local, target, remote, exitCode, cause)
+		}
+		return fmt.Errorf("scp %s → %s:%s exited %d: %s: %w", local, target, remote, exitCode, stderr, cause)
+	}
+	if stderr == "" {
+		return fmt.Errorf("scp %s → %s:%s: %w", local, target, remote, cause)
+	}
+	return fmt.Errorf("scp %s → %s:%s: %s: %w", local, target, remote, stderr, cause)
 }
 
 func (c *Client) Close() error {

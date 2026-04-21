@@ -229,11 +229,6 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 		return 0, nil
 	}
 
-	serviceSet := make(map[string]struct{}, len(services))
-	for _, svc := range services {
-		serviceSet[strings.TrimSpace(svc)] = struct{}{}
-	}
-
 	uploaded := 0
 	for _, hostName := range targetHosts {
 		host := manifest.Hosts[hostName]
@@ -244,7 +239,7 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 		}
 
 		fmt.Fprintf(out, "Uploading GeoIP MMDB to %s (%s)...\n", hostName, host.ExternalIP)
-		if _, err := pool.Run(ctx, connCfg, fmt.Sprintf("mkdir -p %s", filepath.Dir(remotePath))); err != nil {
+		if _, err := pool.Run(ctx, connCfg, fmt.Sprintf("mkdir -p %s", ssh.ShellQuote(filepath.Dir(remotePath)))); err != nil {
 			return uploaded, fmt.Errorf("prepare geoip directory on %s: %w", hostName, err)
 		}
 		if err := pool.Upload(ctx, connCfg, ssh.UploadOptions{
@@ -252,7 +247,7 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 			RemotePath: remotePath,
 			Mode:       0644,
 		}); err != nil {
-			return uploaded, fmt.Errorf("failed to upload GeoIP MMDB to %s: %w", hostName, err)
+			return uploaded, fmt.Errorf("upload GeoIP MMDB to %s:%s: %w", hostName, remotePath, err)
 		}
 		uploaded++
 
