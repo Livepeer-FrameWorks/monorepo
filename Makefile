@@ -4,13 +4,11 @@
 	lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
-# Version information
 # Prefer annotated git tags like v1.2.3; fallback to describe or dev
 VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exact-match 2>/dev/null || git describe --tags --match "v[0-9]*" --dirty --always 2>/dev/null || echo "0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-# Build flags for version injection (matching pkg/version/version.go variable names)
 LDFLAGS = -ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
 					-X frameworks/pkg/version.GitCommit=$(GIT_COMMIT) \
 					-X frameworks/pkg/version.BuildDate=$(BUILD_DATE)"
@@ -23,27 +21,21 @@ GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
 GO_GET_ARGS ?= -u all
 PNPM_UP_ARGS ?= -r
 
-# Generate proto files first
 proto:
 	cd pkg/proto && make proto
 
-# Generate GraphQL files (backend)
 graphql:
 	cd api_gateway && make graphql
 
-# Generate GraphQL files (frontend)
 graphql-frontend:
 	cd website_application && pnpm run gql:codegen
 
-# Generate GraphQL Swift constants (tray app)
 graphql-tray:
 	./scripts/generate-swift-gql.sh
 
-# Generate GraphQL files (backend + frontend + tray)
 graphql-all: graphql graphql-frontend graphql-tray
 
-# Build all service binaries
-build: proto graphql
+build:
 	@echo "Building service binaries with version: $(VERSION)"
 	@mkdir -p bin
 	@for service in $(SERVICES); do \
@@ -54,7 +46,7 @@ build: proto graphql
 	@$(MAKE) build-bin-cli
 
 # Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
-verify: proto graphql
+verify:
 	@echo "Verifying all Go modules (fmt/vet/test/build + images)..."
 	@failed=0; \
 	for service_dir in $(GO_SERVICES); do \
@@ -78,78 +70,76 @@ verify: proto graphql
 		exit 1; \
 	fi
 
-# Build all Docker images
-build-images: proto graphql
+build-images:
 	@echo "Building Docker images for all services..."
 	@for service in $(SERVICES); do \
 		$(MAKE) build-image-$$service 2>/dev/null || echo "Skipping $$service (no Dockerfile)"; \
 	done
 
-# Individual Docker builds
-build-image-commodore: proto
+build-image-commodore:
 	docker build -t frameworks-commodore:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_control/Dockerfile .
 
-build-image-quartermaster: proto
+build-image-quartermaster:
 	docker build -t frameworks-quartermaster:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_tenants/Dockerfile .
 
-build-image-purser: proto
+build-image-purser:
 	docker build -t frameworks-purser:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_billing/Dockerfile .
 
-build-image-decklog: proto
+build-image-decklog:
 	docker build -t frameworks-decklog:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_firehose/Dockerfile .
 
-build-image-foghorn: proto
+build-image-foghorn:
 	docker build -t frameworks-foghorn:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_balancing/Dockerfile .
 
-build-image-helmsman: proto
+build-image-helmsman:
 	docker build -t frameworks-helmsman:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_sidecar/Dockerfile .
 
-build-image-periscope-ingest: proto
+build-image-periscope-ingest:
 	docker build -t frameworks-periscope-ingest:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_analytics_ingest/Dockerfile .
 
-build-image-periscope-query: proto
+build-image-periscope-query:
 	docker build -t frameworks-periscope-query:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_analytics_query/Dockerfile .
 
-build-image-signalman: proto
+build-image-signalman:
 	docker build -t frameworks-signalman:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_realtime/Dockerfile .
 
-build-image-bridge: proto
+build-image-bridge:
 	docker build -t frameworks-bridge:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
@@ -161,14 +151,14 @@ build-image-logbook:
 		--build-arg BUILD_ENV=production \
 		-f website_docs/Dockerfile .
 
-build-image-navigator: proto
+build-image-navigator:
 	docker build -t frameworks-navigator:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_dns/Dockerfile .
 
-build-image-deckhand: proto
+build-image-deckhand:
 	docker build -t frameworks-deckhand:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
@@ -189,77 +179,72 @@ build-image-chandler:
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_assets/Dockerfile .
 
-# Individual service bin builds (explicit)
-build-bin-commodore: proto
+build-bin-commodore:
 	cd api_control && go build $(LDFLAGS) -o ../bin/commodore ./cmd/commodore
 
-build-bin-quartermaster: proto
+build-bin-quartermaster:
 	cd api_tenants && go build $(LDFLAGS) -o ../bin/quartermaster ./cmd/quartermaster
 
-build-bin-purser: proto
+build-bin-purser:
 	cd api_billing && go build $(LDFLAGS) -o ../bin/purser ./cmd/purser
 
-build-bin-decklog: proto
+build-bin-decklog:
 	cd api_firehose && go build $(LDFLAGS) -o ../bin/decklog ./cmd/decklog
 
-build-bin-foghorn: proto
+build-bin-foghorn:
 	cd api_balancing && go build $(LDFLAGS) -o ../bin/foghorn ./cmd/foghorn
 
-build-bin-helmsman: proto
+build-bin-helmsman:
 	cd api_sidecar && go build $(LDFLAGS) -o ../bin/helmsman ./cmd/helmsman
 
-build-bin-periscope-ingest: proto
+build-bin-periscope-ingest:
 	cd api_analytics_ingest && go build $(LDFLAGS) -o ../bin/periscope-ingest ./cmd/periscope
 
-build-bin-periscope-query: proto
+build-bin-periscope-query:
 	cd api_analytics_query && go build $(LDFLAGS) -o ../bin/periscope-query ./cmd/periscope
 
-build-bin-signalman: proto
+build-bin-signalman:
 	cd api_realtime && go build $(LDFLAGS) -o ../bin/signalman ./cmd/signalman
 
-build-bin-bridge: proto
+build-bin-bridge:
 	cd api_gateway && go build $(LDFLAGS) -o ../bin/bridge ./cmd/bridge
 
-build-bin-navigator: proto
+build-bin-navigator:
 	cd api_dns && go build $(LDFLAGS) -o ../bin/navigator ./cmd/navigator
 
-build-bin-privateer: proto
+build-bin-privateer:
 	cd api_mesh && go build $(LDFLAGS) -o ../bin/privateer ./cmd/privateer
 
-build-bin-deckhand: proto
+build-bin-deckhand:
 	cd api_ticketing && go build $(LDFLAGS) -o ../bin/deckhand ./cmd/deckhand
 
-build-bin-steward: proto
+build-bin-steward:
 	cd api_forms && go build $(LDFLAGS) -o ../bin/steward ./cmd/steward
 
-build-bin-skipper: proto
+build-bin-skipper:
 	cd api_consultant && go build $(LDFLAGS) -o ../bin/skipper ./cmd/skipper
 
-build-bin-chandler: proto
+build-bin-chandler:
 	cd api_assets && go build $(LDFLAGS) -o ../bin/chandler ./cmd/chandler
 
-build-bin-cli: proto
+build-bin-cli:
 	cd cli && go build $(LDFLAGS) -o ../bin/cli .
 
-# Clean build artifacts
 clean:
 	rm -rf bin/
 	cd pkg/proto && make clean
 
-# Show version information
 version:
 	@echo "Version: $(VERSION)"
 	@echo "Git Commit: $(GIT_COMMIT)"
 	@echo "Build Date: $(BUILD_DATE)"
 
-# Install required development tools
 install-tools:
 	cd pkg/proto && make install-tools
 	cd api_gateway && make install-tools
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
-# Run unit tests in every Go module
-test: proto graphql
+test:
 	@echo "Running unit tests for all Go modules..."
 	@failed=0; \
 	for service_dir in $(GO_SERVICES); do \
@@ -277,7 +262,7 @@ test: proto graphql
 	fi
 
 # Run unit tests with JUnit XML output for Codecov Test Analytics
-test-junit: proto graphql
+test-junit:
 	@echo "Running unit tests with JUnit output for all Go modules..."
 	@mkdir -p $(CURDIR)/test-results
 	@rm -f $(CURDIR)/test-results/go-junit.xml
@@ -309,8 +294,7 @@ test-junit: proto graphql
 	fi
 	@echo "JUnit report saved to $(CURDIR)/test-results/go-junit.xml"
 
-# Generate a single combined coverage report at ./coverage
-coverage: proto graphql
+coverage:
 	@echo "Generating combined coverage for all Go modules..."
 	@rm -rf $(CURDIR)/coverage && mkdir -p $(CURDIR)/coverage
 	@echo "mode: atomic" > $(CURDIR)/coverage/coverage.out
@@ -333,7 +317,6 @@ coverage: proto graphql
 			fi; \
 		rm -f "$$tmpfile" ); \
 	done;
-	@# Filter out generated code from coverage
 	@if [ -f "$(CURDIR)/coverage/coverage.out" ]; then \
 		grep -v '\.pb\.go:' "$(CURDIR)/coverage/coverage.out" | \
 			grep -v '_grpc\.pb\.go:' | \
@@ -362,7 +345,6 @@ decrypt:
 	@sops -d -i config/env/secrets.env
 	@echo "Decrypted config/env/secrets.env"
 
-# Tidy all Go modules
 tidy:
 	@echo "Running go mod tidy for all Go modules..."
 	@for service_dir in $(GO_SERVICES); do \
@@ -372,7 +354,6 @@ tidy:
 	done
 	@echo "✓ All modules tidied"
 
-# Update Go dependencies in all modules, then tidy
 update:
 	@echo "Updating Go dependencies for all Go modules (go get $(GO_GET_ARGS))..."
 	@failed=0; \
@@ -392,7 +373,6 @@ update:
 	pnpm up $(PNPM_UP_ARGS)
 	@echo "✓ Update complete"
 
-# Show outdated dependencies across Go and JS
 outdated:
 	@echo "Checking outdated Go dependencies..."
 	@for service_dir in $(GO_SERVICES); do \
@@ -407,7 +387,6 @@ outdated:
 	@echo "Checking outdated JS dependencies..."
 	@pnpm outdated -r 2>/dev/null || true
 
-# Format all Go code
 fmt:
 	@echo "Running go fmt for all Go modules..."
 	@for service_dir in $(GO_SERVICES); do \
@@ -417,18 +396,14 @@ fmt:
 	done
 	@echo "✓ All modules formatted"
 
-# =============================================================================
-# Linting
-# =============================================================================
-
-# Run both Go and frontend lint checks (matches CI lint jobs)
+# Matches CI lint jobs (lint-go + lint-frontend).
 lint:
 	@failed=0; \
 	$(MAKE) lint-go || failed=1; \
 	$(MAKE) lint-frontend || failed=1; \
 	if [ $$failed -eq 1 ]; then exit 1; fi
 
-# Run golangci-lint with baseline (matches CI go-lint - shows only NEW violations)
+# Baseline mode: reports only violations newer than .golangci-baseline (matches CI go-lint).
 lint-go:
 	@echo "Running golangci-lint with baseline (CI mode)..."
 	@BASELINE=$$(cat .golangci-baseline 2>/dev/null || echo ""); \
@@ -447,13 +422,13 @@ lint-go:
 	done; \
 	if [ $$failed -eq 1 ]; then exit 1; fi
 
-# Run frontend lint and format checks (matches CI frontend-lint)
+# Matches CI frontend-lint.
 lint-frontend:
 	@echo "Running frontend lint checks (pnpm lint + pnpm format:check)..."
 	pnpm lint
 	pnpm format:check
 
-# Run golangci-lint without baseline (shows ALL violations for cleanup work)
+# No baseline: reports every violation, including pre-existing ones. For cleanup work.
 lint-all:
 	@echo "Running golangci-lint for all Go modules (all violations)..."
 	@for service_dir in $(GO_SERVICES); do \
@@ -462,7 +437,6 @@ lint-all:
 		(cd $$service_dir && golangci-lint run --timeout=5m ./...); \
 	done
 
-# Run golangci-lint with auto-fix
 lint-fix:
 	@echo "Running golangci-lint with auto-fix for all Go modules..."
 	@for service_dir in $(GO_SERVICES); do \
@@ -471,24 +445,16 @@ lint-fix:
 		(cd $$service_dir && golangci-lint run --fix --timeout=5m ./...); \
 	done
 
-# Fix all formatting (go fmt + prettier)
 format:
 	@$(MAKE) fmt
 	pnpm format
 
-# Generate lint report to file
 lint-report:
 	@./scripts/lint-report.sh
 
-# Analyze lint report
 lint-analyze:
 	@./scripts/lint-analyze.sh
 
-# =============================================================================
-# Local CI Parity
-# =============================================================================
-
-# Run the main CI checks locally (go + frontend)
 ci-local:
 	@failed=0; \
 	$(MAKE) ci-local-go || failed=1; \
@@ -509,13 +475,8 @@ ci-local-frontend:
 	pnpm test:coverage
 	pnpm build
 
-# =============================================================================
-# Dead Code Analysis
-# =============================================================================
-
 REPORTS_DIR := reports
 
-# Install dead code analysis tools
 dead-code-install:
 	@echo "Installing Go dead code analysis tools..."
 	go install golang.org/x/tools/cmd/deadcode@latest
@@ -525,7 +486,6 @@ dead-code-install:
 	@echo "✓ Go dead code analysis tools installed"
 	@echo "Note: knip must be installed separately (workspace dev dependency)."
 
-# Run Go dead code analysis
 dead-code-go:
 	@mkdir -p $(REPORTS_DIR)
 	@echo "=== Go Dead Code Analysis ==="
@@ -564,7 +524,6 @@ dead-code-go:
 	@echo ""
 	@echo "Go reports saved to $(REPORTS_DIR)/"
 
-# Run TypeScript dead code analysis
 dead-code-ts:
 	@mkdir -p $(REPORTS_DIR)
 	@echo "=== TypeScript Dead Code Analysis ==="
@@ -600,14 +559,12 @@ dead-code-ts:
 		echo "Unused types:        $$(jq '.types | length' $(REPORTS_DIR)/knip-report.json 2>/dev/null || echo 0)"; \
 	fi
 
-# Generate consolidated dead code report
 dead-code-report:
 	@mkdir -p $(REPORTS_DIR)
 	@echo "=== Generating Consolidated Dead Code Report ==="
 	@./scripts/consolidate-dead-code-report.sh > $(REPORTS_DIR)/DEAD_CODE_SUMMARY.md
 	@echo "Summary report: $(REPORTS_DIR)/DEAD_CODE_SUMMARY.md"
 
-# Run all dead code analysis
 dead-code: dead-code-go dead-code-ts dead-code-report
 	@echo ""
 	@echo "=== Dead Code Analysis Complete ==="
