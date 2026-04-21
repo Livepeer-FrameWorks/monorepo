@@ -17,7 +17,7 @@ export { StudioActionBar, type StudioActionBarProps } from "./components/StudioA
 export { StudioSettings, type StudioSettingsProps } from "./components/StudioSettings";
 export { StudioStatusBadge, type StudioStatusBadgeProps } from "./components/StudioStatusBadge";
 
-// Compositor Components (Phase 3)
+// Compositor components
 export { SceneSwitcher, type SceneSwitcherProps } from "./components/SceneSwitcher";
 export { LayerList, type LayerListProps } from "./components/LayerList";
 export { CompositorControls, type CompositorControlsProps } from "./components/CompositorControls";
@@ -31,7 +31,7 @@ export {
   type UseStreamStatsReturn,
 } from "./hooks/useStreamStats";
 
-// Main hook (V2 is now primary, V1 removed)
+// Primary hook exports
 export {
   useStreamCrafterV2 as useStreamCrafter,
   type UseStreamCrafterV2Options as UseStreamCrafterOptions,
@@ -41,7 +41,7 @@ export {
   useStreamCrafterV2,
   type UseStreamCrafterV2Options,
   type UseStreamCrafterV2Return,
-} from "./hooks/useStreamCrafterV2"; // Alias for backwards compat
+} from "./hooks/useStreamCrafterV2"; // Named export for direct imports
 
 // Audio Hooks
 export {
@@ -51,14 +51,14 @@ export {
   type AudioLevels,
 } from "./hooks/useAudioLevels";
 
-// Compositor Hook (Phase 3)
+// Compositor hook
 export {
   useCompositor,
   type UseCompositorOptions,
   type UseCompositorReturn,
 } from "./hooks/useCompositor";
 
-// Gateway Integration Hook (Phase 3.5)
+// Gateway integration hook
 export {
   useIngestEndpoints,
   type UseIngestEndpointsOptions,
@@ -88,7 +88,7 @@ export type {
   SourceType,
   ReconnectionState,
   ReconnectionConfig,
-  // Compositor types (Phase 3)
+  // Compositor types
   Scene,
   Layer,
   LayerTransform,
@@ -99,7 +99,7 @@ export type {
   RendererType,
   RendererStats,
   CompositorConfig,
-  // Ingest endpoint types (Phase 3.5)
+  // Ingest endpoint types
   IngestEndpoint,
   IngestEndpoints,
   IngestMetadata,

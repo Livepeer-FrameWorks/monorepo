@@ -209,13 +209,13 @@ func (s *CrawlScheduler) runCycle(ctx context.Context) {
 		return
 	}
 
-	// Phase 1: Expand sitemaps into individual page URLs (lightweight XML fetch).
+	// Expand sitemaps into individual page URLs with lightweight XML fetches.
 	sitemapPages := s.expandSitemaps(ctx, sources)
 
-	// Phase 2: Load all cached page state for priority scoring.
+	// Load cached page state for priority scoring.
 	cached := s.loadCachedPages(ctx)
 
-	// Phase 3: Build priority queue.
+	// Build the next crawl queue.
 	queue := BuildQueue(sources, cached, sitemapPages, time.Now(), s.interval)
 	total := queue.Total()
 	if total == 0 {
@@ -225,10 +225,10 @@ func (s *CrawlScheduler) runCycle(ctx context.Context) {
 	s.logger.WithField("total", total).Info("Crawl queue built")
 	crawlQueueSize.Set(float64(total))
 
-	// Phase 4: Persist sitemap metadata for newly discovered pages.
+	// Persist sitemap metadata for newly discovered pages.
 	s.persistSitemapMeta(ctx, sitemapPages, cached)
 
-	// Phase 5: Drain at steady rate.
+	// Drain the queue at the configured steady rate.
 	s.health.StartCycle()
 	s.drainQueue(ctx, queue)
 }

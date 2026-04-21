@@ -162,7 +162,7 @@ function getPrimaryVideoPipeline(): PipelineState | null {
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 const STATS_INTERVAL_MS = 250;
 
-// Frame dropping stats (Phase 2B)
+// Frame-dropping stats
 let _totalFramesDropped = 0;
 
 // Chrome-recommended decoder queue threshold.
@@ -432,7 +432,7 @@ async function configureVideoDecoder(
 ): Promise<void> {
   const track = pipeline.track;
 
-  // Handle JPEG codec separately via ImageDecoder (Phase 2C)
+  // JPEG frames are decoded through ImageDecoder instead of VideoDecoder.
   if (track.codec === "JPEG" || track.codec.toLowerCase() === "jpeg") {
     log("JPEG codec detected - will use ImageDecoder");
     pipeline.configured = true;
@@ -963,7 +963,7 @@ function decodeChunk(
   pipeline.stats.lastInputTimestamp = chunk.timestamp;
 
   try {
-    // Handle JPEG via ImageDecoder (Phase 2C)
+    // JPEG frames are decoded through ImageDecoder instead of VideoDecoder.
     const codec = pipeline.track.codec;
     if (codec === "JPEG" || codec.toLowerCase() === "jpeg") {
       decodeJpegFrame(pipeline, chunk);
@@ -1058,7 +1058,7 @@ function decodeChunk(
 }
 
 /**
- * Decode JPEG frame using ImageDecoder API (Phase 2C)
+ * Decode a JPEG frame with ImageDecoder.
  * ImageDecoder is simpler than VideoDecoder for still images
  */
 async function decodeJpegFrame(

@@ -540,7 +540,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	if req.GetClipHash() != "" {
 		clipHash = req.GetClipHash()
 	} else {
-		// Fallback: generate locally (legacy, should not happen with Commodore integration)
+		// Generate a hash locally when Commodore does not provide one.
 		var errHash error
 		clipHash, errHash = clips.GenerateClipHash(req.StreamInternalName, startMs, durationMs)
 		if errHash != nil {

@@ -3803,8 +3803,6 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 	return &pb.NodeResponse{Node: node}, nil
 }
 
-// UpdateNodeHealth removed - health tracking moved to Lookout
-
 // ResolveNodeFingerprint resolves a node identity from fingerprint data.
 // Lookup priority:
 // 1. Exact match by machine_id_sha256

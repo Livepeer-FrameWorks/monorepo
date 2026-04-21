@@ -360,7 +360,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 			TenantID    string `json:"tenant_id"`
 			ReferenceID string `json:"reference_id"`
 			ClusterID   string `json:"cluster_id"`
-			// Legacy fields for backwards compatibility
+			// Older checkout sessions may still include TierID in metadata.
 			TierID string `json:"tier_id"`
 		} `json:"metadata"`
 		AmountTotal int64  `json:"amount_total"`
@@ -372,7 +372,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 
 	purpose := CheckoutPurpose(sess.Metadata.Purpose)
 
-	// Backwards compatibility: if no purpose, infer from mode
+	// Older Stripe sessions may not include purpose in metadata.
 	if purpose == "" {
 		if sess.Mode == "subscription" {
 			purpose = PurposeSubscription

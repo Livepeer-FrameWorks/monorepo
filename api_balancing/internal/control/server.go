@@ -1157,9 +1157,8 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ProcessingJobResult:
 			if x.ProcessingJobResult.GetStatus() == "cache_update" {
-				// Best-effort cache refresh for processing fallback. The restarted
-				// push now reads its override locally in Helmsman, so this no longer
-				// needs to act as a cross-process ordering barrier.
+				// Refresh cached overrides before returning so the restarted push
+				// reads the latest value from Helmsman.
 				processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
 			} else {
 				go processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
@@ -2269,8 +2268,7 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 	// Replace HOST placeholder with actual hostname
 	dtscURI := strings.ReplaceAll(dtscTemplate, "HOST", hostname)
 
-	// For DVR readiness, we want the base URI without the $ placeholder
-	// The $ will be replaced with the actual stream name later
+	// Use the template's static prefix when checking DVR readiness.
 	baseDTSCURI := strings.ReplaceAll(dtscURI, "$", "")
 
 	// Remove trailing slash if present

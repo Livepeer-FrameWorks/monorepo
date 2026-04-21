@@ -11,9 +11,9 @@ export { TypedEventEmitter } from "./core/EventEmitter";
 export { DeviceManager } from "./core/DeviceManager";
 export { ScreenCapture } from "./core/ScreenCapture";
 export { WhipClient } from "./core/WhipClient";
-// IngestController (V2 is now the primary, V1 removed)
+// Ingest controller exports
 export { IngestControllerV2 as IngestController } from "./core/IngestControllerV2";
-export { IngestControllerV2 } from "./core/IngestControllerV2"; // Alias for backwards compat
+export { IngestControllerV2 } from "./core/IngestControllerV2"; // Named export for direct imports
 export {
   EncoderManager,
   createEncoderConfig,
@@ -56,11 +56,11 @@ export {
   type CongestionLevel,
 } from "./core/BitrateAdaptation";
 
-// Phase 2: Audio mixing and reconnection
+// Mixing and reconnection
 export { AudioMixer, type AudioProcessingConfig } from "./core/AudioMixer";
 export { ReconnectionManager, DEFAULT_RECONNECTION_CONFIG } from "./core/ReconnectionManager";
 
-// Phase 3.5: Gateway integration (ingest endpoint resolution)
+// Gateway integration
 export { IngestClient } from "./core/IngestClient";
 
 // Feature detection
@@ -92,7 +92,7 @@ export {
 // Media file playback
 export { MediaFileSource, type MediaFileSourceEvents } from "./core/MediaFileSource";
 
-// Phase 3: Compositor and scene management
+// Compositor and scene management
 export { SceneManager } from "./core/SceneManager";
 export { TextOverlaySource, type TextOverlayConfig } from "./core/TextOverlaySource";
 export {

@@ -272,8 +272,8 @@ func (s *Server) sendOnConnectNotification(ctx context.Context) {
 	}
 
 	if len(blockers) > 0 {
-		// Account needs setup - would send notification via MCP
-		// Note: The SDK handles notifications via the session, we log for now
+		// Account needs setup. Session-level notifications are handled by the SDK,
+		// so the server only logs the condition here.
 		s.logger.WithField("tenant_id", tenantID).
 			WithField("blockers", len(blockers)).
 			Info("MCP client connected with account setup required")

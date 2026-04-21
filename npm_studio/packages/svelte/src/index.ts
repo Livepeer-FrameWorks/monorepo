@@ -42,7 +42,7 @@ export {
   type StreamStatsStore,
 } from "./stores/streamStats.svelte";
 
-// Main store (V2 is now primary, V1 removed)
+// Primary context store exports
 export {
   createStreamCrafterContextV2 as createStreamCrafterContext,
   setStreamCrafterContextV2 as setStreamCrafterContext,
@@ -50,7 +50,7 @@ export {
   type StreamCrafterV2State as StreamCrafterState,
   type StreamCrafterContextV2Store as StreamCrafterContextStore,
 } from "./stores/streamCrafterContextV2";
-// Alias for backwards compat
+// Named exports for direct imports
 export {
   createStreamCrafterContextV2,
   setStreamCrafterContextV2,
@@ -66,7 +66,7 @@ export {
   type AudioLevelsStore,
 } from "./stores/audioLevels.svelte";
 
-// Compositor Store (Phase 3)
+// Compositor store
 export {
   createCompositorStore,
   type CompositorState,
@@ -74,7 +74,7 @@ export {
   type CreateCompositorStoreOptions,
 } from "./stores/compositor";
 
-// Gateway Integration Store (Phase 3.5)
+// Gateway integration store
 export {
   createIngestEndpointsStore,
   getIngestEndpointsStore,
@@ -100,7 +100,7 @@ export type {
   SourceType,
   ReconnectionState,
   ReconnectionConfig,
-  // Compositor types (Phase 3)
+  // Compositor types
   Scene,
   Layer,
   LayerTransform,

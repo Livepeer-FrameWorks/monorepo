@@ -122,7 +122,6 @@ hosts:
   <hostname>:
     external_ip: <public-ip>
     user: <ssh-user>
-    ssh_key: <path-to-private-key> # optional
     roles: [infrastructure, services] # optional
     labels: # optional
       environment: prod
@@ -132,9 +131,15 @@ hosts:
 
 - `external_ip` (required) - Public IP address used for SSH and DNS registration
 - `user` (required) - SSH username
-- `ssh_key` (optional) - Path to SSH private key
 - `roles` (optional) - Arbitrary tags used for human grouping
 - `labels` (optional) - Free-form metadata
+
+<Aside type="note">
+SSH authentication is resolved from the operator's machine — ssh-agent,
+`~/.ssh/config`, and default identities (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`).
+If `ssh <external_ip>` or `ssh frameworks-<hostname>` works for you locally,
+the CLI works. There is no `ssh_key` field in the manifest.
+</Aside>
 
 ---
 
@@ -187,12 +192,12 @@ Resolution priority:
 1. Explicit `cluster` field on the service
 2. Role match against cluster `roles`
 3. If only one cluster is defined, use it
-4. Fallback: `{type}-{profile}` (backward-compatible)
+4. Auto-generated `{type}-{profile}` when no `clusters` section is declared
 
 <Aside type="tip">
   If you omit the `clusters` section entirely, the CLI creates a single cluster with ID `{type}-
-  {profile}` (e.g., `cluster-production`). This is the legacy behavior and works for single-cluster
-  deployments.
+  {profile}` (e.g., `cluster-production`). Use this for single-cluster deployments; declare
+  `clusters` explicitly for anything more granular.
 </Aside>
 
 ---
@@ -465,12 +470,14 @@ fetch_cert: true
 nodes:
   - name: edge-us-east-1
     ssh: admin@203.0.113.10
-    ssh_key: ~/.ssh/id_ed25519
     subdomain: edge-us-east-1
     region: us-east
     apply_tune: true
     register_qm: true
 ```
+
+SSH auth for edge nodes resolves from the operator's machine. Pass `--ssh-key`
+on the `frameworks edge provision` command when an explicit key is needed.
 
 **Fields:**
 
@@ -486,7 +493,6 @@ Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive rem
 
 - `name` (required)
 - `ssh` (required) - `user@host`
-- `ssh_key` (optional)
 - `subdomain` (optional)
 - `region` (optional)
 - `apply_tune` (optional)

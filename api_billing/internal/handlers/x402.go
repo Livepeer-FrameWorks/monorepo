@@ -220,9 +220,8 @@ func (h *X402Handler) GetTenantDepositAddress(ctx context.Context, tenantID stri
 	return address, int32(index), true, nil
 }
 
-// GetOrCreateTenantX402Address is deprecated - use GetPlatformX402Address for x402
-// or GetTenantDepositAddress for direct crypto deposits.
-// Kept for backward compatibility during migration.
+// Deprecated: use GetPlatformX402Address for x402 or GetTenantDepositAddress
+// for direct crypto deposits.
 func (h *X402Handler) GetOrCreateTenantX402Address(ctx context.Context, tenantID string) (address string, derivationIndex int32, newlyCreated bool, err error) {
 	return h.GetTenantDepositAddress(ctx, tenantID)
 }
@@ -770,9 +769,8 @@ func (h *X402Handler) sendRawTransaction(ctx context.Context, network NetworkCon
 		return "", fmt.Errorf("failed to get gas price: %w", err)
 	}
 
-	// Build transaction
-	// For simplicity, using legacy transaction format
-	// Production should use EIP-1559
+	// Build a legacy gas-price transaction. This signer does not populate
+	// EIP-1559 fee fields yet.
 	gasLimit := uint64(150000) // Conservative estimate for transferWithAuthorization
 
 	chainId := big.NewInt(network.ChainID)

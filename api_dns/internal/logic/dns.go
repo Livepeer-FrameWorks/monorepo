@@ -384,8 +384,7 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	// 2. Filter for Nodes with External IPs
 	var activeIPs []string
 	for _, node := range nodesResp.Nodes {
-		// We only want nodes with external IPs
-		// Note: Status field was removed - all returned nodes are considered active
+		// ListHealthyNodesForDNS already filters to active nodes.
 		if node.ExternalIp != nil && *node.ExternalIp != "" {
 			activeIPs = append(activeIPs, *node.ExternalIp)
 		}
@@ -541,13 +540,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 
 	var lbID string
 	for _, lb := range lbs {
-		// Name is usually the display name, not the hostname, wait.
-		// Cloudflare API: Name is the user-friendly name.
-		// But usually for LBs, the "Name" IS the hostname in many contexts, or we filter by it.
-		// Wait, `CreateLoadBalancer` sets `Name`.
-		// The `LoadBalancer` struct doesn't have a separate "Hostname" field in my provider?
-		// Let's check provider/cloudflare/types.go if I can.
-		// Assuming Name == Hostname for now based on usage.
+		// CreateLoadBalancer stores the FQDN in Name, so compare against that field here.
 		if lb.Name == fqdn {
 			lbID = lb.ID
 			break

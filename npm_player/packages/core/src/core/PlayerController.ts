@@ -717,7 +717,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       // Ensure players are registered
       ensurePlayersRegistered();
 
-      // Step 1: Resolve endpoints
+      // Resolve playback endpoints before creating the stream client.
       await this.resolveEndpoints();
 
       // Guard against zombie operations (React Strict Mode cleanup)
@@ -731,7 +731,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         return;
       }
 
-      // Step 2: Start stream state polling (for live content)
+      // Start stream-state polling before attaching live playback.
       this.startStreamStatePolling();
 
       if (!this.streamInfo) {

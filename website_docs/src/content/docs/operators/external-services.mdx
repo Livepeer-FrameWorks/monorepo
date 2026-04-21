@@ -36,7 +36,7 @@ Auto-generated secrets use `crypto/rand` (64-char hex). The CLI generates them o
 
 During `frameworks cluster provision`, the CLI also provisions database users:
 
-- **Postgres/YugabyteDB**: Creates the `DATABASE_USER` role with `DATABASE_PASSWORD`, grants access to all configured databases
+- **Postgres/YugabyteDB**: Creates a per-database owner role for each database listed in the manifest (role name = database owner from the manifest), using `DATABASE_PASSWORD`. Each role has access only to its own database.
 - **ClickHouse**: Deploys `users.xml` with a `frameworks` user (password from `CLICKHOUSE_PASSWORD`) and a `readonly_user` (rate-limited, password from `CLICKHOUSE_READONLY_PASSWORD`)
 
 This ensures runtime services can connect with the same credentials the CLI provisioned.

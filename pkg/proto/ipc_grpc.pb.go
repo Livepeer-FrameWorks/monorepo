@@ -168,7 +168,7 @@ const (
 // - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
 // All producers MUST preserve the original payload (no rewriting).
 type DecklogServiceClient interface {
-	// Unified entrypoint for all events (unary is fine for now).
+	// Unified entrypoint for media-plane events.
 	SendEvent(ctx context.Context, in *MistTrigger, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Service-plane events (non-media).
 	SendServiceEvent(ctx context.Context, in *ServiceEvent, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -211,7 +211,7 @@ func (c *decklogServiceClient) SendServiceEvent(ctx context.Context, in *Service
 // - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
 // All producers MUST preserve the original payload (no rewriting).
 type DecklogServiceServer interface {
-	// Unified entrypoint for all events (unary is fine for now).
+	// Unified entrypoint for media-plane events.
 	SendEvent(context.Context, *MistTrigger) (*emptypb.Empty, error)
 	// Service-plane events (non-media).
 	SendServiceEvent(context.Context, *ServiceEvent) (*emptypb.Empty, error)

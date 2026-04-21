@@ -1,6 +1,6 @@
 /**
  * useCompositor Hook
- * React hook for controlling the compositor (Phase 3)
+ * React hook for controlling the compositor.
  *
  * Features:
  * - Scene management (create, delete, switch)

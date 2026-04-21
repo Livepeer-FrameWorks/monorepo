@@ -1573,7 +1573,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			pm.lastBwDown = currentDown
 			pm.lastPollTime = time.Now()
 		} else if bandwidth, ok := jsonData["bandwidth"].(map[string]any); ok {
-			// Fallback to old 'bandwidth' object (legacy)
+			// Older payloads report aggregate bandwidth under a nested object.
 			if up, ok := bandwidth["up"].(float64); ok {
 				nodeUpdate.UpSpeed = uint64(up)
 			}
@@ -1846,8 +1846,6 @@ func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge,
 		}
 	}
 }
-
-// parseOperationalMode removed (unused); see control.parseRequestedMode for mode parsing.
 
 func rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing string) []string {
 	var roles []string

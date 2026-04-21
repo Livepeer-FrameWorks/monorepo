@@ -3164,9 +3164,8 @@ func (x *MarketplaceClusterEntry) GetCreatedAt() *timestamppb.Timestamp {
 }
 
 type ListMarketplaceClustersRequest struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // Requesting tenant (for visibility filtering)
-	// Pricing filter removed - handled by Purser
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	TenantId      string                   `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // Requesting tenant (for visibility filtering)
 	Pagination    *CursorPaginationRequest `protobuf:"bytes,3,opt,name=pagination,proto3" json:"pagination,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

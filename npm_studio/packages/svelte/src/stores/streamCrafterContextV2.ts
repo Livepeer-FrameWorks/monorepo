@@ -1,6 +1,6 @@
 /**
  * StreamCrafter Context Store V2
- * Svelte 5 store with Phase 2 features:
+ * Svelte 5 store for the multi-source ingest controller:
  * - Multi-source support
  * - Audio mixing
  * - Quality switching

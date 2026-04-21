@@ -112,10 +112,9 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		return err
 	}
 
-	// Process based on event type using direct protobuf parsing
+	// Process each trigger using the canonical event names emitted by Decklog.
 	var err error
 	switch event.EventType {
-	// Unified naming (no legacy)
 	case "viewer_connect":
 		err = h.processViewerConnection(ctx, event, true)
 	case "viewer_disconnect":

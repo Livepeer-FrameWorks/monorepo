@@ -207,11 +207,7 @@ func main() {
 		logger.Info("Livepeer deposit monitor started")
 	}
 
-	// Setup router with unified monitoring (health/metrics only)
-	// NOTE: All billing/usage API routes removed - now handled via gRPC only.
-	// Gateway -> Purser gRPC for billing, tiers, invoices, payments, usage queries.
-	// Usage ingestion is via Kafka (Periscope -> billing.usage_reports -> JobManager)
-	// Webhooks are now routed through Gateway -> gRPC -> ProcessWebhook (keeps Purser internal)
+	// Expose health and metrics over HTTP; billing APIs are served over gRPC.
 	router := server.SetupServiceRouter(logger, "purser", healthChecker, metricsCollector)
 
 	// Start gRPC server in a goroutine

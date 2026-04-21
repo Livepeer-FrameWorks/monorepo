@@ -93,7 +93,7 @@
   let navigationStack = $state<NavItem[]>([{ kind: "root", name: "Schema" }]);
   let currentNav = $derived(navigationStack[navigationStack.length - 1]);
 
-  // Track expanded field for detail view (legacy, will be replaced by navigation)
+  // Field currently shown in the detail pane.
   let expandedField = $state<string | null>(null);
 
   // Template search state

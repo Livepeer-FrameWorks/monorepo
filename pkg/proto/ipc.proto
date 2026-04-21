@@ -27,7 +27,7 @@ service HelmsmanControl {
 // - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
 // All producers MUST preserve the original payload (no rewriting).
 service DecklogService {
-  // Unified entrypoint for all events (unary is fine for now).
+  // Unified entrypoint for media-plane events.
   rpc SendEvent(MistTrigger) returns (google.protobuf.Empty);
   // Service-plane events (non-media).
   rpc SendServiceEvent(ServiceEvent) returns (google.protobuf.Empty);

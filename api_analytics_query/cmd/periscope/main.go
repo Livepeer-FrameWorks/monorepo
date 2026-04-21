@@ -83,7 +83,7 @@ func main() {
 	taskScheduler.Start()
 	defer taskScheduler.Stop()
 
-	// Setup router with unified monitoring (health/metrics only - all API routes removed, now handled via gRPC)
+	// Expose health and metrics over HTTP; query APIs are served over gRPC.
 	router := server.SetupServiceRouter(logger, "periscope-query", healthChecker, metricsCollector)
 
 	// Start gRPC server in a goroutine

@@ -166,7 +166,6 @@ service NodeService {
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc ListHealthyNodesForDNS(ListHealthyNodesForDNSRequest) returns (ListHealthyNodesForDNSResponse);
   rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
-  // UpdateNodeHealth RPC removed - health tracking moved to Lookout
 
   // Resolve node fingerprint for identity binding
   // Source: pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest
@@ -393,8 +392,7 @@ message GetTenantsByClusterResponse {
 
 // Request to list all active tenant IDs (for billing job iteration)
 message ListActiveTenantsRequest {
-  // Empty for now - returns all active tenants
-  // Could add filters in future (e.g., billing_model, last_activity)
+  // Empty request: returns all active tenants.
 }
 
 // Response with tenant IDs for batch processing
@@ -642,7 +640,6 @@ message MarketplaceClusterEntry {
 
 message ListMarketplaceClustersRequest {
   string tenant_id = 1;  // Requesting tenant (for visibility filtering)
-  // Pricing filter removed - handled by Purser
   common.CursorPaginationRequest pagination = 3;
 }
 
@@ -895,8 +892,6 @@ message CreateNodeRequest {
   google.protobuf.Struct tags = 14;     // json:"tags,omitempty"
   google.protobuf.Struct metadata = 15; // json:"metadata,omitempty"
 }
-
-// UpdateNodeHealthRequest removed - health tracking moved to Lookout
 
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest (lines 180-190)
 message ResolveNodeFingerprintRequest {

@@ -273,7 +273,7 @@ export interface WorkerAudioMessage extends WorkerMessage {
 }
 
 // ============================================================================
-// Multi-Source Types (Phase 2)
+// Multi-Source Types
 // ============================================================================
 
 export type SourceType = "camera" | "screen" | "custom" | "media";
@@ -303,7 +303,7 @@ export interface SourceUpdatedEvent {
 }
 
 // ============================================================================
-// Audio Mixer Types (Phase 2)
+// Audio Mixer Types
 // ============================================================================
 
 export interface AudioMixerConfig {
@@ -326,7 +326,7 @@ export interface AudioSourceOptions {
 }
 
 // ============================================================================
-// Reconnection Types (Phase 2)
+// Reconnection Types
 // ============================================================================
 
 export interface ReconnectionConfig {
@@ -352,7 +352,7 @@ export interface ReconnectionEvents {
 }
 
 // ============================================================================
-// Extended Ingest Controller Types (Phase 2)
+// Extended Ingest Controller Types
 // ============================================================================
 
 export interface IngestControllerConfigV2 extends IngestControllerConfig {
@@ -388,7 +388,7 @@ export interface IngestStateContextV2 extends IngestStateContext {
 }
 
 // ============================================================================
-// Scene & Layer Types (Phase 3 - Compositor)
+// Scene & Layer Types
 // ============================================================================
 
 export interface Scene {
@@ -431,7 +431,7 @@ export interface CropConfig {
 }
 
 // ============================================================================
-// Layout Types (Phase 3 - Compositor)
+// Layout Types
 // ============================================================================
 
 export type LayoutMode =
@@ -482,7 +482,7 @@ export interface LayoutConfig {
 }
 
 // ============================================================================
-// Transition Types (Phase 3 - Compositor)
+// Transition Types
 // ============================================================================
 
 export type TransitionType =
@@ -512,7 +512,7 @@ export interface TransitionState {
 }
 
 // ============================================================================
-// Renderer Types (Phase 3 - Compositor)
+// Renderer Types
 // ============================================================================
 
 export type RendererType = "canvas2d" | "webgl" | "webgpu" | "auto";
@@ -545,7 +545,7 @@ export interface FilterConfig {
 }
 
 // ============================================================================
-// Compositor Configuration (Phase 3)
+// Compositor Configuration
 // ============================================================================
 
 export interface CompositorConfig {
@@ -584,7 +584,7 @@ export const DEFAULT_LAYER_TRANSFORM: LayerTransform = {
 };
 
 // ============================================================================
-// Compositor Worker Messages (Phase 3)
+// Compositor Worker Messages
 // ============================================================================
 
 /**
@@ -619,7 +619,7 @@ export type CompositorWorkerToMain =
   | { type: "error"; message: string };
 
 // ============================================================================
-// Scene Manager Events (Phase 3)
+// Scene Manager Events
 // ============================================================================
 
 export interface SceneManagerEvents {

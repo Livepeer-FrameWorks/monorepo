@@ -679,8 +679,8 @@ func clusterInPeers(peers []*pb.TenantClusterPeer, clusterID string) bool {
 	return false
 }
 
-// resolveFoghornForArtifact returns a Foghorn client routed to the artifact's origin cluster.
-// Falls back to the tenant's primary cluster if originClusterID is empty (legacy data).
+// resolveFoghornForArtifact returns a Foghorn client routed to the artifact's
+// origin cluster, or the tenant's primary cluster when the origin is unknown.
 func (s *CommodoreServer) resolveFoghornForArtifact(ctx context.Context, tenantID, originClusterID string) (*foghornclient.GRPCClient, error) {
 	if originClusterID == "" {
 		client, _, err := s.resolveFoghornForTenant(ctx, tenantID)
@@ -869,9 +869,6 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		}).Error("Database error resolving playback ID")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-
-	// Note: Status check removed - operational state now comes from Periscope (Data Plane)
-	// Foghorn handles real-time stream state through its own state management
 
 	resp := &pb.ResolvePlaybackIDResponse{
 		InternalName: internalName,

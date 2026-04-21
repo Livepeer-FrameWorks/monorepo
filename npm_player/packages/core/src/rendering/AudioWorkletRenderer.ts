@@ -245,9 +245,8 @@ export class AudioWorkletRenderer {
    * Note: This affects pitch. For pitch-corrected speed, a SoundTouch WASM would be needed.
    */
   setPlaybackRate(rate: number): void {
-    // AudioContext doesn't have a native playback rate.
-    // Speed changes are handled by the frame timing controller feeding samples at a different rate.
-    // This is a no-op for now — future work could integrate SoundTouch.
+    // AudioContext doesn't expose playback-rate control here. Speed changes come
+    // from the frame timing controller feeding samples at a different cadence.
     void rate;
   }
 

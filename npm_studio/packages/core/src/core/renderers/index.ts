@@ -207,7 +207,7 @@ export function getSupportedRenderers(): RendererType[] {
 export function getRecommendedRenderer(): RendererType {
   const supported = getSupportedRenderers();
 
-  // Prefer WebGL for now (WebGPU not ready for production)
+  // Prefer WebGL until the WebGPU renderer reaches feature parity.
   if (supported.includes("webgl")) {
     return "webgl";
   }

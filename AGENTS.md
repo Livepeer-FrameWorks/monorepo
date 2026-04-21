@@ -23,6 +23,7 @@
 | Multistreaming / push targets   | `docs/architecture/multistreaming.md`      |
 | UI design system                | `docs/standards/design-system.md`          |
 | Metrics naming/units            | `docs/standards/metrics.md`                |
+| Code comments policy            | `docs/standards/code-comments.md`          |
 | Deployment & ops                | `website_docs/src/content/docs/operators/` |
 | Dev runtime                     | `docker-compose.yml`                       |
 | Release pipeline                | `.github/workflows/release.yml`            |
@@ -118,17 +119,7 @@ Required flow:
 
 **Truth over appeasement** - Be honest about limitations; don't pretend stub services are implemented
 
-**No AI narration in comments**:
-
-- No `// Step 1:`, `// Phase 2:`, `// ========== SECTION ==========`
-- No `// Helper function for X` (function name should be clear)
-- No `// X was removed`, `// No longer needed`, `// Added in v2.0`
-- No obvious restatements: `// Check if user is authenticated` above `if user.isAuthenticated`
-
-Good comments explain WHY:
-
-- `// MistServer uses MD5(MD5(password) + challenge) for auth`
-- `// Registration triggers DNS sync as a side-effect`
+**Code comments**: explain current behavior, a non-obvious invariant, or why the code is written this way at this site. Never history, roadmap, inner monologue, or obvious restatement. See `docs/standards/code-comments.md`.
 
 **Avoid destructive commands without asking**: `git push --force`, deleting production data, modifying external repos
 

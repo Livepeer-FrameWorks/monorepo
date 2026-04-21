@@ -1,6 +1,6 @@
 /**
  * StreamCrafter V2
- * Vanilla JS API with Phase 2 features:
+ * Vanilla JS API for the multi-source ingest controller:
  * - Multi-source support
  * - Audio mixing
  * - Quality switching

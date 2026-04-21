@@ -1,6 +1,6 @@
 /**
  * useStreamCrafterV2 Hook
- * React hook with Phase 2 features:
+ * React hook for the multi-source ingest controller:
  * - Multi-source support
  * - Audio mixing
  * - Quality switching

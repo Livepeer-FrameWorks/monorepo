@@ -139,9 +139,7 @@ func main() {
 		logger.WithField("url", listmonkURL).Info("Listmonk client configured")
 	}
 
-	// Setup router with unified monitoring (health/metrics only)
-	// NOTE: All API routes removed - now handled via gRPC only.
-	// Gateway -> Commodore gRPC for all auth, streams, clips, DVR, etc.
+	// Expose health and metrics over HTTP; product APIs are served over gRPC.
 	app := server.SetupServiceRouter(logger, "commodore", healthChecker, metricsCollector)
 
 	// Start gRPC server in a goroutine

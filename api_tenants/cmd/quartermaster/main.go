@@ -133,14 +133,11 @@ func main() {
 		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
 	}
 
-	// Initialize handlers (for health poller)
+	// Initialize handlers used by the health poller.
 	handlers.Init(db, logger)
 
-	// Setup router with unified monitoring
+	// Expose health and metrics over HTTP; tenant and cluster APIs are served over gRPC.
 	router := server.SetupServiceRouter(logger, "quartermaster", healthChecker, metricsCollector)
-
-	// NOTE: All API routes removed - now handled via gRPC only.
-	// Gateway -> Quartermaster gRPC for all tenant, cluster, node, service operations.
 	router.GET("/internal/ingress-sites", func(c *gin.Context) {
 		if !requirePrivateInternalRequest(c) {
 			return

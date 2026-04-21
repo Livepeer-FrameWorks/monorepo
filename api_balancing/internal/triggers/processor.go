@@ -936,8 +936,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		}).Error("Failed to send stream ingest event to Decklog")
 	}
 
-	// NOTE: stream-start event no longer forwarded to Commodore (Control Plane separation)
-	// Operational state (status, timing) now tracked in Periscope via Decklog events
+	// Control-plane stream lifecycle is derived from Decklog events.
 
 	// Check if DVR recording is enabled for this stream and start it
 	if streamValidation.IsRecordingEnabled {
@@ -1442,8 +1441,7 @@ func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, e
 		pushOutStart.StreamId = &streamID
 	}
 
-	// NOTE: push_out_start event no longer forwarded to Commodore (Control Plane separation)
-	// Events flow through Decklog to Periscope for tracking
+	// Control-plane stream lifecycle is derived from Decklog events.
 
 	// Send enriched trigger to Decklog (Data Plane)
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
@@ -1571,8 +1569,7 @@ func (p *Processor) handleStreamBuffer(trigger *pb.MistTrigger) (string, bool, e
 		"node_id":          trigger.GetNodeId(),
 	}).Debug("Processing STREAM_BUFFER trigger")
 
-	// NOTE: stream-status event no longer forwarded to Commodore (Control Plane separation)
-	// Events flow through Decklog to Periscope for tracking
+	// Control-plane stream lifecycle is derived from Decklog events.
 
 	info := p.applyStreamContext(trigger, streamBuffer.GetStreamName())
 	if streamID := trigger.GetStreamId(); streamID != "" {
@@ -1622,8 +1619,7 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 		"node_id":       nodeID,
 	}).Debug("Processing STREAM_END trigger")
 
-	// NOTE: stream-end event no longer forwarded to Commodore (Control Plane separation)
-	// Events flow through Decklog to Periscope for tracking
+	// Control-plane stream lifecycle is derived from Decklog events.
 
 	_ = p.applyStreamContext(trigger, internalName)
 	streamEnd.NodeId = &nodeID
@@ -1813,8 +1809,7 @@ func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, e
 		"node_id":           nodeID,
 	}).Debug("Processing RECORDING_END trigger")
 
-	// NOTE: recording-status event no longer forwarded to Commodore (Control Plane separation)
-	// Events flow through Decklog to Periscope for tracking
+	// Control-plane recording lifecycle is derived from Decklog events.
 
 	_ = p.applyStreamContext(trigger, internalName)
 	if streamID := trigger.GetStreamId(); streamID != "" {

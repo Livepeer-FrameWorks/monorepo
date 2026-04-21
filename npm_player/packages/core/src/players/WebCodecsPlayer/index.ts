@@ -367,10 +367,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       return false;
     }
 
-    // Assume all codecs are available — real validation is async and runs in initialize()
-    // via checkCodecSupport(). Reference rawws.js:29-32 uses the same pattern:
-    // "for now, assume all codecs are available. we will perform the actual testing
-    //  in player buildup and nextCombo if it's bad"
+    // Real codec validation is async and runs in initialize() via checkCodecSupport(),
+    // so preselection starts optimistic here.
     const playableTracks: Record<string, boolean> = {};
 
     for (const track of streamInfo.meta.tracks) {
@@ -675,7 +673,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
    * The canvas overlays the hidden video element.
    */
   private setupDirectRendering(container: HTMLElement, video: HTMLVideoElement): void {
-    // Hide the video element (kept for IPlayer interface contract)
+    // Keep the backing video element mounted for the player contract, but render from canvas.
     video.style.position = "absolute";
     video.style.width = "0";
     video.style.height = "0";
@@ -1825,8 +1823,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         await pipeline.generator.waitForInit();
       }
 
-      // For polyfill, writable stays on main thread
-      // Worker would need different architecture - for now, fall back to main thread decode
+      // The polyfill exposes its writable on the main thread, so decode stays there.
       this.log("Using MediaStreamTrackGenerator polyfill - main thread decode");
 
       // Add track to stream directly
@@ -2138,7 +2135,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   }
 
   // ============================================================================
-  // Media Properties (Phase 2A)
+  // Media Properties
   // ============================================================================
 
   /**

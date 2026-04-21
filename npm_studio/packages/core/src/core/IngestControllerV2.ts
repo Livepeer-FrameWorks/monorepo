@@ -1,6 +1,6 @@
 /**
  * Ingest Controller V2
- * Enhanced orchestrator with Phase 2 features:
+ * Orchestrator for multi-source ingest:
  * - Multi-source support (camera + screen simultaneously)
  * - Audio mixing
  * - Quality profile switching
@@ -64,11 +64,11 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private lastStats: IngestStats | null = null;
   private statsInFlight = false;
 
-  // Phase 3: Compositor
+  // Compositor
   private sceneManager: SceneManager | null = null;
   private compositorBaseConfig: CompositorConfig | null = null;
 
-  // Phase 2.5: WebCodecs Encoder (Path C)
+  // WebCodecs encoder
   private encoderManager: EncoderManager | null = null;
   private encoderOverrides: EncoderOverrides = {};
   private videoCodecFamily: VideoCodecFamily = "h264";
@@ -379,9 +379,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   }
 
   /**
-   * Update output stream from all sources
-   * Phase 2: Primary video + mixed audio
-   * Phase 3: Compositor for multi-source composition
+   * Update the output stream from active sources.
+   * Uses the compositor when enabled, otherwise falls back to the primary
+   * video track plus mixed audio.
    */
   private updateOutputStreamFromSources(): void {
     const sourcesArray = Array.from(this.sources.values()).filter((s) => s.active);
@@ -394,7 +394,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     // Create new output stream
     const tracks: MediaStreamTrack[] = [];
 
-    // Phase 3: Use compositor when enabled
+    // Use compositor output when available.
     if (this.sceneManager && this.sceneManager.isInitialized()) {
       const compositedTrack = this.sceneManager.getOutputTrack();
       if (compositedTrack) {
@@ -1294,7 +1294,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   }
 
   // ============================================================================
-  // Phase 3: Compositor
+  // Compositor
   // ============================================================================
 
   /**
