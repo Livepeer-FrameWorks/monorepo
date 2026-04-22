@@ -92,7 +92,13 @@ func (k *KafkaProvisioner) provisionController(ctx context.Context, host invento
 		controllerPort = 9093
 	}
 
-	playbook := ansible.GenerateKafkaControllerPlaybook(config.Version, nodeID, hostID, controllerPort, bootstrapServers, clusterID, initialControllers)
+	amd, arm, err := resolveLinuxArtifacts("kafka", config.Metadata)
+	if err != nil {
+		return err
+	}
+	downloadSnippet := archSwitchedDownloadSnippet(amd, arm, "/tmp/kafka.tgz")
+
+	playbook := ansible.GenerateKafkaControllerPlaybook(config.Version, nodeID, hostID, controllerPort, bootstrapServers, clusterID, initialControllers, downloadSnippet)
 	return k.executePlaybook(ctx, host, playbook)
 }
 
@@ -120,7 +126,13 @@ func (k *KafkaProvisioner) provisionBroker(ctx context.Context, host inventory.H
 		port = 9092
 	}
 
-	playbook := ansible.GenerateKafkaBrokerPlaybook(config.Version, nodeID, hostID, port, bootstrapServers, clusterID, config.Metadata)
+	amd, arm, err := resolveLinuxArtifacts("kafka", config.Metadata)
+	if err != nil {
+		return err
+	}
+	downloadSnippet := archSwitchedDownloadSnippet(amd, arm, "/tmp/kafka.tgz")
+
+	playbook := ansible.GenerateKafkaBrokerPlaybook(config.Version, nodeID, hostID, port, bootstrapServers, clusterID, config.Metadata, downloadSnippet)
 	return k.executePlaybook(ctx, host, playbook)
 }
 
@@ -152,7 +164,13 @@ func (k *KafkaProvisioner) provisionCombined(ctx context.Context, host inventory
 		port = 9092
 	}
 
-	playbook := ansible.GenerateKafkaKRaftPlaybook(config.Version, brokerID, hostID, port, controllerPort, controllerQuorum, clusterID, config.Metadata)
+	amd, arm, err := resolveLinuxArtifacts("kafka", config.Metadata)
+	if err != nil {
+		return err
+	}
+	downloadSnippet := archSwitchedDownloadSnippet(amd, arm, "/tmp/kafka.tgz")
+
+	playbook := ansible.GenerateKafkaKRaftPlaybook(config.Version, brokerID, hostID, port, controllerPort, controllerQuorum, clusterID, config.Metadata, downloadSnippet)
 	return k.executePlaybook(ctx, host, playbook)
 }
 

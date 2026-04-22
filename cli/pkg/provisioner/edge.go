@@ -15,6 +15,7 @@ import (
 
 	"frameworks/cli/internal/preflight"
 	"frameworks/cli/internal/templates"
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
@@ -663,21 +664,23 @@ func (e *EdgeProvisioner) installEdgeTelemetryLinux(ctx context.Context, host in
 		tokenArg = " -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token"
 	}
 
-	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "linux", remoteArch, nil)
+	artifact, err := resolveVMAgentArtifact(config.Version, "linux", remoteArch, nil)
 	if err != nil {
 		return err
 	}
-	installScript := fmt.Sprintf(`#!/bin/bash
+	installScript := `#!/bin/bash
 set -e
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir" /tmp/vmagent-edge.tar.gz' EXIT
-wget -q -O /tmp/vmagent-edge.tar.gz "%s"
+__FRAMEWORKS_VMAGENT_DOWNLOAD__
 tar -xzf /tmp/vmagent-edge.tar.gz -C "$tmpdir"
 bin=$(find "$tmpdir" -type f \( -name vmagent-prod -o -name vmagent \) | head -n 1)
 test -n "$bin"
 install -m 0755 "$bin" /opt/frameworks/vmagent-edge/vmagent
 chown -R frameworks:frameworks /opt/frameworks/vmagent-edge /var/log/frameworks
-`, binaryURL)
+`
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_VMAGENT_DOWNLOAD__",
+		ansible.RobustDownloadSnippet(artifact.URL, artifact.Checksum, "/tmp/vmagent-edge.tar.gz"), 1)
 	if result, err := e.ExecuteSudoScript(ctx, host, installScript); err != nil || result.ExitCode != 0 {
 		stderr := ""
 		if result != nil {
@@ -724,7 +727,7 @@ func (e *EdgeProvisioner) installEdgeTelemetryDarwin(ctx context.Context, host i
 		}
 	}
 
-	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "darwin", remoteArch, nil)
+	artifact, err := resolveVMAgentArtifact(config.Version, "darwin", remoteArch, nil)
 	if err != nil {
 		return err
 	}
@@ -733,12 +736,14 @@ set -e
 mkdir -p %[1]s/vmagent-edge %[2]s
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir" /tmp/vmagent-edge.tar.gz' EXIT
-curl -sSfL -o /tmp/vmagent-edge.tar.gz "%[3]s"
+__FRAMEWORKS_VMAGENT_DOWNLOAD__
 tar -xzf /tmp/vmagent-edge.tar.gz -C "$tmpdir"
 bin=$(find "$tmpdir" -type f \( -name vmagent-prod -o -name vmagent \) | head -n 1)
 test -n "$bin"
 install -m 0755 "$bin" %[1]s/vmagent-edge/vmagent
-`, dirs.baseDir, dirs.logDir, binaryURL)
+`, dirs.baseDir, dirs.logDir)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_VMAGENT_DOWNLOAD__",
+		ansible.RobustDownloadSnippet(artifact.URL, artifact.Checksum, "/tmp/vmagent-edge.tar.gz"), 1)
 	if result, err := runScript(installScript); err != nil || result.ExitCode != 0 {
 		stderr := ""
 		if result != nil {

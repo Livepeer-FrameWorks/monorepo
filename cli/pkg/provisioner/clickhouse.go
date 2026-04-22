@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/health"
@@ -42,8 +43,12 @@ func (c *ClickHouseProvisioner) Provision(ctx context.Context, host inventory.Ho
 		return nil // Already provisioned
 	}
 
-	// Install ClickHouse via shell script
 	version := config.Version
+	amd, arm, err := resolveLinuxArtifacts("clickhouse", config.Metadata)
+	if err != nil {
+		return err
+	}
+
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -e
 
@@ -85,66 +90,12 @@ REPO
 
 install_clickhouse_arch() {
   pacman -Syu --noconfirm --needed curl tar
-
-  checksum_value() {
-    awk 'NF { print $1; exit }' "$1"
-  }
-
-  verify_checksum() {
-    local algorithm="$1" file="$2" checksum_file="$3" expected actual
-    expected="$(checksum_value "$checksum_file")"
-    [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
-    case "$algorithm" in
-      sha512)
-        if command -v sha512sum >/dev/null 2>&1; then
-          actual="$(sha512sum "$file" | awk '{print $1}')"
-        elif command -v shasum >/dev/null 2>&1; then
-          actual="$(shasum -a 512 "$file" | awk '{print $1}')"
-        else
-          actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
-        fi
-        ;;
-      *)
-        echo "unsupported checksum algorithm: $algorithm" >&2
-        exit 1
-        ;;
-    esac
-    [ "$actual" = "$expected" ] || {
-      echo "checksum mismatch for $file" >&2
-      echo "expected: $expected" >&2
-      echo "actual:   $actual" >&2
-      exit 1
-    }
-  }
-
-  arch=$(uname -m)
-  case "$arch" in
-    x86_64) ch_arch="amd64" ;;
-    aarch64|arm64) ch_arch="arm64" ;;
-    *)
-      echo "unsupported architecture: $arch" >&2
-      exit 1
-      ;;
-  esac
-
-  if [ -n "$VERSION" ]; then
-    archive="clickhouse-common-static-${VERSION}-${ch_arch}.tgz"
-  else
-    archive=$(curl -fsSL https://packages.clickhouse.com/tgz/stable/ | grep -o "clickhouse-common-static-[0-9][^\"']*-${ch_arch}\.tgz" | sort -V | tail -n 1)
-  fi
-  if [ -z "$archive" ]; then
-    echo "failed to resolve clickhouse static archive" >&2
-    exit 1
-  fi
-
-  curl -fsSL -o /tmp/clickhouse.tgz "https://packages.clickhouse.com/tgz/stable/${archive}"
-  curl -fsSL -o /tmp/clickhouse.tgz.sha512 "https://packages.clickhouse.com/tgz/stable/${archive}.sha512"
-  verify_checksum sha512 /tmp/clickhouse.tgz /tmp/clickhouse.tgz.sha512
+__FRAMEWORKS_CH_DOWNLOAD__
   topdir=$(tar -tzf /tmp/clickhouse.tgz | head -n 1 | cut -d/ -f1)
   rm -rf "/tmp/${topdir}"
   tar -xzf /tmp/clickhouse.tgz -C /tmp
   "/tmp/${topdir}/usr/bin/clickhouse" install --noninteractive --user clickhouse --group clickhouse
-  rm -rf "/tmp/${topdir}" /tmp/clickhouse.tgz /tmp/clickhouse.tgz.sha512
+  rm -rf "/tmp/${topdir}" /tmp/clickhouse.tgz
 }
 
 if command -v apt-get >/dev/null; then
@@ -169,6 +120,7 @@ fi
 # Wait for server to be ready
 sleep 5
 `, version)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_CH_DOWNLOAD__", archSwitchedDownloadSnippet(amd, arm, "/tmp/clickhouse.tgz"), 1)
 
 	result, err := c.ExecuteScript(ctx, host, installScript)
 	if err != nil {

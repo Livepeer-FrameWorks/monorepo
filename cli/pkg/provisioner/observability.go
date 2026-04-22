@@ -640,24 +640,10 @@ func resolveObservabilityImage(version, explicitImage, serviceName, fallback str
 	return "", fmt.Errorf("no image available for %s", serviceName)
 }
 
-func resolveVMAgentBinaryURL(version, osName, arch string, metadata map[string]interface{}) (string, error) {
-	info, err := resolveObservabilityServiceInfo(version, "vmagent", metadata)
-	if err == nil && info != nil {
-		if binaryURL, binaryErr := info.GetBinaryURL(osName, arch); binaryErr == nil && strings.TrimSpace(binaryURL) != "" {
-			return binaryURL, nil
-		}
-		if fallback := fallbackVMAgentBinaryURL(info.Version, osName, arch); fallback != "" {
-			return fallback, nil
-		}
-	}
-
-	if fallback := fallbackVMAgentBinaryURL(imageVersion(defaultVMAgentImage), osName, arch); fallback != "" {
-		return fallback, nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return "", fmt.Errorf("vmagent binary URL not available for %s/%s", osName, arch)
+// resolveVMAgentArtifact returns the vmagent artifact (url + checksum) from
+// the release manifest pinned to channel, for the requested os/arch pair.
+func resolveVMAgentArtifact(channel, osName, arch string, metadata map[string]any) (*gitops.Artifact, error) {
+	return resolveInfraArtifactFromChannel("vmagent", osName+"-"+arch, channel, metadata)
 }
 
 func resolveObservabilityServiceInfo(version, serviceName string, metadata map[string]interface{}) (*gitops.ServiceInfo, error) {
@@ -672,42 +658,6 @@ func resolveObservabilityServiceInfo(version, serviceName string, metadata map[s
 		return nil, err
 	}
 	return info, nil
-}
-
-func fallbackVMAgentBinaryURL(version, osName, arch string) string {
-	normalized := normalizeVictoriaMetricsVersion(version)
-	if normalized == "" || osName == "" || arch == "" {
-		return ""
-	}
-	return fmt.Sprintf(
-		"https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/%[1]s/vmutils-%[2]s-%[3]s-%[1]s.tar.gz",
-		normalized,
-		osName,
-		arch,
-	)
-}
-
-func normalizeVictoriaMetricsVersion(version string) string {
-	version = strings.TrimSpace(version)
-	if version == "" {
-		return ""
-	}
-	if !strings.HasPrefix(version, "v") {
-		return "v" + version
-	}
-	return version
-}
-
-func imageVersion(image string) string {
-	image = strings.TrimSpace(image)
-	if image == "" {
-		return ""
-	}
-	idx := strings.LastIndex(image, ":")
-	if idx == -1 || idx < strings.LastIndex(image, "/") {
-		return ""
-	}
-	return image[idx+1:]
 }
 
 func validateRunningContainer(ctx context.Context, base *BaseProvisioner, host inventory.Host, serviceName string) error {

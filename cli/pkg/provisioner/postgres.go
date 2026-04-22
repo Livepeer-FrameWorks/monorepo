@@ -63,7 +63,13 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, host inventory.Host
 		hostID = "localhost"
 	}
 
-	playbook := ansible.GeneratePostgresPlaybook(hostID, config.Version, databases)
+	amd, arm, err := resolveLinuxArtifacts("postgresql", config.Metadata)
+	if err != nil {
+		return err
+	}
+	downloadSnippet := archSwitchedDownloadSnippet(amd, arm, "/tmp/postgresql.tar.bz2")
+
+	playbook := ansible.GeneratePostgresPlaybook(hostID, config.Version, databases, downloadSnippet)
 
 	inv := ansible.NewInventory()
 	inv.AddHost(&ansible.InventoryHost{

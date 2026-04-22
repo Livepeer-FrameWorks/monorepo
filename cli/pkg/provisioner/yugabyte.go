@@ -7,6 +7,7 @@ import (
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
+	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -173,11 +174,34 @@ func (y *YugabyteProvisioner) Provision(ctx context.Context, host inventory.Host
 		Region:          region,
 		Zone:            zone,
 	}
-	masterConf := string(BuildYugabyteMasterConf(params))
-	tserverConf := string(BuildYugabyteTServerConf(params))
-	masterUnit := string(BuildYugabyteMasterUnit())
-	tserverUnit := string(BuildYugabyteTServerUnit())
 
+	amd, arm, err := resolveLinuxArtifacts("yugabyte", config.Metadata)
+	if err != nil {
+		return err
+	}
+
+	installScript := buildYugabyteInstallScript(
+		version, nodeID,
+		string(BuildYugabyteMasterConf(params)),
+		string(BuildYugabyteTServerConf(params)),
+		string(BuildYugabyteMasterUnit()),
+		string(BuildYugabyteTServerUnit()),
+		amd, arm,
+	)
+
+	result, err := y.ExecuteScript(ctx, host, installScript)
+	if err != nil {
+		return fmt.Errorf("failed to install YugabyteDB: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("YugabyteDB installation failed: %s", result.Stderr)
+	}
+
+	fmt.Printf("✓ YugabyteDB node %d provisioned on %s\n", nodeID, host.ExternalIP)
+	return nil
+}
+
+func buildYugabyteInstallScript(version string, nodeID int, masterConf, tserverConf, masterUnit, tserverUnit string, amd, arm *gitops.Artifact) string {
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -e
 
@@ -233,25 +257,10 @@ if [ -f /sys/kernel/mm/transparent_hugepage/enabled ]; then
   echo never > /sys/kernel/mm/transparent_hugepage/defrag
 fi
 
-# Ensure curl is available (yugabyte installer downloads the tarball).
-if ! command -v curl >/dev/null 2>&1; then
-  if command -v apt-get >/dev/null; then
-    apt-get -o DPkg::Lock::Timeout=300 update -qq
-    apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl
-  elif command -v dnf >/dev/null; then
-    dnf install -y -q curl
-  elif command -v yum >/dev/null; then
-    yum install -y -q curl
-  elif command -v pacman >/dev/null; then
-    pacman -Syu --noconfirm --needed curl
-  fi
-fi
+__FRAMEWORKS_INSTALL_CURL__
 
-# Clock sync — critical for distributed consensus. Skip if any time-sync
-# daemon is already active; install chrony only when none is.
 __FRAMEWORKS_INSTALL_TIMESYNC__
 
-# Download and install YugabyteDB
 INSTALL_DIR="/opt/yugabyte"
 DATA_DIR="/var/lib/yugabyte/data"
 CONF_DIR="/opt/yugabyte/conf"
@@ -261,23 +270,11 @@ mkdir -p "$DATA_DIR" "$CONF_DIR" "$CORES_DIR"
 
 if [ ! -x "$INSTALL_DIR/bin/yb-master" ]; then
   echo "Downloading YugabyteDB $VERSION..."
-  ARCH=$(uname -m)
-  case "$ARCH" in
-    x86_64)  YB_ARCH="x86_64" ;;
-    aarch64) YB_ARCH="aarch64" ;;
-    *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-  esac
-
-  TARBALL="yugabyte-${VERSION}-linux-${YB_ARCH}.tar.gz"
-  URL="https://downloads.yugabyte.com/releases/${VERSION}/${TARBALL}"
-
   cd /tmp
-  curl -sSLO "$URL"
+__FRAMEWORKS_YB_DOWNLOAD__
   mkdir -p "$INSTALL_DIR"
-  tar xzf "$TARBALL" -C "$INSTALL_DIR" --strip-components=1
-  rm -f "$TARBALL"
-
-  # Post-install
+  tar xzf /tmp/yugabyte.tar.gz -C "$INSTALL_DIR" --strip-components=1
+  rm -f /tmp/yugabyte.tar.gz
   "$INSTALL_DIR/bin/post_install.sh" 2>/dev/null || true
 fi
 
@@ -293,30 +290,23 @@ printf '%%s' "${TSERVER_UNIT_CONTENT}" > /etc/systemd/system/yb-tserver.service
 
 systemctl daemon-reload
 
-# Start yb-master first
 systemctl enable --now yb-master
 echo "Waiting for yb-master to start..."
 sleep 5
 
-# Then start yb-tserver
 systemctl enable --now yb-tserver
 echo "Waiting for yb-tserver to start..."
 sleep 5
 
 echo "YugabyteDB node $NODE_ID provisioned"
 `, version, nodeID, masterConf, tserverConf, masterUnit, tserverUnit)
+
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_CURL__", ansible.EnsureCurlInstallSnippet, 1)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_TIMESYNC__", ansible.TimeSyncInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_YB_DOWNLOAD__",
+		archSwitchedDownloadSnippet(amd, arm, "/tmp/yugabyte.tar.gz"), 1)
 
-	result, err := y.ExecuteScript(ctx, host, installScript)
-	if err != nil {
-		return fmt.Errorf("failed to install YugabyteDB: %w", err)
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("YugabyteDB installation failed: %s", result.Stderr)
-	}
-
-	fmt.Printf("✓ YugabyteDB node %d provisioned on %s\n", nodeID, host.ExternalIP)
-	return nil
+	return installScript
 }
 
 // Validate checks if YugabyteDB YSQL is healthy

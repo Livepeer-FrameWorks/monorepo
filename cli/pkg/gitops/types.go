@@ -16,19 +16,21 @@ type Manifest struct {
 
 // ExternalDependency represents an external dependency (e.g. MistServer)
 type ExternalDependency struct {
-	Name       string                 `yaml:"name"`
-	Image      string                 `yaml:"image,omitempty"`
-	Digest     string                 `yaml:"digest,omitempty"`
-	ReleaseURL string                 `yaml:"release_url,omitempty"`
-	ReleaseTag string                 `yaml:"release_tag,omitempty"`
-	Binaries   []ExternalBinary       `yaml:"binaries,omitempty"`
-	Raw        map[string]interface{} `yaml:",inline"` // Catch any additional fields
+	Name       string           `yaml:"name"`
+	Image      string           `yaml:"image,omitempty"`
+	Digest     string           `yaml:"digest,omitempty"`
+	ReleaseURL string           `yaml:"release_url,omitempty"`
+	ReleaseTag string           `yaml:"release_tag,omitempty"`
+	Binaries   []ExternalBinary `yaml:"binaries,omitempty"`
+	Raw        map[string]any   `yaml:",inline"` // Catch any additional fields
 }
 
-// ExternalBinary represents a binary artifact for an external dependency
+// ExternalBinary represents a binary artifact for an external dependency.
+// Checksum format is "<algo>:<hex>" with algo in {sha256, sha512}.
 type ExternalBinary struct {
 	Name      string `yaml:"name"`
 	URL       string `yaml:"url,omitempty"`
+	Checksum  string `yaml:"checksum,omitempty"`
 	SizeBytes int64  `yaml:"size_bytes,omitempty"`
 }
 
@@ -46,11 +48,13 @@ type NativeBinary struct {
 	Artifacts []Artifact `yaml:"artifacts"`
 }
 
-// Artifact represents a single binary artifact
+// Artifact represents a single binary artifact.
+// Checksum format is "<algo>:<hex>" with algo in {sha256, sha512}.
 type Artifact struct {
 	Arch      string `yaml:"arch"` // linux-amd64, linux-arm64, etc.
 	File      string `yaml:"file"` // filename
 	URL       string `yaml:"url,omitempty"`
+	Checksum  string `yaml:"checksum,omitempty"`
 	SizeBytes int64  `yaml:"size_bytes,omitempty"`
 }
 
@@ -62,13 +66,36 @@ type InterfaceEntry struct {
 	StaticBundle string `yaml:"static_bundle,omitempty"`
 }
 
-// InfrastructureEntry represents infrastructure requirements
+// InfrastructureEntry represents an infrastructure component pinned by a
+// platform release. Artifacts is populated for components that raw-download
+// a tarball/binary instead of pulling from an OS package manager or Docker
+// registry.
 type InfrastructureEntry struct {
-	Name           string `yaml:"name"`
-	TestedVersion  string `yaml:"tested_version"`
-	MinimumVersion string `yaml:"minimum_version"`
-	Image          string `yaml:"image"`
-	Notes          string `yaml:"notes,omitempty"`
+	Name      string     `yaml:"name"`
+	Version   string     `yaml:"version"`
+	Image     string     `yaml:"image,omitempty"`
+	Artifacts []Artifact `yaml:"artifacts,omitempty"`
+}
+
+// GetInfrastructure looks up an infrastructure entry by name.
+func (m *Manifest) GetInfrastructure(name string) *InfrastructureEntry {
+	for i := range m.Infrastructure {
+		if m.Infrastructure[i].Name == name {
+			return &m.Infrastructure[i]
+		}
+	}
+	return nil
+}
+
+// GetArtifact returns the artifact for the given arch (linux-amd64, linux-arm64, ...),
+// or nil if the infra entry has no artifact for that arch.
+func (e *InfrastructureEntry) GetArtifact(arch string) *Artifact {
+	for i := range e.Artifacts {
+		if e.Artifacts[i].Arch == arch {
+			return &e.Artifacts[i]
+		}
+	}
+	return nil
 }
 
 // ServiceInfo holds release information for a service (helper struct)
@@ -99,6 +126,18 @@ func (d *ExternalDependency) GetBinaryURL(arch string) string {
 		}
 	}
 	return ""
+}
+
+// GetBinary returns the full binary record for the given os-arch key, or nil
+// if the dependency carries no artifact for that arch. Prefer this over
+// GetBinaryURL when the caller also needs the checksum.
+func (d *ExternalDependency) GetBinary(arch string) *ExternalBinary {
+	for i := range d.Binaries {
+		if d.Binaries[i].Name == arch {
+			return &d.Binaries[i]
+		}
+	}
+	return nil
 }
 
 // FetchOptions configures manifest fetching

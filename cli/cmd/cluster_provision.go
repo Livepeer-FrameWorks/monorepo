@@ -1513,6 +1513,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		copy(repos, releaseRepos)
 		config.Metadata["gitops_repositories"] = repos
 	}
+	if manifest != nil {
+		config.Metadata["platform_channel"] = manifest.ResolvedChannel()
+	}
 
 	// Copy runtime data
 	for k, v := range runtimeData {

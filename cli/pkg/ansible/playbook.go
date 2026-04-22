@@ -208,7 +208,7 @@ WantedBy=multi-user.target
 `, dataDir)
 }
 
-func GeneratePostgresPlaybook(host, version string, databases []string) *Playbook {
+func GeneratePostgresPlaybook(host, version string, databases []string, downloadSnippet string) *Playbook {
 	playbook := NewPlaybook("Provision PostgreSQL", host)
 	normalizedVersion := strings.TrimSpace(version)
 	switch normalizedVersion {
@@ -234,37 +234,6 @@ FRAMEWORKS_PG_MANAGED_HBA=$(cat <<'FRAMEWORKS_PG_HBA_EOF'
 FRAMEWORKS_PG_HBA_EOF
 )
 
-checksum_value() {
-  awk 'NF { print $1; exit }' "$1"
-}
-
-verify_checksum() {
-  local algorithm="$1" file="$2" checksum_file="$3" expected actual
-  expected="$(checksum_value "$checksum_file")"
-  [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
-  case "$algorithm" in
-    sha256)
-      if command -v sha256sum >/dev/null 2>&1; then
-        actual="$(sha256sum "$file" | awk '{print $1}')"
-      elif command -v shasum >/dev/null 2>&1; then
-        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
-      else
-        actual="$(openssl dgst -sha256 "$file" | awk '{print $NF}')"
-      fi
-      ;;
-    *)
-      echo "unsupported checksum algorithm: $algorithm" >&2
-      exit 1
-      ;;
-  esac
-  [ "$actual" = "$expected" ] || {
-    echo "checksum mismatch for $file" >&2
-    echo "expected: $expected" >&2
-    echo "actual:   $actual" >&2
-    exit 1
-  }
-}
-
 if command -v apt-get >/dev/null 2>&1; then
   apt-get -o DPkg::Lock::Timeout=300 update
   if [ -n "$PG_MAJOR" ]; then
@@ -284,16 +253,14 @@ elif command -v dnf >/dev/null 2>&1; then
     dnf install -y gcc make readline-devel zlib-devel openssl-devel libicu-devel curl tar
     PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
     if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
-      curl -fsSL -o /tmp/postgresql.tar.bz2 "https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/postgresql-${POSTGRES_VERSION}.tar.bz2"
-      curl -fsSL -o /tmp/postgresql.tar.bz2.sha256 "https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/postgresql-${POSTGRES_VERSION}.tar.bz2.sha256"
-      verify_checksum sha256 /tmp/postgresql.tar.bz2 /tmp/postgresql.tar.bz2.sha256
+__FRAMEWORKS_PG_DOWNLOAD__
       rm -rf "/tmp/postgresql-${POSTGRES_VERSION}"
       tar -xjf /tmp/postgresql.tar.bz2 -C /tmp
       cd "/tmp/postgresql-${POSTGRES_VERSION}"
       ./configure --prefix="${PGPREFIX}"
       make -j"$(nproc)"
       make install
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2 /tmp/postgresql.tar.bz2.sha256
+      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2
     fi
     ln -sfn "${PGPREFIX}" /opt/postgresql
     install -d -m 0700 -o postgres -g postgres /var/lib/postgresql/data
@@ -337,16 +304,14 @@ elif command -v yum >/dev/null 2>&1; then
     yum install -y gcc make readline-devel zlib-devel openssl-devel libicu-devel curl tar
     PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
     if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
-      curl -fsSL -o /tmp/postgresql.tar.bz2 "https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/postgresql-${POSTGRES_VERSION}.tar.bz2"
-      curl -fsSL -o /tmp/postgresql.tar.bz2.sha256 "https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/postgresql-${POSTGRES_VERSION}.tar.bz2.sha256"
-      verify_checksum sha256 /tmp/postgresql.tar.bz2 /tmp/postgresql.tar.bz2.sha256
+__FRAMEWORKS_PG_DOWNLOAD__
       rm -rf "/tmp/postgresql-${POSTGRES_VERSION}"
       tar -xjf /tmp/postgresql.tar.bz2 -C /tmp
       cd "/tmp/postgresql-${POSTGRES_VERSION}"
       ./configure --prefix="${PGPREFIX}"
       make -j"$(nproc)"
       make install
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2 /tmp/postgresql.tar.bz2.sha256
+      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2
     fi
     ln -sfn "${PGPREFIX}" /opt/postgresql
     install -d -m 0700 -o postgres -g postgres /var/lib/postgresql/data
@@ -390,16 +355,14 @@ elif command -v pacman >/dev/null 2>&1; then
     pacman -Syu --noconfirm --needed base-devel curl icu krb5 openssl readline zlib
     PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
     if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
-      curl -fsSL -o /tmp/postgresql.tar.bz2 "https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/postgresql-${POSTGRES_VERSION}.tar.bz2"
-      curl -fsSL -o /tmp/postgresql.tar.bz2.sha256 "https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/postgresql-${POSTGRES_VERSION}.tar.bz2.sha256"
-      verify_checksum sha256 /tmp/postgresql.tar.bz2 /tmp/postgresql.tar.bz2.sha256
+__FRAMEWORKS_PG_DOWNLOAD__
       rm -rf "/tmp/postgresql-${POSTGRES_VERSION}"
       tar -xjf /tmp/postgresql.tar.bz2 -C /tmp
       cd "/tmp/postgresql-${POSTGRES_VERSION}"
       ./configure --prefix="${PGPREFIX}"
       make -j"$(nproc)"
       make install
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2 /tmp/postgresql.tar.bz2.sha256
+      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2
     fi
     ln -sfn "${PGPREFIX}" /opt/postgresql
     install -d -m 0700 -o postgres -g postgres /var/lib/postgres/data
@@ -456,6 +419,7 @@ systemctl enable postgresql
 systemctl restart postgresql
 %s
 `, normalizedVersion, managedConf, managedHBA, postgresDatabaseBootstrapCommands(databases))
+	installScript = strings.ReplaceAll(installScript, "__FRAMEWORKS_PG_DOWNLOAD__", downloadSnippet)
 
 	play := Play{
 		Name:        "Install and configure PostgreSQL",
@@ -632,7 +596,9 @@ WantedBy=multi-user.target
 }
 
 // GenerateKafkaKRaftPlaybook creates an Ansible playbook for Kafka in KRaft mode (no ZooKeeper).
-func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port int, controllerPort int, controllerQuorum string, clusterID string, metadata map[string]any) *Playbook {
+// downloadSnippet must be a bash fragment that fetches the kafka tarball to /tmp/kafka.tgz
+// and verifies its checksum. Callers build it via the provisioner-side artifact resolver.
+func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port int, controllerPort int, controllerQuorum string, clusterID string, metadata map[string]any, downloadSnippet string) *Playbook {
 	playbook := NewPlaybook("Provision Kafka", host)
 	if port == 0 {
 		port = 9092
@@ -680,37 +646,6 @@ BROKER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_UNIT_EOF'
 FRAMEWORKS_KAFKA_UNIT_EOF
 )
 
-checksum_value() {
-  awk 'NF { print $1; exit }' "$1"
-}
-
-verify_checksum() {
-  local algorithm="$1" file="$2" checksum_file="$3" expected actual
-  expected="$(checksum_value "$checksum_file")"
-  [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
-  case "$algorithm" in
-    sha512)
-      if command -v sha512sum >/dev/null 2>&1; then
-        actual="$(sha512sum "$file" | awk '{print $1}')"
-      elif command -v shasum >/dev/null 2>&1; then
-        actual="$(shasum -a 512 "$file" | awk '{print $1}')"
-      else
-        actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
-      fi
-      ;;
-    *)
-      echo "unsupported checksum algorithm: $algorithm" >&2
-      exit 1
-      ;;
-  esac
-  [ "$actual" = "$expected" ] || {
-    echo "checksum mismatch for $file" >&2
-    echo "expected: $expected" >&2
-    echo "actual:   $actual" >&2
-    exit 1
-  }
-}
-
 shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/sbin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
@@ -720,13 +655,13 @@ id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
 
 mkdir -p /opt /etc/kafka /var/lib/kafka/logs
 if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
-  rm -rf /opt/kafka /tmp/kafka_2.13-${KAFKA_VERSION}
-  curl -fsSL -o /tmp/kafka.tgz "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz"
-  curl -fsSL -o /tmp/kafka.tgz.sha512 "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz.sha512"
-  verify_checksum sha512 /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+  rm -rf /opt/kafka
+__FRAMEWORKS_KAFKA_DOWNLOAD__
+  topdir=$(tar -tzf /tmp/kafka.tgz | head -n1 | cut -d/ -f1)
+  rm -rf "/tmp/${topdir}"
   tar -xzf /tmp/kafka.tgz -C /tmp
-  mv /tmp/kafka_2.13-${KAFKA_VERSION} /opt/kafka
-  rm -f /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+  mv "/tmp/${topdir}" /opt/kafka
+  rm -f /tmp/kafka.tgz
 fi
 
 printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka/server.properties
@@ -743,6 +678,7 @@ chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
 `, kafkaVersion, clusterID, serverProps, brokerUnit)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
 
 	play := Play{
 		Name:        "Install and configure Kafka",
@@ -775,7 +711,8 @@ systemctl daemon-reload
 }
 
 // GenerateKafkaControllerPlaybook creates an Ansible playbook for a dedicated KRaft controller.
-func GenerateKafkaControllerPlaybook(version string, nodeID int, host string, controllerPort int, bootstrapServers string, clusterID string, initialControllers string) *Playbook {
+// downloadSnippet is the bash fragment that fetches /tmp/kafka.tgz and verifies its checksum.
+func GenerateKafkaControllerPlaybook(version string, nodeID int, host string, controllerPort int, bootstrapServers string, clusterID string, initialControllers string, downloadSnippet string) *Playbook {
 	playbook := NewPlaybook("Provision Kafka Controller", host)
 	if controllerPort == 0 {
 		controllerPort = 9093
@@ -806,37 +743,6 @@ CTRL_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_CTRL_UNIT_EOF'
 FRAMEWORKS_KAFKA_CTRL_UNIT_EOF
 )
 
-checksum_value() {
-  awk 'NF { print $1; exit }' "$1"
-}
-
-verify_checksum() {
-  local algorithm="$1" file="$2" checksum_file="$3" expected actual
-  expected="$(checksum_value "$checksum_file")"
-  [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
-  case "$algorithm" in
-    sha512)
-      if command -v sha512sum >/dev/null 2>&1; then
-        actual="$(sha512sum "$file" | awk '{print $1}')"
-      elif command -v shasum >/dev/null 2>&1; then
-        actual="$(shasum -a 512 "$file" | awk '{print $1}')"
-      else
-        actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
-      fi
-      ;;
-    *)
-      echo "unsupported checksum algorithm: $algorithm" >&2
-      exit 1
-      ;;
-  esac
-  [ "$actual" = "$expected" ] || {
-    echo "checksum mismatch for $file" >&2
-    echo "expected: $expected" >&2
-    echo "actual:   $actual" >&2
-    exit 1
-  }
-}
-
 shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/sbin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
@@ -846,13 +752,13 @@ id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
 
 mkdir -p /opt /etc/kafka-controller /var/lib/kafka-controller/logs
 if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
-  rm -rf /opt/kafka /tmp/kafka_2.13-${KAFKA_VERSION}
-  curl -fsSL -o /tmp/kafka.tgz "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz"
-  curl -fsSL -o /tmp/kafka.tgz.sha512 "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz.sha512"
-  verify_checksum sha512 /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+  rm -rf /opt/kafka
+__FRAMEWORKS_KAFKA_DOWNLOAD__
+  topdir=$(tar -tzf /tmp/kafka.tgz | head -n1 | cut -d/ -f1)
+  rm -rf "/tmp/${topdir}"
   tar -xzf /tmp/kafka.tgz -C /tmp
-  mv /tmp/kafka_2.13-${KAFKA_VERSION} /opt/kafka
-  rm -f /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+  mv "/tmp/${topdir}" /opt/kafka
+  rm -f /tmp/kafka.tgz
 fi
 
 printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka-controller/server.properties
@@ -870,6 +776,7 @@ chown -R kafka:kafka /opt/kafka /etc/kafka-controller /var/lib/kafka-controller
 systemctl daemon-reload
 `, kafkaVersion, clusterID, initialControllers, serverProps, ctrlUnit)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
 
 	play := Play{
 		Name:        "Install and configure Kafka Controller",
@@ -902,7 +809,8 @@ systemctl daemon-reload
 }
 
 // GenerateKafkaBrokerPlaybook creates an Ansible playbook for a broker-only Kafka node (dedicated controller mode).
-func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port int, bootstrapServers string, clusterID string, metadata map[string]any) *Playbook {
+// downloadSnippet is the bash fragment that fetches /tmp/kafka.tgz and verifies its checksum.
+func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port int, bootstrapServers string, clusterID string, metadata map[string]any, downloadSnippet string) *Playbook {
 	playbook := NewPlaybook("Provision Kafka Broker", host)
 	if port == 0 {
 		port = 9092
@@ -946,37 +854,6 @@ BROKER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_BROKER_UNIT_EOF'
 FRAMEWORKS_KAFKA_BROKER_UNIT_EOF
 )
 
-checksum_value() {
-  awk 'NF { print $1; exit }' "$1"
-}
-
-verify_checksum() {
-  local algorithm="$1" file="$2" checksum_file="$3" expected actual
-  expected="$(checksum_value "$checksum_file")"
-  [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
-  case "$algorithm" in
-    sha512)
-      if command -v sha512sum >/dev/null 2>&1; then
-        actual="$(sha512sum "$file" | awk '{print $1}')"
-      elif command -v shasum >/dev/null 2>&1; then
-        actual="$(shasum -a 512 "$file" | awk '{print $1}')"
-      else
-        actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
-      fi
-      ;;
-    *)
-      echo "unsupported checksum algorithm: $algorithm" >&2
-      exit 1
-      ;;
-  esac
-  [ "$actual" = "$expected" ] || {
-    echo "checksum mismatch for $file" >&2
-    echo "expected: $expected" >&2
-    echo "actual:   $actual" >&2
-    exit 1
-  }
-}
-
 shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/sbin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
@@ -986,13 +863,13 @@ id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
 
 mkdir -p /opt /etc/kafka /var/lib/kafka/logs
 if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
-  rm -rf /opt/kafka /tmp/kafka_2.13-${KAFKA_VERSION}
-  curl -fsSL -o /tmp/kafka.tgz "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz"
-  curl -fsSL -o /tmp/kafka.tgz.sha512 "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_2.13-${KAFKA_VERSION}.tgz.sha512"
-  verify_checksum sha512 /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+  rm -rf /opt/kafka
+__FRAMEWORKS_KAFKA_DOWNLOAD__
+  topdir=$(tar -tzf /tmp/kafka.tgz | head -n1 | cut -d/ -f1)
+  rm -rf "/tmp/${topdir}"
   tar -xzf /tmp/kafka.tgz -C /tmp
-  mv /tmp/kafka_2.13-${KAFKA_VERSION} /opt/kafka
-  rm -f /tmp/kafka.tgz /tmp/kafka.tgz.sha512
+  mv "/tmp/${topdir}" /opt/kafka
+  rm -f /tmp/kafka.tgz
 fi
 
 printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka/server.properties
@@ -1010,6 +887,7 @@ chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
 `, kafkaVersion, clusterID, serverProps, brokerUnit)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
 
 	play := Play{
 		Name:        "Install and configure Kafka Broker",

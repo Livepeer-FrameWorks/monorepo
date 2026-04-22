@@ -186,6 +186,11 @@ func (z *ZookeeperProvisioner) provisionNative(ctx context.Context, host invento
 	zooCfgContent := string(BuildZookeeperConfig(port, serverLines))
 	systemdUnit := string(BuildZookeeperSystemdUnit())
 
+	amd, arm, err := resolveLinuxArtifacts("zookeeper", config.Metadata)
+	if err != nil {
+		return err
+	}
+
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
 
@@ -200,37 +205,6 @@ SYSTEMD_UNIT_CONTENT=$(cat <<'FRAMEWORKS_ZOO_UNIT_EOF'
 FRAMEWORKS_ZOO_UNIT_EOF
 )
 
-checksum_value() {
-  awk 'NF { print $1; exit }' "$1"
-}
-
-verify_checksum() {
-  local algorithm="$1" file="$2" checksum_file="$3" expected actual
-  expected="$(checksum_value "$checksum_file")"
-  [ -n "$expected" ] || { echo "missing checksum in $checksum_file" >&2; exit 1; }
-  case "$algorithm" in
-    sha512)
-      if command -v sha512sum >/dev/null 2>&1; then
-        actual="$(sha512sum "$file" | awk '{print $1}')"
-      elif command -v shasum >/dev/null 2>&1; then
-        actual="$(shasum -a 512 "$file" | awk '{print $1}')"
-      else
-        actual="$(openssl dgst -sha512 "$file" | awk '{print $NF}')"
-      fi
-      ;;
-    *)
-      echo "unsupported checksum algorithm: $algorithm" >&2
-      exit 1
-      ;;
-  esac
-  [ "$actual" = "$expected" ] || {
-    echo "checksum mismatch for $file" >&2
-    echo "expected: $expected" >&2
-    echo "actual:   $actual" >&2
-    exit 1
-  }
-}
-
 shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/sbin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
@@ -241,12 +215,10 @@ id -u zookeeper >/dev/null 2>&1 || useradd -r -g zookeeper -s "$shell" zookeeper
 mkdir -p /opt /etc/zookeeper /var/lib/zookeeper/data /var/lib/zookeeper/log
 if [ ! -x /opt/zookeeper/bin/zkServer.sh ]; then
   rm -rf /opt/zookeeper /tmp/apache-zookeeper-${VERSION}-bin
-  curl -fsSL -o /tmp/zookeeper.tgz "https://downloads.apache.org/zookeeper/zookeeper-${VERSION}/apache-zookeeper-${VERSION}-bin.tar.gz"
-  curl -fsSL -o /tmp/zookeeper.tgz.sha512 "https://downloads.apache.org/zookeeper/zookeeper-${VERSION}/apache-zookeeper-${VERSION}-bin.tar.gz.sha512"
-  verify_checksum sha512 /tmp/zookeeper.tgz /tmp/zookeeper.tgz.sha512
+__FRAMEWORKS_ZK_DOWNLOAD__
   tar -xzf /tmp/zookeeper.tgz -C /tmp
   mv /tmp/apache-zookeeper-${VERSION}-bin /opt/zookeeper
-  rm -f /tmp/zookeeper.tgz /tmp/zookeeper.tgz.sha512
+  rm -f /tmp/zookeeper.tgz
 fi
 
 printf '%%s' "${ZOO_CFG_CONTENT}" > /etc/zookeeper/zoo.cfg
@@ -262,6 +234,7 @@ systemctl daemon-reload
 systemctl enable --now frameworks-zookeeper
 `, version, serverID, zooCfgContent, systemdUnit)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", ansible.EnsureCurlInstallSnippet+ansible.EnsureJavaRuntimeInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_ZK_DOWNLOAD__", archSwitchedDownloadSnippet(amd, arm, "/tmp/zookeeper.tgz"), 1)
 
 	result, err := z.ExecuteScript(ctx, host, installScript)
 	if err != nil {
