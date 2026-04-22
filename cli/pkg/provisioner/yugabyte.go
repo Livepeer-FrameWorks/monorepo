@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
@@ -232,17 +233,23 @@ if [ -f /sys/kernel/mm/transparent_hugepage/enabled ]; then
   echo never > /sys/kernel/mm/transparent_hugepage/defrag
 fi
 
-# Install NTP (chrony) for clock sync — critical for distributed consensus
-if command -v apt-get >/dev/null; then
-  apt-get -o DPkg::Lock::Timeout=300 update -qq && apt-get -o DPkg::Lock::Timeout=300 install -y -qq chrony curl >/dev/null 2>&1
-elif command -v yum >/dev/null; then
-  yum install -y -q chrony curl >/dev/null 2>&1
-elif command -v dnf >/dev/null; then
-  dnf install -y -q chrony curl >/dev/null 2>&1
-elif command -v pacman >/dev/null; then
-  pacman -Syu --noconfirm --needed chrony curl >/dev/null 2>&1
+# Ensure curl is available (yugabyte installer downloads the tarball).
+if ! command -v curl >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null; then
+    apt-get -o DPkg::Lock::Timeout=300 update -qq
+    apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl
+  elif command -v dnf >/dev/null; then
+    dnf install -y -q curl
+  elif command -v yum >/dev/null; then
+    yum install -y -q curl
+  elif command -v pacman >/dev/null; then
+    pacman -Syu --noconfirm --needed curl
+  fi
 fi
-systemctl enable --now chronyd 2>/dev/null || systemctl enable --now chrony 2>/dev/null || true
+
+# Clock sync — critical for distributed consensus. Skip if any time-sync
+# daemon is already active; install chrony only when none is.
+__FRAMEWORKS_INSTALL_TIMESYNC__
 
 # Download and install YugabyteDB
 INSTALL_DIR="/opt/yugabyte"
@@ -298,6 +305,7 @@ sleep 5
 
 echo "YugabyteDB node $NODE_ID provisioned"
 `, version, nodeID, masterConf, tserverConf, masterUnit, tserverUnit)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_TIMESYNC__", ansible.TimeSyncInstallSnippet, 1)
 
 	result, err := y.ExecuteScript(ctx, host, installScript)
 	if err != nil {

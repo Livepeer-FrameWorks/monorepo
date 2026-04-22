@@ -714,21 +714,7 @@ verify_checksum() {
 shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/sbin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
-
-if command -v apt-get >/dev/null 2>&1; then
-  apt-get -o DPkg::Lock::Timeout=300 update
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y curl ca-certificates default-jre-headless
-elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y curl java-17-openjdk-headless
-elif command -v yum >/dev/null 2>&1; then
-  yum install -y curl java-17-openjdk-headless
-elif command -v pacman >/dev/null 2>&1; then
-  pacman -Syu --noconfirm --needed curl jre-openjdk-headless
-else
-  echo "unsupported package manager" >&2
-  exit 1
-fi
-
+__FRAMEWORKS_INSTALL_JAVA__
 getent group kafka >/dev/null || groupadd --system kafka
 id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
 
@@ -756,6 +742,7 @@ printf '%%s' "${BROKER_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka.ser
 chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
 `, kafkaVersion, clusterID, serverProps, brokerUnit)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
 
 	play := Play{
 		Name:        "Install and configure Kafka",
@@ -853,21 +840,7 @@ verify_checksum() {
 shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/sbin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
-
-if command -v apt-get >/dev/null 2>&1; then
-  apt-get -o DPkg::Lock::Timeout=300 update
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y curl ca-certificates default-jre-headless
-elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y curl java-17-openjdk-headless
-elif command -v yum >/dev/null 2>&1; then
-  yum install -y curl java-17-openjdk-headless
-elif command -v pacman >/dev/null 2>&1; then
-  pacman -Syu --noconfirm --needed curl jre-openjdk-headless
-else
-  echo "unsupported package manager" >&2
-  exit 1
-fi
-
+__FRAMEWORKS_INSTALL_JAVA__
 getent group kafka >/dev/null || groupadd --system kafka
 id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
 
@@ -896,6 +869,7 @@ printf '%%s' "${CTRL_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka-contr
 chown -R kafka:kafka /opt/kafka /etc/kafka-controller /var/lib/kafka-controller
 systemctl daemon-reload
 `, kafkaVersion, clusterID, initialControllers, serverProps, ctrlUnit)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
 
 	play := Play{
 		Name:        "Install and configure Kafka Controller",
@@ -1006,21 +980,7 @@ verify_checksum() {
 shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/sbin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
-
-if command -v apt-get >/dev/null 2>&1; then
-  apt-get -o DPkg::Lock::Timeout=300 update
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y curl ca-certificates default-jre-headless
-elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y curl java-17-openjdk-headless
-elif command -v yum >/dev/null 2>&1; then
-  yum install -y curl java-17-openjdk-headless
-elif command -v pacman >/dev/null 2>&1; then
-  pacman -Syu --noconfirm --needed curl jre-openjdk-headless
-else
-  echo "unsupported package manager" >&2
-  exit 1
-fi
-
+__FRAMEWORKS_INSTALL_JAVA__
 getent group kafka >/dev/null || groupadd --system kafka
 id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
 
@@ -1049,6 +1009,7 @@ printf '%%s' "${BROKER_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka.ser
 chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
 `, kafkaVersion, clusterID, serverProps, brokerUnit)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
 
 	play := Play{
 		Name:        "Install and configure Kafka Broker",

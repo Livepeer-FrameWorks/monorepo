@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
@@ -233,21 +234,7 @@ verify_checksum() {
 shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/sbin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
-
-if command -v apt-get >/dev/null 2>&1; then
-  apt-get -o DPkg::Lock::Timeout=300 update
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y curl ca-certificates default-jre-headless
-elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y curl java-17-openjdk-headless
-elif command -v yum >/dev/null 2>&1; then
-  yum install -y curl java-17-openjdk-headless
-elif command -v pacman >/dev/null 2>&1; then
-  pacman -Syu --noconfirm --needed curl jre-openjdk-headless
-else
-  echo "unsupported package manager" >&2
-  exit 1
-fi
-
+__FRAMEWORKS_INSTALL_JAVA__
 getent group zookeeper >/dev/null || groupadd --system zookeeper
 id -u zookeeper >/dev/null 2>&1 || useradd -r -g zookeeper -s "$shell" zookeeper
 
@@ -274,6 +261,7 @@ chown -R zookeeper:zookeeper /opt/zookeeper /etc/zookeeper /var/lib/zookeeper
 systemctl daemon-reload
 systemctl enable --now frameworks-zookeeper
 `, version, serverID, zooCfgContent, systemdUnit)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", ansible.EnsureCurlInstallSnippet+ansible.EnsureJavaRuntimeInstallSnippet, 1)
 
 	result, err := z.ExecuteScript(ctx, host, installScript)
 	if err != nil {
