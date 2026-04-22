@@ -3,7 +3,6 @@ package provisioner
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
@@ -16,14 +15,20 @@ import (
 // ClickHouseProvisioner provisions ClickHouse
 type ClickHouseProvisioner struct {
 	*BaseProvisioner
-	ch CHExecutor
+	ch       CHExecutor
+	executor *ansible.Executor
 }
 
 // NewClickHouseProvisioner creates a new ClickHouse provisioner
 func NewClickHouseProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (*ClickHouseProvisioner, error) {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		return nil, fmt.Errorf("create ansible executor: %w", err)
+	}
 	p := &ClickHouseProvisioner{
 		BaseProvisioner: NewBaseProvisioner("clickhouse", pool),
 		ch:              &DirectCHExecutor{},
+		executor:        executor,
 	}
 	for _, opt := range opts {
 		opt.applyClickHouse(p)
@@ -36,108 +41,134 @@ func (c *ClickHouseProvisioner) Detect(ctx context.Context, host inventory.Host)
 	return c.CheckExists(ctx, host, "clickhouse")
 }
 
-// Provision installs ClickHouse
+// Provision installs ClickHouse using declarative Ansible tasks. Every distro
+// follows the same pinned-artifact path: fetch the vendor tarball whose URL +
+// checksum come from the release manifest, extract it, and let the bundled
+// `clickhouse install` helper bootstrap /etc, /var/lib, users, and the
+// systemd unit. Runs every apply — same-version reruns are changed=0 via
+// get_url checksum match + version-keyed unarchive sentinel + install
+// sentinel; version bumps rotate both sentinels so the host converges to
+// the pinned version.
 func (c *ClickHouseProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Check if already installed
-	state, err := c.Detect(ctx, host)
-	if err == nil && state.Exists && state.Running {
-		return nil // Already provisioned
-	}
-
-	version := config.Version
-	amd, arm, err := resolveLinuxArtifacts("clickhouse", config.Metadata)
+	family, err := c.DetectDistroFamily(ctx, host)
 	if err != nil {
-		return err
+		return fmt.Errorf("detect distro family: %w", err)
+	}
+	switch family {
+	case "debian", "rhel", "arch":
+	default:
+		return fmt.Errorf("clickhouse: unsupported distro family %q", family)
 	}
 
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-
-__FRAMEWORKS_TAR_HELPERS__
-
-VERSION="%s"
-if [ "$VERSION" = "stable" ]; then
-  VERSION=""
-fi
-
-install_clickhouse_apt() {
-  apt-get -o DPkg::Lock::Timeout=300 update
-  apt-get -o DPkg::Lock::Timeout=300 install -y apt-transport-https ca-certificates curl gnupg
-  mkdir -p /etc/apt/keyrings
-  curl -fsSL https://packages.clickhouse.com/CLICKHOUSE-KEY.GPG | gpg --dearmor -o /etc/apt/keyrings/clickhouse.gpg
-  echo "deb [signed-by=/etc/apt/keyrings/clickhouse.gpg] https://packages.clickhouse.com/deb stable main" > /etc/apt/sources.list.d/clickhouse.list
-  apt-get -o DPkg::Lock::Timeout=300 update
-  if [ -n "$VERSION" ]; then
-    apt-get -o DPkg::Lock::Timeout=300 install -y clickhouse-server="$VERSION" clickhouse-client="$VERSION"
-  else
-    apt-get -o DPkg::Lock::Timeout=300 install -y clickhouse-server clickhouse-client
-  fi
-}
-
-install_clickhouse_yum() {
-  PKG_MGR="$1"
-  cat >/etc/yum.repos.d/clickhouse.repo <<'REPO'
-[clickhouse]
-name=ClickHouse
-baseurl=https://packages.clickhouse.com/rpm/stable/
-enabled=1
-gpgcheck=1
-gpgkey=https://packages.clickhouse.com/rpm/stable/repodata/repomd.xml.key
-REPO
-  if [ -n "$VERSION" ]; then
-    "$PKG_MGR" install -y "clickhouse-server-$VERSION" "clickhouse-client-$VERSION"
-  else
-    "$PKG_MGR" install -y clickhouse-server clickhouse-client
-  fi
-}
-
-install_clickhouse_arch() {
-  pacman -Syu --noconfirm --needed curl tar
-__FRAMEWORKS_CH_DOWNLOAD__
-  extract_tarball_to /tmp/clickhouse.tgz /tmp/clickhouse-install
-  /tmp/clickhouse-install/usr/bin/clickhouse install --noninteractive --user clickhouse --group clickhouse
-  rm -rf /tmp/clickhouse-install /tmp/clickhouse.tgz
-}
-
-if command -v apt-get >/dev/null; then
-  install_clickhouse_apt
-elif command -v dnf >/dev/null; then
-  install_clickhouse_yum dnf
-elif command -v yum >/dev/null; then
-  install_clickhouse_yum yum
-elif command -v pacman >/dev/null; then
-  install_clickhouse_arch
-else
-  echo "Unsupported package manager"
-  exit 1
-fi
-
-if command -v systemctl >/dev/null; then
-  systemctl enable --now clickhouse-server
-else
-  /usr/bin/clickhouse-server start
-fi
-
-# Wait for server to be ready
-sleep 5
-`, version)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_TAR_HELPERS__", ansible.SafeTarballExtractSnippet, 1)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_CH_DOWNLOAD__", archSwitchedDownloadSnippet(amd, arm, "/tmp/clickhouse.tgz"), 1)
-
-	result, err := c.ExecuteScript(ctx, host, installScript)
-	if err != nil {
-		return fmt.Errorf("failed to install ClickHouse: %w", err)
+	_, remoteArch, archErr := c.DetectRemoteArch(ctx, host)
+	if archErr != nil {
+		return fmt.Errorf("detect remote arch: %w", archErr)
+	}
+	artifact, artifactErr := resolveInfraArtifactFromChannel("clickhouse", "linux-"+remoteArch, platformChannelFromMetadata(config.Metadata), config.Metadata)
+	if artifactErr != nil {
+		return artifactErr
 	}
 
-	if result.ExitCode != 0 {
-		return fmt.Errorf("ClickHouse installation failed: %s", result.Stderr)
+	tasks := clickhouseInstallTasks(artifact.URL, artifact.Checksum)
+	tasks = append(tasks, ansible.TaskSystemdService("clickhouse-server", ansible.SystemdOpts{
+		State:        "started",
+		Enabled:      ansible.BoolPtr(true),
+		DaemonReload: true,
+	}))
+
+	playbook := &ansible.Playbook{
+		Name:  "Provision ClickHouse",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Provision ClickHouse",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: true,
+				Tasks:       tasks,
+			},
+		},
+	}
+
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": c.sshPool.DefaultKeyPath(),
+		},
+	})
+
+	result, execErr := c.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("ansible execution failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("ansible playbook failed\nOutput: %s", result.Output)
 	}
 
 	return nil
 }
 
-// Validate checks if ClickHouse is healthy
+// clickhouseInstallTasks installs ClickHouse from the pinned vendor tarball
+// (release-manifest-pinned). Tarball wraps a single
+// `clickhouse-common-static-<version>-<arch>/` top dir; --strip-components=1
+// drops it so the inner usr/bin/clickhouse lands at
+// /tmp/clickhouse-install/usr/bin/clickhouse. Works identically on Debian,
+// RHEL, and Arch — `clickhouse install` bootstraps everything distro-specific.
+func clickhouseInstallTasks(artifactURL, artifactChecksum string) []ansible.Task {
+	// Sentinels rotate with the pinned artifact identity so version bumps
+	// trigger re-extract + re-install instead of silently skipping.
+	extractSentinel := ansible.ArtifactSentinel("/tmp/clickhouse-install", artifactChecksum+artifactURL)
+	installSentinel := ansible.ArtifactSentinel("/var/lib/clickhouse", artifactChecksum+artifactURL)
+	return []ansible.Task{
+		ansible.TaskPackage("curl", ansible.PackagePresent),
+		ansible.TaskPackage("tar", ansible.PackagePresent),
+		{
+			Name:   "create /tmp/clickhouse-install",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/tmp/clickhouse-install", "state": "directory", "mode": "0755"},
+		},
+		// Tarball + extract dir are both intentionally left in /tmp so
+		// subsequent same-version applies short-circuit: get_url skips via
+		// checksum match, unarchive skips via creates: gate.
+		ansible.TaskGetURL(artifactURL, "/tmp/clickhouse.tgz", artifactChecksum),
+		ansible.TaskUnarchive("/tmp/clickhouse.tgz", "/tmp/clickhouse-install", extractSentinel,
+			ansible.UnarchiveOpts{StripComponents: 1}),
+		ansible.TaskShell("touch "+extractSentinel, ansible.ShellOpts{Creates: extractSentinel}),
+		// Vendor's `clickhouse install` bootstraps /etc, /var/lib, users, and
+		// the systemd unit. Version-keyed sentinel so a pin bump re-runs it.
+		ansible.TaskShell(
+			"/tmp/clickhouse-install/usr/bin/clickhouse install --noninteractive --user clickhouse --group clickhouse && "+
+				"install -d -o clickhouse -g clickhouse /var/lib/clickhouse && "+
+				"touch "+installSentinel+" && chown clickhouse:clickhouse "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+	}
+}
+
+// Validate checks ClickHouse structural state via goss, then the HTTP
+// health endpoint.
 func (c *ClickHouseProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if _, remoteArch, err := c.DetectRemoteArch(ctx, host); err == nil {
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Services: map[string]ansible.GossService{
+				"clickhouse-server": {Running: true, Enabled: true},
+			},
+			Ports: map[string]ansible.GossPort{
+				fmt.Sprintf("tcp:%d", config.Port): {Listening: true},
+			},
+			Files: map[string]ansible.GossFile{
+				"/usr/bin/clickhouse-server": {Exists: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, c.executor, c.sshPool.DefaultKeyPath(), host,
+			"clickhouse", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("clickhouse goss validate failed: %w", gossErr)
+		}
+	}
+
 	checker := &health.ClickHouseChecker{
 		User:     "default",
 		Password: "",
@@ -300,39 +331,52 @@ func (c *ClickHouseProvisioner) Configure(ctx context.Context, host inventory.Ho
 	usersXML := string(BuildClickHouseUsersXML())
 	passwordsDropIn := string(BuildClickHousePasswordsDropIn(password, readonlyPassword))
 
-	script := fmt.Sprintf(`#!/bin/bash
-set -e
-
-USERS_XML_CONTENT=$(cat <<'FRAMEWORKS_CH_USERS_EOF'
-%s
-FRAMEWORKS_CH_USERS_EOF
-)
-PASSWORDS_DROPIN_CONTENT=$(cat <<'FRAMEWORKS_CH_PASSWORDS_EOF'
-%s
-FRAMEWORKS_CH_PASSWORDS_EOF
-)
-
-printf '%%s' "${USERS_XML_CONTENT}" > /etc/clickhouse-server/users.xml
-chown clickhouse:clickhouse /etc/clickhouse-server/users.xml
-chmod 640 /etc/clickhouse-server/users.xml
-
-mkdir -p /etc/systemd/system/clickhouse-server.service.d
-printf '%%s' "${PASSWORDS_DROPIN_CONTENT}" > /etc/systemd/system/clickhouse-server.service.d/passwords.conf
-chmod 600 /etc/systemd/system/clickhouse-server.service.d/passwords.conf
-
-systemctl daemon-reload
-systemctl restart clickhouse-server
-
-sleep 3
-echo "ClickHouse configured with application credentials"
-`, usersXML, passwordsDropIn)
-
-	result, err := c.ExecuteScript(ctx, host, script)
-	if err != nil {
-		return fmt.Errorf("failed to configure ClickHouse credentials: %w", err)
+	tasks := []ansible.Task{
+		ansible.TaskCopy("/etc/clickhouse-server/users.xml", usersXML, ansible.CopyOpts{
+			Owner: "clickhouse", Group: "clickhouse", Mode: "0640",
+		}),
+		{
+			Name:   "ensure clickhouse-server systemd drop-in dir",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/systemd/system/clickhouse-server.service.d", "state": "directory", "mode": "0755"},
+		},
+		ansible.TaskCopy("/etc/systemd/system/clickhouse-server.service.d/passwords.conf", passwordsDropIn, ansible.CopyOpts{
+			Mode: "0600",
+		}),
+		ansible.TaskSystemdService("clickhouse-server", ansible.SystemdOpts{
+			State:        "restarted",
+			DaemonReload: true,
+		}),
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("ClickHouse configuration failed: %s", result.Stderr)
+
+	playbook := &ansible.Playbook{
+		Name:  "Configure ClickHouse credentials",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Configure ClickHouse credentials",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: false,
+				Tasks:       tasks,
+			},
+		},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": c.sshPool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := c.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("failed to configure ClickHouse credentials: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("ClickHouse configuration playbook failed\nOutput: %s", result.Output)
 	}
 
 	fmt.Printf("✓ ClickHouse credentials configured on %s\n", host.ExternalIP)

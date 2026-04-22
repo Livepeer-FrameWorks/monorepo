@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
@@ -16,14 +17,20 @@ import (
 // CaddyProvisioner provisions the Caddy reverse proxy
 type CaddyProvisioner struct {
 	*FlexibleProvisioner
-	pool *ssh.Pool
+	pool     *ssh.Pool
+	executor *ansible.Executor
 }
 
 // NewCaddyProvisioner creates a new Caddy provisioner
 func NewCaddyProvisioner(pool *ssh.Pool) *CaddyProvisioner {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		panic(fmt.Sprintf("create ansible executor for caddy: %v", err))
+	}
 	return &CaddyProvisioner{
-		FlexibleProvisioner: NewFlexibleProvisioner("caddy", 18090, pool), // Port 18090 used for dev detection compatibility
+		FlexibleProvisioner: NewFlexibleProvisioner("caddy", 18090, pool),
 		pool:                pool,
+		executor:            executor,
 	}
 }
 
@@ -97,16 +104,10 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 	return nil
 }
 
-// installCaddy uses FlexibleProvisioner's logic for installing Caddy itself
+// installCaddy fetches the pinned manifest and dispatches to docker- or
+// native-mode provisioning. Runs every apply — convergence is handled by the
+// per-mode playbook's idempotence gates.
 func (c *CaddyProvisioner) installCaddy(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Check if already provisioned
-	state, err := c.Detect(ctx, host) // Corrected call to FlexibleProvisioner.Detect
-	if err == nil && state.Exists && state.Running {
-		fmt.Printf("Service %s already running, skipping...\n", c.GetName())
-		return nil
-	}
-
-	// Fetch manifest from gitops
 	channel, version := gitops.ResolveVersion(config.Version)
 	manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
 	if err != nil {
@@ -217,76 +218,101 @@ func (c *CaddyProvisioner) provisionDocker(ctx context.Context, host inventory.H
 }
 
 // provisionNative overrides FlexibleProvisioner.provisionNative
-func (c *CaddyProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, _ *gitops.ServiceInfo) error {
+func (c *CaddyProvisioner) provisionNative(ctx context.Context, host inventory.Host, _ ServiceConfig, _ *gitops.ServiceInfo) error {
 	fmt.Printf("Provisioning %s in native mode...\n", c.GetName())
-	family, err := c.DetectDistroFamily(ctx, host)
-	if err != nil {
-		return fmt.Errorf("failed to detect distro family: %w", err)
+
+	tasks := []ansible.Task{
+		ansible.TaskPackage("caddy", ansible.PackagePresent),
+		{
+			Name:   "ensure /etc/caddy/conf.d exists",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/caddy/conf.d", "state": "directory", "mode": "0755"},
+		},
+		// blockinfile creates the file if absent and inserts the import
+		// statement once, bracketed by a marker so re-runs are idempotent
+		// and other tooling editing Caddyfile is not disturbed.
+		{
+			Name:   "ensure FrameWorks import block in /etc/caddy/Caddyfile",
+			Module: "ansible.builtin.blockinfile",
+			Args: map[string]any{
+				"path":   "/etc/caddy/Caddyfile",
+				"block":  "import /etc/caddy/conf.d/*.caddyfile",
+				"marker": "# {mark} FrameWorks caddy include",
+				"create": true,
+				"mode":   "0644",
+			},
+		},
+		ansible.TaskSystemdService("caddy", ansible.SystemdOpts{
+			State:   "started",
+			Enabled: ansible.BoolPtr(true),
+		}),
 	}
 
-	setupScript := fmt.Sprintf(`#!/bin/bash
-set -e
-if ! command -v caddy >/dev/null 2>&1; then
-  %s
-fi
-mkdir -p /etc/caddy/conf.d
-if [ ! -f /etc/caddy/Caddyfile ]; then
-  cat > /etc/caddy/Caddyfile <<'EOF'
-import /etc/caddy/conf.d/*.caddyfile
-EOF
-elif ! grep -q '/etc/caddy/conf.d/\*.caddyfile' /etc/caddy/Caddyfile; then
-  printf '\nimport /etc/caddy/conf.d/*.caddyfile\n' >> /etc/caddy/Caddyfile
-fi
-systemctl enable caddy
-systemctl start caddy
-`, packageInstallCommand(family, "caddy"))
-
-	result, err := c.ExecuteScript(ctx, host, setupScript)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to install packaged caddy: %w (stderr: %s)", err, result.Stderr)
+	playbook := &ansible.Playbook{
+		Name:  "Install Caddy (native)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Install packaged Caddy",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: false,
+				Tasks:       tasks,
+			},
+		},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": c.pool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := c.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("caddy install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("caddy install playbook failed\nOutput: %s", result.Output)
 	}
 
 	fmt.Printf("✓ Caddy provisioned in native mode on %s\n", host.ExternalIP)
 	return nil
 }
 
-// Validate checks health
+// Validate runs goss for structural state (service running, ports listening)
+// then checks the admin API and public listeners. The public-port checks are
+// TCP-only because edge Caddy commonly redirects :80 -> :443 and config-less
+// templates may not serve /health.
 func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Caddy's admin API runs on port 2019 by default.
-	// We can try to hit its /health endpoint or metrics.
-	// For web health, we can check 80/443.
-
-	// Let's check the admin API for a reliable internal health check.
-	checker := &health.HTTPChecker{
-		Path:    "/health",
-		Timeout: 5,
+	if _, remoteArch, err := c.DetectRemoteArch(ctx, host); err == nil {
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Ports: map[string]ansible.GossPort{
+				"tcp:2019": {Listening: true},
+				"tcp:80":   {Listening: true},
+				"tcp:443":  {Listening: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, c.executor, c.pool.DefaultKeyPath(), host,
+			"caddy", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("caddy goss validate failed: %w", gossErr)
+		}
 	}
-	// For a native Caddy, port 2019 is local. For Docker Caddy, if admin port is exposed, too.
-	// Caddy's health endpoint on standard HTTP ports is /health or similar.
-	// We should probably check one of the public facing routes (e.g. foredeck) through Caddy.
 
-	// But as a self-check, the internal admin API is best.
-	result := checker.Check(host.ExternalIP, 2019) // Caddy admin API port
-	if !result.OK {
+	admin := &health.HTTPChecker{Path: "/health", Timeout: 5}
+	if result := admin.Check(host.ExternalIP, 2019); !result.OK {
 		return fmt.Errorf("caddy admin API health check failed: %s", result.Error)
 	}
 
-	// For the public listener, a TCP connect is safer than hard-coding an HTTP path.
-	// Edge Caddy commonly redirects :80 -> :443 and templates may not define /health.
-	publicHTTP := &health.TCPChecker{
-		Timeout: 5 * time.Second,
+	publicHTTP := &health.TCPChecker{Timeout: 5 * time.Second}
+	if result := publicHTTP.Check(host.ExternalIP, 80); !result.OK {
+		return fmt.Errorf("caddy public HTTP port check failed: %s", result.Error)
 	}
-	httpResult := publicHTTP.Check(host.ExternalIP, 80)
-	if !httpResult.OK {
-		return fmt.Errorf("caddy public HTTP port check failed: %s", httpResult.Error)
-	}
-
-	publicTLS := &health.TCPChecker{
-		Timeout: 5 * time.Second,
-	}
-	tlsResult := publicTLS.Check(host.ExternalIP, 443)
-	if !tlsResult.OK {
-		return fmt.Errorf("caddy public HTTPS port check failed: %s", tlsResult.Error)
+	publicTLS := &health.TCPChecker{Timeout: 5 * time.Second}
+	if result := publicTLS.Check(host.ExternalIP, 443); !result.OK {
+		return fmt.Errorf("caddy public HTTPS port check failed: %s", result.Error)
 	}
 
 	return nil

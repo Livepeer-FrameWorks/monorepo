@@ -284,22 +284,21 @@ func TestGetServiceInfoBinaryOnlyService(t *testing.T) {
 		t.Fatalf("expected name privateer, got %s", info.Name)
 	}
 
-	// URL should be preferred over File when present
-	url, err := info.GetBinaryURL("linux", "amd64")
+	bin, err := info.GetBinary("linux", "amd64")
 	if err != nil {
 		t.Fatalf("expected amd64 binary: %v", err)
 	}
-	if url != "https://example.com/privateer-linux-amd64.tar.gz" {
-		t.Fatalf("expected full URL, got %s", url)
+	if bin.URL != "https://example.com/privateer-linux-amd64.tar.gz" {
+		t.Fatalf("expected full URL, got %s", bin.URL)
 	}
 
-	// Falls back to File when URL is empty
-	url, err = info.GetBinaryURL("linux", "arm64")
+	// File is preserved alongside URL
+	bin, err = info.GetBinary("linux", "arm64")
 	if err != nil {
 		t.Fatalf("expected arm64 binary: %v", err)
 	}
-	if url != "privateer-linux-arm64.tar.gz" {
-		t.Fatalf("expected filename fallback, got %s", url)
+	if bin.File != "privateer-linux-arm64.tar.gz" {
+		t.Fatalf("expected filename preserved, got %s", bin.File)
 	}
 
 	// Not found
@@ -328,12 +327,12 @@ func TestGetServiceInfoPrefersURLOverFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	url, err := info.GetBinaryURL("linux", "amd64")
+	bin, err := info.GetBinary("linux", "amd64")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if url != "https://example.com/bridge.tar.gz" {
-		t.Fatalf("expected URL, got %s", url)
+	if bin.URL != "https://example.com/bridge.tar.gz" {
+		t.Fatalf("expected URL, got %s", bin.URL)
 	}
 }
 

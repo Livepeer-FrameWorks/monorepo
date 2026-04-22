@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
@@ -20,12 +21,20 @@ import (
 // PrivateerProvisioner provisions the Privateer mesh agent
 type PrivateerProvisioner struct {
 	*BaseProvisioner
+	executor *ansible.Executor
 }
 
 // NewPrivateerProvisioner creates a new Privateer provisioner
 func NewPrivateerProvisioner(pool *ssh.Pool) *PrivateerProvisioner {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		// NewExecutor failure is fatal at startup; surface via panic so the
+		// CLI fails fast at provisioner construction rather than on first use.
+		panic(fmt.Sprintf("create ansible executor: %v", err))
+	}
 	return &PrivateerProvisioner{
 		BaseProvisioner: NewBaseProvisioner("privateer", pool),
+		executor:        executor,
 	}
 }
 
@@ -34,17 +43,10 @@ func (p *PrivateerProvisioner) Detect(ctx context.Context, host inventory.Host) 
 	return p.CheckExists(ctx, host, "privateer")
 }
 
-// Provision installs and configures Privateer
+// Provision installs and configures Privateer. Runs every apply; each task
+// is idempotent via its own gate (package state=present, version-keyed
+// install sentinel, systemd state=started).
 func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, detectErr := p.Detect(ctx, host)
-	if detectErr != nil {
-		state = nil
-	}
-	if skip, reason := shouldSkipProvision(state, config, "", ""); skip {
-		fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
-		return nil
-	}
-
 	// 1. Install WireGuard tools
 	if err := p.installDependencies(ctx, host); err != nil {
 		return fmt.Errorf("failed to install dependencies: %w", err)
@@ -87,32 +89,43 @@ func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Hos
 }
 
 func (p *PrivateerProvisioner) installDependencies(ctx context.Context, host inventory.Host) error {
-	// Install WireGuard userspace tools with the host's package manager.
-	script := `#!/bin/bash
-set -e
+	// wireguard-tools is the same package name across apt/dnf/yum/pacman, so
+	// `package` module's auto-detect routes correctly; no DistroPackageSpec needed.
+	playbook := &ansible.Playbook{
+		Name:  "Install Privateer dependencies",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Install WireGuard userspace tools",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: true,
+				Tasks:       []ansible.Task{ansible.TaskPackage("wireguard-tools", ansible.PackagePresent)},
+			},
+		},
+	}
 
-if command -v apt-get >/dev/null; then
-    apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y wireguard-tools
-elif command -v dnf >/dev/null; then
-    dnf install -y wireguard-tools
-elif command -v yum >/dev/null; then
-    yum install -y wireguard-tools
-elif command -v pacman >/dev/null; then
-    pacman -Syu --noconfirm --needed wireguard-tools
-else
-    echo "Unsupported package manager"
-    exit 1
-fi
-`
-	result, err := p.ExecuteScript(ctx, host, script)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("dependency install failed: %v", result.Stderr)
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": p.sshPool.DefaultKeyPath(),
+		},
+	})
+
+	result, err := p.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if err != nil {
+		return fmt.Errorf("ansible execution failed: %w\nOutput: %s", err, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("ansible playbook failed\nOutput: %s", result.Output)
 	}
 	return nil
 }
 
 func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory.Host, version string, metadata map[string]any) error {
-	// Fetch from GitOps
 	channel, resolved := gitops.ResolveVersion(version)
 	manifest, err := fetchGitopsManifest(channel, resolved, metadata)
 	if err != nil {
@@ -126,46 +139,63 @@ func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory
 	if archErr != nil {
 		return fmt.Errorf("failed to detect remote architecture: %w", archErr)
 	}
-	url, err := svcInfo.GetBinaryURL(remoteOS, remoteArch)
+	bin, err := svcInfo.GetBinary(remoteOS, remoteArch)
 	if err != nil {
 		return err
 	}
+	url, checksum := bin.URL, bin.Checksum
 
-	script := fmt.Sprintf(`#!/bin/bash
-set -e
-ASSET_URL=%q
-ASSET_PATH=/tmp/privateer.asset
-EXTRACT_DIR="$(mktemp -d)"
-trap 'rm -rf "$EXTRACT_DIR" "$ASSET_PATH"' EXIT
+	// The privateer release asset is tar.gz on linux, zip on darwin. Ansible's
+	// unarchive handles both but needs `unzip` present for zip archives. A
+	// post-extract move picks up whichever filename variant shipped.
+	// Version-keyed sentinel rotates when checksum or URL changes.
+	isZip := strings.HasSuffix(url, ".zip")
+	installSentinel := ansible.ArtifactSentinel("/opt/frameworks/privateer", checksum+url)
+	tasks := []ansible.Task{
+		mkdirTask("/opt/frameworks/privateer", "root", "root", "0755"),
+	}
+	if isZip {
+		tasks = append(tasks, ansible.TaskPackage("unzip", ansible.PackagePresent))
+	}
+	tasks = append(tasks,
+		ansible.TaskGetURL(url, "/tmp/privateer.asset", checksum),
+		ansible.TaskUnarchive("/tmp/privateer.asset", "/opt/frameworks/privateer",
+			installSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell(
+			"mv /opt/frameworks/privateer/frameworks-privateer-* /opt/frameworks/privateer/privateer 2>/dev/null || true; "+
+				"chmod +x /opt/frameworks/privateer/privateer; touch "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+	)
 
-extract_zip() {
-  if command -v unzip >/dev/null 2>&1; then
-    unzip -q "$1" -d "$2"
-  elif command -v ditto >/dev/null 2>&1; then
-    ditto -x -k "$1" "$2"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -m zipfile -e "$1" "$2"
-  else
-    echo "zip extractor not available" >&2
-    exit 1
-  fi
-}
-
-wget -q -O "$ASSET_PATH" "$ASSET_URL"
-mkdir -p /opt/frameworks/privateer
-if [[ "$ASSET_URL" == *.zip ]]; then
-  extract_zip "$ASSET_PATH" "$EXTRACT_DIR"
-  mv "$EXTRACT_DIR"/frameworks-privateer-* /opt/frameworks/privateer/privateer 2>/dev/null || mv "$EXTRACT_DIR"/privateer /opt/frameworks/privateer/privateer
-else
-  tar -xzf "$ASSET_PATH" -C "$EXTRACT_DIR"
-  mv "$EXTRACT_DIR"/frameworks-privateer-* /opt/frameworks/privateer/privateer
-fi
-chmod +x /opt/frameworks/privateer/privateer
-`, url)
-
-	result, err := p.ExecuteScript(ctx, host, script)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("binary install failed: %v", result.Stderr)
+	playbook := &ansible.Playbook{
+		Name:  "Install Privateer binary",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Install Privateer binary",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: false,
+				Tasks:       tasks,
+			},
+		},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": p.sshPool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := p.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("privateer binary install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("privateer binary install playbook failed\nOutput: %s", result.Output)
 	}
 	return nil
 }
@@ -426,9 +456,23 @@ func (p *PrivateerProvisioner) configureDNS(ctx context.Context, host inventory.
 	return nil
 }
 
-// Validate checks health
+// Validate runs goss (service + installed binary present) then the
+// WaitForService poll.
 func (p *PrivateerProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Check process
+	if _, remoteArch, err := p.DetectRemoteArch(ctx, host); err == nil {
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Services: map[string]ansible.GossService{
+				"privateer": {Running: true, Enabled: true},
+			},
+			Files: map[string]ansible.GossFile{
+				"/opt/frameworks/privateer/privateer": {Exists: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, p.executor, p.sshPool.DefaultKeyPath(), host,
+			"privateer", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("privateer goss validate failed: %w", gossErr)
+		}
+	}
 	return p.WaitForService(ctx, host, "privateer", 10)
 }
 

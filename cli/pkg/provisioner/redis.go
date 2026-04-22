@@ -52,12 +52,6 @@ func (r *RedisProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		instanceName = "default"
 	}
 
-	state, err := r.Detect(ctx, host)
-	if err == nil && state.Exists && state.Running && !config.Force {
-		fmt.Printf("Redis instance %s already running, skipping...\n", instanceName)
-		return nil
-	}
-
 	switch config.Mode {
 	case "docker":
 		return r.provisionDocker(ctx, host, config, instanceName)

@@ -44,18 +44,9 @@ func (p *VictoriaMetricsProvisioner) Provision(ctx context.Context, host invento
 		return fmt.Errorf("victoriametrics only supports docker mode")
 	}
 
-	state, err := p.Detect(ctx, host)
-	if err != nil {
-		state = nil
-	}
-
 	image, err := resolveObservabilityImage(config.Version, config.Image, "victoriametrics", defaultVictoriaMetricsImage, config.Metadata)
 	if err != nil {
 		return err
-	}
-	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
-		fmt.Printf("Service %s already running (%s), skipping...\n", p.GetName(), reason)
-		return nil
 	}
 
 	if err := p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/victoriametrics /etc/frameworks /var/lib/frameworks/victoriametrics"); err != nil {
@@ -112,18 +103,9 @@ func (p *VMAgentProvisioner) Provision(ctx context.Context, host inventory.Host,
 		return fmt.Errorf("vmagent only supports docker mode")
 	}
 
-	state, err := p.Detect(ctx, host)
-	if err != nil {
-		state = nil
-	}
-
 	image, err := resolveObservabilityImage(config.Version, config.Image, "vmagent", defaultVMAgentImage, config.Metadata)
 	if err != nil {
 		return err
-	}
-	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
-		fmt.Printf("Service %s already running (%s), skipping...\n", p.GetName(), reason)
-		return nil
 	}
 
 	err = p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/vmagent /etc/frameworks")
@@ -193,18 +175,9 @@ func (p *VMAAuthProvisioner) Provision(ctx context.Context, host inventory.Host,
 		return fmt.Errorf("vmauth only supports docker mode")
 	}
 
-	state, err := p.Detect(ctx, host)
-	if err != nil {
-		state = nil
-	}
-
 	image, err := resolveObservabilityImage(config.Version, config.Image, "vmauth", defaultVMAAuthImage, config.Metadata)
 	if err != nil {
 		return err
-	}
-	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
-		fmt.Printf("Service %s already running (%s), skipping...\n", p.GetName(), reason)
-		return nil
 	}
 
 	err = p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/vmauth /etc/frameworks")
@@ -270,18 +243,9 @@ func (p *GrafanaProvisioner) Provision(ctx context.Context, host inventory.Host,
 		return fmt.Errorf("grafana only supports docker mode")
 	}
 
-	state, err := p.Detect(ctx, host)
-	if err != nil {
-		state = nil
-	}
-
 	image, err := resolveObservabilityImage(config.Version, config.Image, "grafana", defaultGrafanaImage, config.Metadata)
 	if err != nil {
 		return err
-	}
-	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
-		fmt.Printf("Service %s already running (%s), skipping...\n", p.GetName(), reason)
-		return nil
 	}
 
 	if err := p.RunRemoteCommand(ctx, host, "mkdir -p /opt/frameworks/grafana/provisioning/datasources /etc/frameworks /var/lib/frameworks/grafana"); err != nil {

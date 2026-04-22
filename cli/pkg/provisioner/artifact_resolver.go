@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/gitops"
 )
 
@@ -50,44 +49,4 @@ func resolveInfraArtifactFromChannel(name, arch, platformChannel string, metadat
 		return nil, err
 	}
 	return artifactForArch(infra, arch, channel, resolved)
-}
-
-// resolveLinuxArtifacts fetches the manifest once and returns the linux-amd64
-// and linux-arm64 artifacts for name, erroring if either is missing or its
-// URL does not reference the entry's version.
-func resolveLinuxArtifacts(name string, metadata map[string]any) (amd, arm *gitops.Artifact, err error) {
-	platformChannel, ok := metadata["platform_channel"].(string)
-	if !ok {
-		platformChannel = ""
-	}
-	infra, channel, resolved, err := fetchInfraEntry(name, platformChannel, metadata)
-	if err != nil {
-		return nil, nil, err
-	}
-	amd, err = artifactForArch(infra, "linux-amd64", channel, resolved)
-	if err != nil {
-		return nil, nil, err
-	}
-	arm, err = artifactForArch(infra, "linux-arm64", channel, resolved)
-	if err != nil {
-		return nil, nil, err
-	}
-	return amd, arm, nil
-}
-
-// archSwitchedDownloadSnippet emits bash that selects the arch-appropriate
-// artifact via `uname -m` and invokes ansible.RobustDownloadSnippet with the
-// per-arch URL and checksum. Unknown arches exit non-zero.
-func archSwitchedDownloadSnippet(amd, arm *gitops.Artifact, destPath string) string {
-	return fmt.Sprintf(`case "$(uname -m)" in
-  x86_64)
-%s
-    ;;
-  aarch64|arm64)
-%s
-    ;;
-  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-esac
-`, ansible.RobustDownloadSnippet(amd.URL, amd.Checksum, destPath),
-		ansible.RobustDownloadSnippet(arm.URL, arm.Checksum, destPath))
 }

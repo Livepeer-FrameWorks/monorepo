@@ -362,7 +362,7 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				Image:     svc.Image,
 				Digest:    svc.Digest,
 				FullImage: fmt.Sprintf("%s@%s", svc.Image, svc.Digest),
-				Binaries:  make(map[string]string),
+				Binaries:  make(map[string]Artifact),
 			}
 			m.populateBinaries(info)
 			return info, nil
@@ -378,7 +378,7 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				Image:     iface.Image,
 				Digest:    iface.Digest,
 				FullImage: fmt.Sprintf("%s@%s", iface.Image, iface.Digest),
-				Binaries:  make(map[string]string),
+				Binaries:  make(map[string]Artifact),
 			}, nil
 		}
 	}
@@ -388,7 +388,7 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 		if nb.Name == serviceName {
 			info := &ServiceInfo{
 				Name:     nb.Name,
-				Binaries: make(map[string]string),
+				Binaries: make(map[string]Artifact),
 			}
 			m.populateBinaries(info)
 			return info, nil
@@ -398,31 +398,28 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 	return nil, fmt.Errorf("service %s not found in manifest", serviceName)
 }
 
-// populateBinaries fills ServiceInfo.Binaries from the manifest's native_binaries.
-// Prefers artifact.URL when available; falls back to artifact.File.
+// populateBinaries fills ServiceInfo.Binaries from native_binaries, preserving
+// URL + Checksum so callers can download with integrity verification.
 func (m *Manifest) populateBinaries(info *ServiceInfo) {
 	for _, nb := range m.NativeBinaries {
 		if nb.Name == info.Name {
 			for _, artifact := range nb.Artifacts {
-				if artifact.URL != "" {
-					info.Binaries[artifact.Arch] = artifact.URL
-				} else {
-					info.Binaries[artifact.Arch] = artifact.File
-				}
+				info.Binaries[artifact.Arch] = artifact
 			}
 			break
 		}
 	}
 }
 
-// GetBinaryURL returns the download URL (or filename) for a binary matching the given os and arch.
-func (s *ServiceInfo) GetBinaryURL(os, arch string) (string, error) {
+// GetBinary returns the full artifact record (URL + Checksum) for the os/arch,
+// or an error if no entry matches.
+func (s *ServiceInfo) GetBinary(os, arch string) (*Artifact, error) {
 	key := fmt.Sprintf("%s-%s", os, arch)
-	value, ok := s.Binaries[key]
+	a, ok := s.Binaries[key]
 	if !ok {
-		return "", fmt.Errorf("binary not available for %s", key)
+		return nil, fmt.Errorf("binary not available for %s", key)
 	}
-	return value, nil
+	return &a, nil
 }
 
 // isLocalPath checks if a path is local (starts with / or ./)

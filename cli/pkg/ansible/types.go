@@ -24,14 +24,16 @@ type Play struct {
 
 // Task represents an Ansible task
 type Task struct {
-	Name     string
-	Module   string
-	Args     map[string]interface{}
-	When     string
-	Register string
-	Notify   []string
-	Tags     []string
-	Ignore   bool // ignore_errors
+	Name        string
+	Module      string
+	Args        map[string]interface{}
+	When        string
+	ChangedWhen string // e.g. "false" for commands that are always-OK to re-run
+	Environment map[string]string
+	Register    string
+	Notify      []string
+	Tags        []string
+	Ignore      bool // ignore_errors
 }
 
 // Role represents an Ansible role

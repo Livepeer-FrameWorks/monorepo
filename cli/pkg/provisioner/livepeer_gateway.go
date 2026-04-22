@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
@@ -22,11 +23,17 @@ import (
 // config: block (merged into EnvVars by buildServiceEnvVars).
 type LivepeerGatewayProvisioner struct {
 	*BaseProvisioner
+	executor *ansible.Executor
 }
 
 func NewLivepeerGatewayProvisioner(pool *ssh.Pool) *LivepeerGatewayProvisioner {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		panic(fmt.Sprintf("create ansible executor for livepeer-gateway: %v", err))
+	}
 	return &LivepeerGatewayProvisioner{
 		BaseProvisioner: NewBaseProvisioner("livepeer-gateway", pool),
+		executor:        executor,
 	}
 }
 
@@ -35,34 +42,10 @@ func (p *LivepeerGatewayProvisioner) Detect(ctx context.Context, host inventory.
 }
 
 func (p *LivepeerGatewayProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, err := p.Detect(ctx, host)
-	if err != nil {
-		state = nil
-	}
-
 	switch config.Mode {
 	case "docker":
-		image := config.Image
-		if image == "" {
-			image = p.resolveImageFromManifest(config.Version, config.Metadata)
-		}
-		if image == "" {
-			image = "ghcr.io/livepeer-frameworks/go-livepeer:latest"
-		}
-		if skip, reason := shouldSkipProvision(state, config, "", image); skip {
-			fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
-			return nil
-		}
 		return p.provisionDocker(ctx, host, config)
 	case "native":
-		desiredVersion := ""
-		if config.Version != "" && config.Version != "stable" {
-			desiredVersion = config.Version
-		}
-		if skip, reason := shouldSkipProvision(state, config, desiredVersion, ""); skip {
-			fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
-			return nil
-		}
 		return p.provisionNative(ctx, host, config)
 	default:
 		return fmt.Errorf("unsupported mode %q for livepeer-gateway (docker or native)", config.Mode)
@@ -332,7 +315,10 @@ func (p *LivepeerGatewayProvisioner) resolveImageFromManifest(version string, me
 }
 
 func (p *LivepeerGatewayProvisioner) installBinary(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	binaryURL := config.BinaryURL
+	var (
+		binaryURL = config.BinaryURL
+		checksum  string
+	)
 	if binaryURL == "" {
 		channel, version := gitops.ResolveVersion(config.Version)
 		manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
@@ -348,24 +334,51 @@ func (p *LivepeerGatewayProvisioner) installBinary(ctx context.Context, host inv
 			return err
 		}
 		archKey := remoteOS + "-" + remoteArch
-		binaryURL = dep.GetBinaryURL(archKey)
-		if binaryURL == "" {
+		bin := dep.GetBinary(archKey)
+		if bin == nil || bin.URL == "" {
 			return fmt.Errorf("no go-livepeer binary for %s", archKey)
 		}
+		binaryURL = bin.URL
+		checksum = bin.Checksum
 	}
 
-	script := fmt.Sprintf(`#!/bin/bash
-set -e
-mkdir -p /opt/frameworks/livepeer-gateway
-wget -q -O /tmp/go-livepeer.tar.gz "%s"
-tar -xzf /tmp/go-livepeer.tar.gz -C /opt/frameworks/livepeer-gateway/
-chmod +x /opt/frameworks/livepeer-gateway/livepeer
-rm -f /tmp/go-livepeer.tar.gz
-`, binaryURL)
-
-	result, err := p.ExecuteScript(ctx, host, script)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("binary install failed: %v", result.Stderr)
+	installSentinel := ansible.ArtifactSentinel("/opt/frameworks/livepeer-gateway", checksum+binaryURL)
+	tasks := []ansible.Task{
+		mkdirTask("/opt/frameworks/livepeer-gateway", "root", "root", "0755"),
+		ansible.TaskGetURL(binaryURL, "/tmp/go-livepeer.tar.gz", checksum),
+		ansible.TaskUnarchive("/tmp/go-livepeer.tar.gz", "/opt/frameworks/livepeer-gateway",
+			installSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell(
+			"chmod +x /opt/frameworks/livepeer-gateway/livepeer && touch "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+	}
+	playbook := &ansible.Playbook{
+		Name:  "Install go-livepeer binary (gateway)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{{
+			Name:        "Install go-livepeer binary (gateway)",
+			Hosts:       host.ExternalIP,
+			Become:      true,
+			GatherFacts: false,
+			Tasks:       tasks,
+		}},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": p.sshPool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := p.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: false})
+	if execErr != nil {
+		return fmt.Errorf("gateway binary install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("gateway binary install playbook failed\nOutput: %s", result.Output)
 	}
 	return nil
 }
@@ -526,12 +539,22 @@ func (p *LivepeerGatewayProvisioner) Validate(ctx context.Context, host inventor
 	if port == 0 {
 		port = 8935
 	}
-	checker := &health.HTTPChecker{
-		Path:    "/status",
-		Timeout: 10,
+	if _, remoteArch, err := p.DetectRemoteArch(ctx, host); err == nil && config.Mode == "native" {
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Ports: map[string]ansible.GossPort{
+				fmt.Sprintf("tcp:%d", port): {Listening: true},
+			},
+			Files: map[string]ansible.GossFile{
+				"/opt/frameworks/livepeer-gateway/livepeer": {Exists: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, p.executor, p.sshPool.DefaultKeyPath(), host,
+			"livepeer-gateway", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("livepeer-gateway goss validate failed: %w", gossErr)
+		}
 	}
-	result := checker.Check(host.ExternalIP, port)
-	if !result.OK {
+	checker := &health.HTTPChecker{Path: "/status", Timeout: 10}
+	if result := checker.Check(host.ExternalIP, port); !result.OK {
 		return fmt.Errorf("livepeer-gateway health check failed: %s", result.Error)
 	}
 	return nil

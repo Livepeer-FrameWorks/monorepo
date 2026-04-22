@@ -98,14 +98,16 @@ func (e *InfrastructureEntry) GetArtifact(arch string) *Artifact {
 	return nil
 }
 
-// ServiceInfo holds release information for a service (helper struct)
+// ServiceInfo holds release information for a service (helper struct).
+// Binaries is keyed by arch and preserves URL + Checksum from the manifest so
+// callers can do integrity-verified downloads.
 type ServiceInfo struct {
-	Name      string            // Service name
-	Version   string            // Service version
-	Image     string            // Docker image with registry
-	Digest    string            // sha256 digest
-	Binaries  map[string]string // arch → filename
-	FullImage string            // image@digest for docker
+	Name      string
+	Version   string
+	Image     string
+	Digest    string
+	Binaries  map[string]Artifact
+	FullImage string
 }
 
 // GetExternalDependency looks up an external dependency by name (e.g., "mistserver", "caddy").
@@ -118,19 +120,8 @@ func (m *Manifest) GetExternalDependency(name string) *ExternalDependency {
 	return nil
 }
 
-// GetBinaryURL returns the download URL for the given os-arch key (e.g., "linux-amd64").
-func (d *ExternalDependency) GetBinaryURL(arch string) string {
-	for _, b := range d.Binaries {
-		if b.Name == arch {
-			return b.URL
-		}
-	}
-	return ""
-}
-
 // GetBinary returns the full binary record for the given os-arch key, or nil
-// if the dependency carries no artifact for that arch. Prefer this over
-// GetBinaryURL when the caller also needs the checksum.
+// if the dependency carries no artifact for that arch.
 func (d *ExternalDependency) GetBinary(arch string) *ExternalBinary {
 	for i := range d.Binaries {
 		if d.Binaries[i].Name == arch {

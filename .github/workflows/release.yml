@@ -1242,6 +1242,26 @@ jobs:
           path: dist/digests
           merge-multiple: true
 
+      # Native binary tarballs / zips are pulled in so the manifest can embed
+      # per-artifact sha256 checksums. Without these, consumers that download
+      # via get_url have no integrity check (bypassing the artifact-pinning
+      # model for non-infra binaries).
+      - name: Download linux/amd64 binary artifacts for checksumming
+        uses: actions/download-artifact@v8
+        with:
+          name: binary-all-linux-amd64
+          path: dist/binaries-linux-amd64
+      - name: Download linux/arm64 binary artifacts for checksumming
+        uses: actions/download-artifact@v8
+        with:
+          name: binary-all-linux-arm64
+          path: dist/binaries-linux-arm64
+      - name: Download darwin/arm64 binary artifacts for checksumming
+        uses: actions/download-artifact@v8
+        with:
+          name: binary-all-darwin-arm64
+          path: dist/binaries-darwin-arm64
+
       - name: Fetch go-livepeer metadata from latest release
         id: golivepeer
         env:
@@ -1377,36 +1397,69 @@ jobs:
           YAML
           done
 
-          # Native Binaries (for bare-metal deployment)
+          # Native Binaries (for bare-metal deployment).
+          # Each artifact embeds a sha256 checksum computed from the built
+          # tarball/zip so consumers can do integrity-verified downloads.
           RELEASE_DL="${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}"
           echo "" >> dist/manifest.yaml
           echo "native_binaries:" >> dist/manifest.yaml
 
+          artifact_sha256() {
+            local path="$1"
+            if [ -f "$path" ]; then
+              echo "sha256:$(sha256sum "$path" | awk '{print $1}')"
+            else
+              # Missing artifact — fail loudly so the release is rejected.
+              # A checksum-less entry would let consumers download unverified.
+              echo "missing artifact for manifest: $path" >&2
+              exit 1
+            fi
+          }
+
+          emit_linux_artifacts() {
+            local svc="$1"
+            local amd_file="frameworks-${svc}-${{ github.ref_name }}-linux-amd64.tar.gz"
+            local arm_file="frameworks-${svc}-${{ github.ref_name }}-linux-arm64.tar.gz"
+            local amd_sum arm_sum
+            amd_sum="$(artifact_sha256 "dist/binaries-linux-amd64/${amd_file}")"
+            arm_sum="$(artifact_sha256 "dist/binaries-linux-arm64/${arm_file}")"
+            cat >> dist/manifest.yaml <<YAML
+                - arch: linux-amd64
+                  file: ${amd_file}
+                  url: ${RELEASE_DL}/${amd_file}
+                  checksum: ${amd_sum}
+                - arch: linux-arm64
+                  file: ${arm_file}
+                  url: ${RELEASE_DL}/${arm_file}
+                  checksum: ${arm_sum}
+          YAML
+          }
+
+          emit_darwin_artifact() {
+            local svc="$1"
+            local file="frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.zip"
+            local sum
+            sum="$(artifact_sha256 "dist/binaries-darwin-arm64/${file}")"
+            cat >> dist/manifest.yaml <<YAML
+                - arch: darwin-arm64
+                  file: ${file}
+                  url: ${RELEASE_DL}/${file}
+                  checksum: ${sum}
+          YAML
+          }
+
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
-            # Skip interfaces - they don't have native binaries
             if echo "$WEBAPP_NAMES" | grep -qx "$name"; then
               continue
             fi
-
             cat >> dist/manifest.yaml <<YAML
             - name: ${name}
               artifacts:
-                - arch: linux-amd64
-                  file: frameworks-${name}-${{ github.ref_name }}-linux-amd64.tar.gz
-                  url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-linux-amd64.tar.gz
-                - arch: linux-arm64
-                  file: frameworks-${name}-${{ github.ref_name }}-linux-arm64.tar.gz
-                  url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-linux-arm64.tar.gz
           YAML
-
-            # Non-CGO services also have darwin binaries
+            emit_linux_artifacts "$name"
             if ! echo "$CGO_SERVICES" | grep -qx "$name"; then
-              cat >> dist/manifest.yaml <<YAML
-                - arch: darwin-arm64
-                  file: frameworks-${name}-${{ github.ref_name }}-darwin-arm64.zip
-                  url: ${RELEASE_DL}/frameworks-${name}-${{ github.ref_name }}-darwin-arm64.zip
-          YAML
+              emit_darwin_artifact "$name"
             fi
           done
 
@@ -1415,16 +1468,9 @@ jobs:
             cat >> dist/manifest.yaml <<YAML
             - name: ${svc}
               artifacts:
-                - arch: linux-amd64
-                  file: frameworks-${svc}-${{ github.ref_name }}-linux-amd64.tar.gz
-                  url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-linux-amd64.tar.gz
-                - arch: linux-arm64
-                  file: frameworks-${svc}-${{ github.ref_name }}-linux-arm64.tar.gz
-                  url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-linux-arm64.tar.gz
-                - arch: darwin-arm64
-                  file: frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.zip
-                  url: ${RELEASE_DL}/frameworks-${svc}-${{ github.ref_name }}-darwin-arm64.zip
           YAML
+            emit_linux_artifacts "$svc"
+            emit_darwin_artifact "$svc"
           done
 
           # Interfaces (reference implementations)

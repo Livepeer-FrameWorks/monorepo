@@ -7,7 +7,6 @@ import (
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -59,61 +58,78 @@ func BuildYugabyteTServerConf(p YugabyteNativeParams) []byte {
 
 // BuildYugabyteMasterUnit returns the yb-master.service bytes.
 func BuildYugabyteMasterUnit() []byte {
-	return []byte(`[Unit]
-Description=YugabyteDB Master
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=yugabyte
-Group=yugabyte
-ExecStart=/opt/yugabyte/bin/yb-master --flagfile /opt/yugabyte/conf/master.conf
-Restart=always
-RestartSec=5
-LimitNOFILE=1048576
-LimitNPROC=12000
-LimitCORE=infinity
-
-[Install]
-WantedBy=multi-user.target
-`)
+	return []byte(ansible.RenderSystemdUnit(yugabyteMasterUnitSpec()))
 }
 
 // BuildYugabyteTServerUnit returns the yb-tserver.service bytes.
 func BuildYugabyteTServerUnit() []byte {
-	return []byte(`[Unit]
-Description=YugabyteDB TServer
-After=network-online.target yb-master.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=yugabyte
-Group=yugabyte
-ExecStart=/opt/yugabyte/bin/yb-tserver --flagfile /opt/yugabyte/conf/tserver.conf
-Restart=always
-RestartSec=5
-LimitNOFILE=1048576
-LimitNPROC=12000
-LimitCORE=infinity
-
-[Install]
-WantedBy=multi-user.target
-`)
+	return []byte(ansible.RenderSystemdUnit(yugabyteTServerUnitSpec()))
 }
+
+// yugabyteMasterUnitSpec returns the SystemdUnitSpec for yb-master.
+func yugabyteMasterUnitSpec() ansible.SystemdUnitSpec {
+	return ansible.SystemdUnitSpec{
+		Description: "YugabyteDB Master",
+		After:       []string{"network-online.target"},
+		Wants:       []string{"network-online.target"},
+		User:        "yugabyte",
+		Group:       "yugabyte",
+		ExecStart:   "/opt/yugabyte/bin/yb-master --flagfile /opt/yugabyte/conf/master.conf",
+		Restart:     "always",
+		RestartSec:  5,
+		LimitNOFILE: "1048576",
+		LimitNPROC:  "12000",
+		LimitCORE:   "infinity",
+	}
+}
+
+// yugabyteTServerUnitSpec returns the SystemdUnitSpec for yb-tserver.
+func yugabyteTServerUnitSpec() ansible.SystemdUnitSpec {
+	return ansible.SystemdUnitSpec{
+		Description: "YugabyteDB TServer",
+		After:       []string{"network-online.target", "yb-master.service"},
+		Wants:       []string{"network-online.target"},
+		User:        "yugabyte",
+		Group:       "yugabyte",
+		ExecStart:   "/opt/yugabyte/bin/yb-tserver --flagfile /opt/yugabyte/conf/tserver.conf",
+		Restart:     "always",
+		RestartSec:  5,
+		LimitNOFILE: "1048576",
+		LimitNPROC:  "12000",
+		LimitCORE:   "infinity",
+	}
+}
+
+const yugabyteLimitsConf = `yugabyte soft core unlimited
+yugabyte hard core unlimited
+yugabyte soft nofile 1048576
+yugabyte hard nofile 1048576
+yugabyte soft nproc 12000
+yugabyte hard nproc 12000
+`
+
+const yugabyteSysctlConf = `vm.swappiness=0
+vm.max_map_count=262144
+kernel.core_pattern=/var/lib/yugabyte/cores/core_%p_%t_%e
+`
 
 // YugabyteProvisioner provisions YugabyteDB nodes (yb-master + yb-tserver)
 type YugabyteProvisioner struct {
 	*BaseProvisioner
-	sql SQLExecutor
+	sql      SQLExecutor
+	executor *ansible.Executor
 }
 
 // NewYugabyteProvisioner creates a new YugabyteDB provisioner
 func NewYugabyteProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (Provisioner, error) {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		return nil, fmt.Errorf("create ansible executor: %w", err)
+	}
 	p := &YugabyteProvisioner{
 		BaseProvisioner: NewBaseProvisioner("yugabyte", pool),
 		sql:             &DirectExecutor{},
+		executor:        executor,
 	}
 	for _, opt := range opts {
 		opt.applyYugabyte(p)
@@ -130,7 +146,6 @@ func (y *YugabyteProvisioner) Detect(ctx context.Context, host inventory.Host) (
 
 	running := strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
 
-	// Check if binaries exist
 	binResult, _ := y.RunCommand(ctx, host, "test -x /opt/yugabyte/bin/yb-master && echo EXISTS")
 	exists := binResult != nil && strings.Contains(binResult.Stdout, "EXISTS")
 
@@ -140,14 +155,11 @@ func (y *YugabyteProvisioner) Detect(ctx context.Context, host inventory.Host) (
 	}, nil
 }
 
-// Provision installs YugabyteDB on a single node
+// Provision installs YugabyteDB on a single node via declarative Ansible
+// tasks. Runs the full playbook every apply — each task's idempotence gate
+// (creates:, state=present, systemd_service state=started) turns rebuilds
+// into no-ops on healthy hosts, and config/unit drift gets corrected.
 func (y *YugabyteProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, err := y.Detect(ctx, host)
-	if err == nil && state.Exists && state.Running {
-		return nil
-	}
-
-	version := config.Version
 	masterAddresses, _ := config.Metadata["master_addresses"].(string)
 	nodeID, _ := config.Metadata["node_id"].(int)
 	rf, _ := config.Metadata["replication_factor"].(int)
@@ -160,159 +172,249 @@ func (y *YugabyteProvisioner) Provision(ctx context.Context, host inventory.Host
 		port = 5433
 	}
 
-	cloud := "frameworks"
-	region := "eu"
-	zone := fmt.Sprintf("eu-%d", nodeID)
-
 	params := YugabyteNativeParams{
 		MasterAddresses: masterAddresses,
 		NodeIP:          host.ExternalIP,
 		DataDir:         "/var/lib/yugabyte/data",
 		RF:              rf,
 		YSQLPort:        port,
-		Cloud:           cloud,
-		Region:          region,
-		Zone:            zone,
+		Cloud:           "frameworks",
+		Region:          "eu",
+		Zone:            fmt.Sprintf("eu-%d", nodeID),
 	}
 
-	amd, arm, err := resolveLinuxArtifacts("yugabyte", config.Metadata)
+	_, remoteArch, err := y.DetectRemoteArch(ctx, host)
+	if err != nil {
+		return fmt.Errorf("detect remote arch: %w", err)
+	}
+	archKey := "linux-" + remoteArch
+	artifact, err := resolveInfraArtifactFromChannel("yugabyte", archKey, platformChannelFromMetadata(config.Metadata), config.Metadata)
 	if err != nil {
 		return err
 	}
-
-	installScript := buildYugabyteInstallScript(
-		version, nodeID,
-		string(BuildYugabyteMasterConf(params)),
-		string(BuildYugabyteTServerConf(params)),
-		string(BuildYugabyteMasterUnit()),
-		string(BuildYugabyteTServerUnit()),
-		amd, arm,
-	)
-
-	result, err := y.ExecuteScript(ctx, host, installScript)
+	family, err := y.DetectDistroFamily(ctx, host)
 	if err != nil {
-		return fmt.Errorf("failed to install YugabyteDB: %w", err)
+		return fmt.Errorf("detect distro family: %w", err)
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("YugabyteDB installation failed: %s", result.Stderr)
+	timesyncSpec, ok := ansible.ResolveDistroPackage(ansible.TimeSyncPackages, family)
+	if !ok {
+		return fmt.Errorf("yugabyte: unsupported distro family %q for chrony install", family)
+	}
+
+	tasks := yugabyteProvisionTasks(params, artifact.URL, artifact.Checksum, timesyncSpec)
+	playbook := &ansible.Playbook{
+		Name:  "Provision YugabyteDB",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Provision YugabyteDB node " + fmt.Sprint(nodeID),
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: true,
+				Tasks:       tasks,
+			},
+		},
+	}
+
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": y.sshPool.DefaultKeyPath(),
+		},
+	})
+
+	result, execErr := y.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("ansible execution failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("ansible playbook failed\nOutput: %s", result.Output)
 	}
 
 	fmt.Printf("✓ YugabyteDB node %d provisioned on %s\n", nodeID, host.ExternalIP)
 	return nil
 }
 
-func buildYugabyteInstallScript(version string, nodeID int, masterConf, tserverConf, masterUnit, tserverUnit string, amd, arm *gitops.Artifact) string {
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-
-VERSION="%s"
-NODE_ID=%d
-MASTER_CONF_CONTENT=$(cat <<'FRAMEWORKS_YB_MASTER_CONF_EOF'
-%s
-FRAMEWORKS_YB_MASTER_CONF_EOF
-)
-TSERVER_CONF_CONTENT=$(cat <<'FRAMEWORKS_YB_TSERVER_CONF_EOF'
-%s
-FRAMEWORKS_YB_TSERVER_CONF_EOF
-)
-MASTER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_YB_MASTER_UNIT_EOF'
-%s
-FRAMEWORKS_YB_MASTER_UNIT_EOF
-)
-TSERVER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_YB_TSERVER_UNIT_EOF'
-%s
-FRAMEWORKS_YB_TSERVER_UNIT_EOF
-)
-
-# System prerequisites
-echo "Configuring system settings..."
-
-# Create yugabyte user
-shell=/usr/bin/nologin
-[ ! -x "$shell" ] && shell=/sbin/nologin
-[ ! -x "$shell" ] && shell=/bin/false
-id -u yugabyte &>/dev/null || useradd -r -s "$shell" yugabyte
-
-# Set ulimits for yugabyte
-cat > /etc/security/limits.d/yugabyte.conf <<'LIMITS'
-yugabyte soft core unlimited
-yugabyte hard core unlimited
-yugabyte soft nofile 1048576
-yugabyte hard nofile 1048576
-yugabyte soft nproc 12000
-yugabyte hard nproc 12000
-LIMITS
-
-# Kernel tuning
-cat > /etc/sysctl.d/99-yugabyte.conf <<'SYSCTL'
-vm.swappiness=0
-vm.max_map_count=262144
-kernel.core_pattern=/var/lib/yugabyte/cores/core_%%p_%%t_%%e
-SYSCTL
-sysctl --system >/dev/null 2>&1 || true
-
-# Disable transparent hugepages
-if [ -f /sys/kernel/mm/transparent_hugepage/enabled ]; then
-  echo never > /sys/kernel/mm/transparent_hugepage/enabled
-  echo never > /sys/kernel/mm/transparent_hugepage/defrag
-fi
-
-__FRAMEWORKS_INSTALL_CURL__
-
-__FRAMEWORKS_INSTALL_TIMESYNC__
-
-INSTALL_DIR="/opt/yugabyte"
-DATA_DIR="/var/lib/yugabyte/data"
-CONF_DIR="/opt/yugabyte/conf"
-CORES_DIR="/var/lib/yugabyte/cores"
-
-mkdir -p "$DATA_DIR" "$CONF_DIR" "$CORES_DIR"
-
-if [ ! -x "$INSTALL_DIR/bin/yb-master" ]; then
-  echo "Downloading YugabyteDB $VERSION..."
-  cd /tmp
-__FRAMEWORKS_YB_DOWNLOAD__
-  extract_tarball_to /tmp/yugabyte.tar.gz "$INSTALL_DIR"
-  rm -f /tmp/yugabyte.tar.gz
-  "$INSTALL_DIR/bin/post_install.sh" 2>/dev/null || true
-fi
-
-chown -R yugabyte:yugabyte "$INSTALL_DIR" "$DATA_DIR" "$CORES_DIR"
-
-printf '%%s' "${MASTER_CONF_CONTENT}" > "$CONF_DIR/master.conf"
-printf '%%s' "${TSERVER_CONF_CONTENT}" > "$CONF_DIR/tserver.conf"
-
-chown -R yugabyte:yugabyte "$CONF_DIR"
-
-printf '%%s' "${MASTER_UNIT_CONTENT}" > /etc/systemd/system/yb-master.service
-printf '%%s' "${TSERVER_UNIT_CONTENT}" > /etc/systemd/system/yb-tserver.service
-
-systemctl daemon-reload
-
-systemctl enable --now yb-master
-echo "Waiting for yb-master to start..."
-sleep 5
-
-systemctl enable --now yb-tserver
-echo "Waiting for yb-tserver to start..."
-sleep 5
-
-echo "YugabyteDB node $NODE_ID provisioned"
-`, version, nodeID, masterConf, tserverConf, masterUnit, tserverUnit)
-
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_CURL__", ansible.EnsureCurlInstallSnippet+ansible.SafeTarballExtractSnippet, 1)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_TIMESYNC__", ansible.TimeSyncInstallSnippet, 1)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_YB_DOWNLOAD__",
-		archSwitchedDownloadSnippet(amd, arm, "/tmp/yugabyte.tar.gz"), 1)
-
-	return installScript
+// platformChannelFromMetadata pulls the release-channel key that
+// `buildTaskConfig` injects. Returns empty string when missing; the resolver
+// treats that as an error.
+func platformChannelFromMetadata(metadata map[string]any) string {
+	if v, ok := metadata["platform_channel"].(string); ok {
+		return v
+	}
+	return ""
 }
 
-// Validate checks if YugabyteDB YSQL is healthy
+// yugabyteProvisionTasks renders the full declarative task list for one
+// Yugabyte node. Archive contract: the vendor tarball wraps a single
+// `yugabyte-<version>-<arch>/` top directory; --strip-components=1 drops
+// that wrapper and lands bin/, lib/, conf/ directly under /opt/yugabyte.
+func yugabyteProvisionTasks(params YugabyteNativeParams, artifactURL, artifactChecksum string, timesyncSpec ansible.DistroPackageSpec) []ansible.Task {
+	masterConf := string(BuildYugabyteMasterConf(params))
+	tserverConf := string(BuildYugabyteTServerConf(params))
+	masterUnit := ansible.RenderSystemdUnit(yugabyteMasterUnitSpec())
+	tserverUnit := ansible.RenderSystemdUnit(yugabyteTServerUnitSpec())
+	installSentinel := ansible.ArtifactSentinel("/opt/yugabyte", artifactChecksum+artifactURL)
+
+	tasks := []ansible.Task{
+		// curl is needed by yugabyte's post_install.sh relocation script; cheap
+		// declarative install via package module (Ansible picks the distro's
+		// package manager automatically; name happens to be "curl" everywhere).
+		ansible.TaskPackage("curl", ansible.PackagePresent),
+	}
+	// Probe for an existing timesync daemon; install+start chrony only if none
+	// is running.
+	tasks = append(tasks, ansible.TimeSyncTasks(timesyncSpec)...)
+	tasks = append(tasks,
+		// Ensure yugabyte user + group exist (idempotent via module state=present).
+		ansible.Task{
+			Name:   "ensure yugabyte group",
+			Module: "ansible.builtin.group",
+			Args:   map[string]any{"name": "yugabyte", "system": true, "state": "present"},
+		},
+		ansible.Task{
+			Name:   "ensure yugabyte user",
+			Module: "ansible.builtin.user",
+			Args: map[string]any{
+				"name":   "yugabyte",
+				"group":  "yugabyte",
+				"system": true,
+				"shell":  "/usr/sbin/nologin",
+				"state":  "present",
+			},
+		},
+
+		// System limits + sysctl.
+		ansible.TaskCopy("/etc/security/limits.d/yugabyte.conf", yugabyteLimitsConf, ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskCopy("/etc/sysctl.d/99-yugabyte.conf", yugabyteSysctlConf, ansible.CopyOpts{Mode: "0644"}),
+		// sysctl --system re-applies every key from /etc/sysctl.d each run;
+		// ChangedWhen=false is the honest declaration that reapplying a
+		// matching value is not a change. One-shell-per-key via sysctl.posix
+		// would bloat the task list with no functional benefit.
+		ansible.TaskShell("sysctl --system", ansible.ShellOpts{ChangedWhen: "false"}),
+
+		// Transparent hugepages off (kernel setting, idempotent shell with a
+		// cheap state probe via `when`).
+		ansible.TaskShell(
+			"echo never > /sys/kernel/mm/transparent_hugepage/enabled && echo never > /sys/kernel/mm/transparent_hugepage/defrag",
+			ansible.ShellOpts{
+				When: "ansible_facts.kernel is defined",
+				Extra: map[string]any{
+					"executable": "/bin/bash",
+				},
+				ChangedWhen: "false",
+			},
+		),
+
+		// Data/config/cores dirs (file module, idempotent).
+		ansible.Task{
+			Name:   "create yugabyte data/conf/cores dirs",
+			Module: "ansible.builtin.file",
+			Args: map[string]any{
+				"path":  "/var/lib/yugabyte/data",
+				"state": "directory",
+				"owner": "yugabyte",
+				"group": "yugabyte",
+				"mode":  "0755",
+			},
+		},
+		ansible.Task{
+			Name:   "create yugabyte cores dir",
+			Module: "ansible.builtin.file",
+			Args: map[string]any{
+				"path":  "/var/lib/yugabyte/cores",
+				"state": "directory",
+				"owner": "yugabyte",
+				"group": "yugabyte",
+				"mode":  "0755",
+			},
+		},
+		ansible.Task{
+			Name:   "create /opt/yugabyte",
+			Module: "ansible.builtin.file",
+			Args: map[string]any{
+				"path":  "/opt/yugabyte",
+				"state": "directory",
+				"owner": "yugabyte",
+				"group": "yugabyte",
+				"mode":  "0755",
+			},
+		},
+		ansible.Task{
+			Name:   "create /opt/yugabyte/conf",
+			Module: "ansible.builtin.file",
+			Args: map[string]any{
+				"path":  "/opt/yugabyte/conf",
+				"state": "directory",
+				"owner": "yugabyte",
+				"group": "yugabyte",
+				"mode":  "0755",
+			},
+		},
+
+		// Download tarball (get_url skips via checksum match on rerun).
+		ansible.TaskGetURL(artifactURL, "/tmp/yugabyte.tar.gz", artifactChecksum),
+
+		// Version-keyed sentinel: on a version bump, the sentinel path changes,
+		// unarchive re-extracts on top of /opt/yugabyte, and post_install.sh
+		// re-runs. Tarball is left in /tmp so get_url cache-hits on same-version
+		// reruns; do NOT add a remove-tarball task or every apply re-downloads.
+		ansible.TaskUnarchive("/tmp/yugabyte.tar.gz", "/opt/yugabyte", installSentinel,
+			ansible.UnarchiveOpts{StripComponents: 1, Owner: "yugabyte", Group: "yugabyte"}),
+
+		// Yugabyte's post_install.sh relocates embedded absolute paths. Gated
+		// on the same version-keyed sentinel so it re-runs on every upgrade.
+		ansible.TaskShell(
+			"/opt/yugabyte/bin/post_install.sh && touch "+installSentinel+" && chown yugabyte:yugabyte "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+
+		// Render configs + units.
+		ansible.TaskCopy("/opt/yugabyte/conf/master.conf", masterConf, ansible.CopyOpts{Owner: "yugabyte", Group: "yugabyte", Mode: "0644"}),
+		ansible.TaskCopy("/opt/yugabyte/conf/tserver.conf", tserverConf, ansible.CopyOpts{Owner: "yugabyte", Group: "yugabyte", Mode: "0644"}),
+		ansible.TaskCopy("/etc/systemd/system/yb-master.service", masterUnit, ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskCopy("/etc/systemd/system/yb-tserver.service", tserverUnit, ansible.CopyOpts{Mode: "0644"}),
+
+		// Start master first, then tserver. daemon_reload on the first one
+		// picks up the newly-written unit files.
+		ansible.TaskSystemdService("yb-master", ansible.SystemdOpts{State: "started", Enabled: ansible.BoolPtr(true), DaemonReload: true}),
+		ansible.TaskSystemdService("yb-tserver", ansible.SystemdOpts{State: "started", Enabled: ansible.BoolPtr(true)}),
+	)
+	return tasks
+}
+
+// Validate checks YugabyteDB health on three levels: goss asserts host-level
+// structural state (services, ports, installed binary), then a YSQL query
+// confirms the DB is accepting connections, then yb-admin reports tablet
+// server liveness. The goss step runs first so structural regressions are
+// flagged before we try the network round-trip.
 func (y *YugabyteProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	port := config.Port
 	if port == 0 {
 		port = 5433
+	}
+
+	if _, remoteArch, err := y.DetectRemoteArch(ctx, host); err == nil {
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Services: map[string]ansible.GossService{
+				"yb-master":  {Running: true, Enabled: true},
+				"yb-tserver": {Running: true, Enabled: true},
+			},
+			Ports: map[string]ansible.GossPort{
+				fmt.Sprintf("tcp:%d", port): {Listening: true},
+			},
+			Files: map[string]ansible.GossFile{
+				"/opt/yugabyte/bin/yb-master":      {Exists: true},
+				"/opt/yugabyte/.post_install_done": {Exists: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, y.executor, y.sshPool.DefaultKeyPath(), host,
+			"yugabyte", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("yugabyte goss validate failed: %w", gossErr)
+		}
 	}
 
 	conn := ConnParams{Host: host.ExternalIP, Port: port, User: "yugabyte", Database: "yugabyte"}
@@ -326,7 +428,6 @@ func (y *YugabyteProvisioner) Validate(ctx context.Context, host inventory.Host,
 		return fmt.Errorf("unexpected version string (expected YugabyteDB): %s", version)
 	}
 
-	// Verify tablet servers are live
 	tsResult, err := y.RunCommand(ctx, host,
 		"/opt/yugabyte/bin/yb-admin -master_addresses $(cat /opt/yugabyte/conf/master.conf | grep master_addresses | cut -d= -f2) list_all_tablet_servers 2>/dev/null | grep -c ALIVE || echo 0")
 	if err == nil && tsResult.ExitCode == 0 {

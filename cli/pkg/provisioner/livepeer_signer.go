@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
@@ -21,11 +22,17 @@ import (
 // One signer per cluster; multiple gateways point at it via -remoteSignerUrl.
 type LivepeerSignerProvisioner struct {
 	*BaseProvisioner
+	executor *ansible.Executor
 }
 
 func NewLivepeerSignerProvisioner(pool *ssh.Pool) *LivepeerSignerProvisioner {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		panic(fmt.Sprintf("create ansible executor for livepeer-signer: %v", err))
+	}
 	return &LivepeerSignerProvisioner{
 		BaseProvisioner: NewBaseProvisioner("livepeer-signer", pool),
+		executor:        executor,
 	}
 }
 
@@ -34,34 +41,10 @@ func (p *LivepeerSignerProvisioner) Detect(ctx context.Context, host inventory.H
 }
 
 func (p *LivepeerSignerProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, err := p.Detect(ctx, host)
-	if err != nil {
-		state = nil
-	}
-
 	switch config.Mode {
 	case "native":
-		desiredVersion := ""
-		if config.Version != "" && config.Version != "stable" {
-			desiredVersion = config.Version
-		}
-		if skip, reason := shouldSkipProvision(state, config, desiredVersion, ""); skip {
-			fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
-			return nil
-		}
 		return p.provisionNative(ctx, host, config)
 	case "docker":
-		image := config.Image
-		if image == "" {
-			image = p.resolveImageFromManifest(config.Version, config.Metadata)
-		}
-		if image == "" {
-			image = "ghcr.io/livepeer-frameworks/go-livepeer:latest"
-		}
-		if skip, reason := shouldSkipProvision(state, config, "", image); skip {
-			fmt.Printf("Service %s already running (%s), skipping...\n", p.name, reason)
-			return nil
-		}
 		return p.provisionDocker(ctx, host, config)
 	default:
 		return fmt.Errorf("unsupported mode %q for livepeer-signer (native or docker)", config.Mode)
@@ -396,7 +379,10 @@ func (p *LivepeerSignerProvisioner) resolveImageFromManifest(version string, met
 }
 
 func (p *LivepeerSignerProvisioner) installBinary(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	binaryURL := config.BinaryURL
+	var (
+		binaryURL = config.BinaryURL
+		checksum  string
+	)
 	if binaryURL == "" {
 		channel, version := gitops.ResolveVersion(config.Version)
 		manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
@@ -412,24 +398,51 @@ func (p *LivepeerSignerProvisioner) installBinary(ctx context.Context, host inve
 			return err
 		}
 		archKey := remoteOS + "-" + remoteArch
-		binaryURL = dep.GetBinaryURL(archKey)
-		if binaryURL == "" {
+		bin := dep.GetBinary(archKey)
+		if bin == nil || bin.URL == "" {
 			return fmt.Errorf("no go-livepeer binary for %s", archKey)
 		}
+		binaryURL = bin.URL
+		checksum = bin.Checksum
 	}
 
-	script := fmt.Sprintf(`#!/bin/bash
-set -e
-mkdir -p /opt/frameworks/livepeer-signer
-wget -q -O /tmp/go-livepeer-signer.tar.gz "%s"
-tar -xzf /tmp/go-livepeer-signer.tar.gz -C /opt/frameworks/livepeer-signer/
-chmod +x /opt/frameworks/livepeer-signer/livepeer
-rm -f /tmp/go-livepeer-signer.tar.gz
-`, binaryURL)
-
-	result, err := p.ExecuteScript(ctx, host, script)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("binary install failed: %v", result.Stderr)
+	installSentinel := ansible.ArtifactSentinel("/opt/frameworks/livepeer-signer", checksum+binaryURL)
+	tasks := []ansible.Task{
+		mkdirTask("/opt/frameworks/livepeer-signer", "root", "root", "0755"),
+		ansible.TaskGetURL(binaryURL, "/tmp/go-livepeer-signer.tar.gz", checksum),
+		ansible.TaskUnarchive("/tmp/go-livepeer-signer.tar.gz", "/opt/frameworks/livepeer-signer",
+			installSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell(
+			"chmod +x /opt/frameworks/livepeer-signer/livepeer && touch "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+	}
+	playbook := &ansible.Playbook{
+		Name:  "Install go-livepeer binary (signer)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{{
+			Name:        "Install go-livepeer binary (signer)",
+			Hosts:       host.ExternalIP,
+			Become:      true,
+			GatherFacts: false,
+			Tasks:       tasks,
+		}},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": p.sshPool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := p.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: false})
+	if execErr != nil {
+		return fmt.Errorf("signer binary install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("signer binary install playbook failed\nOutput: %s", result.Output)
 	}
 	return nil
 }
@@ -460,12 +473,22 @@ func (p *LivepeerSignerProvisioner) Validate(ctx context.Context, host inventory
 	if port == 0 {
 		port = 18016
 	}
-	checker := &health.HTTPChecker{
-		Path:    "/status",
-		Timeout: 10,
+	if _, remoteArch, err := p.DetectRemoteArch(ctx, host); err == nil && config.Mode == "native" {
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Ports: map[string]ansible.GossPort{
+				fmt.Sprintf("tcp:%d", port): {Listening: true},
+			},
+			Files: map[string]ansible.GossFile{
+				"/opt/frameworks/livepeer-signer/livepeer": {Exists: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, p.executor, p.sshPool.DefaultKeyPath(), host,
+			"livepeer-signer", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("livepeer-signer goss validate failed: %w", gossErr)
+		}
 	}
-	result := checker.Check(host.ExternalIP, port)
-	if !result.OK {
+	checker := &health.HTTPChecker{Path: "/status", Timeout: 10}
+	if result := checker.Check(host.ExternalIP, port); !result.OK {
 		return fmt.Errorf("livepeer-signer health check failed: %s", result.Error)
 	}
 	return nil

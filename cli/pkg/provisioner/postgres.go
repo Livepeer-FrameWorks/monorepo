@@ -42,13 +42,13 @@ func (p *PostgresProvisioner) Detect(ctx context.Context, host inventory.Host) (
 	return p.CheckExists(ctx, host, "postgres")
 }
 
-// Provision installs Postgres using Ansible
+// Provision installs Postgres via Ansible on every apply. Package-install
+// paths (debian, stock-repo rhel) reach changed=0 on rerun via package
+// state=present + systemd_service state=started. The source-build path
+// (rhel/arch with a pinned version) reaches changed=0 via get_url+unarchive
+// cache-hits on a version-keyed sentinel and a creates: gate on
+// <prefix>/bin/postgres; a version bump rotates both and rebuilds cleanly.
 func (p *PostgresProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, err := p.Detect(ctx, host)
-	if err == nil && state.Exists && state.Running {
-		return nil
-	}
-
 	databases := []string{}
 	if dbList, ok := config.Metadata["databases"].([]any); ok {
 		for _, db := range dbList {
@@ -63,13 +63,38 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, host inventory.Host
 		hostID = "localhost"
 	}
 
-	amd, arm, err := resolveLinuxArtifacts("postgresql", config.Metadata)
+	family, err := p.DetectDistroFamily(ctx, host)
 	if err != nil {
-		return err
+		return fmt.Errorf("detect distro family: %w", err)
 	}
-	downloadSnippet := archSwitchedDownloadSnippet(amd, arm, "/tmp/postgresql.tar.bz2")
 
-	playbook := ansible.GeneratePostgresPlaybook(hostID, config.Version, databases, downloadSnippet)
+	version := strings.TrimSpace(config.Version)
+	switch version {
+	case "latest", "stable":
+		version = ""
+	}
+
+	params := ansible.PostgresInstallParams{
+		DistroFamily: family,
+		Version:      version,
+		Databases:    databases,
+	}
+
+	// Source-build is only used on rhel/arch when a specific version is pinned.
+	if version != "" && (family == "rhel" || family == "arch") {
+		_, remoteArch, archErr := p.DetectRemoteArch(ctx, host)
+		if archErr != nil {
+			return fmt.Errorf("detect remote arch: %w", archErr)
+		}
+		artifact, artifactErr := resolveInfraArtifactFromChannel("postgresql", "linux-"+remoteArch, platformChannelFromMetadata(config.Metadata), config.Metadata)
+		if artifactErr != nil {
+			return artifactErr
+		}
+		params.ArtifactURL = artifact.URL
+		params.ArtifactChecksum = artifact.Checksum
+	}
+
+	playbook := ansible.GeneratePostgresPlaybook(hostID, params)
 
 	inv := ansible.NewInventory()
 	inv.AddHost(&ansible.InventoryHost{
@@ -98,8 +123,25 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, host inventory.Host
 	return nil
 }
 
-// Validate checks if Postgres is healthy
+// Validate checks Postgres structural state via goss (service running, port
+// listening) then the protocol-level health check and database readiness.
+// Goss is skipped when an arch probe fails — protocol check still runs.
 func (p *PostgresProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if _, remoteArch, err := p.DetectRemoteArch(ctx, host); err == nil {
+		// Package-install sets up "postgresql" on debian, "postgresql-*" on rhel;
+		// source-build leaves it at "postgresql". Assert on port + the
+		// canonical data dir rather than a distro-specific unit name.
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Ports: map[string]ansible.GossPort{
+				fmt.Sprintf("tcp:%d", config.Port): {Listening: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, p.executor, p.sshPool.DefaultKeyPath(), host,
+			"postgres", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("postgres goss validate failed: %w", gossErr)
+		}
+	}
+
 	checker := &health.PostgresChecker{
 		User:     "postgres",
 		Password: "",

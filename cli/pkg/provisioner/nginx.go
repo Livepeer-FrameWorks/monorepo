@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
@@ -18,14 +19,20 @@ import (
 // NginxProvisioner provisions the Nginx reverse proxy with generated config
 type NginxProvisioner struct {
 	*FlexibleProvisioner
-	pool *ssh.Pool
+	pool     *ssh.Pool
+	executor *ansible.Executor
 }
 
 // NewNginxProvisioner creates a new Nginx provisioner
 func NewNginxProvisioner(pool *ssh.Pool) *NginxProvisioner {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		panic(fmt.Sprintf("create ansible executor for nginx: %v", err))
+	}
 	return &NginxProvisioner{
 		FlexibleProvisioner: NewFlexibleProvisioner("nginx", 18090, pool),
 		pool:                pool,
+		executor:            executor,
 	}
 }
 
@@ -118,12 +125,6 @@ func (n *NginxProvisioner) Provision(ctx context.Context, host inventory.Host, c
 }
 
 func (n *NginxProvisioner) installNginx(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, err := n.Detect(ctx, host)
-	if config.Mode == "docker" && err == nil && state.Exists && state.Running {
-		fmt.Printf("Service %s already running, skipping install...\n", n.GetName())
-		return nil
-	}
-
 	channel, version := gitops.ResolveVersion(config.Version)
 	manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
 	if err != nil {
@@ -231,85 +232,188 @@ func (n *NginxProvisioner) provisionNative(ctx context.Context, host inventory.H
 		return fmt.Errorf("unexpected nginx runtime probe result: %q", runtime)
 	}
 
-	setupScript := fmt.Sprintf(`#!/bin/bash
-set -e
-if ! command -v nginx >/dev/null 2>&1; then
-  %s
-fi
-if ! command -v python3 >/dev/null 2>&1; then
-  %s
-fi
-export FRAMEWORKS_GEOIP2_MODULE="$(find /usr/lib64/nginx/modules /usr/lib/nginx/modules -maxdepth 1 -type f \( -name '*http_geoip2*.so' -o -name '*geoip2*.so' \) 2>/dev/null | head -n 1)"
-mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/frameworks-http.d
-python3 - <<'PY'
-import os
-from pathlib import Path
-path = Path("/etc/nginx/nginx.conf")
-text = path.read_text()
-module_path = os.environ.get("FRAMEWORKS_GEOIP2_MODULE", "").strip()
-include_line = "    include /etc/nginx/sites-enabled/*;\n"
-snippet_include_line = "    include /etc/nginx/frameworks-http.d/*.conf;\n"
-if module_path:
-    load_line = f"load_module {module_path};\n"
-    if load_line not in text:
-        text = load_line + text
-if "/etc/nginx/sites-enabled/*" not in text:
-    marker = "http {"
-    idx = text.find(marker)
-    if idx == -1:
-        raise SystemExit("http block not found in /etc/nginx/nginx.conf")
-    insert_at = idx + len(marker)
-    text = text[:insert_at] + "\n" + include_line + text[insert_at:]
-if "/etc/nginx/frameworks-http.d/*.conf" not in text:
-    marker = "http {"
-    idx = text.find(marker)
-    if idx == -1:
-        raise SystemExit("http block not found in /etc/nginx/nginx.conf")
-    insert_at = idx + len(marker)
-    text = text[:insert_at] + "\n" + snippet_include_line + text[insert_at:]
-path.write_text(text)
-PY
-rm -f /etc/nginx/sites-available/frameworks.conf /etc/nginx/sites-enabled/frameworks.conf /etc/nginx/conf.d/frameworks.conf
-systemctl enable nginx
-systemctl start nginx
-`, nginxPackageInstallCommand(family, requiresGeoIP), packageInstallCommand(family, distroPythonPackage(family)))
+	pythonPkg := distroPythonPackage(family)
+	nginxPkgs := nginxPackageNames(family, requiresGeoIP)
 
-	result, err := n.ExecuteScript(ctx, host, setupScript)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to install packaged nginx: %w (stderr: %s)", err, result.Stderr)
+	tasks := []ansible.Task{}
+	for _, pkg := range nginxPkgs {
+		tasks = append(tasks, ansible.TaskPackage(pkg, ansible.PackagePresent))
+	}
+	tasks = append(tasks,
+		ansible.TaskPackage(pythonPkg, ansible.PackagePresent),
+		ansible.Task{
+			Name:   "ensure nginx sites-available dir",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/nginx/sites-available", "state": "directory", "mode": "0755"},
+		},
+		ansible.Task{
+			Name:   "ensure nginx sites-enabled dir",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/nginx/sites-enabled", "state": "directory", "mode": "0755"},
+		},
+		ansible.Task{
+			Name:   "ensure nginx frameworks-http.d dir",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/nginx/frameworks-http.d", "state": "directory", "mode": "0755"},
+		},
+		// Locate the GeoIP2 module (path varies by distro). Empty result means
+		// no module shipped — we conditionally emit load_module below.
+		ansible.Task{
+			Name:   "locate nginx geoip2 module",
+			Module: "ansible.builtin.shell",
+			Args: map[string]any{
+				"cmd": "find /usr/lib64/nginx/modules /usr/lib/nginx/modules -maxdepth 1 -type f " +
+					`\( -name '*http_geoip2*.so' -o -name '*geoip2*.so' \) 2>/dev/null | head -n 1`,
+			},
+			Register:    "frameworks_geoip2",
+			ChangedWhen: "false",
+			Ignore:      true,
+		},
+		// load_module must appear at the top of nginx.conf; blockinfile with
+		// insertbefore BOF + a FrameWorks-scoped marker keeps it idempotent.
+		ansible.Task{
+			Name:   "insert geoip2 load_module at top of /etc/nginx/nginx.conf",
+			Module: "ansible.builtin.blockinfile",
+			Args: map[string]any{
+				"path":         "/etc/nginx/nginx.conf",
+				"block":        "load_module {{ frameworks_geoip2.stdout | trim }};",
+				"insertbefore": "BOF",
+				"marker":       "# {mark} FrameWorks geoip2 load_module",
+			},
+			When: "frameworks_geoip2.stdout | default('') | trim | length > 0",
+		},
+		// Two independent include directives, each bracketed by its own marker
+		// so neither can be accidentally deduped. insertafter puts them right
+		// inside `http {` — matching the original Python munging exactly.
+		ansible.Task{
+			Name:   "ensure sites-enabled include inside http block",
+			Module: "ansible.builtin.blockinfile",
+			Args: map[string]any{
+				"path":        "/etc/nginx/nginx.conf",
+				"block":       "    include /etc/nginx/sites-enabled/*;",
+				"insertafter": `^\s*http\s*\{`,
+				"marker":      "    # {mark} FrameWorks sites-enabled include",
+			},
+		},
+		ansible.Task{
+			Name:   "ensure frameworks-http.d include inside http block",
+			Module: "ansible.builtin.blockinfile",
+			Args: map[string]any{
+				"path":        "/etc/nginx/nginx.conf",
+				"block":       "    include /etc/nginx/frameworks-http.d/*.conf;",
+				"insertafter": `^\s*http\s*\{`,
+				"marker":      "    # {mark} FrameWorks frameworks-http.d include",
+			},
+		},
+		// Historical frameworks.conf locations: older versions dropped a single
+		// conf file under sites-available/sites-enabled/conf.d. The new layout
+		// spreads it across sites-enabled/ and frameworks-http.d/, so clear the
+		// old locations to avoid duplicate-server-name warnings.
+		ansible.Task{
+			Name:   "remove legacy sites-available frameworks.conf",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/nginx/sites-available/frameworks.conf", "state": "absent"},
+		},
+		ansible.Task{
+			Name:   "remove legacy sites-enabled frameworks.conf",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/nginx/sites-enabled/frameworks.conf", "state": "absent"},
+		},
+		ansible.Task{
+			Name:   "remove legacy conf.d frameworks.conf",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/nginx/conf.d/frameworks.conf", "state": "absent"},
+		},
+		ansible.TaskSystemdService("nginx", ansible.SystemdOpts{
+			State:   "started",
+			Enabled: ansible.BoolPtr(true),
+		}),
+	)
+
+	playbook := &ansible.Playbook{
+		Name:  "Install Nginx (native)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Install packaged Nginx",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: false,
+				Tasks:       tasks,
+			},
+		},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": n.pool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := n.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("nginx install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("nginx install playbook failed\nOutput: %s", result.Output)
 	}
 
 	fmt.Printf("✓ Nginx provisioned in native mode on %s\n", host.ExternalIP)
 	return nil
 }
 
-// Validate checks health
-func (n *NginxProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	checker := &health.HTTPChecker{
-		Path:    "/health",
-		Timeout: 5,
+// nginxPackageNames returns the distro-specific nginx package names. GeoIP2
+// packages differ per distro: Debian/Ubuntu name them libnginx-mod-*, Arch
+// has nginx-mod-geoip2, and RHEL may ship them separately (best-effort).
+func nginxPackageNames(family string, requiresGeoIP bool) []string {
+	switch family {
+	case "debian":
+		return []string{"nginx", "libnginx-mod-http-geoip2", "libnginx-mod-stream-geoip2"}
+	case "rhel":
+		if requiresGeoIP {
+			// nginx-mod-http-geoip2 exists on AlmaLinux/Rocky; skipped if missing.
+			return []string{"nginx", "nginx-mod-http-geoip2"}
+		}
+		return []string{"nginx"}
+	case "arch":
+		return []string{"nginx", "nginx-mod-geoip2"}
+	default:
+		return []string{"nginx"}
 	}
-	result := checker.Check(host.ExternalIP, 80)
-	if !result.OK {
+}
+
+// Validate runs goss (service + ports + config file present), then the
+// /health HTTP probe, then TCP on 80/443.
+func (n *NginxProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if _, remoteArch, err := n.DetectRemoteArch(ctx, host); err == nil {
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Services: map[string]ansible.GossService{
+				"nginx": {Running: true, Enabled: true},
+			},
+			Ports: map[string]ansible.GossPort{
+				"tcp:80":  {Listening: true},
+				"tcp:443": {Listening: true},
+			},
+			Files: map[string]ansible.GossFile{
+				"/etc/nginx/nginx.conf": {Exists: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, n.executor, n.pool.DefaultKeyPath(), host,
+			"nginx", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("nginx goss validate failed: %w", gossErr)
+		}
+	}
+
+	checker := &health.HTTPChecker{Path: "/health", Timeout: 5}
+	if result := checker.Check(host.ExternalIP, 80); !result.OK {
 		return fmt.Errorf("nginx health check failed: %s", result.Error)
 	}
-
-	publicHTTP := &health.TCPChecker{
-		Timeout: 5 * time.Second,
+	publicTLS := &health.TCPChecker{Timeout: 5 * time.Second}
+	if result := publicTLS.Check(host.ExternalIP, 443); !result.OK {
+		return fmt.Errorf("nginx HTTPS port check failed: %s", result.Error)
 	}
-	httpResult := publicHTTP.Check(host.ExternalIP, 80)
-	if !httpResult.OK {
-		return fmt.Errorf("nginx HTTP port check failed: %s", httpResult.Error)
-	}
-
-	publicTLS := &health.TCPChecker{
-		Timeout: 5 * time.Second,
-	}
-	tlsResult := publicTLS.Check(host.ExternalIP, 443)
-	if !tlsResult.OK {
-		return fmt.Errorf("nginx HTTPS port check failed: %s", tlsResult.Error)
-	}
-
 	return nil
 }
 
@@ -344,42 +448,6 @@ func localServicePorts(metadata map[string]any) map[string]int {
 		"steward":   ServicePorts["steward"],
 		"listmonk":  ServicePorts["listmonk"],
 		"chatwoot":  ServicePorts["chatwoot"],
-	}
-}
-
-func packageInstallCommand(family, pkg string) string {
-	switch family {
-	case "debian":
-		return fmt.Sprintf("apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y %s", pkg)
-	case "rhel":
-		return fmt.Sprintf("(dnf install -y %s || yum install -y %s)", pkg, pkg)
-	case "arch":
-		return fmt.Sprintf("pacman -Syu --noconfirm --needed %s", pkg)
-	default:
-		return "echo unsupported distro && exit 1"
-	}
-}
-
-func nginxPackageInstallCommand(family string, requiresGeoIP bool) string {
-	switch family {
-	case "debian":
-		return "apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y nginx libnginx-mod-http-geoip2 libnginx-mod-stream-geoip2"
-	case "rhel":
-		if !requiresGeoIP {
-			return "(dnf install -y nginx || yum install -y nginx)"
-		}
-		return `(dnf install -y nginx || yum install -y nginx)
-if command -v dnf >/dev/null 2>&1; then
-  dnf install -y nginx-module-geoip2 || dnf install -y nginx-mod-http-geoip2 || true
-elif command -v yum >/dev/null 2>&1; then
-  yum install -y nginx-module-geoip2 || yum install -y nginx-mod-http-geoip2 || true
-fi
-MODULE_PATH=$(find /usr/lib64/nginx/modules /usr/lib/nginx/modules -maxdepth 1 -type f \( -name '*http_geoip2*.so' -o -name '*geoip2*.so' \) 2>/dev/null | head -n 1)
-[ -n "$MODULE_PATH" ] || { echo "GeoIP2 module required but not available on this RHEL host" >&2; exit 1; }`
-	case "arch":
-		return "pacman -Syu --noconfirm --needed nginx nginx-mod-geoip2"
-	default:
-		return "echo unsupported distro && exit 1"
 	}
 }
 

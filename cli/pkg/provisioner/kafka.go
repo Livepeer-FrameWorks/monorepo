@@ -49,13 +49,10 @@ func (k *KafkaProvisioner) Detect(ctx context.Context, host inventory.Host) (*de
 	return k.CheckExists(ctx, host, k.GetName())
 }
 
-// Provision installs Kafka using Ansible (dispatches by role).
+// Provision installs Kafka using Ansible (dispatches by role). Runs every
+// apply — each task's idempotence gate handles reruns on healthy hosts, and
+// config/unit drift gets reconciled.
 func (k *KafkaProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, err := k.Detect(ctx, host)
-	if err == nil && state.Exists && state.Running {
-		return nil
-	}
-
 	role, _ := config.Metadata["role"].(string) //nolint:errcheck // metadata validated by schema
 	switch role {
 	case "controller":
@@ -92,13 +89,20 @@ func (k *KafkaProvisioner) provisionController(ctx context.Context, host invento
 		controllerPort = 9093
 	}
 
-	amd, arm, err := resolveLinuxArtifacts("kafka", config.Metadata)
+	_, remoteArch, err := k.DetectRemoteArch(ctx, host)
+	if err != nil {
+		return fmt.Errorf("detect remote arch: %w", err)
+	}
+	artifact, err := resolveInfraArtifactFromChannel("kafka", "linux-"+remoteArch, platformChannelFromMetadata(config.Metadata), config.Metadata)
 	if err != nil {
 		return err
 	}
-	downloadSnippet := archSwitchedDownloadSnippet(amd, arm, "/tmp/kafka.tgz")
+	javaSpec, err := k.resolveJavaSpec(ctx, host)
+	if err != nil {
+		return err
+	}
 
-	playbook := ansible.GenerateKafkaControllerPlaybook(config.Version, nodeID, hostID, controllerPort, bootstrapServers, clusterID, initialControllers, downloadSnippet)
+	playbook := ansible.GenerateKafkaControllerPlaybook(config.Version, nodeID, hostID, controllerPort, bootstrapServers, clusterID, initialControllers, artifact.URL, artifact.Checksum, javaSpec)
 	return k.executePlaybook(ctx, host, playbook)
 }
 
@@ -126,13 +130,20 @@ func (k *KafkaProvisioner) provisionBroker(ctx context.Context, host inventory.H
 		port = 9092
 	}
 
-	amd, arm, err := resolveLinuxArtifacts("kafka", config.Metadata)
+	_, remoteArch, err := k.DetectRemoteArch(ctx, host)
+	if err != nil {
+		return fmt.Errorf("detect remote arch: %w", err)
+	}
+	artifact, err := resolveInfraArtifactFromChannel("kafka", "linux-"+remoteArch, platformChannelFromMetadata(config.Metadata), config.Metadata)
 	if err != nil {
 		return err
 	}
-	downloadSnippet := archSwitchedDownloadSnippet(amd, arm, "/tmp/kafka.tgz")
+	javaSpec, err := k.resolveJavaSpec(ctx, host)
+	if err != nil {
+		return err
+	}
 
-	playbook := ansible.GenerateKafkaBrokerPlaybook(config.Version, nodeID, hostID, port, bootstrapServers, clusterID, config.Metadata, downloadSnippet)
+	playbook := ansible.GenerateKafkaBrokerPlaybook(config.Version, nodeID, hostID, port, bootstrapServers, clusterID, config.Metadata, artifact.URL, artifact.Checksum, javaSpec)
 	return k.executePlaybook(ctx, host, playbook)
 }
 
@@ -164,14 +175,35 @@ func (k *KafkaProvisioner) provisionCombined(ctx context.Context, host inventory
 		port = 9092
 	}
 
-	amd, arm, err := resolveLinuxArtifacts("kafka", config.Metadata)
+	_, remoteArch, err := k.DetectRemoteArch(ctx, host)
+	if err != nil {
+		return fmt.Errorf("detect remote arch: %w", err)
+	}
+	artifact, err := resolveInfraArtifactFromChannel("kafka", "linux-"+remoteArch, platformChannelFromMetadata(config.Metadata), config.Metadata)
 	if err != nil {
 		return err
 	}
-	downloadSnippet := archSwitchedDownloadSnippet(amd, arm, "/tmp/kafka.tgz")
+	javaSpec, err := k.resolveJavaSpec(ctx, host)
+	if err != nil {
+		return err
+	}
 
-	playbook := ansible.GenerateKafkaKRaftPlaybook(config.Version, brokerID, hostID, port, controllerPort, controllerQuorum, clusterID, config.Metadata, downloadSnippet)
+	playbook := ansible.GenerateKafkaKRaftPlaybook(config.Version, brokerID, hostID, port, controllerPort, controllerQuorum, clusterID, config.Metadata, artifact.URL, artifact.Checksum, javaSpec)
 	return k.executePlaybook(ctx, host, playbook)
+}
+
+// resolveJavaSpec detects the host's distro family and returns the matching
+// JRE package spec, erroring if the family isn't in JavaRuntimePackages.
+func (k *KafkaProvisioner) resolveJavaSpec(ctx context.Context, host inventory.Host) (ansible.DistroPackageSpec, error) {
+	family, err := k.DetectDistroFamily(ctx, host)
+	if err != nil {
+		return ansible.DistroPackageSpec{}, fmt.Errorf("detect distro family: %w", err)
+	}
+	spec, ok := ansible.ResolveDistroPackage(ansible.JavaRuntimePackages, family)
+	if !ok {
+		return ansible.DistroPackageSpec{}, fmt.Errorf("kafka: unsupported distro family %q for Java install", family)
+	}
+	return spec, nil
 }
 
 func (k *KafkaProvisioner) executePlaybook(ctx context.Context, host inventory.Host, playbook *ansible.Playbook) error {
@@ -219,9 +251,34 @@ func validateApacheKafkaVersion(version string) error {
 
 // Validate checks if Kafka is healthy.
 // Controllers use TCP check (no broker protocol on controller listener).
-// Brokers and combined-mode nodes use Sarama broker check.
+// Brokers and combined-mode nodes use Sarama broker check. goss runs first to
+// catch structural regressions before the protocol-level check.
 func (k *KafkaProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	role, _ := config.Metadata["role"].(string) //nolint:errcheck // metadata validated by schema
+
+	if _, remoteArch, err := k.DetectRemoteArch(ctx, host); err == nil {
+		unit := "frameworks-kafka"
+		filePresent := "/opt/kafka/bin/kafka-server-start.sh"
+		if role == "controller" {
+			unit = "frameworks-kafka-controller"
+		}
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Services: map[string]ansible.GossService{
+				unit: {Running: true, Enabled: true},
+			},
+			Ports: map[string]ansible.GossPort{
+				fmt.Sprintf("tcp:%d", config.Port): {Listening: true},
+			},
+			Files: map[string]ansible.GossFile{
+				filePresent: {Exists: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, k.executor, k.sshPool.DefaultKeyPath(), host,
+			"kafka-"+role, platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("kafka goss validate failed: %w", gossErr)
+		}
+	}
+
 	if role == "controller" {
 		checker := &health.TCPChecker{}
 		result := checker.Check(host.ExternalIP, config.Port)
@@ -247,7 +304,7 @@ func (k *KafkaProvisioner) Initialize(ctx context.Context, host inventory.Host, 
 		return nil
 	}
 
-	topicsConfig, ok := config.Metadata["topics"].([]map[string]interface{})
+	topicsConfig, ok := config.Metadata["topics"].([]map[string]any)
 	if !ok {
 		fmt.Println("No topics to create")
 		return nil
@@ -262,7 +319,7 @@ func (k *KafkaProvisioner) Initialize(ctx context.Context, host inventory.Host, 
 		replication := int16(topicCfg["replication_factor"].(int)) //nolint:errcheck // config validated by schema
 
 		kafkaConfig := make(map[string]*string)
-		if cfg, ok := topicCfg["config"].(map[string]interface{}); ok {
+		if cfg, ok := topicCfg["config"].(map[string]any); ok {
 			for k, v := range cfg {
 				val := fmt.Sprintf("%v", v)
 				kafkaConfig[k] = &val

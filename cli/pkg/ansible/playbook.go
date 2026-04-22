@@ -93,6 +93,14 @@ func convertTasks(tasks []Task) []map[string]any {
 			taskMap["when"] = task.When
 		}
 
+		if task.ChangedWhen != "" {
+			taskMap["changed_when"] = task.ChangedWhen
+		}
+
+		if len(task.Environment) > 0 {
+			taskMap["environment"] = task.Environment
+		}
+
 		if task.Register != "" {
 			taskMap["register"] = task.Register
 		}
@@ -147,8 +155,6 @@ func convertHandlers(handlers []Handler) []map[string]any {
 
 	return result
 }
-
-const defaultApacheKafkaVersion = "3.6.0"
 
 // GeneratePostgresPlaybook creates an Ansible playbook for PostgreSQL.
 // PostgresManagedConfBlock returns the bytes inserted into postgresql.conf's
@@ -208,238 +214,279 @@ WantedBy=multi-user.target
 `, dataDir)
 }
 
-func GeneratePostgresPlaybook(host, version string, databases []string, downloadSnippet string) *Playbook {
+// PostgresInstallParams describes a Postgres provisioning request after the
+// caller has detected distro family + arch + resolved any artifact.
+type PostgresInstallParams struct {
+	DistroFamily     string // "debian" | "rhel" | "arch"
+	Version          string // empty = vendor-package install; non-empty = source-build
+	Databases        []string
+	ArtifactURL      string // pinned tarball URL (only for source-build)
+	ArtifactChecksum string // pinned tarball checksum
+	ServiceName      string // distro's postgres service name; debian:"postgresql", rhel-pkg:"postgresql", arch-pkg:"postgresql", source-build:"postgresql"
+}
+
+// GeneratePostgresPlaybook creates an Ansible playbook for PostgreSQL using
+// the typed task model. Distro family decides which install path: vendor
+// package on debian (always) and on rhel/arch when no version is pinned;
+// source-build on rhel/arch when a version is pinned.
+func GeneratePostgresPlaybook(host string, params PostgresInstallParams) *Playbook {
 	playbook := NewPlaybook("Provision PostgreSQL", host)
-	normalizedVersion := strings.TrimSpace(version)
-	switch normalizedVersion {
-	case "", "latest", "stable":
-		normalizedVersion = ""
-	}
-	managedConf := string(PostgresManagedConfBlock())
-	managedHBA := string(PostgresManagedHBABlock())
 
-	installScript := fmt.Sprintf(`set -euo pipefail
+	managedConf := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(string(PostgresManagedConfBlock()), "\n# frameworks managed end\n"), "# frameworks managed begin\n"))
+	managedHBA := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(string(PostgresManagedHBABlock()), "\n# frameworks managed end\n"), "# frameworks managed begin\n"))
 
-__FRAMEWORKS_TAR_HELPERS__
+	var (
+		tasks    []Task
+		pgConf   string
+		pgHBA    string
+		dataDir  string
+		svcName  = "postgresql"
+		needsDir = false
+	)
 
-PG_SERVICE=postgresql
-PGCONF=""
-PGHBA=""
-POSTGRES_VERSION=%q
-PG_MAJOR="${POSTGRES_VERSION%%.*}"
-FRAMEWORKS_PG_MANAGED_CONF=$(cat <<'FRAMEWORKS_PG_CONF_EOF'
-%s
-FRAMEWORKS_PG_CONF_EOF
-)
-FRAMEWORKS_PG_MANAGED_HBA=$(cat <<'FRAMEWORKS_PG_HBA_EOF'
-%s
-FRAMEWORKS_PG_HBA_EOF
-)
-
-if command -v apt-get >/dev/null 2>&1; then
-  apt-get -o DPkg::Lock::Timeout=300 update
-  if [ -n "$PG_MAJOR" ]; then
-    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y "postgresql-$PG_MAJOR" postgresql-contrib
-  else
-    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y postgresql postgresql-contrib
-  fi
-  PGCONF=$(find /etc/postgresql -path '*/main/postgresql.conf' | head -n 1)
-  PGHBA=$(find /etc/postgresql -path '*/main/pg_hba.conf' | head -n 1)
-elif command -v dnf >/dev/null 2>&1; then
-  shell=/usr/bin/nologin
-  [ ! -x "$shell" ] && shell=/sbin/nologin
-  [ ! -x "$shell" ] && shell=/bin/false
-  getent group postgres >/dev/null || groupadd --system postgres
-  id -u postgres >/dev/null 2>&1 || useradd -r -g postgres -d /var/lib/postgresql -s "$shell" postgres
-  if [ -n "$POSTGRES_VERSION" ]; then
-    dnf install -y gcc make readline-devel zlib-devel openssl-devel libicu-devel curl tar
-    PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
-    if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
-__FRAMEWORKS_PG_DOWNLOAD__
-      extract_tarball_to /tmp/postgresql.tar.bz2 /tmp/postgresql-src
-      cd /tmp/postgresql-src
-      ./configure --prefix="${PGPREFIX}"
-      make -j"$(nproc)"
-      make install
-      rm -rf /tmp/postgresql-src /tmp/postgresql.tar.bz2
-    fi
-    ln -sfn "${PGPREFIX}" /opt/postgresql
-    install -d -m 0700 -o postgres -g postgres /var/lib/postgresql/data
-    if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
-      su -s /bin/sh postgres -c '/opt/postgresql/bin/initdb -D /var/lib/postgresql/data'
-    fi
-    cat > /etc/systemd/system/postgresql.service <<'EOF'
-[Unit]
-Description=PostgreSQL database server
-After=network.target
-
-[Service]
-Type=simple
-User=postgres
-Group=postgres
-ExecStart=/opt/postgresql/bin/postgres -D /var/lib/postgresql/data
-ExecReload=/bin/kill -HUP $MAINPID
-KillMode=mixed
-KillSignal=SIGINT
-TimeoutSec=0
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    PGCONF=/var/lib/postgresql/data/postgresql.conf
-    PGHBA=/var/lib/postgresql/data/pg_hba.conf
-  else
-    dnf install -y postgresql-server postgresql
-    [ -f /var/lib/pgsql/data/PG_VERSION ] || postgresql-setup --initdb
-    PGCONF=/var/lib/pgsql/data/postgresql.conf
-    PGHBA=/var/lib/pgsql/data/pg_hba.conf
-  fi
-elif command -v yum >/dev/null 2>&1; then
-  shell=/usr/bin/nologin
-  [ ! -x "$shell" ] && shell=/sbin/nologin
-  [ ! -x "$shell" ] && shell=/bin/false
-  getent group postgres >/dev/null || groupadd --system postgres
-  id -u postgres >/dev/null 2>&1 || useradd -r -g postgres -d /var/lib/postgresql -s "$shell" postgres
-  if [ -n "$POSTGRES_VERSION" ]; then
-    yum install -y gcc make readline-devel zlib-devel openssl-devel libicu-devel curl tar
-    PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
-    if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
-__FRAMEWORKS_PG_DOWNLOAD__
-      extract_tarball_to /tmp/postgresql.tar.bz2 /tmp/postgresql-src
-      cd /tmp/postgresql-src
-      ./configure --prefix="${PGPREFIX}"
-      make -j"$(nproc)"
-      make install
-      rm -rf /tmp/postgresql-src /tmp/postgresql.tar.bz2
-    fi
-    ln -sfn "${PGPREFIX}" /opt/postgresql
-    install -d -m 0700 -o postgres -g postgres /var/lib/postgresql/data
-    if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
-      su -s /bin/sh postgres -c '/opt/postgresql/bin/initdb -D /var/lib/postgresql/data'
-    fi
-    cat > /etc/systemd/system/postgresql.service <<'EOF'
-[Unit]
-Description=PostgreSQL database server
-After=network.target
-
-[Service]
-Type=simple
-User=postgres
-Group=postgres
-ExecStart=/opt/postgresql/bin/postgres -D /var/lib/postgresql/data
-ExecReload=/bin/kill -HUP $MAINPID
-KillMode=mixed
-KillSignal=SIGINT
-TimeoutSec=0
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    PGCONF=/var/lib/postgresql/data/postgresql.conf
-    PGHBA=/var/lib/postgresql/data/pg_hba.conf
-  else
-    yum install -y postgresql-server postgresql
-    [ -f /var/lib/pgsql/data/PG_VERSION ] || postgresql-setup initdb
-    PGCONF=/var/lib/pgsql/data/postgresql.conf
-    PGHBA=/var/lib/pgsql/data/pg_hba.conf
-  fi
-elif command -v pacman >/dev/null 2>&1; then
-  shell=/usr/bin/nologin
-  [ ! -x "$shell" ] && shell=/sbin/nologin
-  [ ! -x "$shell" ] && shell=/bin/false
-  getent group postgres >/dev/null || groupadd --system postgres
-  id -u postgres >/dev/null 2>&1 || useradd -r -g postgres -d /var/lib/postgres -s "$shell" postgres
-  if [ -n "$POSTGRES_VERSION" ]; then
-    pacman -Syu --noconfirm --needed base-devel curl icu krb5 openssl readline zlib
-    PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
-    if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
-__FRAMEWORKS_PG_DOWNLOAD__
-      extract_tarball_to /tmp/postgresql.tar.bz2 /tmp/postgresql-src
-      cd /tmp/postgresql-src
-      ./configure --prefix="${PGPREFIX}"
-      make -j"$(nproc)"
-      make install
-      rm -rf /tmp/postgresql-src /tmp/postgresql.tar.bz2
-    fi
-    ln -sfn "${PGPREFIX}" /opt/postgresql
-    install -d -m 0700 -o postgres -g postgres /var/lib/postgres/data
-    if [ ! -f /var/lib/postgres/data/PG_VERSION ]; then
-      su -s /bin/sh postgres -c '/opt/postgresql/bin/initdb -D /var/lib/postgres/data'
-    fi
-    cat > /etc/systemd/system/postgresql.service <<'EOF'
-[Unit]
-Description=PostgreSQL database server
-After=network.target
-
-[Service]
-Type=simple
-User=postgres
-Group=postgres
-ExecStart=/opt/postgresql/bin/postgres -D /var/lib/postgres/data
-ExecReload=/bin/kill -HUP $MAINPID
-KillMode=mixed
-KillSignal=SIGINT
-TimeoutSec=0
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    PGCONF=/var/lib/postgres/data/postgresql.conf
-    PGHBA=/var/lib/postgres/data/pg_hba.conf
-  else
-    pacman -Syu --noconfirm --needed postgresql
-    install -d -m 0700 -o postgres -g postgres /var/lib/postgres/data
-    if [ ! -f /var/lib/postgres/data/PG_VERSION ]; then
-      su -s /bin/sh postgres -c 'initdb -D /var/lib/postgres/data'
-    fi
-    PGCONF=/var/lib/postgres/data/postgresql.conf
-    PGHBA=/var/lib/postgres/data/pg_hba.conf
-  fi
-else
-  echo "unsupported package manager" >&2
-  exit 1
-fi
-
-if [ -z "$PGCONF" ] || [ -z "$PGHBA" ] || [ ! -f "$PGCONF" ] || [ ! -f "$PGHBA" ]; then
-  echo "failed to locate postgresql.conf or pg_hba.conf" >&2
-  exit 1
-fi
-
-sed -i '/# frameworks managed begin/,/# frameworks managed end/d' "$PGCONF"
-printf '%%s' "${FRAMEWORKS_PG_MANAGED_CONF}" >> "$PGCONF"
-
-sed -i '/# frameworks managed begin/,/# frameworks managed end/d' "$PGHBA"
-printf '%%s' "${FRAMEWORKS_PG_MANAGED_HBA}" >> "$PGHBA"
-
-systemctl enable postgresql
-systemctl restart postgresql
-%s
-`, normalizedVersion, managedConf, managedHBA, postgresDatabaseBootstrapCommands(databases))
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_TAR_HELPERS__", SafeTarballExtractSnippet, 1)
-	installScript = strings.ReplaceAll(installScript, "__FRAMEWORKS_PG_DOWNLOAD__", downloadSnippet)
-
-	play := Play{
-		Name:        "Install and configure PostgreSQL",
-		Hosts:       host,
-		Become:      true,
-		GatherFacts: true,
-		Tasks: []Task{
-			{
-				Name:   "Install and configure PostgreSQL packages and config",
-				Module: "shell",
-				Args: map[string]any{
-					"cmd":        installScript,
-					"executable": "/bin/bash",
+	switch params.DistroFamily {
+	case "debian":
+		tasks, pgConf, pgHBA = postgresDebianTasks(params.Version)
+	case "rhel":
+		if params.Version != "" {
+			dataDir = "/var/lib/postgresql/data"
+			tasks = postgresSourceBuildTasks("rhel", params.Version, params.ArtifactURL, params.ArtifactChecksum, dataDir)
+			pgConf, pgHBA = dataDir+"/postgresql.conf", dataDir+"/pg_hba.conf"
+			needsDir = true
+		} else {
+			pgConf, pgHBA = "/var/lib/pgsql/data/postgresql.conf", "/var/lib/pgsql/data/pg_hba.conf"
+			tasks = []Task{
+				TaskPackage("postgresql-server", PackagePresent),
+				TaskPackage("postgresql", PackagePresent),
+				TaskShell("postgresql-setup --initdb", ShellOpts{Creates: "/var/lib/pgsql/data/PG_VERSION"}),
+			}
+		}
+	case "arch":
+		if params.Version != "" {
+			dataDir = "/var/lib/postgres/data"
+			tasks = postgresSourceBuildTasks("arch", params.Version, params.ArtifactURL, params.ArtifactChecksum, dataDir)
+			pgConf, pgHBA = dataDir+"/postgresql.conf", dataDir+"/pg_hba.conf"
+			needsDir = true
+		} else {
+			dataDir = "/var/lib/postgres/data"
+			pgConf, pgHBA = dataDir+"/postgresql.conf", dataDir+"/pg_hba.conf"
+			tasks = []Task{
+				TaskPackage("postgresql", PackagePresent),
+				{
+					Name:   "create postgres data dir",
+					Module: "ansible.builtin.file",
+					Args:   map[string]any{"path": dataDir, "state": "directory", "owner": "postgres", "group": "postgres", "mode": "0700"},
 				},
+				TaskShell("su -s /bin/sh postgres -c 'initdb -D "+dataDir+"'", ShellOpts{Creates: dataDir + "/PG_VERSION"}),
+			}
+		}
+	default:
+		// Unknown family: emit a single shell task that fails clearly.
+		tasks = []Task{
+			TaskShell(`echo "unsupported package manager" >&2; exit 1`, ShellOpts{ChangedWhen: "false"}),
+		}
+		playbook.AddPlay(Play{Name: "Provision PostgreSQL", Hosts: host, Become: true, GatherFacts: true, Tasks: tasks})
+		return playbook
+	}
+
+	// Source-build path needs the data dir created upfront.
+	if needsDir {
+		tasks = append(tasks,
+			Task{
+				Name:   "create postgres data dir",
+				Module: "ansible.builtin.file",
+				Args:   map[string]any{"path": dataDir, "state": "directory", "owner": "postgres", "group": "postgres", "mode": "0700"},
+			},
+			TaskShell("su -s /bin/sh postgres -c '/opt/postgresql/bin/initdb -D "+dataDir+"'", ShellOpts{Creates: dataDir + "/PG_VERSION"}),
+			TaskCopy("/etc/systemd/system/postgresql.service", string(PostgresSourceBuiltSystemdUnit(dataDir)), CopyOpts{Mode: "0644"}),
+		)
+	}
+
+	// Common post-install: managed config blocks (idempotent via blockinfile)
+	// + service start + database bootstrap.
+	if params.DistroFamily == "debian" {
+		// Debian's path lookup happens at apply time via shell+register because
+		// the conf path includes the major version (e.g. /etc/postgresql/15/main).
+		tasks = append(tasks,
+			Task{
+				Name:        "find debian postgresql.conf",
+				Module:      "ansible.builtin.shell",
+				Args:        map[string]any{"cmd": "find /etc/postgresql -path '*/main/postgresql.conf' | head -n 1", "executable": "/bin/bash"},
+				Register:    "pgconf_path",
+				ChangedWhen: "false",
+			},
+			Task{
+				Name:        "find debian pg_hba.conf",
+				Module:      "ansible.builtin.shell",
+				Args:        map[string]any{"cmd": "find /etc/postgresql -path '*/main/pg_hba.conf' | head -n 1", "executable": "/bin/bash"},
+				Register:    "pghba_path",
+				ChangedWhen: "false",
+			},
+			Task{
+				Name:   "managed block in postgresql.conf",
+				Module: "ansible.builtin.blockinfile",
+				Args: map[string]any{
+					"path":   "{{ pgconf_path.stdout }}",
+					"marker": "# frameworks managed {mark}",
+					"block":  managedConf,
+				},
+			},
+			Task{
+				Name:   "managed block in pg_hba.conf",
+				Module: "ansible.builtin.blockinfile",
+				Args: map[string]any{
+					"path":   "{{ pghba_path.stdout }}",
+					"marker": "# frameworks managed {mark}",
+					"block":  managedHBA,
+				},
+			},
+		)
+	} else {
+		tasks = append(tasks,
+			Task{
+				Name:   "managed block in postgresql.conf",
+				Module: "ansible.builtin.blockinfile",
+				Args: map[string]any{
+					"path":   pgConf,
+					"marker": "# frameworks managed {mark}",
+					"block":  managedConf,
+				},
+			},
+			Task{
+				Name:   "managed block in pg_hba.conf",
+				Module: "ansible.builtin.blockinfile",
+				Args: map[string]any{
+					"path":   pgHBA,
+					"marker": "# frameworks managed {mark}",
+					"block":  managedHBA,
+				},
+			},
+		)
+	}
+
+	tasks = append(tasks, TaskSystemdService(svcName, SystemdOpts{
+		State:        "restarted",
+		Enabled:      BoolPtr(true),
+		DaemonReload: needsDir, // only source-build wrote a fresh unit file
+	}))
+
+	// Database bootstrap: idempotent createdb-if-not-exists shell per database.
+	for _, name := range params.Databases {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		quoted := strings.ReplaceAll(name, `'`, `''`)
+		cmd := fmt.Sprintf("su -s /bin/sh postgres -c \"psql -tAc \\\"SELECT 1 FROM pg_database WHERE datname='%s'\\\" | grep -q 1 || createdb %s\"", quoted, name)
+		tasks = append(tasks, TaskShell(cmd, ShellOpts{ChangedWhen: "false"}))
+	}
+
+	playbook.AddPlay(Play{Name: "Install and configure PostgreSQL", Hosts: host, Become: true, GatherFacts: true, Tasks: tasks})
+	return playbook
+}
+
+// postgresDebianTasks returns the apt-managed install task list. Debian's
+// pgconf/pghba paths include the major version (e.g. /etc/postgresql/15/main),
+// so they're discovered at apply time rather than hardcoded.
+func postgresDebianTasks(version string) (tasks []Task, pgConfPath, pgHBAPath string) {
+	pkg := "postgresql"
+	if version != "" {
+		// Debian uses postgresql-N where N is the major version.
+		major := version
+		if dot := strings.Index(version, "."); dot > 0 {
+			major = version[:dot]
+		}
+		pkg = "postgresql-" + major
+	}
+	tasks = []Task{
+		{
+			Name:   "apt update",
+			Module: "ansible.builtin.apt",
+			Args:   map[string]any{"update_cache": true},
+		},
+		TaskPackage(pkg, PackagePresent),
+		TaskPackage("postgresql-contrib", PackagePresent),
+	}
+	// pgConfPath/pgHBAPath unused for debian (looked up at apply time via
+	// shell+register), returned as empty.
+	return tasks, "", ""
+}
+
+// postgresSourceBuildTasks returns the task list for the source-build path
+// (rhel/arch when a specific version is pinned). The build is gated by a
+// `creates:` marker on the installed binary so re-runs short-circuit.
+func postgresSourceBuildTasks(family, version, artifactURL, artifactChecksum, dataDir string) []Task {
+	prefix := "/opt/postgresql-" + version
+	tasks := []Task{
+		// Group + user.
+		{
+			Name:   "ensure postgres group",
+			Module: "ansible.builtin.group",
+			Args:   map[string]any{"name": "postgres", "system": true, "state": "present"},
+		},
+		{
+			Name:   "ensure postgres user",
+			Module: "ansible.builtin.user",
+			Args: map[string]any{
+				"name":   "postgres",
+				"group":  "postgres",
+				"system": true,
+				"home":   "/var/lib/postgresql",
+				"shell":  "/usr/sbin/nologin",
+				"state":  "present",
 			},
 		},
 	}
 
-	playbook.AddPlay(play)
-	return playbook
+	// Build-time deps (devel libs differ per family).
+	switch family {
+	case "rhel":
+		for _, p := range []string{"gcc", "make", "readline-devel", "zlib-devel", "openssl-devel", "libicu-devel", "curl", "tar"} {
+			tasks = append(tasks, TaskPackage(p, PackagePresent))
+		}
+	case "arch":
+		for _, p := range []string{"base-devel", "curl", "icu", "krb5", "openssl", "readline", "zlib"} {
+			tasks = append(tasks, TaskPackage(p, PackagePresent))
+		}
+	}
+
+	// Version-keyed sentinels rotate when the pinned URL/checksum changes so a
+	// version bump re-extracts + rebuilds instead of skipping on stale markers.
+	// The prefix itself is versioned (/opt/postgresql-<ver>), so Creates gates
+	// on the built binary there are also effectively version-keyed.
+	extractSentinel := ArtifactSentinel("/tmp/postgresql-src", artifactChecksum+artifactURL)
+	tasks = append(tasks,
+		TaskGetURL(artifactURL, "/tmp/postgresql.tar.bz2", artifactChecksum),
+		Task{
+			Name:   "create /tmp/postgresql-src",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/tmp/postgresql-src", "state": "directory", "mode": "0755"},
+		},
+		// Tarball + source tree stay in /tmp so same-version reruns short-
+		// circuit: get_url cache-hits via checksum, unarchive skips via the
+		// sentinel gate. The tree is large but /tmp is cleared on reboot;
+		// deleting it here would force re-download + re-extract every apply
+		// and break changed=0 idempotence.
+		TaskUnarchive("/tmp/postgresql.tar.bz2", "/tmp/postgresql-src", extractSentinel,
+			UnarchiveOpts{StripComponents: 1}),
+		TaskShell("touch "+extractSentinel, ShellOpts{Creates: extractSentinel}),
+		// configure + make + install. Gated by prefix/bin/postgres; when
+		// prefix is /opt/postgresql-<ver> this naturally rebuilds on version bumps.
+		TaskShell(
+			fmt.Sprintf(`./configure --prefix=%q && make -j"$(nproc)" && make install`, prefix),
+			ShellOpts{Creates: prefix + "/bin/postgres", Chdir: "/tmp/postgresql-src"},
+		),
+		Task{
+			Name:   "symlink /opt/postgresql",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"src": prefix, "dest": "/opt/postgresql", "state": "link", "force": true},
+		},
+	)
+
+	// dataDir referenced by caller for initdb + systemd unit emission; ignore
+	// here, but assert non-empty since the caller passes it in.
+	_ = dataDir
+	return tasks
 }
 
 // KafkaCombinedParams are the inputs for combined broker+controller mode.
@@ -487,26 +534,25 @@ delete.topic.enable=%t
 		p.MinISR, p.OffsetsRF, p.TxRF, p.TxMinISR, p.DeleteTopics)
 }
 
+// kafkaBrokerUnitSpec is the SystemdUnitSpec for frameworks-kafka.service.
+func kafkaBrokerUnitSpec() SystemdUnitSpec {
+	return SystemdUnitSpec{
+		Description: "FrameWorks Kafka Broker",
+		After:       []string{"network-online.target"},
+		Wants:       []string{"network-online.target"},
+		User:        "kafka",
+		Group:       "kafka",
+		ExecStart:   "/opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties",
+		ExecStop:    "/opt/kafka/bin/kafka-server-stop.sh",
+		Restart:     "always",
+		RestartSec:  5,
+		LimitNOFILE: "100000",
+	}
+}
+
 // BuildKafkaBrokerUnit returns the frameworks-kafka.service bytes.
 func BuildKafkaBrokerUnit() []byte {
-	return []byte(`[Unit]
-Description=FrameWorks Kafka Broker
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=kafka
-Group=kafka
-ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties
-ExecStop=/opt/kafka/bin/kafka-server-stop.sh
-Restart=always
-RestartSec=5
-LimitNOFILE=100000
-
-[Install]
-WantedBy=multi-user.target
-`)
+	return []byte(RenderSystemdUnit(kafkaBrokerUnitSpec()))
 }
 
 // KafkaControllerParams are the inputs for dedicated controller mode.
@@ -573,42 +619,91 @@ delete.topic.enable=%t
 		p.MinISR, p.OffsetsRF, p.TxRF, p.TxMinISR, p.DeleteTopics)
 }
 
+// kafkaControllerUnitSpec is the SystemdUnitSpec for frameworks-kafka-controller.service.
+func kafkaControllerUnitSpec() SystemdUnitSpec {
+	return SystemdUnitSpec{
+		Description: "FrameWorks Kafka Controller",
+		After:       []string{"network-online.target"},
+		Wants:       []string{"network-online.target"},
+		User:        "kafka",
+		Group:       "kafka",
+		ExecStart:   "/opt/kafka/bin/kafka-server-start.sh /etc/kafka-controller/server.properties",
+		ExecStop:    "/opt/kafka/bin/kafka-server-stop.sh",
+		Restart:     "always",
+		RestartSec:  5,
+		LimitNOFILE: "100000",
+	}
+}
+
 // BuildKafkaControllerUnit returns the frameworks-kafka-controller.service bytes.
 func BuildKafkaControllerUnit() []byte {
-	return []byte(`[Unit]
-Description=FrameWorks Kafka Controller
-After=network-online.target
-Wants=network-online.target
+	return []byte(RenderSystemdUnit(kafkaControllerUnitSpec()))
+}
 
-[Service]
-Type=simple
-User=kafka
-Group=kafka
-ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties
-ExecStop=/opt/kafka/bin/kafka-server-stop.sh
-Restart=always
-RestartSec=5
-LimitNOFILE=100000
-
-[Install]
-WantedBy=multi-user.target
-`)
+// kafkaCommonInstallTasks returns the shared prefix for every Kafka role:
+// prereqs (curl + Java), user/group, base dirs, download+extract. configDir
+// is "/etc/kafka" for combined/broker, "/etc/kafka-controller" for controller;
+// logsDir matches. javaSpec names the distro-correct JRE package, picked by
+// the caller from JavaRuntimePackages using DetectDistroFamily.
+func kafkaCommonInstallTasks(artifactURL, artifactChecksum, configDir, logsDir string, javaSpec DistroPackageSpec) []Task {
+	// Sentinel path rotates with the pinned artifact identity, so both the
+	// unarchive skip and the touch-marker shell trigger on a version bump.
+	sentinel := ArtifactSentinel("/opt/kafka", artifactChecksum+artifactURL)
+	return []Task{
+		TaskPackage("curl", PackagePresent),
+		TaskPackage(javaSpec.PackageName, PackagePresent),
+		{
+			Name:   "ensure kafka group",
+			Module: "ansible.builtin.group",
+			Args:   map[string]any{"name": "kafka", "system": true, "state": "present"},
+		},
+		{
+			Name:   "ensure kafka user",
+			Module: "ansible.builtin.user",
+			Args: map[string]any{
+				"name":   "kafka",
+				"group":  "kafka",
+				"system": true,
+				"shell":  "/usr/sbin/nologin",
+				"state":  "present",
+			},
+		},
+		{
+			Name:   "create " + configDir,
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": configDir, "state": "directory", "owner": "kafka", "group": "kafka", "mode": "0755"},
+		},
+		{
+			Name:   "create " + logsDir,
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": logsDir, "state": "directory", "owner": "kafka", "group": "kafka", "mode": "0755"},
+		},
+		{
+			Name:   "create /opt/kafka",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/opt/kafka", "state": "directory", "owner": "kafka", "group": "kafka", "mode": "0755"},
+		},
+		TaskGetURL(artifactURL, "/tmp/kafka.tgz", artifactChecksum),
+		// Tarball is intentionally left in /tmp. get_url with checksum matches
+		// the cached file on rerun and skips; deleting it would force a
+		// re-download every apply and break changed=0 idempotence.
+		TaskUnarchive("/tmp/kafka.tgz", "/opt/kafka", sentinel,
+			UnarchiveOpts{StripComponents: 1, Owner: "kafka", Group: "kafka"}),
+		TaskShell("touch "+sentinel+" && chown kafka:kafka "+sentinel,
+			ShellOpts{Creates: sentinel}),
+	}
 }
 
 // GenerateKafkaKRaftPlaybook creates an Ansible playbook for Kafka in KRaft mode (no ZooKeeper).
-// downloadSnippet must be a bash fragment that fetches the kafka tarball to /tmp/kafka.tgz
-// and verifies its checksum. Callers build it via the provisioner-side artifact resolver.
-func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port int, controllerPort int, controllerQuorum string, clusterID string, metadata map[string]any, downloadSnippet string) *Playbook {
+// artifactURL + artifactChecksum come from the provisioner-side artifact resolver
+// (pre-arch-selected).
+func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port int, controllerPort int, controllerQuorum string, clusterID string, metadata map[string]any, artifactURL, artifactChecksum string, javaSpec DistroPackageSpec) *Playbook {
 	playbook := NewPlaybook("Provision Kafka", host)
 	if port == 0 {
 		port = 9092
 	}
 	if controllerPort == 0 {
 		controllerPort = 9093
-	}
-	kafkaVersion := strings.TrimSpace(version)
-	if kafkaVersion == "" {
-		kafkaVersion = defaultApacheKafkaVersion
 	}
 
 	brokerCount := max(metadataInt(metadata, "broker_count", 1), 1)
@@ -631,92 +726,37 @@ func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port in
 		TxMinISR:         txMinISR,
 		DeleteTopics:     deleteTopics,
 	}))
-	brokerUnit := string(BuildKafkaBrokerUnit())
+	brokerUnit := RenderSystemdUnit(kafkaBrokerUnitSpec())
 
-	installScript := fmt.Sprintf(`set -euo pipefail
+	tasks := kafkaCommonInstallTasks(artifactURL, artifactChecksum, "/etc/kafka", "/var/lib/kafka/logs", javaSpec)
+	tasks = append(tasks,
+		TaskCopy("/etc/kafka/server.properties", serverProps, CopyOpts{Owner: "kafka", Group: "kafka", Mode: "0644"}),
+		// kafka-storage.sh format is required exactly once per cluster; the
+		// meta.properties marker is the idempotence key.
+		TaskShell(
+			fmt.Sprintf(`/opt/kafka/bin/kafka-storage.sh format -t %q -c /etc/kafka/server.properties`, clusterID),
+			ShellOpts{Creates: "/var/lib/kafka/logs/meta.properties"},
+		),
+		TaskCopy("/etc/systemd/system/frameworks-kafka.service", brokerUnit, CopyOpts{Mode: "0644"}),
+		TaskSystemdService("frameworks-kafka", SystemdOpts{State: "started", Enabled: BoolPtr(true), DaemonReload: true}),
+	)
 
-KAFKA_VERSION="%s"
-CLUSTER_ID="%s"
-SERVER_PROPS_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_SERVER_EOF'
-%s
-FRAMEWORKS_KAFKA_SERVER_EOF
-)
-BROKER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_UNIT_EOF'
-%s
-FRAMEWORKS_KAFKA_UNIT_EOF
-)
-
-shell=/usr/bin/nologin
-[ ! -x "$shell" ] && shell=/sbin/nologin
-[ ! -x "$shell" ] && shell=/bin/false
-__FRAMEWORKS_INSTALL_JAVA__
-getent group kafka >/dev/null || groupadd --system kafka
-id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
-
-mkdir -p /opt /etc/kafka /var/lib/kafka/logs
-if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
-  rm -rf /opt/kafka
-__FRAMEWORKS_KAFKA_DOWNLOAD__
-  extract_tarball_to /tmp/kafka.tgz /opt/kafka
-  rm -f /tmp/kafka.tgz
-fi
-
-printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka/server.properties
-
-if [ ! -f /var/lib/kafka/logs/meta.properties ]; then
-  /opt/kafka/bin/kafka-storage.sh format \
-    -t "${CLUSTER_ID}" \
-    -c /etc/kafka/server.properties
-fi
-
-printf '%%s' "${BROKER_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka.service
-
-chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
-systemctl daemon-reload
-`, kafkaVersion, clusterID, serverProps, brokerUnit)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet+SafeTarballExtractSnippet, 1)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
-
-	play := Play{
+	playbook.AddPlay(Play{
 		Name:        "Install and configure Kafka",
 		Hosts:       host,
 		Become:      true,
 		GatherFacts: true,
-		Tasks: []Task{
-			{
-				Name:   "Install Kafka runtime and configuration",
-				Module: "shell",
-				Args: map[string]any{
-					"cmd":        installScript,
-					"executable": "/bin/bash",
-				},
-			},
-			{
-				Name:   "Enable and start Kafka",
-				Module: "systemd",
-				Args: map[string]any{
-					"name":    "frameworks-kafka",
-					"enabled": true,
-					"state":   "started",
-				},
-			},
-		},
-	}
-
-	playbook.AddPlay(play)
+		Tasks:       tasks,
+	})
 	return playbook
 }
 
 // GenerateKafkaControllerPlaybook creates an Ansible playbook for a dedicated KRaft controller.
-// downloadSnippet is the bash fragment that fetches /tmp/kafka.tgz and verifies its checksum.
-func GenerateKafkaControllerPlaybook(version string, nodeID int, host string, controllerPort int, bootstrapServers string, clusterID string, initialControllers string, downloadSnippet string) *Playbook {
+// artifactURL + artifactChecksum come from the provisioner-side artifact resolver.
+func GenerateKafkaControllerPlaybook(version string, nodeID int, host string, controllerPort int, bootstrapServers string, clusterID string, initialControllers string, artifactURL, artifactChecksum string, javaSpec DistroPackageSpec) *Playbook {
 	playbook := NewPlaybook("Provision Kafka Controller", host)
 	if controllerPort == 0 {
 		controllerPort = 9093
-	}
-	kafkaVersion := strings.TrimSpace(version)
-	if kafkaVersion == "" {
-		kafkaVersion = defaultApacheKafkaVersion
 	}
 
 	serverProps := string(BuildKafkaControllerServerProperties(KafkaControllerParams{
@@ -724,94 +764,35 @@ func GenerateKafkaControllerPlaybook(version string, nodeID int, host string, co
 		ControllerPort:   controllerPort,
 		BootstrapServers: bootstrapServers,
 	}))
-	ctrlUnit := string(BuildKafkaControllerUnit())
+	ctrlUnit := RenderSystemdUnit(kafkaControllerUnitSpec())
 
-	installScript := fmt.Sprintf(`set -euo pipefail
+	tasks := kafkaCommonInstallTasks(artifactURL, artifactChecksum, "/etc/kafka-controller", "/var/lib/kafka-controller/logs", javaSpec)
+	tasks = append(tasks,
+		TaskCopy("/etc/kafka-controller/server.properties", serverProps, CopyOpts{Owner: "kafka", Group: "kafka", Mode: "0644"}),
+		TaskShell(
+			fmt.Sprintf(`/opt/kafka/bin/kafka-storage.sh format --cluster-id %q --initial-controllers %q --config /etc/kafka-controller/server.properties`, clusterID, initialControllers),
+			ShellOpts{Creates: "/var/lib/kafka-controller/logs/meta.properties"},
+		),
+		TaskCopy("/etc/systemd/system/frameworks-kafka-controller.service", ctrlUnit, CopyOpts{Mode: "0644"}),
+		TaskSystemdService("frameworks-kafka-controller", SystemdOpts{State: "started", Enabled: BoolPtr(true), DaemonReload: true}),
+	)
 
-KAFKA_VERSION="%s"
-CLUSTER_ID="%s"
-INITIAL_CONTROLLERS="%s"
-SERVER_PROPS_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_CTRL_SERVER_EOF'
-%s
-FRAMEWORKS_KAFKA_CTRL_SERVER_EOF
-)
-CTRL_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_CTRL_UNIT_EOF'
-%s
-FRAMEWORKS_KAFKA_CTRL_UNIT_EOF
-)
-
-shell=/usr/bin/nologin
-[ ! -x "$shell" ] && shell=/sbin/nologin
-[ ! -x "$shell" ] && shell=/bin/false
-__FRAMEWORKS_INSTALL_JAVA__
-getent group kafka >/dev/null || groupadd --system kafka
-id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
-
-mkdir -p /opt /etc/kafka-controller /var/lib/kafka-controller/logs
-if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
-  rm -rf /opt/kafka
-__FRAMEWORKS_KAFKA_DOWNLOAD__
-  extract_tarball_to /tmp/kafka.tgz /opt/kafka
-  rm -f /tmp/kafka.tgz
-fi
-
-printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka-controller/server.properties
-
-if [ ! -f /var/lib/kafka-controller/logs/meta.properties ]; then
-  /opt/kafka/bin/kafka-storage.sh format \
-    --cluster-id "${CLUSTER_ID}" \
-    --initial-controllers "${INITIAL_CONTROLLERS}" \
-    --config /etc/kafka-controller/server.properties
-fi
-
-printf '%%s' "${CTRL_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka-controller.service
-
-chown -R kafka:kafka /opt/kafka /etc/kafka-controller /var/lib/kafka-controller
-systemctl daemon-reload
-`, kafkaVersion, clusterID, initialControllers, serverProps, ctrlUnit)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet+SafeTarballExtractSnippet, 1)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
-
-	play := Play{
+	playbook.AddPlay(Play{
 		Name:        "Install and configure Kafka Controller",
 		Hosts:       host,
 		Become:      true,
 		GatherFacts: true,
-		Tasks: []Task{
-			{
-				Name:   "Install Kafka controller runtime and configuration",
-				Module: "shell",
-				Args: map[string]any{
-					"cmd":        installScript,
-					"executable": "/bin/bash",
-				},
-			},
-			{
-				Name:   "Enable and start Kafka Controller",
-				Module: "systemd",
-				Args: map[string]any{
-					"name":    "frameworks-kafka-controller",
-					"enabled": true,
-					"state":   "started",
-				},
-			},
-		},
-	}
-
-	playbook.AddPlay(play)
+		Tasks:       tasks,
+	})
 	return playbook
 }
 
 // GenerateKafkaBrokerPlaybook creates an Ansible playbook for a broker-only Kafka node (dedicated controller mode).
-// downloadSnippet is the bash fragment that fetches /tmp/kafka.tgz and verifies its checksum.
-func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port int, bootstrapServers string, clusterID string, metadata map[string]any, downloadSnippet string) *Playbook {
+// artifactURL + artifactChecksum come from the provisioner-side artifact resolver.
+func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port int, bootstrapServers string, clusterID string, metadata map[string]any, artifactURL, artifactChecksum string, javaSpec DistroPackageSpec) *Playbook {
 	playbook := NewPlaybook("Provision Kafka Broker", host)
 	if port == 0 {
 		port = 9092
-	}
-	kafkaVersion := strings.TrimSpace(version)
-	if kafkaVersion == "" {
-		kafkaVersion = defaultApacheKafkaVersion
 	}
 
 	brokerCount := max(metadataInt(metadata, "broker_count", 1), 1)
@@ -833,80 +814,26 @@ func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port i
 		TxMinISR:         txMinISR,
 		DeleteTopics:     deleteTopics,
 	}))
-	brokerUnit := string(BuildKafkaBrokerUnit())
+	brokerUnit := RenderSystemdUnit(kafkaBrokerUnitSpec())
 
-	installScript := fmt.Sprintf(`set -euo pipefail
+	tasks := kafkaCommonInstallTasks(artifactURL, artifactChecksum, "/etc/kafka", "/var/lib/kafka/logs", javaSpec)
+	tasks = append(tasks,
+		TaskCopy("/etc/kafka/server.properties", serverProps, CopyOpts{Owner: "kafka", Group: "kafka", Mode: "0644"}),
+		TaskShell(
+			fmt.Sprintf(`/opt/kafka/bin/kafka-storage.sh format --cluster-id %q --no-initial-controllers --config /etc/kafka/server.properties`, clusterID),
+			ShellOpts{Creates: "/var/lib/kafka/logs/meta.properties"},
+		),
+		TaskCopy("/etc/systemd/system/frameworks-kafka.service", brokerUnit, CopyOpts{Mode: "0644"}),
+		TaskSystemdService("frameworks-kafka", SystemdOpts{State: "started", Enabled: BoolPtr(true), DaemonReload: true}),
+	)
 
-KAFKA_VERSION="%s"
-CLUSTER_ID="%s"
-SERVER_PROPS_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_BROKER_SERVER_EOF'
-%s
-FRAMEWORKS_KAFKA_BROKER_SERVER_EOF
-)
-BROKER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_BROKER_UNIT_EOF'
-%s
-FRAMEWORKS_KAFKA_BROKER_UNIT_EOF
-)
-
-shell=/usr/bin/nologin
-[ ! -x "$shell" ] && shell=/sbin/nologin
-[ ! -x "$shell" ] && shell=/bin/false
-__FRAMEWORKS_INSTALL_JAVA__
-getent group kafka >/dev/null || groupadd --system kafka
-id -u kafka >/dev/null 2>&1 || useradd -r -g kafka -s "$shell" kafka
-
-mkdir -p /opt /etc/kafka /var/lib/kafka/logs
-if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
-  rm -rf /opt/kafka
-__FRAMEWORKS_KAFKA_DOWNLOAD__
-  extract_tarball_to /tmp/kafka.tgz /opt/kafka
-  rm -f /tmp/kafka.tgz
-fi
-
-printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka/server.properties
-
-if [ ! -f /var/lib/kafka/logs/meta.properties ]; then
-  /opt/kafka/bin/kafka-storage.sh format \
-    --cluster-id "${CLUSTER_ID}" \
-    --no-initial-controllers \
-    --config /etc/kafka/server.properties
-fi
-
-printf '%%s' "${BROKER_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka.service
-
-chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
-systemctl daemon-reload
-`, kafkaVersion, clusterID, serverProps, brokerUnit)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet+SafeTarballExtractSnippet, 1)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
-
-	play := Play{
+	playbook.AddPlay(Play{
 		Name:        "Install and configure Kafka Broker",
 		Hosts:       host,
 		Become:      true,
 		GatherFacts: true,
-		Tasks: []Task{
-			{
-				Name:   "Install Kafka broker runtime and configuration",
-				Module: "shell",
-				Args: map[string]any{
-					"cmd":        installScript,
-					"executable": "/bin/bash",
-				},
-			},
-			{
-				Name:   "Enable and start Kafka Broker",
-				Module: "systemd",
-				Args: map[string]any{
-					"name":    "frameworks-kafka",
-					"enabled": true,
-					"state":   "started",
-				},
-			},
-		},
-	}
-
-	playbook.AddPlay(play)
+		Tasks:       tasks,
+	})
 	return playbook
 }
 
@@ -941,25 +868,6 @@ func metadataBool(metadata map[string]any, key string, fallback bool) bool {
 		return fallback
 	}
 	return typed
-}
-
-func postgresDatabaseBootstrapCommands(databases []string) string {
-	if len(databases) == 0 {
-		return ""
-	}
-
-	var commands []string
-	for _, database := range databases {
-		name := strings.TrimSpace(database)
-		if name == "" {
-			continue
-		}
-		quoted := strings.ReplaceAll(name, `'`, `''`)
-		commands = append(commands,
-			fmt.Sprintf("su -s /bin/sh postgres -c \"psql -tAc \\\"SELECT 1 FROM pg_database WHERE datname='%s'\\\" | grep -q 1 || createdb %s\"", quoted, name),
-		)
-	}
-	return strings.Join(commands, "\n")
 }
 
 // String returns a string representation of the playbook

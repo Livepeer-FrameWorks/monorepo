@@ -36,12 +36,18 @@ const (
 // in Docker (docker-compose), native Linux (systemd), or native macOS (launchd) mode.
 type EdgeProvisioner struct {
 	*BaseProvisioner
+	executor *ansible.Executor
 }
 
 // NewEdgeProvisioner creates a new edge provisioner.
 func NewEdgeProvisioner(pool *ssh.Pool) *EdgeProvisioner {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		panic(fmt.Sprintf("create ansible executor for edge: %v", err))
+	}
 	return &EdgeProvisioner{
 		BaseProvisioner: NewBaseProvisioner("edge", pool),
+		executor:        executor,
 	}
 }
 
@@ -200,7 +206,7 @@ func (e *EdgeProvisioner) uploadFileWithSudo(ctx context.Context, host inventory
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	mode := config.resolvedMode()
 
-	// Detect remote OS early so we can use OS-appropriate paths throughout
+	// Remote OS determines OS-appropriate paths (systemd vs launchd, etc.).
 	remoteOS, _, err := e.detectRemoteArch(ctx, host)
 	if err != nil {
 		return fmt.Errorf("failed to detect remote OS: %w", err)
@@ -352,30 +358,48 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 
 // applyTuning uploads sysctl and limits config.
 func (e *EdgeProvisioner) applyTuning(ctx context.Context, host inventory.Host) error {
-	tuningScript := `#!/bin/bash
-set -e
-cat > /etc/sysctl.d/frameworks-edge.conf << 'SYSCTL'
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.core.somaxconn = 8192
-net.ipv4.ip_local_port_range = 16384 65535
-SYSCTL
+	sysctlContent := "net.core.rmem_max = 16777216\n" +
+		"net.core.wmem_max = 16777216\n" +
+		"net.core.somaxconn = 8192\n" +
+		"net.ipv4.ip_local_port_range = 16384 65535\n"
+	limitsContent := "* soft nofile 1048576\n* hard nofile 1048576\n"
 
-cat > /etc/security/limits.d/frameworks-edge.conf << 'LIMITS'
-* soft nofile 1048576
-* hard nofile 1048576
-LIMITS
+	tasks := []ansible.Task{
+		ansible.TaskCopy("/etc/sysctl.d/frameworks-edge.conf", sysctlContent, ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskCopy("/etc/security/limits.d/frameworks-edge.conf", limitsContent, ansible.CopyOpts{Mode: "0644"}),
+		// sysctl --system is always-safe to re-run; changed_when: false keeps
+		// Ansible from reporting this task as a change on every apply.
+		ansible.TaskShell("sysctl --system", ansible.ShellOpts{ChangedWhen: "false"}),
+	}
 
-sysctl --system > /dev/null 2>&1 || true
-echo "tuning applied"
-`
-	result, err := e.ExecuteSudoScript(ctx, host, tuningScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("tuning script failed: %w (%s)", err, stderr)
+	playbook := &ansible.Playbook{
+		Name:  "Apply edge kernel/fs tuning",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Edge tuning",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: false,
+				Tasks:       tasks,
+			},
+		},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": e.sshPool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := e.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: false})
+	if execErr != nil {
+		return fmt.Errorf("tuning failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("tuning playbook failed\nOutput: %s", result.Output)
 	}
 	fmt.Println("  sysctl + limits applied")
 	return nil
@@ -595,7 +619,7 @@ func buildEdgeTelemetryScrapeConfig(mode, nodeID string) (string, error) {
 		helmsmanTarget = "helmsman:18007"
 	}
 
-	return buildVMAgentScrapeConfig([]map[string]interface{}{
+	return buildVMAgentScrapeConfig([]map[string]any{
 		{
 			"job_name": "edge-mist",
 			"targets":  []string{mistTarget},
@@ -636,132 +660,263 @@ func (e *EdgeProvisioner) edgeTelemetryDockerNetwork(ctx context.Context, host i
 }
 
 func (e *EdgeProvisioner) installEdgeTelemetryLinux(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, remoteArch string) error {
-	if _, err := e.RunSudoCommand(ctx, host, "mkdir -p /etc/frameworks /etc/frameworks/telemetry /opt/frameworks/vmagent-edge /var/log/frameworks"); err != nil {
-		return err
-	}
-
 	scrapeConfig, err := buildEdgeTelemetryScrapeConfig("native", config.NodeID)
 	if err != nil {
 		return err
-	}
-	err = e.writeRemoteFile(ctx, host, "/etc/frameworks/vmagent-edge.yml", scrapeConfig, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, chownErr := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/vmagent-edge.yml"); chownErr != nil {
-		return chownErr
-	}
-
-	tokenArg := ""
-	if strings.TrimSpace(config.TelemetryToken) != "" {
-		err = e.writeRemoteFile(ctx, host, "/etc/frameworks/telemetry/token", config.TelemetryToken+"\n", 0o600)
-		if err != nil {
-			return err
-		}
-		if _, chownErr := e.RunSudoCommand(ctx, host, "chown frameworks:frameworks /etc/frameworks/telemetry/token"); chownErr != nil {
-			return chownErr
-		}
-		tokenArg = " -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token"
 	}
 
 	artifact, err := resolveVMAgentArtifact(config.Version, "linux", remoteArch, nil)
 	if err != nil {
 		return err
 	}
-	installScript := `#!/bin/bash
-set -e
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir" /tmp/vmagent-edge.tar.gz' EXIT
-__FRAMEWORKS_VMAGENT_DOWNLOAD__
-tar -xzf /tmp/vmagent-edge.tar.gz -C "$tmpdir"
-bin=$(find "$tmpdir" -type f \( -name vmagent-prod -o -name vmagent \) | head -n 1)
-test -n "$bin"
-install -m 0755 "$bin" /opt/frameworks/vmagent-edge/vmagent
-chown -R frameworks:frameworks /opt/frameworks/vmagent-edge /var/log/frameworks
-`
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_VMAGENT_DOWNLOAD__",
-		ansible.RobustDownloadSnippet(artifact.URL, artifact.Checksum, "/tmp/vmagent-edge.tar.gz"), 1)
-	if result, err := e.ExecuteSudoScript(ctx, host, installScript); err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("vmagent install failed: %w (%s)", err, stderr)
-	}
 
 	execStart := fmt.Sprintf(
 		"/opt/frameworks/vmagent-edge/vmagent -httpListenAddr=:8430 -promscrape.config=/etc/frameworks/vmagent-edge.yml -remoteWrite.url=%s",
 		config.TelemetryURL,
 	)
-	if tokenArg != "" {
-		execStart += tokenArg
+	if strings.TrimSpace(config.TelemetryToken) != "" {
+		execStart += " -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token"
 	}
 
-	return e.uploadSystemdUnit(ctx, host, SystemdUnitData{
-		ServiceName: "frameworks-vmagent-edge",
+	unitContent := ansible.RenderSystemdUnit(ansible.SystemdUnitSpec{
 		Description: "FrameWorks vmagent (edge telemetry)",
+		After:       []string{"network-online.target", "frameworks-mistserver.service", "frameworks-helmsman.service"},
+		Wants:       []string{"network-online.target"},
+		User:        "frameworks",
+		Group:       "frameworks",
 		WorkingDir:  "/opt/frameworks/vmagent-edge",
 		ExecStart:   execStart,
-		User:        "frameworks",
-		After:       []string{"network-online", "frameworks-mistserver", "frameworks-helmsman"},
+		Restart:     "always",
+		RestartSec:  5,
 		LimitNOFILE: "1048576",
 	})
+
+	tasks := []ansible.Task{
+		// Directories. owner=frameworks so the service user can write logs/state.
+		mkdirTask("/etc/frameworks", "frameworks", "frameworks", "0755"),
+		mkdirTask("/etc/frameworks/telemetry", "frameworks", "frameworks", "0755"),
+		mkdirTask("/opt/frameworks/vmagent-edge", "frameworks", "frameworks", "0755"),
+		mkdirTask("/var/log/frameworks", "frameworks", "frameworks", "0755"),
+		mkdirTask("/tmp/frameworks-vmutils", "root", "root", "0755"),
+
+		// Scrape config.
+		ansible.TaskCopy("/etc/frameworks/vmagent-edge.yml", scrapeConfig, ansible.CopyOpts{Owner: "frameworks", Group: "frameworks", Mode: "0644"}),
+	}
+
+	// Optional bearer-token file for remote-write auth.
+	if strings.TrimSpace(config.TelemetryToken) != "" {
+		tasks = append(tasks, ansible.TaskCopy(
+			"/etc/frameworks/telemetry/token",
+			config.TelemetryToken+"\n",
+			ansible.CopyOpts{Owner: "frameworks", Group: "frameworks", Mode: "0600"},
+		))
+	}
+
+	extractSentinel := ansible.ArtifactSentinel("/tmp/frameworks-vmutils", artifact.Checksum+artifact.URL)
+	installSentinel := ansible.ArtifactSentinel("/opt/frameworks/vmagent-edge", artifact.Checksum+artifact.URL)
+	tasks = append(tasks,
+		// Pinned vmutils tarball. Flat layout, no top-level wrapper dir.
+		// Tarball stays in /tmp for get_url cache-hit; version-keyed sentinels
+		// rotate both the extract skip and the install skip on a pin bump.
+		ansible.TaskGetURL(artifact.URL, "/tmp/vmagent-edge.tar.gz", artifact.Checksum),
+		ansible.TaskUnarchive("/tmp/vmagent-edge.tar.gz", "/tmp/frameworks-vmutils",
+			extractSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell("touch "+extractSentinel, ansible.ShellOpts{Creates: extractSentinel}),
+		ansible.TaskShell(
+			"install -m 0755 -o frameworks -g frameworks /tmp/frameworks-vmutils/vmagent-prod /opt/frameworks/vmagent-edge/vmagent && "+
+				"touch "+installSentinel+" && chown frameworks:frameworks "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+
+		// Systemd unit + start.
+		ansible.TaskCopy("/etc/systemd/system/frameworks-vmagent-edge.service", unitContent, ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskSystemdService("frameworks-vmagent-edge", ansible.SystemdOpts{
+			State:        "started",
+			Enabled:      ansible.BoolPtr(true),
+			DaemonReload: true,
+		}),
+	)
+
+	playbook := &ansible.Playbook{
+		Name:  "Install vmagent edge telemetry (linux)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Install vmagent edge telemetry",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: true,
+				Tasks:       tasks,
+			},
+		},
+	}
+
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": e.sshPool.DefaultKeyPath(),
+		},
+	})
+
+	result, execErr := e.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("vmagent install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("vmagent install playbook failed\nOutput: %s", result.Output)
+	}
+	return nil
 }
 
-func (e *EdgeProvisioner) installEdgeTelemetryDarwin(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader, remoteArch string) error {
+// mkdirTask emits an ansible.builtin.file task that creates path as a directory.
+// Used by edge install paths where the same directory pattern recurs across
+// telemetry, mistserver, helmsman, and caddy installs.
+func mkdirTask(path, owner, group, mode string) ansible.Task {
+	return ansible.Task{
+		Name:   "create " + path,
+		Module: "ansible.builtin.file",
+		Args:   map[string]any{"path": path, "state": "directory", "owner": owner, "group": group, "mode": mode},
+	}
+}
+
+// darwinLaunchdTasks returns the task sequence that makes a launchd service
+// running: write the wrapper script that sources the env file, write the
+// plist, and hand off to ansible.builtin.launchd to load/start it. isUser
+// selects the launchd domain (user vs system) — callers match this to the
+// Play's Become setting (Become=false for user domain).
+//
+// launchd natively does not support EnvironmentFile, so we use a shell
+// wrapper that sources the env file before exec-ing the binary.
+func darwinLaunchdTasks(dirs darwinDirSet, data LaunchdPlistData) []ansible.Task {
+	wrapperPath := dirs.baseDir + "/" + strings.TrimPrefix(data.Label, "com.livepeer.frameworks.") + "/run.sh"
+	args := strings.Join(data.ProgramArgs, " ")
+	wrapperContent := fmt.Sprintf(`#!/bin/bash
+while IFS= read -r line || [ -n "$line" ]; do
+  line="${line%%#*}"
+  line="${line#"${line%%%%[! ]*}"}"
+  [ -z "$line" ] && continue
+  case "$line" in
+    *=*) export "$line" ;;
+  esac
+done < %s
+exec %s %s
+`, data.EnvFile, data.Program, args)
+
+	plistData := data
+	plistData.Program = "/bin/bash"
+	plistData.ProgramArgs = []string{wrapperPath}
+	plistData.EnvFile = ""
+	plistContent, err := GenerateLaunchdPlist(plistData)
+	if err != nil {
+		// GenerateLaunchdPlist fails only on malformed LaunchdPlistData; the
+		// callers pass static struct literals so this is effectively unreachable.
+		plistContent = ""
+	}
+	plistPath := fmt.Sprintf("%s/%s.plist", dirs.plistDir, data.Label)
+
+	return []ansible.Task{
+		ansible.TaskCopy(wrapperPath, wrapperContent, ansible.CopyOpts{Mode: "0755"}),
+		ansible.TaskCopy(plistPath, plistContent, ansible.CopyOpts{Mode: "0644"}),
+		{
+			Name:   "launchd load " + data.Label,
+			Module: "ansible.builtin.launchd",
+			Args: map[string]any{
+				"name":    data.Label,
+				"state":   "started",
+				"enabled": true,
+			},
+		},
+	}
+}
+
+// darwinPlaybook wraps the standard edge-darwin playbook-execution boilerplate.
+// isUser=false selects Become=true (system domain / /Library/LaunchDaemons).
+// isUser=true selects Become=false so Ansible runs as the SSH user, letting
+// the launchd module address the user's GUI domain.
+func (e *EdgeProvisioner) darwinPlaybook(ctx context.Context, host inventory.Host, name string, isUser bool, tasks []ansible.Task) error {
+	playbook := &ansible.Playbook{
+		Name:  name,
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        name,
+				Hosts:       host.ExternalIP,
+				Become:      !isUser,
+				GatherFacts: false,
+				Tasks:       tasks,
+			},
+		},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": e.sshPool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := e.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("%s failed: %w\nOutput: %s", name, execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("%s playbook failed\nOutput: %s", name, result.Output)
+	}
+	return nil
+}
+
+func (e *EdgeProvisioner) installEdgeTelemetryDarwin(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, dirs darwinDirSet, isUser bool, remoteArch string) error {
 	scrapeConfig, err := buildEdgeTelemetryScrapeConfig("native", config.NodeID)
 	if err != nil {
 		return err
 	}
-	err = e.writeRemoteFile(ctx, host, dirs.confDir+"/vmagent-edge.yml", scrapeConfig, 0o644)
+	artifact, err := resolveVMAgentArtifact(config.Version, "darwin", remoteArch, nil)
 	if err != nil {
 		return err
 	}
 
 	tokenPath := ""
-	if strings.TrimSpace(config.TelemetryToken) != "" {
-		tokenPath = dirs.confDir + "/telemetry/token"
-		err = e.writeRemoteFile(ctx, host, tokenPath, config.TelemetryToken+"\n", 0o600)
-		if err != nil {
-			return err
-		}
-	}
-
-	artifact, err := resolveVMAgentArtifact(config.Version, "darwin", remoteArch, nil)
-	if err != nil {
-		return err
-	}
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-mkdir -p %[1]s/vmagent-edge %[2]s
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir" /tmp/vmagent-edge.tar.gz' EXIT
-__FRAMEWORKS_VMAGENT_DOWNLOAD__
-tar -xzf /tmp/vmagent-edge.tar.gz -C "$tmpdir"
-bin=$(find "$tmpdir" -type f \( -name vmagent-prod -o -name vmagent \) | head -n 1)
-test -n "$bin"
-install -m 0755 "$bin" %[1]s/vmagent-edge/vmagent
-`, dirs.baseDir, dirs.logDir)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_VMAGENT_DOWNLOAD__",
-		ansible.RobustDownloadSnippet(artifact.URL, artifact.Checksum, "/tmp/vmagent-edge.tar.gz"), 1)
-	if result, err := runScript(installScript); err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("vmagent install failed: %w (%s)", err, stderr)
-	}
-
 	args := []string{
 		"-httpListenAddr=:8430",
 		"-promscrape.config=" + dirs.confDir + "/vmagent-edge.yml",
 		"-remoteWrite.url=" + config.TelemetryURL,
 	}
-	if tokenPath != "" {
+
+	tasks := []ansible.Task{
+		mkdirTask(dirs.baseDir+"/vmagent-edge", "", "", "0755"),
+		mkdirTask(dirs.logDir, "", "", "0755"),
+		mkdirTask(dirs.confDir, "", "", "0755"),
+		ansible.TaskCopy(dirs.confDir+"/vmagent-edge.yml", scrapeConfig, ansible.CopyOpts{Mode: "0644"}),
+	}
+	if strings.TrimSpace(config.TelemetryToken) != "" {
+		tokenPath = dirs.confDir + "/telemetry/token"
+		tasks = append(tasks,
+			mkdirTask(dirs.confDir+"/telemetry", "", "", "0755"),
+			ansible.TaskCopy(tokenPath, config.TelemetryToken+"\n", ansible.CopyOpts{Mode: "0600"}),
+		)
 		args = append(args, "-remoteWrite.bearerTokenFile="+tokenPath)
 	}
-
-	return e.uploadLaunchdPlistTo(ctx, host, dirs, LaunchdPlistData{
+	extractSentinel := ansible.ArtifactSentinel("/tmp", artifact.Checksum+artifact.URL+"-vmagent")
+	installSentinel := ansible.ArtifactSentinel(dirs.baseDir+"/vmagent-edge", artifact.Checksum+artifact.URL)
+	tasks = append(tasks,
+		// Tarball left in /tmp; version-keyed sentinels rotate on a pin bump
+		// so both extraction and install rerun.
+		ansible.TaskGetURL(artifact.URL, "/tmp/vmagent-edge.tar.gz", artifact.Checksum),
+		ansible.TaskUnarchive("/tmp/vmagent-edge.tar.gz", "/tmp", extractSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell("touch "+extractSentinel, ansible.ShellOpts{Creates: extractSentinel}),
+		// vmutils tarball unpacks vmagent-prod (and peers) directly at the
+		// extraction root. Copy the single binary we need to its run path.
+		ansible.TaskShell(
+			fmt.Sprintf("install -m 0755 /tmp/vmagent-prod %s/vmagent-edge/vmagent && touch %s",
+				dirs.baseDir, installSentinel),
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+	)
+	tasks = append(tasks, darwinLaunchdTasks(dirs, LaunchdPlistData{
 		Label:       "com.livepeer.frameworks.vmagent-edge",
 		Description: "FrameWorks vmagent (edge telemetry)",
 		Program:     dirs.baseDir + "/vmagent-edge/vmagent",
@@ -771,33 +926,8 @@ install -m 0755 "$bin" %[1]s/vmagent-edge/vmagent
 		KeepAlive:   true,
 		LogPath:     dirs.logDir + "/com.livepeer.frameworks.vmagent-edge.log",
 		ErrorPath:   dirs.logDir + "/com.livepeer.frameworks.vmagent-edge.err",
-	})
-}
-
-func linuxTelemetryEnableSuffix(config EdgeProvisionConfig) string {
-	if strings.TrimSpace(config.TelemetryURL) == "" {
-		return ""
-	}
-	return " frameworks-vmagent-edge"
-}
-
-func linuxTelemetryStartCommands(config EdgeProvisionConfig) string {
-	if strings.TrimSpace(config.TelemetryURL) == "" {
-		return ""
-	}
-	return "systemctl start frameworks-vmagent-edge\nsleep 1"
-}
-
-func darwinTelemetryBootstrapCommand(plistDir string, config EdgeProvisionConfig, isUser bool) string {
-	if strings.TrimSpace(config.TelemetryURL) == "" {
-		return ""
-	}
-	if isUser {
-		return fmt.Sprintf(`launchctl bootstrap "gui/${uid}" %s/com.livepeer.frameworks.vmagent-edge.plist 2>/dev/null || launchctl kickstart "gui/${uid}/com.livepeer.frameworks.vmagent-edge"
-sleep 1`, plistDir)
-	}
-	return fmt.Sprintf(`launchctl bootstrap system %s/com.livepeer.frameworks.vmagent-edge.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.vmagent-edge
-sleep 1`, plistDir)
+	})...)
+	return e.darwinPlaybook(ctx, host, "Install edge telemetry (darwin)", isUser, tasks)
 }
 
 // installNative installs MistServer, Helmsman, and Caddy as systemd services.
@@ -876,200 +1006,130 @@ func darwinPaths(domain DarwinDomain) darwinDirSet {
 func (e *EdgeProvisioner) installNativeDarwin(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
 	dirs := darwinPaths(config.DarwinDomain)
 	isUser := config.DarwinDomain == DomainUser
-
-	// runScript picks sudo vs direct execution based on domain
-	runScript := func(script string) (*ssh.CommandResult, error) {
-		if isUser {
-			return e.ExecuteScript(ctx, host, script)
-		}
-		return e.ExecuteSudoScript(ctx, host, script)
-	}
-	uploadFile := func(opts ssh.UploadOptions) error {
-		if isUser {
-			return e.UploadFile(ctx, host, opts)
-		}
-		return e.uploadFileWithSudo(ctx, host, opts)
-	}
-
 	domainLabel := "system"
 	if isUser {
 		domainLabel = "user"
 	}
 	fmt.Printf("  launchd domain: %s\n", domainLabel)
 
-	// (a) Create directories
+	// (a) Base directory prep + optional CA bundle + plist dir in one playbook.
 	fmt.Println("  creating macOS directories...")
-	mkdirScript := fmt.Sprintf(`#!/bin/bash
-set -e
-mkdir -p %s/mistserver %s/helmsman %s/caddy %s %s/certs %s %s/pki
-`, dirs.baseDir, dirs.baseDir, dirs.baseDir, dirs.logDir, dirs.confDir, dirs.confDir, dirs.confDir)
-	if _, err := runScript(mkdirScript); err != nil {
-		return fmt.Errorf("failed to create directories: %w", err)
+	prepTasks := []ansible.Task{
+		mkdirTask(dirs.baseDir+"/mistserver", "", "", "0755"),
+		mkdirTask(dirs.baseDir+"/helmsman", "", "", "0755"),
+		mkdirTask(dirs.baseDir+"/caddy", "", "", "0755"),
+		mkdirTask(dirs.baseDir+"/edge", "", "", "0755"),
+		mkdirTask(dirs.logDir, "", "", "0755"),
+		mkdirTask(dirs.confDir, "", "", "0755"),
+		mkdirTask(dirs.confDir+"/certs", "", "", "0755"),
+		mkdirTask(dirs.confDir+"/pki", "", "", "0755"),
+		mkdirTask(dirs.plistDir, "", "", "0755"),
 	}
 	if caPath := config.helmsmanCAPath(remoteOS); strings.TrimSpace(config.CABundlePEM) != "" && caPath != "" {
-		tmpFile, tmpErr := os.CreateTemp("", "edge-ca-*.crt")
-		if tmpErr != nil {
-			return tmpErr
-		}
-		defer os.Remove(tmpFile.Name())
-		if _, tmpErr = tmpFile.WriteString(config.CABundlePEM); tmpErr != nil {
-			tmpFile.Close()
-			return tmpErr
-		}
-		if tmpErr = tmpFile.Close(); tmpErr != nil {
-			return tmpErr
-		}
-		if err := uploadFile(ssh.UploadOptions{
-			LocalPath:  tmpFile.Name(),
-			RemotePath: caPath,
-			Mode:       0o644,
-		}); err != nil {
-			return fmt.Errorf("failed to stage gRPC CA bundle: %w", err)
-		}
-		fmt.Printf("  gRPC CA bundle staged at %s\n", caPath)
+		prepTasks = append(prepTasks,
+			ansible.TaskCopy(caPath, config.CABundlePEM, ansible.CopyOpts{Mode: "0644"}),
+		)
+		fmt.Printf("  gRPC CA bundle will be staged at %s\n", caPath)
 	}
-
-	// Ensure plist directory exists (~/Library/LaunchAgents may not exist)
-	if isUser {
-		mkPlistDir := fmt.Sprintf("#!/bin/bash\nmkdir -p %s\n", dirs.plistDir)
-		if _, err := runScript(mkPlistDir); err != nil {
-			return fmt.Errorf("failed to create plist directory: %w", err)
-		}
+	if err := e.darwinPlaybook(ctx, host, "Edge macOS prep (dirs + CA)", isUser, prepTasks); err != nil {
+		return fmt.Errorf("failed to prep macOS host: %w", err)
 	}
 
 	// (b) MistServer
 	fmt.Println("  installing MistServer...")
-	mistPass, err := e.installDarwinMistServer(ctx, host, manifest, arch, dirs, runScript, uploadFile)
+	mistPass, err := e.installDarwinMistServer(ctx, host, manifest, arch, dirs, isUser)
 	if err != nil {
 		return fmt.Errorf("mistserver install failed: %w", err)
 	}
 
 	// (c) Helmsman
 	fmt.Println("  installing Helmsman...")
-	if err = e.installDarwinHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch, dirs, runScript, uploadFile, mistPass); err != nil {
+	if err = e.installDarwinHelmsman(ctx, host, config, vars, manifest, remoteOS, remoteArch, dirs, isUser, mistPass); err != nil {
 		return fmt.Errorf("helmsman install failed: %w", err)
 	}
 
 	// (d) Caddy
 	fmt.Println("  installing Caddy...")
-	if err = e.installDarwinCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch, dirs, runScript, uploadFile); err != nil {
+	if err = e.installDarwinCaddy(ctx, host, vars, manifest, arch, remoteOS, remoteArch, dirs, isUser); err != nil {
 		return fmt.Errorf("caddy install failed: %w", err)
 	}
 
 	if strings.TrimSpace(config.TelemetryURL) != "" {
 		fmt.Println("  installing edge telemetry agent...")
-		if err = e.installEdgeTelemetryDarwin(ctx, host, config, dirs, runScript, uploadFile, remoteArch); err != nil {
+		if err = e.installEdgeTelemetryDarwin(ctx, host, config, dirs, isUser, remoteArch); err != nil {
 			return fmt.Errorf("edge telemetry install failed: %w", err)
 		}
 	}
 
-	// (e) Write .edge.env
+	// (e) Write .edge.env for mode detection.
 	fmt.Println("  writing .edge.env for mode detection...")
 	envTmpDir, err := os.MkdirTemp("", "edge-native-env-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(envTmpDir)
-
 	if err = templates.WriteEdgeTemplates(envTmpDir, vars, true); err != nil {
 		return fmt.Errorf("failed to render .edge.env: %w", err)
 	}
-
-	remoteDir := dirs.baseDir + "/edge"
-	mkEdgeDir := fmt.Sprintf("#!/bin/bash\nmkdir -p %s\n", remoteDir)
-	if _, err = runScript(mkEdgeDir); err != nil {
-		return fmt.Errorf("failed to create %s: %w", remoteDir, err)
+	edgeEnvBytes, err := os.ReadFile(filepath.Join(envTmpDir, ".edge.env"))
+	if err != nil {
+		return fmt.Errorf("failed to read rendered .edge.env: %w", err)
 	}
-	if err = uploadFile(ssh.UploadOptions{
-		LocalPath: filepath.Join(envTmpDir, ".edge.env"), RemotePath: remoteDir + "/.edge.env", Mode: 0600,
-	}); err != nil {
-		return fmt.Errorf("failed to upload .edge.env: %w", err)
+	envTasks := []ansible.Task{
+		ansible.TaskCopy(dirs.baseDir+"/edge/.edge.env", string(edgeEnvBytes), ansible.CopyOpts{Mode: "0600"}),
 	}
-
-	// (f) Start all services via launchctl
-	fmt.Println("  starting services...")
-	var startScript string
-	if isUser {
-		startScript = fmt.Sprintf(`#!/bin/bash
-set -e
-uid=$(id -u)
-launchctl bootstrap "gui/${uid}" %[1]s/com.livepeer.frameworks.mistserver.plist 2>/dev/null || launchctl kickstart "gui/${uid}/com.livepeer.frameworks.mistserver"
-sleep 2
-launchctl bootstrap "gui/${uid}" %[1]s/com.livepeer.frameworks.helmsman.plist 2>/dev/null || launchctl kickstart "gui/${uid}/com.livepeer.frameworks.helmsman"
-sleep 1
-%[2]s
-launchctl bootstrap "gui/${uid}" %[1]s/com.livepeer.frameworks.caddy.plist 2>/dev/null || launchctl kickstart "gui/${uid}/com.livepeer.frameworks.caddy"
-echo "all services started (user domain)"
-`, dirs.plistDir, darwinTelemetryBootstrapCommand(dirs.plistDir, config, true))
-	} else {
-		startScript = fmt.Sprintf(`#!/bin/bash
-set -e
-launchctl bootstrap system %[1]s/com.livepeer.frameworks.mistserver.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.mistserver
-sleep 2
-launchctl bootstrap system %[1]s/com.livepeer.frameworks.helmsman.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.helmsman
-sleep 1
-%[2]s
-launchctl bootstrap system %[1]s/com.livepeer.frameworks.caddy.plist 2>/dev/null || launchctl kickstart system/com.livepeer.frameworks.caddy
-echo "all services started (system domain)"
-`, dirs.plistDir, darwinTelemetryBootstrapCommand(dirs.plistDir, config, false))
-	}
-	result, err := runScript(startScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("service start failed: %w (%s)", err, stderr)
+	if err := e.darwinPlaybook(ctx, host, "Write edge .edge.env (darwin)", isUser, envTasks); err != nil {
+		return fmt.Errorf("failed to write .edge.env: %w", err)
 	}
 
+	// Each install* step above used ansible.builtin.launchd to load+start its
+	// own service, so no separate launchctl orchestration is needed here.
 	fmt.Println("  edge stack running on macOS (launchd)")
 	return nil
 }
 
-type scriptRunner func(string) (*ssh.CommandResult, error)
-type fileUploader func(ssh.UploadOptions) error
-
-func (e *EdgeProvisioner) installDarwinMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader) (string, error) {
+func (e *EdgeProvisioner) installDarwinMistServer(ctx context.Context, host inventory.Host, manifest *gitops.Manifest, arch string, dirs darwinDirSet, isUser bool) (string, error) {
 	mistPass, err := generateEdgePassword()
 	if err != nil {
 		return "", err
 	}
 
-	var binaryURL string
+	var (
+		binaryURL string
+		checksum  string
+	)
 	if manifest != nil {
-		dep := manifest.GetExternalDependency("mistserver")
-		if dep != nil {
-			binaryURL = dep.GetBinaryURL(arch)
+		if dep := manifest.GetExternalDependency("mistserver"); dep != nil {
+			if bin := dep.GetBinary(arch); bin != nil {
+				binaryURL = bin.URL
+				checksum = bin.Checksum
+			}
 		}
 	}
 	if binaryURL == "" {
 		return "", fmt.Errorf("MistServer binary URL not available for %s (ensure darwin builds exist in mistserver releases)", arch)
 	}
 
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-curl -sSfL -o /tmp/mistserver.tar.gz "%s"
-tar -xzf /tmp/mistserver.tar.gz -C %s/mistserver/
-rm -f /tmp/mistserver.tar.gz
-chmod +x %s/mistserver/MistServer
-echo "MistServer installed"
-`, binaryURL, dirs.baseDir, dirs.baseDir)
-
-	result, err := runScript(installScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return "", fmt.Errorf("install script failed: %w (%s)", err, stderr)
-	}
-
 	envContent := "# MistServer environment\nMIST_DEBUG=3\n"
-	if err = e.writeRemoteFile(ctx, host, dirs.confDir+"/mistserver.env", envContent, 0644); err != nil {
-		return "", err
+	// Tarball stays in /tmp so get_url cache-hits via checksum on rerun;
+	// version-keyed sentinel triggers re-extract on a pinned-version bump.
+	installSentinel := ansible.ArtifactSentinel(dirs.baseDir+"/mistserver", checksum+binaryURL)
+	tasks := []ansible.Task{
+		mkdirTask(dirs.baseDir+"/mistserver", "", "", "0755"),
+		mkdirTask(dirs.confDir, "", "", "0755"),
+		mkdirTask(dirs.logDir, "", "", "0755"),
+		ansible.TaskCopy(dirs.confDir+"/mistserver.env", envContent, ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskGetURL(binaryURL, "/tmp/mistserver.tar.gz", checksum),
+		ansible.TaskUnarchive("/tmp/mistserver.tar.gz", dirs.baseDir+"/mistserver",
+			installSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell("touch "+installSentinel, ansible.ShellOpts{Creates: installSentinel}),
+		{
+			Name:   "ensure MistServer is executable",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": dirs.baseDir + "/mistserver/MistServer", "mode": "0755"},
+		},
 	}
-
-	err = e.uploadLaunchdPlistTo(ctx, host, dirs, LaunchdPlistData{
+	tasks = append(tasks, darwinLaunchdTasks(dirs, LaunchdPlistData{
 		Label:       "com.livepeer.frameworks.mistserver",
 		Description: "FrameWorks MistServer (edge media server)",
 		Program:     dirs.baseDir + "/mistserver/MistServer",
@@ -1080,60 +1140,29 @@ echo "MistServer installed"
 		KeepAlive:   true,
 		LogPath:     dirs.logDir + "/com.livepeer.frameworks.mistserver.log",
 		ErrorPath:   dirs.logDir + "/com.livepeer.frameworks.mistserver.err",
-	})
-	return mistPass, err
+	})...)
+	if err := e.darwinPlaybook(ctx, host, "Install MistServer (darwin)", isUser, tasks); err != nil {
+		return "", err
+	}
+	return mistPass, nil
 }
 
-func (e *EdgeProvisioner) installDarwinHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader, mistPass string) error {
-	var binaryURL string
+func (e *EdgeProvisioner) installDarwinHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, remoteOS, remoteArch string, dirs darwinDirSet, isUser bool, mistPass string) error {
+	var (
+		binaryURL string
+		checksum  string
+	)
 	if manifest != nil {
 		svcInfo, err := manifest.GetServiceInfo("helmsman")
 		if err == nil {
-			binaryURL, _ = svcInfo.GetBinaryURL(remoteOS, remoteArch)
+			if bin, binErr := svcInfo.GetBinary(remoteOS, remoteArch); binErr == nil {
+				binaryURL = bin.URL
+				checksum = bin.Checksum
+			}
 		}
 	}
 	if binaryURL == "" {
 		return fmt.Errorf("helmsman binary URL not available for %s/%s", remoteOS, remoteArch)
-	}
-
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-ASSET_URL=%[1]q
-ASSET_PATH=/tmp/helmsman.asset
-EXTRACT_DIR="$(mktemp -d)"
-trap 'rm -rf "$EXTRACT_DIR" "$ASSET_PATH"' EXIT
-
-extract_zip() {
-  if command -v unzip >/dev/null 2>&1; then
-    unzip -q "$1" -d "$2"
-  elif command -v ditto >/dev/null 2>&1; then
-    ditto -x -k "$1" "$2"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -m zipfile -e "$1" "$2"
-  else
-    echo "zip extractor not available" >&2
-    exit 1
-  fi
-}
-
-curl -sSfL -o "$ASSET_PATH" "$ASSET_URL"
-if [[ "$ASSET_URL" == *.zip ]]; then
-  extract_zip "$ASSET_PATH" "$EXTRACT_DIR"
-else
-  tar -xzf "$ASSET_PATH" -C "$EXTRACT_DIR"
-fi
-mv "$EXTRACT_DIR"/frameworks-helmsman-* %[2]s/helmsman/helmsman 2>/dev/null || mv "$EXTRACT_DIR"/helmsman %[2]s/helmsman/helmsman 2>/dev/null || mv "$EXTRACT_DIR"/frameworks %[2]s/helmsman/helmsman 2>/dev/null || true
-chmod +x %[2]s/helmsman/helmsman
-echo "Helmsman installed"
-`, binaryURL, dirs.baseDir)
-
-	result, err := runScript(installScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
 	}
 
 	domain := config.primaryDomain()
@@ -1149,18 +1178,36 @@ echo "Helmsman installed"
 		fmt.Sprintf("MISTSERVER_URL=http://%s", vars.MistUpstream),
 		fmt.Sprintf("HELMSMAN_WEBHOOK_URL=http://%s", vars.HelmsmanUpstream),
 		"CADDY_ADMIN_URL=http://localhost:2019",
-		fmt.Sprintf("MIST_API_USERNAME=%s", "frameworks"),
+		"MIST_API_USERNAME=frameworks",
 		fmt.Sprintf("MIST_API_PASSWORD=%s", mistPass),
 	}
 	if vars.GRPCTLSCAPath != "" {
 		envLines = append(envLines, fmt.Sprintf("GRPC_TLS_CA_PATH=%s", vars.GRPCTLSCAPath))
 	}
 	envContent := strings.Join(envLines, "\n") + "\n"
-	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/helmsman.env", envContent, 0600); err != nil {
-		return err
-	}
 
-	return e.uploadLaunchdPlistTo(ctx, host, dirs, LaunchdPlistData{
+	// macOS ships ditto and unzip out of the box, so Ansible's unarchive can
+	// handle both .tar.gz and .zip release assets without a prereq install.
+	// Version-keyed sentinel rotates when checksum or URL changes.
+	installSentinel := ansible.ArtifactSentinel(dirs.baseDir+"/helmsman", checksum+binaryURL)
+	tasks := []ansible.Task{
+		mkdirTask(dirs.baseDir+"/helmsman", "", "", "0755"),
+		mkdirTask(dirs.confDir, "", "", "0755"),
+		mkdirTask(dirs.logDir, "", "", "0755"),
+		ansible.TaskCopy(dirs.confDir+"/helmsman.env", envContent, ansible.CopyOpts{Mode: "0600"}),
+	}
+	tasks = append(tasks,
+		ansible.TaskGetURL(binaryURL, "/tmp/helmsman.asset", checksum),
+		ansible.TaskUnarchive("/tmp/helmsman.asset", dirs.baseDir+"/helmsman",
+			installSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell(
+			fmt.Sprintf("mv %[1]s/helmsman/frameworks-helmsman-* %[1]s/helmsman/helmsman 2>/dev/null || "+
+				"mv %[1]s/helmsman/frameworks %[1]s/helmsman/helmsman 2>/dev/null || true; "+
+				"chmod +x %[1]s/helmsman/helmsman; touch %[2]s", dirs.baseDir, installSentinel),
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+	)
+	tasks = append(tasks, darwinLaunchdTasks(dirs, LaunchdPlistData{
 		Label:       "com.livepeer.frameworks.helmsman",
 		Description: "FrameWorks Helmsman (edge sidecar)",
 		Program:     dirs.baseDir + "/helmsman/helmsman",
@@ -1170,20 +1217,27 @@ echo "Helmsman installed"
 		KeepAlive:   true,
 		LogPath:     dirs.logDir + "/com.livepeer.frameworks.helmsman.log",
 		ErrorPath:   dirs.logDir + "/com.livepeer.frameworks.helmsman.err",
-	})
+	})...)
+	return e.darwinPlaybook(ctx, host, "Install Helmsman (darwin)", isUser, tasks)
 }
 
-func (e *EdgeProvisioner) installDarwinCaddy(ctx context.Context, host inventory.Host, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string, dirs darwinDirSet, runScript scriptRunner, uploadFile fileUploader) error {
+func (e *EdgeProvisioner) installDarwinCaddy(ctx context.Context, host inventory.Host, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string, dirs darwinDirSet, isUser bool) error {
 	var binaryURL string
+	var checksum string
 	if manifest != nil {
-		dep := manifest.GetExternalDependency("caddy")
-		if dep != nil {
-			binaryURL = dep.GetBinaryURL(arch)
+		if dep := manifest.GetExternalDependency("caddy"); dep != nil {
+			if bin := dep.GetBinary(arch); bin != nil {
+				binaryURL = bin.URL
+				checksum = bin.Checksum
+			}
 		}
 		if binaryURL == "" {
 			svcInfo, err := manifest.GetServiceInfo("caddy")
 			if err == nil {
-				binaryURL, _ = svcInfo.GetBinaryURL(remoteOS, remoteArch)
+				if bin, binErr := svcInfo.GetBinary(remoteOS, remoteArch); binErr == nil {
+					binaryURL = bin.URL
+					checksum = bin.Checksum
+				}
 			}
 		}
 	}
@@ -1197,48 +1251,41 @@ func (e *EdgeProvisioner) installDarwinCaddy(ctx context.Context, host inventory
 		caddyDataDir = filepath.Join(os.Getenv("HOME"), ".local/var/lib/caddy")
 	}
 
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-curl -sSfL -o /tmp/caddy.tar.gz "%s"
-tar -xzf /tmp/caddy.tar.gz -C /tmp/
-mv /tmp/caddy %[2]s/caddy/caddy 2>/dev/null || true
-chmod +x %[2]s/caddy/caddy
-mkdir -p %[3]s
-echo "Caddy installed"
-`, binaryURL, dirs.baseDir, caddyDataDir)
-
-	result, err := runScript(installScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
-	}
-
 	tmpDir, err := os.MkdirTemp("", "edge-caddy-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
-
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
-		return fmt.Errorf("failed to write templates: %w", err)
+		return fmt.Errorf("failed to render caddyfile: %w", err)
 	}
-
-	caddyfilePath := filepath.Join(tmpDir, "Caddyfile")
-	if err := uploadFile(ssh.UploadOptions{
-		LocalPath: caddyfilePath, RemotePath: dirs.confDir + "/Caddyfile", Mode: 0644,
-	}); err != nil {
-		return fmt.Errorf("failed to upload Caddyfile: %w", err)
+	caddyfileBytes, err := os.ReadFile(filepath.Join(tmpDir, "Caddyfile"))
+	if err != nil {
+		return fmt.Errorf("failed to read rendered caddyfile: %w", err)
 	}
 
 	envContent := fmt.Sprintf("# Caddy edge environment\nCADDY_EMAIL=%s\n", vars.AcmeEmail)
-	if err := e.writeRemoteFile(ctx, host, dirs.confDir+"/caddy.env", envContent, 0600); err != nil {
-		return err
+	installSentinel := ansible.ArtifactSentinel(dirs.baseDir+"/caddy", checksum+binaryURL)
+	tasks := []ansible.Task{
+		mkdirTask(dirs.baseDir+"/caddy", "", "", "0755"),
+		mkdirTask(dirs.confDir, "", "", "0755"),
+		mkdirTask(dirs.logDir, "", "", "0755"),
+		mkdirTask(caddyDataDir, "", "", "0755"),
+		ansible.TaskCopy(dirs.confDir+"/Caddyfile", string(caddyfileBytes), ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskCopy(dirs.confDir+"/caddy.env", envContent, ansible.CopyOpts{Mode: "0600"}),
+		// Tarball stays in /tmp so get_url cache-hits on rerun via checksum;
+		// version-keyed sentinel triggers re-extract on a pin bump.
+		ansible.TaskGetURL(binaryURL, "/tmp/caddy.tar.gz", checksum),
+		ansible.TaskUnarchive("/tmp/caddy.tar.gz", dirs.baseDir+"/caddy",
+			installSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell("touch "+installSentinel, ansible.ShellOpts{Creates: installSentinel}),
+		{
+			Name:   "ensure Caddy binary is executable",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": dirs.baseDir + "/caddy/caddy", "mode": "0755"},
+		},
 	}
-
-	return e.uploadLaunchdPlistTo(ctx, host, dirs, LaunchdPlistData{
+	tasks = append(tasks, darwinLaunchdTasks(dirs, LaunchdPlistData{
 		Label:       "com.livepeer.frameworks.caddy",
 		Description: "FrameWorks Caddy Reverse Proxy (edge)",
 		Program:     dirs.baseDir + "/caddy/caddy",
@@ -1249,30 +1296,65 @@ echo "Caddy installed"
 		KeepAlive:   true,
 		LogPath:     dirs.logDir + "/com.livepeer.frameworks.caddy.log",
 		ErrorPath:   dirs.logDir + "/com.livepeer.frameworks.caddy.err",
-	})
+	})...)
+	return e.darwinPlaybook(ctx, host, "Install Caddy (darwin)", isUser, tasks)
 }
 
 // installNativeLinux is the original Linux systemd installation path.
 func (e *EdgeProvisioner) installNativeLinux(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
 	// (0) Create frameworks user/group for MistServer and Helmsman systemd units
 	fmt.Println("  creating frameworks user/group...")
-	userScript := `#!/bin/bash
-set -e
-shell=/usr/bin/nologin
-[ ! -x "$shell" ] && shell=/sbin/nologin
-[ ! -x "$shell" ] && shell=/bin/false
-getent group frameworks >/dev/null || groupadd --system frameworks
-id -u frameworks >/dev/null 2>&1 || useradd -r -g frameworks -s "$shell" frameworks
-mkdir -p /opt/frameworks/mistserver /opt/frameworks/helmsman /etc/frameworks /var/log/frameworks
-mkdir -p /etc/frameworks/pki
-chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsman /etc/frameworks /var/log/frameworks
-`
-	if result, err := e.ExecuteSudoScript(ctx, host, userScript); err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("failed to create frameworks user: %w (%s)", err, stderr)
+	userPrepTasks := []ansible.Task{
+		{
+			Name:   "ensure frameworks group exists",
+			Module: "ansible.builtin.group",
+			Args:   map[string]any{"name": "frameworks", "system": true, "state": "present"},
+		},
+		{
+			Name:   "ensure frameworks user exists",
+			Module: "ansible.builtin.user",
+			Args: map[string]any{
+				"name":   "frameworks",
+				"group":  "frameworks",
+				"system": true,
+				"shell":  "/usr/sbin/nologin",
+				"state":  "present",
+			},
+		},
+		mkdirTask("/opt/frameworks/mistserver", "frameworks", "frameworks", "0755"),
+		mkdirTask("/opt/frameworks/helmsman", "frameworks", "frameworks", "0755"),
+		mkdirTask("/etc/frameworks", "frameworks", "frameworks", "0755"),
+		mkdirTask("/etc/frameworks/pki", "frameworks", "frameworks", "0755"),
+		mkdirTask("/var/log/frameworks", "frameworks", "frameworks", "0755"),
+	}
+	prepPlaybook := &ansible.Playbook{
+		Name:  "Prepare edge native (user, group, dirs)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Edge user prep",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: false,
+				Tasks:       userPrepTasks,
+			},
+		},
+	}
+	prepInv := ansible.NewInventory()
+	prepInv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": e.sshPool.DefaultKeyPath(),
+		},
+	})
+	prepResult, prepErr := e.executor.ExecutePlaybook(ctx, prepPlaybook, prepInv, ansible.ExecuteOptions{Verbose: false})
+	if prepErr != nil {
+		return fmt.Errorf("failed to create frameworks user: %w\nOutput: %s", prepErr, prepResult.Output)
+	}
+	if !prepResult.Success {
+		return fmt.Errorf("frameworks user prep playbook failed\nOutput: %s", prepResult.Output)
 	}
 	if err := e.stageCABundleAt(ctx, host, config.CABundlePEM, config.helmsmanCAPath(remoteOS)); err != nil {
 		return fmt.Errorf("failed to stage gRPC CA bundle: %w", err)
@@ -1287,7 +1369,7 @@ chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsm
 
 	// (b) Helmsman
 	fmt.Println("  installing Helmsman...")
-	if err = e.installNativeHelmsman(ctx, host, config, vars, manifest, arch, remoteOS, remoteArch, mistPass); err != nil {
+	if err = e.installNativeHelmsman(ctx, host, config, vars, manifest, remoteOS, remoteArch, mistPass); err != nil {
 		return fmt.Errorf("helmsman install failed: %w", err)
 	}
 
@@ -1326,29 +1408,9 @@ chown -R frameworks:frameworks /opt/frameworks/mistserver /opt/frameworks/helmsm
 		return fmt.Errorf("failed to upload .edge.env: %w", err)
 	}
 
-	// (e) Start all services in order
-	fmt.Println("  starting services...")
-	startScript := fmt.Sprintf(`#!/bin/bash
-set -e
-systemctl daemon-reload
-systemctl enable frameworks-mistserver frameworks-helmsman frameworks-caddy%s
-systemctl start frameworks-mistserver
-sleep 2
-systemctl start frameworks-helmsman
-	sleep 1
-	%s
-	systemctl start frameworks-caddy
-	echo "all services started"
-	`, linuxTelemetryEnableSuffix(config), linuxTelemetryStartCommands(config))
-	result, err := e.ExecuteSudoScript(ctx, host, startScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("service start failed: %w (%s)", err, stderr)
-	}
-
+	// Each install_*Native* call above already runs daemon-reload, enable, and
+	// start for its own systemd unit (and for the optional vmagent telemetry
+	// agent), so no separate orchestration step is needed here.
 	fmt.Println("  edge stack running (frameworks-mistserver, frameworks-helmsman, frameworks-caddy)")
 	return nil
 }
@@ -1359,109 +1421,114 @@ func (e *EdgeProvisioner) installNativeMistServer(ctx context.Context, host inve
 		return "", err
 	}
 
-	var binaryURL string
+	var (
+		binaryURL string
+		checksum  string
+	)
 	if manifest != nil {
-		dep := manifest.GetExternalDependency("mistserver")
-		if dep != nil {
-			binaryURL = dep.GetBinaryURL(arch)
+		if dep := manifest.GetExternalDependency("mistserver"); dep != nil {
+			if bin := dep.GetBinary(arch); bin != nil {
+				binaryURL = bin.URL
+				checksum = bin.Checksum
+			}
 		}
 	}
 	if binaryURL == "" {
 		return "", fmt.Errorf("MistServer binary URL not available (set --version to resolve from gitops, or provide binary URL in manifest)")
 	}
 
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-mkdir -p /opt/frameworks/mistserver
-wget -q -O /tmp/mistserver.tar.gz "%s"
-tar -xzf /tmp/mistserver.tar.gz -C /opt/frameworks/mistserver/
-rm -f /tmp/mistserver.tar.gz
-chmod +x /opt/frameworks/mistserver/MistServer
-echo "MistServer installed"
-`, binaryURL)
-
-	result, err := e.ExecuteSudoScript(ctx, host, installScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return "", fmt.Errorf("install script failed: %w (%s)", err, stderr)
-	}
-
 	envContent := "# MistServer environment\nMIST_DEBUG=3\n"
-	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/mistserver.env", envContent, 0644); err != nil {
-		return "", err
+	unitContent := ansible.RenderSystemdUnit(ansible.SystemdUnitSpec{
+		Description:     "FrameWorks MistServer (edge media server)",
+		After:           []string{"network-online.target"},
+		Wants:           []string{"network-online.target"},
+		User:            "frameworks",
+		WorkingDir:      "/opt/frameworks/mistserver",
+		EnvironmentFile: "/etc/frameworks/mistserver.env",
+		ExecStart:       fmt.Sprintf("/opt/frameworks/mistserver/MistServer -a frameworks:%s", mistPass),
+		Restart:         "always",
+		RestartSec:      5,
+		LimitNOFILE:     "1048576",
+	})
+
+	installSentinel := ansible.ArtifactSentinel("/opt/frameworks/mistserver", checksum+binaryURL)
+	tasks := []ansible.Task{
+		mkdirTask("/etc/frameworks", "frameworks", "frameworks", "0755"),
+		mkdirTask("/opt/frameworks/mistserver", "frameworks", "frameworks", "0755"),
+		ansible.TaskCopy("/etc/frameworks/mistserver.env", envContent, ansible.CopyOpts{Owner: "frameworks", Group: "frameworks", Mode: "0644"}),
+		// Tarball stays in /tmp for get_url cache-hit; version-keyed sentinel
+		// triggers re-extract on a pinned-version bump. MistServer tarball lays
+		// out files directly (no top-level wrapper), so no --strip-components.
+		ansible.TaskGetURL(binaryURL, "/tmp/mistserver.tar.gz", checksum),
+		ansible.TaskUnarchive("/tmp/mistserver.tar.gz", "/opt/frameworks/mistserver",
+			installSentinel,
+			ansible.UnarchiveOpts{Owner: "frameworks", Group: "frameworks"}),
+		ansible.TaskShell("touch "+installSentinel+" && chown frameworks:frameworks "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel}),
+		{
+			Name:   "ensure MistServer is executable",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/opt/frameworks/mistserver/MistServer", "mode": "0755", "owner": "frameworks", "group": "frameworks"},
+		},
+		ansible.TaskCopy("/etc/systemd/system/frameworks-mistserver.service", unitContent, ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskSystemdService("frameworks-mistserver", ansible.SystemdOpts{
+			State:        "started",
+			Enabled:      ansible.BoolPtr(true),
+			DaemonReload: true,
+		}),
 	}
 
-	unitData := SystemdUnitData{
-		ServiceName: "frameworks-mistserver",
-		Description: "FrameWorks MistServer (edge media server)",
-		WorkingDir:  "/opt/frameworks/mistserver",
-		ExecStart:   fmt.Sprintf("/opt/frameworks/mistserver/MistServer -a frameworks:%s", mistPass),
-		User:        "frameworks",
-		EnvFile:     "/etc/frameworks/mistserver.env",
-		After:       []string{"network-online"},
-		LimitNOFILE: "1048576",
+	playbook := &ansible.Playbook{
+		Name:  "Install MistServer (edge linux)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Install MistServer",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: true,
+				Tasks:       tasks,
+			},
+		},
 	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": e.sshPool.DefaultKeyPath(),
+		},
+	})
 
-	return mistPass, e.uploadSystemdUnit(ctx, host, unitData)
+	result, execErr := e.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return "", fmt.Errorf("MistServer install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return "", fmt.Errorf("MistServer install playbook failed\nOutput: %s", result.Output)
+	}
+	return mistPass, nil
 }
 
-func (e *EdgeProvisioner) installNativeHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch, mistPass string) error {
-	var binaryURL string
+func (e *EdgeProvisioner) installNativeHelmsman(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, vars templates.EdgeVars, manifest *gitops.Manifest, remoteOS, remoteArch, mistPass string) error {
+	var (
+		binaryURL string
+		checksum  string
+	)
 	if manifest != nil {
 		svcInfo, err := manifest.GetServiceInfo("helmsman")
 		if err == nil {
-			binaryURL, _ = svcInfo.GetBinaryURL(remoteOS, remoteArch)
+			if bin, binErr := svcInfo.GetBinary(remoteOS, remoteArch); binErr == nil {
+				binaryURL = bin.URL
+				checksum = bin.Checksum
+			}
 		}
 	}
 	if binaryURL == "" {
 		return fmt.Errorf("helmsman binary URL not available (set --version to resolve from gitops)")
 	}
 
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-ASSET_URL=%[1]q
-ASSET_PATH=/tmp/helmsman.asset
-EXTRACT_DIR="$(mktemp -d)"
-trap 'rm -rf "$EXTRACT_DIR" "$ASSET_PATH"' EXIT
-
-extract_zip() {
-  if command -v unzip >/dev/null 2>&1; then
-    unzip -q "$1" -d "$2"
-  elif command -v ditto >/dev/null 2>&1; then
-    ditto -x -k "$1" "$2"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -m zipfile -e "$1" "$2"
-  else
-    echo "zip extractor not available" >&2
-    exit 1
-  fi
-}
-
-mkdir -p /opt/frameworks/helmsman
-wget -q -O "$ASSET_PATH" "$ASSET_URL"
-if [[ "$ASSET_URL" == *.zip ]]; then
-  extract_zip "$ASSET_PATH" "$EXTRACT_DIR"
-else
-  tar -xzf "$ASSET_PATH" -C "$EXTRACT_DIR"
-fi
-mv "$EXTRACT_DIR"/frameworks-helmsman-* /opt/frameworks/helmsman/helmsman 2>/dev/null || mv "$EXTRACT_DIR"/helmsman /opt/frameworks/helmsman/helmsman 2>/dev/null || mv "$EXTRACT_DIR"/frameworks /opt/frameworks/helmsman/helmsman 2>/dev/null || true
-chmod +x /opt/frameworks/helmsman/helmsman
-echo "Helmsman installed"
-`, binaryURL)
-
-	result, err := e.ExecuteSudoScript(ctx, host, installScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
-	}
-
-	// Generate env file with all edge vars + native-specific additions
 	domain := config.primaryDomain()
 	envLines := []string{
 		"# Helmsman edge environment",
@@ -1472,47 +1539,114 @@ echo "Helmsman installed"
 		fmt.Sprintf("EDGE_DOMAIN=%s", domain),
 		fmt.Sprintf("ACME_EMAIL=%s", vars.AcmeEmail),
 		fmt.Sprintf("DEPLOY_MODE=%s", vars.Mode),
-		// Native-specific: services on localhost
 		fmt.Sprintf("MISTSERVER_URL=http://%s", vars.MistUpstream),
 		fmt.Sprintf("HELMSMAN_WEBHOOK_URL=http://%s", vars.HelmsmanUpstream),
 		"CADDY_ADMIN_URL=http://localhost:2019",
-		fmt.Sprintf("MIST_API_USERNAME=%s", "frameworks"),
+		"MIST_API_USERNAME=frameworks",
 		fmt.Sprintf("MIST_API_PASSWORD=%s", mistPass),
 	}
 	if vars.GRPCTLSCAPath != "" {
 		envLines = append(envLines, fmt.Sprintf("GRPC_TLS_CA_PATH=%s", vars.GRPCTLSCAPath))
 	}
 	envContent := strings.Join(envLines, "\n") + "\n"
-	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/helmsman.env", envContent, 0600); err != nil {
-		return err
-	}
 
-	// Generate systemd unit
-	unitData := SystemdUnitData{
-		ServiceName: "frameworks-helmsman",
-		Description: "FrameWorks Helmsman (edge sidecar)",
-		WorkingDir:  "/opt/frameworks/helmsman",
-		ExecStart:   "/opt/frameworks/helmsman/helmsman",
-		User:        "frameworks",
-		EnvFile:     "/etc/frameworks/helmsman.env",
-		After:       []string{"network-online", "frameworks-mistserver"},
-	}
+	unitContent := ansible.RenderSystemdUnit(ansible.SystemdUnitSpec{
+		Description:     "FrameWorks Helmsman (edge sidecar)",
+		After:           []string{"network-online.target", "frameworks-mistserver.service"},
+		Wants:           []string{"network-online.target"},
+		User:            "frameworks",
+		WorkingDir:      "/opt/frameworks/helmsman",
+		EnvironmentFile: "/etc/frameworks/helmsman.env",
+		ExecStart:       "/opt/frameworks/helmsman/helmsman",
+		Restart:         "always",
+		RestartSec:      5,
+	})
 
-	return e.uploadSystemdUnit(ctx, host, unitData)
+	// Helmsman's release asset is a tar.gz or zip; Ansible's unarchive auto-
+	// detects both but needs `unzip` for zip archives. The filename pattern
+	// inside the archive varies (frameworks-helmsman-*, helmsman, frameworks),
+	// so a post-extract move picks whichever shipped. Version-keyed sentinel
+	// rotates when either checksum or URL changes.
+	isZip := strings.HasSuffix(binaryURL, ".zip")
+	installSentinel := ansible.ArtifactSentinel("/opt/frameworks/helmsman", checksum+binaryURL)
+	tasks := []ansible.Task{
+		mkdirTask("/etc/frameworks", "frameworks", "frameworks", "0755"),
+		mkdirTask("/opt/frameworks/helmsman", "frameworks", "frameworks", "0755"),
+		ansible.TaskCopy("/etc/frameworks/helmsman.env", envContent, ansible.CopyOpts{Owner: "frameworks", Group: "frameworks", Mode: "0600"}),
+	}
+	if isZip {
+		tasks = append(tasks, ansible.TaskPackage("unzip", ansible.PackagePresent))
+	}
+	tasks = append(tasks,
+		ansible.TaskGetURL(binaryURL, "/tmp/helmsman.asset", checksum),
+		ansible.TaskUnarchive("/tmp/helmsman.asset", "/opt/frameworks/helmsman",
+			installSentinel,
+			ansible.UnarchiveOpts{Owner: "frameworks", Group: "frameworks"}),
+		ansible.TaskShell(
+			"mv /opt/frameworks/helmsman/frameworks-helmsman-* /opt/frameworks/helmsman/helmsman 2>/dev/null || "+
+				"mv /opt/frameworks/helmsman/frameworks /opt/frameworks/helmsman/helmsman 2>/dev/null || true; "+
+				"chmod +x /opt/frameworks/helmsman/helmsman; touch "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel},
+		),
+		ansible.TaskCopy("/etc/systemd/system/frameworks-helmsman.service", unitContent, ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskSystemdService("frameworks-helmsman", ansible.SystemdOpts{
+			State:        "started",
+			Enabled:      ansible.BoolPtr(true),
+			DaemonReload: true,
+		}),
+	)
+
+	playbook := &ansible.Playbook{
+		Name:  "Install Helmsman (edge linux)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Install Helmsman",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: true,
+				Tasks:       tasks,
+			},
+		},
+	}
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": e.sshPool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := e.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("helmsman install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("helmsman install playbook failed\nOutput: %s", result.Output)
+	}
+	return nil
 }
 
 func (e *EdgeProvisioner) installNativeCaddy(ctx context.Context, host inventory.Host, vars templates.EdgeVars, manifest *gitops.Manifest, arch, remoteOS, remoteArch string) error {
-	var binaryURL string
+	var (
+		binaryURL string
+		checksum  string
+	)
 	if manifest != nil {
-		dep := manifest.GetExternalDependency("caddy")
-		if dep != nil {
-			binaryURL = dep.GetBinaryURL(arch)
+		if dep := manifest.GetExternalDependency("caddy"); dep != nil {
+			if bin := dep.GetBinary(arch); bin != nil {
+				binaryURL = bin.URL
+				checksum = bin.Checksum
+			}
 		}
-		// Fallback: try service info
 		if binaryURL == "" {
 			svcInfo, err := manifest.GetServiceInfo("caddy")
 			if err == nil {
-				binaryURL, _ = svcInfo.GetBinaryURL(remoteOS, remoteArch)
+				if bin, binErr := svcInfo.GetBinary(remoteOS, remoteArch); binErr == nil {
+					binaryURL = bin.URL
+					checksum = bin.Checksum
+				}
 			}
 		}
 	}
@@ -1520,78 +1654,123 @@ func (e *EdgeProvisioner) installNativeCaddy(ctx context.Context, host inventory
 		return fmt.Errorf("caddy binary URL not available (set --version to resolve from gitops)")
 	}
 
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-mkdir -p /opt/frameworks/caddy
-wget -q -O /tmp/caddy.tar.gz "%s"
-tar -xzf /tmp/caddy.tar.gz -C /tmp/
-mv /tmp/caddy /opt/frameworks/caddy/caddy 2>/dev/null || true
-chmod +x /opt/frameworks/caddy/caddy
-rm -f /tmp/caddy.tar.gz
-
-# Create caddy user if needed
-shell=/usr/bin/nologin
-[ ! -x "$shell" ] && shell=/sbin/nologin
-[ ! -x "$shell" ] && shell=/bin/false
-getent group caddy >/dev/null || groupadd --system caddy
-id -u caddy &>/dev/null || useradd -r -g caddy -s "$shell" caddy
-mkdir -p /etc/caddy /var/lib/caddy
-chown -R caddy:caddy /etc/caddy /var/lib/caddy
-
-echo "Caddy installed"
-`, binaryURL)
-
-	result, err := e.ExecuteSudoScript(ctx, host, installScript)
-	if err != nil || result.ExitCode != 0 {
-		stderr := ""
-		if result != nil {
-			stderr = result.Stderr
-		}
-		return fmt.Errorf("install script failed: %w (%s)", err, stderr)
-	}
-
-	// Write the Caddyfile using the edge template system
+	// Caddyfile is rendered locally (owned by the templates package), then
+	// shipped to the host inline via TaskCopy.
 	tmpDir, err := os.MkdirTemp("", "edge-caddy-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
-
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
-		return fmt.Errorf("failed to write templates: %w", err)
+		return fmt.Errorf("failed to render caddyfile: %w", err)
+	}
+	caddyfileBytes, err := os.ReadFile(filepath.Join(tmpDir, "Caddyfile"))
+	if err != nil {
+		return fmt.Errorf("failed to read rendered caddyfile: %w", err)
 	}
 
-	caddyfilePath := filepath.Join(tmpDir, "Caddyfile")
-	if err := e.uploadFileWithSudo(ctx, host, ssh.UploadOptions{
-		LocalPath: caddyfilePath, RemotePath: "/etc/caddy/Caddyfile", Mode: 0644,
-		Owner: "caddy", Group: "caddy",
-	}); err != nil {
-		return fmt.Errorf("failed to upload Caddyfile: %w", err)
-	}
-
-	// Ensure caddy can read cert files
-	if vars.CertPath != "" {
-		_, _ = e.RunSudoCommand(ctx, host, "chown caddy:caddy /etc/frameworks/certs/cert.pem /etc/frameworks/certs/key.pem 2>/dev/null || true")
-	}
-
-	// Generate caddy env file
 	envContent := fmt.Sprintf("# Caddy edge environment\nCADDY_EMAIL=%s\n", vars.AcmeEmail)
-	if err := e.writeRemoteFile(ctx, host, "/etc/frameworks/caddy.env", envContent, 0600); err != nil {
-		return err
+	unitContent := ansible.RenderSystemdUnit(ansible.SystemdUnitSpec{
+		Description:     "FrameWorks Caddy Reverse Proxy (edge)",
+		After:           []string{"network-online.target", "frameworks-mistserver.service", "frameworks-helmsman.service"},
+		Wants:           []string{"network-online.target"},
+		User:            "caddy",
+		WorkingDir:      "/etc/caddy",
+		EnvironmentFile: "/etc/frameworks/caddy.env",
+		ExecStart:       "/opt/frameworks/caddy/caddy run --config /etc/caddy/Caddyfile",
+		Restart:         "always",
+		RestartSec:      5,
+	})
+
+	installSentinel := ansible.ArtifactSentinel("/opt/frameworks/caddy", checksum+binaryURL)
+	tasks := []ansible.Task{
+		mkdirTask("/opt/frameworks/caddy", "root", "root", "0755"),
+		mkdirTask("/etc/frameworks", "frameworks", "frameworks", "0755"),
+		{
+			Name:   "ensure caddy group exists",
+			Module: "ansible.builtin.group",
+			Args:   map[string]any{"name": "caddy", "system": true, "state": "present"},
+		},
+		{
+			Name:   "ensure caddy user exists",
+			Module: "ansible.builtin.user",
+			Args: map[string]any{
+				"name":   "caddy",
+				"group":  "caddy",
+				"system": true,
+				"shell":  "/usr/sbin/nologin",
+				"state":  "present",
+			},
+		},
+		mkdirTask("/etc/caddy", "caddy", "caddy", "0755"),
+		mkdirTask("/var/lib/caddy", "caddy", "caddy", "0755"),
+		// Tarball stays in /tmp for get_url cache-hit; version-keyed sentinel
+		// triggers re-extract on a pinned-version bump.
+		ansible.TaskGetURL(binaryURL, "/tmp/caddy.tar.gz", checksum),
+		ansible.TaskUnarchive("/tmp/caddy.tar.gz", "/opt/frameworks/caddy",
+			installSentinel, ansible.UnarchiveOpts{}),
+		ansible.TaskShell("touch "+installSentinel, ansible.ShellOpts{Creates: installSentinel}),
+		{
+			Name:   "ensure Caddy binary is executable",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/opt/frameworks/caddy/caddy", "mode": "0755"},
+		},
+		ansible.TaskCopy("/etc/caddy/Caddyfile", string(caddyfileBytes), ansible.CopyOpts{Owner: "caddy", Group: "caddy", Mode: "0644"}),
+		ansible.TaskCopy("/etc/frameworks/caddy.env", envContent, ansible.CopyOpts{Owner: "caddy", Group: "caddy", Mode: "0600"}),
+		ansible.TaskCopy("/etc/systemd/system/frameworks-caddy.service", unitContent, ansible.CopyOpts{Mode: "0644"}),
+		ansible.TaskSystemdService("frameworks-caddy", ansible.SystemdOpts{
+			State:        "started",
+			Enabled:      ansible.BoolPtr(true),
+			DaemonReload: true,
+		}),
+	}
+	// Edge cert/key are written to /etc/frameworks/certs earlier in the pipeline
+	// as root:root; caddy needs read access to them.
+	if vars.CertPath != "" {
+		tasks = append(tasks,
+			ansible.Task{
+				Name:   "chown edge cert for caddy",
+				Module: "ansible.builtin.file",
+				Args:   map[string]any{"path": "/etc/frameworks/certs/cert.pem", "owner": "caddy", "group": "caddy"},
+			},
+			ansible.Task{
+				Name:   "chown edge key for caddy",
+				Module: "ansible.builtin.file",
+				Args:   map[string]any{"path": "/etc/frameworks/certs/key.pem", "owner": "caddy", "group": "caddy"},
+			},
+		)
 	}
 
-	// Generate systemd unit
-	unitData := SystemdUnitData{
-		ServiceName: "frameworks-caddy",
-		Description: "FrameWorks Caddy Reverse Proxy (edge)",
-		WorkingDir:  "/etc/caddy",
-		ExecStart:   "/opt/frameworks/caddy/caddy run --config /etc/caddy/Caddyfile",
-		User:        "caddy",
-		EnvFile:     "/etc/frameworks/caddy.env",
-		After:       []string{"network-online", "frameworks-mistserver", "frameworks-helmsman"},
+	playbook := &ansible.Playbook{
+		Name:  "Install Caddy (edge linux)",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Install Caddy",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: true,
+				Tasks:       tasks,
+			},
+		},
 	}
-
-	return e.uploadSystemdUnit(ctx, host, unitData)
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": e.sshPool.DefaultKeyPath(),
+		},
+	})
+	result, execErr := e.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("caddy install failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("caddy install playbook failed\nOutput: %s", result.Output)
+	}
+	return nil
 }
 
 // verifyHTTPS polls the edge domain for HTTPS readiness.
@@ -1739,54 +1918,4 @@ func (e *EdgeProvisioner) writeRemoteFile(ctx context.Context, host inventory.Ho
 	return e.uploadFileWithSudo(ctx, host, ssh.UploadOptions{
 		LocalPath: tmpFile.Name(), RemotePath: remotePath, Mode: mode,
 	})
-}
-
-// uploadLaunchdPlist uploads a launchd plist to the default system domain.
-// uploadLaunchdPlistTo generates a launchd plist and uploads it to the given directory set.
-// Since launchd doesn't support EnvironmentFile natively, we use a wrapper shell script
-// that sources the env file before exec-ing the program.
-func (e *EdgeProvisioner) uploadLaunchdPlistTo(ctx context.Context, host inventory.Host, dirs darwinDirSet, data LaunchdPlistData) error {
-	wrapperPath := dirs.baseDir + "/" + strings.TrimPrefix(data.Label, "com.livepeer.frameworks.") + "/run.sh"
-	program := data.Program
-	args := strings.Join(data.ProgramArgs, " ")
-
-	// Read env file line-by-line and export only valid KEY=VALUE pairs.
-	wrapperContent := fmt.Sprintf(`#!/bin/bash
-while IFS= read -r line || [ -n "$line" ]; do
-  line="${line%%#*}"
-  line="${line#"${line%%%%[! ]*}"}"
-  [ -z "$line" ] && continue
-  case "$line" in
-    *=*) export "$line" ;;
-  esac
-done < %s
-exec %s %s
-`, data.EnvFile, program, args)
-
-	if err := e.writeRemoteFile(ctx, host, wrapperPath, wrapperContent, 0755); err != nil {
-		return fmt.Errorf("failed to write wrapper script for %s: %w", data.Label, err)
-	}
-
-	data.Program = "/bin/bash"
-	data.ProgramArgs = []string{wrapperPath}
-	data.EnvFile = "" // Handled by wrapper
-
-	plistContent, err := GenerateLaunchdPlist(data)
-	if err != nil {
-		return fmt.Errorf("failed to generate launchd plist for %s: %w", data.Label, err)
-	}
-
-	plistPath := fmt.Sprintf("%s/%s.plist", dirs.plistDir, data.Label)
-	return e.writeRemoteFile(ctx, host, plistPath, plistContent, 0644)
-}
-
-// uploadSystemdUnit generates a unit file and uploads it.
-func (e *EdgeProvisioner) uploadSystemdUnit(ctx context.Context, host inventory.Host, data SystemdUnitData) error {
-	unitContent, err := GenerateSystemdUnit(data)
-	if err != nil {
-		return fmt.Errorf("failed to generate systemd unit for %s: %w", data.ServiceName, err)
-	}
-
-	unitPath := fmt.Sprintf("/etc/systemd/system/%s.service", data.ServiceName)
-	return e.writeRemoteFile(ctx, host, unitPath, unitContent, 0644)
 }

@@ -39,23 +39,14 @@ func (l *ListmonkProvisioner) Detect(ctx context.Context, host inventory.Host) (
 func (l *ListmonkProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	fmt.Println("Provisioning listmonk in Docker mode...")
 
-	state, err := l.Detect(ctx, host)
-	if err != nil {
-		state = nil
-	}
-
 	image := config.Image
 	if image == "" {
 		image = defaultListmonkImage
 	}
-	if skip, reason := shouldSkipProvision(state, config, "", image); skip {
-		fmt.Printf("Service %s already running (%s), skipping...\n", l.name, reason)
-		return nil
-	}
 
 	// Write Listmonk-specific env file
 	envFile := "/etc/frameworks/listmonk.env"
-	if err = l.writeListmonkEnv(ctx, host, envFile, config); err != nil {
+	if err := l.writeListmonkEnv(ctx, host, envFile, config); err != nil {
 		return fmt.Errorf("failed to write listmonk env file: %w", err)
 	}
 

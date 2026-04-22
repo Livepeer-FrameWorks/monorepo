@@ -20,12 +20,18 @@ const defaultApacheZookeeperVersion = "3.9.2"
 // ZookeeperProvisioner provisions Zookeeper nodes.
 type ZookeeperProvisioner struct {
 	*BaseProvisioner
+	executor *ansible.Executor
 }
 
 // NewZookeeperProvisioner creates a new Zookeeper provisioner.
 func NewZookeeperProvisioner(pool *ssh.Pool) (*ZookeeperProvisioner, error) {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		return nil, fmt.Errorf("create ansible executor: %w", err)
+	}
 	return &ZookeeperProvisioner{
 		BaseProvisioner: NewBaseProvisioner("zookeeper", pool),
+		executor:        executor,
 	}, nil
 }
 
@@ -34,13 +40,10 @@ func (z *ZookeeperProvisioner) Detect(ctx context.Context, host inventory.Host) 
 	return z.CheckExists(ctx, host, "zookeeper")
 }
 
-// Provision installs Zookeeper using Docker or native systemd.
+// Provision installs Zookeeper using Docker or native systemd. Runs every
+// apply — each task's idempotence gate handles reruns on healthy hosts, and
+// version-keyed install sentinels make upgrades trigger re-extraction.
 func (z *ZookeeperProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, err := z.Detect(ctx, host)
-	if err == nil && state.Exists && state.Running {
-		return nil
-	}
-
 	port := config.Port
 	if port == 0 {
 		port = 2181
@@ -157,97 +160,200 @@ autopurge.purgeInterval=24
 %s`, port, trailer)
 }
 
+// zookeeperSystemdUnitSpec returns the SystemdUnitSpec for the zookeeper service.
+func zookeeperSystemdUnitSpec() ansible.SystemdUnitSpec {
+	return ansible.SystemdUnitSpec{
+		Description: "FrameWorks ZooKeeper",
+		After:       []string{"network-online.target"},
+		Wants:       []string{"network-online.target"},
+		User:        "zookeeper",
+		Group:       "zookeeper",
+		Environment: map[string]string{"ZOO_LOG_DIR": "/var/lib/zookeeper/log"},
+		ExecStart:   "/opt/zookeeper/bin/zkServer.sh start-foreground /etc/zookeeper/zoo.cfg",
+		Restart:     "always",
+		RestartSec:  5,
+		LimitNOFILE: "65535",
+	}
+}
+
 // BuildZookeeperSystemdUnit returns the frameworks-zookeeper.service bytes.
 func BuildZookeeperSystemdUnit() []byte {
-	return []byte(`[Unit]
-Description=FrameWorks ZooKeeper
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=zookeeper
-Group=zookeeper
-Environment=ZOO_LOG_DIR=/var/lib/zookeeper/log
-ExecStart=/opt/zookeeper/bin/zkServer.sh start-foreground /etc/zookeeper/zoo.cfg
-Restart=always
-RestartSec=5
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-`)
+	return []byte(ansible.RenderSystemdUnit(zookeeperSystemdUnitSpec()))
 }
 
 func (z *ZookeeperProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, port int) error {
-	version := resolveZookeeperNativeVersion(config.Version)
+	_ = resolveZookeeperNativeVersion(config.Version) // retained for validation side-effect of the helper
 	serverID := zookeeperServerID(config.Metadata["server_id"])
 	serverLines := strings.Join(zookeeperServerList(config.Metadata["servers"]), "\n")
-	zooCfgContent := string(BuildZookeeperConfig(port, serverLines))
-	systemdUnit := string(BuildZookeeperSystemdUnit())
 
-	amd, arm, err := resolveLinuxArtifacts("zookeeper", config.Metadata)
+	_, remoteArch, err := z.DetectRemoteArch(ctx, host)
+	if err != nil {
+		return fmt.Errorf("detect remote arch: %w", err)
+	}
+	archKey := "linux-" + remoteArch
+	artifact, err := resolveInfraArtifactFromChannel("zookeeper", archKey, platformChannelFromMetadata(config.Metadata), config.Metadata)
 	if err != nil {
 		return err
 	}
-
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -euo pipefail
-
-VERSION="%s"
-SERVER_ID="%d"
-ZOO_CFG_CONTENT=$(cat <<'FRAMEWORKS_ZOO_CFG_EOF'
-%s
-FRAMEWORKS_ZOO_CFG_EOF
-)
-SYSTEMD_UNIT_CONTENT=$(cat <<'FRAMEWORKS_ZOO_UNIT_EOF'
-%s
-FRAMEWORKS_ZOO_UNIT_EOF
-)
-
-shell=/usr/bin/nologin
-[ ! -x "$shell" ] && shell=/sbin/nologin
-[ ! -x "$shell" ] && shell=/bin/false
-__FRAMEWORKS_INSTALL_JAVA__
-getent group zookeeper >/dev/null || groupadd --system zookeeper
-id -u zookeeper >/dev/null 2>&1 || useradd -r -g zookeeper -s "$shell" zookeeper
-
-mkdir -p /opt /etc/zookeeper /var/lib/zookeeper/data /var/lib/zookeeper/log
-if [ ! -x /opt/zookeeper/bin/zkServer.sh ]; then
-  rm -rf /opt/zookeeper
-__FRAMEWORKS_ZK_DOWNLOAD__
-  extract_tarball_to /tmp/zookeeper.tgz /opt/zookeeper
-  rm -f /tmp/zookeeper.tgz
-fi
-
-printf '%%s' "${ZOO_CFG_CONTENT}" > /etc/zookeeper/zoo.cfg
-
-if [ "${SERVER_ID}" -gt 0 ]; then
-  echo "${SERVER_ID}" > /var/lib/zookeeper/data/myid
-fi
-
-printf '%%s' "${SYSTEMD_UNIT_CONTENT}" > /etc/systemd/system/frameworks-zookeeper.service
-
-chown -R zookeeper:zookeeper /opt/zookeeper /etc/zookeeper /var/lib/zookeeper
-systemctl daemon-reload
-systemctl enable --now frameworks-zookeeper
-`, version, serverID, zooCfgContent, systemdUnit)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", ansible.EnsureCurlInstallSnippet+ansible.EnsureJavaRuntimeInstallSnippet+ansible.SafeTarballExtractSnippet, 1)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_ZK_DOWNLOAD__", archSwitchedDownloadSnippet(amd, arm, "/tmp/zookeeper.tgz"), 1)
-
-	result, err := z.ExecuteScript(ctx, host, installScript)
+	family, err := z.DetectDistroFamily(ctx, host)
 	if err != nil {
-		return fmt.Errorf("failed to install Zookeeper: %w", err)
+		return fmt.Errorf("detect distro family: %w", err)
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("zookeeper installation failed: %s", result.Stderr)
+	javaSpec, ok := ansible.ResolveDistroPackage(ansible.JavaRuntimePackages, family)
+	if !ok {
+		return fmt.Errorf("zookeeper: unsupported distro family %q for Java install", family)
+	}
+
+	tasks := zookeeperProvisionTasks(port, serverID, serverLines, artifact.URL, artifact.Checksum, javaSpec)
+
+	playbook := &ansible.Playbook{
+		Name:  "Provision ZooKeeper",
+		Hosts: host.ExternalIP,
+		Plays: []ansible.Play{
+			{
+				Name:        "Provision ZooKeeper node",
+				Hosts:       host.ExternalIP,
+				Become:      true,
+				GatherFacts: true,
+				Tasks:       tasks,
+			},
+		},
+	}
+
+	inv := ansible.NewInventory()
+	inv.AddHost(&ansible.InventoryHost{
+		Name:    host.ExternalIP,
+		Address: host.ExternalIP,
+		Vars: map[string]string{
+			"ansible_user":                 host.User,
+			"ansible_ssh_private_key_file": z.sshPool.DefaultKeyPath(),
+		},
+	})
+
+	result, execErr := z.executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: true})
+	if execErr != nil {
+		return fmt.Errorf("ansible execution failed: %w\nOutput: %s", execErr, result.Output)
+	}
+	if !result.Success {
+		return fmt.Errorf("ansible playbook failed\nOutput: %s", result.Output)
 	}
 
 	return nil
 }
 
-// Validate checks if Zookeeper is healthy.
+// zookeeperProvisionTasks renders the declarative task list for a ZooKeeper
+// node. Archive contract: the vendor tarball wraps a single
+// `apache-zookeeper-<version>-bin/` top directory; --strip-components=1 drops
+// it and lands bin/, lib/, conf/ directly under /opt/zookeeper.
+func zookeeperProvisionTasks(port, serverID int, serverLines, artifactURL, artifactChecksum string, javaSpec ansible.DistroPackageSpec) []ansible.Task {
+	zooCfg := string(BuildZookeeperConfig(port, serverLines))
+	unit := ansible.RenderSystemdUnit(zookeeperSystemdUnitSpec())
+	installSentinel := ansible.ArtifactSentinel("/opt/zookeeper", artifactChecksum+artifactURL)
+
+	tasks := []ansible.Task{
+		// curl + Java runtime prerequisites, both idempotent via the package
+		// module. Distro-aware Java name comes from JavaRuntimePackages; a
+		// pre-existing Java >= 11 already satisfies the runtime requirement so
+		// installing the pinned OpenJDK only introduces a dormant provider
+		// on Arch (archlinux-java can switch between them).
+		ansible.TaskPackage("curl", ansible.PackagePresent),
+		ansible.TaskPackage(javaSpec.PackageName, ansible.PackagePresent),
+
+		// zookeeper user + group.
+		{
+			Name:   "ensure zookeeper group",
+			Module: "ansible.builtin.group",
+			Args:   map[string]any{"name": "zookeeper", "system": true, "state": "present"},
+		},
+		{
+			Name:   "ensure zookeeper user",
+			Module: "ansible.builtin.user",
+			Args: map[string]any{
+				"name":   "zookeeper",
+				"group":  "zookeeper",
+				"system": true,
+				"shell":  "/usr/sbin/nologin",
+				"state":  "present",
+			},
+		},
+
+		// Directory layout.
+		{
+			Name:   "create /etc/zookeeper",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/etc/zookeeper", "state": "directory", "owner": "zookeeper", "group": "zookeeper", "mode": "0755"},
+		},
+		{
+			Name:   "create /var/lib/zookeeper/data",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/var/lib/zookeeper/data", "state": "directory", "owner": "zookeeper", "group": "zookeeper", "mode": "0755"},
+		},
+		{
+			Name:   "create /var/lib/zookeeper/log",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/var/lib/zookeeper/log", "state": "directory", "owner": "zookeeper", "group": "zookeeper", "mode": "0755"},
+		},
+		{
+			Name:   "create /opt/zookeeper",
+			Module: "ansible.builtin.file",
+			Args:   map[string]any{"path": "/opt/zookeeper", "state": "directory", "owner": "zookeeper", "group": "zookeeper", "mode": "0755"},
+		},
+
+		// Download + extract tarball. strip-components drops the versioned top
+		// dir. Version-keyed sentinel: a pinned-version bump rotates the
+		// marker path, triggering unarchive + touch to re-extract on top.
+		// Tarball stays in /tmp so get_url cache-hits on same-version reruns.
+		ansible.TaskGetURL(artifactURL, "/tmp/zookeeper.tgz", artifactChecksum),
+		ansible.TaskUnarchive("/tmp/zookeeper.tgz", "/opt/zookeeper", installSentinel,
+			ansible.UnarchiveOpts{StripComponents: 1, Owner: "zookeeper", Group: "zookeeper"}),
+		ansible.TaskShell("touch "+installSentinel+" && chown zookeeper:zookeeper "+installSentinel,
+			ansible.ShellOpts{Creates: installSentinel}),
+
+		// Config + unit file.
+		ansible.TaskCopy("/etc/zookeeper/zoo.cfg", zooCfg, ansible.CopyOpts{Owner: "zookeeper", Group: "zookeeper", Mode: "0644"}),
+		ansible.TaskCopy("/etc/systemd/system/frameworks-zookeeper.service", unit, ansible.CopyOpts{Mode: "0644"}),
+	}
+
+	// myid only when an explicit non-zero server_id is configured.
+	if serverID > 0 {
+		tasks = append(tasks, ansible.TaskCopy(
+			"/var/lib/zookeeper/data/myid",
+			fmt.Sprintf("%d\n", serverID),
+			ansible.CopyOpts{Owner: "zookeeper", Group: "zookeeper", Mode: "0644"},
+		))
+	}
+
+	tasks = append(tasks,
+		ansible.TaskSystemdService("frameworks-zookeeper", ansible.SystemdOpts{
+			State:        "started",
+			Enabled:      ansible.BoolPtr(true),
+			DaemonReload: true,
+		}),
+	)
+
+	return tasks
+}
+
+// Validate checks Zookeeper structural state via goss, then the TCP listener.
 func (z *ZookeeperProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if _, remoteArch, err := z.DetectRemoteArch(ctx, host); err == nil {
+		spec := ansible.RenderGossYAML(ansible.GossSpec{
+			Services: map[string]ansible.GossService{
+				"frameworks-zookeeper": {Running: true, Enabled: true},
+			},
+			Ports: map[string]ansible.GossPort{
+				fmt.Sprintf("tcp:%d", config.Port): {Listening: true},
+			},
+			Files: map[string]ansible.GossFile{
+				"/opt/zookeeper/bin/zkServer.sh": {Exists: true},
+			},
+		})
+		if gossErr := runGossValidate(ctx, z.executor, z.sshPool.DefaultKeyPath(), host,
+			"zookeeper", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+			return fmt.Errorf("zookeeper goss validate failed: %w", gossErr)
+		}
+	}
+
 	checker := &health.TCPChecker{}
 	result := checker.Check(host.ExternalIP, config.Port)
 	if !result.OK {
