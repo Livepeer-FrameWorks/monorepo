@@ -191,8 +191,8 @@ shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
 
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates default-jre-headless
+  apt-get -o DPkg::Lock::Timeout=300 update
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y curl ca-certificates default-jre-headless
 elif command -v dnf >/dev/null 2>&1; then
   dnf install -y curl java-17-openjdk-headless
 elif command -v yum >/dev/null 2>&1; then

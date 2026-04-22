@@ -84,7 +84,7 @@ type TaskResult struct {
 // ExecutionPlan holds tasks organized by execution batches
 type ExecutionPlan struct {
 	Manifest *inventory.Manifest
-	Batches  [][]*Task // Tasks grouped by dependency level (execute in order)
+	Batches  [][]*Task // Parallel-executable batches in dep order; within a batch, tasks share no host and no unresolved deps
 	AllTasks []*Task   // All tasks in plan
 }
 

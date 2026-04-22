@@ -36,8 +36,8 @@ func (p *PrivateerProvisioner) Detect(ctx context.Context, host inventory.Host) 
 
 // Provision installs and configures Privateer
 func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	state, err := p.Detect(ctx, host)
-	if err != nil {
+	state, detectErr := p.Detect(ctx, host)
+	if detectErr != nil {
 		state = nil
 	}
 	if skip, reason := shouldSkipProvision(state, config, "", ""); skip {
@@ -92,7 +92,7 @@ func (p *PrivateerProvisioner) installDependencies(ctx context.Context, host inv
 set -e
 
 if command -v apt-get >/dev/null; then
-    apt-get update && apt-get install -y wireguard-tools
+    apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y wireguard-tools
 elif command -v dnf >/dev/null; then
     dnf install -y wireguard-tools
 elif command -v yum >/dev/null; then

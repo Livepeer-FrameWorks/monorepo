@@ -199,11 +199,11 @@ verify_checksum() {
 }
 
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update
+  apt-get -o DPkg::Lock::Timeout=300 update
   if [ -n "$PG_MAJOR" ]; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "postgresql-$PG_MAJOR" postgresql-contrib
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y "postgresql-$PG_MAJOR" postgresql-contrib
   else
-    DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql postgresql-contrib
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y postgresql postgresql-contrib
   fi
   PGCONF=$(find /etc/postgresql -path '*/main/postgresql.conf' | head -n 1)
   PGHBA=$(find /etc/postgresql -path '*/main/pg_hba.conf' | head -n 1)
@@ -525,8 +525,8 @@ shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
 
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates default-jre-headless
+  apt-get -o DPkg::Lock::Timeout=300 update
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y curl ca-certificates default-jre-headless
 elif command -v dnf >/dev/null 2>&1; then
   dnf install -y curl java-17-openjdk-headless
 elif command -v yum >/dev/null 2>&1; then
@@ -695,8 +695,8 @@ shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
 
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates default-jre-headless
+  apt-get -o DPkg::Lock::Timeout=300 update
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y curl ca-certificates default-jre-headless
 elif command -v dnf >/dev/null 2>&1; then
   dnf install -y curl java-17-openjdk-headless
 elif command -v yum >/dev/null 2>&1; then
@@ -880,8 +880,8 @@ shell=/usr/bin/nologin
 [ ! -x "$shell" ] && shell=/bin/false
 
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates default-jre-headless
+  apt-get -o DPkg::Lock::Timeout=300 update
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y curl ca-certificates default-jre-headless
 elif command -v dnf >/dev/null 2>&1; then
   dnf install -y curl java-17-openjdk-headless
 elif command -v yum >/dev/null 2>&1; then

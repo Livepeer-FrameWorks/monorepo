@@ -53,16 +53,16 @@ if [ "$VERSION" = "stable" ]; then
 fi
 
 install_clickhouse_apt() {
-  apt-get update
-  apt-get install -y apt-transport-https ca-certificates curl gnupg
+  apt-get -o DPkg::Lock::Timeout=300 update
+  apt-get -o DPkg::Lock::Timeout=300 install -y apt-transport-https ca-certificates curl gnupg
   mkdir -p /etc/apt/keyrings
   curl -fsSL https://packages.clickhouse.com/CLICKHOUSE-KEY.GPG | gpg --dearmor -o /etc/apt/keyrings/clickhouse.gpg
   echo "deb [signed-by=/etc/apt/keyrings/clickhouse.gpg] https://packages.clickhouse.com/deb stable main" > /etc/apt/sources.list.d/clickhouse.list
-  apt-get update
+  apt-get -o DPkg::Lock::Timeout=300 update
   if [ -n "$VERSION" ]; then
-    apt-get install -y clickhouse-server="$VERSION" clickhouse-client="$VERSION"
+    apt-get -o DPkg::Lock::Timeout=300 install -y clickhouse-server="$VERSION" clickhouse-client="$VERSION"
   else
-    apt-get install -y clickhouse-server clickhouse-client
+    apt-get -o DPkg::Lock::Timeout=300 install -y clickhouse-server clickhouse-client
   fi
 }
 

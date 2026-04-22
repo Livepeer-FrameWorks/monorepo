@@ -350,7 +350,7 @@ func localServicePorts(metadata map[string]interface{}) map[string]int {
 func packageInstallCommand(family, pkg string) string {
 	switch family {
 	case "debian":
-		return fmt.Sprintf("apt-get update && apt-get install -y %s", pkg)
+		return fmt.Sprintf("apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y %s", pkg)
 	case "rhel":
 		return fmt.Sprintf("(dnf install -y %s || yum install -y %s)", pkg, pkg)
 	case "arch":
@@ -363,7 +363,7 @@ func packageInstallCommand(family, pkg string) string {
 func nginxPackageInstallCommand(family string, requiresGeoIP bool) string {
 	switch family {
 	case "debian":
-		return "apt-get update && apt-get install -y nginx libnginx-mod-http-geoip2 libnginx-mod-stream-geoip2"
+		return "apt-get -o DPkg::Lock::Timeout=300 update && apt-get -o DPkg::Lock::Timeout=300 install -y nginx libnginx-mod-http-geoip2 libnginx-mod-stream-geoip2"
 	case "rhel":
 		if !requiresGeoIP {
 			return "(dnf install -y nginx || yum install -y nginx)"

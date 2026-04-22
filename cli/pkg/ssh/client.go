@@ -74,7 +74,6 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	fmt.Fprintf(os.Stderr, "  Connecting to %s...\n", c.resolution.Target)
 	err := cmd.Run()
 	result.Stdout = strings.TrimSpace(stdout.String())
 	result.Stderr = strings.TrimSpace(stderr.String())

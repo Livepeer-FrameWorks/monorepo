@@ -31,7 +31,9 @@ func (g *DependencyGraph) AddTask(task *Task) {
 	g.edges[task.Name] = append(g.edges[task.Name], task.DependsOn...)
 }
 
-// TopologicalSort returns tasks ordered by dependencies (batches that can run in parallel)
+// TopologicalSort returns task batches in dependency order. Tasks within a
+// batch have no unresolved dependencies AND target distinct hosts, so every
+// batch can execute fully in parallel without same-host resource contention.
 func (g *DependencyGraph) TopologicalSort() ([][]*Task, error) {
 	// Calculate in-degree for each task
 	inDegree := make(map[string]int)
@@ -43,7 +45,6 @@ func (g *DependencyGraph) TopologicalSort() ([][]*Task, error) {
 		inDegree[name] = len(deps)
 	}
 
-	// Find tasks with no dependencies (can run first)
 	var batches [][]*Task
 	remaining := make(map[string]*Task)
 	for name, task := range g.tasks {
@@ -51,21 +52,44 @@ func (g *DependencyGraph) TopologicalSort() ([][]*Task, error) {
 	}
 
 	for len(remaining) > 0 {
-		// Find all tasks with no remaining dependencies
+		// Admit at most one task per host per batch; same-host tasks contend
+		// on dpkg, systemd, and filesystem state. Additional ready tasks on
+		// an already-taken host keep inDegree 0 and are picked up next pass.
 		batch := []*Task{}
-		for name, task := range remaining {
-			if inDegree[name] == 0 {
-				batch = append(batch, task)
+		takenHosts := map[string]bool{}
+
+		names := make([]string, 0, len(remaining))
+		for name := range remaining {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		anyReady := false
+		for _, name := range names {
+			if inDegree[name] != 0 {
+				continue
+			}
+			anyReady = true
+			task := remaining[name]
+			if task.Host != "" && takenHosts[task.Host] {
+				continue
+			}
+			batch = append(batch, task)
+			if task.Host != "" {
+				takenHosts[task.Host] = true
 			}
 		}
 
 		if len(batch) == 0 {
-			// Circular dependency detected
-			cycle := g.findCycle(remaining)
-			if len(cycle) > 0 {
-				return nil, fmt.Errorf("circular dependency detected: %s", strings.Join(cycle, " -> "))
+			if !anyReady {
+				// Circular dependency detected
+				cycle := g.findCycle(remaining)
+				if len(cycle) > 0 {
+					return nil, fmt.Errorf("circular dependency detected: %s", strings.Join(cycle, " -> "))
+				}
+				return nil, fmt.Errorf("circular dependency detected among tasks: %v", mapKeys(remaining))
 			}
-			return nil, fmt.Errorf("circular dependency detected among tasks: %v", mapKeys(remaining))
+			return nil, fmt.Errorf("planner: ready tasks could not be scheduled (host-exclusion logic bug)")
 		}
 
 		batches = append(batches, batch)

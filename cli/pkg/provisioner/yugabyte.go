@@ -120,7 +120,7 @@ fi
 
 # Install NTP (chrony) for clock sync — critical for distributed consensus
 if command -v apt-get >/dev/null; then
-  apt-get update -qq && apt-get install -y -qq chrony curl >/dev/null 2>&1
+  apt-get -o DPkg::Lock::Timeout=300 update -qq && apt-get -o DPkg::Lock::Timeout=300 install -y -qq chrony curl >/dev/null 2>&1
 elif command -v yum >/dev/null; then
   yum install -y -q chrony curl >/dev/null 2>&1
 elif command -v dnf >/dev/null; then
