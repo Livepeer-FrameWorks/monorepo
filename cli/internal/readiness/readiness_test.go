@@ -7,9 +7,6 @@ import (
 
 func TestReport_OKRequiresChecked(t *testing.T) {
 	t.Parallel()
-	// A zero Report (Checked=false, no Warnings) must NOT be considered OK.
-	// This is the regression the post-provision summary triggered before we
-	// added Checked — no auth meant zero warnings meant "healthy" by default.
 	var empty Report
 	if empty.OK() {
 		t.Error("unchecked Report must not report OK")
@@ -28,14 +25,12 @@ func TestReport_OKRequiresChecked(t *testing.T) {
 
 func TestControlPlaneReadiness_missingInputsIsUnchecked(t *testing.T) {
 	t.Parallel()
-	// No tenant, no token, no QM addr — can't check anything. Must return
-	// Checked=false so callers don't render "healthy".
 	r := ControlPlaneReadiness(context.Background(), ControlPlaneInputs{})
 	if r.Checked {
 		t.Error("missing inputs must produce Checked=false")
 	}
 	if r.OK() {
-		t.Error("missing inputs must not report OK (would mislead post-provision summary)")
+		t.Error("missing inputs must not report OK")
 	}
 }
 

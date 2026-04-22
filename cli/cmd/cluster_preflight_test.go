@@ -10,8 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newPreflightTestCmd creates a bare cobra command with the persistent
-// cluster manifest-source flags that anyManifestSourceConfigured inspects.
 func newPreflightTestCmd() *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Flags().String("manifest", "", "")
@@ -20,8 +18,6 @@ func newPreflightTestCmd() *cobra.Command {
 	return cmd
 }
 
-// withTempHomeAndCwd routes XDG_CONFIG_HOME at a temp dir and chdirs into
-// another temp dir so cwd heuristics can be exercised deterministically.
 func withTempHomeAndCwd(t *testing.T) (home, cwd string, restore func()) {
 	t.Helper()
 	home = t.TempDir()
@@ -34,8 +30,6 @@ func withTempHomeAndCwd(t *testing.T) (home, cwd string, restore func()) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	// Clear the env vars preflight looks at so prior state from other
-	// tests can't bleed in.
 	prevEnv := map[string]string{}
 	for _, k := range []string{"FRAMEWORKS_MANIFEST", "FRAMEWORKS_GITOPS_DIR", "FRAMEWORKS_GITHUB_REPO"} {
 		prevEnv[k] = os.Getenv(k)
@@ -74,10 +68,6 @@ func TestAnyManifestSourceConfigured_contextGitopsReturnsTrue(t *testing.T) {
 	_, _, restore := withTempHomeAndCwd(t)
 	defer restore()
 
-	// Real resolver requires a gitops-shaped dir (clusters/ + .sops.yaml)
-	// with a resolvable cluster manifest. Anything less and preflight
-	// correctly says "no source" — matching what resolveClusterManifest
-	// would actually return.
 	gitopsDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(gitopsDir, "clusters", "dev"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -106,9 +96,6 @@ func TestAnyManifestSourceConfigured_contextGitopsReturnsTrue(t *testing.T) {
 }
 
 func TestAnyManifestSourceConfigured_contextGitopsMissingPathReturnsFalse(t *testing.T) {
-	// Regression guard for the old broken heuristic: context.Gitops set
-	// but pointing at a non-existent path must NOT satisfy the check,
-	// because the real resolver will fail to produce a manifest.
 	_, _, restore := withTempHomeAndCwd(t)
 	defer restore()
 
@@ -124,7 +111,7 @@ func TestAnyManifestSourceConfigured_contextGitopsMissingPathReturnsFalse(t *tes
 	fwcfg.SetRuntimeOverrides(fwcfg.RuntimeOverrides{})
 
 	if anyManifestSourceConfigured(newPreflightTestCmd()) {
-		t.Error("stale context gitops (missing path) must not satisfy the check — the real resolver would fail")
+		t.Error("stale context gitops (missing path) must not satisfy the check")
 	}
 }
 
@@ -132,7 +119,6 @@ func TestAnyManifestSourceConfigured_contextLastManifestPathReturnsTrue(t *testi
 	_, _, restore := withTempHomeAndCwd(t)
 	defer restore()
 
-	// Create a file that LastManifestPath can point at and pass the stat check.
 	manifest := filepath.Join(t.TempDir(), "cluster.yaml")
 	if err := os.WriteFile(manifest, []byte("type: central\n"), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -175,10 +161,6 @@ func TestAnyManifestSourceConfigured_contextLastManifestPathMissingReturnsFalse(
 }
 
 func TestAnyManifestSourceConfigured_cwdGitopsRootReturnsTrue(t *testing.T) {
-	// The real resolver's cwd heuristic (looksLikeGitopsRoot) requires
-	// BOTH clusters/ AND .sops.yaml. Preflight must match that exactly
-	// so it doesn't run infra checks against a manifest the real
-	// resolver would refuse to load.
 	_, cwd, restore := withTempHomeAndCwd(t)
 	defer restore()
 
@@ -198,9 +180,6 @@ func TestAnyManifestSourceConfigured_cwdGitopsRootReturnsTrue(t *testing.T) {
 }
 
 func TestAnyManifestSourceConfigured_cwdClusterYAMLAloneReturnsFalse(t *testing.T) {
-	// Regression guard: the old preflight heuristic accepted a bare
-	// cluster.yaml in cwd, but the real resolver requires a full
-	// gitops-root. These tests lock in alignment.
 	_, cwd, restore := withTempHomeAndCwd(t)
 	defer restore()
 
@@ -209,7 +188,7 @@ func TestAnyManifestSourceConfigured_cwdClusterYAMLAloneReturnsFalse(t *testing.
 	}
 
 	if anyManifestSourceConfigured(newPreflightTestCmd()) {
-		t.Error("bare cluster.yaml in cwd should NOT satisfy the check — real resolver needs a full gitops tree")
+		t.Error("bare cluster.yaml in cwd should NOT satisfy the check")
 	}
 }
 

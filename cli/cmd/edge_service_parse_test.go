@@ -72,8 +72,6 @@ func TestParseEdgeServiceStatus_nativeSystemctl(t *testing.T) {
 
 func TestParseEdgeServiceStatus_missingServiceOmittedNotFabricated(t *testing.T) {
 	t.Parallel()
-	// Output mentions only caddy. Parser must not emit fake "down" entries
-	// for mistserver/helmsman — that would produce misleading remediation.
 	raw := `NAME        SERVICE   STATUS
 edge-caddy  caddy     Up 2 hours
 `

@@ -54,9 +54,6 @@ func newClusterPreflightCmd() *cobra.Command {
 				results = append(results, preflight.DiskSpace("/usr/local", minDiskFreeBytes, minDiskFreePercent))
 			}
 
-			// Infrastructure connectivity checks run only when the operator
-			// has actually configured a manifest source (flags, env, context,
-			// or cwd heuristic). Preflight itself does not require a manifest.
 			if anyManifestSourceConfigured(cmd) {
 				rc, err := resolveClusterManifest(cmd)
 				if err != nil {
@@ -148,27 +145,16 @@ func newClusterPreflightCmd() *cobra.Command {
 	return cmd
 }
 
-// anyManifestSourceConfigured reports whether the operator has supplied
-// enough input for resolveClusterManifest to succeed. Used by preflight
-// to decide whether to run infrastructure-connectivity checks (they
-// require a manifest but preflight itself does not).
-//
-// Delegates to inventory.ResolveManifestSource — the same function
-// resolveClusterManifest uses — with flag/env/context inputs. That keeps
-// preflight's notion of "is a source available" perfectly aligned with
-// the real resolver: for example, the cwd heuristic only fires when
-// both clusters/ AND .sops.yaml are present, matching looksLikeGitopsRoot.
-// LastManifestPath fallback is a preflight-specific extension since the
-// real resolver doesn't consume it.
+// anyManifestSourceConfigured reports whether resolveClusterManifest
+// would succeed for the given flags/env/context. Preflight uses this to
+// decide whether to run infrastructure-connectivity checks (which need a
+// manifest) — preflight itself does not require one.
 func anyManifestSourceConfigured(cmd *cobra.Command) bool {
-	cfg, _ := fwcfg.Load() //nolint:errcheck // no config == no active context, handled below
+	cfg, _ := fwcfg.Load() //nolint:errcheck
 	rt := fwcfg.GetRuntimeOverrides()
-	ctxCfg, _ := fwcfg.MaybeActiveContext(rt, fwcfg.OSEnv{}, cfg) //nolint:errcheck // empty on miss is the intent
+	ctxCfg, _ := fwcfg.MaybeActiveContext(rt, fwcfg.OSEnv{}, cfg) //nolint:errcheck
 
-	// The real resolver answers "is there a source?" for us — including
-	// the cwd heuristic's actual requirements. Route its stdout to
-	// /dev/null so a probe call can't leak log lines.
-	cwd, _ := os.Getwd() //nolint:errcheck // empty cwd just skips the cwd heuristic
+	cwd, _ := os.Getwd() //nolint:errcheck
 	in := inventory.ResolveInput{
 		Manifest:    stringFlag(cmd, "manifest"),
 		GitopsDir:   stringFlag(cmd, "gitops-dir"),
@@ -192,10 +178,6 @@ func anyManifestSourceConfigured(cmd *cobra.Command) bool {
 		}
 		return true
 	}
-	// Preflight-only fallback: a prior successful provision saved
-	// LastManifestPath in context. The real resolver doesn't look at
-	// this field, but preflight benefits from using it so infra checks
-	// keep running on subsequent invocations from a different cwd.
 	if ctxCfg.LastManifestPath != "" {
 		if _, statErr := os.Stat(ctxCfg.LastManifestPath); statErr == nil {
 			return true

@@ -10,8 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newDeployTestCmd wires a cobra command + capture buffer so renderEdgeDeployResult
-// can be tested end-to-end through its real ux.Result output path.
 func newDeployTestCmd() (*cobra.Command, *bytes.Buffer) {
 	cmd := &cobra.Command{}
 	buf := &bytes.Buffer{}

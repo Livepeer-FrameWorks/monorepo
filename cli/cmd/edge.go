@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -364,14 +365,9 @@ func newEdgeEnrollCmd() *cobra.Command {
 }
 
 // parseEdgeServiceStatus extracts per-service up/down state from docker
-// compose ps or systemctl status output. The names returned match the log
-// handles `frameworks edge logs <name>` accepts, so readiness remediations
-// point at usable next-step commands.
-//
-// Heuristic parser — tolerates format drift rather than shelling out to
-// `docker compose ps --format json` (which would need a per-host docker
-// version check). On any parse uncertainty we omit the service rather than
-// emit a false "down" warning.
+// compose ps or systemctl status output. Service names returned match
+// `frameworks edge logs <name>` handles. On parse uncertainty the service
+// is omitted rather than reported as down.
 func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
 	services := []string{"caddy", "mistserver", "helmsman"}
 	out := make([]readiness.EdgeCheck, 0, len(services))
@@ -379,7 +375,6 @@ func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
 	for _, svc := range services {
 		idx := strings.Index(lowered, svc)
 		if idx < 0 {
-			// Service not in output — can't tell state, don't fabricate one.
 			continue
 		}
 		lineStart := strings.LastIndex(lowered[:idx], "\n") + 1
@@ -389,12 +384,8 @@ func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
 		}
 		nameLine := lowered[lineStart : idx+lineEnd]
 
-		// Docker compose ps = one line per service, so the state is on the
-		// service line itself. Systemctl status spans multiple lines per
-		// service block, with "Active: …" below the "● frameworks-X.service"
-		// header — expand the search window to the next block boundary (the
-		// next "●" or blank line) so we pick up the Active: line without
-		// swallowing the NEXT service's state.
+		// Docker ps is one line per service; systemctl status spans multiple
+		// lines per block — native mode expands scope to the next block boundary.
 		scope := nameLine
 		if mode == "native" {
 			blockEnd := len(lowered)
@@ -432,7 +423,6 @@ func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
 // detectEdgeMode reads DEPLOY_MODE from .edge.env to determine if the edge
 // stack is running in docker or native mode. Falls back to "docker" if unset.
 func detectEdgeMode(ctx context.Context, dir, envFile, sshTarget, sshKey string) string {
-	// For remote hosts, read .edge.env via SSH
 	if strings.TrimSpace(sshTarget) != "" {
 		remoteEnv := "/opt/frameworks/edge/" + envFile
 		_, out, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", fmt.Sprintf("grep ^DEPLOY_MODE= %s 2>/dev/null", remoteEnv)}, "")
@@ -444,7 +434,6 @@ func detectEdgeMode(ctx context.Context, dir, envFile, sshTarget, sshKey string)
 		}
 		return "docker"
 	}
-	// Local: read from file
 	val := readEnvFileKey(dir+string(os.PathSeparator)+envFile, "DEPLOY_MODE")
 	if val == "native" {
 		return "native"
@@ -474,8 +463,8 @@ func readEnvFileKey(path, key string) string {
 	prefix := key + "="
 	for _, ln := range lines {
 		ln = strings.TrimSpace(ln)
-		if strings.HasPrefix(ln, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(ln, prefix))
+		if v, ok := strings.CutPrefix(ln, prefix); ok {
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""
@@ -1595,12 +1584,41 @@ func newEdgeLogsCmd() *cobra.Command {
 	return cmd
 }
 
+// edgeDoctorHTTPS carries the /health probe result. Status == 0 with
+// Error == "" means the probe was not attempted (no EDGE_DOMAIN).
+type edgeDoctorHTTPS struct {
+	URL    string `json:"url,omitempty"`
+	Status int    `json:"status,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// edgeDoctorJSONReport is the --output json shape for `edge doctor`.
+type edgeDoctorJSONReport struct {
+	Mode            string                `json:"mode"`
+	Domain          string                `json:"domain,omitempty"`
+	HostChecks      []preflight.Check     `json:"host_checks"`
+	ServiceChecks   []readiness.EdgeCheck `json:"service_checks"`
+	ServiceProbeErr string                `json:"service_probe_error,omitempty"`
+	HTTPS           edgeDoctorHTTPS       `json:"https"`
+	StreamChecks    []readiness.EdgeCheck `json:"stream_checks"`
+	Warnings        []readiness.Warning   `json:"warnings"`
+	NextSteps       []ux.NextStep         `json:"next_steps"`
+	OK              bool                  `json:"ok"`
+}
+
 func newEdgeDoctorCmd() *cobra.Command {
 	var domain string
 	var dir string
 	cmd := &cobra.Command{Use: "doctor", Short: "Run diagnostics and remediation hints", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		// Combine preflight + service status + https
+		jsonMode := output == "json"
+		// JSON mode discards section output and encodes the full payload
+		// at the end — the diagnostic pipeline must stay identical.
+		var textOut = cmd.OutOrStdout()
+		if jsonMode {
+			textOut = io.Discard
+		}
+
 		results := []preflight.Check{}
 		if domain != "" {
 			results = append(results, preflight.DNSResolution(ctx, domain))
@@ -1614,14 +1632,8 @@ func newEdgeDoctorCmd() *cobra.Command {
 		results = append(results, preflight.UlimitNoFile())
 		results = append(results, preflight.PortChecks(ctx)...)
 
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(results)
-		}
-
 		okCount := 0
-		ux.Subheading(cmd.OutOrStdout(), "Host Checks:")
+		ux.Subheading(textOut, "Host Checks:")
 		for _, r := range results {
 			label := r.Name + ":"
 			line := fmt.Sprintf("%-18s %s", label, r.Detail)
@@ -1629,13 +1641,13 @@ func newEdgeDoctorCmd() *cobra.Command {
 				line = fmt.Sprintf("%-18s %-40s (%s)", label, r.Detail, r.Error)
 			}
 			if r.OK {
-				ux.Success(cmd.OutOrStdout(), line)
+				ux.Success(textOut, line)
 				okCount++
 			} else {
-				ux.Fail(cmd.OutOrStdout(), line)
+				ux.Fail(textOut, line)
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Summary: %d/%d checks passed\n\n", okCount, len(results))
+		fmt.Fprintf(textOut, "Summary: %d/%d checks passed\n\n", okCount, len(results))
 
 		// Service status
 		if dir == "" {
@@ -1648,7 +1660,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 			probeErr      string
 		)
 		if deployMode == "native" {
-			fmt.Fprintln(cmd.OutOrStdout(), "Native Services:")
+			fmt.Fprintln(textOut, "Native Services:")
 			var statusCmd string
 			if runtime.GOOS == "darwin" {
 				statusCmd = "launchctl list | grep com.livepeer.frameworks"
@@ -1657,21 +1669,21 @@ func newEdgeDoctorCmd() *cobra.Command {
 			}
 			_, out, _, err := xexec.Run(ctx, "sh", []string{"-c", statusCmd}, "")
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), " service status error: %v\n", err)
+				fmt.Fprintf(textOut, " service status error: %v\n", err)
 				probeErr = err.Error()
 			} else {
-				fmt.Fprint(cmd.OutOrStdout(), out)
+				fmt.Fprint(textOut, out)
 				serviceChecks = parseEdgeServiceStatus(out, "native")
 			}
 		} else {
 			compose := "docker-compose.edge.yml"
 			_, out, errOut, err := xexec.Run(ctx, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
-			fmt.Fprintln(cmd.OutOrStdout(), "Compose Services:")
+			fmt.Fprintln(textOut, "Compose Services:")
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), " compose ps error: %v\n%s\n", err, errOut)
+				fmt.Fprintf(textOut, " compose ps error: %v\n%s\n", err, errOut)
 				probeErr = err.Error()
 			} else {
-				fmt.Fprint(cmd.OutOrStdout(), out)
+				fmt.Fprint(textOut, out)
 				serviceChecks = parseEdgeServiceStatus(out, "docker")
 			}
 		}
@@ -1683,34 +1695,35 @@ func newEdgeDoctorCmd() *cobra.Command {
 		}
 		httpsStatus := 0
 		httpsError := ""
+		httpsURL := ""
 		if domain != "" {
-			url := "https://" + domain + "/health"
+			httpsURL = "https://" + domain + "/health"
 			httpClient := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpsURL, nil)
 			if err != nil {
 				cancel()
 				httpsError = err.Error()
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
+				fmt.Fprintln(textOut, "HTTPS Health:")
+				fmt.Fprintf(textOut, " %s error: %v\n", httpsURL, err)
 			} else {
 				resp, err := httpClient.Do(req)
 				cancel()
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
+				fmt.Fprintln(textOut, "HTTPS Health:")
 				if err != nil {
 					httpsError = err.Error()
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
+					fmt.Fprintf(textOut, " %s error: %v\n", httpsURL, err)
 				} else {
 					if resp.Body != nil {
 						_ = resp.Body.Close()
 					}
 					httpsStatus = resp.StatusCode
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s http %d\n", url, resp.StatusCode)
+					fmt.Fprintf(textOut, " %s http %d\n", httpsURL, resp.StatusCode)
 				}
 			}
 		}
 		// Stream health quick-check via MistServer analyzers
-		fmt.Fprintln(cmd.OutOrStdout(), "\nStream Health:")
+		fmt.Fprintln(textOut, "\nStream Health:")
 		var streamChecks []readiness.EdgeCheck
 		func() {
 			diagCtx, diagCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1721,27 +1734,27 @@ func newEdgeDoctorCmd() *cobra.Command {
 
 			streams, err := mistdiag.DiscoverStreams(diagCtx, localRunner, deployMode)
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), " - Could not query MistServer: %v\n", err)
+				fmt.Fprintf(textOut, " - Could not query MistServer: %v\n", err)
 				return
 			}
 			if len(streams) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), " - No active streams (skipped)")
+				fmt.Fprintln(textOut, " - No active streams (skipped)")
 				return
 			}
 			for _, s := range streams {
 				result, err := ar.Validate(diagCtx, "HLS", s.HLSURL, 5)
 				label := fmt.Sprintf("%-24s", s.Name+":")
 				if err != nil {
-					ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("%s error: %v", label, err))
+					ux.Warn(textOut, fmt.Sprintf("%s error: %v", label, err))
 					streamChecks = append(streamChecks, readiness.EdgeCheck{Name: s.Name, OK: false, Detail: err.Error()})
 					continue
 				}
 				if result.OK {
-					ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s HLS OK", label))
+					ux.Success(textOut, fmt.Sprintf("%s HLS OK", label))
 					streamChecks = append(streamChecks, readiness.EdgeCheck{Name: s.Name, OK: true, Detail: "HLS OK"})
 				} else {
 					msg := result.Summary()
-					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s HLS FAIL (%s)", label, msg))
+					ux.Fail(textOut, fmt.Sprintf("%s HLS FAIL (%s)", label, msg))
 					streamChecks = append(streamChecks, readiness.EdgeCheck{Name: s.Name, OK: false, Detail: msg})
 				}
 			}
@@ -1779,12 +1792,35 @@ func newEdgeDoctorCmd() *cobra.Command {
 			}
 			steps = append(steps, ux.NextStep{Cmd: w.Remediation.Cmd, Why: w.Remediation.Why})
 		}
-		if len(steps) == 0 && report.OK() {
-			// Everything looks healthy — keep doctor silent for the next-steps
-			// section so a green run isn't padded with filler.
+
+		if jsonMode {
+			payload := edgeDoctorJSONReport{
+				Mode:          deployMode,
+				Domain:        domain,
+				HostChecks:    results,
+				ServiceChecks: serviceChecks,
+				StreamChecks:  streamChecks,
+				HTTPS: edgeDoctorHTTPS{
+					URL:    httpsURL,
+					Status: httpsStatus,
+					Error:  httpsError,
+				},
+				ServiceProbeErr: probeErr,
+				Warnings:        report.Warnings,
+				NextSteps:       steps,
+				OK:              report.OK(),
+			}
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(payload)
+		}
+
+		out := cmd.OutOrStdout()
+		if report.OK() && len(steps) == 0 {
+			ux.Success(out, "Edge node healthy — all checks passed")
 			return nil
 		}
-		ux.PrintNextSteps(cmd.OutOrStdout(), steps)
+		ux.PrintNextSteps(out, steps)
 		return nil
 	}}
 	cmd.Flags().StringVar(&domain, "domain", "", "edge domain to validate (DNS and HTTPS)")

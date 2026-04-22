@@ -14,12 +14,9 @@ type EdgeCheck struct {
 
 // EdgeInputs is the observed state an edge doctor / status command has
 // collected; EdgeReadiness turns it into adaptive remediation.
-//
-// ServiceProbeErr carries an error from the probe itself failing (e.g.
-// `docker compose ps` exited non-zero, `systemctl status` rejected the
-// unit names). That's distinct from "service X is down" — it means we
-// couldn't tell what state the services are in, and the operator needs
-// remediation for the probe, not the services.
+// ServiceProbeErr is non-empty when the probe itself failed (distinct from
+// a service being down): the operator needs to fix the probe, not the
+// services.
 type EdgeInputs struct {
 	HasEnv          bool
 	Domain          string
@@ -32,10 +29,8 @@ type EdgeInputs struct {
 	HTTPSError      string
 }
 
-// EdgeReadiness produces a Report whose warnings include adaptive hints
-// tied to the actual failures — so an edge doctor can surface only the
-// suggestions that correspond to what's broken, rather than four static
-// hints on every run.
+// EdgeReadiness produces a Report whose warnings carry remediations tied
+// to the specific failures in the inputs.
 func EdgeReadiness(in EdgeInputs) Report {
 	r := Report{Checked: true}
 
@@ -112,16 +107,17 @@ func EdgeReadiness(in EdgeInputs) Report {
 		if c.OK {
 			continue
 		}
-		rem := Remediation{
-			Why: "Run a deep stream analysis to pinpoint which segment or manifest is broken.",
-		}
+		why := "Run a deep stream analysis to pinpoint which segment or manifest is broken."
 		if in.Domain != "" {
-			rem.Cmd = fmt.Sprintf("frameworks edge diagnose media --stream %s", c.Name)
+			why = fmt.Sprintf("Run a deep stream analysis against https://%s to pinpoint which segment or manifest is broken.", in.Domain)
 		}
 		r.Warnings = append(r.Warnings, Warning{
-			Subject:     fmt.Sprintf("edge.stream.%s", c.Name),
-			Detail:      c.Detail,
-			Remediation: rem,
+			Subject: fmt.Sprintf("edge.stream.%s", c.Name),
+			Detail:  c.Detail,
+			Remediation: Remediation{
+				Cmd: fmt.Sprintf("frameworks edge diagnose media --stream %s", c.Name),
+				Why: why,
+			},
 		})
 	}
 

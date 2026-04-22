@@ -20,16 +20,12 @@ type Warning struct {
 }
 
 // Report aggregates readiness findings for a single workflow check.
-// Checked distinguishes "I ran the checks and found no issues" (Checked=true,
-// no Warnings) from "I couldn't run the checks because inputs were missing"
-// (Checked=false, no Warnings) — callers that present a summary must not
-// report "healthy" for the second case.
+// Checked=false means inputs were missing and no checks ran — not the same
+// as Checked=true with no warnings.
 type Report struct {
 	Checked  bool
 	Warnings []Warning
 }
 
 // OK reports whether the workflow is fully ready (checked and no warnings).
-// A Report that was never checked is NOT OK — callers should render it as
-// "not verified" rather than "healthy".
 func (r Report) OK() bool { return r.Checked && len(r.Warnings) == 0 }

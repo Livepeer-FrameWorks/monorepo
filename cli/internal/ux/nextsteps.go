@@ -19,24 +19,16 @@ var (
 	styleNextWhy     = color.New(color.Faint)
 )
 
-// PrintNextSteps renders a "Next:" block. Suppressed when Mode.Hints is
-// false (CI/NoHints) and in JSON output mode.
-//
-// Entries split by shape:
-//   - Cmd set (Why optional): rendered as a numbered command + reason.
-//   - Cmd empty, Why set: rendered as an unnumbered advisory bullet under
-//     the same heading — it's still operator-facing guidance, but it's
-//     not executable so we don't pretend it is.
-//   - Both empty: skipped.
+// PrintNextSteps renders a "Next:" block. Suppressed in JSON mode and
+// when Mode.Hints is false. Entries with Cmd set render as numbered
+// commands; Why-only entries render as unnumbered bullets; empty entries
+// are skipped.
 func PrintNextSteps(w io.Writer, steps []NextStep) {
 	m := DetectMode(w)
 	if m.JSON || !m.Hints || len(steps) == 0 {
 		return
 	}
 
-	// Filter empty-empty entries and split by shape so executables get
-	// the numbered-command treatment and why-only entries don't pretend
-	// to be runnable.
 	type entry struct {
 		ns       NextStep
 		runnable bool
@@ -78,7 +70,6 @@ func PrintNextSteps(w io.Writer, steps []NextStep) {
 			}
 			continue
 		}
-		// Why-only: unnumbered advisory bullet.
 		line := fmt.Sprintf("  - %s", e.ns.Why)
 		if m.Color {
 			_, _ = styleNextWhy.Fprintln(w, line)

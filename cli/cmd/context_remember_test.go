@@ -8,8 +8,6 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 )
 
-// withTempConfig points XDG_CONFIG_HOME at a temp dir and seeds a config
-// with one context so the remember helpers have a target to write to.
 func withTempConfig(t *testing.T, ctxName string) (restore func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -78,8 +76,6 @@ func TestRememberSystemTenantID_persistsOnActiveContext(t *testing.T) {
 }
 
 func TestRememberInActiveContext_noContextIsSafeNoOp(t *testing.T) {
-	// No XDG_CONFIG_HOME seeded = no saved config. The helper should silently
-	// skip rather than fail — persistence is a best-effort side-channel.
 	dir := t.TempDir()
 	prev, had := os.LookupEnv("XDG_CONFIG_HOME")
 	os.Setenv("XDG_CONFIG_HOME", dir)
@@ -91,7 +87,6 @@ func TestRememberInActiveContext_noContextIsSafeNoOp(t *testing.T) {
 		}
 	})
 
-	// This must not panic, write anything, or error.
 	rememberLastManifest(nil, "/some/path")
 	rememberSystemTenantID(nil, "some-uuid")
 }

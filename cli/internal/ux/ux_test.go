@@ -139,10 +139,6 @@ func TestNextSteps_rendersNumbered(t *testing.T) {
 }
 
 func TestNextSteps_whyOnlyRendersAsAdvisoryBullet(t *testing.T) {
-	// Readiness remediations sometimes carry only explanatory text (no
-	// executable command). The renderer must NOT produce a blank numbered
-	// command in that case — blank "1. " with reason text underneath is
-	// indistinguishable from a broken build.
 	withRuntime(t, fwcfg.RuntimeOverrides{})
 	var buf bytes.Buffer
 	PrintNextSteps(&buf, []NextStep{
@@ -166,7 +162,6 @@ func TestNextSteps_skipsCompletelyEmptyEntries(t *testing.T) {
 	var buf bytes.Buffer
 	PrintNextSteps(&buf, []NextStep{{Cmd: "frameworks cluster doctor"}, {}})
 	got := buf.String()
-	// Empty-empty entries mustn't produce a stray "2." line.
 	if strings.Contains(got, "2.") {
 		t.Fatalf("empty-empty NextStep must not render: %q", got)
 	}

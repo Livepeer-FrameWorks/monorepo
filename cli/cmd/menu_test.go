@@ -39,8 +39,6 @@ func TestMenuSectionsForPersona_platformRecommendsClusterAndControlPlane(t *test
 
 func TestMenuSectionsForPersona_neverHidesSections(t *testing.T) {
 	t.Parallel()
-	// Every persona must still surface all six sections — ordering and
-	// emphasis may differ, but power users need the full tree reachable.
 	for _, p := range []fwcfg.Persona{fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted, fwcfg.PersonaEdge, ""} {
 		sections := menuSectionsForPersona(p)
 		if len(sections) != 6 {

@@ -10,14 +10,8 @@ import (
 )
 
 // rememberInActiveContext mutates the active context and writes it back.
-// Silent no-op when no context is configured (a fresh machine with only
-// explicit flags must work). A save failure is logged as a faint warning
-// but never masks the command's outcome — the command already succeeded,
-// the persistence is just a side-channel for future runs.
-//
-// NOTE: read-path resolvers (resolveClusterManifest) must not call this;
-// persistence belongs to success paths only, so dry-runs and --help
-// paths don't haunt the operator with speculative defaults.
+// No-op when no context is configured. A save failure is reported as a
+// warning but does not fail the caller. Call only from success paths.
 func rememberInActiveContext(cmd *cobra.Command, mutate func(*fwcfg.Context)) {
 	cfg, err := fwcfg.Load()
 	if err != nil {

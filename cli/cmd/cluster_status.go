@@ -202,10 +202,8 @@ func runClusterStatus(cmd *cobra.Command, manifest *inventory.Manifest, jsonOutp
 	return nil
 }
 
-// printStatusControlPlaneSection runs ControlPlaneReadiness with what
-// status can observe without SOPS (context tenant + manifest addresses)
-// and renders the report. Like doctor, missing service-token triggers
-// Checked=false so the summary is honest about what was verified.
+// printStatusControlPlaneSection runs ControlPlaneReadiness without
+// SOPS and renders the report. No service token means Checked=false.
 func printStatusControlPlaneSection(cmd *cobra.Command, manifest *inventory.Manifest) {
 	out := cmd.OutOrStdout()
 	cfg, err := fwcfg.Load()
@@ -242,11 +240,16 @@ func printStatusControlPlaneSection(cmd *cobra.Command, manifest *inventory.Mani
 	if qmAddr != "" {
 		fmt.Fprintf(out, "  quartermaster:  %s\n", qmAddr)
 	}
-	// Don't forward the operator to `cluster doctor` — doctor is on the
-	// same read-only path and can't run the deeper check either. Point
-	// directly at commands that actually carry a service token.
-	renderReadinessBlock(cmd, report, []ux.NextStep{
-		{Cmd: "frameworks cluster provision --ready", Why: "Re-run with SOPS access so the control-plane check gets a real service token."},
+	renderReadinessBlock(cmd, report, statusControlPlaneFallbacks())
+}
+
+// statusControlPlaneFallbacks returns the next-steps for an unverified
+// control plane. The order is load-bearing — `cluster doctor --deep`
+// must lead (see cluster_status_fallback_test.go).
+func statusControlPlaneFallbacks() []ux.NextStep {
+	return []ux.NextStep{
+		{Cmd: "frameworks cluster doctor --deep", Why: "Run the authenticated doctor — decrypts SOPS and verifies default/official cluster, operator account, pricing."},
+		{Cmd: "frameworks cluster provision --ready", Why: "Re-run provisioning with SOPS access if the control plane needs more than verification."},
 		{Cmd: "frameworks admin clusters list", Why: "Any admin command that touches Quartermaster reads the service token and will succeed or fail explicitly."},
-	})
+	}
 }

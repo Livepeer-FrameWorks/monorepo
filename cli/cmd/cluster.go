@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,10 +80,9 @@ type resolvedCluster struct {
 	sharedEnvErr  error
 }
 
-// SharedEnv decrypts and merges the manifest's top-level env_files on first
-// call and caches the result. Only call from commands that consume platform
-// secrets — read-only commands (status/logs/detect/diagnose/doctor/backup/
-// restore/channel) must not trigger SOPS decryption here.
+// SharedEnv decrypts and merges the manifest's top-level env_files on
+// first call and caches the result. Only call from commands that consume
+// platform secrets — read-only commands must not trigger SOPS here.
 func (rc *resolvedCluster) SharedEnv() (map[string]string, error) {
 	rc.sharedEnvOnce.Do(func() {
 		rc.sharedEnv, rc.sharedEnvErr = inventory.LoadSharedEnv(
@@ -242,45 +242,43 @@ func newClusterDetectCmd() *cobra.Command {
 }
 
 func newClusterDoctorCmd() *cobra.Command {
+	var deep bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Comprehensive health check of all cluster services",
-		Long: `Run comprehensive health checks across the entire cluster:
+		Short: "Health check for cluster infrastructure and services",
+		Long: `Health check for the cluster's infrastructure and application services.
 
-Infrastructure Health:
-  - Postgres: connection, databases, query performance, replication
-  - Kafka: cluster health, topics, consumer lag, broker disk
-  - Zookeeper: quorum, leader election
-  - ClickHouse: connection, tables, query performance
+Default mode (read-only, no SOPS decryption):
+  - Infrastructure reachability: Postgres/Yugabyte, Kafka, Zookeeper, ClickHouse,
+    Redis — port/connection probes only, not query performance or replication state.
+  - Application services: HTTP /health endpoints.
+  - Control plane: read-only view of SystemTenantID + Quartermaster address from
+    the active context. Authenticated checks are skipped (reported as
+    "not verified") — pass --deep for the full check.
 
-Application Services:
-  - Health endpoints (/health)
-  - Database connectivity
-  - Kafka consumer status
-  - Active connections/subscriptions
+--deep mode (opts into SOPS decryption to obtain SERVICE_TOKEN):
+  - All of the above, plus authenticated Quartermaster/Commodore/Purser checks:
+    default cluster + platform-official cluster flags, operator-account presence
+    in the system tenant, pricing config for clusters that declared it.
+  - Requires a readable age key (SOPS_AGE_KEY_FILE, --age-key, or the active
+    context's set-age-key value). Fails explicitly if the key is missing or
+    decryption errors — never silently falls back.
 
-Networking & Connectivity:
-  - WireGuard mesh (if configured)
-  - /etc/hosts overrides
-  - Service discovery (can services reach dependencies)
-
-Data Initialization:
-  - Postgres schemas and tables
-  - Kafka topics and partitions
-  - ClickHouse tables
-
-Reports critical issues and provides actionable recommendations.`,
+Failing checks produce actionable remediation commands where one exists (e.g.
+'cluster logs <service>', 'cluster diagnose kafka').`,
 		Example: `  frameworks cluster doctor
-  frameworks cluster doctor --manifest ./cluster.yaml`,
+  frameworks cluster doctor --deep
+  frameworks cluster doctor --manifest ./cluster.yaml --deep`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rc, err := resolveClusterManifest(cmd)
 			if err != nil {
 				return err
 			}
 			defer rc.Cleanup()
-			return runDoctor(cmd, rc.Manifest, rc.ManifestPath)
+			return runDoctor(cmd, rc, deep)
 		},
 	}
+	cmd.Flags().BoolVar(&deep, "deep", false, "Decrypt SOPS env_files to obtain SERVICE_TOKEN and run authenticated control-plane checks (Quartermaster/Commodore/Purser). Requires an age key.")
 	return cmd
 }
 
@@ -430,68 +428,87 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 	}
 }
 
-func runDoctor(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath string) error {
-	ux.Heading(cmd.OutOrStdout(), "Running cluster health checks")
-	fmt.Fprintf(cmd.OutOrStdout(), "Manifest: %s (type: %s, profile: %s)\n\n", manifestPath, manifest.Type, manifest.Profile)
+func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
+	manifest := rc.Manifest
+	out := cmd.OutOrStdout()
+	ux.Heading(out, "Running cluster health checks")
+	fmt.Fprintf(out, "Manifest: %s (type: %s, profile: %s)\n", rc.ManifestPath, manifest.Type, manifest.Profile)
+	if deep {
+		fmt.Fprintln(out, "Mode: --deep (authenticated control-plane check enabled)")
+	}
+	fmt.Fprintln(out, "")
 
+	var serviceToken string
+	if deep {
+		sharedEnv, err := rc.SharedEnv()
+		if err != nil {
+			ux.FormatError(cmd.ErrOrStderr(), fmt.Errorf("--deep requires SOPS decryption, which failed: %w", err), "set an age key via 'frameworks context set-age-key <path>' or SOPS_AGE_KEY_FILE, then re-run")
+			return fmt.Errorf("--deep: SOPS decrypt failed: %w", err)
+		}
+		serviceToken = strings.TrimSpace(sharedEnv["SERVICE_TOKEN"])
+		if serviceToken == "" {
+			ux.FormatError(cmd.ErrOrStderr(), fmt.Errorf("--deep: SERVICE_TOKEN missing from manifest env_files"), "confirm SERVICE_TOKEN is set in the decrypted shared env")
+			return fmt.Errorf("--deep: SERVICE_TOKEN missing")
+		}
+	}
+
+	var remediationSteps []ux.NextStep
 	totalChecks := 0
 	passedChecks := 0
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Infrastructure Health:")
 	fmt.Fprintln(cmd.OutOrStdout(), "")
 
+	runInfraCheck := func(name string, result *health.CheckResult) {
+		totalChecks++
+		printHealthResult(cmd, name, result)
+		if result.OK {
+			passedChecks++
+			return
+		}
+		if step := doctorServiceRemediation(name); step.Cmd != "" || step.Why != "" {
+			remediationSteps = append(remediationSteps, step)
+		}
+	}
+
+	recordMiss := func(name, reason string) {
+		totalChecks++
+		ux.Fail(out, fmt.Sprintf("%s: %s", name, reason))
+		if step := doctorServiceRemediation(name); step.Cmd != "" || step.Why != "" {
+			remediationSteps = append(remediationSteps, step)
+		}
+	}
+
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
 		host, ok := manifest.GetHost(manifest.Infrastructure.Postgres.Host)
 		if !ok {
-			fmt.Fprintf(cmd.OutOrStdout(), "✗ Postgres: host '%s' not found\n", manifest.Infrastructure.Postgres.Host)
+			recordMiss("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", manifest.Infrastructure.Postgres.Host))
 		} else {
-			totalChecks++
-			checker := &health.PostgresChecker{
-				User:     "postgres",
-				Password: "",
-				Database: "postgres",
-			}
-			result := checker.Check(host.ExternalIP, manifest.Infrastructure.Postgres.Port)
-			printHealthResult(cmd, "Postgres/Yugabyte", result)
-			if result.OK {
-				passedChecks++
-			}
+			checker := &health.PostgresChecker{User: "postgres", Password: "", Database: "postgres"}
+			runInfraCheck("Postgres/Yugabyte", checker.Check(host.ExternalIP, manifest.Infrastructure.Postgres.Port))
 		}
 	}
 
 	if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
 		host, ok := manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
 		if !ok {
-			fmt.Fprintf(cmd.OutOrStdout(), "✗ ClickHouse: host '%s' not found\n", manifest.Infrastructure.ClickHouse.Host)
+			recordMiss("ClickHouse", fmt.Sprintf("host %q not found in manifest", manifest.Infrastructure.ClickHouse.Host))
 		} else {
-			totalChecks++
-			checker := &health.ClickHouseChecker{
-				User:     "default",
-				Password: "",
-				Database: "default",
-			}
-			result := checker.Check(host.ExternalIP, manifest.Infrastructure.ClickHouse.Port)
-			printHealthResult(cmd, "ClickHouse", result)
-			if result.OK {
-				passedChecks++
-			}
+			checker := &health.ClickHouseChecker{User: "default", Password: "", Database: "default"}
+			runInfraCheck("ClickHouse", checker.Check(host.ExternalIP, manifest.Infrastructure.ClickHouse.Port))
 		}
 	}
 
 	if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
 		for _, broker := range manifest.Infrastructure.Kafka.Brokers {
+			brokerName := fmt.Sprintf("Kafka Broker %d", broker.ID)
 			host, ok := manifest.GetHost(broker.Host)
 			if !ok {
-				fmt.Fprintf(cmd.OutOrStdout(), "✗ Kafka broker %d: host '%s' not found\n", broker.ID, broker.Host)
+				recordMiss(brokerName, fmt.Sprintf("host %q not found in manifest", broker.Host))
 				continue
 			}
-			totalChecks++
 			checker := &health.KafkaChecker{}
-			result := checker.Check(host.ExternalIP, broker.Port)
-			printHealthResult(cmd, fmt.Sprintf("Kafka Broker %d", broker.ID), result)
-			if result.OK {
-				passedChecks++
-			}
+			runInfraCheck(brokerName, checker.Check(host.ExternalIP, broker.Port))
 		}
 	}
 
@@ -515,29 +532,21 @@ func runDoctor(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 
 		host, ok := manifest.GetHost(hostName)
 		if !ok {
-			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: host '%s' not found\n", name, hostName)
+			recordMiss(name, fmt.Sprintf("host %q not found in manifest", hostName))
 			continue
 		}
 
 		port, err := resolvePort(name, svc)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+			recordMiss(name, fmt.Sprintf("resolve port: %v", err))
 			continue
 		}
-		totalChecks++
 		path := "/health"
 		if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
 			path = def.HealthPath
 		}
-		checker := &health.HTTPChecker{
-			Path:    path,
-			Timeout: 5 * time.Second,
-		}
-		result := checker.Check(host.ExternalIP, port)
-		printHealthResult(cmd, name, result)
-		if result.OK {
-			passedChecks++
-		}
+		checker := &health.HTTPChecker{Path: path, Timeout: 5 * time.Second}
+		runInfraCheck(name, checker.Check(host.ExternalIP, port))
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -554,30 +563,22 @@ func runDoctor(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 
 		host, ok := manifest.GetHost(svc.Host)
 		if !ok {
-			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: host '%s' not found\n", name, svc.Host)
+			recordMiss(name, fmt.Sprintf("host %q not found in manifest", svc.Host))
 			continue
 		}
 
 		port, err := resolvePort(name, svc)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+			recordMiss(name, fmt.Sprintf("resolve port: %v", err))
 			continue
 		}
 
-		totalChecks++
 		path := "/health"
 		if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
 			path = def.HealthPath
 		}
-		checker := &health.HTTPChecker{
-			Path:    path,
-			Timeout: 5 * time.Second,
-		}
-		result := checker.Check(host.ExternalIP, port)
-		printHealthResult(cmd, name, result)
-		if result.OK {
-			passedChecks++
-		}
+		checker := &health.HTTPChecker{Path: path, Timeout: 5 * time.Second}
+		runInfraCheck(name, checker.Check(host.ExternalIP, port))
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -594,65 +595,55 @@ func runDoctor(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 			}
 			host, ok := manifest.GetHost(svc.Host)
 			if !ok {
-				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: host '%s' not found\n", name, svc.Host)
+				recordMiss(name, fmt.Sprintf("host %q not found in manifest", svc.Host))
 				continue
 			}
 			port, err := resolvePort(name, svc)
 			if err != nil {
-				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s: %v", name, err))
+				recordMiss(name, fmt.Sprintf("resolve port: %v", err))
 				continue
 			}
-			totalChecks++
 			path := "/health"
 			if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
 				path = def.HealthPath
 			}
-			checker := &health.HTTPChecker{
-				Path:    path,
-				Timeout: 5 * time.Second,
-			}
-			result := checker.Check(host.ExternalIP, port)
-			printHealthResult(cmd, name, result)
-			if result.OK {
-				passedChecks++
-			}
+			checker := &health.HTTPChecker{Path: path, Timeout: 5 * time.Second}
+			runInfraCheck(name, checker.Check(host.ExternalIP, port))
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "")
+		fmt.Fprintln(out, "")
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Summary: %d/%d checks passed\n", passedChecks, totalChecks)
+	cpReport, cpSteps := doctorControlPlane(cmd, manifest, serviceToken)
 
-	printDoctorControlPlaneSection(cmd, manifest)
+	ux.Result(out, []ux.ResultField{
+		{Key: "infrastructure + services", OK: passedChecks == totalChecks, Detail: fmt.Sprintf("%d/%d healthy", passedChecks, totalChecks)},
+		{Key: "control-plane", OK: cpReport.OK(), Detail: doctorControlPlaneDetail(cpReport, deep)},
+	})
 
-	if passedChecks < totalChecks {
-		ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
-			{Cmd: "frameworks cluster detect", Why: "See which services are running vs. missing."},
-			{Cmd: "frameworks cluster logs <service>", Why: "Review logs for the failing service."},
+	steps := append([]ux.NextStep{}, remediationSteps...)
+	steps = append(steps, cpSteps...)
+	if !deep && !cpReport.Checked {
+		steps = append(steps, ux.NextStep{
+			Cmd: "frameworks cluster doctor --deep",
+			Why: "Run authenticated control-plane checks (default/official cluster, operator account, pricing).",
 		})
 	}
+	ux.PrintNextSteps(out, steps)
 
 	return nil
 }
 
-// printDoctorControlPlaneSection runs the shared ControlPlaneReadiness check
-// against what doctor can see without SOPS access: the tenant ID the
-// context remembered at provision time, plus the Quartermaster address
-// from the manifest. With no service token, readiness returns Checked=false
-// and we render "not re-verified" honestly rather than fabricating a
-// healthy-looking summary.
-//
-// Doctor stays read-only by design (no SOPS decryption). Operators who
-// need the deep check re-run `cluster provision --ready` or use admin
-// commands that already carry a service token.
-func printDoctorControlPlaneSection(cmd *cobra.Command, manifest *inventory.Manifest) {
+// doctorControlPlane runs ControlPlaneReadiness, prints its section, and
+// returns the report plus next-steps derived from any warnings.
+func doctorControlPlane(cmd *cobra.Command, manifest *inventory.Manifest, serviceToken string) (readiness.Report, []ux.NextStep) {
 	out := cmd.OutOrStdout()
 	cfg, err := fwcfg.Load()
 	if err != nil {
-		return
+		return readiness.Report{}, nil
 	}
 	active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
 	if mErr != nil || active.SystemTenantID == "" {
-		return
+		return readiness.Report{}, nil
 	}
 
 	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002)    //nolint:errcheck // empty on miss is the intent
@@ -668,11 +659,12 @@ func printDoctorControlPlaneSection(cmd *cobra.Command, manifest *inventory.Mani
 
 	report := readiness.ControlPlaneReadiness(cmd.Context(), readiness.ControlPlaneInputs{
 		SystemTenantID:    active.SystemTenantID,
+		ServiceToken:      serviceToken,
 		QuartermasterAddr: qmAddr,
 		CommodoreAddr:     commodoreAddr,
 		PurserAddr:        purserAddr,
+		AllowInsecure:     isDevProfile(manifest),
 		DeclaredPricings:  pricings,
-		// ServiceToken intentionally empty — doctor doesn't SOPS-decrypt.
 	})
 
 	fmt.Fprintln(out, "")
@@ -681,17 +673,81 @@ func printDoctorControlPlaneSection(cmd *cobra.Command, manifest *inventory.Mani
 	if qmAddr != "" {
 		fmt.Fprintf(out, "  quartermaster:  %s\n", qmAddr)
 	}
-	renderReadinessBlock(cmd, report, []ux.NextStep{
-		{Cmd: "frameworks cluster provision --ready", Why: "Re-run with SOPS access so the control-plane check gets a real service token."},
-		{Cmd: "frameworks admin clusters list", Why: "Any admin command that touches Quartermaster reads the service token and will succeed/fail explicitly."},
-	})
+	switch {
+	case !report.Checked:
+		ux.Warn(out, "control-plane not verified (pass --deep for the authenticated check)")
+	case len(report.Warnings) == 0:
+		ux.Success(out, "control-plane verified")
+	default:
+		for _, w := range report.Warnings {
+			ux.Warn(out, w.Detail)
+		}
+	}
+
+	var steps []ux.NextStep
+	for _, w := range report.Warnings {
+		if w.Remediation.Cmd == "" && w.Remediation.Why == "" {
+			continue
+		}
+		steps = append(steps, ux.NextStep{Cmd: w.Remediation.Cmd, Why: w.Remediation.Why})
+	}
+	return report, steps
 }
 
-// renderReadinessBlock prints a readiness.Report inline: per-warning
-// status lines + remediation next-steps. When the report couldn't run
-// (Checked=false), it says so instead of implying "healthy" and renders
-// the caller-supplied fallback next-steps so the operator knows how to
-// actually re-verify.
+func doctorControlPlaneDetail(r readiness.Report, deep bool) string {
+	if !r.Checked {
+		if deep {
+			return "not verified (insufficient context; run 'cluster provision --ready' first)"
+		}
+		return "not verified (pass --deep for authenticated check)"
+	}
+	if len(r.Warnings) == 0 {
+		return "healthy"
+	}
+	if len(r.Warnings) == 1 {
+		return "1 warning"
+	}
+	return fmt.Sprintf("%d warnings", len(r.Warnings))
+}
+
+// doctorServiceRemediation maps a failing service name to a next-step.
+// Known infrastructure names get curated commands; everything else falls
+// through to `cluster logs <name>`.
+func doctorServiceRemediation(serviceName string) ux.NextStep {
+	n := strings.ToLower(serviceName)
+	switch {
+	case strings.HasPrefix(n, "postgres"), strings.HasPrefix(n, "yugabyte"):
+		return ux.NextStep{
+			Cmd: "frameworks cluster logs postgres",
+			Why: "Inspect Postgres for connection/startup errors.",
+		}
+	case strings.HasPrefix(n, "kafka"):
+		return ux.NextStep{
+			Cmd: "frameworks cluster diagnose kafka",
+			Why: "Kafka diagnosis checks broker health and topic state.",
+		}
+	case strings.HasPrefix(n, "clickhouse"):
+		return ux.NextStep{
+			Cmd: "frameworks cluster logs clickhouse",
+			Why: "Inspect ClickHouse for startup/credential errors.",
+		}
+	case strings.HasPrefix(n, "zookeeper"):
+		return ux.NextStep{
+			Cmd: "frameworks cluster logs zookeeper-1",
+			Why: "Zookeeper quorum issues usually show in its logs.",
+		}
+	case strings.HasPrefix(n, "redis"):
+		return ux.NextStep{
+			Cmd: "frameworks cluster logs redis",
+			Why: "Inspect Redis for connection/persistence errors.",
+		}
+	}
+	return ux.NextStep{
+		Cmd: fmt.Sprintf("frameworks cluster logs %s", serviceName),
+		Why: "Review service logs for startup or dependency errors.",
+	}
+}
+
 func renderReadinessBlock(cmd *cobra.Command, report readiness.Report, notCheckedFallback []ux.NextStep) {
 	out := cmd.OutOrStdout()
 	if !report.Checked {

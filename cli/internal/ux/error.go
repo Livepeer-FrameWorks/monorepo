@@ -10,15 +10,13 @@ import (
 
 var styleHint = color.New(color.Faint)
 
-// FormatError prints an error in the CLI's standard shape:
+// FormatError prints:
 //
 //	✗ <message>
-//	  Hint: <optional remediation>
+//	  Hint: <remediation>   (when hint != "")
 //
-// hint must be a short actionable remediation ("run X", "check Y"). Do NOT
-// pass raw command stdout/stderr here — use ErrorWithOutput for that case
-// so the blob goes below the Hint and doesn't hijack its meaning.
-// JSON mode writes nothing (command emits structured error).
+// hint must be a short actionable remediation. For raw command output
+// use ErrorWithOutput. No-op in JSON mode.
 func FormatError(w io.Writer, err error, hint string) {
 	if err == nil {
 		return
@@ -39,18 +37,8 @@ func FormatError(w io.Writer, err error, hint string) {
 	fmt.Fprintln(w, line)
 }
 
-// ErrorWithOutput is FormatError plus an indented dump of a command's raw
-// stdout / stderr, both rendered faint so they read as context — not as
-// the remediation hint. Empty stdout/stderr are skipped.
-//
-// Shape:
-//
-//	✗ <wrapped error>
-//	  Hint: <short remediation>   (when hint != "")
-//	  stdout:
-//	    <raw>
-//	  stderr:
-//	    <raw>
+// ErrorWithOutput is FormatError plus indented stdout/stderr dumps.
+// Empty stdout/stderr are skipped.
 func ErrorWithOutput(w io.Writer, err error, hint, stdout, stderr string) {
 	if err == nil {
 		return
@@ -71,7 +59,7 @@ func ErrorWithOutput(w io.Writer, err error, hint, stdout, stderr string) {
 		} else {
 			fmt.Fprintln(w, header)
 		}
-		for _, line := range strings.Split(body, "\n") {
+		for line := range strings.SplitSeq(body, "\n") {
 			indented := "    " + line
 			if m.Color {
 				_, _ = styleHint.Fprintln(w, indented)
