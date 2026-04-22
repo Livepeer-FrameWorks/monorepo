@@ -272,8 +272,7 @@ if [ ! -x "$INSTALL_DIR/bin/yb-master" ]; then
   echo "Downloading YugabyteDB $VERSION..."
   cd /tmp
 __FRAMEWORKS_YB_DOWNLOAD__
-  mkdir -p "$INSTALL_DIR"
-  tar xzf /tmp/yugabyte.tar.gz -C "$INSTALL_DIR" --strip-components=1
+  extract_tarball_to /tmp/yugabyte.tar.gz "$INSTALL_DIR"
   rm -f /tmp/yugabyte.tar.gz
   "$INSTALL_DIR/bin/post_install.sh" 2>/dev/null || true
 fi
@@ -301,7 +300,7 @@ sleep 5
 echo "YugabyteDB node $NODE_ID provisioned"
 `, version, nodeID, masterConf, tserverConf, masterUnit, tserverUnit)
 
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_CURL__", ansible.EnsureCurlInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_CURL__", ansible.EnsureCurlInstallSnippet+ansible.SafeTarballExtractSnippet, 1)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_TIMESYNC__", ansible.TimeSyncInstallSnippet, 1)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_YB_DOWNLOAD__",
 		archSwitchedDownloadSnippet(amd, arm, "/tmp/yugabyte.tar.gz"), 1)

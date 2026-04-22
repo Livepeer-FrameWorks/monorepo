@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
@@ -52,6 +53,8 @@ func (c *ClickHouseProvisioner) Provision(ctx context.Context, host inventory.Ho
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -e
 
+__FRAMEWORKS_TAR_HELPERS__
+
 VERSION="%s"
 if [ "$VERSION" = "stable" ]; then
   VERSION=""
@@ -91,11 +94,9 @@ REPO
 install_clickhouse_arch() {
   pacman -Syu --noconfirm --needed curl tar
 __FRAMEWORKS_CH_DOWNLOAD__
-  topdir=$(tar -tzf /tmp/clickhouse.tgz | head -n 1 | cut -d/ -f1)
-  rm -rf "/tmp/${topdir}"
-  tar -xzf /tmp/clickhouse.tgz -C /tmp
-  "/tmp/${topdir}/usr/bin/clickhouse" install --noninteractive --user clickhouse --group clickhouse
-  rm -rf "/tmp/${topdir}" /tmp/clickhouse.tgz
+  extract_tarball_to /tmp/clickhouse.tgz /tmp/clickhouse-install
+  /tmp/clickhouse-install/usr/bin/clickhouse install --noninteractive --user clickhouse --group clickhouse
+  rm -rf /tmp/clickhouse-install /tmp/clickhouse.tgz
 }
 
 if command -v apt-get >/dev/null; then
@@ -120,6 +121,7 @@ fi
 # Wait for server to be ready
 sleep 5
 `, version)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_TAR_HELPERS__", ansible.SafeTarballExtractSnippet, 1)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_CH_DOWNLOAD__", archSwitchedDownloadSnippet(amd, arm, "/tmp/clickhouse.tgz"), 1)
 
 	result, err := c.ExecuteScript(ctx, host, installScript)

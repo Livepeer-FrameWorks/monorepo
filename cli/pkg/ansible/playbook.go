@@ -220,6 +220,8 @@ func GeneratePostgresPlaybook(host, version string, databases []string, download
 
 	installScript := fmt.Sprintf(`set -euo pipefail
 
+__FRAMEWORKS_TAR_HELPERS__
+
 PG_SERVICE=postgresql
 PGCONF=""
 PGHBA=""
@@ -254,13 +256,12 @@ elif command -v dnf >/dev/null 2>&1; then
     PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
     if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
 __FRAMEWORKS_PG_DOWNLOAD__
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}"
-      tar -xjf /tmp/postgresql.tar.bz2 -C /tmp
-      cd "/tmp/postgresql-${POSTGRES_VERSION}"
+      extract_tarball_to /tmp/postgresql.tar.bz2 /tmp/postgresql-src
+      cd /tmp/postgresql-src
       ./configure --prefix="${PGPREFIX}"
       make -j"$(nproc)"
       make install
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2
+      rm -rf /tmp/postgresql-src /tmp/postgresql.tar.bz2
     fi
     ln -sfn "${PGPREFIX}" /opt/postgresql
     install -d -m 0700 -o postgres -g postgres /var/lib/postgresql/data
@@ -305,13 +306,12 @@ elif command -v yum >/dev/null 2>&1; then
     PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
     if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
 __FRAMEWORKS_PG_DOWNLOAD__
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}"
-      tar -xjf /tmp/postgresql.tar.bz2 -C /tmp
-      cd "/tmp/postgresql-${POSTGRES_VERSION}"
+      extract_tarball_to /tmp/postgresql.tar.bz2 /tmp/postgresql-src
+      cd /tmp/postgresql-src
       ./configure --prefix="${PGPREFIX}"
       make -j"$(nproc)"
       make install
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2
+      rm -rf /tmp/postgresql-src /tmp/postgresql.tar.bz2
     fi
     ln -sfn "${PGPREFIX}" /opt/postgresql
     install -d -m 0700 -o postgres -g postgres /var/lib/postgresql/data
@@ -356,13 +356,12 @@ elif command -v pacman >/dev/null 2>&1; then
     PGPREFIX="/opt/postgresql-${POSTGRES_VERSION}"
     if [ ! -x "${PGPREFIX}/bin/postgres" ]; then
 __FRAMEWORKS_PG_DOWNLOAD__
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}"
-      tar -xjf /tmp/postgresql.tar.bz2 -C /tmp
-      cd "/tmp/postgresql-${POSTGRES_VERSION}"
+      extract_tarball_to /tmp/postgresql.tar.bz2 /tmp/postgresql-src
+      cd /tmp/postgresql-src
       ./configure --prefix="${PGPREFIX}"
       make -j"$(nproc)"
       make install
-      rm -rf "/tmp/postgresql-${POSTGRES_VERSION}" /tmp/postgresql.tar.bz2
+      rm -rf /tmp/postgresql-src /tmp/postgresql.tar.bz2
     fi
     ln -sfn "${PGPREFIX}" /opt/postgresql
     install -d -m 0700 -o postgres -g postgres /var/lib/postgres/data
@@ -419,6 +418,7 @@ systemctl enable postgresql
 systemctl restart postgresql
 %s
 `, normalizedVersion, managedConf, managedHBA, postgresDatabaseBootstrapCommands(databases))
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_TAR_HELPERS__", SafeTarballExtractSnippet, 1)
 	installScript = strings.ReplaceAll(installScript, "__FRAMEWORKS_PG_DOWNLOAD__", downloadSnippet)
 
 	play := Play{
@@ -657,10 +657,7 @@ mkdir -p /opt /etc/kafka /var/lib/kafka/logs
 if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
   rm -rf /opt/kafka
 __FRAMEWORKS_KAFKA_DOWNLOAD__
-  topdir=$(tar -tzf /tmp/kafka.tgz | head -n1 | cut -d/ -f1)
-  rm -rf "/tmp/${topdir}"
-  tar -xzf /tmp/kafka.tgz -C /tmp
-  mv "/tmp/${topdir}" /opt/kafka
+  extract_tarball_to /tmp/kafka.tgz /opt/kafka
   rm -f /tmp/kafka.tgz
 fi
 
@@ -677,7 +674,7 @@ printf '%%s' "${BROKER_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka.ser
 chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
 `, kafkaVersion, clusterID, serverProps, brokerUnit)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet+SafeTarballExtractSnippet, 1)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
 
 	play := Play{
@@ -754,10 +751,7 @@ mkdir -p /opt /etc/kafka-controller /var/lib/kafka-controller/logs
 if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
   rm -rf /opt/kafka
 __FRAMEWORKS_KAFKA_DOWNLOAD__
-  topdir=$(tar -tzf /tmp/kafka.tgz | head -n1 | cut -d/ -f1)
-  rm -rf "/tmp/${topdir}"
-  tar -xzf /tmp/kafka.tgz -C /tmp
-  mv "/tmp/${topdir}" /opt/kafka
+  extract_tarball_to /tmp/kafka.tgz /opt/kafka
   rm -f /tmp/kafka.tgz
 fi
 
@@ -775,7 +769,7 @@ printf '%%s' "${CTRL_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka-contr
 chown -R kafka:kafka /opt/kafka /etc/kafka-controller /var/lib/kafka-controller
 systemctl daemon-reload
 `, kafkaVersion, clusterID, initialControllers, serverProps, ctrlUnit)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet+SafeTarballExtractSnippet, 1)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
 
 	play := Play{
@@ -865,10 +859,7 @@ mkdir -p /opt /etc/kafka /var/lib/kafka/logs
 if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
   rm -rf /opt/kafka
 __FRAMEWORKS_KAFKA_DOWNLOAD__
-  topdir=$(tar -tzf /tmp/kafka.tgz | head -n1 | cut -d/ -f1)
-  rm -rf "/tmp/${topdir}"
-  tar -xzf /tmp/kafka.tgz -C /tmp
-  mv "/tmp/${topdir}" /opt/kafka
+  extract_tarball_to /tmp/kafka.tgz /opt/kafka
   rm -f /tmp/kafka.tgz
 fi
 
@@ -886,7 +877,7 @@ printf '%%s' "${BROKER_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka.ser
 chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
 `, kafkaVersion, clusterID, serverProps, brokerUnit)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", EnsureCurlInstallSnippet+EnsureJavaRuntimeInstallSnippet+SafeTarballExtractSnippet, 1)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_KAFKA_DOWNLOAD__", downloadSnippet, 1)
 
 	play := Play{

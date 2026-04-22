@@ -214,10 +214,9 @@ id -u zookeeper >/dev/null 2>&1 || useradd -r -g zookeeper -s "$shell" zookeeper
 
 mkdir -p /opt /etc/zookeeper /var/lib/zookeeper/data /var/lib/zookeeper/log
 if [ ! -x /opt/zookeeper/bin/zkServer.sh ]; then
-  rm -rf /opt/zookeeper /tmp/apache-zookeeper-${VERSION}-bin
+  rm -rf /opt/zookeeper
 __FRAMEWORKS_ZK_DOWNLOAD__
-  tar -xzf /tmp/zookeeper.tgz -C /tmp
-  mv /tmp/apache-zookeeper-${VERSION}-bin /opt/zookeeper
+  extract_tarball_to /tmp/zookeeper.tgz /opt/zookeeper
   rm -f /tmp/zookeeper.tgz
 fi
 
@@ -233,7 +232,7 @@ chown -R zookeeper:zookeeper /opt/zookeeper /etc/zookeeper /var/lib/zookeeper
 systemctl daemon-reload
 systemctl enable --now frameworks-zookeeper
 `, version, serverID, zooCfgContent, systemdUnit)
-	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", ansible.EnsureCurlInstallSnippet+ansible.EnsureJavaRuntimeInstallSnippet, 1)
+	installScript = strings.Replace(installScript, "__FRAMEWORKS_INSTALL_JAVA__", ansible.EnsureCurlInstallSnippet+ansible.EnsureJavaRuntimeInstallSnippet+ansible.SafeTarballExtractSnippet, 1)
 	installScript = strings.Replace(installScript, "__FRAMEWORKS_ZK_DOWNLOAD__", archSwitchedDownloadSnippet(amd, arm, "/tmp/zookeeper.tgz"), 1)
 
 	result, err := z.ExecuteScript(ctx, host, installScript)
