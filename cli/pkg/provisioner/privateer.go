@@ -170,41 +170,36 @@ chmod +x /opt/frameworks/privateer/privateer
 	return nil
 }
 
-func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Extract secrets — prefer per-cluster token from EnvVars (resolved by buildServiceEnvVars)
-	qmGRPCAddr, _ := config.Metadata["quartermaster_grpc_addr"].(string)
-	token := config.EnvVars["ENROLLMENT_TOKEN"]
-	if token == "" {
-		token, _ = config.Metadata["enrollment_token"].(string)
-	}
-	serviceToken, _ := config.Metadata["service_token"].(string)
-	certIssueToken, _ := config.Metadata["cert_issue_token"].(string) //nolint:errcheck // zero value acceptable
-	nodeType, _ := config.Metadata["mesh_node_type"].(string)
+// PrivateerEnvInputs bundles everything BuildPrivateerEnv needs. UpstreamDNS
+// is host-captured at apply time; drift passes "" and IgnoreKeys handles it.
+type PrivateerEnvInputs struct {
+	QMGRPCAddr        string
+	NavigatorGRPCAddr string
+	ServiceToken      string
+	EnrollmentToken   string
+	CertIssueToken    string
+	DNSPort           string
+	NodeType          string
+	NodeName          string
+	ExternalIP        string
+	NodeID            string
+	GRPCAllowInsecure string
+	BuildEnv          string
+	UpstreamDNS       string
+	ExpectedServices  []string
+}
+
+// BuildPrivateerEnv returns the /etc/frameworks/privateer.env bytes.
+func BuildPrivateerEnv(in PrivateerEnvInputs) []byte {
+	nodeType := in.NodeType
 	if nodeType == "" {
 		nodeType = infra.NodeTypeCore
 	}
-	nodeName, _ := config.Metadata["mesh_node_name"].(string)
-	navigatorGRPCAddr := config.EnvVars["NAVIGATOR_GRPC_ADDR"]
-	grpcAllowInsecure := config.EnvVars["GRPC_ALLOW_INSECURE"]
-	if grpcAllowInsecure == "" {
-		grpcAllowInsecure = "true"
+	allowInsecure := in.GRPCAllowInsecure
+	if allowInsecure == "" {
+		allowInsecure = "true"
 	}
-	buildEnv := config.EnvVars["BUILD_ENV"]
-	expectedServices := metadataStringSlice(config.Metadata["expected_internal_grpc_services"])
-
-	dnsPort := strconv.Itoa(parseDNSPort(config.Metadata["dns_port"]))
-
-	// Capture the host's current upstream nameservers before we overwrite resolv.conf,
-	// so Privateer can forward non-.internal queries to them.
-	var upstreamDNS string
-	captureResult, captureErr := p.RunCommand(ctx, host, system.CaptureUpstreamNameservers())
-	if captureErr == nil && captureResult.ExitCode == 0 {
-		upstreamDNS = strings.TrimSpace(captureResult.Stdout)
-	}
-
-	nodeID, _ := config.Metadata["node_id"].(string) //nolint:errcheck // type assertion, not error
-
-	envContent := fmt.Sprintf(`QUARTERMASTER_GRPC_ADDR=%s
+	content := fmt.Sprintf(`QUARTERMASTER_GRPC_ADDR=%s
 NAVIGATOR_GRPC_ADDR=%s
 SERVICE_TOKEN=%s
 ENROLLMENT_TOKEN=%s
@@ -219,16 +214,79 @@ GRPC_TLS_PKI_DIR=/etc/frameworks/pki
 GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
 GRPC_ALLOW_INSECURE=%s
 BUILD_ENV=%s
-`, qmGRPCAddr, navigatorGRPCAddr, serviceToken, token, certIssueToken, dnsPort, nodeType, nodeName, host.ExternalIP, nodeID, grpcAllowInsecure, buildEnv)
-
-	if upstreamDNS != "" {
-		envContent += fmt.Sprintf("UPSTREAM_DNS=%s\n", upstreamDNS)
+`, in.QMGRPCAddr, in.NavigatorGRPCAddr, in.ServiceToken, in.EnrollmentToken, in.CertIssueToken, in.DNSPort, nodeType, in.NodeName, in.ExternalIP, in.NodeID, allowInsecure, in.BuildEnv)
+	if in.UpstreamDNS != "" {
+		content += fmt.Sprintf("UPSTREAM_DNS=%s\n", in.UpstreamDNS)
 	}
-	if len(expectedServices) > 0 {
-		envContent += fmt.Sprintf("EXPECTED_INTERNAL_GRPC_SERVICES=%s\n", strings.Join(expectedServices, ","))
+	if len(in.ExpectedServices) > 0 {
+		content += fmt.Sprintf("EXPECTED_INTERNAL_GRPC_SERVICES=%s\n", strings.Join(in.ExpectedServices, ","))
+	}
+	return []byte(content)
+}
+
+// BuildPrivateerSystemdUnit returns the frameworks-privateer.service bytes.
+// Runs as root because WireGuard requires it.
+func BuildPrivateerSystemdUnit() ([]byte, error) {
+	unit, err := GenerateSystemdUnit(SystemdUnitData{
+		ServiceName: "privateer",
+		Description: "FrameWorks Privateer Mesh Agent",
+		WorkingDir:  "/opt/frameworks/privateer",
+		ExecStart:   "/opt/frameworks/privateer/privateer",
+		User:        "root",
+		EnvFile:     "/etc/frameworks/privateer.env",
+		Restart:     "always",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []byte(unit), nil
+}
+
+// privateerInputsFromConfig extracts the BuildPrivateerEnv inputs from a
+// ServiceConfig. UpstreamDNS is left empty — callers that want the apply-
+// time value fill it after capturing it on the host.
+func privateerInputsFromConfig(host inventory.Host, config ServiceConfig) PrivateerEnvInputs {
+	token := config.EnvVars["ENROLLMENT_TOKEN"]
+	if token == "" {
+		if v, ok := config.Metadata["enrollment_token"].(string); ok {
+			token = v
+		}
+	}
+	qmGRPCAddr, _ := config.Metadata["quartermaster_grpc_addr"].(string) //nolint:errcheck // zero value acceptable
+	serviceToken, _ := config.Metadata["service_token"].(string)         //nolint:errcheck
+	certIssueToken, _ := config.Metadata["cert_issue_token"].(string)    //nolint:errcheck
+	nodeType, _ := config.Metadata["mesh_node_type"].(string)            //nolint:errcheck
+	nodeName, _ := config.Metadata["mesh_node_name"].(string)            //nolint:errcheck
+	nodeID, _ := config.Metadata["node_id"].(string)                     //nolint:errcheck
+	return PrivateerEnvInputs{
+		QMGRPCAddr:        qmGRPCAddr,
+		NavigatorGRPCAddr: config.EnvVars["NAVIGATOR_GRPC_ADDR"],
+		ServiceToken:      serviceToken,
+		EnrollmentToken:   token,
+		CertIssueToken:    certIssueToken,
+		DNSPort:           strconv.Itoa(parseDNSPort(config.Metadata["dns_port"])),
+		NodeType:          nodeType,
+		NodeName:          nodeName,
+		ExternalIP:        host.ExternalIP,
+		NodeID:            nodeID,
+		GRPCAllowInsecure: config.EnvVars["GRPC_ALLOW_INSECURE"],
+		BuildEnv:          config.EnvVars["BUILD_ENV"],
+		ExpectedServices:  metadataStringSlice(config.Metadata["expected_internal_grpc_services"]),
+	}
+}
+
+func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	inputs := privateerInputsFromConfig(host, config)
+
+	// Capture the host's current upstream nameservers before we overwrite resolv.conf,
+	// so Privateer can forward non-.internal queries to them.
+	captureResult, captureErr := p.RunCommand(ctx, host, system.CaptureUpstreamNameservers())
+	if captureErr == nil && captureResult.ExitCode == 0 {
+		inputs.UpstreamDNS = strings.TrimSpace(captureResult.Stdout)
 	}
 
-	// Upload Env File
+	envContent := string(BuildPrivateerEnv(inputs))
+
 	tmpEnv := filepath.Join(os.TempDir(), "privateer.env")
 	if err := os.WriteFile(tmpEnv, []byte(envContent), 0600); err != nil {
 		return err
@@ -239,24 +297,12 @@ BUILD_ENV=%s
 		return err
 	}
 
-	// Generate Unit
-	unitData := SystemdUnitData{
-		ServiceName: "privateer",
-		Description: "FrameWorks Privateer Mesh Agent",
-		WorkingDir:  "/opt/frameworks/privateer",
-		ExecStart:   "/opt/frameworks/privateer/privateer",
-		User:        "root", // Needs root for WireGuard
-		EnvFile:     "/etc/frameworks/privateer.env",
-		Restart:     "always",
-	}
-	unitContent, err := GenerateSystemdUnit(unitData)
+	unitContent, err := BuildPrivateerSystemdUnit()
 	if err != nil {
 		return err
 	}
-
-	// Upload Unit
 	tmpUnit := filepath.Join(os.TempDir(), "privateer.service")
-	if err := os.WriteFile(tmpUnit, []byte(unitContent), 0644); err != nil {
+	if err := os.WriteFile(tmpUnit, unitContent, 0644); err != nil {
 		return err
 	}
 	return p.UploadFile(ctx, host, ssh.UploadOptions{

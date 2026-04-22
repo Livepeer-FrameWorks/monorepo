@@ -10,6 +10,97 @@ import (
 	"frameworks/cli/pkg/ssh"
 )
 
+// YugabyteNativeParams bundles the inputs needed to render the flagfile
+// configs for a single Yugabyte node.
+type YugabyteNativeParams struct {
+	MasterAddresses string
+	NodeIP          string
+	DataDir         string
+	RF              int
+	YSQLPort        int
+	Cloud           string
+	Region          string
+	Zone            string
+}
+
+// BuildYugabyteMasterConf returns the yb-master flagfile bytes.
+func BuildYugabyteMasterConf(p YugabyteNativeParams) []byte {
+	return fmt.Appendf(nil, `--master_addresses=%s
+--rpc_bind_addresses=%s:7100
+--webserver_interface=%s
+--fs_data_dirs=%s
+--replication_factor=%d
+--placement_cloud=%s
+--placement_region=%s
+--placement_zone=%s
+--leader_failure_max_missed_heartbeat_periods=10
+--callhome_enabled=false
+`, p.MasterAddresses, p.NodeIP, p.NodeIP, p.DataDir, p.RF, p.Cloud, p.Region, p.Zone)
+}
+
+// BuildYugabyteTServerConf returns the yb-tserver flagfile bytes.
+func BuildYugabyteTServerConf(p YugabyteNativeParams) []byte {
+	return fmt.Appendf(nil, `--tserver_master_addrs=%s
+--rpc_bind_addresses=%s:9100
+--webserver_interface=%s
+--pgsql_proxy_bind_address=0.0.0.0:%d
+--cql_proxy_bind_address=0.0.0.0:9042
+--fs_data_dirs=%s
+--ysql_enable_auth=true
+--ysql_hba_conf_csv="host all all 0.0.0.0/0 scram-sha-256,host all all ::0/0 scram-sha-256"
+--placement_cloud=%s
+--placement_region=%s
+--placement_zone=%s
+--callhome_enabled=false
+`, p.MasterAddresses, p.NodeIP, p.NodeIP, p.YSQLPort, p.DataDir, p.Cloud, p.Region, p.Zone)
+}
+
+// BuildYugabyteMasterUnit returns the yb-master.service bytes.
+func BuildYugabyteMasterUnit() []byte {
+	return []byte(`[Unit]
+Description=YugabyteDB Master
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yugabyte
+Group=yugabyte
+ExecStart=/opt/yugabyte/bin/yb-master --flagfile /opt/yugabyte/conf/master.conf
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+LimitNPROC=12000
+LimitCORE=infinity
+
+[Install]
+WantedBy=multi-user.target
+`)
+}
+
+// BuildYugabyteTServerUnit returns the yb-tserver.service bytes.
+func BuildYugabyteTServerUnit() []byte {
+	return []byte(`[Unit]
+Description=YugabyteDB TServer
+After=network-online.target yb-master.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yugabyte
+Group=yugabyte
+ExecStart=/opt/yugabyte/bin/yb-tserver --flagfile /opt/yugabyte/conf/tserver.conf
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+LimitNPROC=12000
+LimitCORE=infinity
+
+[Install]
+WantedBy=multi-user.target
+`)
+}
+
 // YugabyteProvisioner provisions YugabyteDB nodes (yb-master + yb-tserver)
 type YugabyteProvisioner struct {
 	*BaseProvisioner
@@ -67,23 +158,46 @@ func (y *YugabyteProvisioner) Provision(ctx context.Context, host inventory.Host
 		port = 5433
 	}
 
-	// Placement info — defaults to single zone
 	cloud := "frameworks"
 	region := "eu"
 	zone := fmt.Sprintf("eu-%d", nodeID)
+
+	params := YugabyteNativeParams{
+		MasterAddresses: masterAddresses,
+		NodeIP:          host.ExternalIP,
+		DataDir:         "/var/lib/yugabyte/data",
+		RF:              rf,
+		YSQLPort:        port,
+		Cloud:           cloud,
+		Region:          region,
+		Zone:            zone,
+	}
+	masterConf := string(BuildYugabyteMasterConf(params))
+	tserverConf := string(BuildYugabyteTServerConf(params))
+	masterUnit := string(BuildYugabyteMasterUnit())
+	tserverUnit := string(BuildYugabyteTServerUnit())
 
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -e
 
 VERSION="%s"
-MASTER_ADDRESSES="%s"
-NODE_IP="%s"
 NODE_ID=%d
-RF=%d
-YSQL_PORT=%d
-CLOUD="%s"
-REGION="%s"
-ZONE="%s"
+MASTER_CONF_CONTENT=$(cat <<'FRAMEWORKS_YB_MASTER_CONF_EOF'
+%s
+FRAMEWORKS_YB_MASTER_CONF_EOF
+)
+TSERVER_CONF_CONTENT=$(cat <<'FRAMEWORKS_YB_TSERVER_CONF_EOF'
+%s
+FRAMEWORKS_YB_TSERVER_CONF_EOF
+)
+MASTER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_YB_MASTER_UNIT_EOF'
+%s
+FRAMEWORKS_YB_MASTER_UNIT_EOF
+)
+TSERVER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_YB_TSERVER_UNIT_EOF'
+%s
+FRAMEWORKS_YB_TSERVER_UNIT_EOF
+)
 
 # System prerequisites
 echo "Configuring system settings..."
@@ -162,80 +276,13 @@ fi
 
 chown -R yugabyte:yugabyte "$INSTALL_DIR" "$DATA_DIR" "$CORES_DIR"
 
-# Write master gflags
-cat > "$CONF_DIR/master.conf" <<MASTERCONF
---master_addresses=${MASTER_ADDRESSES}
---rpc_bind_addresses=${NODE_IP}:7100
---webserver_interface=${NODE_IP}
---fs_data_dirs=${DATA_DIR}
---replication_factor=${RF}
---placement_cloud=${CLOUD}
---placement_region=${REGION}
---placement_zone=${ZONE}
---leader_failure_max_missed_heartbeat_periods=10
---callhome_enabled=false
-MASTERCONF
-
-# Write tserver gflags
-cat > "$CONF_DIR/tserver.conf" <<TSERVERCONF
---tserver_master_addrs=${MASTER_ADDRESSES}
---rpc_bind_addresses=${NODE_IP}:9100
---webserver_interface=${NODE_IP}
---pgsql_proxy_bind_address=0.0.0.0:${YSQL_PORT}
---cql_proxy_bind_address=0.0.0.0:9042
---fs_data_dirs=${DATA_DIR}
---ysql_enable_auth=true
---ysql_hba_conf_csv="host all all 0.0.0.0/0 scram-sha-256,host all all ::0/0 scram-sha-256"
---placement_cloud=${CLOUD}
---placement_region=${REGION}
---placement_zone=${ZONE}
---callhome_enabled=false
-TSERVERCONF
+printf '%%s' "${MASTER_CONF_CONTENT}" > "$CONF_DIR/master.conf"
+printf '%%s' "${TSERVER_CONF_CONTENT}" > "$CONF_DIR/tserver.conf"
 
 chown -R yugabyte:yugabyte "$CONF_DIR"
 
-# Create systemd units
-cat > /etc/systemd/system/yb-master.service <<'YBMASTER'
-[Unit]
-Description=YugabyteDB Master
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=yugabyte
-Group=yugabyte
-ExecStart=/opt/yugabyte/bin/yb-master --flagfile /opt/yugabyte/conf/master.conf
-Restart=always
-RestartSec=5
-LimitNOFILE=1048576
-LimitNPROC=12000
-LimitCORE=infinity
-
-[Install]
-WantedBy=multi-user.target
-YBMASTER
-
-cat > /etc/systemd/system/yb-tserver.service <<'YBTSERVER'
-[Unit]
-Description=YugabyteDB TServer
-After=network-online.target yb-master.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=yugabyte
-Group=yugabyte
-ExecStart=/opt/yugabyte/bin/yb-tserver --flagfile /opt/yugabyte/conf/tserver.conf
-Restart=always
-RestartSec=5
-LimitNOFILE=1048576
-LimitNPROC=12000
-LimitCORE=infinity
-
-[Install]
-WantedBy=multi-user.target
-YBTSERVER
+printf '%%s' "${MASTER_UNIT_CONTENT}" > /etc/systemd/system/yb-master.service
+printf '%%s' "${TSERVER_UNIT_CONTENT}" > /etc/systemd/system/yb-tserver.service
 
 systemctl daemon-reload
 
@@ -250,7 +297,7 @@ echo "Waiting for yb-tserver to start..."
 sleep 5
 
 echo "YugabyteDB node $NODE_ID provisioned"
-`, version, masterAddresses, host.ExternalIP, nodeID, rf, port, cloud, region, zone)
+`, version, nodeID, masterConf, tserverConf, masterUnit, tserverUnit)
 
 	result, err := y.ExecuteScript(ctx, host, installScript)
 	if err != nil {

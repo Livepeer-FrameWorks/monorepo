@@ -64,6 +64,7 @@ func newEdgeCmd() *cobra.Command {
 	edge.AddCommand(newEdgeCertCmd())
 	edge.AddCommand(newEdgeLogsCmd())
 	edge.AddCommand(newEdgeDoctorCmd())
+	edge.AddCommand(newEdgeDriftCmd())
 	edge.AddCommand(newEdgeDiagnoseCmd())
 	edge.AddCommand(newEdgeModeCmd())
 	edge.AddCommand(newEdgeDeployCmd())
@@ -318,7 +319,7 @@ func newEdgeEnrollCmd() *cobra.Command {
 			return err
 		}
 		ux.Success(out, "Edge stack started (caddy, mistserver, helmsman)")
-		domain := readEnvFileKey(dir+string(os.PathSeparator)+envFile, "EDGE_DOMAIN")
+		domain := readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, envFile, "EDGE_DOMAIN")
 		if strings.TrimSpace(domain) == "" {
 			ux.Warn(out, "EDGE_DOMAIN not set in .edge.env; skipping HTTPS check")
 			return nil
@@ -420,22 +421,11 @@ func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
 	return out
 }
 
-// detectEdgeMode reads DEPLOY_MODE from .edge.env to determine if the edge
-// stack is running in docker or native mode. Falls back to "docker" if unset.
+// detectEdgeMode reads DEPLOY_MODE from <dir>/.edge.env to determine if the
+// edge stack is running in docker or native mode. Honors --dir both locally
+// and over SSH. Falls back to "docker" if unset.
 func detectEdgeMode(ctx context.Context, dir, envFile, sshTarget, sshKey string) string {
-	if strings.TrimSpace(sshTarget) != "" {
-		remoteEnv := "/opt/frameworks/edge/" + envFile
-		_, out, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", fmt.Sprintf("grep ^DEPLOY_MODE= %s 2>/dev/null", remoteEnv)}, "")
-		if err == nil {
-			val := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out), "DEPLOY_MODE="))
-			if val == "native" {
-				return "native"
-			}
-		}
-		return "docker"
-	}
-	val := readEnvFileKey(dir+string(os.PathSeparator)+envFile, "DEPLOY_MODE")
-	if val == "native" {
+	if readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, envFile, "DEPLOY_MODE") == "native" {
 		return "native"
 	}
 	return "docker"
@@ -462,6 +452,68 @@ func readEnvFileKey(path, key string) string {
 	lines := strings.Split(string(b), "\n")
 	prefix := key + "="
 	for _, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if v, ok := strings.CutPrefix(ln, prefix); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// probeEdgeEnvFile reports whether the .edge.env file at <dir>/<envFile> is
+// readable. Callers use it to distinguish "file missing / unreachable" from
+// "key absent" before attempting per-key reads.
+func probeEdgeEnvFile(ctx context.Context, sshTarget, sshKey, dir, envFile string) error {
+	path := dir + string(os.PathSeparator) + envFile
+	if strings.TrimSpace(sshTarget) != "" {
+		path = strings.TrimRight(dir, "/") + "/" + envFile
+		if strings.TrimSpace(dir) == "" {
+			path = envFile
+		}
+		script := fmt.Sprintf("test -r %s", fwssh.ShellQuote(path))
+		code, _, stderr, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", script}, "")
+		if err != nil {
+			return fmt.Errorf("probe %s: %w", path, err)
+		}
+		switch code {
+		case 0:
+			return nil
+		case 1:
+			return fmt.Errorf("probe %s: not readable", path)
+		default:
+			return fmt.Errorf("probe %s: test -r exited %d: %s", path, code, stderr)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("probe %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("probe %s: is a directory", path)
+	}
+	return nil
+}
+
+// readRemoteEnvFileKey reads a single key from <dir>/.edge.env, honoring --dir
+// both locally and over SSH. When sshTarget is empty, delegates to
+// readEnvFileKey. Returns "" on any read error or missing key — callers that
+// need to distinguish the two call probeEdgeEnvFile() first.
+func readRemoteEnvFileKey(ctx context.Context, sshTarget, sshKey, dir, envFile, key string) string {
+	if strings.TrimSpace(sshTarget) == "" {
+		return readEnvFileKey(dir+string(os.PathSeparator)+envFile, key)
+	}
+	remoteDir := dir
+	if strings.TrimSpace(remoteDir) == "" {
+		remoteDir = "."
+	}
+	remotePath := strings.TrimRight(remoteDir, "/") + "/" + envFile
+	script := fmt.Sprintf("grep ^%s= %s 2>/dev/null", fwssh.ShellQuote(key), fwssh.ShellQuote(remotePath))
+	_, out, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", script}, "")
+	if err != nil {
+		return ""
+	}
+	prefix := key + "="
+	for ln := range strings.SplitSeq(out, "\n") {
 		ln = strings.TrimSpace(ln)
 		if v, ok := strings.CutPrefix(ln, prefix); ok {
 			return strings.TrimSpace(v)
@@ -1251,15 +1303,14 @@ func newEdgeStatusCmd() *cobra.Command {
 			dir = "."
 		}
 		envFile := ".edge.env"
-		envPath := dir + string(os.PathSeparator) + envFile
 		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 
 		// Multi-line state summary sourced from .edge.env + runtime probes.
-		if envDomain := readEnvFileKey(envPath, "EDGE_DOMAIN"); envDomain != "" && domain == "" {
+		if envDomain := readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, envFile, "EDGE_DOMAIN"); envDomain != "" && domain == "" {
 			domain = envDomain
 		}
-		nodeID := readEnvFileKey(envPath, "NODE_ID")
-		telemetryURL := readEnvFileKey(envPath, "TELEMETRY_URL")
+		nodeID := readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, envFile, "NODE_ID")
+		telemetryURL := readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, envFile, "TELEMETRY_URL")
 		ux.Subheading(cmd.OutOrStdout(), "Edge node state:")
 		fmt.Fprintf(cmd.OutOrStdout(), "  mode:      %s\n", deployMode)
 		if nodeID != "" {
@@ -1427,8 +1478,7 @@ func newEdgeCertCmd() *cobra.Command {
 			if dir == "" {
 				dir = "."
 			}
-			envFile := dir + string(os.PathSeparator) + ".edge.env"
-			domain = readEnvFileKey(envFile, "EDGE_DOMAIN")
+			domain = readRemoteEnvFileKey(cmd.Context(), sshTarget, sshKey, dir, ".edge.env", "EDGE_DOMAIN")
 		}
 		if strings.TrimSpace(domain) == "" {
 			ux.Warn(out, "No domain provided and EDGE_DOMAIN not set in .edge.env")
@@ -1689,9 +1739,8 @@ func newEdgeDoctorCmd() *cobra.Command {
 		}
 
 		// HTTPS health
-		envPath := dir + string(os.PathSeparator) + envFile
 		if domain == "" {
-			domain = readEnvFileKey(envPath, "EDGE_DOMAIN")
+			domain = readRemoteEnvFileKey(ctx, "", "", dir, envFile, "EDGE_DOMAIN")
 		}
 		httpsStatus := 0
 		httpsError := ""
@@ -1771,7 +1820,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 			hostChecks = append(hostChecks, readiness.EdgeCheck{Name: r.Name, OK: r.OK, Detail: detail})
 		}
 		hasEnv := true
-		if _, statErr := os.Stat(envPath); statErr != nil {
+		if _, statErr := os.Stat(dir + string(os.PathSeparator) + envFile); statErr != nil {
 			hasEnv = false
 		}
 		report := readiness.EdgeReadiness(readiness.EdgeInputs{

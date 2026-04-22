@@ -184,15 +184,25 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return fmt.Errorf("failed to create execution plan: %w", err)
 	}
 
-	// Show plan
+	// Show plan. In dry-run mode, annotate each task with a desired-vs-observed
+	// config diff summary so operators see the real change surface before applying.
+	annotateTask := func(task *orchestrator.Task) string { return "" }
+	if dryRun {
+		compareFn, cleanup := buildDryRunTaskCompare(ctx, cmd, rc, manifest, manifestDir, sharedEnv)
+		if cleanup != nil {
+			defer cleanup()
+		}
+		annotateTask = compareFn
+	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Execution Plan:")
 	for i, batch := range plan.Batches {
 		fmt.Fprintf(cmd.OutOrStdout(), "  Batch %d (parallel):\n", i+1)
 		for _, task := range batch {
+			suffix := annotateTask(task)
 			if task.ClusterID != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "    - %s (%s) on %s [cluster: %s]\n", task.Name, task.Type, task.Host, task.ClusterID)
+				fmt.Fprintf(cmd.OutOrStdout(), "    - %s (%s) on %s [cluster: %s]%s\n", task.Name, task.Type, task.Host, task.ClusterID, suffix)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "    - %s (%s) on %s\n", task.Name, task.Type, task.Host)
+				fmt.Fprintf(cmd.OutOrStdout(), "    - %s (%s) on %s%s\n", task.Name, task.Type, task.Host, suffix)
 			}
 		}
 	}
@@ -1479,7 +1489,7 @@ func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 	return nil
 }
 
-// buildTaskConfig creates a ServiceConfig for a task
+// buildTaskConfig creates a ServiceConfig for a task.
 func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, force bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
 	config := provisioner.ServiceConfig{
 		Mode:     "docker",

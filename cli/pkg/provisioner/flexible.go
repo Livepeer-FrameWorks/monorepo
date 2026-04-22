@@ -3,10 +3,9 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
@@ -136,10 +135,9 @@ func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventor
 		envFile = svcEnvFile
 	}
 
-	// Use merged env vars from config, falling back to metadata for CLUSTER_ID/NODE_ID
-	envVars := make(map[string]string)
-	for k, v := range config.EnvVars {
-		envVars[k] = v
+	envVars := maps.Clone(config.EnvVars)
+	if envVars == nil {
+		envVars = map[string]string{}
 	}
 	if len(envVars) == 0 {
 		if clusterID, ok := config.Metadata["cluster_id"].(string); ok && clusterID != "" {
@@ -369,37 +367,14 @@ echo "Binary installed"
 	return nil
 }
 
-// writeServiceEnvFile writes merged environment variables to the remote host.
-// If config.EnvVars is populated, writes those. Otherwise falls back to CLUSTER_ID/NODE_ID from metadata.
+// writeServiceEnvFile writes the env-file content from BuildServiceEnvFileBytes
+// to the remote host, so drift and apply share the exact same bytes.
 func (f *FlexibleProvisioner) writeServiceEnvFile(ctx context.Context, host inventory.Host, envFilePath string, config ServiceConfig) error {
-	envVars := config.EnvVars
-	if len(envVars) == 0 {
-		envVars = make(map[string]string)
-		if clusterID, ok := config.Metadata["cluster_id"].(string); ok && clusterID != "" {
-			envVars["CLUSTER_ID"] = clusterID
-		}
-		if nodeID, ok := config.Metadata["node_id"].(string); ok && nodeID != "" {
-			envVars["NODE_ID"] = nodeID
-		}
-	}
-	if len(envVars) == 0 {
+	content := BuildServiceEnvFileBytes(config)
+	if len(content) == 0 {
 		return nil
 	}
-
-	// Build env file content with sorted keys for deterministic output
-	keys := make([]string, 0, len(envVars))
-	for k := range envVars {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	lines := make([]string, 0, len(keys))
-	for _, k := range keys {
-		lines = append(lines, fmt.Sprintf("%s=%s", k, envVars[k]))
-	}
-
-	// Write atomically: create file with all env vars (not append)
-	content := strings.Join(lines, "\n") + "\n"
-	writeCmd := fmt.Sprintf("mkdir -p /etc/frameworks && cat > %s << 'ENVEOF'\n%sENVEOF\nchmod 0600 %s", envFilePath, content, envFilePath)
+	writeCmd := fmt.Sprintf("mkdir -p /etc/frameworks && cat > %s << 'ENVEOF'\n%sENVEOF\nchmod 0600 %s", envFilePath, string(content), envFilePath)
 	result, err := f.RunCommand(ctx, host, writeCmd)
 	if err != nil {
 		return fmt.Errorf("failed to write env file: %w", err)

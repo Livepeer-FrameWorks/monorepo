@@ -234,26 +234,9 @@ func (c *ClickHouseProvisioner) Initialize(ctx context.Context, host inventory.H
 // Configure deploys users.xml and sets the CLICKHOUSE_PASSWORD env var
 // on the ClickHouse host so the "frameworks" user has a password.
 // Must be called after Provision (ClickHouse is installed and running).
-func (c *ClickHouseProvisioner) Configure(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	password, _ := config.Metadata["clickhouse_password"].(string)
-	if password == "" {
-		return nil // no password configured — skip (dev mode)
-	}
-
-	readonlyPassword, _ := config.Metadata["clickhouse_readonly_password"].(string)
-	if readonlyPassword == "" {
-		readonlyPassword = password // reuse primary password for readonly if not set
-	}
-
-	// Deploy users.xml and set env vars via a single script.
-	// ClickHouse reads CLICKHOUSE_PASSWORD from the process environment
-	// when users.xml uses <password from_env="CLICKHOUSE_PASSWORD"/>.
-	script := fmt.Sprintf(`#!/bin/bash
-set -e
-
-# Write users.xml with from_env references
-cat > /etc/clickhouse-server/users.xml <<'USERSXML'
-<?xml version="1.0"?>
+// BuildClickHouseUsersXML returns the /etc/clickhouse-server/users.xml bytes.
+func BuildClickHouseUsersXML() []byte {
+	return []byte(`<?xml version="1.0"?>
 <clickhouse>
     <profiles>
         <default>
@@ -336,19 +319,51 @@ cat > /etc/clickhouse-server/users.xml <<'USERSXML'
         </readonly_quota>
     </quotas>
 </clickhouse>
-USERSXML
+`)
+}
 
+// BuildClickHousePasswordsDropIn returns the systemd drop-in that exposes
+// the CLICKHOUSE_PASSWORD and CLICKHOUSE_READONLY_PASSWORD env vars to the
+// clickhouse-server service.
+func BuildClickHousePasswordsDropIn(password, readonlyPassword string) []byte {
+	return fmt.Appendf(nil, `[Service]
+Environment="CLICKHOUSE_PASSWORD=%s"
+Environment="CLICKHOUSE_READONLY_PASSWORD=%s"
+`, password, readonlyPassword)
+}
+
+func (c *ClickHouseProvisioner) Configure(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	password := metaString(config.Metadata, "clickhouse_password")
+	if password == "" {
+		return nil // no password configured — skip (dev mode)
+	}
+
+	readonlyPassword := metaString(config.Metadata, "clickhouse_readonly_password")
+	if readonlyPassword == "" {
+		readonlyPassword = password
+	}
+
+	usersXML := string(BuildClickHouseUsersXML())
+	passwordsDropIn := string(BuildClickHousePasswordsDropIn(password, readonlyPassword))
+
+	script := fmt.Sprintf(`#!/bin/bash
+set -e
+
+USERS_XML_CONTENT=$(cat <<'FRAMEWORKS_CH_USERS_EOF'
+%s
+FRAMEWORKS_CH_USERS_EOF
+)
+PASSWORDS_DROPIN_CONTENT=$(cat <<'FRAMEWORKS_CH_PASSWORDS_EOF'
+%s
+FRAMEWORKS_CH_PASSWORDS_EOF
+)
+
+printf '%%s' "${USERS_XML_CONTENT}" > /etc/clickhouse-server/users.xml
 chown clickhouse:clickhouse /etc/clickhouse-server/users.xml
 chmod 640 /etc/clickhouse-server/users.xml
 
-# Set password env vars for systemd so ClickHouse reads them at startup
 mkdir -p /etc/systemd/system/clickhouse-server.service.d
-cat > /etc/systemd/system/clickhouse-server.service.d/passwords.conf <<EOF
-[Service]
-Environment="CLICKHOUSE_PASSWORD=%s"
-Environment="CLICKHOUSE_READONLY_PASSWORD=%s"
-EOF
-
+printf '%%s' "${PASSWORDS_DROPIN_CONTENT}" > /etc/systemd/system/clickhouse-server.service.d/passwords.conf
 chmod 600 /etc/systemd/system/clickhouse-server.service.d/passwords.conf
 
 systemctl daemon-reload
@@ -356,7 +371,7 @@ systemctl restart clickhouse-server
 
 sleep 3
 echo "ClickHouse configured with application credentials"
-`, password, readonlyPassword)
+`, usersXML, passwordsDropIn)
 
 	result, err := c.ExecuteScript(ctx, host, script)
 	if err != nil {

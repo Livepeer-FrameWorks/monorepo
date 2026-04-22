@@ -139,20 +139,64 @@ func (z *ZookeeperProvisioner) provisionDocker(ctx context.Context, host invento
 	return nil
 }
 
+// BuildZookeeperConfig returns the /etc/zookeeper/zoo.cfg bytes.
+func BuildZookeeperConfig(port int, serverLines string) []byte {
+	trailer := ""
+	if serverLines != "" {
+		trailer = serverLines + "\n"
+	}
+	return fmt.Appendf(nil, `tickTime=2000
+initLimit=10
+syncLimit=5
+dataDir=/var/lib/zookeeper/data
+dataLogDir=/var/lib/zookeeper/log
+clientPort=%d
+autopurge.snapRetainCount=3
+autopurge.purgeInterval=24
+%s`, port, trailer)
+}
+
+// BuildZookeeperSystemdUnit returns the frameworks-zookeeper.service bytes.
+func BuildZookeeperSystemdUnit() []byte {
+	return []byte(`[Unit]
+Description=FrameWorks ZooKeeper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zookeeper
+Group=zookeeper
+Environment=ZOO_LOG_DIR=/var/lib/zookeeper/log
+ExecStart=/opt/zookeeper/bin/zkServer.sh start-foreground /etc/zookeeper/zoo.cfg
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+`)
+}
+
 func (z *ZookeeperProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, port int) error {
 	version := resolveZookeeperNativeVersion(config.Version)
 	serverID := zookeeperServerID(config.Metadata["server_id"])
 	serverLines := strings.Join(zookeeperServerList(config.Metadata["servers"]), "\n")
+	zooCfgContent := string(BuildZookeeperConfig(port, serverLines))
+	systemdUnit := string(BuildZookeeperSystemdUnit())
 
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
 
 VERSION="%s"
-CLIENT_PORT="%d"
 SERVER_ID="%d"
-SERVER_LINES=$(cat <<'EOF'
+ZOO_CFG_CONTENT=$(cat <<'FRAMEWORKS_ZOO_CFG_EOF'
 %s
-EOF
+FRAMEWORKS_ZOO_CFG_EOF
+)
+SYSTEMD_UNIT_CONTENT=$(cat <<'FRAMEWORKS_ZOO_UNIT_EOF'
+%s
+FRAMEWORKS_ZOO_UNIT_EOF
 )
 
 checksum_value() {
@@ -218,46 +262,18 @@ if [ ! -x /opt/zookeeper/bin/zkServer.sh ]; then
   rm -f /tmp/zookeeper.tgz /tmp/zookeeper.tgz.sha512
 fi
 
-cat > /etc/zookeeper/zoo.cfg <<EOF
-tickTime=2000
-initLimit=10
-syncLimit=5
-dataDir=/var/lib/zookeeper/data
-dataLogDir=/var/lib/zookeeper/log
-clientPort=${CLIENT_PORT}
-autopurge.snapRetainCount=3
-autopurge.purgeInterval=24
-${SERVER_LINES}
-EOF
+printf '%%s' "${ZOO_CFG_CONTENT}" > /etc/zookeeper/zoo.cfg
 
 if [ "${SERVER_ID}" -gt 0 ]; then
   echo "${SERVER_ID}" > /var/lib/zookeeper/data/myid
 fi
 
-cat > /etc/systemd/system/frameworks-zookeeper.service <<'EOF'
-[Unit]
-Description=FrameWorks ZooKeeper
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=zookeeper
-Group=zookeeper
-Environment=ZOO_LOG_DIR=/var/lib/zookeeper/log
-ExecStart=/opt/zookeeper/bin/zkServer.sh start-foreground /etc/zookeeper/zoo.cfg
-Restart=always
-RestartSec=5
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-EOF
+printf '%%s' "${SYSTEMD_UNIT_CONTENT}" > /etc/systemd/system/frameworks-zookeeper.service
 
 chown -R zookeeper:zookeeper /opt/zookeeper /etc/zookeeper /var/lib/zookeeper
 systemctl daemon-reload
 systemctl enable --now frameworks-zookeeper
-`, version, port, serverID, serverLines)
+`, version, serverID, zooCfgContent, systemdUnit)
 
 	result, err := z.ExecuteScript(ctx, host, installScript)
 	if err != nil {

@@ -65,44 +65,13 @@ func (p *VictoriaMetricsProvisioner) Provision(ctx context.Context, host invento
 		return err
 	}
 
-	passwordPath := ""
 	if password := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_PASSWORD"]); password != "" {
-		passwordPath = "/etc/frameworks/victoriametrics.password"
-		if err := uploadContent(ctx, p.BaseProvisioner, host, passwordPath, password+"\n", 0o600); err != nil {
+		if err := uploadContent(ctx, p.BaseProvisioner, host, "/etc/frameworks/victoriametrics.password", password+"\n", 0o600); err != nil {
 			return err
 		}
 	}
 
-	retention := config.EnvVars["VM_RETENTION_PERIOD"]
-	if retention == "" {
-		retention = "30d"
-	}
-
-	command := []string{
-		"--storageDataPath=/storage",
-		"--httpListenAddr=:8428",
-		"--retentionPeriod=" + retention,
-	}
-	if username := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_USERNAME"]); username != "" && passwordPath != "" {
-		command = append(command,
-			"--httpAuth.username="+username,
-			"--httpAuth.password=file://"+passwordPath,
-		)
-	}
-
-	volumes := []string{
-		"/var/lib/frameworks/victoriametrics:/storage",
-	}
-	if passwordPath != "" {
-		volumes = append(volumes, passwordPath+":"+passwordPath+":ro")
-	}
-
-	compose := buildCustomCompose("victoriametrics", image, customComposeOptions{
-		Ports:   []string{fmt.Sprintf("%d:8428", resolvedServicePort(config, 8428))},
-		Volumes: volumes,
-		Network: "frameworks",
-		Command: command,
-	})
+	compose := buildCustomCompose("victoriametrics", image, buildVictoriaMetricsComposeOptions(config))
 
 	if err := deployCustomCompose(ctx, p.BaseProvisioner, host, "victoriametrics", compose, config.DeferStart); err != nil {
 		return err
@@ -174,42 +143,16 @@ func (p *VMAgentProvisioner) Provision(ctx context.Context, host inventory.Host,
 		return err
 	}
 
-	passwordPath := ""
 	if password := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"]); password != "" {
-		passwordPath = "/etc/frameworks/vmagent.password"
-		if err := uploadContent(ctx, p.BaseProvisioner, host, passwordPath, password+"\n", 0o600); err != nil {
+		if err := uploadContent(ctx, p.BaseProvisioner, host, "/etc/frameworks/vmagent.password", password+"\n", 0o600); err != nil {
 			return err
 		}
 	}
-
-	remoteWriteURL := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_URL"])
-	if remoteWriteURL == "" {
+	if strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_URL"]) == "" {
 		return fmt.Errorf("vmagent requires VMAGENT_REMOTE_WRITE_URL")
 	}
-	command := []string{
-		"--httpListenAddr=:8429",
-		"--promscrape.config=/etc/frameworks/vmagent.yml",
-		"--remoteWrite.url=" + remoteWriteURL,
-	}
-	if username := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"]); username != "" && passwordPath != "" {
-		command = append(command,
-			"--remoteWrite.basicAuth.username="+username,
-			"--remoteWrite.basicAuth.password=file://"+passwordPath,
-		)
-	}
 
-	volumes := []string{
-		"/etc/frameworks/vmagent.yml:/etc/frameworks/vmagent.yml:ro",
-	}
-	if passwordPath != "" {
-		volumes = append(volumes, passwordPath+":"+passwordPath+":ro")
-	}
-
-	compose := buildCustomCompose("vmagent", image, customComposeOptions{
-		HostNetwork: true,
-		Volumes:     volumes,
-		Command:     command,
-	})
+	compose := buildCustomCompose("vmagent", image, buildVMAgentComposeOptions(config))
 
 	if err := deployCustomCompose(ctx, p.BaseProvisioner, host, "vmagent", compose, config.DeferStart); err != nil {
 		return err
@@ -286,17 +229,7 @@ func (p *VMAAuthProvisioner) Provision(ctx context.Context, host inventory.Host,
 		return err
 	}
 
-	compose := buildCustomCompose("vmauth", image, customComposeOptions{
-		Ports: []string{fmt.Sprintf("%d:8427", resolvedServicePort(config, 8427))},
-		Volumes: []string{
-			"/etc/frameworks/vmauth.yml:/etc/frameworks/vmauth.yml:ro",
-		},
-		Network: "frameworks",
-		Command: []string{
-			"--httpListenAddr=:8427",
-			"--auth.config=/etc/frameworks/vmauth.yml",
-		},
-	})
+	compose := buildCustomCompose("vmauth", image, buildVMAuthComposeOptions(config))
 
 	if err := deployCustomCompose(ctx, p.BaseProvisioner, host, "vmauth", compose, config.DeferStart); err != nil {
 		return err
@@ -365,15 +298,7 @@ func (p *GrafanaProvisioner) Provision(ctx context.Context, host inventory.Host,
 		}
 	}
 
-	compose := buildCustomCompose("grafana", image, customComposeOptions{
-		Ports: []string{fmt.Sprintf("%d:3000", resolvedServicePort(config, 3000))},
-		Volumes: []string{
-			"/var/lib/frameworks/grafana:/var/lib/grafana",
-			"/opt/frameworks/grafana/provisioning:/etc/grafana/provisioning",
-		},
-		Network: "frameworks",
-		EnvFile: "/etc/frameworks/grafana.env",
-	})
+	compose := buildCustomCompose("grafana", image, buildGrafanaComposeOptions(config))
 
 	if err := deployCustomCompose(ctx, p.BaseProvisioner, host, "grafana", compose, config.DeferStart); err != nil {
 		return err
@@ -401,6 +326,97 @@ type customComposeOptions struct {
 	EnvFile     string
 	Command     []string
 	HostNetwork bool
+}
+
+// buildVictoriaMetricsComposeOptions returns the customComposeOptions used
+// by both apply and drift to render /opt/frameworks/victoriametrics/docker-compose.yml.
+func buildVictoriaMetricsComposeOptions(config ServiceConfig) customComposeOptions {
+	retention := config.EnvVars["VM_RETENTION_PERIOD"]
+	if retention == "" {
+		retention = "30d"
+	}
+	passwordPath := ""
+	if strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_PASSWORD"]) != "" {
+		passwordPath = "/etc/frameworks/victoriametrics.password"
+	}
+	command := []string{
+		"--storageDataPath=/storage",
+		"--httpListenAddr=:8428",
+		"--retentionPeriod=" + retention,
+	}
+	if username := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_USERNAME"]); username != "" && passwordPath != "" {
+		command = append(command,
+			"--httpAuth.username="+username,
+			"--httpAuth.password=file://"+passwordPath,
+		)
+	}
+	volumes := []string{"/var/lib/frameworks/victoriametrics:/storage"}
+	if passwordPath != "" {
+		volumes = append(volumes, passwordPath+":"+passwordPath+":ro")
+	}
+	return customComposeOptions{
+		Ports:   []string{fmt.Sprintf("%d:8428", resolvedServicePort(config, 8428))},
+		Volumes: volumes,
+		Network: "frameworks",
+		Command: command,
+	}
+}
+
+// buildVMAuthComposeOptions returns the compose options for vmauth.
+func buildVMAuthComposeOptions(config ServiceConfig) customComposeOptions {
+	return customComposeOptions{
+		Ports: []string{fmt.Sprintf("%d:8427", resolvedServicePort(config, 8427))},
+		Volumes: []string{
+			"/etc/frameworks/vmauth.yml:/etc/frameworks/vmauth.yml:ro",
+		},
+		Network: "frameworks",
+		Command: []string{
+			"--httpListenAddr=:8427",
+			"--auth.config=/etc/frameworks/vmauth.yml",
+		},
+	}
+}
+
+// buildGrafanaComposeOptions returns the compose options for grafana.
+func buildGrafanaComposeOptions(config ServiceConfig) customComposeOptions {
+	return customComposeOptions{
+		Ports: []string{fmt.Sprintf("%d:3000", resolvedServicePort(config, 3000))},
+		Volumes: []string{
+			"/var/lib/frameworks/grafana:/var/lib/grafana",
+			"/opt/frameworks/grafana/provisioning:/etc/grafana/provisioning",
+		},
+		Network: "frameworks",
+		EnvFile: "/etc/frameworks/grafana.env",
+	}
+}
+
+// buildVMAgentComposeOptions returns the compose options for vmagent.
+func buildVMAgentComposeOptions(config ServiceConfig) customComposeOptions {
+	passwordPath := ""
+	if strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"]) != "" {
+		passwordPath = "/etc/frameworks/vmagent.password"
+	}
+	remoteWriteURL := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_URL"])
+	command := []string{
+		"--httpListenAddr=:8429",
+		"--promscrape.config=/etc/frameworks/vmagent.yml",
+		"--remoteWrite.url=" + remoteWriteURL,
+	}
+	if username := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"]); username != "" && passwordPath != "" {
+		command = append(command,
+			"--remoteWrite.basicAuth.username="+username,
+			"--remoteWrite.basicAuth.password=file://"+passwordPath,
+		)
+	}
+	volumes := []string{"/etc/frameworks/vmagent.yml:/etc/frameworks/vmagent.yml:ro"}
+	if passwordPath != "" {
+		volumes = append(volumes, passwordPath+":"+passwordPath+":ro")
+	}
+	return customComposeOptions{
+		HostNetwork: true,
+		Volumes:     volumes,
+		Command:     command,
+	}
 }
 
 func buildCustomCompose(serviceName, image string, opts customComposeOptions) string {

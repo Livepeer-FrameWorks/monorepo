@@ -151,6 +151,63 @@ func convertHandlers(handlers []Handler) []map[string]any {
 const defaultApacheKafkaVersion = "3.6.0"
 
 // GeneratePostgresPlaybook creates an Ansible playbook for PostgreSQL.
+// PostgresManagedConfBlock returns the bytes inserted into postgresql.conf's
+// frameworks managed section.
+func PostgresManagedConfBlock() []byte {
+	return []byte(`# frameworks managed begin
+listen_addresses = '*'
+max_connections = 200
+shared_buffers = '256MB'
+work_mem = '8MB'
+maintenance_work_mem = '128MB'
+effective_cache_size = '768MB'
+wal_buffers = '16MB'
+checkpoint_completion_target = 0.9
+random_page_cost = 1.1
+log_connections = on
+log_disconnections = on
+log_statement = 'ddl'
+password_encryption = 'scram-sha-256'
+# frameworks managed end
+`)
+}
+
+// PostgresManagedHBABlock returns the bytes inserted into pg_hba.conf's
+// frameworks managed section.
+func PostgresManagedHBABlock() []byte {
+	return []byte(`# frameworks managed begin
+host all all 127.0.0.1/32 scram-sha-256
+host all all ::1/128 scram-sha-256
+host all all 0.0.0.0/0 scram-sha-256
+host all all ::/0 scram-sha-256
+# frameworks managed end
+`)
+}
+
+// PostgresSourceBuiltSystemdUnit returns the systemd unit bytes for the
+// source-built Postgres path (dnf/yum/pacman when POSTGRES_VERSION is set).
+// dataDir varies by distro — pass the exact path used in the install script.
+func PostgresSourceBuiltSystemdUnit(dataDir string) []byte {
+	return fmt.Appendf(nil, `[Unit]
+Description=PostgreSQL database server
+After=network.target
+
+[Service]
+Type=simple
+User=postgres
+Group=postgres
+ExecStart=/opt/postgresql/bin/postgres -D %s
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutSec=0
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+`, dataDir)
+}
+
 func GeneratePostgresPlaybook(host, version string, databases []string) *Playbook {
 	playbook := NewPlaybook("Provision PostgreSQL", host)
 	normalizedVersion := strings.TrimSpace(version)
@@ -158,6 +215,8 @@ func GeneratePostgresPlaybook(host, version string, databases []string) *Playboo
 	case "", "latest", "stable":
 		normalizedVersion = ""
 	}
+	managedConf := string(PostgresManagedConfBlock())
+	managedHBA := string(PostgresManagedHBABlock())
 
 	installScript := fmt.Sprintf(`set -euo pipefail
 
@@ -166,6 +225,14 @@ PGCONF=""
 PGHBA=""
 POSTGRES_VERSION=%q
 PG_MAJOR="${POSTGRES_VERSION%%.*}"
+FRAMEWORKS_PG_MANAGED_CONF=$(cat <<'FRAMEWORKS_PG_CONF_EOF'
+%s
+FRAMEWORKS_PG_CONF_EOF
+)
+FRAMEWORKS_PG_MANAGED_HBA=$(cat <<'FRAMEWORKS_PG_HBA_EOF'
+%s
+FRAMEWORKS_PG_HBA_EOF
+)
 
 checksum_value() {
   awk 'NF { print $1; exit }' "$1"
@@ -380,38 +447,15 @@ if [ -z "$PGCONF" ] || [ -z "$PGHBA" ] || [ ! -f "$PGCONF" ] || [ ! -f "$PGHBA" 
 fi
 
 sed -i '/# frameworks managed begin/,/# frameworks managed end/d' "$PGCONF"
-cat >> "$PGCONF" <<'EOF'
-# frameworks managed begin
-listen_addresses = '*'
-max_connections = 200
-shared_buffers = '256MB'
-work_mem = '8MB'
-maintenance_work_mem = '128MB'
-effective_cache_size = '768MB'
-wal_buffers = '16MB'
-checkpoint_completion_target = 0.9
-random_page_cost = 1.1
-log_connections = on
-log_disconnections = on
-log_statement = 'ddl'
-password_encryption = 'scram-sha-256'
-# frameworks managed end
-EOF
+printf '%%s' "${FRAMEWORKS_PG_MANAGED_CONF}" >> "$PGCONF"
 
 sed -i '/# frameworks managed begin/,/# frameworks managed end/d' "$PGHBA"
-cat >> "$PGHBA" <<'EOF'
-# frameworks managed begin
-host all all 127.0.0.1/32 scram-sha-256
-host all all ::1/128 scram-sha-256
-host all all 0.0.0.0/0 scram-sha-256
-host all all ::/0 scram-sha-256
-# frameworks managed end
-EOF
+printf '%%s' "${FRAMEWORKS_PG_MANAGED_HBA}" >> "$PGHBA"
 
 systemctl enable postgresql
 systemctl restart postgresql
 %s
-`, normalizedVersion, postgresDatabaseBootstrapCommands(databases))
+`, normalizedVersion, managedConf, managedHBA, postgresDatabaseBootstrapCommands(databases))
 
 	play := Play{
 		Name:        "Install and configure PostgreSQL",
@@ -432,6 +476,159 @@ systemctl restart postgresql
 
 	playbook.AddPlay(play)
 	return playbook
+}
+
+// KafkaCombinedParams are the inputs for combined broker+controller mode.
+type KafkaCombinedParams struct {
+	NodeID           int
+	ListenerHost     string
+	ListenerPort     int
+	ControllerPort   int
+	ControllerQuorum string
+	MinISR           int
+	OffsetsRF        int
+	TxRF             int
+	TxMinISR         int
+	DeleteTopics     bool
+}
+
+// BuildKafkaCombinedServerProperties returns the /etc/kafka/server.properties
+// bytes for combined broker+controller mode.
+func BuildKafkaCombinedServerProperties(p KafkaCombinedParams) []byte {
+	return fmt.Appendf(nil, `node.id=%d
+process.roles=broker,controller
+controller.quorum.voters=%s
+controller.listener.names=CONTROLLER
+listeners=PLAINTEXT://0.0.0.0:%d,CONTROLLER://0.0.0.0:%d
+advertised.listeners=PLAINTEXT://%s:%d
+inter.broker.listener.name=PLAINTEXT
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+num.network.threads=3
+num.io.threads=8
+socket.send.buffer.bytes=102400
+socket.receive.buffer.bytes=102400
+socket.request.max.bytes=104857600
+log.dirs=/var/lib/kafka/logs
+num.partitions=3
+num.recovery.threads.per.data.dir=1
+min.insync.replicas=%d
+offsets.topic.replication.factor=%d
+transaction.state.log.replication.factor=%d
+transaction.state.log.min.isr=%d
+log.retention.hours=168
+group.initial.rebalance.delay.ms=0
+auto.create.topics.enable=false
+delete.topic.enable=%t
+`, p.NodeID, p.ControllerQuorum, p.ListenerPort, p.ControllerPort, p.ListenerHost, p.ListenerPort,
+		p.MinISR, p.OffsetsRF, p.TxRF, p.TxMinISR, p.DeleteTopics)
+}
+
+// BuildKafkaBrokerUnit returns the frameworks-kafka.service bytes.
+func BuildKafkaBrokerUnit() []byte {
+	return []byte(`[Unit]
+Description=FrameWorks Kafka Broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kafka
+Group=kafka
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=always
+RestartSec=5
+LimitNOFILE=100000
+
+[Install]
+WantedBy=multi-user.target
+`)
+}
+
+// KafkaControllerParams are the inputs for dedicated controller mode.
+type KafkaControllerParams struct {
+	NodeID           int
+	ControllerPort   int
+	BootstrapServers string
+}
+
+// BuildKafkaControllerServerProperties returns the
+// /etc/kafka-controller/server.properties bytes.
+func BuildKafkaControllerServerProperties(p KafkaControllerParams) []byte {
+	return fmt.Appendf(nil, `process.roles=controller
+node.id=%d
+controller.listener.names=CONTROLLER
+listeners=CONTROLLER://0.0.0.0:%d
+listener.security.protocol.map=CONTROLLER:PLAINTEXT
+controller.quorum.bootstrap.servers=%s
+log.dirs=/var/lib/kafka-controller/logs
+`, p.NodeID, p.ControllerPort, p.BootstrapServers)
+}
+
+// KafkaBrokerParams are the inputs for dedicated broker mode.
+type KafkaBrokerParams struct {
+	NodeID           int
+	ListenerHost     string
+	ListenerPort     int
+	BootstrapServers string
+	MinISR           int
+	OffsetsRF        int
+	TxRF             int
+	TxMinISR         int
+	DeleteTopics     bool
+}
+
+// BuildKafkaBrokerServerProperties returns the /etc/kafka/server.properties
+// bytes for dedicated broker mode.
+func BuildKafkaBrokerServerProperties(p KafkaBrokerParams) []byte {
+	return fmt.Appendf(nil, `process.roles=broker
+node.id=%d
+controller.listener.names=CONTROLLER
+listeners=PLAINTEXT://0.0.0.0:%d
+advertised.listeners=PLAINTEXT://%s:%d
+inter.broker.listener.name=PLAINTEXT
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+controller.quorum.bootstrap.servers=%s
+num.network.threads=3
+num.io.threads=8
+socket.send.buffer.bytes=102400
+socket.receive.buffer.bytes=102400
+socket.request.max.bytes=104857600
+log.dirs=/var/lib/kafka/logs
+num.partitions=3
+num.recovery.threads.per.data.dir=1
+min.insync.replicas=%d
+offsets.topic.replication.factor=%d
+transaction.state.log.replication.factor=%d
+transaction.state.log.min.isr=%d
+log.retention.hours=168
+group.initial.rebalance.delay.ms=0
+auto.create.topics.enable=false
+delete.topic.enable=%t
+`, p.NodeID, p.ListenerPort, p.ListenerHost, p.ListenerPort, p.BootstrapServers,
+		p.MinISR, p.OffsetsRF, p.TxRF, p.TxMinISR, p.DeleteTopics)
+}
+
+// BuildKafkaControllerUnit returns the frameworks-kafka-controller.service bytes.
+func BuildKafkaControllerUnit() []byte {
+	return []byte(`[Unit]
+Description=FrameWorks Kafka Controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kafka
+Group=kafka
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=always
+RestartSec=5
+LimitNOFILE=100000
+
+[Install]
+WantedBy=multi-user.target
+`)
 }
 
 // GenerateKafkaKRaftPlaybook creates an Ansible playbook for Kafka in KRaft mode (no ZooKeeper).
@@ -456,20 +653,32 @@ func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port in
 	txMinISR := max(metadataInt(metadata, "transaction_state_log_min_isr", txRF-1), 1)
 	deleteTopics := metadataBool(metadata, "delete_topic_enable", false)
 
+	serverProps := string(BuildKafkaCombinedServerProperties(KafkaCombinedParams{
+		NodeID:           nodeID,
+		ListenerHost:     host,
+		ListenerPort:     port,
+		ControllerPort:   controllerPort,
+		ControllerQuorum: controllerQuorum,
+		MinISR:           minISR,
+		OffsetsRF:        offsetsRF,
+		TxRF:             txRF,
+		TxMinISR:         txMinISR,
+		DeleteTopics:     deleteTopics,
+	}))
+	brokerUnit := string(BuildKafkaBrokerUnit())
+
 	installScript := fmt.Sprintf(`set -euo pipefail
 
 KAFKA_VERSION="%s"
-NODE_ID="%d"
-LISTENER_HOST="%s"
-LISTENER_PORT="%d"
-CONTROLLER_PORT="%d"
-CONTROLLER_QUORUM_VOTERS="%s"
 CLUSTER_ID="%s"
-MIN_INSYNC_REPLICAS="%d"
-OFFSETS_RF="%d"
-TX_RF="%d"
-TX_MIN_ISR="%d"
-DELETE_TOPICS="%t"
+SERVER_PROPS_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_SERVER_EOF'
+%s
+FRAMEWORKS_KAFKA_SERVER_EOF
+)
+BROKER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_UNIT_EOF'
+%s
+FRAMEWORKS_KAFKA_UNIT_EOF
+)
 
 checksum_value() {
   awk 'NF { print $1; exit }' "$1"
@@ -534,32 +743,7 @@ if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
   rm -f /tmp/kafka.tgz /tmp/kafka.tgz.sha512
 fi
 
-cat > /etc/kafka/server.properties <<EOF
-node.id=${NODE_ID}
-process.roles=broker,controller
-controller.quorum.voters=${CONTROLLER_QUORUM_VOTERS}
-controller.listener.names=CONTROLLER
-listeners=PLAINTEXT://0.0.0.0:${LISTENER_PORT},CONTROLLER://0.0.0.0:${CONTROLLER_PORT}
-advertised.listeners=PLAINTEXT://${LISTENER_HOST}:${LISTENER_PORT}
-inter.broker.listener.name=PLAINTEXT
-listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-num.network.threads=3
-num.io.threads=8
-socket.send.buffer.bytes=102400
-socket.receive.buffer.bytes=102400
-socket.request.max.bytes=104857600
-log.dirs=/var/lib/kafka/logs
-num.partitions=3
-num.recovery.threads.per.data.dir=1
-min.insync.replicas=${MIN_INSYNC_REPLICAS}
-offsets.topic.replication.factor=${OFFSETS_RF}
-transaction.state.log.replication.factor=${TX_RF}
-transaction.state.log.min.isr=${TX_MIN_ISR}
-log.retention.hours=168
-group.initial.rebalance.delay.ms=0
-auto.create.topics.enable=false
-delete.topic.enable=${DELETE_TOPICS}
-EOF
+printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka/server.properties
 
 if [ ! -f /var/lib/kafka/logs/meta.properties ]; then
   /opt/kafka/bin/kafka-storage.sh format \
@@ -567,29 +751,11 @@ if [ ! -f /var/lib/kafka/logs/meta.properties ]; then
     -c /etc/kafka/server.properties
 fi
 
-cat > /etc/systemd/system/frameworks-kafka.service <<'EOF'
-[Unit]
-Description=FrameWorks Kafka Broker
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=kafka
-Group=kafka
-ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties
-ExecStop=/opt/kafka/bin/kafka-server-stop.sh
-Restart=always
-RestartSec=5
-LimitNOFILE=100000
-
-[Install]
-WantedBy=multi-user.target
-EOF
+printf '%%s' "${BROKER_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka.service
 
 chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
-`, kafkaVersion, nodeID, host, port, controllerPort, controllerQuorum, clusterID, minISR, offsetsRF, txRF, txMinISR, deleteTopics)
+`, kafkaVersion, clusterID, serverProps, brokerUnit)
 
 	play := Play{
 		Name:        "Install and configure Kafka",
@@ -632,14 +798,26 @@ func GenerateKafkaControllerPlaybook(version string, nodeID int, host string, co
 		kafkaVersion = defaultApacheKafkaVersion
 	}
 
+	serverProps := string(BuildKafkaControllerServerProperties(KafkaControllerParams{
+		NodeID:           nodeID,
+		ControllerPort:   controllerPort,
+		BootstrapServers: bootstrapServers,
+	}))
+	ctrlUnit := string(BuildKafkaControllerUnit())
+
 	installScript := fmt.Sprintf(`set -euo pipefail
 
 KAFKA_VERSION="%s"
-NODE_ID="%d"
-CONTROLLER_PORT="%d"
-BOOTSTRAP_SERVERS="%s"
 CLUSTER_ID="%s"
 INITIAL_CONTROLLERS="%s"
+SERVER_PROPS_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_CTRL_SERVER_EOF'
+%s
+FRAMEWORKS_KAFKA_CTRL_SERVER_EOF
+)
+CTRL_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_CTRL_UNIT_EOF'
+%s
+FRAMEWORKS_KAFKA_CTRL_UNIT_EOF
+)
 
 checksum_value() {
   awk 'NF { print $1; exit }' "$1"
@@ -704,15 +882,7 @@ if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
   rm -f /tmp/kafka.tgz /tmp/kafka.tgz.sha512
 fi
 
-cat > /etc/kafka-controller/server.properties <<EOF
-process.roles=controller
-node.id=${NODE_ID}
-controller.listener.names=CONTROLLER
-listeners=CONTROLLER://0.0.0.0:${CONTROLLER_PORT}
-listener.security.protocol.map=CONTROLLER:PLAINTEXT
-controller.quorum.bootstrap.servers=${BOOTSTRAP_SERVERS}
-log.dirs=/var/lib/kafka-controller/logs
-EOF
+printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka-controller/server.properties
 
 if [ ! -f /var/lib/kafka-controller/logs/meta.properties ]; then
   /opt/kafka/bin/kafka-storage.sh format \
@@ -721,29 +891,11 @@ if [ ! -f /var/lib/kafka-controller/logs/meta.properties ]; then
     --config /etc/kafka-controller/server.properties
 fi
 
-cat > /etc/systemd/system/frameworks-kafka-controller.service <<'EOF'
-[Unit]
-Description=FrameWorks Kafka Controller
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=kafka
-Group=kafka
-ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka-controller/server.properties
-ExecStop=/opt/kafka/bin/kafka-server-stop.sh
-Restart=always
-RestartSec=5
-LimitNOFILE=100000
-
-[Install]
-WantedBy=multi-user.target
-EOF
+printf '%%s' "${CTRL_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka-controller.service
 
 chown -R kafka:kafka /opt/kafka /etc/kafka-controller /var/lib/kafka-controller
 systemctl daemon-reload
-`, kafkaVersion, nodeID, controllerPort, bootstrapServers, clusterID, initialControllers)
+`, kafkaVersion, clusterID, initialControllers, serverProps, ctrlUnit)
 
 	play := Play{
 		Name:        "Install and configure Kafka Controller",
@@ -794,19 +946,31 @@ func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port i
 	txMinISR := max(metadataInt(metadata, "transaction_state_log_min_isr", txRF-1), 1)
 	deleteTopics := metadataBool(metadata, "delete_topic_enable", false)
 
+	serverProps := string(BuildKafkaBrokerServerProperties(KafkaBrokerParams{
+		NodeID:           nodeID,
+		ListenerHost:     host,
+		ListenerPort:     port,
+		BootstrapServers: bootstrapServers,
+		MinISR:           minISR,
+		OffsetsRF:        offsetsRF,
+		TxRF:             txRF,
+		TxMinISR:         txMinISR,
+		DeleteTopics:     deleteTopics,
+	}))
+	brokerUnit := string(BuildKafkaBrokerUnit())
+
 	installScript := fmt.Sprintf(`set -euo pipefail
 
 KAFKA_VERSION="%s"
-NODE_ID="%d"
-LISTENER_HOST="%s"
-LISTENER_PORT="%d"
-BOOTSTRAP_SERVERS="%s"
 CLUSTER_ID="%s"
-MIN_INSYNC_REPLICAS="%d"
-OFFSETS_RF="%d"
-TX_RF="%d"
-TX_MIN_ISR="%d"
-DELETE_TOPICS="%t"
+SERVER_PROPS_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_BROKER_SERVER_EOF'
+%s
+FRAMEWORKS_KAFKA_BROKER_SERVER_EOF
+)
+BROKER_UNIT_CONTENT=$(cat <<'FRAMEWORKS_KAFKA_BROKER_UNIT_EOF'
+%s
+FRAMEWORKS_KAFKA_BROKER_UNIT_EOF
+)
 
 checksum_value() {
   awk 'NF { print $1; exit }' "$1"
@@ -871,32 +1035,7 @@ if [ ! -x /opt/kafka/bin/kafka-server-start.sh ]; then
   rm -f /tmp/kafka.tgz /tmp/kafka.tgz.sha512
 fi
 
-cat > /etc/kafka/server.properties <<EOF
-process.roles=broker
-node.id=${NODE_ID}
-listeners=PLAINTEXT://0.0.0.0:${LISTENER_PORT}
-advertised.listeners=PLAINTEXT://${LISTENER_HOST}:${LISTENER_PORT}
-inter.broker.listener.name=PLAINTEXT
-controller.listener.names=CONTROLLER
-listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-controller.quorum.bootstrap.servers=${BOOTSTRAP_SERVERS}
-num.network.threads=3
-num.io.threads=8
-socket.send.buffer.bytes=102400
-socket.receive.buffer.bytes=102400
-socket.request.max.bytes=104857600
-log.dirs=/var/lib/kafka/logs
-num.partitions=3
-num.recovery.threads.per.data.dir=1
-min.insync.replicas=${MIN_INSYNC_REPLICAS}
-offsets.topic.replication.factor=${OFFSETS_RF}
-transaction.state.log.replication.factor=${TX_RF}
-transaction.state.log.min.isr=${TX_MIN_ISR}
-log.retention.hours=168
-group.initial.rebalance.delay.ms=0
-auto.create.topics.enable=false
-delete.topic.enable=${DELETE_TOPICS}
-EOF
+printf '%%s' "${SERVER_PROPS_CONTENT}" > /etc/kafka/server.properties
 
 if [ ! -f /var/lib/kafka/logs/meta.properties ]; then
   /opt/kafka/bin/kafka-storage.sh format \
@@ -905,29 +1044,11 @@ if [ ! -f /var/lib/kafka/logs/meta.properties ]; then
     --config /etc/kafka/server.properties
 fi
 
-cat > /etc/systemd/system/frameworks-kafka.service <<'EOF'
-[Unit]
-Description=FrameWorks Kafka Broker
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=kafka
-Group=kafka
-ExecStart=/opt/kafka/bin/kafka-server-start.sh /etc/kafka/server.properties
-ExecStop=/opt/kafka/bin/kafka-server-stop.sh
-Restart=always
-RestartSec=5
-LimitNOFILE=100000
-
-[Install]
-WantedBy=multi-user.target
-EOF
+printf '%%s' "${BROKER_UNIT_CONTENT}" > /etc/systemd/system/frameworks-kafka.service
 
 chown -R kafka:kafka /opt/kafka /etc/kafka /var/lib/kafka
 systemctl daemon-reload
-`, kafkaVersion, nodeID, host, port, bootstrapServers, clusterID, minISR, offsetsRF, txRF, txMinISR, deleteTopics)
+`, kafkaVersion, clusterID, serverProps, brokerUnit)
 
 	play := Play{
 		Name:        "Install and configure Kafka Broker",

@@ -72,50 +72,59 @@ func (v *EdgeVars) SetModeDefaults() {
 	}
 }
 
-// WriteEdgeTemplates writes edge stack templates into target directory.
-// It will not overwrite existing files unless overwrite is true.
-func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
+// EdgeWriteMode selects WriteEdgeTemplates' per-file write semantic.
+type EdgeWriteMode int
+
+const (
+	// EdgeWriteOverwriteCheck errors if the file exists unless overwrite=true.
+	EdgeWriteOverwriteCheck EdgeWriteMode = iota
+	// EdgeWriteAlways writes unconditionally.
+	EdgeWriteAlways
+	// EdgeWriteIfMissingOrOverwrite skips silently if the file exists and overwrite=false.
+	EdgeWriteIfMissingOrOverwrite
+)
+
+// EdgeRenderedFile is one file produced by RenderEdgeTemplates. Path is
+// relative to the target directory.
+type EdgeRenderedFile struct {
+	Path      string
+	Content   []byte
+	Mode      os.FileMode
+	WriteMode EdgeWriteMode
+}
+
+// RenderEdgeTemplates returns the full set of files the edge stack writes
+// into the target directory, keyed by relative path. No filesystem side
+// effects.
+func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 	vars.SetModeDefaults()
 
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return err
-	}
-	// Write shared maintenance page (embedded via pkg/maintenance)
-	maintPath := filepath.Join(targetDir, "maintenance.html")
-	if _, err := os.Stat(maintPath); err != nil || overwrite {
-		if err := os.WriteFile(maintPath, maintenance.HTML, 0o644); err != nil {
-			return err
-		}
+	var out []EdgeRenderedFile
+
+	out = append(out, EdgeRenderedFile{
+		Path:      "maintenance.html",
+		Content:   append([]byte(nil), maintenance.HTML...),
+		Mode:      0o644,
+		WriteMode: EdgeWriteIfMissingOrOverwrite,
+	})
+
+	if strings.TrimSpace(vars.CABundlePEM) != "" {
+		out = append(out, EdgeRenderedFile{
+			Path:      filepath.Join("pki", "ca.crt"),
+			Content:   []byte(vars.CABundlePEM),
+			Mode:      0o644,
+			WriteMode: EdgeWriteAlways,
+		})
 	}
 
-	// files to render — native mode skips docker-compose
-	files := []struct{ in, out string }{
-		{"edge/Caddyfile.tmpl", "Caddyfile"},
-		{"edge/.edge.env.tmpl", ".edge.env"},
-	}
-	if vars.Mode != "native" {
-		files = append([]struct{ in, out string }{
-			{"edge/docker-compose.edge.yml.tmpl", "docker-compose.edge.yml"},
-		}, files...)
-	}
-	if strings.TrimSpace(vars.CABundlePEM) != "" {
-		pkiDir := filepath.Join(targetDir, "pki")
-		if err := os.MkdirAll(pkiDir, 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(pkiDir, "ca.crt"), []byte(vars.CABundlePEM), 0o644); err != nil {
-			return err
-		}
-	}
 	vmagentServiceBlock := ""
 	if strings.TrimSpace(vars.TelemetryURL) != "" && strings.TrimSpace(vars.TelemetryToken) != "" {
-		telemetryDir := filepath.Join(targetDir, "telemetry")
-		if err := os.MkdirAll(telemetryDir, 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(telemetryDir, "token"), []byte(vars.TelemetryToken+"\n"), 0o600); err != nil {
-			return err
-		}
+		out = append(out, EdgeRenderedFile{
+			Path:      filepath.Join("telemetry", "token"),
+			Content:   []byte(vars.TelemetryToken + "\n"),
+			Mode:      0o600,
+			WriteMode: EdgeWriteAlways,
+		})
 		vmagentConfig := fmt.Sprintf(`global:
   scrape_interval: 30s
 scrape_configs:
@@ -138,9 +147,12 @@ scrape_configs:
           frameworks_node: %q
           frameworks_service: "helmsman"
 `, mist.MetricsPath, vars.NodeID, vars.NodeID)
-		if err := os.WriteFile(filepath.Join(targetDir, "vmagent-edge.yml"), []byte(vmagentConfig), 0o644); err != nil {
-			return err
-		}
+		out = append(out, EdgeRenderedFile{
+			Path:      "vmagent-edge.yml",
+			Content:   []byte(vmagentConfig),
+			Mode:      0o644,
+			WriteMode: EdgeWriteAlways,
+		})
 		vmagentServiceBlock = `  vmagent:
     image: victoriametrics/vmagent:v1.122.0
     container_name: frameworks-edge-vmagent
@@ -155,10 +167,20 @@ scrape_configs:
     restart: unless-stopped
 `
 	}
-	for _, f := range files {
+
+	tplFiles := []struct{ in, out string }{
+		{"edge/Caddyfile.tmpl", "Caddyfile"},
+		{"edge/.edge.env.tmpl", ".edge.env"},
+	}
+	if vars.Mode != "native" {
+		tplFiles = append([]struct{ in, out string }{
+			{"edge/docker-compose.edge.yml.tmpl", "docker-compose.edge.yml"},
+		}, tplFiles...)
+	}
+	for _, f := range tplFiles {
 		b, err := edgeFS.ReadFile(f.in)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		content := string(b)
 		content = strings.ReplaceAll(content, "{{NODE_ID}}", vars.NodeID)
@@ -179,19 +201,55 @@ scrape_configs:
 		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
 		content = strings.ReplaceAll(content, "{{VMAGENT_EDGE_SERVICE}}", vmagentServiceBlock)
 		content = strings.ReplaceAll(content, "{{TELEMETRY_TOKEN}}", vars.TelemetryToken)
-		// Populate {{TLS_DIRECTIVE}} only when explicit certificate paths are available.
 		if vars.CertPath != "" && vars.KeyPath != "" {
-			tlsDirective := fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath)
-			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", tlsDirective)
+			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath))
 		} else {
 			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", "")
 		}
-		outPath := filepath.Join(targetDir, f.out)
-		if _, err := os.Stat(outPath); err == nil && !overwrite {
-			return fmt.Errorf("file exists: %s (use overwrite)", outPath)
-		}
-		if err := os.WriteFile(outPath, []byte(content), 0o644); err != nil {
+		out = append(out, EdgeRenderedFile{
+			Path:      f.out,
+			Content:   []byte(content),
+			Mode:      0o644,
+			WriteMode: EdgeWriteOverwriteCheck,
+		})
+	}
+
+	return out, nil
+}
+
+// WriteEdgeTemplates writes edge stack templates into the target directory.
+// It will not overwrite existing files unless overwrite is true.
+func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
+	files, err := RenderEdgeTemplates(vars)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	for _, f := range files {
+		outPath := filepath.Join(targetDir, f.Path)
+		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 			return err
+		}
+		switch f.WriteMode {
+		case EdgeWriteAlways:
+			if err := os.WriteFile(outPath, f.Content, f.Mode); err != nil {
+				return err
+			}
+		case EdgeWriteIfMissingOrOverwrite:
+			if _, statErr := os.Stat(outPath); statErr != nil || overwrite {
+				if err := os.WriteFile(outPath, f.Content, f.Mode); err != nil {
+					return err
+				}
+			}
+		case EdgeWriteOverwriteCheck:
+			if _, statErr := os.Stat(outPath); statErr == nil && !overwrite {
+				return fmt.Errorf("file exists: %s (use overwrite)", outPath)
+			}
+			if err := os.WriteFile(outPath, f.Content, f.Mode); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

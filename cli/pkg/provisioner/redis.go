@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"frameworks/cli/pkg/ansible"
@@ -432,12 +433,11 @@ func buildRedisNativeSpec(engine, instanceName, family string) redisNativeSpec {
 	return spec
 }
 
-// GenerateRedisPlaybook creates an Ansible playbook for native Redis or Valkey installation.
-func GenerateRedisPlaybook(host, engine, instanceName string, port int, password, family string, metadata map[string]interface{}) *ansible.Playbook {
-	playbook := ansible.NewPlaybook("Provision Redis", host)
+// BuildRedisNativeConfig returns the redis.conf content the native Redis
+// provisioner writes. Metadata keys prefixed with redis_ become directives
+// (e.g. redis_maxmemory → maxmemory ...).
+func BuildRedisNativeConfig(engine, instanceName string, port int, password, family string, metadata map[string]any) []byte {
 	spec := buildRedisNativeSpec(engine, instanceName, family)
-
-	// Build redis.conf directives
 	configLines := []string{
 		fmt.Sprintf("port %d", port),
 		"bind 0.0.0.0",
@@ -445,22 +445,56 @@ func GenerateRedisPlaybook(host, engine, instanceName string, port int, password
 		"daemonize no",
 		fmt.Sprintf("dir %s", spec.dataDir),
 	}
-
 	if password != "" {
 		configLines = append(configLines, fmt.Sprintf("requirepass %s", password))
 	}
-
-	for key, val := range metadata {
-		if !strings.HasPrefix(key, "redis_") {
-			continue
+	metaKeys := make([]string, 0, len(metadata))
+	for k := range metadata {
+		if strings.HasPrefix(k, "redis_") {
+			metaKeys = append(metaKeys, k)
 		}
+	}
+	sort.Strings(metaKeys)
+	for _, key := range metaKeys {
 		directive := strings.TrimPrefix(key, "redis_")
-		if strVal, ok := val.(string); ok {
+		if strVal, ok := metadata[key].(string); ok {
 			configLines = append(configLines, fmt.Sprintf("%s %s", directive, strVal))
 		}
 	}
+	return []byte(strings.Join(configLines, "\n") + "\n")
+}
 
-	configContent := strings.Join(configLines, "\n") + "\n"
+// BuildRedisNativeSystemdUnit returns the systemd unit bytes for a native
+// Redis instance.
+func BuildRedisNativeSystemdUnit(engine, instanceName, family string) []byte {
+	spec := buildRedisNativeSpec(engine, instanceName, family)
+	return []byte(generateRedisSystemdUnit(spec, instanceName))
+}
+
+// RedisNativePaths returns the remote paths the native Redis provisioner
+// writes for an instance.
+type RedisNativePaths struct {
+	ConfigPath      string
+	SystemdUnitPath string
+	ServiceName     string
+}
+
+// BuildRedisNativePaths returns the on-host paths for a native Redis instance.
+func BuildRedisNativePaths(engine, instanceName, family string) RedisNativePaths {
+	spec := buildRedisNativeSpec(engine, instanceName, family)
+	return RedisNativePaths{
+		ConfigPath:      spec.configPath,
+		SystemdUnitPath: fmt.Sprintf("/etc/systemd/system/%s.service", spec.serviceName),
+		ServiceName:     spec.serviceName,
+	}
+}
+
+// GenerateRedisPlaybook creates an Ansible playbook for native Redis or Valkey installation.
+func GenerateRedisPlaybook(host, engine, instanceName string, port int, password, family string, metadata map[string]interface{}) *ansible.Playbook {
+	playbook := ansible.NewPlaybook("Provision Redis", host)
+	spec := buildRedisNativeSpec(engine, instanceName, family)
+
+	configContent := string(BuildRedisNativeConfig(engine, instanceName, port, password, family, metadata))
 
 	play := ansible.Play{
 		Name:        fmt.Sprintf("Install and configure %s instance %s", spec.serviceLabel, instanceName),
@@ -514,7 +548,7 @@ func GenerateRedisPlaybook(host, engine, instanceName string, port int, password
 				Name:   spec.systemdTask,
 				Module: "copy",
 				Args: map[string]interface{}{
-					"content": generateRedisSystemdUnit(spec, instanceName),
+					"content": string(BuildRedisNativeSystemdUnit(engine, instanceName, family)),
 					"dest":    fmt.Sprintf("/etc/systemd/system/%s.service", spec.serviceName),
 					"mode":    "0644",
 				},

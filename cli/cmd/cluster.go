@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterDetectCmd())
 	cluster.AddCommand(newClusterDoctorCmd())
 	cluster.AddCommand(newClusterStatusCmd())
+	cluster.AddCommand(newClusterDriftCmd())
 	cluster.AddCommand(newClusterProvisionCmd())
 	cluster.AddCommand(newClusterInitCmd())
 	cluster.AddCommand(newClusterLogsCmd())
@@ -93,7 +95,7 @@ func (rc *resolvedCluster) SharedEnv() (map[string]string, error) {
 	return rc.sharedEnv, rc.sharedEnvErr
 }
 
-func (rc *resolvedCluster) applyReleaseMetadata(metadata map[string]interface{}) {
+func (rc *resolvedCluster) applyReleaseMetadata(metadata map[string]any) {
 	if metadata == nil || len(rc.ReleaseRepos) == 0 {
 		return
 	}
@@ -189,10 +191,8 @@ func resolveReleaseRepositories(cmd *cobra.Command, cfg fwcfg.Config, ctx fwcfg.
 		if repo == "" {
 			return
 		}
-		for _, existing := range repos {
-			if existing == repo {
-				return
-			}
+		if slices.Contains(repos, repo) {
+			return
 		}
 		repos = append(repos, repo)
 	}
