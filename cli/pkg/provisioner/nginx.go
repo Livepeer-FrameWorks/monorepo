@@ -144,7 +144,7 @@ func (n *NginxProvisioner) installNginx(ctx context.Context, host inventory.Host
 	}
 }
 
-func (n *NginxProvisioner) provisionDocker(ctx context.Context, host inventory.Host, config ServiceConfig, svcInfo *gitops.ServiceInfo) error {
+func (n *NginxProvisioner) provisionDocker(ctx context.Context, host inventory.Host, _ ServiceConfig, svcInfo *gitops.ServiceInfo) error {
 	fmt.Printf("Provisioning %s in Docker mode...\n", n.GetName())
 
 	composeData := DockerComposeData{
@@ -318,8 +318,8 @@ func (n *NginxProvisioner) Initialize(ctx context.Context, host inventory.Host, 
 	return nil
 }
 
-func localServicePorts(metadata map[string]interface{}) map[string]int {
-	if localServicesMap, ok := metadata["local_services"].(map[string]interface{}); ok {
+func localServicePorts(metadata map[string]any) map[string]int {
+	if localServicesMap, ok := metadata["local_services"].(map[string]any); ok {
 		routes := make(map[string]int)
 		for svcName, svcPort := range localServicesMap {
 			switch port := svcPort.(type) {

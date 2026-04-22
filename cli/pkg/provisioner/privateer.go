@@ -111,7 +111,7 @@ fi
 	return nil
 }
 
-func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory.Host, version string, metadata map[string]interface{}) error {
+func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory.Host, version string, metadata map[string]any) error {
 	// Fetch from GitOps
 	channel, resolved := gitops.ResolveVersion(version)
 	manifest, err := fetchGitopsManifest(channel, resolved, metadata)
@@ -297,11 +297,13 @@ func (p *PrivateerProvisioner) waitForInitialPKISync(ctx context.Context, host i
 	expectedServices := metadataStringSlice(config.Metadata["expected_internal_grpc_services"])
 	paths := initialPKIPaths(expectedServices)
 
-	script := "#!/bin/bash\nset -e\npaths=(\n"
+	var b strings.Builder
+	b.WriteString("#!/bin/bash\nset -e\npaths=(\n")
 	for _, path := range paths {
-		script += fmt.Sprintf("  %q\n", path)
+		fmt.Fprintf(&b, "  %q\n", path)
 	}
-	script += ")\nfor _ in $(seq 1 60); do\n  ready=1\n  for path in \"${paths[@]}\"; do\n    if [ ! -s \"$path\" ]; then\n      ready=0\n      break\n    fi\n  done\n  if [ \"$ready\" -eq 1 ]; then\n    exit 0\n  fi\n  sleep 2\n done\nprintf 'timed out waiting for initial PKI files\\n' >&2\nexit 1\n"
+	b.WriteString(")\nfor _ in $(seq 1 60); do\n  ready=1\n  for path in \"${paths[@]}\"; do\n    if [ ! -s \"$path\" ]; then\n      ready=0\n      break\n    fi\n  done\n  if [ \"$ready\" -eq 1 ]; then\n    exit 0\n  fi\n  sleep 2\n done\nprintf 'timed out waiting for initial PKI files\\n' >&2\nexit 1\n")
+	script := b.String()
 
 	result, err := p.ExecuteScript(ctx, host, script)
 	if err != nil {
@@ -322,7 +324,7 @@ func initialPKIPaths(expectedServices []string) []string {
 	return paths
 }
 
-func metadataStringSlice(raw interface{}) []string {
+func metadataStringSlice(raw any) []string {
 	switch values := raw.(type) {
 	case []string:
 		out := make([]string, 0, len(values))
@@ -333,7 +335,7 @@ func metadataStringSlice(raw interface{}) []string {
 			}
 		}
 		return out
-	case []interface{}:
+	case []any:
 		out := make([]string, 0, len(values))
 		for _, value := range values {
 			if str, ok := value.(string); ok {

@@ -24,10 +24,10 @@ func (p *Playbook) AddPlay(play Play) {
 // ToYAML converts the playbook to YAML format
 func (p *Playbook) ToYAML() ([]byte, error) {
 	// Convert to Ansible playbook structure
-	plays := make([]map[string]interface{}, 0, len(p.Plays))
+	plays := make([]map[string]any, 0, len(p.Plays))
 
 	for _, play := range p.Plays {
-		playMap := map[string]interface{}{
+		playMap := map[string]any{
 			"name":  play.Name,
 			"hosts": play.Hosts,
 		}
@@ -76,11 +76,11 @@ func (p *Playbook) ToYAML() ([]byte, error) {
 }
 
 // convertTasks converts Task structs to Ansible task maps
-func convertTasks(tasks []Task) []map[string]interface{} {
-	result := make([]map[string]interface{}, 0, len(tasks))
+func convertTasks(tasks []Task) []map[string]any {
+	result := make([]map[string]any, 0, len(tasks))
 
 	for _, task := range tasks {
-		taskMap := map[string]interface{}{
+		taskMap := map[string]any{
 			"name": task.Name,
 		}
 
@@ -116,12 +116,12 @@ func convertTasks(tasks []Task) []map[string]interface{} {
 }
 
 // convertRoles converts Role structs to Ansible role format
-func convertRoles(roles []Role) []interface{} {
-	result := make([]interface{}, 0, len(roles))
+func convertRoles(roles []Role) []any {
+	result := make([]any, 0, len(roles))
 
 	for _, role := range roles {
 		if len(role.Vars) > 0 {
-			result = append(result, map[string]interface{}{
+			result = append(result, map[string]any{
 				"role": role.Name,
 				"vars": role.Vars,
 			})
@@ -134,11 +134,11 @@ func convertRoles(roles []Role) []interface{} {
 }
 
 // convertHandlers converts Handler structs to Ansible handler maps
-func convertHandlers(handlers []Handler) []map[string]interface{} {
-	result := make([]map[string]interface{}, 0, len(handlers))
+func convertHandlers(handlers []Handler) []map[string]any {
+	result := make([]map[string]any, 0, len(handlers))
 
 	for _, handler := range handlers {
-		handlerMap := map[string]interface{}{
+		handlerMap := map[string]any{
 			"name":         handler.Name,
 			handler.Module: handler.Args,
 		}
@@ -422,7 +422,7 @@ systemctl restart postgresql
 			{
 				Name:   "Install and configure PostgreSQL packages and config",
 				Module: "shell",
-				Args: map[string]interface{}{
+				Args: map[string]any{
 					"cmd":        installScript,
 					"executable": "/bin/bash",
 				},
@@ -435,7 +435,7 @@ systemctl restart postgresql
 }
 
 // GenerateKafkaKRaftPlaybook creates an Ansible playbook for Kafka in KRaft mode (no ZooKeeper).
-func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port int, controllerPort int, controllerQuorum string, clusterID string, metadata map[string]interface{}) *Playbook {
+func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port int, controllerPort int, controllerQuorum string, clusterID string, metadata map[string]any) *Playbook {
 	playbook := NewPlaybook("Provision Kafka", host)
 	if port == 0 {
 		port = 9092
@@ -448,30 +448,12 @@ func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port in
 		kafkaVersion = defaultApacheKafkaVersion
 	}
 
-	brokerCount := metadataInt(metadata, "broker_count", 1)
-	if brokerCount < 1 {
-		brokerCount = 1
-	}
-	defaultRF := brokerCount
-	if defaultRF > 3 {
-		defaultRF = 3
-	}
-	minISR := metadataInt(metadata, "min_insync_replicas", defaultRF-1)
-	if minISR < 1 {
-		minISR = 1
-	}
-	offsetsRF := metadataInt(metadata, "offsets_topic_replication_factor", defaultRF)
-	if offsetsRF < 1 {
-		offsetsRF = 1
-	}
-	txRF := metadataInt(metadata, "transaction_state_log_replication_factor", defaultRF)
-	if txRF < 1 {
-		txRF = 1
-	}
-	txMinISR := metadataInt(metadata, "transaction_state_log_min_isr", txRF-1)
-	if txMinISR < 1 {
-		txMinISR = 1
-	}
+	brokerCount := max(metadataInt(metadata, "broker_count", 1), 1)
+	defaultRF := min(brokerCount, 3)
+	minISR := max(metadataInt(metadata, "min_insync_replicas", defaultRF-1), 1)
+	offsetsRF := max(metadataInt(metadata, "offsets_topic_replication_factor", defaultRF), 1)
+	txRF := max(metadataInt(metadata, "transaction_state_log_replication_factor", defaultRF), 1)
+	txMinISR := max(metadataInt(metadata, "transaction_state_log_min_isr", txRF-1), 1)
 	deleteTopics := metadataBool(metadata, "delete_topic_enable", false)
 
 	installScript := fmt.Sprintf(`set -euo pipefail
@@ -618,7 +600,7 @@ systemctl daemon-reload
 			{
 				Name:   "Install Kafka runtime and configuration",
 				Module: "shell",
-				Args: map[string]interface{}{
+				Args: map[string]any{
 					"cmd":        installScript,
 					"executable": "/bin/bash",
 				},
@@ -626,7 +608,7 @@ systemctl daemon-reload
 			{
 				Name:   "Enable and start Kafka",
 				Module: "systemd",
-				Args: map[string]interface{}{
+				Args: map[string]any{
 					"name":    "frameworks-kafka",
 					"enabled": true,
 					"state":   "started",
@@ -772,7 +754,7 @@ systemctl daemon-reload
 			{
 				Name:   "Install Kafka controller runtime and configuration",
 				Module: "shell",
-				Args: map[string]interface{}{
+				Args: map[string]any{
 					"cmd":        installScript,
 					"executable": "/bin/bash",
 				},
@@ -780,7 +762,7 @@ systemctl daemon-reload
 			{
 				Name:   "Enable and start Kafka Controller",
 				Module: "systemd",
-				Args: map[string]interface{}{
+				Args: map[string]any{
 					"name":    "frameworks-kafka-controller",
 					"enabled": true,
 					"state":   "started",
@@ -794,7 +776,7 @@ systemctl daemon-reload
 }
 
 // GenerateKafkaBrokerPlaybook creates an Ansible playbook for a broker-only Kafka node (dedicated controller mode).
-func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port int, bootstrapServers string, clusterID string, metadata map[string]interface{}) *Playbook {
+func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port int, bootstrapServers string, clusterID string, metadata map[string]any) *Playbook {
 	playbook := NewPlaybook("Provision Kafka Broker", host)
 	if port == 0 {
 		port = 9092
@@ -804,30 +786,12 @@ func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port i
 		kafkaVersion = defaultApacheKafkaVersion
 	}
 
-	brokerCount := metadataInt(metadata, "broker_count", 1)
-	if brokerCount < 1 {
-		brokerCount = 1
-	}
-	defaultRF := brokerCount
-	if defaultRF > 3 {
-		defaultRF = 3
-	}
-	minISR := metadataInt(metadata, "min_insync_replicas", defaultRF-1)
-	if minISR < 1 {
-		minISR = 1
-	}
-	offsetsRF := metadataInt(metadata, "offsets_topic_replication_factor", defaultRF)
-	if offsetsRF < 1 {
-		offsetsRF = 1
-	}
-	txRF := metadataInt(metadata, "transaction_state_log_replication_factor", defaultRF)
-	if txRF < 1 {
-		txRF = 1
-	}
-	txMinISR := metadataInt(metadata, "transaction_state_log_min_isr", txRF-1)
-	if txMinISR < 1 {
-		txMinISR = 1
-	}
+	brokerCount := max(metadataInt(metadata, "broker_count", 1), 1)
+	defaultRF := min(brokerCount, 3)
+	minISR := max(metadataInt(metadata, "min_insync_replicas", defaultRF-1), 1)
+	offsetsRF := max(metadataInt(metadata, "offsets_topic_replication_factor", defaultRF), 1)
+	txRF := max(metadataInt(metadata, "transaction_state_log_replication_factor", defaultRF), 1)
+	txMinISR := max(metadataInt(metadata, "transaction_state_log_min_isr", txRF-1), 1)
 	deleteTopics := metadataBool(metadata, "delete_topic_enable", false)
 
 	installScript := fmt.Sprintf(`set -euo pipefail
@@ -974,7 +938,7 @@ systemctl daemon-reload
 			{
 				Name:   "Install Kafka broker runtime and configuration",
 				Module: "shell",
-				Args: map[string]interface{}{
+				Args: map[string]any{
 					"cmd":        installScript,
 					"executable": "/bin/bash",
 				},
@@ -982,7 +946,7 @@ systemctl daemon-reload
 			{
 				Name:   "Enable and start Kafka Broker",
 				Module: "systemd",
-				Args: map[string]interface{}{
+				Args: map[string]any{
 					"name":    "frameworks-kafka",
 					"enabled": true,
 					"state":   "started",
@@ -995,7 +959,7 @@ systemctl daemon-reload
 	return playbook
 }
 
-func metadataInt(metadata map[string]interface{}, key string, fallback int) int {
+func metadataInt(metadata map[string]any, key string, fallback int) int {
 	if metadata == nil {
 		return fallback
 	}
@@ -1013,7 +977,7 @@ func metadataInt(metadata map[string]interface{}, key string, fallback int) int 
 	}
 }
 
-func metadataBool(metadata map[string]interface{}, key string, fallback bool) bool {
+func metadataBool(metadata map[string]any, key string, fallback bool) bool {
 	if metadata == nil {
 		return fallback
 	}

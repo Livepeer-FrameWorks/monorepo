@@ -149,8 +149,13 @@ func TestFetchStaleCacheFallbackOnFetchFailure(t *testing.T) {
 	manifestYAML := []byte("platform_version: cached\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n")
 	cacheDir := t.TempDir()
 
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "down", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
 	fetcher, err := NewFetcher(FetchOptions{
-		Repository:     "https://example.com",
+		Repository:     server.URL,
 		CacheDir:       cacheDir,
 		PinnedTTL:      1 * time.Second,
 		PinnedMaxStale: 1 * time.Hour,
@@ -173,12 +178,6 @@ func TestFetchStaleCacheFallbackOnFetchFailure(t *testing.T) {
 	if metaErr := fetcher.writeMetadata(metaPath, time.Now().Add(-2*time.Second)); metaErr != nil {
 		t.Fatalf("failed to write metadata: %v", metaErr)
 	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "down", http.StatusInternalServerError)
-	}))
-	t.Cleanup(server.Close)
-	fetcher.repository = server.URL
 
 	manifest, err := fetcher.Fetch("stable", "v1.2.3")
 	if err != nil {

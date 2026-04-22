@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 )
@@ -46,10 +47,8 @@ func (g *DependencyGraph) TopologicalSort() ([][]*Task, error) {
 	}
 
 	var batches [][]*Task
-	remaining := make(map[string]*Task)
-	for name, task := range g.tasks {
-		remaining[name] = task
-	}
+	remaining := make(map[string]*Task, len(g.tasks))
+	maps.Copy(remaining, g.tasks)
 
 	for len(remaining) > 0 {
 		// Admit at most one task per host per batch; same-host tasks contend

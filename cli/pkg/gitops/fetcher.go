@@ -311,12 +311,10 @@ func (f *Fetcher) loadFromCache(channel, version string) (*Manifest, time.Time, 
 
 // saveToCache saves a manifest to local cache
 func (f *Fetcher) saveToCache(channel, version string, manifest *Manifest) error {
-	channelDir := filepath.Join(f.cacheDir, channel)
-	if err := os.MkdirAll(channelDir, 0755); err != nil {
+	cachePath, metaPath := f.cachePaths(channel, version)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
 		return err
 	}
-
-	cachePath, metaPath := f.cachePaths(channel, version)
 
 	data, err := yaml.Marshal(manifest)
 	if err != nil {

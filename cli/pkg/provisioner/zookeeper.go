@@ -304,7 +304,7 @@ func validateApacheZookeeperVersion(version string) error {
 	return nil
 }
 
-func zookeeperServerID(raw interface{}) int {
+func zookeeperServerID(raw any) int {
 	switch v := raw.(type) {
 	case int:
 		return v
@@ -319,11 +319,11 @@ func zookeeperServerID(raw interface{}) int {
 	}
 }
 
-func zookeeperServerList(raw interface{}) []string {
+func zookeeperServerList(raw any) []string {
 	switch v := raw.(type) {
 	case []string:
 		return v
-	case []interface{}:
+	case []any:
 		out := make([]string, 0, len(v))
 		for _, item := range v {
 			if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
