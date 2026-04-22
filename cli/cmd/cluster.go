@@ -73,6 +73,7 @@ type resolvedCluster struct {
 	ManifestPath string
 	AgeKey       string
 	Source       inventory.ManifestSource
+	ReleaseRepos []string
 	Cleanup      func()
 
 	sharedEnvOnce sync.Once
@@ -90,6 +91,15 @@ func (rc *resolvedCluster) SharedEnv() (map[string]string, error) {
 		)
 	})
 	return rc.sharedEnv, rc.sharedEnvErr
+}
+
+func (rc *resolvedCluster) applyReleaseMetadata(metadata map[string]interface{}) {
+	if metadata == nil || len(rc.ReleaseRepos) == 0 {
+		return
+	}
+	repos := make([]string, len(rc.ReleaseRepos))
+	copy(repos, rc.ReleaseRepos)
+	metadata["gitops_repositories"] = repos
 }
 
 func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
@@ -158,6 +168,7 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 		ManifestPath: rm.Path,
 		AgeKey:       rm.AgeKey,
 		Source:       rm.Source,
+		ReleaseRepos: resolveReleaseRepositories(cmd, cfg, ctxCfg, rm, cwd),
 		Cleanup:      rm.Cleanup,
 	}, nil
 }
@@ -169,6 +180,117 @@ func manifestSourceInEnv() bool {
 		}
 	}
 	return false
+}
+
+func resolveReleaseRepositories(cmd *cobra.Command, cfg fwcfg.Config, ctx fwcfg.Context, rm inventory.Resolved, cwd string) []string {
+	var repos []string
+	add := func(repo string) {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			return
+		}
+		for _, existing := range repos {
+			if existing == repo {
+				return
+			}
+		}
+		repos = append(repos, repo)
+	}
+
+	switch rm.Source {
+	case inventory.SourceGitopsDirFlag:
+		add(stringFlag(cmd, "gitops-dir").Value)
+	case inventory.SourceGitopsDirEnv:
+		add(os.Getenv("FRAMEWORKS_GITOPS_DIR"))
+	case inventory.SourceCwdHeuristic:
+		add(cwd)
+	case inventory.SourceGithubRepoFlag:
+		add(rawGitHubRepoURL(stringFlag(cmd, "github-repo").Value, explicitGitHubRef(cmd, cfg, false)))
+	case inventory.SourceGithubRepoEnv:
+		add(rawGitHubRepoURL(os.Getenv("FRAMEWORKS_GITHUB_REPO"), explicitGitHubRef(cmd, cfg, true)))
+	case inventory.SourceContext:
+		if ctx.Gitops != nil {
+			switch ctx.Gitops.Source {
+			case fwcfg.GitopsLocal:
+				add(ctx.Gitops.LocalPath)
+			case fwcfg.GitopsGitHub:
+				add(rawGitHubRepoURL(ctx.Gitops.Repo, contextGitHubRef(cfg, ctx)))
+			case fwcfg.GitopsManifest:
+				add(findGitopsRootFromManifest(rm.Path))
+			}
+		}
+	case inventory.SourceManifestFlag, inventory.SourceManifestEnv:
+		add(findGitopsRootFromManifest(rm.Path))
+	}
+
+	add(fwgitops.DefaultRepository)
+	return repos
+}
+
+func explicitGitHubRef(cmd *cobra.Command, cfg fwcfg.Config, preferEnv bool) string {
+	if preferEnv {
+		if ref := strings.TrimSpace(os.Getenv("FRAMEWORKS_GITHUB_REF")); ref != "" {
+			return ref
+		}
+	} else if ref := strings.TrimSpace(stringFlag(cmd, "github-ref").Value); ref != "" {
+		return ref
+	}
+	if cfg.GitHub != nil && strings.TrimSpace(cfg.GitHub.Ref) != "" {
+		return strings.TrimSpace(cfg.GitHub.Ref)
+	}
+	return "main"
+}
+
+func contextGitHubRef(cfg fwcfg.Config, ctx fwcfg.Context) string {
+	if ctx.Gitops != nil && strings.TrimSpace(ctx.Gitops.Ref) != "" {
+		return strings.TrimSpace(ctx.Gitops.Ref)
+	}
+	if cfg.GitHub != nil && strings.TrimSpace(cfg.GitHub.Ref) != "" {
+		return strings.TrimSpace(cfg.GitHub.Ref)
+	}
+	return "main"
+}
+
+func rawGitHubRepoURL(repo, ref string) string {
+	repo = strings.TrimSpace(repo)
+	ref = strings.TrimSpace(ref)
+	if repo == "" {
+		return ""
+	}
+	if ref == "" {
+		ref = "main"
+	}
+	return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s", repo, ref)
+}
+
+func findGitopsRootFromManifest(manifestPath string) string {
+	if strings.TrimSpace(manifestPath) == "" {
+		return ""
+	}
+	dir := filepath.Dir(manifestPath)
+	for {
+		if looksLikeReleaseRepoRoot(dir) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func looksLikeReleaseRepoRoot(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	for _, name := range []string{"clusters", "channels", "releases"} {
+		st, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || !st.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 func stringFlag(cmd *cobra.Command, name string) inventory.StringFlag {

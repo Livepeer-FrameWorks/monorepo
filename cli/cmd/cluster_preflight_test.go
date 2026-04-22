@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/pkg/inventory"
 
 	"github.com/spf13/cobra"
 )
@@ -201,5 +202,29 @@ func TestAnyManifestSourceConfigured_envVarReturnsTrue(t *testing.T) {
 
 	if !anyManifestSourceConfigured(newPreflightTestCmd()) {
 		t.Error("FRAMEWORKS_MANIFEST env should satisfy the check")
+	}
+}
+
+func TestResolvePostgresConnectivityHostUsesFirstNodeForYugabyte(t *testing.T) {
+	manifest := &inventory.Manifest{}
+	pg := &inventory.PostgresConfig{
+		Engine: "yugabyte",
+		Nodes: []inventory.PostgresNode{
+			{Host: "yuga-1"},
+			{Host: "yuga-2"},
+		},
+	}
+
+	if got := resolvePostgresConnectivityHost(manifest, pg); got != "yuga-1" {
+		t.Fatalf("expected first Yugabyte node host, got %q", got)
+	}
+}
+
+func TestResolvePostgresConnectivityHostFallsBackToSingleHost(t *testing.T) {
+	manifest := &inventory.Manifest{}
+	pg := &inventory.PostgresConfig{Host: "postgres-1"}
+
+	if got := resolvePostgresConnectivityHost(manifest, pg); got != "postgres-1" {
+		t.Fatalf("expected postgres host fallback, got %q", got)
 	}
 }

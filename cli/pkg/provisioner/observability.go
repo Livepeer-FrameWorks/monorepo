@@ -49,7 +49,7 @@ func (p *VictoriaMetricsProvisioner) Provision(ctx context.Context, host invento
 		state = nil
 	}
 
-	image, err := resolveObservabilityImage(config.Version, config.Image, "victoriametrics", defaultVictoriaMetricsImage)
+	image, err := resolveObservabilityImage(config.Version, config.Image, "victoriametrics", defaultVictoriaMetricsImage, config.Metadata)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (p *VMAgentProvisioner) Provision(ctx context.Context, host inventory.Host,
 		state = nil
 	}
 
-	image, err := resolveObservabilityImage(config.Version, config.Image, "vmagent", defaultVMAgentImage)
+	image, err := resolveObservabilityImage(config.Version, config.Image, "vmagent", defaultVMAgentImage, config.Metadata)
 	if err != nil {
 		return err
 	}
@@ -255,7 +255,7 @@ func (p *VMAAuthProvisioner) Provision(ctx context.Context, host inventory.Host,
 		state = nil
 	}
 
-	image, err := resolveObservabilityImage(config.Version, config.Image, "vmauth", defaultVMAAuthImage)
+	image, err := resolveObservabilityImage(config.Version, config.Image, "vmauth", defaultVMAAuthImage, config.Metadata)
 	if err != nil {
 		return err
 	}
@@ -342,7 +342,7 @@ func (p *GrafanaProvisioner) Provision(ctx context.Context, host inventory.Host,
 		state = nil
 	}
 
-	image, err := resolveObservabilityImage(config.Version, config.Image, "grafana", defaultGrafanaImage)
+	image, err := resolveObservabilityImage(config.Version, config.Image, "grafana", defaultGrafanaImage, config.Metadata)
 	if err != nil {
 		return err
 	}
@@ -606,12 +606,12 @@ func vmauthProxyURL(upstreamWriteURL, upstreamUsername, upstreamPassword string)
 	return rendered + separator + "extra_label={{.MetricsExtraLabels}}", nil
 }
 
-func resolveObservabilityImage(version, explicitImage, serviceName, fallback string) (string, error) {
+func resolveObservabilityImage(version, explicitImage, serviceName, fallback string, metadata map[string]interface{}) (string, error) {
 	if strings.TrimSpace(explicitImage) != "" {
 		return explicitImage, nil
 	}
 
-	info, err := resolveObservabilityServiceInfo(version, serviceName)
+	info, err := resolveObservabilityServiceInfo(version, serviceName, metadata)
 	if err == nil && info != nil && strings.TrimSpace(info.FullImage) != "" {
 		return info.FullImage, nil
 	}
@@ -624,8 +624,8 @@ func resolveObservabilityImage(version, explicitImage, serviceName, fallback str
 	return "", fmt.Errorf("no image available for %s", serviceName)
 }
 
-func resolveVMAgentBinaryURL(version, osName, arch string) (string, error) {
-	info, err := resolveObservabilityServiceInfo(version, "vmagent")
+func resolveVMAgentBinaryURL(version, osName, arch string, metadata map[string]interface{}) (string, error) {
+	info, err := resolveObservabilityServiceInfo(version, "vmagent", metadata)
 	if err == nil && info != nil {
 		if binaryURL, binaryErr := info.GetBinaryURL(osName, arch); binaryErr == nil && strings.TrimSpace(binaryURL) != "" {
 			return binaryURL, nil
@@ -644,14 +644,9 @@ func resolveVMAgentBinaryURL(version, osName, arch string) (string, error) {
 	return "", fmt.Errorf("vmagent binary URL not available for %s/%s", osName, arch)
 }
 
-func resolveObservabilityServiceInfo(version, serviceName string) (*gitops.ServiceInfo, error) {
+func resolveObservabilityServiceInfo(version, serviceName string, metadata map[string]interface{}) (*gitops.ServiceInfo, error) {
 	channel, resolvedVersion := gitops.ResolveVersion(version)
-	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gitops fetcher: %w", err)
-	}
-
-	manifest, err := fetcher.Fetch(channel, resolvedVersion)
+	manifest, err := fetchGitopsManifest(channel, resolvedVersion, metadata)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch gitops manifest: %w", err)
 	}

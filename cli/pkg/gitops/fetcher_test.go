@@ -215,6 +215,55 @@ func TestFetchLocalResolvesChannelPointer(t *testing.T) {
 	}
 }
 
+func TestFetchFromRepositoriesFallsBackToSecondRepository(t *testing.T) {
+	t.Parallel()
+
+	firstRepo := t.TempDir()
+	secondRepo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(secondRepo, "channels"), 0755); err != nil {
+		t.Fatalf("mkdir channels: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(secondRepo, "releases"), 0755); err != nil {
+		t.Fatalf("mkdir releases: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(secondRepo, "channels", "rc.yaml"), []byte("platform_version: v9.9.9\nmanifest: releases/v9.9.9.yaml\n"), 0644); err != nil {
+		t.Fatalf("write rc channel: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(secondRepo, "releases", "v9.9.9.yaml"), []byte("platform_version: v9.9.9\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n"), 0644); err != nil {
+		t.Fatalf("write release manifest: %v", err)
+	}
+
+	manifest, err := FetchFromRepositories(FetchOptions{
+		CacheDir:   t.TempDir(),
+		RetryCount: 1,
+	}, []string{firstRepo, secondRepo}, "rc", "latest")
+	if err != nil {
+		t.Fatalf("expected fallback fetch to succeed: %v", err)
+	}
+	if manifest.PlatformVersion != "v9.9.9" {
+		t.Fatalf("expected fallback manifest version v9.9.9, got %s", manifest.PlatformVersion)
+	}
+}
+
+func TestCachePathsAreRepositoryScoped(t *testing.T) {
+	t.Parallel()
+
+	f1, err := NewFetcher(FetchOptions{Repository: "/tmp/repo-a", CacheDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("fetcher 1: %v", err)
+	}
+	f2, err := NewFetcher(FetchOptions{Repository: "/tmp/repo-b", CacheDir: f1.cacheDir})
+	if err != nil {
+		t.Fatalf("fetcher 2: %v", err)
+	}
+
+	cache1, _ := f1.cachePaths("stable", "latest")
+	cache2, _ := f2.cachePaths("stable", "latest")
+	if cache1 == cache2 {
+		t.Fatalf("expected repository-scoped cache paths, got identical path %s", cache1)
+	}
+}
+
 func TestGetServiceInfoBinaryOnlyService(t *testing.T) {
 	m := &Manifest{
 		NativeBinaries: []NativeBinary{

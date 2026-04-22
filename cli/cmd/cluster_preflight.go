@@ -64,8 +64,8 @@ func newClusterPreflightCmd() *cobra.Command {
 
 				fmt.Fprintln(cmd.OutOrStdout(), "\nInfrastructure connectivity:")
 				if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
-					pgHost := pg.Host
-					if host, ok := manifest.GetHost(pg.Host); ok {
+					pgHost := resolvePostgresConnectivityHost(manifest, pg)
+					if host, ok := manifest.GetHost(pgHost); ok {
 						pgHost = host.ExternalIP
 					}
 					results = append(results, preflight.PostgresConnectivity(ctx, pgHost, pg.EffectivePort()))
@@ -143,6 +143,16 @@ func newClusterPreflightCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&domain, "domain", "", "Domain to validate DNS resolution")
 	return cmd
+}
+
+func resolvePostgresConnectivityHost(manifest *inventory.Manifest, pg *inventory.PostgresConfig) string {
+	if pg == nil {
+		return ""
+	}
+	if hosts := pg.AllHosts(); len(hosts) > 0 {
+		return hosts[0]
+	}
+	return pg.Host
 }
 
 // anyManifestSourceConfigured reports whether resolveClusterManifest

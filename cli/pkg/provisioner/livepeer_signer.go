@@ -53,7 +53,7 @@ func (p *LivepeerSignerProvisioner) Provision(ctx context.Context, host inventor
 	case "docker":
 		image := config.Image
 		if image == "" {
-			image = p.resolveImageFromManifest(config.Version)
+			image = p.resolveImageFromManifest(config.Version, config.Metadata)
 		}
 		if image == "" {
 			image = "ghcr.io/livepeer-frameworks/go-livepeer:latest"
@@ -146,7 +146,7 @@ func (p *LivepeerSignerProvisioner) provisionDocker(ctx context.Context, host in
 
 	image := config.Image
 	if image == "" {
-		image = p.resolveImageFromManifest(config.Version)
+		image = p.resolveImageFromManifest(config.Version, config.Metadata)
 	}
 	if image == "" {
 		image = "ghcr.io/livepeer-frameworks/go-livepeer:latest"
@@ -379,13 +379,9 @@ func (p *LivepeerSignerProvisioner) ensureKeystore(ctx context.Context, host inv
 	return keystorePath, nil
 }
 
-func (p *LivepeerSignerProvisioner) resolveImageFromManifest(version string) string {
+func (p *LivepeerSignerProvisioner) resolveImageFromManifest(version string, metadata map[string]interface{}) string {
 	channel, resolved := gitops.ResolveVersion(version)
-	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-	if err != nil {
-		return ""
-	}
-	manifest, err := fetcher.Fetch(channel, resolved)
+	manifest, err := fetchGitopsManifest(channel, resolved, metadata)
 	if err != nil {
 		return ""
 	}
@@ -403,11 +399,7 @@ func (p *LivepeerSignerProvisioner) installBinary(ctx context.Context, host inve
 	binaryURL := config.BinaryURL
 	if binaryURL == "" {
 		channel, version := gitops.ResolveVersion(config.Version)
-		fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-		if err != nil {
-			return err
-		}
-		manifest, err := fetcher.Fetch(channel, version)
+		manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
 		if err != nil {
 			return err
 		}

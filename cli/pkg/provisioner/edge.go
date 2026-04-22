@@ -538,7 +538,7 @@ func (e *EdgeProvisioner) installEdgeTelemetryDocker(ctx context.Context, host i
 	if err != nil {
 		return err
 	}
-	image, err := resolveObservabilityImage(config.Version, "", "vmagent", defaultVMAgentImage)
+	image, err := resolveObservabilityImage(config.Version, "", "vmagent", defaultVMAgentImage, nil)
 	if err != nil {
 		return err
 	}
@@ -663,7 +663,7 @@ func (e *EdgeProvisioner) installEdgeTelemetryLinux(ctx context.Context, host in
 		tokenArg = " -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token"
 	}
 
-	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "linux", remoteArch)
+	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "linux", remoteArch, nil)
 	if err != nil {
 		return err
 	}
@@ -724,7 +724,7 @@ func (e *EdgeProvisioner) installEdgeTelemetryDarwin(ctx context.Context, host i
 		}
 	}
 
-	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "darwin", remoteArch)
+	binaryURL, err := resolveVMAgentBinaryURL(config.Version, "darwin", remoteArch, nil)
 	if err != nil {
 		return err
 	}

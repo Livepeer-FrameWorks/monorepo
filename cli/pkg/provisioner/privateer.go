@@ -51,7 +51,7 @@ func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Hos
 	}
 
 	// 2. Fetch and Install Binary
-	if err := p.installBinary(ctx, host, config.Version); err != nil {
+	if err := p.installBinary(ctx, host, config.Version, config.Metadata); err != nil {
 		return fmt.Errorf("failed to install binary: %w", err)
 	}
 
@@ -111,14 +111,10 @@ fi
 	return nil
 }
 
-func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory.Host, version string) error {
+func (p *PrivateerProvisioner) installBinary(ctx context.Context, host inventory.Host, version string, metadata map[string]interface{}) error {
 	// Fetch from GitOps
 	channel, resolved := gitops.ResolveVersion(version)
-	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-	if err != nil {
-		return err
-	}
-	manifest, err := fetcher.Fetch(channel, resolved)
+	manifest, err := fetchGitopsManifest(channel, resolved, metadata)
 	if err != nil {
 		return err
 	}

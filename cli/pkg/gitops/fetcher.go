@@ -2,6 +2,8 @@ package gitops
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -96,6 +98,40 @@ func NewFetcher(opts FetchOptions) (*Fetcher, error) {
 			Timeout: 30 * time.Second,
 		},
 	}, nil
+}
+
+// FetchFromRepositories tries each repository in order until one returns a
+// manifest. Callers can provide a preferred local/public gitops source first
+// and still fall back to the default upstream repository.
+func FetchFromRepositories(opts FetchOptions, repositories []string, channel, version string) (*Manifest, error) {
+	repos := dedupeRepositories(repositories)
+	if len(repos) == 0 {
+		if opts.Repository != "" {
+			repos = []string{opts.Repository}
+		} else {
+			repos = []string{DefaultRepository}
+		}
+	}
+
+	var errs []string
+	for _, repo := range repos {
+		repoOpts := opts
+		repoOpts.Repository = repo
+
+		fetcher, err := NewFetcher(repoOpts)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: create fetcher: %v", repo, err))
+			continue
+		}
+
+		manifest, err := fetcher.Fetch(channel, version)
+		if err == nil {
+			return manifest, nil
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v", repo, err))
+	}
+
+	return nil, fmt.Errorf("failed to fetch manifest from configured gitops repositories: %s", strings.Join(errs, "; "))
 }
 
 // Fetch retrieves a manifest for a specific channel and version
@@ -404,10 +440,18 @@ func (f *Fetcher) cachePolicy(version string) (time.Duration, time.Duration) {
 }
 
 func (f *Fetcher) cachePaths(channel, version string) (string, string) {
-	channelDir := filepath.Join(f.cacheDir, channel)
+	channelDir := filepath.Join(f.cacheDir, repositoryCacheKey(f.repository), channel)
 	cachePath := filepath.Join(channelDir, fmt.Sprintf("%s.yaml", version))
 	metaPath := filepath.Join(channelDir, fmt.Sprintf("%s.meta.json", version))
 	return cachePath, metaPath
+}
+
+func repositoryCacheKey(repository string) string {
+	if repository == "" {
+		return "default"
+	}
+	sum := sha256.Sum256([]byte(repository))
+	return hex.EncodeToString(sum[:8])
 }
 
 func (f *Fetcher) readMetadata(path string) (time.Time, error) {
@@ -459,6 +503,23 @@ func shouldRetryStatus(status int) bool {
 		return true
 	}
 	return status >= http.StatusInternalServerError
+}
+
+func dedupeRepositories(repositories []string) []string {
+	seen := make(map[string]struct{}, len(repositories))
+	out := make([]string, 0, len(repositories))
+	for _, repo := range repositories {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			continue
+		}
+		if _, ok := seen[repo]; ok {
+			continue
+		}
+		seen[repo] = struct{}{}
+		out = append(out, repo)
+	}
+	return out
 }
 
 // fetchFromLocal loads a manifest from local filesystem

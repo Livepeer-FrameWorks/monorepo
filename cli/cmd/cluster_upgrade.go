@@ -207,13 +207,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	channel, resolvedVersion := gitops.ResolveVersion(version)
 	fmt.Fprintf(cmd.OutOrStdout(), "  Channel: %s, Version: %s\n", channel, resolvedVersion)
 
-	// Use default remote GitOps repository (https://raw.githubusercontent.com/Livepeer-FrameWorks/gitops/main)
-	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create gitops fetcher: %w", err)
-	}
-
-	gitopsManifest, err := fetcher.Fetch(channel, resolvedVersion)
+	gitopsManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, resolvedVersion)
 	if err != nil {
 		return fmt.Errorf("failed to fetch gitops manifest: %w", err)
 	}
@@ -290,6 +284,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		Port:     port,
 		Metadata: make(map[string]interface{}),
 	}
+	rc.applyReleaseMetadata(config.Metadata)
 
 	// Provision (this pulls new image or downloads new binary and starts)
 	if err := prov.Provision(ctx, host, config); err != nil {
@@ -321,6 +316,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 					Metadata: make(map[string]interface{}),
 					Force:    true,
 				}
+				rc.applyReleaseMetadata(rollbackConfig.Metadata)
 
 				if cleanupErr := prov.Cleanup(ctx, host, rollbackConfig); cleanupErr != nil {
 					fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Rollback cleanup warning: %v\n", cleanupErr)

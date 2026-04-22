@@ -67,12 +67,7 @@ func (f *FlexibleProvisioner) Provision(ctx context.Context, host inventory.Host
 
 	// Fetch manifest from gitops
 	channel, version := gitops.ResolveVersion(config.Version)
-	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create gitops fetcher: %w", err)
-	}
-
-	manifest, err := fetcher.Fetch(channel, version)
+	manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
 	if err != nil {
 		return fmt.Errorf("failed to fetch gitops manifest: %w", err)
 	}

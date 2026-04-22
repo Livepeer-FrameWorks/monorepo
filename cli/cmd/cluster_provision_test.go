@@ -306,7 +306,7 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 		},
 	}
 
-	metadata, err := serviceRegistrationMetadata("livepeer-gateway", "central-eu-1", "media-central-primary", manifest, map[string]interface{}{}, "", testLoadSharedEnv(t, manifest))
+	metadata, err := serviceRegistrationMetadata("livepeer-gateway", "central-eu-1", "media-central-primary", manifest, map[string]interface{}{}, "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("serviceRegistrationMetadata returned error: %v", err)
 	}
@@ -748,7 +748,7 @@ func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *t
 	registrar := &fakePublicServiceRegistrar{}
 
 	var out bytes.Buffer
-	if err := registerPublicServiceInstanceWithClient(context.Background(), &out, manifest, task, manifest.Hosts["core-1"], runtimeData, "", testLoadSharedEnv(t, manifest), registrar); err != nil {
+	if err := registerPublicServiceInstanceWithClient(context.Background(), &out, manifest, task, manifest.Hosts["core-1"], runtimeData, "", testLoadSharedEnv(t, manifest), nil, registrar); err != nil {
 		t.Fatalf("registerPublicServiceInstanceWithClient returned error: %v", err)
 	}
 	if len(registrar.reqs) != 1 {

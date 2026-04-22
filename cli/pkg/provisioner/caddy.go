@@ -108,11 +108,7 @@ func (c *CaddyProvisioner) installCaddy(ctx context.Context, host inventory.Host
 
 	// Fetch manifest from gitops
 	channel, version := gitops.ResolveVersion(config.Version)
-	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-	if err != nil {
-		return err
-	}
-	manifest, err := fetcher.Fetch(channel, version)
+	manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
 	if err != nil {
 		return err
 	}

@@ -125,11 +125,7 @@ func (n *NginxProvisioner) installNginx(ctx context.Context, host inventory.Host
 	}
 
 	channel, version := gitops.ResolveVersion(config.Version)
-	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-	if err != nil {
-		return err
-	}
-	manifest, err := fetcher.Fetch(channel, version)
+	manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
 	if err != nil {
 		return err
 	}

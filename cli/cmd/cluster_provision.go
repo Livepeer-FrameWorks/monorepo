@@ -203,7 +203,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return nil
 	}
 
-	if err := executeProvision(ctx, cmd, manifest, plan, force, ignoreValidation, manifestDir, sharedEnv); err != nil {
+	if err := executeProvision(ctx, cmd, manifest, plan, force, ignoreValidation, manifestDir, sharedEnv, rc.ReleaseRepos); err != nil {
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
@@ -373,7 +373,7 @@ type taskProvisionOutcome struct {
 }
 
 // executeProvision runs the provisioning tasks
-func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string) error {
+func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
@@ -440,7 +440,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 				fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
 				stopProgress := startTaskProgressLogger(cmd, task, 30*time.Second)
-				outcome, err := provisionTask(taskCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv)
+				outcome, err := provisionTask(taskCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, releaseRepos)
 				stopProgress()
 				if err != nil {
 					return fmt.Errorf("failed to provision %s: %w", task.Name, err)
@@ -502,7 +502,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				}
 			}
 
-			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, manifestDir, sharedEnv); err != nil {
+			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, manifestDir, sharedEnv, releaseRepos); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", r.task.Name, err)
 			}
 			if err := maybeRegisterIngressDesiredState(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData); err != nil {
@@ -539,7 +539,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	}
 
 	// Post-provision: bootstrap Purser cluster pricing, admin user, control-plane validation
-	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData); err != nil {
+	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData, releaseRepos); err != nil {
 		return err
 	}
 
@@ -548,7 +548,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 // postProvisionFinalize handles Purser pricing bootstrap, optional admin user creation,
 // and control-plane validation after all service batches are complete.
-func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}, releaseRepos []string) error {
 	systemTenantID, ok := runtimeData["system_tenant_id"].(string)
 	serviceToken, stOK := runtimeData["service_token"].(string)
 
@@ -1060,7 +1060,7 @@ func ensurePrivateerCertIssueTokenWithClient(ctx context.Context, runtimeData ma
 	return nil
 }
 
-func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string) error {
+func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
 	if outcome == nil || outcome.deferred || !outcome.running {
 		return nil
 	}
@@ -1087,7 +1087,7 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 	defer client.Close()
 
 	runtimeData["quartermaster_grpc_addr"] = grpcAddr
-	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, host, runtimeData, manifestDir, sharedEnv, client)
+	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, host, runtimeData, manifestDir, sharedEnv, releaseRepos, client)
 }
 
 func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}) error {
@@ -1117,7 +1117,7 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 	return registerIngressDesiredStateWithClient(ctx, out, manifest, task, host, client)
 }
 
-func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, registrar publicServiceRegistrar) error {
+func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string, registrar publicServiceRegistrar) error {
 	serviceName := task.ServiceID
 	serviceType, ok := publicServiceType(serviceName)
 	if !ok || selfRegisters(serviceName) {
@@ -1168,7 +1168,7 @@ func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer,
 		ClusterId:      &hostCluster,
 		NodeId:         &task.Host,
 	}
-	if metadata, err := serviceRegistrationMetadata(serviceName, task.Host, hostCluster, manifest, runtimeData, manifestDir, sharedEnv); err != nil {
+	if metadata, err := serviceRegistrationMetadata(serviceName, task.Host, hostCluster, manifest, runtimeData, manifestDir, sharedEnv, releaseRepos); err != nil {
 		return fmt.Errorf("resolve metadata: %w", err)
 	} else if len(metadata) > 0 {
 		req.Metadata = metadata
@@ -1480,7 +1480,7 @@ func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 }
 
 // buildTaskConfig creates a ServiceConfig for a task
-func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, force bool, manifestDir string, sharedEnv map[string]string) (provisioner.ServiceConfig, error) {
+func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, force bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
 	config := provisioner.ServiceConfig{
 		Mode:     "docker",
 		Version:  "stable",
@@ -1497,6 +1497,11 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 	if task.Host != "" {
 		config.Metadata["node_id"] = task.Host
+	}
+	if len(releaseRepos) > 0 {
+		repos := make([]string, len(releaseRepos))
+		copy(repos, releaseRepos)
+		config.Metadata["gitops_repositories"] = repos
 	}
 
 	// Copy runtime data
@@ -2354,7 +2359,7 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 }
 
 // provisionTask provisions a single task
-func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string) (*taskProvisionOutcome, error) {
+func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (*taskProvisionOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -2377,7 +2382,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 	}
 
-	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv)
+	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, releaseRepos)
 	if err != nil {
 		return nil, err
 	}
@@ -2778,7 +2783,7 @@ func publicServiceType(serviceName string) (string, bool) {
 	}
 }
 
-func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string) (map[string]string, error) {
+func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (map[string]string, error) {
 	if name != "livepeer-gateway" {
 		return nil, nil
 	}
@@ -2792,7 +2797,7 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	config, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir, sharedEnv)
+	config, err := buildTaskConfig(task, manifest, runtimeData, false, manifestDir, sharedEnv, releaseRepos)
 	if err != nil {
 		return nil, err
 	}

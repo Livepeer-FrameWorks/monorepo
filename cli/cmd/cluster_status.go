@@ -50,7 +50,7 @@ running, or is not installed.`,
 				return err
 			}
 			defer rc.Cleanup()
-			return runClusterStatus(cmd, rc.Manifest, jsonOutput)
+			return runClusterStatus(cmd, rc, jsonOutput)
 		},
 	}
 
@@ -59,16 +59,12 @@ running, or is not installed.`,
 	return cmd
 }
 
-func runClusterStatus(cmd *cobra.Command, manifest *inventory.Manifest, jsonOutput bool) error {
+func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) error {
+	manifest := rc.Manifest
 	channel := manifest.ResolvedChannel()
 	gitopsChannel, gitopsVersion := gitops.ResolveVersion(channel)
 
-	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create gitops fetcher: %w", err)
-	}
-
-	gitopsManifest, err := fetcher.Fetch(gitopsChannel, gitopsVersion)
+	gitopsManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, gitopsChannel, gitopsVersion)
 	if err != nil {
 		return fmt.Errorf("failed to fetch gitops manifest (channel: %s): %w", channel, err)
 	}
