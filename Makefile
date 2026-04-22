@@ -1,8 +1,8 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
-	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper build-image-chandler \
-	proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test coverage env frontend-env tidy update outdated fmt format \
-	lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
+		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper build-image-chandler \
+		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
+		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
+		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
 # Prefer annotated git tags like v1.2.3; fallback to describe or dev
 VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exact-match 2>/dev/null || git describe --tags --match "v[0-9]*" --dirty --always 2>/dev/null || echo "0.0.0-dev")
@@ -20,6 +20,31 @@ SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ing
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
 GO_GET_ARGS ?= -u all
 PNPM_UP_ARGS ?= -r
+
+SERVICE_DIR_commodore = api_control
+SERVICE_DIR_quartermaster = api_tenants
+SERVICE_DIR_purser = api_billing
+SERVICE_DIR_decklog = api_firehose
+SERVICE_DIR_foghorn = api_balancing
+SERVICE_DIR_helmsman = api_sidecar
+SERVICE_DIR_periscope-ingest = api_analytics_ingest
+SERVICE_DIR_periscope-query = api_analytics_query
+SERVICE_DIR_signalman = api_realtime
+SERVICE_DIR_bridge = api_gateway
+SERVICE_DIR_navigator = api_dns
+SERVICE_DIR_privateer = api_mesh
+SERVICE_DIR_deckhand = api_ticketing
+SERVICE_DIR_steward = api_forms
+SERVICE_DIR_skipper = api_consultant
+SERVICE_DIR_chandler = api_assets
+SERVICE_DIR_cli = cli
+
+define run-go-tests
+	@echo "Running unit tests for $(1)..."
+	@(cd $(2) && \
+		go mod tidy && \
+		go test ./... -race -count=1)
+endef
 
 proto:
 	cd pkg/proto && make proto
@@ -260,6 +285,57 @@ test:
 		echo "✗ Unit tests failed"; \
 		exit 1; \
 	fi
+
+test-cli:
+	$(call run-go-tests,cli,$(SERVICE_DIR_cli))
+
+test-commodore:
+	$(call run-go-tests,commodore,$(SERVICE_DIR_commodore))
+
+test-quartermaster:
+	$(call run-go-tests,quartermaster,$(SERVICE_DIR_quartermaster))
+
+test-purser:
+	$(call run-go-tests,purser,$(SERVICE_DIR_purser))
+
+test-decklog:
+	$(call run-go-tests,decklog,$(SERVICE_DIR_decklog))
+
+test-foghorn:
+	$(call run-go-tests,foghorn,$(SERVICE_DIR_foghorn))
+
+test-helmsman:
+	$(call run-go-tests,helmsman,$(SERVICE_DIR_helmsman))
+
+test-periscope-ingest:
+	$(call run-go-tests,periscope-ingest,$(SERVICE_DIR_periscope-ingest))
+
+test-periscope-query:
+	$(call run-go-tests,periscope-query,$(SERVICE_DIR_periscope-query))
+
+test-signalman:
+	$(call run-go-tests,signalman,$(SERVICE_DIR_signalman))
+
+test-bridge:
+	$(call run-go-tests,bridge,$(SERVICE_DIR_bridge))
+
+test-navigator:
+	$(call run-go-tests,navigator,$(SERVICE_DIR_navigator))
+
+test-privateer:
+	$(call run-go-tests,privateer,$(SERVICE_DIR_privateer))
+
+test-deckhand:
+	$(call run-go-tests,deckhand,$(SERVICE_DIR_deckhand))
+
+test-steward:
+	$(call run-go-tests,steward,$(SERVICE_DIR_steward))
+
+test-skipper:
+	$(call run-go-tests,skipper,$(SERVICE_DIR_skipper))
+
+test-chandler:
+	$(call run-go-tests,chandler,$(SERVICE_DIR_chandler))
 
 # Run unit tests with JUnit XML output for Codecov Test Analytics
 test-junit:
