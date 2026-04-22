@@ -74,7 +74,8 @@ jobs:
           elif [[ -f "$PACKAGE_JSON" ]]; then
             echo "version=$(jq -r .version "$PACKAGE_JSON")" >> "$GITHUB_OUTPUT"
           else
-            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+            echo "ERROR: ${{ matrix.service.context }} has neither VERSION nor package.json" >&2
+            exit 1
           fi
 
       - name: Build & push ${{ matrix.service.name }} (amd64)
@@ -156,7 +157,8 @@ jobs:
           elif [[ -f "$PACKAGE_JSON" ]]; then
             echo "version=$(jq -r .version "$PACKAGE_JSON")" >> "$GITHUB_OUTPUT"
           else
-            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+            echo "ERROR: ${{ matrix.service.context }} has neither VERSION nor package.json" >&2
+            exit 1
           fi
 
       - name: Build & push ${{ matrix.service.name }} (arm64)
@@ -665,10 +667,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Sanitize platform tag to component version
+      - name: Read CLI component version
         id: compver
         run: |
-          ver="${GITHUB_REF_NAME#v}"
+          ver=$(tr -d '\n' < cli/VERSION)
           echo "value=${ver}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
         with:
@@ -702,10 +704,10 @@ jobs:
       - uses: actions/checkout@v6
       - name: Add Homebrew to PATH
         run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-      - name: Sanitize platform tag to component version
+      - name: Read CLI component version
         id: compver
         run: |
-          ver="${GITHUB_REF_NAME#v}"
+          ver=$(tr -d '\n' < cli/VERSION)
           echo "value=${ver}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
         with:

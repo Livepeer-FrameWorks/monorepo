@@ -1,5 +1,5 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
-		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper build-image-chandler \
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
+		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
@@ -9,9 +9,30 @@ VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exact-match 2>/dev/nu
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-LDFLAGS = -ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
-					-X frameworks/pkg/version.GitCommit=$(GIT_COMMIT) \
-					-X frameworks/pkg/version.BuildDate=$(BUILD_DATE)"
+# component_version(dir) returns the contents of <dir>/VERSION, failing the
+# make invocation loudly if the file is missing. Every buildable component
+# must carry a VERSION file; no silent 0.0.0 fallback.
+component_version = $(if $(wildcard $(1)/VERSION),$(shell tr -d '\n' < $(1)/VERSION),$(error VERSION file required but missing: $(1)/VERSION))
+
+# component_ldflags(binary_name, source_dir) returns the -ldflags block that
+# injects platform + per-component version fields into a go build.
+define component_ldflags
+-ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
+          -X frameworks/pkg/version.GitCommit=$(GIT_COMMIT) \
+          -X frameworks/pkg/version.BuildDate=$(BUILD_DATE) \
+          -X frameworks/pkg/version.ComponentName=$(1) \
+          -X frameworks/pkg/version.ComponentVersion=$(call component_version,$(2))"
+endef
+
+# component_build_args(binary_name, source_dir) returns the docker build-args
+# that inject the same fields into image builds via the per-service Dockerfiles.
+define component_build_args
+--build-arg VERSION=$(VERSION) \
+--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+--build-arg BUILD_DATE=$(BUILD_DATE) \
+--build-arg COMPONENT_NAME=$(1) \
+--build-arg COMPONENT_VERSION=$(call component_version,$(2))
+endef
 
 # All microservices (only services with actual binaries)
 SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer deckhand steward skipper chandler
@@ -103,72 +124,52 @@ build-images:
 
 build-image-commodore:
 	docker build -t frameworks-commodore:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,commodore,api_control) \
 		-f api_control/Dockerfile .
 
 build-image-quartermaster:
 	docker build -t frameworks-quartermaster:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,quartermaster,api_tenants) \
 		-f api_tenants/Dockerfile .
 
 build-image-purser:
 	docker build -t frameworks-purser:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,purser,api_billing) \
 		-f api_billing/Dockerfile .
 
 build-image-decklog:
 	docker build -t frameworks-decklog:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,decklog,api_firehose) \
 		-f api_firehose/Dockerfile .
 
 build-image-foghorn:
 	docker build -t frameworks-foghorn:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,foghorn,api_balancing) \
 		-f api_balancing/Dockerfile .
 
 build-image-helmsman:
 	docker build -t frameworks-helmsman:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,helmsman,api_sidecar) \
 		-f api_sidecar/Dockerfile .
 
 build-image-periscope-ingest:
 	docker build -t frameworks-periscope-ingest:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,periscope-ingest,api_analytics_ingest) \
 		-f api_analytics_ingest/Dockerfile .
 
 build-image-periscope-query:
 	docker build -t frameworks-periscope-query:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,periscope-query,api_analytics_query) \
 		-f api_analytics_query/Dockerfile .
 
 build-image-signalman:
 	docker build -t frameworks-signalman:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,signalman,api_realtime) \
 		-f api_realtime/Dockerfile .
 
 build-image-bridge:
 	docker build -t frameworks-bridge:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,bridge,api_gateway) \
 		-f api_gateway/Dockerfile .
 
 build-image-logbook:
@@ -178,82 +179,79 @@ build-image-logbook:
 
 build-image-navigator:
 	docker build -t frameworks-navigator:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,navigator,api_dns) \
 		-f api_dns/Dockerfile .
 
 build-image-deckhand:
 	docker build -t frameworks-deckhand:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,deckhand,api_ticketing) \
 		-f api_ticketing/Dockerfile .
+
+build-image-steward:
+	docker build -t frameworks-steward:$(VERSION) \
+		$(call component_build_args,steward,api_forms) \
+		-f api_forms/Dockerfile .
 
 build-image-skipper:
 	docker build -t frameworks-skipper:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,skipper,api_consultant) \
 		-f api_consultant/Dockerfile .
 
 build-image-chandler:
 	docker build -t frameworks-chandler:$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		$(call component_build_args,chandler,api_assets) \
 		-f api_assets/Dockerfile .
 
 build-bin-commodore:
-	cd api_control && go build $(LDFLAGS) -o ../bin/commodore ./cmd/commodore
+	cd api_control && go build $(call component_ldflags,commodore,api_control) -o ../bin/commodore ./cmd/commodore
 
 build-bin-quartermaster:
-	cd api_tenants && go build $(LDFLAGS) -o ../bin/quartermaster ./cmd/quartermaster
+	cd api_tenants && go build $(call component_ldflags,quartermaster,api_tenants) -o ../bin/quartermaster ./cmd/quartermaster
 
 build-bin-purser:
-	cd api_billing && go build $(LDFLAGS) -o ../bin/purser ./cmd/purser
+	cd api_billing && go build $(call component_ldflags,purser,api_billing) -o ../bin/purser ./cmd/purser
 
 build-bin-decklog:
-	cd api_firehose && go build $(LDFLAGS) -o ../bin/decklog ./cmd/decklog
+	cd api_firehose && go build $(call component_ldflags,decklog,api_firehose) -o ../bin/decklog ./cmd/decklog
 
 build-bin-foghorn:
-	cd api_balancing && go build $(LDFLAGS) -o ../bin/foghorn ./cmd/foghorn
+	cd api_balancing && go build $(call component_ldflags,foghorn,api_balancing) -o ../bin/foghorn ./cmd/foghorn
 
 build-bin-helmsman:
-	cd api_sidecar && go build $(LDFLAGS) -o ../bin/helmsman ./cmd/helmsman
+	cd api_sidecar && go build $(call component_ldflags,helmsman,api_sidecar) -o ../bin/helmsman ./cmd/helmsman
 
 build-bin-periscope-ingest:
-	cd api_analytics_ingest && go build $(LDFLAGS) -o ../bin/periscope-ingest ./cmd/periscope
+	cd api_analytics_ingest && go build $(call component_ldflags,periscope-ingest,api_analytics_ingest) -o ../bin/periscope-ingest ./cmd/periscope
 
 build-bin-periscope-query:
-	cd api_analytics_query && go build $(LDFLAGS) -o ../bin/periscope-query ./cmd/periscope
+	cd api_analytics_query && go build $(call component_ldflags,periscope-query,api_analytics_query) -o ../bin/periscope-query ./cmd/periscope
 
 build-bin-signalman:
-	cd api_realtime && go build $(LDFLAGS) -o ../bin/signalman ./cmd/signalman
+	cd api_realtime && go build $(call component_ldflags,signalman,api_realtime) -o ../bin/signalman ./cmd/signalman
 
 build-bin-bridge:
-	cd api_gateway && go build $(LDFLAGS) -o ../bin/bridge ./cmd/bridge
+	cd api_gateway && go build $(call component_ldflags,bridge,api_gateway) -o ../bin/bridge ./cmd/bridge
 
 build-bin-navigator:
-	cd api_dns && go build $(LDFLAGS) -o ../bin/navigator ./cmd/navigator
+	cd api_dns && go build $(call component_ldflags,navigator,api_dns) -o ../bin/navigator ./cmd/navigator
 
 build-bin-privateer:
-	cd api_mesh && go build $(LDFLAGS) -o ../bin/privateer ./cmd/privateer
+	cd api_mesh && go build $(call component_ldflags,privateer,api_mesh) -o ../bin/privateer ./cmd/privateer
 
 build-bin-deckhand:
-	cd api_ticketing && go build $(LDFLAGS) -o ../bin/deckhand ./cmd/deckhand
+	cd api_ticketing && go build $(call component_ldflags,deckhand,api_ticketing) -o ../bin/deckhand ./cmd/deckhand
 
 build-bin-steward:
-	cd api_forms && go build $(LDFLAGS) -o ../bin/steward ./cmd/steward
+	cd api_forms && go build $(call component_ldflags,steward,api_forms) -o ../bin/steward ./cmd/steward
 
 build-bin-skipper:
-	cd api_consultant && go build $(LDFLAGS) -o ../bin/skipper ./cmd/skipper
+	cd api_consultant && go build $(call component_ldflags,skipper,api_consultant) -o ../bin/skipper ./cmd/skipper
 
 build-bin-chandler:
-	cd api_assets && go build $(LDFLAGS) -o ../bin/chandler ./cmd/chandler
+	cd api_assets && go build $(call component_ldflags,chandler,api_assets) -o ../bin/chandler ./cmd/chandler
 
 build-bin-cli:
-	cd cli && go build $(LDFLAGS) -o ../bin/cli .
+	cd cli && go build $(call component_ldflags,cli,cli) -o ../bin/cli .
 
 clean:
 	rm -rf bin/

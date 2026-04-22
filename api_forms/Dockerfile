@@ -23,10 +23,20 @@ COPY api_forms/ api_forms/
 
 WORKDIR /workspace/api_forms
 
+ARG VERSION=dev
+ARG GIT_COMMIT=docker
+ARG BUILD_DATE
+ARG COMPONENT_NAME=steward
+ARG COMPONENT_VERSION=0.0.0
+
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w -X frameworks/pkg/version.Version=${VERSION:-dev} -X frameworks/pkg/version.GitCommit=${GIT_COMMIT:-unknown}" \
+    -ldflags "-s -w -X frameworks/pkg/version.Version=${VERSION} \
+              -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} \
+              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
+              -X frameworks/pkg/version.ComponentName=${COMPONENT_NAME} \
+              -X frameworks/pkg/version.ComponentVersion=${COMPONENT_VERSION}" \
     -o /steward ./cmd/steward
 
 FROM alpine:3.19
