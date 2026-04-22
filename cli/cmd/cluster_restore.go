@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
@@ -59,9 +60,8 @@ Always backup current state before restoring.`,
 
 // runRestore executes the restore command against an already-loaded manifest.
 func runRestore(cmd *cobra.Command, manifest *inventory.Manifest, component, backupPath string, skipValidation, yes bool) error {
-	fmt.Fprintf(cmd.OutOrStdout(), "⚠  WARNING: Restore will STOP services and OVERWRITE data!\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "Component: %s\n", component)
-	fmt.Fprintf(cmd.OutOrStdout(), "Backup: %s\n\n", backupPath)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Restoring %s from %s", component, backupPath))
+	ux.Warn(cmd.OutOrStdout(), "Restore will STOP services and OVERWRITE data.")
 
 	// Require confirmation for destructive operation
 	if !yes {
@@ -127,7 +127,7 @@ func restorePostgres(ctx context.Context, cmd *cobra.Command, manifest *inventor
 	if result, errRun := runner.Run(ctx, stopCmd); errRun != nil || result.ExitCode != 0 {
 		return fmt.Errorf("failed to stop postgres: %w", errRun)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Postgres stopped\n")
+	ux.Success(cmd.OutOrStdout(), "Postgres stopped")
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[2/4] Restoring from backup...\n")
 
@@ -148,24 +148,24 @@ cat %s | docker compose exec -T postgres psql -U postgres
 		return fmt.Errorf("restore failed: %s", result.Stderr)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Data restored\n")
+	ux.Success(cmd.OutOrStdout(), "Data restored")
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/4] Starting Postgres...\n")
 	// Already started above
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Postgres started\n")
+	ux.Success(cmd.OutOrStdout(), "Postgres started")
 
 	if !skipValidation {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[4/4] Validating...\n")
 		// Simple connection test
 		validateCmd := "docker compose -f /opt/frameworks/postgres/docker-compose.yml exec -T postgres psql -U postgres -c 'SELECT 1'"
 		if result, err := runner.Run(ctx, validateCmd); err != nil || result.ExitCode != 0 {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Validation failed: %v\n", err)
+			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Validation failed: %v", err))
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Postgres is healthy\n")
+			ux.Success(cmd.OutOrStdout(), "Postgres is healthy")
 		}
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "\n✓ Postgres restore complete!\n")
+	ux.Success(cmd.OutOrStdout(), "Postgres restore complete")
 	return nil
 }
 
@@ -193,7 +193,7 @@ func restoreClickHouse(ctx context.Context, cmd *cobra.Command, manifest *invent
 	if result, errRun := runner.Run(ctx, stopCmd); errRun != nil || result.ExitCode != 0 {
 		return fmt.Errorf("failed to stop clickhouse: %w", errRun)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ ClickHouse stopped\n")
+	ux.Success(cmd.OutOrStdout(), "ClickHouse stopped")
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[2/4] Restoring from backup...\n")
 
@@ -222,23 +222,23 @@ done
 		return fmt.Errorf("restore failed: %s", result.Stderr)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Data restored\n")
+	ux.Success(cmd.OutOrStdout(), "Data restored")
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/4] Starting ClickHouse...\n")
 	// Already started above
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ ClickHouse started\n")
+	ux.Success(cmd.OutOrStdout(), "ClickHouse started")
 
 	if !skipValidation {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[4/4] Validating...\n")
 		validateCmd := "docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --query='SELECT 1'"
 		if result, err := runner.Run(ctx, validateCmd); err != nil || result.ExitCode != 0 {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Validation failed: %v\n", err)
+			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Validation failed: %v", err))
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ ClickHouse is healthy\n")
+			ux.Success(cmd.OutOrStdout(), "ClickHouse is healthy")
 		}
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "\n✓ ClickHouse restore complete!\n")
+	ux.Success(cmd.OutOrStdout(), "ClickHouse restore complete")
 	return nil
 }
 
@@ -262,9 +262,9 @@ func restoreVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory
 	// Stop all services
 	stopCmd := "cd /opt/frameworks && for dir in */; do (cd $dir && docker compose down 2>/dev/null || true); done"
 	if result, errRun := runner.Run(ctx, stopCmd); errRun != nil || result.ExitCode != 0 {
-		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Some services may not have stopped: %v\n", errRun)
+		ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Some services may not have stopped: %v", errRun))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Services stopped\n")
+	ux.Success(cmd.OutOrStdout(), "Services stopped")
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[2/3] Restoring volumes...\n")
 
@@ -282,13 +282,13 @@ docker run --rm -v /var/lib/docker/volumes:/volumes -v $(dirname %s):/backup alp
 		return fmt.Errorf("restore failed: %s", result.Stderr)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Volumes restored\n")
+	ux.Success(cmd.OutOrStdout(), "Volumes restored")
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/3] Starting services...\n")
 	// User should manually start services they need
 	fmt.Fprintf(cmd.OutOrStdout(), "  ℹ  Use 'frameworks cluster provision' to start services\n")
 
-	fmt.Fprintf(cmd.OutOrStdout(), "\n✓ Volume restore complete!\n")
+	ux.Success(cmd.OutOrStdout(), "Volume restore complete")
 	return nil
 }
 
@@ -321,7 +321,7 @@ func restoreConfig(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		return fmt.Errorf("restore failed: %s", result.Stderr)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "✓ Config restore complete!\n")
+	ux.Success(cmd.OutOrStdout(), "Config restore complete")
 	fmt.Fprintln(cmd.OutOrStdout(), "ℹ  Restart services to apply configuration changes")
 	return nil
 }

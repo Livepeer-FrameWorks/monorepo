@@ -9,6 +9,8 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/readiness"
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
@@ -105,10 +107,22 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 	if cwdErr != nil {
 		cwd = ""
 	}
+
+	manifestFlag := stringFlag(cmd, "manifest")
+	gitopsDirFlag := stringFlag(cmd, "gitops-dir")
+	githubRepoFlag := stringFlag(cmd, "github-repo")
+	if !manifestFlag.Changed && !gitopsDirFlag.Changed && !githubRepoFlag.Changed &&
+		!manifestSourceInEnv() && ctxCfg.Gitops == nil && ctxCfg.LastManifestPath != "" {
+		if _, statErr := os.Stat(ctxCfg.LastManifestPath); statErr == nil {
+			ux.ContextNotice(cmd.OutOrStdout(), "manifest", ctxCfg.LastManifestPath)
+			manifestFlag = inventory.StringFlag{Value: ctxCfg.LastManifestPath, Changed: true}
+		}
+	}
+
 	in := inventory.ResolveInput{
-		Manifest:    stringFlag(cmd, "manifest"),
-		GitopsDir:   stringFlag(cmd, "gitops-dir"),
-		GithubRepo:  stringFlag(cmd, "github-repo"),
+		Manifest:    manifestFlag,
+		GitopsDir:   gitopsDirFlag,
+		GithubRepo:  githubRepoFlag,
 		GithubRef:   stringFlag(cmd, "github-ref"),
 		Cluster:     stringFlag(cmd, "cluster"),
 		AgeKey:      stringFlag(cmd, "age-key"),
@@ -146,6 +160,15 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 		Source:       rm.Source,
 		Cleanup:      rm.Cleanup,
 	}, nil
+}
+
+func manifestSourceInEnv() bool {
+	for _, k := range []string{"FRAMEWORKS_MANIFEST", "FRAMEWORKS_GITOPS_DIR", "FRAMEWORKS_GITHUB_REPO"} {
+		if os.Getenv(k) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func stringFlag(cmd *cobra.Command, name string) inventory.StringFlag {
@@ -206,7 +229,13 @@ func newClusterDetectCmd() *cobra.Command {
 				return err
 			}
 			defer rc.Cleanup()
-			return runDetect(cmd, rc.Manifest, rc.ManifestPath)
+			if err := runDetect(cmd, rc.Manifest, rc.ManifestPath); err != nil {
+				return err
+			}
+			if rc.Source == inventory.SourceManifestFlag {
+				rememberLastManifest(cmd, rc.ManifestPath)
+			}
+			return nil
 		},
 	}
 	return cmd
@@ -256,7 +285,7 @@ Reports critical issues and provides actionable recommendations.`,
 }
 
 func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath string) error {
-	fmt.Fprintf(cmd.OutOrStdout(), "Detecting cluster state from manifest: %s\n", manifestPath)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Detecting cluster state from manifest: %s", manifestPath))
 	fmt.Fprintf(cmd.OutOrStdout(), "Cluster type: %s, Profile: %s\n", manifest.Type, manifest.Profile)
 	fmt.Fprintf(cmd.OutOrStdout(), "Hosts: %d\n\n", len(manifest.Hosts))
 
@@ -297,7 +326,7 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 		if svc.Host != "" {
 			deploy, err := resolveDeployName(name, svc)
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s: %v", name, err))
 				continue
 			}
 			detectServiceWithTimeout(cmd, sshPool, manifest, name, deploy, svc.Host)
@@ -305,7 +334,7 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 			for i, hostName := range svc.Hosts {
 				deploy, err := resolveDeployName(name, svc)
 				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s: %v", name, err))
 					continue
 				}
 				serviceName := fmt.Sprintf("%s-%d", name, i+1)
@@ -321,7 +350,7 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 		if iface.Host != "" {
 			deploy, err := resolveDeployName(name, iface)
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s: %v", name, err))
 				continue
 			}
 			detectServiceWithTimeout(cmd, sshPool, manifest, name, deploy, iface.Host)
@@ -335,7 +364,7 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 		if obs.Host != "" {
 			deploy, err := resolveDeployName(name, obs)
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s: %v", name, err))
 				continue
 			}
 			detectServiceWithTimeout(cmd, sshPool, manifest, name, deploy, obs.Host)
@@ -358,14 +387,14 @@ func detectServiceWithTimeout(cmd *cobra.Command, sshPool *fwssh.Pool, manifest 
 	select {
 	case <-done:
 	case <-ctx.Done():
-		fmt.Fprintf(cmd.OutOrStdout(), "✗ %s (%s): timed out after %s\n", serviceName, hostName, perHostTimeout)
+		ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s (%s): timed out after %s", serviceName, hostName, perHostTimeout))
 	}
 }
 
 func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
 	host, ok := manifest.GetHost(hostName)
 	if !ok {
-		fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: host '%s' not found\n", serviceName, hostName)
+		ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s: host %q not found", serviceName, hostName))
 		return
 	}
 
@@ -373,18 +402,13 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 	state, err := detector.Detect(ctx, deployName)
 
 	if err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "✗ %s (%s): detection error: %v\n", serviceName, hostName, err)
+		ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s (%s): detection error: %v", serviceName, hostName, err))
 		return
 	}
 
 	if !state.Exists {
-		fmt.Fprintf(cmd.OutOrStdout(), "✗ %s (%s): not found\n", serviceName, hostName)
+		ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("%s (%s): not installed", serviceName, hostName))
 		return
-	}
-
-	status := "✓"
-	if !state.Running {
-		status = "⚠"
 	}
 
 	modeStr := state.Mode
@@ -392,13 +416,12 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 		modeStr = fmt.Sprintf("%s, v%s", state.Mode, state.Version)
 	}
 
-	runningStr := "stopped"
+	line := fmt.Sprintf("%s (%s): running [%s, detected by: %s]", serviceName, hostName, modeStr, state.DetectedBy)
 	if state.Running {
-		runningStr = "running"
+		ux.Success(cmd.OutOrStdout(), line)
+	} else {
+		ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("%s (%s): stopped [%s, detected by: %s]", serviceName, hostName, modeStr, state.DetectedBy))
 	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "%s %s (%s): %s [%s, detected by: %s]\n",
-		status, serviceName, hostName, runningStr, modeStr, state.DetectedBy)
 
 	if verbose && len(state.Metadata) > 0 {
 		for k, v := range state.Metadata {
@@ -408,7 +431,7 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 }
 
 func runDoctor(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath string) error {
-	fmt.Fprintf(cmd.OutOrStdout(), "Running cluster health checks\n")
+	ux.Heading(cmd.OutOrStdout(), "Running cluster health checks")
 	fmt.Fprintf(cmd.OutOrStdout(), "Manifest: %s (type: %s, profile: %s)\n\n", manifestPath, manifest.Type, manifest.Profile)
 
 	totalChecks := 0
@@ -576,7 +599,7 @@ func runDoctor(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 			}
 			port, err := resolvePort(name, svc)
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s: %v", name, err))
 				continue
 			}
 			totalChecks++
@@ -599,24 +622,101 @@ func runDoctor(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Summary: %d/%d checks passed\n", passedChecks, totalChecks)
 
+	printDoctorControlPlaneSection(cmd, manifest)
+
 	if passedChecks < totalChecks {
-		fmt.Fprintln(cmd.OutOrStdout(), "\nRecommendations:")
-		fmt.Fprintln(cmd.OutOrStdout(), "  - Check failed services with: frameworks cluster detect")
-		fmt.Fprintln(cmd.OutOrStdout(), "  - Review service logs for errors")
-		fmt.Fprintln(cmd.OutOrStdout(), "  - Verify network connectivity between hosts")
+		ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+			{Cmd: "frameworks cluster detect", Why: "See which services are running vs. missing."},
+			{Cmd: "frameworks cluster logs <service>", Why: "Review logs for the failing service."},
+		})
 	}
 
 	return nil
 }
 
-func printHealthResult(cmd *cobra.Command, serviceName string, result *health.CheckResult) {
-	mark := "✗"
-	if result.OK {
-		mark = "✓"
-	} else if result.Status == "degraded" {
-		mark = "⚠"
+// printDoctorControlPlaneSection runs the shared ControlPlaneReadiness check
+// against what doctor can see without SOPS access: the tenant ID the
+// context remembered at provision time, plus the Quartermaster address
+// from the manifest. With no service token, readiness returns Checked=false
+// and we render "not re-verified" honestly rather than fabricating a
+// healthy-looking summary.
+//
+// Doctor stays read-only by design (no SOPS decryption). Operators who
+// need the deep check re-run `cluster provision --ready` or use admin
+// commands that already carry a service token.
+func printDoctorControlPlaneSection(cmd *cobra.Command, manifest *inventory.Manifest) {
+	out := cmd.OutOrStdout()
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return
+	}
+	active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
+	if mErr != nil || active.SystemTenantID == "" {
+		return
 	}
 
+	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002)    //nolint:errcheck // empty on miss is the intent
+	commodoreAddr, _ := resolveServiceGRPCAddr(manifest, "commodore", 19001) //nolint:errcheck // empty on miss is the intent
+	purserAddr, _ := resolveServiceGRPCAddr(manifest, "purser", 19003)       //nolint:errcheck // empty on miss is the intent
+
+	var pricings []readiness.ClusterPricing
+	for clusterID, cc := range manifest.Clusters {
+		if cc.Pricing != nil {
+			pricings = append(pricings, readiness.ClusterPricing{ClusterID: clusterID})
+		}
+	}
+
+	report := readiness.ControlPlaneReadiness(cmd.Context(), readiness.ControlPlaneInputs{
+		SystemTenantID:    active.SystemTenantID,
+		QuartermasterAddr: qmAddr,
+		CommodoreAddr:     commodoreAddr,
+		PurserAddr:        purserAddr,
+		DeclaredPricings:  pricings,
+		// ServiceToken intentionally empty — doctor doesn't SOPS-decrypt.
+	})
+
+	fmt.Fprintln(out, "")
+	ux.Subheading(out, "Control Plane:")
+	fmt.Fprintf(out, "  system tenant:  %s\n", active.SystemTenantID)
+	if qmAddr != "" {
+		fmt.Fprintf(out, "  quartermaster:  %s\n", qmAddr)
+	}
+	renderReadinessBlock(cmd, report, []ux.NextStep{
+		{Cmd: "frameworks cluster provision --ready", Why: "Re-run with SOPS access so the control-plane check gets a real service token."},
+		{Cmd: "frameworks admin clusters list", Why: "Any admin command that touches Quartermaster reads the service token and will succeed/fail explicitly."},
+	})
+}
+
+// renderReadinessBlock prints a readiness.Report inline: per-warning
+// status lines + remediation next-steps. When the report couldn't run
+// (Checked=false), it says so instead of implying "healthy" and renders
+// the caller-supplied fallback next-steps so the operator knows how to
+// actually re-verify.
+func renderReadinessBlock(cmd *cobra.Command, report readiness.Report, notCheckedFallback []ux.NextStep) {
+	out := cmd.OutOrStdout()
+	if !report.Checked {
+		ux.Warn(out, "control-plane not verified (no service token available in this command)")
+		ux.PrintNextSteps(out, notCheckedFallback)
+		return
+	}
+	if len(report.Warnings) == 0 {
+		ux.Success(out, "control-plane verified")
+		return
+	}
+	for _, w := range report.Warnings {
+		ux.Warn(out, w.Detail)
+	}
+	steps := make([]ux.NextStep, 0, len(report.Warnings))
+	for _, w := range report.Warnings {
+		if w.Remediation.Cmd == "" && w.Remediation.Why == "" {
+			continue
+		}
+		steps = append(steps, ux.NextStep{Cmd: w.Remediation.Cmd, Why: w.Remediation.Why})
+	}
+	ux.PrintNextSteps(out, steps)
+}
+
+func printHealthResult(cmd *cobra.Command, serviceName string, result *health.CheckResult) {
 	statusStr := result.Status
 	if result.Message != "" {
 		statusStr = result.Message
@@ -624,7 +724,15 @@ func printHealthResult(cmd *cobra.Command, serviceName string, result *health.Ch
 		statusStr = result.Error
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "%s %-20s: %s\n", mark, serviceName, statusStr)
+	line := fmt.Sprintf("%-20s: %s", serviceName, statusStr)
+	switch {
+	case result.OK:
+		ux.Success(cmd.OutOrStdout(), line)
+	case result.Status == "degraded":
+		ux.Warn(cmd.OutOrStdout(), line)
+	default:
+		ux.Fail(cmd.OutOrStdout(), line)
+	}
 
 	if verbose && len(result.Metadata) > 0 {
 		for k, v := range result.Metadata {

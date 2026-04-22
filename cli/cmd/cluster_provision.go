@@ -19,6 +19,9 @@ import (
 	"sync"
 	"time"
 
+	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/readiness"
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
 	fwsops "frameworks/cli/pkg/sops"
@@ -48,6 +51,8 @@ func newClusterProvisionCmd() *cobra.Command {
 	var dryRun bool
 	var force bool
 	var ignoreValidation bool
+	var ready bool
+	var seedDemo bool
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -63,11 +68,15 @@ Phase Options (--only):
 Provisioning is idempotent - safe to run multiple times.
 Existing services will be detected and skipped unless --force is used.
 
+Pass --ready to chain 'cluster init' and 'cluster seed' (static seeds only)
+after service batches — gives you a fully usable platform in a single
+command. Add --seed-demo for demo tenant/user/stream data as well.
+
 The manifest source (single file, local gitops repo, or GitHub repo) is
 chosen by the persistent cluster-group flags. Run 'frameworks setup' to
 save a default, or pass them explicitly.`,
-		Example: `  # Provision everything using the configured context defaults
-  frameworks cluster provision
+		Example: `  # Provision and make the platform usable in one shot
+  frameworks cluster provision --ready --bootstrap-admin-email you@co --bootstrap-admin-password-env PW
 
   # Dry-run against a local manifest
   frameworks cluster provision --manifest ./cluster.yaml --dry-run
@@ -83,7 +92,7 @@ save a default, or pass them explicitly.`,
 				return err
 			}
 			defer rc.Cleanup()
-			return runProvision(cmd, rc, only, dryRun, force, ignoreValidation)
+			return runProvision(cmd, rc, only, dryRun, force, ignoreValidation, ready, seedDemo)
 		},
 	}
 
@@ -91,6 +100,8 @@ save a default, or pass them explicitly.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if health validation fails (DANGEROUS)")
+	cmd.Flags().BoolVar(&ready, "ready", false, "After service batches, also run 'cluster init' and 'cluster seed' so the platform is usable in one command")
+	cmd.Flags().BoolVar(&seedDemo, "seed-demo", false, "With --ready, apply demo seeds (sample tenant/user/stream) in addition to static seeds")
 
 	cmd.Flags().String("bootstrap-admin-email", "", "Create an initial operator user with this email")
 	cmd.Flags().String("bootstrap-admin-password", "", "Plaintext password for bootstrap admin (prefer --bootstrap-admin-password-env or --bootstrap-admin-password-file)")
@@ -104,16 +115,17 @@ save a default, or pass them explicitly.`,
 	return cmd
 }
 
-func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, force, ignoreValidation bool) error {
+func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, force, ignoreValidation, ready, seedDemo bool) error {
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
+	out := cmd.OutOrStdout()
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Provisioning cluster from manifest: %s\n", manifestPath)
-	fmt.Fprintf(cmd.OutOrStdout(), "Cluster type: %s, Profile: %s\n", manifest.Type, manifest.Profile)
-	fmt.Fprintf(cmd.OutOrStdout(), "Phase: %s\n\n", only)
+	ux.Heading(out, fmt.Sprintf("Provisioning cluster from manifest: %s", manifestPath))
+	fmt.Fprintf(out, "Cluster type: %s, Profile: %s\n", manifest.Type, manifest.Profile)
+	fmt.Fprintf(out, "Phase: %s\n\n", only)
 
 	if dryRun {
-		fmt.Fprintln(cmd.OutOrStdout(), "[DRY-RUN MODE - No changes will be made]")
+		fmt.Fprintln(out, "[DRY-RUN MODE - No changes will be made]")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -195,8 +207,155 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "\n✓ Provisioning complete!")
+	if rc.Source == inventory.SourceManifestFlag {
+		rememberLastManifest(cmd, rc.ManifestPath)
+	}
+
+	initRan, seedsRan := false, false
+	if ready {
+		ux.Heading(out, "Running post-provision --ready chain")
+		if err := runInit(cmd, rc, "all"); err != nil {
+			return fmt.Errorf("cluster init (from --ready): %w", err)
+		}
+		initRan = true
+		if err := runSeed(cmd, rc, seedDemo, true); err != nil {
+			return fmt.Errorf("cluster seed (from --ready): %w", err)
+		}
+		seedsRan = true
+	}
+
+	renderProvisionSummary(ctx, cmd, manifest, only, ready, initRan, seedsRan)
 	return nil
+}
+
+// renderProvisionSummary prints the multi-line Result block and the Next:
+// block for a successful provision. Both degrade cleanly in CI / JSON modes
+// via the ux helpers.
+func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, only string, ready, initRan, seedsRan bool) {
+	out := cmd.OutOrStdout()
+
+	// Build a fresh readiness report that reflects the true state after
+	// --ready's init+seed chain. The earlier validateControlPlane call
+	// inside postProvisionFinalize may have seen pre-init state.
+	adminBootstrapped, _ := cmd.Flags().GetString("bootstrap-admin-email") //nolint:errcheck // flag always exists
+	report := buildControlPlaneReport(ctx, manifest, collectRuntimeForReadinessOnly(cmd, manifest))
+
+	// If the readiness check couldn't run (no service token), we don't know
+	// whether an admin account exists — report state honestly as "unknown"
+	// rather than inferring from a no-warnings-means-healthy heuristic.
+	adminField := ux.ResultField{
+		Key: "operator account",
+	}
+	switch {
+	case !report.Checked && adminBootstrapped == "":
+		adminField.OK = false
+		adminField.Detail = "unknown (no service token to re-check)"
+	case adminBootstrapped != "":
+		adminField.OK = true
+		adminField.Detail = adminBootstrapped
+	default:
+		// Report was checked: derive existence from the operator-account warning.
+		adminExists := true
+		for _, w := range report.Warnings {
+			if w.Subject == "control-plane.operator-account" {
+				adminExists = false
+			}
+		}
+		adminField.OK = adminExists
+		adminField.Detail = adminDetail(adminExists, "")
+	}
+
+	fields := []ux.ResultField{
+		{Key: "infrastructure", OK: true, Detail: "all batches succeeded"},
+		{Key: "control-plane", OK: report.OK(), Detail: controlPlaneDetail(report)},
+		adminField,
+	}
+	if ready {
+		fields = append(fields,
+			ux.ResultField{Key: "init", OK: initRan, Detail: "postgres/kafka/clickhouse"},
+			ux.ResultField{Key: "seeds", OK: seedsRan, Detail: "static (+demo if --seed-demo)"},
+		)
+	}
+	fields = append(fields, ux.ResultField{
+		Key:    "phase",
+		OK:     true,
+		Detail: only,
+	})
+	ux.Result(out, fields)
+
+	// Compose next-steps from readiness remediations + workflow defaults.
+	var steps []ux.NextStep
+	for _, w := range report.Warnings {
+		if w.Remediation.Cmd == "" && w.Remediation.Why == "" {
+			continue
+		}
+		steps = append(steps, ux.NextStep{Cmd: w.Remediation.Cmd, Why: w.Remediation.Why})
+	}
+	// Point at cluster doctor either way — after success to verify, or
+	// after a no-check run so the operator can re-verify with SOPS access.
+	switch {
+	case report.OK():
+		steps = append(steps, ux.NextStep{
+			Cmd: "frameworks cluster doctor",
+			Why: "Verify the control plane and run a final health check.",
+		})
+	case !report.Checked:
+		steps = append(steps, ux.NextStep{
+			Cmd: "frameworks cluster doctor",
+			Why: "The post-run summary couldn't re-verify the control plane — doctor can, given SOPS access to the manifest env_files.",
+		})
+	}
+	if !ready {
+		steps = append(steps, ux.NextStep{
+			Cmd: "frameworks cluster provision --ready",
+			Why: "Re-run with --ready to chain init + seed and land a usable platform in one shot.",
+		})
+	}
+	ux.PrintNextSteps(out, steps)
+}
+
+func collectRuntimeForReadinessOnly(_ *cobra.Command, manifest *inventory.Manifest) map[string]interface{} {
+	// Re-resolve what we need from manifest + shared env just for the final
+	// readiness recheck. Keep this separate from the provision runtimeData
+	// map so changes to one don't leak into the other.
+	data := map[string]interface{}{}
+	if qmAddr, err := resolveServiceGRPCAddr(manifest, "quartermaster", 19002); err == nil {
+		data["quartermaster_grpc_addr"] = qmAddr
+	}
+	cfg, err := fwcfg.Load()
+	if err == nil {
+		active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
+		if mErr == nil && active.SystemTenantID != "" {
+			data["system_tenant_id"] = active.SystemTenantID
+		}
+	}
+	// service_token comes from manifest shared env; we can't read that here
+	// without triggering SOPS decryption. If it's missing, readiness
+	// downgrades to no-check, which is fine for the summary case.
+	return data
+}
+
+func controlPlaneDetail(r readiness.Report) string {
+	if !r.Checked {
+		return "not re-verified (no service token available to post-run summary)"
+	}
+	if len(r.Warnings) == 0 {
+		return "healthy"
+	}
+	if len(r.Warnings) == 1 {
+		return "1 warning — see Next"
+	}
+	return fmt.Sprintf("%d warnings — see Next", len(r.Warnings))
+}
+
+func adminDetail(exists bool, bootstrapEmail string) string {
+	if exists {
+		if bootstrapEmail != "" {
+			return bootstrapEmail
+		}
+		return "present"
+	}
+	return "missing"
 }
 
 // provisionedTask tracks a successfully provisioned task for rollback
@@ -244,7 +403,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	const perTaskTimeout = 10 * time.Minute
 
 	for batchNum, batch := range plan.Batches {
-		fmt.Fprintf(cmd.OutOrStdout(), "Executing Batch %d/%d:\n", batchNum+1, len(plan.Batches))
+		ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Executing Batch %d/%d (%d task(s))", batchNum+1, len(plan.Batches), len(batch)))
 
 		type batchResult struct {
 			task        *orchestrator.Task
@@ -294,14 +453,14 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				}
 				mu.Unlock()
 
-				fmt.Fprintf(cmd.OutOrStdout(), "    ✓ %s provisioned\n", task.Name)
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", task.Name))
 				return nil
 			})
 		}
 
 		if err := g.Wait(); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Batch failed: %v\n", err)
-			fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
+			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Batch failed: %v", err))
+			fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
 			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 			return err
 		}
@@ -327,14 +486,14 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		for _, r := range results {
 			if r.task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-				result, err := runBootstrap(ctx, manifest, runtimeData)
+				result, err := runBootstrap(ctx, cmd.OutOrStdout(), manifest, runtimeData)
 				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Bootstrap failed: %v\n", err)
+					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap failed: %v", err))
 					fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 					return fmt.Errorf("bootstrap failed: %w", err)
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "    ✓ System Tenant bootstrapped")
+				ux.Success(cmd.OutOrStdout(), "System Tenant bootstrapped")
 				if result.SystemTenantID != "" {
 					runtimeData["system_tenant_id"] = result.SystemTenantID
 				}
@@ -352,7 +511,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		}
 
 		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Foghorn reconciliation failed: %v\n", err)
+			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Foghorn reconciliation failed: %v", err))
 			fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 			return fmt.Errorf("foghorn reconciliation failed: %w", err)
@@ -365,7 +524,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			privateerSvc := manifest.Services["privateer"]
 			meshHosts := orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts)
 			if err := verifyMeshHealth(ctx, cmd, manifest, sshPool, meshHosts); err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Mesh verification failed: %v\n", err)
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Mesh verification failed: %v", err))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on mesh DNS for discovery.")
 				fmt.Fprintln(cmd.OutOrStdout(), "  Fix mesh issues and re-run provisioning, or use --ignore-validation to skip.")
 				if !ignoreValidation {
@@ -397,6 +556,8 @@ func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *in
 		// Bootstrap didn't run (e.g. --only=interfaces), skip finalization
 		return nil
 	}
+
+	rememberSystemTenantID(cmd, systemTenantID)
 
 	fmt.Fprintln(cmd.OutOrStdout(), "  Control-plane finalization...")
 
@@ -470,7 +631,7 @@ func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manif
 		if _, err := p.SetClusterPricing(ctx, req); err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "    Warning: failed to set pricing for cluster %s: %v\n", clusterID, err)
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Cluster pricing set for %s (model=%s)\n", clusterID, cc.Pricing.Model)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Cluster pricing set for %s (model=%s)", clusterID, cc.Pricing.Model))
 		}
 	}
 	return nil
@@ -479,8 +640,9 @@ func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manif
 func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, systemTenantID, serviceToken string) error {
 	email, err := cmd.Flags().GetString("bootstrap-admin-email")
 	if err != nil || email == "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n  To create your first operator account:\n")
-		fmt.Fprintf(cmd.OutOrStdout(), "    frameworks admin users create --tenant-id %s --email <email> --password <pw>\n\n", systemTenantID)
+		// No bootstrap email provided. The readiness report at the end
+		// of runProvision will surface a next-step with the exact
+		// `admin users create` command (tenant-id filled from context).
 		return nil
 	}
 
@@ -537,112 +699,62 @@ func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *
 	if err != nil {
 		return fmt.Errorf("failed to create bootstrap admin: %w", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Created operator account: %s (user_id: %s) in tenant %s\n",
-		resp.User.GetEmail(), resp.User.GetId(), systemTenantID)
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created operator account: %s (user_id: %s) in tenant %s",
+		resp.User.GetEmail(), resp.User.GetId(), systemTenantID))
 	return nil
 }
 
 func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
-	systemTenantID, stOk := runtimeData["system_tenant_id"].(string)
-	serviceToken, tkOk := runtimeData["service_token"].(string)
-	grpcAddr, gaOk := runtimeData["quartermaster_grpc_addr"].(string)
+	report := buildControlPlaneReport(ctx, manifest, runtimeData)
+	runtimeData["control_plane_report"] = report
 
-	if !stOk || !tkOk || !gaOk || systemTenantID == "" || serviceToken == "" || grpcAddr == "" {
+	if len(report.Warnings) == 0 {
+		ux.Success(cmd.OutOrStdout(), "Control-plane validation passed")
 		return nil
 	}
 
-	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: isDevProfile(manifest),
-	})
-	if err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: could not connect to Quartermaster for validation: %v\n", err)
-		return nil
+	ux.Subheading(cmd.OutOrStdout(), "Control-plane validation warnings:")
+	for _, w := range report.Warnings {
+		ux.Warn(cmd.OutOrStdout(), w.Detail)
 	}
-	defer client.Close()
-
-	var warnings []string
-
-	// Check clusters for default and official flags
-	clustersResp, err := client.ListClusters(ctx, nil)
-	if err == nil {
-		hasDefault := false
-		hasOfficial := false
-		for _, c := range clustersResp.GetClusters() {
-			if c.GetIsDefaultCluster() {
-				hasDefault = true
-			}
-			if c.GetIsPlatformOfficial() {
-				hasOfficial = true
-			}
-		}
-		if !hasDefault {
-			warnings = append(warnings, "No default cluster - new tenant signups will not auto-subscribe")
-		}
-		if !hasOfficial {
-			warnings = append(warnings, "No platform-official cluster - billing tier access will not work")
-		}
+	strict, _ := cmd.Flags().GetBool("strict-control-plane") //nolint:errcheck // flag always exists
+	switch {
+	case strict:
+		return fmt.Errorf("control-plane validation failed with %d warning(s) (--strict-control-plane is set)", len(report.Warnings))
+	case !isDevProfile(manifest):
+		return fmt.Errorf("control-plane validation failed with %d warning(s); non-dev profiles fail on warnings by default — pass --ignore-validation to override if you know what you're doing", len(report.Warnings))
 	}
-
-	// Check for platform tenant user
-	commodoreAddr, commodoreErr := resolveServiceGRPCAddr(manifest, "commodore", 19001)
-	if commodoreErr == nil {
-		cli, cliErr := commodoreCli.NewGRPCClient(commodoreCli.GRPCConfig{
-			GRPCAddr:      commodoreAddr,
-			Logger:        logging.NewLogger(),
-			ServiceToken:  serviceToken,
-			AllowInsecure: isDevProfile(manifest),
-		})
-		if cliErr == nil {
-			defer cli.Close()
-			countResp, countErr := cli.GetTenantUserCount(ctx, systemTenantID)
-			if countErr == nil && countResp.GetActiveCount() == 0 {
-				warnings = append(warnings, "No users in platform tenant - use 'frameworks admin users create --role owner' or re-run with --bootstrap-admin-email")
-			} else if countErr != nil {
-				warnings = append(warnings, fmt.Sprintf("Could not check platform tenant users: %v", countErr))
-			}
-		}
-	}
-
-	// Check cluster pricing for official clusters
-	purserAddr, purserErr := resolveServiceGRPCAddr(manifest, "purser", 19003)
-	if purserErr == nil {
-		p, pErr := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-			GRPCAddr:      purserAddr,
-			Logger:        logging.NewLogger(),
-			ServiceToken:  serviceToken,
-			AllowInsecure: isDevProfile(manifest),
-		})
-		if pErr == nil {
-			defer p.Close()
-			for clusterID, cc := range manifest.Clusters {
-				if cc.Pricing == nil {
-					continue
-				}
-				pricing, pricingErr := p.GetClusterPricing(ctx, clusterID)
-				if pricingErr != nil || pricing == nil || pricing.GetPricingModel() == "" {
-					warnings = append(warnings, fmt.Sprintf("No pricing config for cluster %s (manifest declares pricing but Purser has none)", clusterID))
-				}
-			}
-		}
-	}
-
-	if len(warnings) > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n  Control-plane validation warnings:\n")
-		for _, w := range warnings {
-			fmt.Fprintf(cmd.OutOrStdout(), "    - %s\n", w)
-		}
-		strict, _ := cmd.Flags().GetBool("strict-control-plane") //nolint:errcheck // flag always exists
-		if strict || !isDevProfile(manifest) {
-			return fmt.Errorf("control-plane validation failed with %d warning(s) (--strict-control-plane is set)", len(warnings))
-		}
-	} else {
-		fmt.Fprintln(cmd.OutOrStdout(), "    ✓ Control-plane validation passed")
-	}
-
 	return nil
+}
+
+// buildControlPlaneReport assembles the ControlPlaneInputs from manifest +
+// runtime data and delegates to readiness.ControlPlaneReadiness. Callers
+// that only need the report (without printing / policy) can use this
+// directly — cluster doctor and status do.
+func buildControlPlaneReport(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}) readiness.Report {
+	systemTenantID, _ := runtimeData["system_tenant_id"].(string) //nolint:errcheck // zero value on missing key is the intent
+	serviceToken, _ := runtimeData["service_token"].(string)      //nolint:errcheck // zero value on missing key is the intent
+	qmAddr, _ := runtimeData["quartermaster_grpc_addr"].(string)  //nolint:errcheck // zero value on missing key is the intent
+
+	var pricings []readiness.ClusterPricing
+	for clusterID, cc := range manifest.Clusters {
+		if cc.Pricing != nil {
+			pricings = append(pricings, readiness.ClusterPricing{ClusterID: clusterID})
+		}
+	}
+
+	commodoreAddr, _ := resolveServiceGRPCAddr(manifest, "commodore", 19001) //nolint:errcheck // missing address degrades readiness to no-op
+	purserAddr, _ := resolveServiceGRPCAddr(manifest, "purser", 19003)       //nolint:errcheck // missing address degrades readiness to no-op
+
+	return readiness.ControlPlaneReadiness(ctx, readiness.ControlPlaneInputs{
+		SystemTenantID:    systemTenantID,
+		ServiceToken:      serviceToken,
+		QuartermasterAddr: qmAddr,
+		CommodoreAddr:     commodoreAddr,
+		PurserAddr:        purserAddr,
+		AllowInsecure:     isDevProfile(manifest),
+		DeclaredPricings:  pricings,
+	})
 }
 
 // resolveServiceGRPCAddr resolves a service's gRPC address from the manifest,
@@ -1065,7 +1177,7 @@ func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer,
 	if _, err := registrar.BootstrapService(ctx, req); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "    ✓ Registered service instance: %s/%s (%s:%d)\n", task.Host, serviceType, externalIP, port)
+	ux.Success(out, fmt.Sprintf("Registered service instance: %s/%s (%s:%d)", task.Host, serviceType, externalIP, port))
 	return nil
 }
 
@@ -1221,7 +1333,7 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 		}
 	}
 
-	fmt.Fprintf(out, "    ✓ Registered ingress desired state for %s\n", task.Host)
+	ux.Success(out, fmt.Sprintf("Registered ingress desired state for %s", task.Host))
 	return nil
 }
 
@@ -1361,7 +1473,7 @@ func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 			return fmt.Errorf("assign foghorn to cluster %s: %w", clusterID, err)
 		}
 
-		fmt.Fprintf(out, "    ✓ Foghorn assigned to cluster %s\n", clusterID)
+		ux.Success(out, fmt.Sprintf("Foghorn assigned to cluster %s", clusterID))
 	}
 
 	return nil
@@ -2216,21 +2328,21 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 		if err != nil {
 			msg := fmt.Sprintf("%s on %s: could not get provisioner: %v", t.task.Name, t.task.Host, err)
 			rollbackFailures = append(rollbackFailures, msg)
-			fmt.Fprintf(cmd.OutOrStdout(), "      ✗ %s\n", msg)
+			ux.Fail(cmd.OutOrStdout(), msg)
 			continue
 		}
 
 		if err := prov.Cleanup(ctx, t.host, t.config); err != nil {
 			msg := fmt.Sprintf("%s on %s: cleanup failed: %v", t.task.Name, t.task.Host, err)
 			rollbackFailures = append(rollbackFailures, msg)
-			fmt.Fprintf(cmd.OutOrStdout(), "      ✗ %s\n", msg)
+			ux.Fail(cmd.OutOrStdout(), msg)
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "      ✓ Stopped\n")
+			ux.Success(cmd.OutOrStdout(), "Stopped")
 		}
 	}
 
 	if len(rollbackFailures) > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n  ⚠ Rollback completed with %d failure(s):\n", len(rollbackFailures))
+		ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("Rollback completed with %d failure(s):", len(rollbackFailures)))
 		for _, f := range rollbackFailures {
 			fmt.Fprintf(cmd.OutOrStdout(), "    - %s\n", f)
 		}
@@ -2279,7 +2391,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 			}
 		}
 		if len(missing) > 0 {
-			fmt.Printf("  ✗ %s: missing required config:\n", task.Name)
+			ux.Fail(os.Stderr, fmt.Sprintf("%s: missing required config:", task.Name))
 			for _, mk := range missing {
 				fmt.Printf("      %s — %s\n", mk.Key, mk.SetupGuide)
 			}
@@ -2368,7 +2480,7 @@ type bootstrapResult struct {
 }
 
 // runBootstrap connects to Quartermaster and generates infrastructure tokens
-func runBootstrap(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}) (*bootstrapResult, error) {
+func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manifest, runtimeData map[string]interface{}) (*bootstrapResult, error) {
 	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
 	if err != nil {
 		return nil, err
@@ -2411,9 +2523,9 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, runtimeData
 			return nil, fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", errCreate)
 		}
 		systemTenantID = createTenantResp.Tenant.Id
-		fmt.Printf("    ✓ Created System Tenant with ID: %s\n", systemTenantID)
+		ux.Success(out, fmt.Sprintf("Created System Tenant with ID: %s", systemTenantID))
 	} else {
-		fmt.Printf("  ✓ 'FrameWorks' System Tenant already exists: %s\n", systemTenantID)
+		ux.Success(out, fmt.Sprintf("'FrameWorks' System Tenant already exists: %s", systemTenantID))
 	}
 
 	// 2. Register all clusters
@@ -2484,7 +2596,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, runtimeData
 			if err != nil {
 				return nil, fmt.Errorf("failed to register cluster '%s': %w", clusterID, err)
 			}
-			fmt.Printf("    ✓ Registered Cluster: %s\n", clusterID)
+			ux.Success(out, fmt.Sprintf("Registered Cluster: %s", clusterID))
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to check cluster '%s': %w", clusterID, err)
 		} else {
@@ -2524,9 +2636,9 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, runtimeData
 				if _, err := client.UpdateCluster(ctx, updateReq); err != nil {
 					return nil, fmt.Errorf("failed to update cluster '%s': %w", clusterID, err)
 				}
-				fmt.Printf("  ✓ Cluster '%s' already registered; updated metadata.\n", clusterID)
+				ux.Success(out, fmt.Sprintf("Cluster %q already registered; updated metadata", clusterID))
 			} else {
-				fmt.Printf("  ✓ Cluster '%s' already registered.\n", clusterID)
+				ux.Success(out, fmt.Sprintf("Cluster %q already registered", clusterID))
 			}
 		}
 	}
@@ -2569,7 +2681,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, runtimeData
 			if errCreate != nil {
 				return nil, fmt.Errorf("failed to register node %s: %w", hostName, errCreate)
 			}
-			fmt.Printf("    ✓ Registered node: %s (%s) -> cluster %s\n", hostName, nodeType, nodeCluster)
+			ux.Success(out, fmt.Sprintf("Registered node: %s (%s) -> cluster %s", hostName, nodeType, nodeCluster))
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to check node %s: %w", hostName, err)
 		} else {
@@ -2589,7 +2701,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest, runtimeData
 				return nil, fmt.Errorf("node %s already registered but has drifted from manifest (%s) — no UpdateNode RPC available; delete and re-register the node manually",
 					hostName, strings.Join(drifts, "; "))
 			}
-			fmt.Printf("    ✓ Node %s already registered.\n", hostName)
+			ux.Success(out, fmt.Sprintf("Node %s already registered", hostName))
 		}
 	}
 
@@ -3427,14 +3539,14 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 			continue
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "      ✓ privateer active, mesh DNS resolves quartermaster → %s\n", resolved)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("privateer active, mesh DNS resolves quartermaster → %s", resolved))
 	}
 
 	if len(failures) > 0 {
 		return fmt.Errorf("mesh health check failed on %d host(s):\n  %s", len(failures), strings.Join(failures, "\n  "))
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "    ✓ Mesh healthy on all privateer hosts")
+	ux.Success(cmd.OutOrStdout(), "Mesh healthy on all privateer hosts")
 	return nil
 }
 

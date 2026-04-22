@@ -20,6 +20,23 @@ sudo mv frameworks /usr/local/bin/
 frameworks version
 ```
 
+## One-Command Deploy (Recommended)
+
+If you have a logged-in FrameWorks account, `edge deploy` handles the entire pipeline end-to-end via Bridge — VPC/cluster creation, enrollment token issuance, preflight, tuning, template generation, stack boot, and HTTPS verification:
+
+```bash
+# Mode A — logged-in tenant (Bridge auto-creates a private cluster + token)
+frameworks login
+frameworks edge deploy --ssh ubuntu@edge-1 --email ops@yourdomain.com
+
+# Mode B — pre-existing enrollment token (no login required)
+frameworks edge deploy --ssh ubuntu@edge-1 --enrollment-token enroll_xxx
+```
+
+When it finishes, `edge deploy` prints a five-line result block (vpc / enrollment / stack / https / node / domain) and suggests `edge status` and `edge doctor` as next steps.
+
+The rest of this page walks through the same workflow as individual commands when you need finer control.
+
 ## Run Preflight Checks
 
 ```bash

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	"frameworks/pkg/servicedefs"
@@ -47,6 +48,7 @@ cause outages.`,
 
 // runDiagnose executes diagnostic checks against an already-loaded manifest.
 func runDiagnose(cmd *cobra.Command, manifest *inventory.Manifest, component string) error {
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Running %s diagnostics", component))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -83,7 +85,7 @@ func diagnoseNetwork(ctx context.Context, cmd *cobra.Command, manifest *inventor
 	for i, sourceHost := range hosts {
 		runner, err := getRunner(sourceHost, pool)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "✗ Cannot connect to %s: %v\n", sourceHost.ExternalIP, err)
+			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Cannot connect to %s: %v", sourceHost.ExternalIP, err))
 			continue
 		}
 
@@ -97,9 +99,9 @@ func diagnoseNetwork(ctx context.Context, cmd *cobra.Command, manifest *inventor
 			result, err := runner.Run(ctx, pingCmd)
 
 			if err != nil || result.ExitCode != 0 {
-				fmt.Fprintf(cmd.OutOrStderr(), "✗ %s → %s: FAILED (no response)\n", sourceHost.ExternalIP, targetHost.ExternalIP)
+				ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s → %s: FAILED (no response)", sourceHost.ExternalIP, targetHost.ExternalIP))
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "✓ %s → %s: OK\n", sourceHost.ExternalIP, targetHost.ExternalIP)
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s → %s: OK", sourceHost.ExternalIP, targetHost.ExternalIP))
 			}
 		}
 	}
@@ -116,7 +118,7 @@ func diagnoseResources(ctx context.Context, cmd *cobra.Command, manifest *invent
 
 		runner, err := getRunner(host, pool)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Cannot connect: %v\n\n", err)
+			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Cannot connect: %v", err))
 			continue
 		}
 
@@ -162,7 +164,7 @@ func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 
 		runner, err := getRunner(host, pool)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Cannot connect: %v\n\n", err)
+			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Cannot connect: %v", err))
 			continue
 		}
 
@@ -243,7 +245,7 @@ func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	if result, err := runner.Run(ctx, topicsCmd); err == nil && result.ExitCode == 0 {
 		fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
 	} else {
-		fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Failed to list topics: %v\n", err)
+		ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Failed to list topics: %v", err))
 	}
 
 	// Check consumer groups
@@ -252,16 +254,16 @@ func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	if result, err := runner.Run(ctx, groupsCmd); err == nil && result.ExitCode == 0 {
 		fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
 	} else {
-		fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Failed to list consumer groups: %v\n", err)
+		ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Failed to list consumer groups: %v", err))
 	}
 
 	// Check broker config
 	fmt.Fprintln(cmd.OutOrStdout(), "\nBroker Status:")
 	brokerCmd := "docker compose -f /opt/frameworks/kafka/docker-compose.yml exec -T kafka kafka-broker-api-versions --bootstrap-server localhost:9092"
 	if result, err := runner.Run(ctx, brokerCmd); err == nil && result.ExitCode == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "  ✓ Broker is responding")
+		ux.Success(cmd.OutOrStdout(), "Broker is responding")
 	} else {
-		fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Broker is not responding: %v\n", err)
+		ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Broker is not responding: %v", err))
 	}
 
 	return nil

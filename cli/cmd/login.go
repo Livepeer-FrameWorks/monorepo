@@ -6,7 +6,9 @@ import (
 	"os"
 	"strings"
 
+	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/credentials"
+	"frameworks/cli/internal/ux"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -65,10 +67,45 @@ your manifest env_files (gitops). There is no 'login --service-account'.
 				return fmt.Errorf("save credential (%s): %w", store.Name(), err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Saved %s to %s (service=%s).\n", account, store.Name(), credentials.ServiceName)
+			out := cmd.OutOrStdout()
+			ux.Success(out, fmt.Sprintf("Saved %s to %s (service=%s)", account, store.Name(), credentials.ServiceName))
+
+			persona := activePersona()
+			ux.PrintNextSteps(out, loginNextSteps(persona))
 			return nil
 		},
 	}
 
 	return cmd
+}
+
+// activePersona reports the persona of the active context, or "" if no
+// context is configured.
+func activePersona() fwcfg.Persona {
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return ""
+	}
+	active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
+	if mErr != nil {
+		return ""
+	}
+	return active.Persona
+}
+
+func loginNextSteps(persona fwcfg.Persona) []ux.NextStep {
+	switch persona {
+	case fwcfg.PersonaEdge:
+		return []ux.NextStep{
+			{Cmd: "frameworks edge deploy --ssh <user>@<host>", Why: "Deploy an edge node; Bridge will auto-create a cluster + token."},
+		}
+	case fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted:
+		return []ux.NextStep{
+			{Cmd: "frameworks cluster provision --ready", Why: "Provision infra + init + static seeds in one shot."},
+		}
+	default:
+		return []ux.NextStep{
+			{Cmd: "frameworks setup", Why: "No active context — run setup to pick a persona first."},
+		}
+	}
 }

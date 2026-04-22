@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
@@ -122,7 +123,7 @@ func runRestart(cmd *cobra.Command, manifest *inventory.Manifest, serviceName st
 		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Restarting %s on %s...\n", serviceName, host.ExternalIP)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Restarting %s on %s", serviceName, host.ExternalIP))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -181,23 +182,20 @@ func runRestart(cmd *cobra.Command, manifest *inventory.Manifest, serviceName st
 	}
 
 	if result.ExitCode != 0 {
-		fmt.Fprintf(cmd.OutOrStderr(), "Error restarting service: %s\n", result.Stderr)
+		ux.FormatError(cmd.ErrOrStderr(), fmt.Errorf("restart command exited with code %d: %s", result.ExitCode, result.Stderr), fmt.Sprintf("check `frameworks cluster logs %s` for details", serviceName))
 		return fmt.Errorf("restart command exited with code %d", result.ExitCode)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "✓ %s restarted successfully\n", serviceName)
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s restarted", serviceName))
 
-	// Validate if requested
 	if validate {
-		fmt.Fprintf(cmd.OutOrStdout(), "Validating service health...\n")
+		fmt.Fprintln(cmd.OutOrStdout(), "Validating service health...")
 
-		// Wait a moment for service to start
 		time.Sleep(3 * time.Second)
 
-		// Get provisioner and validate
 		prov, err := provisioner.GetProvisioner(deployName, sshPool)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Warning: Cannot validate (unknown service type)\n")
+			ux.Warn(cmd.ErrOrStderr(), "Cannot validate (unknown service type)")
 			return nil
 		}
 
@@ -211,7 +209,7 @@ func runRestart(cmd *cobra.Command, manifest *inventory.Manifest, serviceName st
 		}
 		port, err := resolvePort(serviceName, portCfg)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Warning: Cannot resolve port for validation: %v\n", err)
+			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Cannot resolve port for validation: %v", err))
 			return nil
 		}
 		config := provisioner.ServiceConfig{
@@ -220,7 +218,7 @@ func runRestart(cmd *cobra.Command, manifest *inventory.Manifest, serviceName st
 		}
 
 		if err := prov.Validate(ctx, host, config); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Validation failed: %v\n", err)
+			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Validation failed: %v", err))
 			return fmt.Errorf("service restarted but health check failed")
 		}
 

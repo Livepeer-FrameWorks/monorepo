@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/ux"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -103,14 +104,52 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		// is only needed to surface the path to the user.
 		path = "(unknown)"
 	}
-	fmt.Fprintf(out, "\nSaved context %q as current in %s.\n", name, path)
+	fmt.Fprintln(out, "")
+	ux.Success(out, fmt.Sprintf("Saved context %q as current in %s.", name, path))
 
-	if persona == fwcfg.PersonaEdge {
-		fmt.Fprintln(out, "\nNext: 'frameworks login' to authenticate with your account.")
-	} else {
-		fmt.Fprintln(out, "\nNext: run 'frameworks cluster doctor' to verify connectivity, or 'frameworks login' to authenticate.")
-	}
+	ux.Result(out, setupResultFields(ctx))
+	ux.PrintNextSteps(out, setupNextSteps(persona))
 	return nil
+}
+
+func setupResultFields(ctx fwcfg.Context) []ux.ResultField {
+	fields := []ux.ResultField{
+		{Key: "context", OK: true, Detail: ctx.Name},
+		{Key: "persona", OK: true, Detail: string(ctx.Persona)},
+		{Key: "bridge url", OK: ctx.Endpoints.BridgeURL != "", Detail: ctx.Endpoints.BridgeURL},
+	}
+	if ctx.Persona != fwcfg.PersonaEdge {
+		fields = append(fields, ux.ResultField{
+			Key:    "control plane",
+			OK:     ctx.Endpoints.QuartermasterGRPCAddr != "",
+			Detail: ctx.Endpoints.QuartermasterGRPCAddr,
+		})
+		if ctx.Gitops != nil {
+			fields = append(fields, ux.ResultField{
+				Key:    "gitops",
+				OK:     true,
+				Detail: string(ctx.Gitops.Source),
+			})
+		}
+	}
+	return fields
+}
+
+func setupNextSteps(persona fwcfg.Persona) []ux.NextStep {
+	switch persona {
+	case fwcfg.PersonaEdge:
+		return []ux.NextStep{
+			{Cmd: "frameworks login", Why: "Authenticate so `edge deploy` can auto-create a private cluster."},
+			{Cmd: "frameworks edge deploy --ssh <user>@<host>", Why: "Or deploy directly with a pre-issued enrollment token."},
+		}
+	case fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted:
+		return []ux.NextStep{
+			{Cmd: "frameworks cluster preflight", Why: "Check the host is ready to run cluster services."},
+			{Cmd: "frameworks cluster provision --ready", Why: "Provision infra + init + static seeds in one shot."},
+		}
+	default:
+		return nil
+	}
 }
 
 func promptPersona(reader *bufio.Reader, out interface{ Write([]byte) (int, error) }) (fwcfg.Persona, error) {

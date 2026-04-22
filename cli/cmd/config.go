@@ -10,6 +10,7 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	fwcredentials "frameworks/cli/internal/credentials"
+	"frameworks/cli/internal/ux"
 
 	"github.com/spf13/cobra"
 )
@@ -77,7 +78,7 @@ use 'frameworks context set-gitops-*' instead.`,
 			if err := fwcfg.Save(cfg); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Set %s = %s\n", key, value)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Set %s = %s", key, value))
 			return nil
 		},
 	}

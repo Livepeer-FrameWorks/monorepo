@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"frameworks/cli/internal/credentials"
+	"frameworks/cli/internal/ux"
 
 	"github.com/spf13/cobra"
 )
@@ -27,7 +28,10 @@ manifest env_files (gitops).`,
 					return fmt.Errorf("delete %s from %s: %w", account, store.Name(), err)
 				}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed user session from %s.\n", store.Name())
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Removed user session from %s", store.Name()))
+			ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+				{Cmd: "frameworks login", Why: "Log back in when you're ready."},
+			})
 			return nil
 		},
 	}

@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
@@ -122,7 +123,8 @@ func runLogs(cmd *cobra.Command, manifest *inventory.Manifest, serviceName strin
 		}
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Fetching logs for %s on %s...\n\n", serviceName, host.ExternalIP)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Fetching logs for %s on %s", serviceName, host.ExternalIP))
+	fmt.Fprintln(cmd.OutOrStdout(), "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

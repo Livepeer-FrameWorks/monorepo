@@ -180,6 +180,8 @@ frameworks cluster provision [flags]
 
 - Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 - `--only string` - Phase to provision (`infrastructure`, `applications`, `interfaces`, `all`)
+- `--ready` - After service batches, also run `cluster init` + `cluster seed` (static seeds) so the platform is usable in one command.
+- `--seed-demo` - With `--ready`, additionally apply demo seeds (sample tenant/user/stream).
 - `--dry-run` - Show what would be deployed without actually deploying
 - `--force` - Force re-provision even if services exist
 - `--ignore-validation` - Continue even if health validation fails (dangerous)
@@ -188,7 +190,11 @@ frameworks cluster provision [flags]
 **Examples:**
 
 ```bash
-# Provision entire cluster
+# Provision + init + seeds + admin bootstrap in one shot
+frameworks cluster provision --ready \
+  --bootstrap-admin-email you@co --bootstrap-admin-password-env DEPLOY_PW
+
+# Provision entire cluster (no init/seed)
 frameworks cluster provision
 
 # Provision only infrastructure
@@ -200,6 +206,8 @@ frameworks cluster provision --only applications
 # Preview changes
 frameworks cluster provision --dry-run
 ```
+
+On success, the CLI remembers the manifest path and system tenant ID in the active context, so follow-up commands (`cluster doctor`, `cluster status`, `admin users create`) don't need to re-specify them. When a saved default is used, the command announces it with `Using manifest from context: …` — explicit flags always win.
 
 **Bootstrap Flow:**
 
@@ -957,7 +965,10 @@ Manage users in existing tenants.
 - `create` - Create a user in an existing tenant (requires service token auth)
 
 ```bash
-# Create an operator account in the platform tenant
+# Right after cluster provision — tenant-id comes from context, password from stdin
+echo "$DEPLOY_PW" | frameworks admin users create --email admin@example.com --password-stdin --role owner
+
+# Or with an explicit tenant (overrides context default)
 frameworks admin users create \
   --tenant-id <UUID> \
   --email admin@example.com \
@@ -967,12 +978,15 @@ frameworks admin users create \
 
 **Flags:**
 
-- `--tenant-id` (required) - Existing tenant UUID
+- `--tenant-id` - Existing tenant UUID. Defaults to the active context's `SystemTenantID` (populated by a successful `cluster provision`); override to target a different tenant.
 - `--email` (required) - User email address
-- `--password` (required) - User password
+- `--password` - User password (plaintext; leaks into shell history — prefer `--password-stdin`).
+- `--password-stdin` - Read password from stdin (recommended for CI).
 - `--first-name` - First name
 - `--last-name` - Last name
 - `--role` - `owner` or `member` (default: `owner`)
+
+Without `--password` or `--password-stdin`, the CLI prompts at a TTY with hidden echo.
 
 ---
 

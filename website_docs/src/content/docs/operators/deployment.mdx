@@ -32,12 +32,29 @@ curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/downl
 # 4. Detect hosts (verify SSH connectivity)
 frameworks cluster detect --manifest cluster.yaml
 
-# 5. Provision everything (infrastructure → QM → mesh → services → interfaces)
-frameworks cluster provision --manifest cluster.yaml
+# 5. Provision + init + seeds (one command, usable platform)
+frameworks cluster provision --manifest cluster.yaml --ready \
+  --bootstrap-admin-email you@co --bootstrap-admin-password-env DEPLOY_PW
 
-# 6. Verify health
-frameworks cluster doctor --manifest cluster.yaml
+# 6. Verify health — subsequent commands pick up the saved manifest path
+#    from the active context, so no need to re-pass --manifest.
+frameworks cluster doctor
 ```
+
+<Aside type="tip" title="Context-fed defaults">
+After a successful `cluster provision`, the CLI remembers the manifest path and the system
+tenant ID in the active context. Follow-up commands like `cluster doctor`, `cluster status`,
+and `admin users create` use those automatically and announce when they do:
+
+```text
+Using manifest from context: /etc/frameworks/cluster.yaml
+Using tenant from context: 7c2d…
+```
+
+Explicit flags always win. Set `FRAMEWORKS_NO_HINTS=1` or `CI=1` to suppress next-step blocks
+in pipelines.
+
+</Aside>
 
 **GitOps Deployment (from a GitHub repo):**
 
@@ -69,6 +86,10 @@ The CLI provisions in dependency order:
 5. **Interfaces** — Nginx, Chartroom, Foredeck, Logbook (parallel)
 
 Use `--only infrastructure|applications|interfaces` to run a single phase.
+
+`--ready` extends the pipeline with database migrations (`cluster init`) and static
+reference seeds (`cluster seed`), plus optional admin bootstrap if you pass
+`--bootstrap-admin-email`. Add `--seed-demo` to also load sample tenant/user/stream data.
 
 </Aside>
 

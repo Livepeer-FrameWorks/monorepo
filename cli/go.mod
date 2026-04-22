@@ -6,6 +6,7 @@ require (
 	frameworks/pkg v0.0.0-00010101000000-000000000000
 	github.com/ClickHouse/clickhouse-go/v2 v2.45.0
 	github.com/IBM/sarama v1.47.0
+	github.com/fatih/color v1.19.0
 	github.com/getsops/sops/v3 v3.12.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -81,7 +82,6 @@ require (
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
 	github.com/failsafe-go/failsafe-go v0.9.6 // indirect
-	github.com/fatih/color v1.19.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/getsops/gopgagent v0.0.0-20241224165529-7044f28e491e // indirect
 	github.com/go-faster/city v1.0.1 // indirect

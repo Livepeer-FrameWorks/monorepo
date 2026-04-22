@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/cli/internal/config"
+	"frameworks/cli/internal/ux"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
 
@@ -65,9 +66,8 @@ func newMeshStatusCmd() *cobra.Command {
 
 			isJSON := output == "json"
 			if !isJSON {
-				fmt.Fprintln(cmd.OutOrStdout(), "🕸️  Privateer Mesh Status")
-				fmt.Fprintln(cmd.OutOrStdout(), "========================")
-				fmt.Fprint(cmd.OutOrStdout(), "• Fetching topology from Quartermaster... ")
+				ux.Heading(cmd.OutOrStdout(), "Privateer Mesh Status")
+				fmt.Fprint(cmd.OutOrStdout(), "Fetching topology from Quartermaster... ")
 			}
 
 			// Fetch Nodes via gRPC
@@ -79,7 +79,8 @@ func newMeshStatusCmd() *cobra.Command {
 				return fmt.Errorf("failed to get nodes: %w", err)
 			}
 			if !isJSON {
-				fmt.Fprintf(cmd.OutOrStdout(), "✓ (%d nodes)\n\n", len(resp.Nodes))
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("(%d nodes)", len(resp.Nodes)))
+				fmt.Fprintln(cmd.OutOrStdout())
 			}
 
 			// Sort by NodeId for stable output

@@ -15,6 +15,7 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 	fwcredentials "frameworks/cli/internal/credentials"
 	"frameworks/cli/internal/platformauth"
+	"frameworks/cli/internal/ux"
 	commodore "frameworks/pkg/clients/commodore"
 	fhclient "frameworks/pkg/clients/foghorn"
 	purserclient "frameworks/pkg/clients/purser"
@@ -24,6 +25,7 @@ import (
 	pb "frameworks/pkg/proto"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -273,7 +275,7 @@ func newAdminTokensCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created token %q (id=%s)\n", resp.TokenName, resp.Id)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created token %q (id=%s)", resp.TokenName, resp.Id))
 		if resp.TokenValue != "" {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Token value: %s\n", resp.TokenValue)
 		}
@@ -304,7 +306,7 @@ func newAdminTokensListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Tokens (%d)\n", len(resp.Tokens))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Tokens (%d)", len(resp.Tokens)))
 		for _, t := range resp.Tokens {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (%s) status=%s\n", t.TokenName, t.Id, t.Status)
 		}
@@ -367,7 +369,7 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Revoked token %s\n", tokenID)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Revoked token %s", tokenID))
 		return nil
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "revoke token by name instead of ID")
@@ -465,6 +467,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 	var name string
 	var usageLimit int
 	cmd := &cobra.Command{Use: "create", Short: "Create bootstrap token (edge_node|service|infrastructure_node)", RunE: func(cmd *cobra.Command, args []string) error {
+		out := cmd.OutOrStdout()
 		// Validate inputs first
 		if err := validateTokenName(name); err != nil {
 			return fmt.Errorf("--name: %w", err)
@@ -475,6 +478,19 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		normalizedTTL, err := normalizeDuration(ttl)
 		if err != nil {
 			return fmt.Errorf("--ttl: %w", err)
+		}
+		// Fill tenant/cluster from active context when not specified.
+		if strings.TrimSpace(tenantID) == "" {
+			if ctxTenant := tenantIDFromContext(); ctxTenant != "" {
+				tenantID = ctxTenant
+				ux.ContextNotice(out, "tenant", tenantID)
+			}
+		}
+		if strings.TrimSpace(clusterID) == "" {
+			if ctxCluster := clusterIDFromContext(); ctxCluster != "" {
+				clusterID = ctxCluster
+				ux.ContextNotice(out, "cluster", clusterID)
+			}
 		}
 		// edge_node requires tenant-id and cluster-id
 		if kind == "edge_node" && strings.TrimSpace(tenantID) == "" {
@@ -533,16 +549,25 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 			return err
 		}
 		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc := json.NewEncoder(out)
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created bootstrap token: %s (kind=%s) expires=%s\n", resp.Token.Token, resp.Token.Kind, resp.Token.ExpiresAt.AsTime().Format(time.RFC3339))
+		ux.Result(out, []ux.ResultField{
+			{Key: "token", OK: true, Detail: resp.Token.Token},
+			{Key: "kind", OK: true, Detail: resp.Token.Kind},
+			{Key: "expires", OK: true, Detail: resp.Token.ExpiresAt.AsTime().Format(time.RFC3339)},
+		})
+		if kind == "edge_node" {
+			ux.PrintNextSteps(out, []ux.NextStep{
+				{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", resp.Token.Token), Why: "Use this token to enroll the target host."},
+			})
+		}
 		return nil
 	}}
 	cmd.Flags().StringVar(&kind, "kind", "edge_node", "token kind: edge_node|service|infrastructure_node")
-	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required for edge_node)")
-	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required for edge_node, binds token to cluster)")
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to active context's SystemTenantID)")
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (defaults to active context's ClusterID)")
 	cmd.Flags().StringVar(&expectedIP, "expected-ip", "", "expected client IP (optional)")
 	cmd.Flags().StringVar(&ttl, "ttl", "24h", "time-to-live (e.g., 24h, 7d)")
 	cmd.Flags().StringVar(&name, "name", "Bootstrap Token", "display name for the token")
@@ -571,7 +596,7 @@ func newAdminBootstrapTokensListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Bootstrap tokens (%d)\n", len(resp.Tokens))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap tokens (%d)", len(resp.Tokens)))
 		for _, t := range resp.Tokens {
 			used := ""
 			if t.UsedAt != nil {
@@ -647,7 +672,7 @@ func newAdminBootstrapTokensRevokeCmd() *cobra.Command {
 		if err := qm.RevokeBootstrapToken(cctx, tokenID); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Revoked bootstrap token %s\n", tokenID)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Revoked bootstrap token %s", tokenID))
 		return nil
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "revoke token by name instead of ID")
@@ -684,7 +709,7 @@ func newAdminTenantsListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Tenants (%d)\n", len(resp.Tenants))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Tenants (%d)", len(resp.Tenants)))
 		for _, t := range resp.Tenants {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) tier=%s\n", t.Name, t.Id, t.DeploymentTier)
 		}
@@ -730,7 +755,7 @@ func newAdminClustersListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Clusters (%d)\n", len(resp.Clusters))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Clusters (%d)", len(resp.Clusters)))
 		for _, c := range resp.Clusters {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s url=%s\n", c.ClusterName, c.ClusterId, c.ClusterType, c.BaseUrl)
 		}
@@ -829,7 +854,7 @@ func newAdminClustersCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created cluster %s (%s)\n", resp.Cluster.ClusterName, resp.Cluster.ClusterId)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created cluster %s (%s)", resp.Cluster.ClusterName, resp.Cluster.ClusterId))
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -945,7 +970,7 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Updated cluster %s (%s)\n", resp.Cluster.ClusterName, resp.Cluster.ClusterId)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Updated cluster %s (%s)", resp.Cluster.ClusterName, resp.Cluster.ClusterId))
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -1001,7 +1026,7 @@ func newAdminClustersAccessListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Accessible clusters (%d)\n", len(resp.Clusters))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Accessible clusters (%d)", len(resp.Clusters)))
 		for _, c := range resp.Clusters {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) access=%s\n", c.ClusterName, c.ClusterId, c.AccessLevel)
 		}
@@ -1063,7 +1088,7 @@ func newAdminClustersAccessGrantCmd() *cobra.Command {
 		if err := qm.GrantClusterAccess(cctx, req); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Granted access to cluster %s for tenant %s\n", clusterID, tenantID)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Granted access to cluster %s for tenant %s", clusterID, tenantID))
 		return nil
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
@@ -1142,7 +1167,7 @@ func newAdminClustersInvitesCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created invite %s for tenant %s (token=%s)\n", resp.Id, resp.InvitedTenantId, resp.InviteToken)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created invite %s for tenant %s (token=%s)", resp.Id, resp.InvitedTenantId, resp.InviteToken))
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -1190,7 +1215,7 @@ func newAdminClustersInvitesListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Invites (%d)\n", len(resp.Invites))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Invites (%d)", len(resp.Invites)))
 		for _, inv := range resp.Invites {
 			expires := "-"
 			if inv.ExpiresAt != nil {
@@ -1236,7 +1261,7 @@ func newAdminClustersInvitesRevokeCmd() *cobra.Command {
 		}); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Revoked invite %s\n", inviteID)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Revoked invite %s", inviteID))
 		return nil
 	}}
 	cmd.Flags().StringVar(&inviteID, "invite-id", "", "invite id (required)")
@@ -1274,7 +1299,7 @@ func newAdminClustersInvitesListMineCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Invites (%d)\n", len(resp.Invites))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Invites (%d)", len(resp.Invites)))
 		for _, inv := range resp.Invites {
 			expires := "-"
 			if inv.ExpiresAt != nil {
@@ -1319,12 +1344,20 @@ func newAdminClustersInvitesAcceptCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		out := cmd.OutOrStdout()
 		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc := json.NewEncoder(out)
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Accepted invite: cluster=%s tenant=%s access=%s\n", resp.ClusterId, resp.TenantId, resp.AccessLevel)
+		ux.Result(out, []ux.ResultField{
+			{Key: "cluster", OK: true, Detail: resp.ClusterId},
+			{Key: "tenant", OK: true, Detail: resp.TenantId},
+			{Key: "access", OK: true, Detail: resp.AccessLevel},
+		})
+		ux.PrintNextSteps(out, []ux.NextStep{
+			{Cmd: fmt.Sprintf("frameworks admin clusters subscriptions list --tenant-id %s", resp.TenantId), Why: "Verify your tenant's subscriptions on this cluster."},
+		})
 		return nil
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (optional; uses auth context if omitted)")
@@ -1366,7 +1399,7 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Subscriptions (%d)\n", len(resp.Clusters))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Subscriptions (%d)", len(resp.Clusters)))
 		for _, c := range resp.Clusters {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s\n", c.ClusterName, c.ClusterId, c.ClusterType)
 		}
@@ -1381,6 +1414,13 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 func newAdminClustersCertStatusCmd() *cobra.Command {
 	var clusterID string
 	cmd := &cobra.Command{Use: "cert-status", Short: "Show cluster readiness (health, Foghorn, cert)", RunE: func(cmd *cobra.Command, args []string) error {
+		out := cmd.OutOrStdout()
+		if strings.TrimSpace(clusterID) == "" {
+			if ctxCluster := clusterIDFromContext(); ctxCluster != "" {
+				clusterID = ctxCluster
+				ux.ContextNotice(out, "cluster", clusterID)
+			}
+		}
 		if strings.TrimSpace(clusterID) == "" {
 			return fmt.Errorf("--cluster-id is required")
 		}
@@ -1466,19 +1506,24 @@ func newAdminClustersCreateEdgeCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		out := cmd.OutOrStdout()
 		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc := json.NewEncoder(out)
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
 		c := resp.Cluster
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Edge cluster created\n")
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Cluster:   %s (id=%s)\n", c.ClusterName, c.ClusterId)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Base URL:  %s\n", c.BaseUrl)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Foghorn:   %s\n", resp.FoghornAddr)
 		t := resp.BootstrapToken
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Token:     %s\n", t.Token)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Expires:   %s\n", t.ExpiresAt.AsTime().Format(time.RFC3339))
+		ux.Result(out, []ux.ResultField{
+			{Key: "cluster", OK: true, Detail: fmt.Sprintf("%s (id=%s)", c.ClusterName, c.ClusterId)},
+			{Key: "base url", OK: true, Detail: c.BaseUrl},
+			{Key: "foghorn", OK: true, Detail: resp.FoghornAddr},
+			{Key: "token", OK: true, Detail: t.Token},
+			{Key: "expires", OK: true, Detail: t.ExpiresAt.AsTime().Format(time.RFC3339)},
+		})
+		ux.PrintNextSteps(out, []ux.NextStep{
+			{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", t.Token), Why: "Enroll an edge node against this new cluster."},
+		})
 		return nil
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to JWT tenant)")
@@ -1493,8 +1538,21 @@ func newAdminClustersEnrollmentTokenCmd() *cobra.Command {
 	var name string
 	var ttl string
 	cmd := &cobra.Command{Use: "enrollment-token", Short: "Create an enrollment token for a cluster", RunE: func(cmd *cobra.Command, args []string) error {
+		out := cmd.OutOrStdout()
 		if strings.TrimSpace(clusterID) == "" {
-			return fmt.Errorf("--cluster-id is required")
+			if ctxCluster := clusterIDFromContext(); ctxCluster != "" {
+				clusterID = ctxCluster
+				ux.ContextNotice(out, "cluster", clusterID)
+			}
+		}
+		if strings.TrimSpace(clusterID) == "" {
+			return fmt.Errorf("--cluster-id is required (no ClusterID in context; pass --cluster-id)")
+		}
+		if strings.TrimSpace(tenantID) == "" {
+			if ctxTenant := tenantIDFromContext(); ctxTenant != "" {
+				tenantID = ctxTenant
+				ux.ContextNotice(out, "tenant", tenantID)
+			}
 		}
 		if tenantID != "" {
 			if err := validateUUID(tenantID); err != nil {
@@ -1536,17 +1594,22 @@ func newAdminClustersEnrollmentTokenCmd() *cobra.Command {
 			return err
 		}
 		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc := json.NewEncoder(out)
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Enrollment token: %s\n", resp.Token.Token)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Cluster:  %s\n", clusterID)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Expires:  %s\n", resp.Token.ExpiresAt.AsTime().Format(time.RFC3339))
+		ux.Result(out, []ux.ResultField{
+			{Key: "token", OK: true, Detail: resp.Token.Token},
+			{Key: "cluster", OK: true, Detail: clusterID},
+			{Key: "expires", OK: true, Detail: resp.Token.ExpiresAt.AsTime().Format(time.RFC3339)},
+		})
+		ux.PrintNextSteps(out, []ux.NextStep{
+			{Cmd: fmt.Sprintf("frameworks edge deploy --ssh <user>@<host> --enrollment-token %s", resp.Token.Token), Why: "Enroll an edge node with this token."},
+		})
 		return nil
 	}}
-	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
-	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to JWT tenant)")
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (defaults to active context's ClusterID)")
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to active context's SystemTenantID)")
 	cmd.Flags().StringVar(&name, "name", "", "token display name")
 	cmd.Flags().StringVar(&ttl, "ttl", "", "time-to-live (e.g. 24h, 7d; default 30d)")
 	return cmd
@@ -1586,7 +1649,7 @@ func newAdminNodesListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Nodes (%d)\n", len(resp.Nodes))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Nodes (%d)", len(resp.Nodes)))
 		for _, n := range resp.Nodes {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s cluster=%s\n", n.NodeName, n.NodeId, n.NodeType, n.ClusterId)
 		}
@@ -1712,7 +1775,7 @@ func newAdminNodesCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created node %s (id=%s)\n", resp.Node.NodeName, resp.Node.NodeId)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created node %s (id=%s)", resp.Node.NodeName, resp.Node.NodeId))
 		return nil
 	}}
 	cmd.Flags().StringVar(&nodeID, "node-id", "", "node id (defaults to node-name)")
@@ -1768,7 +1831,7 @@ func newAdminFoghornPoolStatusCmd() *cobra.Command {
 			return enc.Encode(resp)
 		}
 
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Foghorn pool: %d total, %d assigned, %d unassigned\n", resp.Total, resp.Assigned, resp.Unassigned)
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Foghorn pool: %d total, %d assigned, %d unassigned", resp.Total, resp.Assigned, resp.Unassigned))
 		for _, c := range resp.Clusters {
 			cid := c.ClusterId
 			if cid == "" {
@@ -1821,7 +1884,7 @@ func newAdminFoghornPoolAddCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Released %d instance(s) to pool\n", resp.Released)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Released %d instance(s) to pool", resp.Released))
 		return nil
 	}}
 	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "instance UUID(s) to release")
@@ -1855,7 +1918,7 @@ func newAdminFoghornPoolDrainCmd() *cobra.Command {
 		if prev == "" || prev == "pool" {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Instance %s was already in pool\n", instanceID)
 		} else {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Drained instance %s from cluster %s → pool\n", instanceID, prev)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Drained instance %s from cluster %s → pool", instanceID, prev))
 		}
 		return nil
 	}}
@@ -1893,9 +1956,9 @@ func newAdminFoghornPoolAssignCmd() *cobra.Command {
 			return err
 		}
 		if len(instanceIDs) > 0 {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Assigned %d Foghorn instance(s) to cluster %s\n", len(instanceIDs), clusterID)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Assigned %d Foghorn instance(s) to cluster %s", len(instanceIDs), clusterID))
 		} else {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Assigned %d Foghorn instance(s) to cluster %s (least-loaded)\n", count, clusterID)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Assigned %d Foghorn instance(s) to cluster %s (least-loaded)", count, clusterID))
 		}
 		return nil
 	}}
@@ -1932,7 +1995,7 @@ func newAdminFoghornPoolUnassignCmd() *cobra.Command {
 		}); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Unassigned %d Foghorn instance(s) from cluster %s\n", len(instanceIDs), clusterID)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Unassigned %d Foghorn instance(s) from cluster %s", len(instanceIDs), clusterID))
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to unassign from (required)")
@@ -1974,7 +2037,7 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 		if err := qm.UpdateNodeHardware(cctx, req); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Updated node hardware for %s\n", nodeID)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Updated node hardware for %s", nodeID))
 		return nil
 	}}
 	cmd.Flags().StringVar(&nodeID, "node-id", "", "node id (required)")
@@ -2016,7 +2079,7 @@ func newAdminBillingTiersCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Billing Tiers (%d)\n", len(resp.Tiers))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Billing tiers (%d)", len(resp.Tiers)))
 		for _, t := range resp.Tiers {
 			defaults := ""
 			if t.IsDefaultPrepaid {
@@ -2061,7 +2124,7 @@ func newAdminBillingInitPostpaidCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Initialized postpaid account\n")
+		ux.Success(cmd.OutOrStdout(), "Initialized postpaid account")
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Subscription: %s\n", resp.SubscriptionId)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Tier level:   %d\n", resp.TierLevel)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Primary cluster: %s\n", resp.PrimaryClusterId)
@@ -2102,7 +2165,7 @@ func newAdminBillingPromoteCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Promoted to postpaid billing\n")
+		ux.Success(cmd.OutOrStdout(), "Promoted to postpaid billing")
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Subscription: %s\n", resp.SubscriptionId)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Billing model: %s\n", resp.NewBillingModel)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Credit balance: %d cents\n", resp.CreditBalanceCents)
@@ -2174,7 +2237,7 @@ func newAdminBillingSetClusterPricingCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Set cluster pricing for %s (model=%s)\n", clusterID, resp.PricingModel)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Set cluster pricing for %s (model=%s)", clusterID, resp.PricingModel))
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -2197,65 +2260,167 @@ func newAdminUsersCreateCmd() *cobra.Command {
 	var tenantID string
 	var email string
 	var password string
+	var passwordStdin bool
 	var firstName string
 	var lastName string
 	var role string
-	cmd := &cobra.Command{Use: "create", Short: "Create a user in an existing tenant", RunE: func(cmd *cobra.Command, args []string) error {
-		if strings.TrimSpace(tenantID) == "" {
-			return fmt.Errorf("--tenant-id is required")
-		}
-		if err := validateUUID(tenantID); err != nil {
-			return fmt.Errorf("--tenant-id: %w", err)
-		}
-		if strings.TrimSpace(email) == "" {
-			return fmt.Errorf("--email is required")
-		}
-		if strings.TrimSpace(password) == "" {
-			return fmt.Errorf("--password is required")
-		}
-		allowedRoles := map[string]bool{"owner": true, "member": true}
-		if !allowedRoles[role] {
-			return fmt.Errorf("--role must be 'owner' or 'member', got %q", role)
-		}
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a user in an existing tenant",
+		Long: `Create a user in an existing tenant.
 
-		cli, ctxCfg, err := commodoreGRPCClientFromContext()
-		if err != nil {
-			return err
-		}
-		defer func() { _ = cli.Close() }()
-		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
-		}
+Tenant-id defaults to the active context's SystemTenantID (populated by a
+successful 'cluster provision'). Pass --tenant-id to target a different
+tenant.
 
-		resp, err := cli.CreateUserInTenant(cctx, &pb.CreateUserInTenantRequest{
-			TenantId:  tenantID,
-			Email:     email,
-			Password:  password,
-			FirstName: firstName,
-			LastName:  lastName,
-			Role:      role,
-		})
-		if err != nil {
-			return err
-		}
-		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			return enc.Encode(resp)
-		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created user %s (%s) in tenant %s with role %s\n",
-			resp.User.GetEmail(), resp.User.GetId(), tenantID, resp.User.GetRole())
-		return nil
-	}}
-	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "existing tenant UUID (required)")
+Password input methods, in precedence order:
+  1. --password <plaintext>      (leaks into shell history — avoid)
+  2. --password-stdin            (read from stdin; good for CI)
+  3. interactive prompt          (hidden echo; default when run at a TTY)`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+
+			if strings.TrimSpace(tenantID) == "" {
+				tenantID = tenantIDFromContext()
+				if tenantID != "" {
+					ux.ContextNotice(out, "tenant", tenantID)
+				}
+			}
+			if strings.TrimSpace(tenantID) == "" {
+				return fmt.Errorf("--tenant-id is required (no SystemTenantID in context; run 'cluster provision' first or pass --tenant-id)")
+			}
+			if err := validateUUID(tenantID); err != nil {
+				return fmt.Errorf("--tenant-id: %w", err)
+			}
+			if strings.TrimSpace(email) == "" {
+				return fmt.Errorf("--email is required")
+			}
+			allowedRoles := map[string]bool{"owner": true, "member": true}
+			if !allowedRoles[role] {
+				return fmt.Errorf("--role must be 'owner' or 'member', got %q", role)
+			}
+
+			resolvedPW, err := resolveUserPassword(password, passwordStdin)
+			if err != nil {
+				return err
+			}
+
+			cli, ctxCfg, err := commodoreGRPCClientFromContext()
+			if err != nil {
+				return err
+			}
+			defer func() { _ = cli.Close() }()
+			cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if ctxCfg.Auth.JWT != "" {
+				cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+			}
+
+			resp, err := cli.CreateUserInTenant(cctx, &pb.CreateUserInTenantRequest{
+				TenantId:  tenantID,
+				Email:     email,
+				Password:  resolvedPW,
+				FirstName: firstName,
+				LastName:  lastName,
+				Role:      role,
+			})
+			if err != nil {
+				return err
+			}
+			if output == "json" {
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(resp)
+			}
+
+			ux.Result(out, []ux.ResultField{
+				{Key: "email", OK: true, Detail: resp.User.GetEmail()},
+				{Key: "user id", OK: true, Detail: resp.User.GetId()},
+				{Key: "tenant", OK: true, Detail: tenantID},
+				{Key: "role", OK: true, Detail: resp.User.GetRole()},
+			})
+			ux.PrintNextSteps(out, []ux.NextStep{
+				{Cmd: fmt.Sprintf("frameworks login --email %s", resp.User.GetEmail()), Why: "Log in with the new account."},
+			})
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "existing tenant UUID (defaults to active context's SystemTenantID)")
 	cmd.Flags().StringVar(&email, "email", "", "user email address (required)")
-	cmd.Flags().StringVar(&password, "password", "", "user password (required)")
+	cmd.Flags().StringVar(&password, "password", "", "user password (plaintext; prefer --password-stdin)")
+	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read user password from stdin")
 	cmd.Flags().StringVar(&firstName, "first-name", "", "first name")
 	cmd.Flags().StringVar(&lastName, "last-name", "", "last name")
 	cmd.Flags().StringVar(&role, "role", "owner", "user role: owner|member")
 	return cmd
+}
+
+// tenantIDFromContext returns the active context's SystemTenantID, or "".
+// Safe to call without any context configured (returns "").
+func tenantIDFromContext() string {
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return ""
+	}
+	active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
+	if mErr != nil {
+		return ""
+	}
+	return active.SystemTenantID
+}
+
+// clusterIDFromContext returns the active context's ClusterID, or "".
+func clusterIDFromContext() string {
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return ""
+	}
+	active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
+	if mErr != nil {
+		return ""
+	}
+	return active.ClusterID
+}
+
+// resolveUserPassword picks the password source in the documented precedence:
+// --password flag > --password-stdin > interactive prompt on a TTY.
+func resolveUserPassword(passwordFlag string, fromStdin bool) (string, error) {
+	if passwordFlag != "" {
+		return passwordFlag, nil
+	}
+	if fromStdin {
+		data, err := readAllStdin()
+		if err != nil {
+			return "", fmt.Errorf("read password from stdin: %w", err)
+		}
+		pw := strings.TrimRight(strings.TrimRight(data, "\n"), "\r")
+		if pw == "" {
+			return "", fmt.Errorf("--password-stdin received empty input")
+		}
+		return pw, nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", fmt.Errorf("no password provided (use --password, --password-stdin, or run at a TTY for interactive prompt)")
+	}
+	fmt.Fprint(os.Stderr, "Password: ")
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("read password: %w", err)
+	}
+	if len(b) == 0 {
+		return "", fmt.Errorf("empty password")
+	}
+	return string(b), nil
+}
+
+func readAllStdin() (string, error) {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	if scanner.Scan() {
+		return scanner.Text(), nil
+	}
+	return "", scanner.Err()
 }
 
 func newAdminClustersMigrateArtifactsCmd() *cobra.Command {
@@ -2293,14 +2458,17 @@ func newAdminClustersMigrateArtifactsCmd() *cobra.Command {
 			return fmt.Errorf("migration error: %s", resp.Error)
 		}
 
+		out := cmd.OutOrStdout()
 		if output == "json" {
-			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc := json.NewEncoder(out)
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Artifact metadata migration complete\n")
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Migrated:        %d\n", resp.MigratedCount)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Already existed: %d\n", resp.AlreadyExists)
+		ux.Success(out, "Artifact metadata migration complete")
+		ux.Result(out, []ux.ResultField{
+			{Key: "migrated", OK: true, Detail: fmt.Sprintf("%d", resp.MigratedCount)},
+			{Key: "already existed", OK: true, Detail: fmt.Sprintf("%d", resp.AlreadyExists)},
+		})
 		return nil
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")

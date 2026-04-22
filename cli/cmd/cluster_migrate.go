@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
@@ -127,9 +128,11 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool) error {
 
 	if dryRun {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n%d pending migration(s) across %d database(s)\n", totalApplied, len(databases))
-	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n✓ Applied %d migration(s)\n", totalApplied)
+		return nil
 	}
-
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Applied %d migration(s)", totalApplied))
+	ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+		{Cmd: "frameworks cluster status", Why: "Verify deployed services are healthy after schema changes."},
+	})
 	return nil
 }

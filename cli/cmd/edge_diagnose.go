@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/mistdiag"
 	fwssh "frameworks/cli/pkg/ssh"
 
@@ -122,22 +123,20 @@ func runDiagnoseMediaAuto(cmd *cobra.Command, sshTarget, sshKey, dir, stream str
 	mode := detectEdgeMode(ctx, dir, ".edge.env", sshTarget, sshKey)
 	ar := mistdiag.NewAnalyzerRunner(runner, mode)
 
-	// Show available analyzers
+	out := cmd.OutOrStdout()
+	ux.Heading(out, fmt.Sprintf("MistServer media diagnostics (%s mode)", mode))
+
 	available, err := ar.Available(ctx)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "⚠ Could not list analyzers: %v\n", err)
+		ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Could not list analyzers: %v", err))
 	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "MistServer Media Diagnostics (%s mode)\n", mode)
 	if len(available) > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "Available analyzers: %s\n", strings.Join(available, ", "))
+		fmt.Fprintf(out, "Available analyzers: %s\n", strings.Join(available, ", "))
 	}
 
-	// Discover active streams
 	streams, err := mistdiag.DiscoverStreams(ctx, runner, mode)
 	if err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n⚠ Could not discover streams: %v\n", err)
-		fmt.Fprintln(cmd.OutOrStdout(), "  Hint: Is MistServer running? Check with 'frameworks edge status'")
+		ux.FormatError(out, fmt.Errorf("discover streams: %w", err), "Is MistServer running? Check with 'frameworks edge status'")
 		return nil
 	}
 
@@ -173,15 +172,16 @@ func runDiagnoseMediaAuto(cmd *cobra.Command, sshTarget, sshKey, dir, stream str
 
 		result, err := ar.Validate(ctx, "HLS", s.HLSURL, timeout)
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "  HLS Validate:  ⚠ error: %v\n\n", err)
+			ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("HLS Validate: %v", err))
+			fmt.Fprintln(cmd.OutOrStdout())
 			continue
 		}
 
 		if result.OK {
 			passed++
-			fmt.Fprintf(cmd.OutOrStdout(), "  HLS Validate:  ✓ PASS\n")
+			ux.Success(cmd.OutOrStdout(), "HLS Validate: PASS")
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "  HLS Validate:  ✗ FAIL\n")
+			ux.Fail(cmd.OutOrStdout(), "HLS Validate: FAIL")
 			if first := result.FirstError(); first != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Error: %s\n", first)
 			}
@@ -214,7 +214,8 @@ func runDiagnoseMediaManual(cmd *cobra.Command, sshTarget, sshKey, dir, analyzer
 	ar := mistdiag.NewAnalyzerRunner(runner, mode)
 
 	analyzer = mistdiag.NormalizeAnalyzerName(analyzer)
-	fmt.Fprintf(cmd.OutOrStdout(), "Running MistAnalyser%s on %s (detail=%d, validate=%v)\n\n", analyzer, target, detail, validate)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Running MistAnalyser%s on %s (detail=%d, validate=%v)", analyzer, target, detail, validate))
+	fmt.Fprintln(cmd.OutOrStdout(), "")
 
 	result, err := ar.Run(ctx, mistdiag.AnalyzerOptions{
 		Analyzer: analyzer,

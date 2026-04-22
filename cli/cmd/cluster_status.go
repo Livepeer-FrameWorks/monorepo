@@ -8,6 +8,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/readiness"
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
@@ -191,5 +194,59 @@ func runClusterStatus(cmd *cobra.Command, manifest *inventory.Manifest, jsonOutp
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Name, deployed, available, r.Status)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	printStatusControlPlaneSection(cmd, manifest)
+	return nil
+}
+
+// printStatusControlPlaneSection runs ControlPlaneReadiness with what
+// status can observe without SOPS (context tenant + manifest addresses)
+// and renders the report. Like doctor, missing service-token triggers
+// Checked=false so the summary is honest about what was verified.
+func printStatusControlPlaneSection(cmd *cobra.Command, manifest *inventory.Manifest) {
+	out := cmd.OutOrStdout()
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		return
+	}
+	active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
+	if mErr != nil || active.SystemTenantID == "" {
+		return
+	}
+
+	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002)    //nolint:errcheck // empty on miss is the intent
+	commodoreAddr, _ := resolveServiceGRPCAddr(manifest, "commodore", 19001) //nolint:errcheck // empty on miss is the intent
+	purserAddr, _ := resolveServiceGRPCAddr(manifest, "purser", 19003)       //nolint:errcheck // empty on miss is the intent
+
+	var pricings []readiness.ClusterPricing
+	for clusterID, cc := range manifest.Clusters {
+		if cc.Pricing != nil {
+			pricings = append(pricings, readiness.ClusterPricing{ClusterID: clusterID})
+		}
+	}
+
+	report := readiness.ControlPlaneReadiness(cmd.Context(), readiness.ControlPlaneInputs{
+		SystemTenantID:    active.SystemTenantID,
+		QuartermasterAddr: qmAddr,
+		CommodoreAddr:     commodoreAddr,
+		PurserAddr:        purserAddr,
+		DeclaredPricings:  pricings,
+	})
+
+	fmt.Fprintln(out, "")
+	ux.Subheading(out, "Control Plane:")
+	fmt.Fprintf(out, "  system tenant:  %s\n", active.SystemTenantID)
+	if qmAddr != "" {
+		fmt.Fprintf(out, "  quartermaster:  %s\n", qmAddr)
+	}
+	// Don't forward the operator to `cluster doctor` — doctor is on the
+	// same read-only path and can't run the deeper check either. Point
+	// directly at commands that actually carry a service token.
+	renderReadinessBlock(cmd, report, []ux.NextStep{
+		{Cmd: "frameworks cluster provision --ready", Why: "Re-run with SOPS access so the control-plane check gets a real service token."},
+		{Cmd: "frameworks admin clusters list", Why: "Any admin command that touches Quartermaster reads the service token and will succeed or fail explicitly."},
+	})
 }

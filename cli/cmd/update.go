@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/installer"
 	"frameworks/cli/pkg/selfupdate"
 	fwv "frameworks/pkg/version"
@@ -31,7 +32,7 @@ func newUpdateCmd() *cobra.Command {
 			}
 
 			if release.TagName == current {
-				fmt.Fprintln(cmd.OutOrStdout(), "Already up to date.")
+				ux.Success(cmd.OutOrStdout(), "Already up to date")
 				return nil
 			}
 
@@ -48,10 +49,10 @@ func newUpdateCmd() *cobra.Command {
 				return fmt.Errorf("update failed: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Updated %s -> %s\n", current, result.NewVersion)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Updated %s -> %s", current, result.NewVersion))
 
 			if majorVersion(current) != majorVersion(result.NewVersion) {
-				fmt.Fprintln(cmd.OutOrStdout(), "Warning: major version change — review the changelog for breaking changes")
+				ux.Warn(cmd.OutOrStdout(), "major version change — review the changelog for breaking changes")
 			}
 
 			// Record install state for lifecycle tracking

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
@@ -63,6 +64,7 @@ Sources:
 }
 
 func runSyncGeoIP(cmd *cobra.Command, rc *resolvedCluster, licenseKey, source, filePath, remotePath string, services []string, restart bool) error {
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Syncing GeoIP MMDB to %d service(s) via %s", len(services), source))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -278,7 +280,7 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 		}
 	}
 
-	fmt.Fprintf(out, "Uploaded GeoIP MMDB to %d host(s)\n", uploaded)
+	ux.Success(out, fmt.Sprintf("Uploaded GeoIP MMDB to %d host(s)", uploaded))
 	return uploaded, nil
 }
 

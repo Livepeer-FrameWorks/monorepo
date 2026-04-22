@@ -2,10 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 
+	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/preflight"
+	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/inventory"
 
 	"github.com/spf13/cobra"
 )
@@ -110,24 +114,32 @@ func newClusterPreflightCmd() *cobra.Command {
 				}
 			}
 
-			// Print results
 			okCount := 0
 			for _, r := range results {
-				mark := "✗"
-				if r.OK {
-					mark = "✓"
-					okCount++
-				}
+				label := r.Name + ":"
+				line := fmt.Sprintf("%-18s %s", label, r.Detail)
 				if r.Error != "" {
-					fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %-40s (%s)\n", mark, r.Name+":", r.Detail, r.Error)
-				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %s\n", mark, r.Name+":", r.Detail)
+					line = fmt.Sprintf("%-18s %-40s (%s)", label, r.Detail, r.Error)
+				}
+				switch {
+				case r.OK:
+					ux.Success(cmd.OutOrStdout(), line)
+					okCount++
+				default:
+					ux.Fail(cmd.OutOrStdout(), line)
 				}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "\nSummary: %d/%d checks passed\n", okCount, len(results))
+
 			if okCount < len(results) {
+				ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+					{Cmd: "frameworks cluster preflight --domain <your.domain>", Why: "Fix the reported items and re-run."},
+				})
 				return fmt.Errorf("%d preflight check(s) failed", len(results)-okCount)
 			}
+			ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+				{Cmd: "frameworks cluster provision --ready", Why: "All checks passed — provision the cluster and chain init+seed."},
+			})
 			return nil
 		},
 	}
@@ -139,21 +151,55 @@ func newClusterPreflightCmd() *cobra.Command {
 // anyManifestSourceConfigured reports whether the operator has supplied
 // enough input for resolveClusterManifest to succeed. Used by preflight
 // to decide whether to run infrastructure-connectivity checks (they
-// require a manifest but preflight doesn't).
+// require a manifest but preflight itself does not).
+//
+// Delegates to inventory.ResolveManifestSource — the same function
+// resolveClusterManifest uses — with flag/env/context inputs. That keeps
+// preflight's notion of "is a source available" perfectly aligned with
+// the real resolver: for example, the cwd heuristic only fires when
+// both clusters/ AND .sops.yaml are present, matching looksLikeGitopsRoot.
+// LastManifestPath fallback is a preflight-specific extension since the
+// real resolver doesn't consume it.
 func anyManifestSourceConfigured(cmd *cobra.Command) bool {
-	for _, name := range []string{"manifest", "gitops-dir", "github-repo"} {
-		if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+	cfg, _ := fwcfg.Load() //nolint:errcheck // no config == no active context, handled below
+	rt := fwcfg.GetRuntimeOverrides()
+	ctxCfg, _ := fwcfg.MaybeActiveContext(rt, fwcfg.OSEnv{}, cfg) //nolint:errcheck // empty on miss is the intent
+
+	// The real resolver answers "is there a source?" for us — including
+	// the cwd heuristic's actual requirements. Route its stdout to
+	// /dev/null so a probe call can't leak log lines.
+	cwd, _ := os.Getwd() //nolint:errcheck // empty cwd just skips the cwd heuristic
+	in := inventory.ResolveInput{
+		Manifest:    stringFlag(cmd, "manifest"),
+		GitopsDir:   stringFlag(cmd, "gitops-dir"),
+		GithubRepo:  stringFlag(cmd, "github-repo"),
+		GithubRef:   stringFlag(cmd, "github-ref"),
+		Cluster:     stringFlag(cmd, "cluster"),
+		AgeKey:      stringFlag(cmd, "age-key"),
+		GithubAppID: int64Flag(cmd, "github-app-id"),
+		GithubInst:  int64Flag(cmd, "github-installation-id"),
+		GithubKey:   stringFlag(cmd, "github-private-key"),
+		Env:         fwcfg.OSEnv{},
+		Context:     ctxCfg,
+		GitHubCfg:   cfg.GitHub,
+		Cwd:         cwd,
+		Stdout:      io.Discard,
+		Ctx:         cmd.Context(),
+	}
+	if rm, err := inventory.ResolveManifestSource(in); err == nil {
+		if rm.Cleanup != nil {
+			rm.Cleanup()
+		}
+		return true
+	}
+	// Preflight-only fallback: a prior successful provision saved
+	// LastManifestPath in context. The real resolver doesn't look at
+	// this field, but preflight benefits from using it so infra checks
+	// keep running on subsequent invocations from a different cwd.
+	if ctxCfg.LastManifestPath != "" {
+		if _, statErr := os.Stat(ctxCfg.LastManifestPath); statErr == nil {
 			return true
 		}
 	}
-	for _, k := range []string{"FRAMEWORKS_MANIFEST", "FRAMEWORKS_GITOPS_DIR", "FRAMEWORKS_GITHUB_REPO"} {
-		if envGet(k) != "" {
-			return true
-		}
-	}
-	// Context-based source? The resolver also handles cwd heuristic; cheap
-	// path is to delegate to it. Worth a Load here to check ctx.Gitops.
 	return false
 }
-
-func envGet(k string) string { return os.Getenv(k) }

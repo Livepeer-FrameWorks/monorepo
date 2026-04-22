@@ -20,7 +20,9 @@ import (
 	fwcredentials "frameworks/cli/internal/credentials"
 	"frameworks/cli/internal/platformauth"
 	"frameworks/cli/internal/preflight"
+	"frameworks/cli/internal/readiness"
 	"frameworks/cli/internal/templates"
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/mistdiag"
@@ -71,7 +73,9 @@ func newEdgePreflightCmd() *cobra.Command {
 	var domain string
 	cmd := &cobra.Command{Use: "preflight", Short: "Check host readiness (DNS/ports/sysctl/limits)", RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		// Gather checks
+		out := cmd.OutOrStdout()
+		ux.Heading(out, "Edge host readiness checks")
+
 		results := []preflight.Check{}
 		if domain != "" {
 			results = append(results, preflight.DNSResolution(ctx, domain))
@@ -91,21 +95,30 @@ func newEdgePreflightCmd() *cobra.Command {
 			results = append(results, preflight.DiskSpace("/usr/local", minDiskFreeBytes, minDiskFreePercent))
 		}
 
-		// Print
 		okCount := 0
 		for _, r := range results {
-			mark := "✗"
-			if r.OK {
-				mark = "✓"
-				okCount++
-			}
+			label := r.Name + ":"
+			line := fmt.Sprintf("%-18s %s", label, r.Detail)
 			if r.Error != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %-40s (%s)\n", mark, r.Name+":", r.Detail, r.Error)
+				line = fmt.Sprintf("%-18s %-40s (%s)", label, r.Detail, r.Error)
+			}
+			if r.OK {
+				ux.Success(out, line)
+				okCount++
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %s\n", mark, r.Name+":", r.Detail)
+				ux.Fail(out, line)
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "\nSummary: %d/%d checks passed\n", okCount, len(results))
+		fmt.Fprintf(out, "\nSummary: %d/%d checks passed\n", okCount, len(results))
+		if okCount < len(results) {
+			ux.PrintNextSteps(out, []ux.NextStep{
+				{Cmd: "frameworks edge tune --write", Why: "Apply recommended sysctl/limits (reboot may be required)."},
+			})
+			return fmt.Errorf("%d preflight check(s) failed", len(results)-okCount)
+		}
+		ux.PrintNextSteps(out, []ux.NextStep{
+			{Cmd: "frameworks edge deploy --ssh <user>@<host>", Why: "Host is ready — deploy an edge node."},
+		})
 		return nil
 	}}
 	cmd.Flags().StringVar(&domain, "domain", "", "Edge domain to validate (DNS)")
@@ -117,14 +130,16 @@ func newEdgeTuneCmd() *cobra.Command {
 	var sysctlPath string
 	var limitsPath string
 	cmd := &cobra.Command{Use: "tune", Short: "Apply recommended sysctl/limits (requires sudo)", RunE: func(cmd *cobra.Command, args []string) error {
+		out := cmd.OutOrStdout()
 		if runtime.GOOS == "darwin" {
-			fmt.Fprintln(cmd.OutOrStdout(), "macOS detected. Network tuning uses different mechanisms:")
-			fmt.Fprintln(cmd.OutOrStdout(), "  - File descriptors: launchctl limit maxfiles 1048576 1048576")
-			fmt.Fprintln(cmd.OutOrStdout(), "  - Socket buffers: sysctl -w kern.ipc.maxsockbuf=16777216")
-			fmt.Fprintln(cmd.OutOrStdout(), "  - Listen backlog: sysctl -w kern.ipc.somaxconn=8192")
-			fmt.Fprintln(cmd.OutOrStdout(), "\nThese require sudo and reset on reboot unless added to /etc/sysctl.conf.")
+			ux.Heading(out, "Network tuning on macOS")
+			fmt.Fprintln(out, "  - File descriptors: launchctl limit maxfiles 1048576 1048576")
+			fmt.Fprintln(out, "  - Socket buffers: sysctl -w kern.ipc.maxsockbuf=16777216")
+			fmt.Fprintln(out, "  - Listen backlog: sysctl -w kern.ipc.somaxconn=8192")
+			ux.Warn(out, "These require sudo and reset on reboot unless added to /etc/sysctl.conf.")
 			return nil
 		}
+		ux.Heading(out, "Applying edge tuning (sysctl + limits)")
 
 		sysctl := `# Frameworks Edge recommended network tuning
 net.core.rmem_max = 16777216
@@ -138,14 +153,14 @@ net.ipv4.ip_local_port_range = 16384 65535
 `
 		if write {
 			if err := os.WriteFile(sysctlPath, []byte(sysctl), 0o644); err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "Failed to write %s: %v\n", sysctlPath, err)
+				ux.FormatError(cmd.OutOrStdout(), fmt.Errorf("write %s: %w", sysctlPath, err), "re-run with sudo or pick a writable path via --sysctl-path")
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Wrote %s\n", sysctlPath)
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Wrote %s", sysctlPath))
 			}
 			if err := os.WriteFile(limitsPath, []byte(limits), 0o644); err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "Failed to write %s: %v\n", limitsPath, err)
+				ux.FormatError(cmd.OutOrStdout(), fmt.Errorf("write %s: %w", limitsPath, err), "re-run with sudo or pick a writable path via --limits-path")
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Wrote %s\n", limitsPath)
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Wrote %s", limitsPath))
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Note: run 'sysctl --system' or reboot to apply sysctl. Relogin to apply limits.")
 			return nil
@@ -189,6 +204,7 @@ func newEdgeInitCmd() *cobra.Command {
 		if target == "" {
 			target = "."
 		}
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Generating edge templates in %s", target))
 
 		// PreRegisterEdge: if enrollment token is provided but domain is not,
 		// call Foghorn to get an assigned domain.
@@ -255,7 +271,10 @@ func newEdgeInitCmd() *cobra.Command {
 		if err := templates.WriteEdgeTemplates(target, vars, overwrite); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Wrote edge templates to %s\n", target)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Wrote edge templates to %s", target))
+		ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+			{Cmd: fmt.Sprintf("frameworks edge enroll --dir %s", target), Why: "Start the edge stack and verify HTTPS."},
+		})
 		return nil
 	}}
 	cmd.Flags().StringVar(&target, "dir", ".", "target directory for templates")
@@ -277,25 +296,30 @@ func newEdgeEnrollCmd() *cobra.Command {
 		if dir == "" {
 			dir = "."
 		}
+		out := cmd.OutOrStdout()
+		target := sshTarget
+		if target == "" {
+			target = "local"
+		}
+		ux.Heading(out, fmt.Sprintf("Enrolling edge node on %s", target))
+
 		compose := "docker-compose.edge.yml"
 		envFile := ".edge.env"
-		// Start stack
-		var out, errOut string
+		var outStr, errOut string
 		var err error
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
+			_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
 		} else {
-			_, out, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
+			_, outStr, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir)
 		}
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "docker compose up failed: %v\n%s\n%s\n", err, out, errOut)
+			ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("docker compose up: %w", err), "docker daemon rejected the stack — inspect the output for the specific service error", outStr, errOut)
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Edge stack started (caddy, mistserver, helmsman)")
-		// Verify HTTPS readiness
+		ux.Success(out, "Edge stack started (caddy, mistserver, helmsman)")
 		domain := readEnvFileKey(dir+string(os.PathSeparator)+envFile, "EDGE_DOMAIN")
 		if strings.TrimSpace(domain) == "" {
-			fmt.Fprintln(cmd.OutOrStdout(), "EDGE_DOMAIN not set in .edge.env; skipping HTTPS check")
+			ux.Warn(out, "EDGE_DOMAIN not set in .edge.env; skipping HTTPS check")
 			return nil
 		}
 		url := "https://" + domain + "/health"
@@ -314,7 +338,7 @@ func newEdgeEnrollCmd() *cobra.Command {
 				if resp.Body != nil {
 					_ = resp.Body.Close()
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "HTTPS ready at %s\n", url)
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("HTTPS ready at %s", url))
 				break
 			}
 			if resp != nil && resp.Body != nil {
@@ -337,6 +361,72 @@ func newEdgeEnrollCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run remotely on user@host via SSH")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
 	return cmd
+}
+
+// parseEdgeServiceStatus extracts per-service up/down state from docker
+// compose ps or systemctl status output. The names returned match the log
+// handles `frameworks edge logs <name>` accepts, so readiness remediations
+// point at usable next-step commands.
+//
+// Heuristic parser — tolerates format drift rather than shelling out to
+// `docker compose ps --format json` (which would need a per-host docker
+// version check). On any parse uncertainty we omit the service rather than
+// emit a false "down" warning.
+func parseEdgeServiceStatus(raw, mode string) []readiness.EdgeCheck {
+	services := []string{"caddy", "mistserver", "helmsman"}
+	out := make([]readiness.EdgeCheck, 0, len(services))
+	lowered := strings.ToLower(raw)
+	for _, svc := range services {
+		idx := strings.Index(lowered, svc)
+		if idx < 0 {
+			// Service not in output — can't tell state, don't fabricate one.
+			continue
+		}
+		lineStart := strings.LastIndex(lowered[:idx], "\n") + 1
+		lineEnd := strings.Index(lowered[idx:], "\n")
+		if lineEnd < 0 {
+			lineEnd = len(lowered) - idx
+		}
+		nameLine := lowered[lineStart : idx+lineEnd]
+
+		// Docker compose ps = one line per service, so the state is on the
+		// service line itself. Systemctl status spans multiple lines per
+		// service block, with "Active: …" below the "● frameworks-X.service"
+		// header — expand the search window to the next block boundary (the
+		// next "●" or blank line) so we pick up the Active: line without
+		// swallowing the NEXT service's state.
+		scope := nameLine
+		if mode == "native" {
+			blockEnd := len(lowered)
+			if dot := strings.Index(lowered[idx+len(svc):], "●"); dot >= 0 {
+				blockEnd = idx + len(svc) + dot
+			}
+			if lineBreak := strings.Index(lowered[idx+len(svc):], "\n\n"); lineBreak >= 0 && idx+len(svc)+lineBreak < blockEnd {
+				blockEnd = idx + len(svc) + lineBreak
+			}
+			scope = lowered[lineStart:blockEnd]
+		}
+
+		healthy := false
+		switch mode {
+		case "native":
+			healthy = strings.Contains(scope, "active (running)") || strings.Contains(scope, "com.livepeer.frameworks")
+			if strings.Contains(scope, "failed") || strings.Contains(scope, "inactive") {
+				healthy = false
+			}
+		case "docker":
+			healthy = strings.Contains(scope, "up ") || strings.Contains(scope, "running")
+			if strings.Contains(scope, "unhealthy") || strings.Contains(scope, "exited") || strings.Contains(scope, "restarting") {
+				healthy = false
+			}
+		}
+		out = append(out, readiness.EdgeCheck{
+			Name:   svc,
+			OK:     healthy,
+			Detail: strings.TrimSpace(nameLine),
+		})
+	}
+	return out
 }
 
 // detectEdgeMode reads DEPLOY_MODE from .edge.env to determine if the edge
@@ -650,8 +740,11 @@ Multi-node manifest example:
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "\nEdge node provisioned successfully!\n")
-			fmt.Fprintf(cmd.OutOrStdout(), "  HTTPS: https://%s/health\n", primaryDomain)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Edge node provisioned at https://%s/health", primaryDomain))
+			ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+				{Cmd: "frameworks edge status", Why: "Confirm services are running and HTTPS is healthy."},
+				{Cmd: "frameworks edge doctor", Why: "Run diagnostics if anything looks off."},
+			})
 			return nil
 		},
 	}
@@ -1111,8 +1204,8 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, cluste
 		return fmt.Errorf("failed to create node: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Node registered: %s (ID: %s)\n", nodeName, resp.GetNode().GetNodeId())
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Node registered (DNS will be synced by Navigator reconciler)\n")
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Node registered: %s (ID: %s)", nodeName, resp.GetNode().GetNodeId()))
+	ux.Success(cmd.OutOrStdout(), "Node registered (DNS will be synced by Navigator reconciler)")
 
 	return nil
 }
@@ -1155,7 +1248,7 @@ func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, em
 		return "", "", fmt.Errorf("certificate issuance failed: %s", errMsg)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Certificate issued for %s\n", domain)
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Certificate issued for %s", domain))
 	return resp.GetCertPem(), resp.GetKeyPem(), nil
 }
 
@@ -1169,7 +1262,27 @@ func newEdgeStatusCmd() *cobra.Command {
 			dir = "."
 		}
 		envFile := ".edge.env"
+		envPath := dir + string(os.PathSeparator) + envFile
 		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
+
+		// Multi-line state summary sourced from .edge.env + runtime probes.
+		if envDomain := readEnvFileKey(envPath, "EDGE_DOMAIN"); envDomain != "" && domain == "" {
+			domain = envDomain
+		}
+		nodeID := readEnvFileKey(envPath, "NODE_ID")
+		telemetryURL := readEnvFileKey(envPath, "TELEMETRY_URL")
+		ux.Subheading(cmd.OutOrStdout(), "Edge node state:")
+		fmt.Fprintf(cmd.OutOrStdout(), "  mode:      %s\n", deployMode)
+		if nodeID != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  node id:   %s\n", nodeID)
+		}
+		if domain != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  domain:    %s\n", domain)
+		}
+		if telemetryURL != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  telemetry: %s\n", telemetryURL)
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "")
 
 		var out, errOut string
 		var err error
@@ -1191,7 +1304,7 @@ func newEdgeStatusCmd() *cobra.Command {
 				if edgeOS == "darwin" {
 					tool = "launchctl"
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "%s status error: %v\n%s\n%s\n", tool, err, out, errOut)
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("%s status: %w", tool, err), "confirm unit names match the deployed stack (frameworks-caddy / frameworks-helmsman / frameworks-mistserver)", out, errOut)
 			} else {
 				fmt.Fprint(cmd.OutOrStdout(), out)
 			}
@@ -1204,15 +1317,12 @@ func newEdgeStatusCmd() *cobra.Command {
 				_, out, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
 			}
 			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "docker compose ps error: %v\n%s\n%s\n", err, out, errOut)
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("docker compose ps: %w", err), "run 'docker info' to confirm the daemon is reachable, or re-run with --dir pointing at the deployment directory", out, errOut)
 			} else {
 				fmt.Fprint(cmd.OutOrStdout(), out)
 			}
 		}
 		// HTTPS health
-		if strings.TrimSpace(domain) == "" {
-			domain = readEnvFileKey(dir+string(os.PathSeparator)+envFile, "EDGE_DOMAIN")
-		}
 		if strings.TrimSpace(domain) != "" {
 			url := "https://" + domain + "/health"
 			httpClient := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
@@ -1220,22 +1330,23 @@ func newEdgeStatusCmd() *cobra.Command {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				cancel()
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("HTTPS %s: %v", url, err))
 			} else {
 				resp, err := httpClient.Do(req)
 				cancel()
-				if err != nil {
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
-				} else {
+				switch {
+				case err != nil:
+					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("HTTPS %s: %v", url, err))
+				case resp.StatusCode == 200:
 					if resp.Body != nil {
 						_ = resp.Body.Close()
 					}
-					ok := resp.StatusCode == 200
-					mark := "✗"
-					if ok {
-						mark = "✓"
+					ux.Success(cmd.OutOrStdout(), fmt.Sprintf("HTTPS %s (http 200)", url))
+				default:
+					if resp.Body != nil {
+						_ = resp.Body.Close()
 					}
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> %s (http %d)\n", url, mark, resp.StatusCode)
+					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("HTTPS %s (http %d)", url, resp.StatusCode))
 				}
 			}
 		}
@@ -1256,6 +1367,12 @@ func newEdgeUpdateCmd() *cobra.Command {
 		if dir == "" {
 			dir = "."
 		}
+		out := cmd.OutOrStdout()
+		target := sshTarget
+		if target == "" {
+			target = "local"
+		}
+		ux.Heading(out, fmt.Sprintf("Updating edge services on %s", target))
 		envFile := ".edge.env"
 		deployMode := detectEdgeMode(cmd.Context(), dir, envFile, sshTarget, sshKey)
 
@@ -1269,37 +1386,37 @@ func newEdgeUpdateCmd() *cobra.Command {
 			}
 			if strings.TrimSpace(sshTarget) != "" {
 				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", restartCmd}, ""); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "restart failed: %v\n%s\n%s\n", err, out, errOut)
+					ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("restart: %w", err), "check service state with 'frameworks edge status' and unit/compose file permissions", out, errOut)
 					return err
 				}
 			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "sh", []string{"-c", restartCmd}, ""); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "restart failed: %v\n%s\n%s\n", err, out, errOut)
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("restart: %w", err), "check service state with 'frameworks edge status' and unit/compose file permissions", out, errOut)
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Edge services restarted (native)")
+			ux.Success(out, "Edge services restarted (native)")
 		} else {
 			compose := "docker-compose.edge.yml"
 			// pull
 			if strings.TrimSpace(sshTarget) != "" {
 				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "compose pull failed: %v\n%s\n%s\n", err, out, errOut)
+					ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose pull: %w", err), "confirm the registry is reachable from this host and the image tags in docker-compose.edge.yml are valid", out, errOut)
 					return err
 				}
 			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "compose pull failed: %v\n%s\n%s\n", err, out, errOut)
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose pull: %w", err), "confirm the registry is reachable from this host and the image tags in docker-compose.edge.yml are valid", out, errOut)
 				return err
 			}
 			// up -d
 			if strings.TrimSpace(sshTarget) != "" {
 				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "compose up failed: %v\n%s\n%s\n", err, out, errOut)
+					ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose up: %w", err), "docker daemon rejected the stack — inspect the output for a specific service error", out, errOut)
 					return err
 				}
 			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "compose up failed: %v\n%s\n%s\n", err, out, errOut)
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose up: %w", err), "docker daemon rejected the stack — inspect the output for a specific service error", out, errOut)
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Edge containers updated")
+			ux.Success(out, "Edge containers updated")
 		}
 		return nil
 	}}
@@ -1316,8 +1433,8 @@ func newEdgeCertCmd() *cobra.Command {
 	var sshKey string
 	var reload bool
 	cmd := &cobra.Command{Use: "cert", Short: "Show TLS expiry and optionally reload Caddy", RunE: func(cmd *cobra.Command, args []string) error {
+		out := cmd.OutOrStdout()
 		if strings.TrimSpace(domain) == "" {
-			// try to read from .edge.env
 			if dir == "" {
 				dir = "."
 			}
@@ -1325,53 +1442,52 @@ func newEdgeCertCmd() *cobra.Command {
 			domain = readEnvFileKey(envFile, "EDGE_DOMAIN")
 		}
 		if strings.TrimSpace(domain) == "" {
-			fmt.Fprintln(cmd.OutOrStdout(), "No domain provided and EDGE_DOMAIN not set in .edge.env")
+			ux.Warn(out, "No domain provided and EDGE_DOMAIN not set in .edge.env")
 		} else {
-			// Check TLS expiry
+			ux.Heading(out, fmt.Sprintf("TLS certificate for %s", domain))
 			exp, issuer, err := tlsExpiry(domain)
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "TLS check: %s -> error: %v\n", domain, err)
+				ux.FormatError(out, fmt.Errorf("TLS check %s: %w", domain, err), "ensure ports 443 is reachable and DNS resolves")
 			} else {
 				days := int(time.Until(exp).Hours() / 24)
-				warn := ""
+				detail := fmt.Sprintf("expires %s (%d days); issuer=%s", exp.Format(time.RFC3339), days, issuer)
 				if days < 30 {
-					warn = " (warning: <30 days)"
+					ux.Warn(out, detail+" — expiring within 30 days")
+				} else {
+					ux.Success(out, detail)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "TLS: %s -> expires %s (%d days)%s; issuer=%s\n", domain, exp.Format(time.RFC3339), days, warn, issuer)
 			}
 		}
 		if reload {
 			deployMode := detectEdgeMode(cmd.Context(), dir, ".edge.env", sshTarget, sshKey)
-			var out, errOut string
+			var outStr, errOut string
 			var err error
 			if deployMode == "native" {
 				edgeOS := detectEdgeOS(cmd.Context(), sshTarget, sshKey)
 				if edgeOS == "darwin" {
-					// macOS: kickstart caddy to reload
 					reloadCmd := "launchctl kickstart -k system/com.livepeer.frameworks.caddy"
 					if strings.TrimSpace(sshTarget) != "" {
-						_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", reloadCmd}, "")
+						_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", reloadCmd}, "")
 					} else {
-						_, out, errOut, err = xexec.Run(cmd.Context(), "sh", []string{"-c", reloadCmd}, "")
+						_, outStr, errOut, err = xexec.Run(cmd.Context(), "sh", []string{"-c", reloadCmd}, "")
 					}
 				} else if strings.TrimSpace(sshTarget) != "" {
-					_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "systemctl", []string{"reload", "frameworks-caddy"}, "")
+					_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "systemctl", []string{"reload", "frameworks-caddy"}, "")
 				} else {
-					_, out, errOut, err = xexec.Run(cmd.Context(), "systemctl", []string{"reload", "frameworks-caddy"}, "")
+					_, outStr, errOut, err = xexec.Run(cmd.Context(), "systemctl", []string{"reload", "frameworks-caddy"}, "")
 				}
 			} else {
-				// Docker: exec into container
 				if strings.TrimSpace(sshTarget) != "" {
-					_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
+					_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
 				} else {
-					_, out, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
+					_, outStr, errOut, err = xexec.Run(cmd.Context(), "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
 				}
 			}
 			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "caddy reload failed: %v\n%s\n%s\n", err, out, errOut)
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("caddy reload: %w", err), "confirm the edge-proxy container is running and /etc/caddy/Caddyfile is valid", outStr, errOut)
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Caddy reloaded")
+			ux.Success(out, "Caddy reloaded")
 		}
 		return nil
 	}}
@@ -1465,7 +1581,7 @@ func newEdgeLogsCmd() *cobra.Command {
 		}
 
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "logs error: %v\n%s\n%s\n", err, out, errOut)
+			ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("fetch logs: %w", err), "confirm the service is running via 'frameworks edge status'", out, errOut)
 			return err
 		}
 		fmt.Fprint(cmd.OutOrStdout(), out)
@@ -1504,19 +1620,19 @@ func newEdgeDoctorCmd() *cobra.Command {
 			return enc.Encode(results)
 		}
 
-		// Print checks
 		okCount := 0
-		fmt.Fprintln(cmd.OutOrStdout(), "Host Checks:")
+		ux.Subheading(cmd.OutOrStdout(), "Host Checks:")
 		for _, r := range results {
-			mark := "✗"
-			if r.OK {
-				mark = "✓"
-				okCount++
-			}
+			label := r.Name + ":"
+			line := fmt.Sprintf("%-18s %s", label, r.Detail)
 			if r.Error != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %-40s (%s)\n", mark, r.Name+":", r.Detail, r.Error)
+				line = fmt.Sprintf("%-18s %-40s (%s)", label, r.Detail, r.Error)
+			}
+			if r.OK {
+				ux.Success(cmd.OutOrStdout(), line)
+				okCount++
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), " %s %-18s %s\n", mark, r.Name+":", r.Detail)
+				ux.Fail(cmd.OutOrStdout(), line)
 			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Summary: %d/%d checks passed\n\n", okCount, len(results))
@@ -1527,6 +1643,10 @@ func newEdgeDoctorCmd() *cobra.Command {
 		}
 		envFile := ".edge.env"
 		deployMode := detectEdgeMode(ctx, dir, envFile, "", "")
+		var (
+			serviceChecks []readiness.EdgeCheck
+			probeErr      string
+		)
 		if deployMode == "native" {
 			fmt.Fprintln(cmd.OutOrStdout(), "Native Services:")
 			var statusCmd string
@@ -1538,8 +1658,10 @@ func newEdgeDoctorCmd() *cobra.Command {
 			_, out, _, err := xexec.Run(ctx, "sh", []string{"-c", statusCmd}, "")
 			if err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), " service status error: %v\n", err)
+				probeErr = err.Error()
 			} else {
 				fmt.Fprint(cmd.OutOrStdout(), out)
+				serviceChecks = parseEdgeServiceStatus(out, "native")
 			}
 		} else {
 			compose := "docker-compose.edge.yml"
@@ -1547,15 +1669,20 @@ func newEdgeDoctorCmd() *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout(), "Compose Services:")
 			if err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), " compose ps error: %v\n%s\n", err, errOut)
+				probeErr = err.Error()
 			} else {
 				fmt.Fprint(cmd.OutOrStdout(), out)
+				serviceChecks = parseEdgeServiceStatus(out, "docker")
 			}
 		}
 
 		// HTTPS health
+		envPath := dir + string(os.PathSeparator) + envFile
 		if domain == "" {
-			domain = readEnvFileKey(dir+string(os.PathSeparator)+envFile, "EDGE_DOMAIN")
+			domain = readEnvFileKey(envPath, "EDGE_DOMAIN")
 		}
+		httpsStatus := 0
+		httpsError := ""
 		if domain != "" {
 			url := "https://" + domain + "/health"
 			httpClient := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
@@ -1563,6 +1690,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				cancel()
+				httpsError = err.Error()
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
 			} else {
@@ -1570,17 +1698,20 @@ func newEdgeDoctorCmd() *cobra.Command {
 				cancel()
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
 				if err != nil {
+					httpsError = err.Error()
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
 				} else {
 					if resp.Body != nil {
 						_ = resp.Body.Close()
 					}
+					httpsStatus = resp.StatusCode
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s http %d\n", url, resp.StatusCode)
 				}
 			}
 		}
 		// Stream health quick-check via MistServer analyzers
 		fmt.Fprintln(cmd.OutOrStdout(), "\nStream Health:")
+		var streamChecks []readiness.EdgeCheck
 		func() {
 			diagCtx, diagCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer diagCancel()
@@ -1599,25 +1730,61 @@ func newEdgeDoctorCmd() *cobra.Command {
 			}
 			for _, s := range streams {
 				result, err := ar.Validate(diagCtx, "HLS", s.HLSURL, 5)
+				label := fmt.Sprintf("%-24s", s.Name+":")
 				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), " ⚠ %-24s error: %v\n", s.Name+":", err)
+					ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("%s error: %v", label, err))
+					streamChecks = append(streamChecks, readiness.EdgeCheck{Name: s.Name, OK: false, Detail: err.Error()})
 					continue
 				}
 				if result.OK {
-					fmt.Fprintf(cmd.OutOrStdout(), " ✓ %-24s HLS OK\n", s.Name+":")
+					ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s HLS OK", label))
+					streamChecks = append(streamChecks, readiness.EdgeCheck{Name: s.Name, OK: true, Detail: "HLS OK"})
 				} else {
 					msg := result.Summary()
-					fmt.Fprintf(cmd.OutOrStdout(), " ✗ %-24s HLS FAIL (%s)\n", s.Name+":", msg)
+					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("%s HLS FAIL (%s)", label, msg))
+					streamChecks = append(streamChecks, readiness.EdgeCheck{Name: s.Name, OK: false, Detail: msg})
 				}
 			}
 		}()
 
-		// Hints minimal
-		fmt.Fprintln(cmd.OutOrStdout(), "\nHints:")
-		fmt.Fprintln(cmd.OutOrStdout(), " - Ensure DNS A/AAAA records point to this host before enrollment.")
-		fmt.Fprintln(cmd.OutOrStdout(), " - If HTTPS fails, confirm ports 80/443 are reachable and Caddy is running.")
-		fmt.Fprintln(cmd.OutOrStdout(), " - Use 'frameworks edge tune --write' to apply recommended sysctl/limits.")
-		fmt.Fprintln(cmd.OutOrStdout(), " - Use 'frameworks edge diagnose media' for detailed stream analysis.")
+		// Adaptive hints from readiness — only the remediations relevant to
+		// what actually failed, replacing the previous four static hints.
+		hostChecks := make([]readiness.EdgeCheck, 0, len(results))
+		for _, r := range results {
+			detail := r.Detail
+			if r.Error != "" {
+				detail = r.Detail + " (" + r.Error + ")"
+			}
+			hostChecks = append(hostChecks, readiness.EdgeCheck{Name: r.Name, OK: r.OK, Detail: detail})
+		}
+		hasEnv := true
+		if _, statErr := os.Stat(envPath); statErr != nil {
+			hasEnv = false
+		}
+		report := readiness.EdgeReadiness(readiness.EdgeInputs{
+			HasEnv:          hasEnv,
+			Domain:          domain,
+			Mode:            deployMode,
+			HostChecks:      hostChecks,
+			ServiceChecks:   serviceChecks,
+			StreamChecks:    streamChecks,
+			ServiceProbeErr: probeErr,
+			HTTPSStatus:     httpsStatus,
+			HTTPSError:      httpsError,
+		})
+		var steps []ux.NextStep
+		for _, w := range report.Warnings {
+			if w.Remediation.Cmd == "" && w.Remediation.Why == "" {
+				continue
+			}
+			steps = append(steps, ux.NextStep{Cmd: w.Remediation.Cmd, Why: w.Remediation.Why})
+		}
+		if len(steps) == 0 && report.OK() {
+			// Everything looks healthy — keep doctor silent for the next-steps
+			// section so a green run isn't padded with filler.
+			return nil
+		}
+		ux.PrintNextSteps(cmd.OutOrStdout(), steps)
 		return nil
 	}}
 	cmd.Flags().StringVar(&domain, "domain", "", "edge domain to validate (DNS and HTTPS)")
@@ -1641,20 +1808,19 @@ the change and pushes an updated ConfigSeed back to the node.`, Args: cobra.Rang
 		helmsmanBase := "http://localhost:18007"
 
 		if len(args) == 0 {
-			// GET current mode
 			curlArgs := []string{"-s", "-f", helmsmanBase + "/node/mode"}
-			var out, errOut string
+			var outStr, errOut string
 			var err error
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
+				_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
 			} else {
-				_, out, errOut, err = xexec.Run(cmd.Context(), "curl", curlArgs, "")
+				_, outStr, errOut, err = xexec.Run(cmd.Context(), "curl", curlArgs, "")
 			}
 			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "failed to get node mode: %v\n%s\n", err, errOut)
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("get node mode: %w", err), "helmsman at "+helmsmanBase+" unreachable — run 'frameworks edge status' to confirm the node is up", "", errOut)
 				return err
 			}
-			fmt.Fprint(cmd.OutOrStdout(), out+"\n")
+			fmt.Fprint(cmd.OutOrStdout(), outStr+"\n")
 			return nil
 		}
 
@@ -1665,20 +1831,22 @@ the change and pushes an updated ConfigSeed back to the node.`, Args: cobra.Rang
 			return fmt.Errorf("invalid mode %q: must be normal, draining, or maintenance", mode)
 		}
 
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Setting node mode to %s", mode))
 		body := fmt.Sprintf(`{"mode":%q,"reason":%q}`, mode, reason)
 		curlArgs := []string{"-s", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", body, helmsmanBase + "/node/mode"}
-		var out, errOut string
+		var outStr, errOut string
 		var err error
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
+			_, outStr, errOut, err = xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "curl", curlArgs, "")
 		} else {
-			_, out, errOut, err = xexec.Run(cmd.Context(), "curl", curlArgs, "")
+			_, outStr, errOut, err = xexec.Run(cmd.Context(), "curl", curlArgs, "")
 		}
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "failed to set node mode: %v\n%s\n", err, errOut)
+			ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("set node mode: %w", err), "helmsman at "+helmsmanBase+" refused the mode change — check 'frameworks edge logs helmsman'", "", errOut)
 			return err
 		}
-		fmt.Fprint(cmd.OutOrStdout(), out+"\n")
+		fmt.Fprint(cmd.OutOrStdout(), outStr+"\n")
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Node mode set to %s", mode))
 		return nil
 	}}
 	cmd.Flags().StringVar(&reason, "reason", "cli_request", "reason for mode change (for audit)")

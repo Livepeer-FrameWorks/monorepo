@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
@@ -173,7 +174,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Upgrading %s on %s to version: %s\n", serviceName, host.ExternalIP, version)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Upgrading %s on %s to version: %s", serviceName, host.ExternalIP, version))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -229,7 +230,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 
 	// Check if already at target version
 	if state.Version == svcInfo.Version && !dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n✓ Already at version %s, nothing to do\n", svcInfo.Version)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Already at version %s, nothing to do", svcInfo.Version))
 		return nil
 	}
 
@@ -355,8 +356,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Service is healthy\n")
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "\n[6/6] Upgrade complete!\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "✓ %s upgraded from %s to %s\n", serviceName, previousVersion, svcInfo.Version)
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s upgraded from %s to %s", serviceName, previousVersion, svcInfo.Version))
 
 	// Persist the new version back to the cluster manifest. The resolver
 	// hands us the on-disk path of whichever source it chose; writing
@@ -411,7 +411,7 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 		return nil
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Upgrading %d services (channel: %s, version: %s)\n", len(services), manifest.ResolvedChannel(), version)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Upgrading %d services (channel: %s, version: %s)", len(services), manifest.ResolvedChannel(), version))
 	fmt.Fprintf(cmd.OutOrStdout(), "Order: %s\n\n", strings.Join(services, " -> "))
 
 	if dryRun {
@@ -449,7 +449,10 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 		succeeded = append(succeeded, svc)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "\n✓ All %d services upgraded successfully\n", len(succeeded))
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("All %d services upgraded", len(succeeded)))
+	ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+		{Cmd: "frameworks cluster status", Why: "Verify deployed versions match the target channel."},
+	})
 	return nil
 }
 

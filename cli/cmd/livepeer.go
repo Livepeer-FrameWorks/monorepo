@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
@@ -158,21 +159,21 @@ func newLivepeerStatusCmd() *cobra.Command {
 				return fmt.Errorf("invalid /status response: %w", err)
 			}
 
-			fmt.Printf("Gateway:    %s\n", addr)
-			fmt.Printf("Version:    %s\n", status.Version)
-			fmt.Printf("ETH Addr:   %s\n", status.EthereumAddr)
-			fmt.Printf("Arch:       %s/%s\n", status.GOOS, status.GOArch)
+			out := cmd.OutOrStdout()
+			ux.Heading(out, fmt.Sprintf("Livepeer gateway status (%s)", addr))
+			fmt.Fprintf(out, "Version:    %s\n", status.Version)
+			fmt.Fprintf(out, "ETH Addr:   %s\n", status.EthereumAddr)
+			fmt.Fprintf(out, "Arch:       %s/%s\n", status.GOOS, status.GOArch)
 
-			// Try to get deposit info from /senderInfo
 			depositBody, err := gatewayGET(addr, "/senderInfo")
 			if err == nil {
 				var senderInfo map[string]interface{}
 				if json.Unmarshal(depositBody, &senderInfo) == nil {
 					if deposit, ok := senderInfo["Deposit"]; ok {
-						fmt.Printf("Deposit:    %v\n", deposit)
+						fmt.Fprintf(out, "Deposit:    %v\n", deposit)
 					}
 					if reserve, ok := senderInfo["Reserve"]; ok {
-						fmt.Printf("Reserve:    %v\n", reserve)
+						fmt.Fprintf(out, "Reserve:    %v\n", reserve)
 					}
 				}
 			}

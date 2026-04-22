@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
@@ -52,17 +53,16 @@ Existing databases/topics/tables will be skipped.`,
 // runInit executes the init command against an already-loaded manifest.
 func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
 	manifest := rc.Manifest
-	fmt.Fprintf(cmd.OutOrStdout(), "Initializing %s from manifest: %s\n\n", service, rc.ManifestPath)
+	out := cmd.OutOrStdout()
+	ux.Heading(out, fmt.Sprintf("Initializing %s from manifest: %s", service, rc.ManifestPath))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Create SSH pool
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	// Initialize services based on argument
 	switch service {
 	case "postgres", "all":
 		if err := initPostgres(ctx, cmd, rc, sshPool); err != nil {
@@ -84,7 +84,11 @@ func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
 		}
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "\n✓ Initialization complete!")
+	ux.Success(out, "Initialization complete")
+	ux.PrintNextSteps(out, []ux.NextStep{
+		{Cmd: "frameworks cluster seed", Why: "Load static seed data (billing tiers, reference data)."},
+		{Cmd: "frameworks cluster doctor", Why: "Verify the cluster is ready."},
+	})
 	return nil
 }
 

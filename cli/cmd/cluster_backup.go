@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
@@ -76,7 +77,7 @@ Optionally upload to S3/GCS after backup (requires --upload flag).`,
 // runBackup executes the backup command against an already-loaded manifest.
 func runBackup(cmd *cobra.Command, manifest *inventory.Manifest, component, outputDir string, skipUpload bool) error {
 	timestamp := time.Now().Format("20060102-150405")
-	fmt.Fprintf(cmd.OutOrStdout(), "Starting backup: %s (timestamp: %s)\n", component, timestamp)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Starting backup: %s (timestamp: %s)", component, timestamp))
 	fmt.Fprintf(cmd.OutOrStdout(), "Output directory: %s\n\n", outputDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -111,22 +112,22 @@ func runBackup(cmd *cobra.Command, manifest *inventory.Manifest, component, outp
 	case "all":
 		fmt.Fprintln(cmd.OutOrStdout(), "[1/4] Backing up Postgres...")
 		if err := backupPostgres(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Postgres backup failed: %v\n", err)
+			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Postgres backup failed: %v", err))
 		}
 
 		fmt.Fprintln(cmd.OutOrStdout(), "\n[2/4] Backing up ClickHouse...")
 		if err := backupClickHouse(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ ClickHouse backup failed: %v\n", err)
+			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("ClickHouse backup failed: %v", err))
 		}
 
 		fmt.Fprintln(cmd.OutOrStdout(), "\n[3/4] Backing up Docker volumes...")
 		if err := backupVolumes(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Volumes backup failed: %v\n", err)
+			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Volumes backup failed: %v", err))
 		}
 
 		fmt.Fprintln(cmd.OutOrStdout(), "\n[4/4] Backing up configuration...")
 		if err := backupConfig(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Config backup failed: %v\n", err)
+			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Config backup failed: %v", err))
 		}
 
 	default:
@@ -137,13 +138,13 @@ func runBackup(cmd *cobra.Command, manifest *inventory.Manifest, component, outp
 	if len(backupFiles) > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "\nWriting backup manifest...\n")
 		if err := writeBackupManifest(outputDir, timestamp, component, backupFiles); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Failed to write manifest: %v\n", err)
+			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Failed to write manifest: %v", err))
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Manifest written: manifest-%s.json\n", timestamp)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Manifest written: manifest-%s.json", timestamp))
 		}
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "\n✓ Backup complete!")
+	ux.Success(cmd.OutOrStdout(), "Backup complete")
 	return nil
 }
 
@@ -201,7 +202,7 @@ func backupPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory
 		}
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Postgres backup saved: %s\n", backupFile)
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Postgres backup saved: %s", backupFile))
 	return nil
 }
 
@@ -269,9 +270,9 @@ done
 				Component: "clickhouse",
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ ClickHouse backup saved: %s\n", tarFile)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("ClickHouse backup saved: %s", tarFile))
 	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ ClickHouse backup saved: %s\n", backupDir)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("ClickHouse backup saved: %s", backupDir))
 	}
 
 	return nil
@@ -333,13 +334,13 @@ docker run --rm -v /var/lib/docker/volumes:/volumes -v %s:/backup alpine tar czf
 			}
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Volumes backup saved: %s\n", backupFile)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Volumes backup saved: %s", backupFile))
 		successCount++
 	}
 
 	if len(errors) > 0 {
 		for _, e := range errors {
-			fmt.Fprintf(cmd.OutOrStderr(), "    ⚠ %s\n", e)
+			ux.Warn(cmd.ErrOrStderr(), e)
 		}
 	}
 
@@ -347,7 +348,7 @@ docker run --rm -v /var/lib/docker/volumes:/volumes -v %s:/backup alpine tar czf
 		return fmt.Errorf("all volume backups failed")
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Backed up volumes from %d/%d hosts\n", successCount, len(manifest.Hosts))
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Backed up volumes from %d/%d hosts", successCount, len(manifest.Hosts)))
 	return nil
 }
 
@@ -411,13 +412,13 @@ cd / && tar czf %s \
 			}
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Config backup saved: %s\n", backupFile)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Config backup saved: %s", backupFile))
 		successCount++
 	}
 
 	if len(errors) > 0 {
 		for _, e := range errors {
-			fmt.Fprintf(cmd.OutOrStderr(), "    ⚠ %s\n", e)
+			ux.Warn(cmd.ErrOrStderr(), e)
 		}
 	}
 
@@ -425,7 +426,7 @@ cd / && tar czf %s \
 		return fmt.Errorf("all config backups failed")
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Backed up config from %d/%d hosts\n", successCount, len(manifest.Hosts))
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Backed up config from %d/%d hosts", successCount, len(manifest.Hosts)))
 	return nil
 }
 

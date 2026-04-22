@@ -13,6 +13,7 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/services"
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/configgen"
@@ -206,13 +207,17 @@ func newServicesHealthCmd() *cobra.Command {
 			}
 			return instances[i].ServiceID < instances[j].ServiceID
 		})
-		fmt.Fprintf(cmd.OutOrStdout(), "Service Health (%d instances)\n", len(instances))
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Service Health (%d instances)", len(instances)))
 		for _, h := range instances {
-			mark := "✗"
-			if strings.ToLower(h.Status) == "ok" || strings.ToLower(h.Status) == "healthy" {
-				mark = "✓"
+			line := fmt.Sprintf("%-12s inst=%-10s %s:%d %s [%s]", h.ServiceID, h.InstanceID, h.Host, h.Port, h.HealthEndpoint, h.Status)
+			switch strings.ToLower(h.Status) {
+			case "ok", "healthy":
+				ux.Success(cmd.OutOrStdout(), line)
+			case "degraded", "warning":
+				ux.Warn(cmd.OutOrStdout(), line)
+			default:
+				ux.Fail(cmd.OutOrStdout(), line)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), " %s %-12s inst=%-10s %s:%d %s [%s]\n", mark, h.ServiceID, h.InstanceID, h.Host, h.Port, h.HealthEndpoint, h.Status)
 		}
 		return nil
 	}}
@@ -334,7 +339,7 @@ func newServicesPlanCmd() *cobra.Command {
 		if err := services.SavePlan(dir, specs, profile); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Wrote service fragments to %s and %s\n", dir, envOutput)
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Wrote service fragments to %s and %s", dir, envOutput))
 		fmt.Fprintln(cmd.OutOrStdout(), "Selection:")
 		fmt.Fprint(cmd.OutOrStdout(), services.SummarizeSelection(specs))
 		return nil

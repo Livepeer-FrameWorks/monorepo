@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 
 	"github.com/spf13/cobra"
@@ -43,9 +44,10 @@ func runSetChannel(cmd *cobra.Command, manifest *inventory.Manifest, manifestPat
 		return fmt.Errorf("invalid channel %q: must be one of %v", channel, validChannels)
 	}
 
+	out := cmd.OutOrStdout()
 	current := manifest.ResolvedChannel()
 	if current == channel {
-		fmt.Fprintf(cmd.OutOrStdout(), "Already on channel: %s\n", channel)
+		ux.Success(out, fmt.Sprintf("Already on channel: %s", channel))
 		return nil
 	}
 
@@ -55,9 +57,13 @@ func runSetChannel(cmd *cobra.Command, manifest *inventory.Manifest, manifestPat
 		return fmt.Errorf("failed to save manifest: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Channel updated: %s -> %s\n", current, channel)
-	fmt.Fprintln(cmd.OutOrStdout(), "Run 'frameworks cluster upgrade --all' to apply.")
-
+	ux.Success(out, fmt.Sprintf("Channel updated: %s -> %s", current, channel))
+	if channel == "rc" {
+		ux.Warn(out, "Release candidates are pre-production — review the changelog before upgrading.")
+	}
+	ux.PrintNextSteps(out, []ux.NextStep{
+		{Cmd: "frameworks cluster upgrade --all", Why: "Roll services to the new channel."},
+	})
 	return nil
 }
 

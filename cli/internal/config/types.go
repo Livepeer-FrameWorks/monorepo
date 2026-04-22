@@ -39,6 +39,13 @@ type Context struct {
 	Auth      Auth      `yaml:"auth" json:"-"`
 	Persona   Persona   `yaml:"persona,omitempty" json:"persona,omitempty"`
 	Gitops    *Gitops   `yaml:"gitops,omitempty" json:"gitops,omitempty"`
+
+	// Remembered state — populated only by the success paths of mutating
+	// commands (cluster provision, cluster detect). Read-path resolvers
+	// must NOT write to these fields, or context becomes haunted with
+	// speculative values from dry-runs and --help paths.
+	LastManifestPath string `yaml:"last_manifest_path,omitempty" json:"last_manifest_path,omitempty"`
+	SystemTenantID   string `yaml:"system_tenant_id,omitempty" json:"system_tenant_id,omitempty"`
 }
 
 // Persona labels a context by operator intent. Shapes setup prompts and

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/ux"
 
 	"github.com/spf13/cobra"
 )
@@ -38,7 +39,9 @@ setup' for interactive onboarding, or 'frameworks context create' +
 	return ctx
 }
 
-func mutateContext(cmd *cobra.Command, explicitCtx string, mutate func(*fwcfg.Context) error) error {
+// mutateContext loads the active (or explicit) context, applies mutate,
+// writes it back, and prints "Updated <subject> in context <name>" on success.
+func mutateContext(cmd *cobra.Command, explicitCtx, subject string, mutate func(*fwcfg.Context) error) error {
 	cfg, err := fwcfg.Load()
 	if err != nil {
 		return err
@@ -70,6 +73,7 @@ func mutateContext(cmd *cobra.Command, explicitCtx string, mutate func(*fwcfg.Co
 	if err := fwcfg.Save(cfg); err != nil {
 		return err
 	}
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Updated %s in context %q", subject, target))
 	return nil
 }
 
@@ -100,7 +104,11 @@ current — pair with 'frameworks context use <name>' to switch to it.`,
 			if err := fwcfg.Save(cfg); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Created context %q (run 'frameworks context use %s' to switch to it)\n", name, name)
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created context %q", name))
+			ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
+				{Cmd: fmt.Sprintf("frameworks context use %s", name), Why: "Switch to the newly created context."},
+				{Cmd: fmt.Sprintf("frameworks context set-persona <platform|selfhosted|edge> --context %s", name), Why: "Label the context by intent."},
+			})
 			return nil
 		},
 	}
@@ -166,7 +174,7 @@ func newContextUseCmd() *cobra.Command {
 			if err := fwcfg.Save(cfg); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Now using context %q\n", args[0])
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Now using context %q", args[0]))
 			return nil
 		},
 	}
@@ -269,7 +277,7 @@ func newContextSetURLCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			svc, url := args[0], args[1]
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, fmt.Sprintf("%s URL", svc), func(c *fwcfg.Context) error {
 				return setEndpointURL(&c.Endpoints, svc, url)
 			})
 		},
@@ -313,7 +321,7 @@ func newContextSetClusterCmd() *cobra.Command {
 		Short: "Set the cluster ID in a context",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "cluster ID", func(c *fwcfg.Context) error {
 				c.ClusterID = args[0]
 				return nil
 			})
@@ -336,7 +344,7 @@ func newContextSetPersonaCmd() *cobra.Command {
 			default:
 				return fmt.Errorf("persona must be one of platform|selfhosted|edge (got %q)", args[0])
 			}
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "persona", func(c *fwcfg.Context) error {
 				c.Persona = p
 				return nil
 			})
@@ -366,7 +374,7 @@ func newContextSetGitopsSourceCmd() *cobra.Command {
 			default:
 				return fmt.Errorf("source must be local|github|manifest (got %q)", args[0])
 			}
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "gitops source", func(c *fwcfg.Context) error {
 				ensureGitops(c).Source = s
 				return nil
 			})
@@ -383,7 +391,7 @@ func newContextSetGitopsPathCmd() *cobra.Command {
 		Short: "Set the local gitops repo path (source=local)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "gitops local-path", func(c *fwcfg.Context) error {
 				ensureGitops(c).LocalPath = args[0]
 				return nil
 			})
@@ -400,7 +408,7 @@ func newContextSetGitopsRepoCmd() *cobra.Command {
 		Short: "Set the GitHub repo (source=github)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "gitops repo", func(c *fwcfg.Context) error {
 				ensureGitops(c).Repo = args[0]
 				return nil
 			})
@@ -417,7 +425,7 @@ func newContextSetGitopsRefCmd() *cobra.Command {
 		Short: "Set the GitHub branch/tag (source=github)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "gitops ref", func(c *fwcfg.Context) error {
 				ensureGitops(c).Ref = args[0]
 				return nil
 			})
@@ -434,7 +442,7 @@ func newContextSetGitopsClusterCmd() *cobra.Command {
 		Short: "Set the cluster name within the gitops repo",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "gitops cluster", func(c *fwcfg.Context) error {
 				ensureGitops(c).Cluster = args[0]
 				return nil
 			})
@@ -451,7 +459,7 @@ func newContextSetGitopsManifestCmd() *cobra.Command {
 		Short: "Set the single-manifest path (source=manifest, or explicit override)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "gitops manifest-path", func(c *fwcfg.Context) error {
 				ensureGitops(c).ManifestPath = args[0]
 				return nil
 			})
@@ -468,7 +476,7 @@ func newContextSetAgeKeyCmd() *cobra.Command {
 		Short: "Set the SOPS age key path for this context",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return mutateContext(cmd, explicitCtx, func(c *fwcfg.Context) error {
+			return mutateContext(cmd, explicitCtx, "age key", func(c *fwcfg.Context) error {
 				ensureGitops(c).AgeKeyPath = args[0]
 				return nil
 			})

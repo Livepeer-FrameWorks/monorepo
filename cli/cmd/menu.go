@@ -8,9 +8,40 @@ import (
 	"strings"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/internal/ux"
 
 	"github.com/spf13/cobra"
 )
+
+type menuSection struct {
+	key         string // "edge", "services", "control-plane", "cluster", "dns-mesh", "settings"
+	label       string
+	recommended bool
+}
+
+// menuSectionsForPersona returns the sections in display order with
+// recommendation tags set for the active persona. No section is ever
+// hidden; power users keep access to everything.
+func menuSectionsForPersona(p fwcfg.Persona) []menuSection {
+	edge := menuSection{key: "edge", label: "Edge Operations"}
+	services := menuSection{key: "services", label: "Services & Health"}
+	controlPlane := menuSection{key: "control-plane", label: "Control Plane (Admin)"}
+	cluster := menuSection{key: "cluster", label: "Cluster Operations"}
+	dnsMesh := menuSection{key: "dns-mesh", label: "DNS & Mesh"}
+	settings := menuSection{key: "settings", label: "Settings & Contexts"}
+
+	switch p {
+	case fwcfg.PersonaEdge:
+		edge.recommended = true
+		return []menuSection{edge, services, settings, cluster, controlPlane, dnsMesh}
+	case fwcfg.PersonaPlatform, fwcfg.PersonaSelfHosted:
+		cluster.recommended = true
+		controlPlane.recommended = true
+		return []menuSection{cluster, controlPlane, services, dnsMesh, edge, settings}
+	default:
+		return []menuSection{edge, services, controlPlane, cluster, dnsMesh, settings}
+	}
+}
 
 func newMenuCmd() *cobra.Command {
 	return &cobra.Command{
@@ -24,34 +55,45 @@ func newMenuCmd() *cobra.Command {
 
 func runMainMenu(cmd *cobra.Command) error {
 	reader := bufio.NewReader(os.Stdin)
+	sections := menuSectionsForPersona(activePersona())
+	out := cmd.OutOrStdout()
+
 	for {
-		fmt.Fprintln(cmd.OutOrStdout(), "\n=== Frameworks CLI ===")
-		fmt.Fprintln(cmd.OutOrStdout(), "1) Edge Operations")
-		fmt.Fprintln(cmd.OutOrStdout(), "2) Services & Health")
-		fmt.Fprintln(cmd.OutOrStdout(), "3) Control Plane (Admin)")
-		fmt.Fprintln(cmd.OutOrStdout(), "4) Cluster Operations")
-		fmt.Fprintln(cmd.OutOrStdout(), "5) DNS & Mesh")
-		fmt.Fprintln(cmd.OutOrStdout(), "6) Settings & Contexts")
-		fmt.Fprintln(cmd.OutOrStdout(), "0) Exit")
-		fmt.Fprint(cmd.OutOrStdout(), "> ")
-		choice, _ := reader.ReadString('\n')
-		switch strings.TrimSpace(choice) {
-		case "1":
-			edgeMenu(cmd, reader)
-		case "2":
-			servicesMenu(cmd, reader)
-		case "3":
-			controlPlaneMenu(cmd, reader)
-		case "4":
-			clusterOpsMenu(cmd, reader)
-		case "5":
-			dnsMeshMenu(cmd, reader)
-		case "6":
-			settingsMenu(cmd, reader)
-		case "0":
+		fmt.Fprintln(out, "\n=== Frameworks CLI ===")
+		for i, s := range sections {
+			tag := ""
+			if s.recommended {
+				tag = " [Recommended]"
+			}
+			fmt.Fprintf(out, "%d) %s%s\n", i+1, s.label, tag)
+		}
+		fmt.Fprintln(out, "0) Exit")
+		fmt.Fprint(out, "> ")
+		choice, _ := reader.ReadString('\n') //nolint:errcheck // interactive prompt; err yields empty string -> unknown-option path below
+
+		trimmed := strings.TrimSpace(choice)
+		if trimmed == "0" {
 			return nil
-		default:
-			fmt.Fprintln(cmd.OutOrStdout(), "Unknown option")
+		}
+		idx, convErr := strconv.Atoi(trimmed)
+		if convErr != nil || idx < 1 || idx > len(sections) {
+			ux.Warn(out, "Unknown option")
+			continue
+		}
+		section := sections[idx-1]
+		switch section.key {
+		case "edge":
+			edgeMenu(cmd, reader)
+		case "services":
+			servicesMenu(cmd, reader)
+		case "control-plane":
+			controlPlaneMenu(cmd, reader)
+		case "cluster":
+			clusterOpsMenu(cmd, reader)
+		case "dns-mesh":
+			dnsMeshMenu(cmd, reader)
+		case "settings":
+			settingsMenu(cmd, reader)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
@@ -48,6 +49,12 @@ Seed operations are idempotent (ON CONFLICT guards).`,
 
 func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 	manifest := rc.Manifest
+
+	seedMode := "static"
+	if demo {
+		seedMode = "static + demo"
+	}
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Seeding cluster (%s)", seedMode))
 
 	if demo && !force {
 		fmt.Fprint(cmd.OutOrStdout(), "This will insert demo data (sample tenant, user, stream). Continue? [y/N] ")
@@ -120,14 +127,14 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 		if err := pgProv.ApplyStaticSeeds(ctx, pgHost, port, dbUser, dbNames); err != nil {
 			return fmt.Errorf("postgres static seeds: %w", err)
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "  ✓ Static seeds applied")
+		ux.Success(cmd.OutOrStdout(), "Static seeds applied")
 
 		if demo {
 			fmt.Fprintln(cmd.OutOrStdout(), "Applying Postgres demo seeds...")
 			if err := pgProv.ApplyDemoSeeds(ctx, pgHost, port, dbUser, dbNames); err != nil {
 				return fmt.Errorf("postgres demo seeds: %w", err)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "  ✓ Demo seeds applied")
+			ux.Success(cmd.OutOrStdout(), "Demo seeds applied")
 		}
 	}
 
@@ -186,11 +193,15 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 				if err := chProv.ApplyDemoSeeds(ctx, chHost, config); err != nil {
 					return fmt.Errorf("clickhouse demo seeds: %w", err)
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "  ✓ ClickHouse demo seeds applied")
+				ux.Success(cmd.OutOrStdout(), "ClickHouse demo seeds applied")
 			}
 		}
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "\n✓ Seed complete!")
+	out := cmd.OutOrStdout()
+	ux.Success(out, "Seed complete")
+	ux.PrintNextSteps(out, []ux.NextStep{
+		{Cmd: "frameworks cluster doctor", Why: "Verify the cluster is healthy after seeding."},
+	})
 	return nil
 }

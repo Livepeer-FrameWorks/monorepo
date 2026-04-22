@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"frameworks/cli/internal/config"
+	"frameworks/cli/internal/ux"
 	"frameworks/pkg/clients/quartermaster"
 	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/logging"
@@ -51,9 +52,8 @@ func newDNSDoctorCmd() *cobra.Command {
 
 			isJSON := output == "json"
 			if !isJSON {
-				fmt.Fprintln(cmd.OutOrStdout(), "🏥 DNS Health Check")
-				fmt.Fprintln(cmd.OutOrStdout(), "===================")
-				fmt.Fprint(cmd.OutOrStdout(), "• Fetching service inventory from Quartermaster... ")
+				ux.Heading(cmd.OutOrStdout(), "DNS Health Check")
+				fmt.Fprint(cmd.OutOrStdout(), "Fetching service inventory from Quartermaster... ")
 			}
 
 			// 2. Fetch expected service-backed IPs using the same Quartermaster
@@ -111,7 +111,7 @@ func newDNSDoctorCmd() *cobra.Command {
 			}
 
 			if !isJSON {
-				fmt.Fprintf(cmd.OutOrStdout(), "✓ (%d service types checked)\n", len(serviceTypes))
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("(%d service types checked)", len(serviceTypes)))
 			}
 
 			// 3. Verify Records
@@ -157,14 +157,30 @@ func newDNSDoctorCmd() *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "\nDOMAIN\tEXPECTED IPs\tACTUAL IPs\tSTATUS")
 			for _, r := range results {
+				// Inline status icons for the DNS-row table. CI/non-TTY
+				// falls through to the ASCII fallbacks; keep the icon
+				// choice consistent with the rest of the CLI's palette.
 				var statusIcon string
+				mode := ux.DetectMode(cmd.OutOrStdout())
 				switch r.Status {
 				case "NXDOMAIN":
-					statusIcon = "❌ NXDOMAIN"
+					if mode.Unicode {
+						statusIcon = "✗ NXDOMAIN"
+					} else {
+						statusIcon = "[FAIL] NXDOMAIN"
+					}
 				case "MISMATCH":
-					statusIcon = "⚠️  MISMATCH"
+					if mode.Unicode {
+						statusIcon = "⚠ MISMATCH"
+					} else {
+						statusIcon = "[WARN] MISMATCH"
+					}
 				default:
-					statusIcon = "✅ OK"
+					if mode.Unicode {
+						statusIcon = "✓ OK"
+					} else {
+						statusIcon = "[OK] OK"
+					}
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 					r.Domain,
