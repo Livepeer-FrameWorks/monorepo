@@ -22,9 +22,9 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	if port == 0 {
 		port = 5432
 	}
-	pwd, _ := config.Metadata["postgres_password"].(string) //nolint:errcheck // zero value = no rotation override
+	pwd := metaString(config.Metadata, "postgres_password")
 	if pwd == "" {
-		pwd, _ = config.Metadata["password"].(string) //nolint:errcheck
+		pwd = metaString(config.Metadata, "password")
 	}
 	if pwd == "" {
 		return nil, fmt.Errorf("postgres: no password in metadata (postgres_password/password)")
@@ -37,12 +37,13 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"postgres_listen_addresses": "*",
 	}
 
-	tuning, _ := config.Metadata["tuning"].(map[string]any)
-	if v, ok := tuning["max_connections"].(int); ok {
-		vars["postgres_max_connections"] = v
-	}
-	if v, ok := tuning["shared_buffers"].(string); ok && v != "" {
-		vars["postgres_shared_buffers"] = v
+	if tuning, ok := config.Metadata["tuning"].(map[string]any); ok {
+		if v, ok := tuning["max_connections"].(int); ok {
+			vars["postgres_max_connections"] = v
+		}
+		if v, ok := tuning["shared_buffers"].(string); ok && v != "" {
+			vars["postgres_shared_buffers"] = v
+		}
 	}
 
 	if dbs, ok := config.Metadata["databases"].([]map[string]string); ok && len(dbs) > 0 {
@@ -84,8 +85,8 @@ func postgresRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBu
 	result, err := runner.Run(ctx, "systemctl is-active postgresql 2>/dev/null | grep -qx active && pg_isready -h 127.0.0.1 -q && echo RUNNING || echo NOT_RUNNING")
 	running := err == nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
 
-	bin, _ := runner.Run(ctx, "command -v psql >/dev/null && echo EXISTS")
-	exists := bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+	bin, binErr := runner.Run(ctx, "command -v psql >/dev/null && echo EXISTS")
+	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
 }

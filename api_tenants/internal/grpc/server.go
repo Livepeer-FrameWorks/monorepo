@@ -12,6 +12,7 @@ import (
 	"net"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -748,7 +749,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		var nodeClusterID string
 		var resolvedNodeIP sql.NullString
 		err := exec.QueryRowContext(ctx, `
-			SELECT cluster_id, COALESCE(wireguard_ip::text, internal_ip::text, external_ip::text)
+			SELECT cluster_id, wireguard_ip::text
 			FROM quartermaster.infrastructure_nodes
 			WHERE node_id = $1
 		`, *req.NodeId).Scan(&nodeClusterID, &resolvedNodeIP)
@@ -761,18 +762,19 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		if nodeClusterID != clusterID {
 			return nil, status.Errorf(codes.InvalidArgument, "node '%s' belongs to cluster '%s', not '%s'", *req.NodeId, nodeClusterID, clusterID)
 		}
-		if resolvedNodeIP.Valid {
-			nodeIP = resolvedNodeIP.String
+		if !resolvedNodeIP.Valid || strings.TrimSpace(resolvedNodeIP.String) == "" {
+			return nil, status.Errorf(codes.FailedPrecondition, "node '%s' has no registered WireGuard mesh address", *req.NodeId)
 		}
+		nodeIP = resolvedNodeIP.String
 	}
 
-	advHost := req.GetAdvertiseHost()
-	if advHost == "" {
-		advHost = req.GetHost()
-	}
-	if advHost == "" && req.NodeId != nil {
-		if nodeIP != "" {
-			advHost = nodeIP
+	advHost := ""
+	if req.NodeId != nil && nodeIP != "" {
+		advHost = nodeIP
+	} else {
+		advHost = req.GetAdvertiseHost()
+		if advHost == "" {
+			advHost = req.GetHost()
 		}
 	}
 	if advHost == "" {
@@ -3759,30 +3761,36 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 
 	now := time.Now()
 
+	var wgPort any
+	if req.WireguardPort != nil && *req.WireguardPort > 0 {
+		wgPort = *req.WireguardPort
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type,
 		                                                internal_ip, external_ip, wireguard_ip, wireguard_public_key,
+		                                                wireguard_listen_port,
 		                                                region, availability_zone,
 		                                                cpu_cores, memory_gb, disk_gb, status,
 		                                                created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active', $14, $14)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15, $15)
 		ON CONFLICT (node_id) DO UPDATE SET
-			cluster_id           = EXCLUDED.cluster_id,
-			node_name            = EXCLUDED.node_name,
-			node_type            = EXCLUDED.node_type,
-			internal_ip          = COALESCE(EXCLUDED.internal_ip, quartermaster.infrastructure_nodes.internal_ip),
-			external_ip          = COALESCE(EXCLUDED.external_ip, quartermaster.infrastructure_nodes.external_ip),
-			wireguard_ip         = COALESCE(EXCLUDED.wireguard_ip, quartermaster.infrastructure_nodes.wireguard_ip),
-			wireguard_public_key = COALESCE(EXCLUDED.wireguard_public_key, quartermaster.infrastructure_nodes.wireguard_public_key),
-			region               = COALESCE(EXCLUDED.region, quartermaster.infrastructure_nodes.region),
-			availability_zone    = COALESCE(EXCLUDED.availability_zone, quartermaster.infrastructure_nodes.availability_zone),
-			cpu_cores            = COALESCE(EXCLUDED.cpu_cores, quartermaster.infrastructure_nodes.cpu_cores),
-			memory_gb            = COALESCE(EXCLUDED.memory_gb, quartermaster.infrastructure_nodes.memory_gb),
-			disk_gb              = COALESCE(EXCLUDED.disk_gb, quartermaster.infrastructure_nodes.disk_gb),
-			status               = 'active',
-			updated_at           = EXCLUDED.updated_at
+			cluster_id            = EXCLUDED.cluster_id,
+			node_name             = EXCLUDED.node_name,
+			node_type             = EXCLUDED.node_type,
+			internal_ip           = COALESCE(EXCLUDED.internal_ip, quartermaster.infrastructure_nodes.internal_ip),
+			external_ip           = COALESCE(EXCLUDED.external_ip, quartermaster.infrastructure_nodes.external_ip),
+			wireguard_ip          = COALESCE(EXCLUDED.wireguard_ip, quartermaster.infrastructure_nodes.wireguard_ip),
+			wireguard_public_key  = COALESCE(EXCLUDED.wireguard_public_key, quartermaster.infrastructure_nodes.wireguard_public_key),
+			wireguard_listen_port = COALESCE(EXCLUDED.wireguard_listen_port, quartermaster.infrastructure_nodes.wireguard_listen_port),
+			region                = COALESCE(EXCLUDED.region, quartermaster.infrastructure_nodes.region),
+			availability_zone     = COALESCE(EXCLUDED.availability_zone, quartermaster.infrastructure_nodes.availability_zone),
+			cpu_cores             = COALESCE(EXCLUDED.cpu_cores, quartermaster.infrastructure_nodes.cpu_cores),
+			memory_gb             = COALESCE(EXCLUDED.memory_gb, quartermaster.infrastructure_nodes.memory_gb),
+			disk_gb               = COALESCE(EXCLUDED.disk_gb, quartermaster.infrastructure_nodes.disk_gb),
+			status                = 'active',
+			updated_at            = EXCLUDED.updated_at
 	`, nodeID, clusterID, req.GetNodeName(), req.GetNodeType(),
-		req.InternalIp, req.ExternalIp, req.WireguardIp, req.WireguardPublicKey,
+		req.InternalIp, req.ExternalIp, req.WireguardIp, req.WireguardPublicKey, wgPort,
 		req.Region, req.AvailabilityZone,
 		req.CpuCores, req.MemoryGb, req.DiskGb, now)
 
@@ -4267,16 +4275,24 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	}
 
 	// Create node with 'active' status
-	var extIP interface{} = nil
+	var extIP any = nil
 	if req.ExternalIp != nil && *req.ExternalIp != "" {
 		extIP = *req.ExternalIp
 	}
-	var intIP interface{} = nil
+	var intIP any = nil
 	if req.InternalIp != nil && *req.InternalIp != "" {
 		intIP = *req.InternalIp
 	}
+	var wgIP any = nil
+	if req.WireguardIp != nil && *req.WireguardIp != "" {
+		wgIP = *req.WireguardIp
+	}
+	var wgPub any = nil
+	if req.WireguardPublicKey != nil && *req.WireguardPublicKey != "" {
+		wgPub = *req.WireguardPublicKey
+	}
 
-	var lat, lng interface{}
+	var lat, lng any
 	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
 		if geo := s.geoipReader.Lookup(ipStr); geo != nil {
 			geobucket.BucketGeoData(geo)
@@ -4285,10 +4301,15 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		}
 	}
 
+	var wgPort any
+	if req.WireguardPort != nil && *req.WireguardPort > 0 {
+		wgPort = *req.WireguardPort
+	}
+
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, latitude, longitude, tags, metadata, last_heartbeat, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8, $9, '{}', '{}', NOW(), NOW(), NOW())
-	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, nodeType, extIP, intIP, lat, lng)
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, wireguard_ip, wireguard_public_key, wireguard_listen_port, latitude, longitude, tags, metadata, last_heartbeat, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8::inet, $9, $10, $11, $12, '{}', '{}', NOW(), NOW(), NOW())
+	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, nodeType, extIP, intIP, wgIP, wgPub, wgPort, lat, lng)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
 	}
@@ -4676,15 +4697,17 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
 	}
 
-	// 1. Check if node exists and get current WireGuard IP
+	// 1. Check if node exists and get current GitOps WireGuard identity.
 	var currentWgIP sql.NullString
+	var storedPublicKey sql.NullString
 	var externalIP, internalIP sql.NullString
+	var storedListenPort sql.NullInt32
 	var clusterID string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT wireguard_ip::text, external_ip::text, internal_ip::text, cluster_id
+		SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
-	`, nodeID).Scan(&currentWgIP, &externalIP, &internalIP, &clusterID)
+	`, nodeID).Scan(&currentWgIP, &storedPublicKey, &externalIP, &internalIP, &storedListenPort, &clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found - please register the node first")
 	}
@@ -4692,51 +4715,40 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		return nil, status.Errorf(codes.Internal, "failed to get node info: %v", err)
 	}
 
-	// 2. Update heartbeat every sync and opportunistically update key/listen port.
+	if !currentWgIP.Valid || strings.TrimSpace(currentWgIP.String) == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no GitOps wireguard_ip; run frameworks mesh wg generate and seed the node before SyncMesh", nodeID)
+	}
+	wireguardIP := currentWgIP.String
+	if !storedPublicKey.Valid || strings.TrimSpace(storedPublicKey.String) == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no GitOps wireguard_public_key; run frameworks mesh wg generate and seed the node before SyncMesh", nodeID)
+	}
+	if publicKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "public_key required")
+	}
+	if storedPublicKey.String != publicKey {
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q public key does not match stored GitOps identity", nodeID)
+	}
+	if !storedListenPort.Valid || storedListenPort.Int32 <= 0 {
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no GitOps wireguard_listen_port; run frameworks mesh wg generate and seed the node before SyncMesh", nodeID)
+	}
+	if req.GetListenPort() > 0 && req.GetListenPort() != storedListenPort.Int32 {
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q listen port %d does not match stored GitOps identity %d", nodeID, req.GetListenPort(), storedListenPort.Int32)
+	}
+	wireguardPort := storedListenPort.Int32
+
+	// 2. Update heartbeat every sync. WireGuard identity is reconciled through
+	// CreateNode from GitOps, never invented or rewritten by SyncMesh.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE quartermaster.infrastructure_nodes
-		SET wireguard_public_key = COALESCE(NULLIF($1, ''), wireguard_public_key),
-		    wireguard_listen_port = COALESCE(NULLIF($2, 0), wireguard_listen_port),
-		    last_heartbeat = NOW(),
+		SET last_heartbeat = NOW(),
 		    updated_at = NOW()
-		WHERE node_id = $3
-	`, publicKey, req.GetListenPort(), nodeID)
+		WHERE node_id = $1
+	`, nodeID)
 	if err != nil {
-		s.logger.WithError(err).Warn("Failed to update node heartbeat/public key")
+		s.logger.WithError(err).Warn("Failed to update node heartbeat")
 	}
 
-	// 3. Allocate WireGuard IP if missing
-	wireguardIP := ""
-	if currentWgIP.Valid && currentWgIP.String != "" {
-		wireguardIP = currentWgIP.String
-	} else {
-		// Allocate next IP in 10.200.0.0/16 range (transaction + advisory lock)
-		tx, txErr := s.db.BeginTx(ctx, nil)
-		if txErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to start allocation tx: %v", txErr)
-		}
-		defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
-		if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "quartermaster_wireguard_ip"); lockErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to acquire allocation lock: %v", lockErr)
-		}
-		newIP, allocErr := s.allocateWireGuardIPTx(ctx, tx)
-		if allocErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to allocate WireGuard IP: %v", allocErr)
-		}
-		if _, execErr := tx.ExecContext(ctx, `
-			UPDATE quartermaster.infrastructure_nodes
-			SET wireguard_ip = $1::inet, updated_at = NOW()
-			WHERE node_id = $2
-		`, newIP, nodeID); execErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to save WireGuard IP: %v", execErr)
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit WireGuard IP allocation: %v", commitErr)
-		}
-		wireguardIP = newIP
-	}
-
-	// 4. Get all peer nodes (same cluster, active, with WireGuard configured)
+	// 3. Get all peer nodes (same cluster, active, with WireGuard configured)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.node_name, n.wireguard_public_key, n.external_ip::text, n.internal_ip::text, n.wireguard_ip::text, n.wireguard_listen_port
 		FROM quartermaster.infrastructure_nodes n
@@ -4778,7 +4790,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		}
 	}
 
-	// 5. Fetch service endpoints for mesh DNS aliases (keyed by canonical service type)
+	// 4. Fetch service endpoints for mesh DNS aliases (keyed by canonical service type)
 	serviceEndpoints := make(map[string]*pb.ServiceEndpoints)
 	svcRows, err := s.db.QueryContext(ctx, `
 		SELECT s.type, n.wireguard_ip::text
@@ -4806,52 +4818,41 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		s.logger.WithError(err).Warn("Failed to fetch service endpoints for DNS")
 	}
 
-	wireguardPort := int32(51820)
-	if req.GetListenPort() > 0 {
-		wireguardPort = req.GetListenPort()
-	}
-
 	return &pb.InfrastructureSyncResponse{
 		WireguardIp:      wireguardIP,
 		WireguardPort:    wireguardPort,
 		Peers:            peers,
 		ServiceEndpoints: serviceEndpoints,
+		MeshRevision:     computeMeshRevision(peers, serviceEndpoints, wireguardIP, wireguardPort),
 	}, nil
 }
 
-// allocateWireGuardIPTx finds the next available IP in the 10.200.0.0/16 range
-func (s *QuartermasterServer) allocateWireGuardIPTx(ctx context.Context, tx *sql.Tx) (string, error) {
-	var maxIP sql.NullString
-	err := tx.QueryRowContext(ctx, `
-		SELECT wireguard_ip::text
-		FROM quartermaster.infrastructure_nodes
-		WHERE wireguard_ip IS NOT NULL
-		ORDER BY wireguard_ip DESC
-		LIMIT 1
-	`).Scan(&maxIP)
-
-	if errors.Is(err, sql.ErrNoRows) || !maxIP.Valid || maxIP.String == "" {
-		return "10.200.0.1", nil
+// computeMeshRevision is a stable hex-sha256 fingerprint of the peer set plus
+// this node's own mesh identity. Agents persist it into last_known_mesh.json
+// so a reboot can tell whether the managed overlay matches what QM would
+// return now.
+func computeMeshRevision(peers []*pb.InfrastructurePeer, serviceEndpoints map[string]*pb.ServiceEndpoints, selfIP string, selfPort int32) string {
+	sorted := make([]*pb.InfrastructurePeer, len(peers))
+	copy(sorted, peers)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].GetPublicKey() < sorted[j].GetPublicKey() })
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%d\n", selfIP, selfPort)
+	for _, p := range sorted {
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d\n",
+			p.GetPublicKey(), p.GetEndpoint(), strings.Join(p.GetAllowedIps(), ","), p.GetKeepAlive())
 	}
-	if err != nil {
-		return "", err
+	endpointNames := make([]string, 0, len(serviceEndpoints))
+	for name := range serviceEndpoints {
+		endpointNames = append(endpointNames, name)
 	}
-
-	// Parse and increment IP
-	ip := net.ParseIP(maxIP.String)
-	if ip == nil {
-		return "", fmt.Errorf("invalid IP in database: %s", maxIP.String)
+	sort.Strings(endpointNames)
+	for _, name := range endpointNames {
+		ips := append([]string(nil), serviceEndpoints[name].GetIps()...)
+		sort.Strings(ips)
+		fmt.Fprintf(h, "svc\x00%s\x00%s\n", name, strings.Join(ips, ","))
 	}
-	ip = ip.To4()
-	if ip == nil {
-		return "", fmt.Errorf("not an IPv4 address: %s", maxIP.String)
-	}
-
-	// Increment
-	intIP := uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-	intIP++
-	newIP := net.IPv4(byte(intIP>>24), byte(intIP>>16), byte(intIP>>8), byte(intIP))
-	return newIP.String(), nil
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum[:8])
 }
 
 // ============================================================================
@@ -5936,7 +5937,7 @@ func subscriptionStatusStringToProto(s string) pb.ClusterSubscriptionStatus {
 func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, node_id, cluster_id, node_name, node_type, internal_ip, external_ip,
-		       wireguard_ip, wireguard_public_key, region, availability_zone,
+		       wireguard_ip, wireguard_public_key, wireguard_listen_port, region, availability_zone,
 		       latitude, longitude,
 		       cpu_cores, memory_gb, disk_gb,
 		       last_heartbeat, created_at, updated_at
@@ -5946,14 +5947,14 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 
 	var node pb.InfrastructureNode
 	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az sql.NullString
-	var cpuCores, memoryGB, diskGB sql.NullInt32
+	var wgPort, cpuCores, memoryGB, diskGB sql.NullInt32
 	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
 
 	err := row.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
-		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &region, &az,
+		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &wgPort, &region, &az,
 		&lat, &lon,
 		&cpuCores, &memoryGB, &diskGB,
 		&lastHeartbeat, &createdAt, &updatedAt,
@@ -5976,6 +5977,9 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 	}
 	if wireguardPubKey.Valid {
 		node.WireguardPublicKey = &wireguardPubKey.String
+	}
+	if wgPort.Valid {
+		node.WireguardPort = &wgPort.Int32
 	}
 	if region.Valid {
 		node.Region = &region.String

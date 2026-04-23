@@ -22,12 +22,12 @@ func redisRoleVars(ctx context.Context, host inventory.Host, config ServiceConfi
 	if port == 0 {
 		port = 6379
 	}
-	bind, _ := config.Metadata["bind"].(string)
+	bind := metaString(config.Metadata, "bind")
 	if bind == "" {
 		bind = "127.0.0.1"
 	}
-	pwd, _ := config.Metadata["password"].(string)
-	instance, _ := config.Metadata["instance"].(string)
+	pwd := metaString(config.Metadata, "password")
+	instance := metaString(config.Metadata, "instance")
 
 	vars := map[string]any{
 		"redis_version":        version,
@@ -57,7 +57,7 @@ func redisRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuild
 	}
 	result, err := runner.Run(ctx, "(pgrep -x redis-server || pgrep -x valkey-server) >/dev/null && echo RUNNING || echo NOT_RUNNING")
 	running := err == nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
-	bin, _ := runner.Run(ctx, "command -v redis-cli >/dev/null && echo EXISTS")
-	exists := bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+	bin, binErr := runner.Run(ctx, "command -v redis-cli >/dev/null && echo EXISTS")
+	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
 }

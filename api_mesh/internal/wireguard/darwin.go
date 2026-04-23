@@ -21,11 +21,3 @@ func (m *darwinManager) Apply(cfg Config) error {
 func (m *darwinManager) Close() error {
 	return nil
 }
-
-func (m *darwinManager) GetPublicKey() (string, error) {
-	return "", fmt.Errorf("darwin support not implemented yet")
-}
-
-func (m *darwinManager) GetPrivateKey() (string, error) {
-	return "", fmt.Errorf("darwin support not implemented yet")
-}

@@ -24,11 +24,8 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 		if err != nil {
 			return nil, err
 		}
-		nodeID, _ := config.Metadata["node_id"].(int)
-		if nodeID == 0 {
-			nodeID = 1
-		}
-		clusterID, _ := config.Metadata["cluster_id"].(string)
+		nodeID := metaIntOr(config.Metadata, "node_id", 1)
+		clusterID := metaString(config.Metadata, "cluster_id")
 
 		vars := map[string]any{
 			"kafka_artifact_url":      art.URL,
@@ -37,7 +34,7 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 			"kafka_role":              role,
 			"kafka_node_id":           nodeID,
 			"kafka_cluster_id":        clusterID,
-			"kafka_advertised_host":   hostAddressFor(host),
+			"kafka_advertised_host":   meshOrExternal(config.Metadata, host),
 		}
 		if controllers, ok := config.Metadata["controllers"].([]map[string]any); ok {
 			vars["kafka_controllers"] = controllers
@@ -124,10 +121,10 @@ func kafkaRoleDetectFor(role string) RoleDetector {
 		if err != nil {
 			return nil, err
 		}
-		result, _ := runner.Run(ctx, "systemctl is-active "+svc+" 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
-		running := result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
-		bin, _ := runner.Run(ctx, "test -x /opt/kafka/bin/kafka-server-start.sh && echo EXISTS")
-		exists := bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+		result, runErr := runner.Run(ctx, "systemctl is-active "+svc+" 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
+		running := runErr == nil && result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
+		bin, binErr := runner.Run(ctx, "test -x /opt/kafka/bin/kafka-server-start.sh && echo EXISTS")
+		exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 		return &detect.ServiceState{Exists: exists, Running: running}, nil
 	}
 }

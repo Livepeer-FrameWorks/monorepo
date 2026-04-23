@@ -21,10 +21,7 @@ func caddyRoleVars(ctx context.Context, host inventory.Host, config ServiceConfi
 	}
 
 	if sites, ok := config.Metadata["sites"].([]map[string]any); ok && len(sites) > 0 {
-		out := make([]map[string]any, 0, len(sites))
-		for _, s := range sites {
-			out = append(out, s)
-		}
+		out := append(make([]map[string]any, 0, len(sites)), sites...)
 		vars["caddy_sites"] = out
 	}
 	if email, ok := config.Metadata["tls_email"].(string); ok && email != "" {
@@ -43,9 +40,9 @@ func caddyRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuild
 	if err != nil {
 		return nil, err
 	}
-	result, _ := runner.Run(ctx, "systemctl is-active caddy 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
-	running := result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
-	bin, _ := runner.Run(ctx, "command -v caddy >/dev/null && echo EXISTS")
-	exists := bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+	result, runErr := runner.Run(ctx, "systemctl is-active caddy 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
+	running := runErr == nil && result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
+	bin, binErr := runner.Run(ctx, "command -v caddy >/dev/null && echo EXISTS")
+	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
 }

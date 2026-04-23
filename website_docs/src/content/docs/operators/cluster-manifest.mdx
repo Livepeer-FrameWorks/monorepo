@@ -107,12 +107,14 @@ env_files:
 
 ### hosts
 
-Map of host definitions for SSH access. The CLI connects to each host via SSH using `external_ip`.
+Map of host definitions for SSH access and mesh identity. The CLI connects to
+each host via SSH using `external_ip`; internal service traffic uses
+`wireguard_ip` or `.internal` names after Privateer starts.
 
 <Aside type="note">
-  Mesh IPs (WireGuard addresses) are **not** defined in the manifest. They are assigned at runtime
-  by Quartermaster when Privateer calls SyncMesh. The manifest only contains the public IPs that the
-  CLI can reach via SSH.
+  Managed backend clusters must generate WireGuard identity before provisioning: `frameworks mesh wg
+  generate --manifest clusters/production/cluster.yaml`. `cluster provision` validates this state
+  and never writes it.
 </Aside>
 
 **Format:**
@@ -122,6 +124,9 @@ hosts:
   <hostname>:
     external_ip: <public-ip>
     user: <ssh-user>
+    wireguard_ip: <mesh-ip>
+    wireguard_public_key: <base64-public-key>
+    wireguard_port: 51820
     roles: [infrastructure, services] # optional
     labels: # optional
       environment: prod
@@ -129,8 +134,11 @@ hosts:
 
 **Fields:**
 
-- `external_ip` (required) - Public IP address used for SSH and DNS registration
+- `external_ip` (required) - Public IP address used for SSH/bootstrap and WireGuard endpoint dialing
 - `user` (required) - SSH username
+- `wireguard_ip` (required for Privateer-covered hosts) - GitOps-owned internal mesh address
+- `wireguard_public_key` (required for Privateer-covered hosts) - Public half of the host mesh identity
+- `wireguard_port` (required for Privateer-covered hosts) - Host WireGuard UDP listen port
 - `roles` (optional) - Arbitrary tags used for human grouping
 - `labels` (optional) - Free-form metadata
 
@@ -204,27 +212,30 @@ Resolution priority:
 
 ### wireguard
 
-WireGuard mesh configuration. In most deployments this section is **not needed** — Privateer (`api_mesh`) automatically manages the WireGuard mesh via Quartermaster's SyncMesh API.
+WireGuard mesh configuration for backend nodes managed by Privateer
+(`api_mesh`). Production/staging managed clusters keep this block in GitOps
+and generate per-host identity with `frameworks mesh wg generate`.
 
 <Aside type="tip">
-  The recommended approach is to omit the `wireguard` section entirely and let Privateer handle mesh
-  setup. Quartermaster allocates IPs from the `10.200.0.0/16` range automatically.
+  Local compose/dev manifests may leave this disabled only when Privateer is disabled. Managed
+  native clusters require `wireguard.enabled: true` and complete per-host identity before
+  provisioning.
 </Aside>
 
-**Format (advanced/override only):**
+**Format:**
 
 ```yaml
 wireguard:
   enabled: true
-  interface: wg0
-  manage_hosts_file: true
+  mesh_cidr: 10.88.0.0/16
+  listen_port: 51820
 ```
 
 **Fields:**
 
 - `enabled` (required)
-- `interface` (optional, default `wg0`)
-- `manage_hosts_file` (optional) - Write WireGuard hostnames into `/etc/hosts`
+- `mesh_cidr` (required when enabled) - CIDR used by generated host `wireguard_ip` values
+- `listen_port` (required when enabled) - Default UDP listen port used by `mesh wg generate`
 
 > Edge nodes do not join the mesh.
 

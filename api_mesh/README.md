@@ -24,10 +24,12 @@ For self-hosted deployments, Privateer ensures your nodes communicate securely w
 
 ## How nodes join
 
-The agent uses the bootstrap token to register the node, then uses the service token for ongoing mesh sync:
+The agent starts from GitOps-rendered WireGuard identity + seed peers, then uses
+the shared service token to reconcile against Quartermaster and self-register
+the node row if needed:
 
 ```bash
-ENROLLMENT_TOKEN=bt_xxx SERVICE_TOKEN=svc_xxx privateer
+SERVICE_TOKEN=svc_xxx QUARTERMASTER_GRPC_ADDR=10.88.0.1:19002 privateer
 ```
 
 ## Run (dev)
@@ -38,15 +40,20 @@ Configuration comes from the top-level `config/env` stack. Generate `.env` with 
 
 ## Required env vars
 
-- `SERVICE_TOKEN` (required for mesh sync)
-- `ENROLLMENT_TOKEN` (optional; used once to register the node)
+- `SERVICE_TOKEN` (required)
+- `QUARTERMASTER_GRPC_ADDR` (required)
+- `CLUSTER_ID` (required for self-registration and internal cert token minting)
 
 ## Optional env vars
 
-- `MESH_NODE_TYPE` (default: `edge`)
+- `MESH_NODE_TYPE` (default: `core`)
 - `MESH_NODE_NAME` (default: hostname)
-- `MESH_EXTERNAL_IP` (optional; used during bootstrap)
-- `MESH_INTERNAL_IP` (optional; used during bootstrap)
+- `MESH_EXTERNAL_IP` (optional; sent when self-registering the node row)
+- `MESH_INTERNAL_IP` (optional; sent when self-registering the node row)
 - `MESH_LISTEN_PORT` (default: `51820`)
+- `MESH_WIREGUARD_IP` (used for startup seed/last-known apply and self-registration)
+- `MESH_PRIVATE_KEY_FILE` (used for startup seed/last-known apply)
+- `PRIVATEER_STATIC_PEERS_FILE` (used for startup seed apply)
+- `PRIVATEER_DATA_DIR` (defaults to `"/var/lib/privateer"`)
 - `PRIVATEER_SYNC_INTERVAL` (default: `30s`)
 - `PRIVATEER_SYNC_TIMEOUT` (default: `10s`)

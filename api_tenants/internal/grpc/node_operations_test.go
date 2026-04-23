@@ -27,9 +27,9 @@ func TestGetNode_Success(t *testing.T) {
 	now := time.Now()
 	mock.ExpectQuery(`SELECT id, node_id, cluster_id, node_name, node_type`).
 		WithArgs("node-1").
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow([]driver.Value{
+		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 			"uuid-1", "node-1", "cluster-1", "my-node", "core",
-			"10.0.0.1", "1.2.3.4", nil, nil,
+			"10.0.0.1", "1.2.3.4", nil, nil, nil,
 			"us-east-1", "us-east-1a",
 			nil, nil,
 			int32(4), int32(16), int32(100),
@@ -181,9 +181,9 @@ func TestGetNodeByLogicalName_Success(t *testing.T) {
 	now := time.Now()
 	mock.ExpectQuery(`SELECT id, node_id`).
 		WithArgs("edge-node-1").
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow([]driver.Value{
+		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 			"uuid-1", "edge-node-1", "cluster-1", "edge-1", "edge",
-			nil, "5.6.7.8", nil, nil, nil, nil, nil, nil, nil, nil, nil,
+			nil, "5.6.7.8", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 			nil, now, now,
 		}...))
 

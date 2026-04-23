@@ -94,10 +94,10 @@ git commit -m "Encrypt production secrets with SOPS/age"
 **Provisioning** decrypts automatically — the CLI detects SOPS-encrypted files and decrypts using the age key at `~/.config/sops/age/keys.txt` (or `SOPS_AGE_KEY_FILE`):
 
 ```bash
-frameworks cluster provision --repo org/gitops
+frameworks cluster provision --github-repo org/gitops --cluster production
 
 # Or explicitly specify the key file:
-frameworks cluster provision --repo org/gitops --age-key /path/to/keys.txt
+frameworks cluster provision --github-repo org/gitops --cluster production --age-key /path/to/keys.txt
 ```
 
 **Local development** with an encrypted `config/env/secrets.env`:

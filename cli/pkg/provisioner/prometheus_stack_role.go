@@ -15,9 +15,9 @@ import (
 // (prometheus, victoriametrics, vmagent, vmauth) and the role dispatches on
 // prometheus_stack_components.
 func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
-	component, _ := config.Metadata["component"].(string)
+	component := metaString(config.Metadata, "component")
 	if component == "" {
-		component, _ = config.Metadata["service_name"].(string)
+		component = metaString(config.Metadata, "service_name")
 	}
 
 	vars := map[string]any{
@@ -83,7 +83,7 @@ func prometheusStackRoleDetect(ctx context.Context, host inventory.Host, helpers
 	if err != nil {
 		return nil, err
 	}
-	result, _ := runner.Run(ctx, "systemctl is-active prometheus victoriametrics vmagent vmauth node_exporter 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
-	running := result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
+	result, runErr := runner.Run(ctx, "systemctl is-active prometheus victoriametrics vmagent vmauth node_exporter 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
+	running := runErr == nil && result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
 	return &detect.ServiceState{Exists: running, Running: running}, nil
 }

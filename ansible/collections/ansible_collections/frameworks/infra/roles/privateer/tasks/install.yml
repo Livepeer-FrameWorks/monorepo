@@ -1,4 +1,14 @@
 ---
+- name: privateer | install host networking tools
+  ansible.builtin.package:
+    name: >-
+      {{
+        ['wireguard-tools', 'iproute2', 'dnsutils']
+        if ansible_facts.os_family == 'Debian'
+        else ['wireguard-tools', 'iproute', 'bind-utils']
+      }}
+    state: present
+
 - name: Ensure privateer group
   ansible.builtin.group:
     name: "{{ privateer_group }}"

@@ -841,6 +841,7 @@ message InfrastructureNode {
   google.protobuf.Timestamp updated_at = 19; // json:"updated_at"
   optional double latitude = 20;        // json:"latitude,omitempty"
   optional double longitude = 21;       // json:"longitude,omitempty"
+  optional int32 wireguard_port = 22;   // json:"wireguard_port,omitempty"
 }
 
 message NodeResponse {
@@ -891,6 +892,7 @@ message CreateNodeRequest {
   optional int32 disk_gb = 13;          // json:"disk_gb,omitempty"
   google.protobuf.Struct tags = 14;     // json:"tags,omitempty"
   google.protobuf.Struct metadata = 15; // json:"metadata,omitempty"
+  optional int32 wireguard_port = 16;   // json:"wireguard_port,omitempty"
 }
 
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest (lines 180-190)
@@ -975,6 +977,13 @@ message BootstrapInfrastructureNodeRequest {
   optional string external_ip = 5;      // json:"external_ip,omitempty"
   optional string internal_ip = 6;      // json:"internal_ip,omitempty"
   optional string target_cluster_id = 7; // Target cluster (must match token binding if token has cluster_id)
+  // Agents in static-bootstrap mode already know their mesh identity (from the
+  // GitOps-rendered static-peers.json) before they ever reach Quartermaster.
+  // Supplying these at bootstrap lets QM persist the row with matching keys
+  // instead of overwriting via SyncMesh on first sync.
+  optional string wireguard_ip = 8;         // json:"wireguard_ip,omitempty"
+  optional string wireguard_public_key = 9; // json:"wireguard_public_key,omitempty"
+  optional int32 wireguard_port = 10;       // json:"wireguard_port,omitempty"
 }
 
 message BootstrapInfrastructureNodeResponse {
@@ -1150,6 +1159,9 @@ message InfrastructureSyncResponse {
   int32 wireguard_port = 2;             // json:"wireguard_port"
   repeated InfrastructurePeer peers = 3; // json:"peers"
   map<string, ServiceEndpoints> service_endpoints = 4; // json:"service_endpoints"
+  // Stable hash over the peer set (server-side), used by Privateer's
+  // last_known_mesh.json to version the dynamic snapshot and detect changes.
+  string mesh_revision = 5;             // json:"mesh_revision,omitempty"
 }
 
 // Helper for map value in InfrastructureSyncResponse

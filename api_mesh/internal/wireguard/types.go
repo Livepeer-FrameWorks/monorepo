@@ -24,8 +24,4 @@ type Manager interface {
 	Apply(cfg Config) error
 	// Close tears down the interface (if applicable)
 	Close() error
-	// GetPublicKey returns the public key of the current private key (or generates one)
-	GetPublicKey() (string, error)
-	// GetPrivateKey returns the private key (reading from storage)
-	GetPrivateKey() (string, error)
 }

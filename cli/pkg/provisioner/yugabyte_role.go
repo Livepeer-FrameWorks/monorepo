@@ -31,27 +31,24 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	if port == 0 {
 		port = 5433
 	}
-	rf, _ := config.Metadata["replication_factor"].(int)
-	if rf == 0 {
-		rf = 3
-	}
-	nodeID, _ := config.Metadata["node_id"].(int)
-	masterAddresses, _ := config.Metadata["master_addresses"].(string)
+	rf := metaIntOr(config.Metadata, "replication_factor", 3)
+	nodeID := metaIntOr(config.Metadata, "node_id", 0)
+	masterAddresses := metaString(config.Metadata, "master_addresses")
 	if masterAddresses == "" {
-		masterAddresses = fmt.Sprintf("%s:7100", hostAddressFor(host))
+		masterAddresses = fmt.Sprintf("%s:7100", meshOrExternal(config.Metadata, host))
 	}
 
 	vars := map[string]any{
 		"yugabyte_artifact_url":       artifact.URL,
 		"yugabyte_artifact_checksum":  artifact.Checksum,
 		"yugabyte_version":            firstNonEmpty(config.Version, metaString(config.Metadata, "version")),
-		"yugabyte_node_address":       hostAddressFor(host),
+		"yugabyte_node_address":       meshOrExternal(config.Metadata, host),
 		"yugabyte_master_addresses":   masterAddresses,
 		"yugabyte_replication_factor": rf,
 		"yugabyte_ysql_port":          port,
 		"yugabyte_placement_cloud":    "frameworks",
 		"yugabyte_placement_region":   "eu",
-		"yugabyte_placement_zone":     fmt.Sprintf("eu-%d", maxInt(nodeID, 1)),
+		"yugabyte_placement_zone":     fmt.Sprintf("eu-%d", max(nodeID, 1)),
 		"yugabyte_node_id":            nodeID,
 	}
 
@@ -101,15 +98,8 @@ func yugabyteRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBu
 	result, err := runner.Run(ctx, "pgrep -x yb-master >/dev/null && pgrep -x yb-tserver >/dev/null && echo RUNNING || echo NOT_RUNNING")
 	running := err == nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
 
-	bin, _ := runner.Run(ctx, "test -x /opt/yugabyte/bin/yb-master && echo EXISTS")
-	exists := bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+	bin, binErr := runner.Run(ctx, "test -x /opt/yugabyte/bin/yb-master && echo EXISTS")
+	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -21,10 +22,12 @@ import (
 )
 
 type fakeMeshClient struct {
-	syncResponses      []meshSyncResult
-	bootstrapResponses []meshBootstrapResult
-	syncRequests       []*pb.InfrastructureSyncRequest
-	bootstrapRequests  []*pb.BootstrapInfrastructureNodeRequest
+	syncResponses        []meshSyncResult
+	createNodeResponses  []meshCreateNodeResult
+	createTokenResponses []meshCreateTokenResult
+	syncRequests         []*pb.InfrastructureSyncRequest
+	createNodeRequests   []*pb.CreateNodeRequest
+	createTokenRequests  []*pb.CreateBootstrapTokenRequest
 }
 
 type fakeServiceRegistryClient struct {
@@ -82,8 +85,13 @@ type meshSyncResult struct {
 	err  error
 }
 
-type meshBootstrapResult struct {
-	resp *pb.BootstrapInfrastructureNodeResponse
+type meshCreateNodeResult struct {
+	resp *pb.NodeResponse
+	err  error
+}
+
+type meshCreateTokenResult struct {
+	resp *pb.CreateBootstrapTokenResponse
 	err  error
 }
 
@@ -97,13 +105,23 @@ func (f *fakeMeshClient) SyncMesh(_ context.Context, req *pb.InfrastructureSyncR
 	return result.resp, result.err
 }
 
-func (f *fakeMeshClient) BootstrapInfrastructureNode(_ context.Context, req *pb.BootstrapInfrastructureNodeRequest) (*pb.BootstrapInfrastructureNodeResponse, error) {
-	f.bootstrapRequests = append(f.bootstrapRequests, req)
-	if len(f.bootstrapResponses) == 0 {
-		return nil, status.Error(codes.Internal, "no bootstrap response")
+func (f *fakeMeshClient) CreateNode(_ context.Context, req *pb.CreateNodeRequest) (*pb.NodeResponse, error) {
+	f.createNodeRequests = append(f.createNodeRequests, req)
+	if len(f.createNodeResponses) == 0 {
+		return nil, status.Error(codes.Internal, "no create-node response")
 	}
-	result := f.bootstrapResponses[0]
-	f.bootstrapResponses = f.bootstrapResponses[1:]
+	result := f.createNodeResponses[0]
+	f.createNodeResponses = f.createNodeResponses[1:]
+	return result.resp, result.err
+}
+
+func (f *fakeMeshClient) CreateBootstrapToken(_ context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
+	f.createTokenRequests = append(f.createTokenRequests, req)
+	if len(f.createTokenResponses) == 0 {
+		return nil, status.Error(codes.Internal, "no create-token response")
+	}
+	result := f.createTokenResponses[0]
+	f.createTokenResponses = f.createTokenResponses[1:]
 	return result.resp, result.err
 }
 
@@ -200,14 +218,6 @@ func (f *fakeWireguard) Close() error {
 	return nil
 }
 
-func (f *fakeWireguard) GetPublicKey() (string, error) {
-	return f.pubKey, nil
-}
-
-func (f *fakeWireguard) GetPrivateKey() (string, error) {
-	return f.privKey, nil
-}
-
 type fakeDNS struct {
 	mu        sync.Mutex
 	updates   []map[string][]string
@@ -256,18 +266,42 @@ func newTestMetrics() *Metrics {
 
 func newTestAgent(t *testing.T, client *fakeMeshClient, wg *fakeWireguard, dns *fakeDNS) *Agent {
 	t.Helper()
+	privateKeyFile, _ := writeTestPrivateKey(t)
 	return &Agent{
-		logger:       logging.NewLogger(),
-		client:       client,
-		wgManager:    wg,
-		dnsServer:    dns,
-		nodeID:       "node-1",
-		nodeName:     "node-1",
-		listenPort:   51820,
-		syncTimeout:  2 * time.Second,
-		syncInterval: 2 * time.Second,
-		stopChan:     make(chan struct{}),
+		logger:         logging.NewLogger(),
+		client:         client,
+		wgManager:      wg,
+		dnsServer:      dns,
+		nodeID:         "node-1",
+		nodeName:       "node-1",
+		privateKeyFile: privateKeyFile,
+		wireguardIP:    "10.0.0.10",
+		listenPort:     51820,
+		syncTimeout:    2 * time.Second,
+		syncInterval:   2 * time.Second,
+		stopChan:       make(chan struct{}),
 	}
+}
+
+func writeTestPrivateKey(t *testing.T) (string, string) {
+	t.Helper()
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(i + 1)
+	}
+	raw[0] &= 248
+	raw[31] &= 127
+	raw[31] |= 64
+	privateKey := base64.StdEncoding.EncodeToString(raw)
+	publicKey, err := derivePublicKey(privateKey)
+	if err != nil {
+		t.Fatalf("derive test public key: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "wg.key")
+	if err := os.WriteFile(path, []byte(privateKey+"\n"), 0o600); err != nil {
+		t.Fatalf("write private key: %v", err)
+	}
+	return path, publicKey
 }
 
 func TestIsHealthyNotStarted(t *testing.T) {
@@ -433,7 +467,56 @@ func TestSyncInternalCertificatesUsesExpectedServicesWithoutRegistryLookup(t *te
 	}
 }
 
-func TestAgentSyncBootstrapJoinFlow(t *testing.T) {
+func TestSyncInternalCertificatesMintsTokenWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	navigator := &fakeCertificateClient{
+		caResponse: &pb.GetCABundleResponse{
+			Found: true,
+			CaPem: "ca-pem",
+		},
+		issueResponse: &pb.IssueInternalCertResponse{
+			Success: true,
+			CertPem: "cert-pem",
+			KeyPem:  "key-pem",
+		},
+	}
+	mesh := &fakeMeshClient{
+		createTokenResponses: []meshCreateTokenResult{{
+			resp: &pb.CreateBootstrapTokenResponse{
+				Token: &pb.BootstrapToken{Token: "bt_cert_sync"},
+			},
+		}},
+	}
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		client:           mesh,
+		nodeID:           "node-1",
+		clusterID:        "cluster-a",
+		navigatorClient:  navigator,
+		pkiBasePath:      dir,
+		syncTimeout:      time.Second,
+		certSyncInterval: 5 * time.Minute,
+		expectedServices: []string{"commodore"},
+	}
+
+	if err := agent.syncInternalCertificates(); err != nil {
+		t.Fatalf("syncInternalCertificates returned error: %v", err)
+	}
+	if agent.certIssueToken != "bt_cert_sync" {
+		t.Fatalf("expected cached cert token bt_cert_sync, got %q", agent.certIssueToken)
+	}
+	if len(mesh.createTokenRequests) != 1 {
+		t.Fatalf("expected 1 create-token request, got %d", len(mesh.createTokenRequests))
+	}
+	if got := mesh.createTokenRequests[0].GetClusterId(); got != "cluster-a" {
+		t.Fatalf("expected token cluster_id cluster-a, got %q", got)
+	}
+	if len(navigator.issueRequests) != 1 || navigator.issueRequests[0].GetIssueToken() != "bt_cert_sync" {
+		t.Fatalf("expected issued cert to use minted token, got %+v", navigator.issueRequests)
+	}
+}
+
+func TestAgentSyncRegistersNodeOnNotFound(t *testing.T) {
 	logger := logging.NewLogger()
 	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
 	if err := os.WriteFile(nodeIDPath, []byte("node-old"), 0600); err != nil {
@@ -444,7 +527,7 @@ func TestAgentSyncBootstrapJoinFlow(t *testing.T) {
 		syncResponses: []meshSyncResult{
 			{err: status.Error(codes.NotFound, "missing")},
 			{resp: &pb.InfrastructureSyncResponse{
-				WireguardIp:   "10.0.0.2",
+				WireguardIp:   "10.0.0.8",
 				WireguardPort: 51820,
 				Peers: []*pb.InfrastructurePeer{
 					{
@@ -460,19 +543,23 @@ func TestAgentSyncBootstrapJoinFlow(t *testing.T) {
 				},
 			}},
 		},
-		bootstrapResponses: []meshBootstrapResult{
-			{resp: &pb.BootstrapInfrastructureNodeResponse{NodeId: "node-new", ClusterId: "cluster-1"}},
+		createNodeResponses: []meshCreateNodeResult{
+			{resp: &pb.NodeResponse{}},
 		},
 	}
 
 	wg := &fakeWireguard{pubKey: "pub-self", privKey: "priv-self"}
 	dnsService := &fakeDNS{}
+	privateKeyFile, publicKey := writeTestPrivateKey(t)
 
 	agent, err := New(Config{
-		EnrollmentToken:  "token-123",
 		NodeIDPath:       nodeIDPath,
 		NodeName:         "privateer-1",
 		NodeType:         "edge",
+		ClusterID:        "cluster-1",
+		WireguardIP:      "10.0.0.8",
+		PrivateKeyFile:   privateKeyFile,
+		ExternalIP:       "203.0.113.20",
 		Logger:           logger,
 		MeshClient:       mesh,
 		WireGuardManager: wg,
@@ -484,25 +571,28 @@ func TestAgentSyncBootstrapJoinFlow(t *testing.T) {
 
 	agent.sync()
 
-	if len(mesh.bootstrapRequests) != 1 {
-		t.Fatalf("expected bootstrap request, got %d", len(mesh.bootstrapRequests))
+	if len(mesh.createNodeRequests) != 1 {
+		t.Fatalf("expected create-node request, got %d", len(mesh.createNodeRequests))
 	}
-	if got := mesh.bootstrapRequests[0].GetNodeId(); got != "node-old" {
-		t.Fatalf("expected bootstrap node_id node-old, got %q", got)
+	if got := mesh.createNodeRequests[0].GetNodeId(); got != "node-old" {
+		t.Fatalf("expected create-node node_id node-old, got %q", got)
 	}
-	if got := agent.nodeID; got != "node-new" {
-		t.Fatalf("expected node id updated to node-new, got %s", got)
+	if got := mesh.createNodeRequests[0].GetClusterId(); got != "cluster-1" {
+		t.Fatalf("expected create-node cluster_id cluster-1, got %q", got)
+	}
+	if got := mesh.createNodeRequests[0].GetWireguardPublicKey(); got != publicKey {
+		t.Fatalf("expected create-node public key from configured private key, got %q", got)
 	}
 	if len(mesh.syncRequests) != 2 {
 		t.Fatalf("expected two sync requests, got %d", len(mesh.syncRequests))
 	}
-	if mesh.syncRequests[1].NodeId != "node-new" {
-		t.Fatalf("expected retry sync to use updated node id, got %s", mesh.syncRequests[1].NodeId)
+	if mesh.syncRequests[1].NodeId != "node-old" {
+		t.Fatalf("expected retry sync to use node-old, got %s", mesh.syncRequests[1].NodeId)
 	}
 	if len(wg.applied) != 1 {
 		t.Fatalf("expected wireguard apply once, got %d", len(wg.applied))
 	}
-	if wg.applied[0].Address != "10.0.0.2/32" {
+	if wg.applied[0].Address != "10.0.0.8/32" {
 		t.Fatalf("unexpected wireguard address %s", wg.applied[0].Address)
 	}
 	if len(dnsService.updates) != 1 {
@@ -516,7 +606,65 @@ func TestAgentSyncBootstrapJoinFlow(t *testing.T) {
 	}
 }
 
-func TestAgentSyncBootstrapInvalidToken(t *testing.T) {
+func TestAgentSyncReconcilesNodeOnFailedPrecondition(t *testing.T) {
+	logger := logging.NewLogger()
+	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
+	if err := os.WriteFile(nodeIDPath, []byte("node-stale"), 0600); err != nil {
+		t.Fatalf("write node id: %v", err)
+	}
+
+	mesh := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{err: status.Error(codes.FailedPrecondition, "wireguard identity mismatch")},
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.8",
+				WireguardPort: 51820,
+			}},
+		},
+		createNodeResponses: []meshCreateNodeResult{
+			{resp: &pb.NodeResponse{}},
+		},
+	}
+
+	wg := &fakeWireguard{}
+	privateKeyFile, publicKey := writeTestPrivateKey(t)
+
+	agent, err := New(Config{
+		NodeIDPath:       nodeIDPath,
+		NodeName:         "privateer-1",
+		NodeType:         "edge",
+		ClusterID:        "cluster-1",
+		WireguardIP:      "10.0.0.8",
+		PrivateKeyFile:   privateKeyFile,
+		Logger:           logger,
+		MeshClient:       mesh,
+		WireGuardManager: wg,
+		DNSService:       &fakeDNS{},
+	})
+	if err != nil {
+		t.Fatalf("new agent: %v", err)
+	}
+
+	agent.sync()
+
+	if len(mesh.createNodeRequests) != 1 {
+		t.Fatalf("expected create-node request, got %d", len(mesh.createNodeRequests))
+	}
+	if got := mesh.createNodeRequests[0].GetNodeId(); got != "node-stale" {
+		t.Fatalf("expected create-node node_id node-stale, got %q", got)
+	}
+	if got := mesh.createNodeRequests[0].GetWireguardPublicKey(); got != publicKey {
+		t.Fatalf("expected create-node public key from configured private key, got %q", got)
+	}
+	if len(mesh.syncRequests) != 2 {
+		t.Fatalf("expected retry sync, got %d sync requests", len(mesh.syncRequests))
+	}
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected wireguard apply after reconciliation, got %d", len(wg.applied))
+	}
+}
+
+func TestAgentSyncRegistrationFailureKeepsExistingMesh(t *testing.T) {
 	logger := logging.NewLogger()
 	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
 	if err := os.WriteFile(nodeIDPath, []byte("node-x"), 0600); err != nil {
@@ -527,18 +675,21 @@ func TestAgentSyncBootstrapInvalidToken(t *testing.T) {
 		syncResponses: []meshSyncResult{
 			{err: status.Error(codes.NotFound, "missing")},
 		},
-		bootstrapResponses: []meshBootstrapResult{
-			{err: status.Error(codes.PermissionDenied, "invalid token")},
+		createNodeResponses: []meshCreateNodeResult{
+			{err: status.Error(codes.PermissionDenied, "denied")},
 		},
 	}
 
 	wg := &fakeWireguard{pubKey: "pub-self", privKey: "priv-self"}
 	dnsService := &fakeDNS{}
+	privateKeyFile, _ := writeTestPrivateKey(t)
 
 	agent, err := New(Config{
-		EnrollmentToken:  "bad-token",
 		NodeIDPath:       nodeIDPath,
 		NodeName:         "privateer-2",
+		ClusterID:        "cluster-1",
+		WireguardIP:      "10.0.0.10",
+		PrivateKeyFile:   privateKeyFile,
 		Logger:           logger,
 		MeshClient:       mesh,
 		WireGuardManager: wg,
@@ -553,8 +704,8 @@ func TestAgentSyncBootstrapInvalidToken(t *testing.T) {
 	if len(mesh.syncRequests) != 1 {
 		t.Fatalf("expected one sync request, got %d", len(mesh.syncRequests))
 	}
-	if len(mesh.bootstrapRequests) != 1 {
-		t.Fatalf("expected one bootstrap request, got %d", len(mesh.bootstrapRequests))
+	if len(mesh.createNodeRequests) != 1 {
+		t.Fatalf("expected one create-node request, got %d", len(mesh.createNodeRequests))
 	}
 	if len(wg.applied) != 0 {
 		t.Fatalf("expected no wireguard apply, got %d", len(wg.applied))
@@ -576,10 +727,13 @@ func TestAgentSyncRevokedWithoutToken(t *testing.T) {
 
 	wg := &fakeWireguard{pubKey: "pub-self", privKey: "priv-self"}
 	dnsService := &fakeDNS{}
+	privateKeyFile, _ := writeTestPrivateKey(t)
 
 	agent, err := New(Config{
 		NodeIDPath:       nodeIDPath,
 		NodeName:         "privateer-3",
+		WireguardIP:      "10.0.0.10",
+		PrivateKeyFile:   privateKeyFile,
 		Logger:           logger,
 		MeshClient:       mesh,
 		WireGuardManager: wg,
@@ -591,8 +745,8 @@ func TestAgentSyncRevokedWithoutToken(t *testing.T) {
 
 	agent.sync()
 
-	if len(mesh.bootstrapRequests) != 0 {
-		t.Fatalf("expected no bootstrap request, got %d", len(mesh.bootstrapRequests))
+	if len(mesh.createNodeRequests) != 0 {
+		t.Fatalf("expected no create-node request, got %d", len(mesh.createNodeRequests))
 	}
 	if len(wg.applied) != 0 {
 		t.Fatalf("expected no wireguard apply, got %d", len(wg.applied))
@@ -602,7 +756,7 @@ func TestAgentSyncRevokedWithoutToken(t *testing.T) {
 	}
 }
 
-func TestAgentSyncNotFoundClearsMeshState(t *testing.T) {
+func TestAgentSyncNotFoundKeepsExistingMeshWhenRegistrationCannotRun(t *testing.T) {
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{resp: &pb.InfrastructureSyncResponse{
@@ -636,20 +790,14 @@ func TestAgentSyncNotFoundClearsMeshState(t *testing.T) {
 
 	agent.sync()
 
-	if len(wg.applied) != 2 {
-		t.Fatalf("expected additional wireguard apply to clear peers on not found, got %d", len(wg.applied))
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected no clearing apply on not found, got %d applies", len(wg.applied))
 	}
-	if len(wg.applied[1].Peers) != 0 {
-		t.Fatalf("expected second wireguard apply to have no peers, got %v", wg.applied[1].Peers)
+	if len(dns.updates) != 1 {
+		t.Fatalf("expected DNS records to remain intact, got %d updates", len(dns.updates))
 	}
-	if len(dns.updates) != 2 {
-		t.Fatalf("expected dns to be updated twice, got %d", len(dns.updates))
-	}
-	if len(dns.updates[1]) != 0 {
-		t.Fatalf("expected second dns update to clear records, got %v", dns.updates[1])
-	}
-	if agent.getLastAppliedConfig() != nil {
-		t.Fatal("expected last applied config to be cleared after node not found")
+	if agent.getLastAppliedConfig() == nil {
+		t.Fatal("expected last applied config to remain after node not found")
 	}
 }
 
@@ -697,18 +845,21 @@ func TestAgentSyncRetryDoesNotApplyOnFailure(t *testing.T) {
 			{err: status.Error(codes.NotFound, "missing")},
 			{err: status.Error(codes.Unavailable, "temporary")},
 		},
-		bootstrapResponses: []meshBootstrapResult{
-			{resp: &pb.BootstrapInfrastructureNodeResponse{NodeId: "node-retry", ClusterId: "cluster-1"}},
+		createNodeResponses: []meshCreateNodeResult{
+			{resp: &pb.NodeResponse{}},
 		},
 	}
 
 	wg := &fakeWireguard{pubKey: "pub-self", privKey: "priv-self"}
 	dnsService := &fakeDNS{}
+	privateKeyFile, _ := writeTestPrivateKey(t)
 
 	agent, err := New(Config{
-		EnrollmentToken:  "token-456",
 		NodeIDPath:       nodeIDPath,
 		NodeName:         "privateer-4",
+		ClusterID:        "cluster-1",
+		WireguardIP:      "10.0.0.10",
+		PrivateKeyFile:   privateKeyFile,
 		Logger:           logger,
 		MeshClient:       mesh,
 		WireGuardManager: wg,
@@ -730,7 +881,7 @@ func TestAgentSyncRetryDoesNotApplyOnFailure(t *testing.T) {
 
 func TestSyncAppliesConfigBeforeDNSUpdate(t *testing.T) {
 	resp := &pb.InfrastructureSyncResponse{
-		WireguardIp:   "10.200.0.5",
+		WireguardIp:   "10.0.0.10",
 		WireguardPort: 51820,
 		Peers: []*pb.InfrastructurePeer{
 			{
@@ -775,9 +926,33 @@ func TestSyncAppliesConfigBeforeDNSUpdate(t *testing.T) {
 	}
 }
 
+func TestSyncRejectsManagedSelfIdentityMismatch(t *testing.T) {
+	client := &fakeMeshClient{syncResponses: []meshSyncResult{{
+		resp: &pb.InfrastructureSyncResponse{
+			WireguardIp:   "10.0.0.99",
+			WireguardPort: 51820,
+		},
+	}}}
+	wg := &fakeWireguard{}
+	dns := &fakeDNS{}
+	agent := newTestAgent(t, client, wg, dns)
+
+	agent.sync()
+
+	if len(wg.applied) != 0 {
+		t.Fatalf("expected no wireguard apply on self identity mismatch, got %d", len(wg.applied))
+	}
+	if len(dns.updates) != 0 {
+		t.Fatalf("expected no dns update on self identity mismatch, got %d", len(dns.updates))
+	}
+	if got := agent.consecutiveFails.Load(); got != 1 {
+		t.Fatalf("expected consecutive failure count 1, got %d", got)
+	}
+}
+
 func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
 	initialResp := &pb.InfrastructureSyncResponse{
-		WireguardIp:   "10.200.0.5",
+		WireguardIp:   "10.0.0.10",
 		WireguardPort: 51820,
 		Peers: []*pb.InfrastructurePeer{
 			{
@@ -790,8 +965,8 @@ func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
 		},
 	}
 	rotatedResp := &pb.InfrastructureSyncResponse{
-		WireguardIp:   "10.200.0.6",
-		WireguardPort: 51821,
+		WireguardIp:   "10.0.0.10",
+		WireguardPort: 51820,
 		Peers: []*pb.InfrastructurePeer{
 			{
 				PublicKey:  "peer-2",
@@ -836,6 +1011,46 @@ func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
 
 	if agent.consecutiveFails.Load() != 1 {
 		t.Fatalf("expected consecutive failure count to be 1, got %d", agent.consecutiveFails.Load())
+	}
+}
+
+func TestApplyStaticIncludesSeedDNS(t *testing.T) {
+	keyPath, _ := writeTestPrivateKey(t)
+	wg := &fakeWireguard{}
+	dns := &fakeDNS{}
+	agent := &Agent{
+		logger:         logging.NewLogger(),
+		wgManager:      wg,
+		dnsServer:      dns,
+		privateKeyFile: keyPath,
+		wireguardIP:    "10.88.0.2",
+		listenPort:     51820,
+		lastKnownPath:  filepath.Join(t.TempDir(), "last_known.json"),
+	}
+
+	agent.applyStatic(&staticPeersFile{
+		Version: "seed-v1",
+		Peers: []staticPeer{{
+			Name:       "core-2",
+			PublicKey:  "peer-key",
+			AllowedIPs: []string{"10.88.0.3/32"},
+			Endpoint:   "203.0.113.3:51820",
+			KeepAlive:  25,
+		}},
+		DNS: map[string][]string{
+			"quartermaster": {"10.88.0.2"},
+			"commodore":     {"10.88.0.4"},
+		},
+	})
+
+	if len(dns.updates) != 1 {
+		t.Fatalf("expected one DNS update, got %d", len(dns.updates))
+	}
+	if got := dns.updates[0]["quartermaster"]; len(got) != 1 || got[0] != "10.88.0.2" {
+		t.Fatalf("expected seed DNS for quartermaster, got %v", got)
+	}
+	if got := dns.updates[0]["core-2"]; len(got) != 1 || got[0] != "10.88.0.3" {
+		t.Fatalf("expected peer DNS for core-2, got %v", got)
 	}
 }
 
@@ -937,7 +1152,7 @@ func TestAgentSyncApplyFailurePropagates(t *testing.T) {
 	}
 }
 
-func TestNewDefaultsNodeTypeToEdge(t *testing.T) {
+func TestNewDefaultsNodeTypeToCore(t *testing.T) {
 	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
 	agent, err := New(Config{
 		NodeIDPath:       nodeIDPath,
@@ -950,8 +1165,8 @@ func TestNewDefaultsNodeTypeToEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new agent: %v", err)
 	}
-	if agent.nodeType != "edge" {
-		t.Fatalf("expected default node type 'edge', got %q", agent.nodeType)
+	if agent.nodeType != "core" {
+		t.Fatalf("expected default node type 'core', got %q", agent.nodeType)
 	}
 }
 
@@ -974,7 +1189,7 @@ func TestNewPreservesExplicitNodeType(t *testing.T) {
 	}
 }
 
-func TestBootstrapSendsNodeType(t *testing.T) {
+func TestRegisterNodeSendsNodeType(t *testing.T) {
 	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
 	if err := os.WriteFile(nodeIDPath, []byte("node-typed"), 0600); err != nil {
 		t.Fatalf("write node id: %v", err)
@@ -984,22 +1199,25 @@ func TestBootstrapSendsNodeType(t *testing.T) {
 		syncResponses: []meshSyncResult{
 			{err: status.Error(codes.NotFound, "missing")},
 			{resp: &pb.InfrastructureSyncResponse{
-				WireguardIp:   "10.0.0.2",
+				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
 			}},
 		},
-		bootstrapResponses: []meshBootstrapResult{
-			{resp: &pb.BootstrapInfrastructureNodeResponse{NodeId: "node-typed", ClusterId: "cluster-1"}},
+		createNodeResponses: []meshCreateNodeResult{
+			{resp: &pb.NodeResponse{}},
 		},
 	}
 	wg := &fakeWireguard{pubKey: "pub", privKey: "priv"}
 	dns := &fakeDNS{}
+	privateKeyFile, _ := writeTestPrivateKey(t)
 
 	agent, err := New(Config{
-		EnrollmentToken:  "token-type-test",
 		NodeIDPath:       nodeIDPath,
 		NodeName:         "typed-node",
 		NodeType:         "core",
+		ClusterID:        "cluster-1",
+		WireguardIP:      "10.0.0.10",
+		PrivateKeyFile:   privateKeyFile,
 		Logger:           logging.NewLogger(),
 		MeshClient:       mesh,
 		WireGuardManager: wg,
@@ -1011,15 +1229,15 @@ func TestBootstrapSendsNodeType(t *testing.T) {
 
 	agent.sync()
 
-	if len(mesh.bootstrapRequests) != 1 {
-		t.Fatalf("expected 1 bootstrap request, got %d", len(mesh.bootstrapRequests))
+	if len(mesh.createNodeRequests) != 1 {
+		t.Fatalf("expected 1 create-node request, got %d", len(mesh.createNodeRequests))
 	}
-	if got := mesh.bootstrapRequests[0].GetNodeType(); got != "core" {
-		t.Fatalf("expected bootstrap node_type 'core', got %q", got)
+	if got := mesh.createNodeRequests[0].GetNodeType(); got != "core" {
+		t.Fatalf("expected create-node node_type 'core', got %q", got)
 	}
 }
 
-func TestAgentSyncBootstrapRetryFailureClearsMeshState(t *testing.T) {
+func TestAgentSyncRegistrationRetryFailureKeepsMeshState(t *testing.T) {
 	logger := logging.NewLogger()
 	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
 	if err := os.WriteFile(nodeIDPath, []byte("node-retry-clear"), 0600); err != nil {
@@ -1045,18 +1263,21 @@ func TestAgentSyncBootstrapRetryFailureClearsMeshState(t *testing.T) {
 			{err: status.Error(codes.NotFound, "missing")},
 			{err: status.Error(codes.Unavailable, "still down")},
 		},
-		bootstrapResponses: []meshBootstrapResult{
-			{resp: &pb.BootstrapInfrastructureNodeResponse{NodeId: "node-retry-clear", ClusterId: "cluster-1"}},
+		createNodeResponses: []meshCreateNodeResult{
+			{resp: &pb.NodeResponse{}},
 		},
 	}
 
 	wg := &fakeWireguard{pubKey: "pub-self", privKey: "priv-self"}
 	dnsService := &fakeDNS{}
+	privateKeyFile, _ := writeTestPrivateKey(t)
 
 	agent, err := New(Config{
-		EnrollmentToken:  "token-456",
 		NodeIDPath:       nodeIDPath,
 		NodeName:         "privateer-bootstrap-clear",
+		ClusterID:        "cluster-1",
+		WireguardIP:      "10.0.0.10",
+		PrivateKeyFile:   privateKeyFile,
 		Logger:           logger,
 		MeshClient:       mesh,
 		WireGuardManager: wg,
@@ -1069,19 +1290,118 @@ func TestAgentSyncBootstrapRetryFailureClearsMeshState(t *testing.T) {
 	agent.sync()
 	agent.sync()
 
-	if len(wg.applied) != 2 {
-		t.Fatalf("expected wireguard apply for initial sync and clear, got %d", len(wg.applied))
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected only the initial managed apply, got %d", len(wg.applied))
 	}
-	if len(wg.applied[1].Peers) != 0 {
-		t.Fatalf("expected clear config to have no peers, got %v", wg.applied[1].Peers)
+	if len(dnsService.updates) != 1 {
+		t.Fatalf("expected DNS to keep prior records, got %d updates", len(dnsService.updates))
 	}
-	if len(dnsService.updates) != 2 {
-		t.Fatalf("expected DNS updated for initial records and clear, got %d", len(dnsService.updates))
+	if agent.getLastAppliedConfig() == nil {
+		t.Fatal("expected last applied config to remain after registration retry failure")
 	}
-	if len(dnsService.updates[1]) != 0 {
-		t.Fatalf("expected second DNS update to clear records, got %v", dnsService.updates[1])
+}
+
+func TestApplyPersistedMeshIdentityWins(t *testing.T) {
+	// Writing a stale last_known with a different self IP must NOT resurrect
+	// it: the agent's own configured identity is authoritative.
+	tmp := t.TempDir()
+	keyPath := filepath.Join(tmp, "wg.key")
+	if err := os.WriteFile(keyPath, []byte("privkey-on-disk\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if agent.getLastAppliedConfig() != nil {
-		t.Fatal("expected last applied config to be cleared after bootstrap retry failure")
+	lastKnownPath := filepath.Join(tmp, "last_known.json")
+	if err := writeLastKnown(lastKnownPath, &lastKnownMesh{
+		Source:      "dynamic",
+		Version:     "v1",
+		WireguardIP: "10.88.0.99", // stale / rotated away
+		ListenPort:  99999,
+		Peers:       []lastKnownPeer{{PublicKey: "peer-a", Endpoint: "1.1.1.1:51820", AllowedIPs: []string{"10.88.0.3/32"}, KeepAlive: 25}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	wg := &fakeWireguard{}
+	agent := &Agent{
+		logger:          logging.NewLogger(),
+		wgManager:       wg,
+		dnsServer:       &fakeDNS{},
+		wireguardIP:     "10.88.0.2", // the real current identity
+		listenPort:      51820,
+		privateKeyFile:  keyPath,
+		lastKnownPath:   lastKnownPath,
+		staticPeersFile: "",
+	}
+
+	agent.applyStartupMesh()
+
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected exactly one wgManager.Apply call, got %d", len(wg.applied))
+	}
+	got := wg.applied[0]
+	if got.Address != "10.88.0.2/32" {
+		t.Errorf("wg0 address = %q, want 10.88.0.2/32 (identity layer wins over stale last_known 10.88.0.99)", got.Address)
+	}
+	if got.ListenPort != 51820 {
+		t.Errorf("wg0 listen port = %d, want 51820 (not stale 99999)", got.ListenPort)
+	}
+	if got.PrivateKey != "privkey-on-disk" {
+		t.Errorf("private key = %q, want from wg.key file", got.PrivateKey)
+	}
+	if len(got.Peers) != 1 || got.Peers[0].PublicKey != "peer-a" {
+		t.Errorf("peers should come from last_known snapshot, got %+v", got.Peers)
+	}
+}
+
+func TestApplyStartupMeshWithEmptySeedStillConfiguresSelfAddress(t *testing.T) {
+	tmp := t.TempDir()
+	keyPath := filepath.Join(tmp, "wg.key")
+	if err := os.WriteFile(keyPath, []byte("privkey-on-disk\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staticPeersPath := filepath.Join(tmp, "static-peers.json")
+	if err := os.WriteFile(staticPeersPath, []byte("{\"version\":\"seed-v1\",\"peers\":[]}"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	lastKnownPath := filepath.Join(tmp, "last_known.json")
+
+	wg := &fakeWireguard{}
+	agent := &Agent{
+		logger:          logging.NewLogger(),
+		wgManager:       wg,
+		dnsServer:       &fakeDNS{},
+		wireguardIP:     "10.88.0.2",
+		listenPort:      51820,
+		privateKeyFile:  keyPath,
+		staticPeersFile: staticPeersPath,
+		lastKnownPath:   lastKnownPath,
+	}
+
+	agent.applyStartupMesh()
+
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected exactly one wgManager.Apply call, got %d", len(wg.applied))
+	}
+	got := wg.applied[0]
+	if got.Address != "10.88.0.2/32" {
+		t.Fatalf("wg0 address = %q, want 10.88.0.2/32", got.Address)
+	}
+	if got.ListenPort != 51820 {
+		t.Fatalf("wg0 listen port = %d, want 51820", got.ListenPort)
+	}
+	if len(got.Peers) != 0 {
+		t.Fatalf("expected zero seed peers, got %+v", got.Peers)
+	}
+	lk, err := loadLastKnown(lastKnownPath)
+	if err != nil {
+		t.Fatalf("loadLastKnown: %v", err)
+	}
+	if lk == nil {
+		t.Fatal("expected last-known mesh to be written")
+	}
+	if lk.Source != "seed" {
+		t.Fatalf("last-known source = %q, want seed", lk.Source)
+	}
+	if lk.WireguardIP != "10.88.0.2" {
+		t.Fatalf("last-known wireguard_ip = %q, want 10.88.0.2", lk.WireguardIP)
 	}
 }

@@ -40,8 +40,8 @@ func TestSentinelRoundTrip(t *testing.T) {
 		t.Fatal("empty cache should not match")
 	}
 
-	if err := writeSentinel(dir, "abc"); err != nil {
-		t.Fatal(err)
+	if writeErr := writeSentinel(dir, "abc"); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	ok, err = sentinelMatches(dir, "abc")

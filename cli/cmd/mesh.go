@@ -28,6 +28,17 @@ func newMeshCmd() *cobra.Command {
 	}
 
 	mesh.AddCommand(newMeshStatusCmd())
+	mesh.AddCommand(newMeshWgCmd())
+
+	mesh.PersistentFlags().String("manifest", "", "path to a single cluster.yaml (overrides gitops sources)")
+	mesh.PersistentFlags().String("gitops-dir", "", "path to a local gitops repo (uses <dir>/clusters/<cluster>/cluster.yaml)")
+	mesh.PersistentFlags().String("github-repo", "", "GitHub repo (owner/repo) to fetch the manifest from")
+	mesh.PersistentFlags().String("github-ref", "", "branch/tag for --github-repo (default 'main')")
+	mesh.PersistentFlags().String("cluster", "", "cluster name within the gitops repo (e.g. 'production')")
+	mesh.PersistentFlags().String("age-key", "", "path to an age private key for SOPS-encrypted files (default: $SOPS_AGE_KEY_FILE)")
+	mesh.PersistentFlags().Int64("github-app-id", 0, "GitHub App ID (for --github-repo)")
+	mesh.PersistentFlags().Int64("github-installation-id", 0, "GitHub Installation ID (for --github-repo)")
+	mesh.PersistentFlags().String("github-private-key", "", "path to GitHub App private key PEM (for --github-repo)")
 
 	return mesh
 }
@@ -145,7 +156,7 @@ func newMeshStatusCmd() *cobra.Command {
 			}
 			w.Flush()
 
-			fmt.Fprintln(cmd.OutOrStdout(), "\nNote: To join a new node, run the Privateer agent with an enrollment token.")
+			fmt.Fprintln(cmd.OutOrStdout(), "\nNote: To join a new node, add it to GitOps, run 'frameworks mesh wg generate', then provision.")
 			return nil
 		},
 	}

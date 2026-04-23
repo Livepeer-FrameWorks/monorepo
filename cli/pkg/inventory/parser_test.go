@@ -11,7 +11,7 @@ func TestManifestValidateKafkaRequiresClusterID(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"broker-1": {ExternalIP: "10.0.0.10", User: "root"},
+			"broker-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{
@@ -31,7 +31,7 @@ func TestManifestValidateKafkaSingleBrokerAllowed(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"broker-1": {ExternalIP: "10.0.0.10", User: "root"},
+			"broker-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{
@@ -52,8 +52,8 @@ func TestManifestValidateKafkaUniqueBrokerIDs(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"broker-1": {ExternalIP: "10.0.0.10", User: "root"},
-			"broker-2": {ExternalIP: "10.0.0.11", User: "root"},
+			"broker-1": {ExternalIP: "10.0.0.10", User: "root", WireguardIP: "10.88.0.10"},
+			"broker-2": {ExternalIP: "10.0.0.11", User: "root", WireguardIP: "10.88.0.11"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{
@@ -77,8 +77,8 @@ func TestManifestValidateKafkaControllersMinThree(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-1": {ExternalIP: "10.0.0.1", User: "root"},
-			"host-2": {ExternalIP: "10.0.0.2", User: "root"},
+			"host-1": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
+			"host-2": {ExternalIP: "10.0.0.2", User: "root", WireguardIP: "10.88.0.2"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{
@@ -103,9 +103,9 @@ func TestManifestValidateKafkaControllerBrokerIDConflict(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-1": {ExternalIP: "10.0.0.1", User: "root"},
-			"host-2": {ExternalIP: "10.0.0.2", User: "root"},
-			"host-3": {ExternalIP: "10.0.0.3", User: "root"},
+			"host-1": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
+			"host-2": {ExternalIP: "10.0.0.2", User: "root", WireguardIP: "10.88.0.2"},
+			"host-3": {ExternalIP: "10.0.0.3", User: "root", WireguardIP: "10.88.0.3"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{
@@ -131,9 +131,9 @@ func TestManifestValidateKafkaControllerDirIDRequired(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-1": {ExternalIP: "10.0.0.1", User: "root"},
-			"host-2": {ExternalIP: "10.0.0.2", User: "root"},
-			"host-3": {ExternalIP: "10.0.0.3", User: "root"},
+			"host-1": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
+			"host-2": {ExternalIP: "10.0.0.2", User: "root", WireguardIP: "10.88.0.2"},
+			"host-3": {ExternalIP: "10.0.0.3", User: "root", WireguardIP: "10.88.0.3"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{
@@ -159,8 +159,8 @@ func TestManifestValidateKafkaControllerHostExists(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-1": {ExternalIP: "10.0.0.1", User: "root"},
-			"host-2": {ExternalIP: "10.0.0.2", User: "root"},
+			"host-1": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
+			"host-2": {ExternalIP: "10.0.0.2", User: "root", WireguardIP: "10.88.0.2"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Kafka: &KafkaConfig{
@@ -191,8 +191,8 @@ func TestMergeHostInventory(t *testing.T) {
 
 	inv := &HostInventory{
 		Hosts: map[string]HostConnection{
-			"node-1": {ExternalIP: "10.0.0.1", User: "admin"},
-			"node-2": {ExternalIP: "10.0.0.2", User: "deploy"},
+			"node-1": {ExternalIP: "10.0.0.1", User: "admin", WireguardPrivateKey: "AAAA"},
+			"node-2": {ExternalIP: "10.0.0.2", User: "deploy", WireguardPrivateKey: "BBBB"},
 		},
 	}
 
@@ -262,9 +262,11 @@ func TestLoadWithHostsFile(t *testing.T) {
   server-1:
     external_ip: "10.0.0.1"
     user: root
+    wireguard_private_key: "AAAA"
   server-2:
     external_ip: "10.0.0.2"
     user: deploy
+    wireguard_private_key: "BBBB"
 `
 	if err := os.WriteFile(filepath.Join(dir, "hosts.yaml"), []byte(hostsYAML), 0644); err != nil {
 		t.Fatal(err)
@@ -277,9 +279,13 @@ hosts:
   server-1:
     cluster: prod
     roles: [infrastructure]
+    wireguard_ip: 10.88.0.1
+    wireguard_public_key: AAAA
   server-2:
     cluster: prod
     roles: [services]
+    wireguard_ip: 10.88.0.2
+    wireguard_public_key: BBBB
 `
 	manifestPath := filepath.Join(dir, "cluster.yaml")
 	if err := os.WriteFile(manifestPath, []byte(manifestYAML), 0644); err != nil {
@@ -308,6 +314,8 @@ hosts:
   server-1:
     external_ip: "10.0.0.1"
     user: root
+    wireguard_ip: 10.88.0.1
+    wireguard_public_key: AAAA
 `
 	manifestPath := filepath.Join(dir, "cluster.yaml")
 	if err := os.WriteFile(manifestPath, []byte(manifestYAML), 0644); err != nil {

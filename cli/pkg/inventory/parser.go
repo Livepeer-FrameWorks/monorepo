@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 
 	fwsops "frameworks/cli/pkg/sops"
@@ -72,6 +73,24 @@ func LoadFromBytes(data []byte) (*Manifest, error) {
 // and validates the fully-resolved result. For manifests without hosts_file,
 // this behaves identically to Load.
 func LoadWithHosts(path, ageKeyFile string) (*Manifest, error) {
+	return loadWithHosts(path, "", ageKeyFile, true)
+}
+
+// LoadWithHostsNoValidate reads a manifest and merges host inventory without
+// running full manifest validation. Use for GitOps editing flows that populate
+// fields required by validation.
+func LoadWithHostsNoValidate(path, ageKeyFile string) (*Manifest, error) {
+	return loadWithHosts(path, "", ageKeyFile, false)
+}
+
+// LoadWithHostsFileNoValidate reads a manifest, merges host inventory from the
+// provided path, and skips full validation. It is used by mesh mutation flows
+// where --hosts-file may intentionally override the manifest's hosts_file.
+func LoadWithHostsFileNoValidate(path, hostsPath, ageKeyFile string) (*Manifest, error) {
+	return loadWithHosts(path, hostsPath, ageKeyFile, false)
+}
+
+func loadWithHosts(path, explicitHostsPath, ageKeyFile string, validate bool) (*Manifest, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read manifest file: %w", err)
@@ -82,8 +101,11 @@ func LoadWithHosts(path, ageKeyFile string) (*Manifest, error) {
 		return nil, err
 	}
 
-	if manifest.HostsFile != "" {
-		hostsPath := manifest.HostsFile
+	hostsPath := explicitHostsPath
+	if hostsPath == "" {
+		hostsPath = manifest.HostsFile
+	}
+	if hostsPath != "" {
 		if !filepath.IsAbs(hostsPath) {
 			hostsPath = filepath.Join(filepath.Dir(path), hostsPath)
 		}
@@ -96,8 +118,10 @@ func LoadWithHosts(path, ageKeyFile string) (*Manifest, error) {
 		}
 	}
 
-	if err := manifest.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid manifest: %w", err)
+	if validate {
+		if err := manifest.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid manifest: %w", err)
+		}
 	}
 
 	return manifest, nil
@@ -124,8 +148,8 @@ func LoadHostInventory(path, ageKeyFile string) (*HostInventory, error) {
 	return &inv, nil
 }
 
-// MergeHostInventory populates Name, ExternalIP, and User on manifest hosts
-// from the given host inventory.
+// MergeHostInventory populates Name, ExternalIP, User, and WireguardPrivateKey
+// on manifest hosts from the given host inventory.
 func (m *Manifest) MergeHostInventory(inv *HostInventory) error {
 	for name, host := range m.Hosts {
 		conn, ok := inv.Hosts[name]
@@ -136,6 +160,9 @@ func (m *Manifest) MergeHostInventory(inv *HostInventory) error {
 		host.ExternalIP = conn.ExternalIP
 		if conn.User != "" {
 			host.User = conn.User
+		}
+		if conn.WireguardPrivateKey != "" {
+			host.WireguardPrivateKey = conn.WireguardPrivateKey
 		}
 		m.Hosts[name] = host
 	}
@@ -207,7 +234,9 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("cluster type requires at least one host")
 	}
 
-	// Validate each host has an external_ip
+	// Validate each host has an external_ip for SSH/bootstrap. WireGuard
+	// identity is validated explicitly by mesh/provisioning flows so local
+	// dev manifests without Privateer can still parse.
 	for name, host := range m.Hosts {
 		if host.ExternalIP == "" {
 			return fmt.Errorf("host '%s': external_ip is required", name)
@@ -429,15 +458,26 @@ func (m *Manifest) GetHost(name string) (Host, bool) {
 	return host, ok
 }
 
+// MeshAddress returns the WireGuard mesh address for hostName, or hostName if
+// the host is unknown/unconfigured. Callers that need the SSH/bootstrap
+// address should use GetHost(...).ExternalIP instead.
+func (m *Manifest) MeshAddress(hostName string) string {
+	h, ok := m.Hosts[hostName]
+	if !ok {
+		return hostName
+	}
+	if h.WireguardIP != "" {
+		return h.WireguardIP
+	}
+	return hostName
+}
+
 // GetInfrastructureHosts returns all hosts that have infrastructure role
 func (m *Manifest) GetInfrastructureHosts() []string {
 	var hosts []string
 	for name, host := range m.Hosts {
-		for _, role := range host.Roles {
-			if role == "infrastructure" {
-				hosts = append(hosts, name)
-				break
-			}
+		if slices.Contains(host.Roles, "infrastructure") {
+			hosts = append(hosts, name)
 		}
 	}
 	return hosts
@@ -470,10 +510,8 @@ func (m *Manifest) ResolveCluster(serviceName string) string {
 	// Role-based: match the service's role against cluster roles
 	if svcDef, ok := servicedefs.Lookup(serviceName); ok && svcDef.Role != "" {
 		for clusterID, cluster := range m.Clusters {
-			for _, role := range cluster.Roles {
-				if role == svcDef.Role {
-					return clusterID
-				}
+			if slices.Contains(cluster.Roles, svcDef.Role) {
+				return clusterID
 			}
 		}
 	}

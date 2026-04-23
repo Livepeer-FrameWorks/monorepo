@@ -7,7 +7,9 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.23.2
+	golang.org/x/crypto v0.50.0
 	google.golang.org/grpc v1.80.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -60,7 +62,6 @@ require (
 	go.opentelemetry.io/otel/sdk v1.43.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	golang.org/x/arch v0.26.0 // indirect
-	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
@@ -68,7 +69,6 @@ require (
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )
 
 replace frameworks/pkg => ../pkg

@@ -170,11 +170,12 @@ frameworks cluster provision [flags]
 
 **Process:**
 
-1. Load the cluster manifest and build an execution plan
-2. Generate configuration files (docker-compose.yml or systemd units)
-3. Transfer files to target hosts via SSH and provision (Ansible for some infra)
-4. Start services
-5. Validate health (unless `--ignore-validation`)
+1. Load the cluster manifest and validate required GitOps mesh identity
+2. Build an execution plan
+3. Generate configuration files (docker-compose.yml or systemd units)
+4. Transfer files to target hosts via SSH and provision (Ansible for some infra)
+5. Start services
+6. Validate health (unless `--ignore-validation`)
 
 **Flags:**
 
@@ -195,7 +196,7 @@ frameworks cluster provision --ready \
   --bootstrap-admin-email you@co --bootstrap-admin-password-env DEPLOY_PW
 
 # Provision entire cluster (no init/seed)
-frameworks cluster provision
+frameworks cluster provision --gitops-dir gitops --cluster production
 
 # Provision only infrastructure
 frameworks cluster provision --only infrastructure
@@ -208,6 +209,10 @@ frameworks cluster provision --dry-run
 ```
 
 On success, the CLI remembers the manifest path and system tenant ID in the active context, so follow-up commands (`cluster doctor`, `cluster status`, `admin users create`) don't need to re-specify them. When a saved default is used, the command announces it with `Using manifest from context: …` — explicit flags always win.
+
+`cluster provision` is read-only against GitOps. For managed native clusters,
+run `frameworks mesh wg generate` and `frameworks mesh wg check` before
+provisioning; missing mesh identity is a hard preflight error.
 
 **Bootstrap Flow:**
 
@@ -677,6 +682,37 @@ Compares expected IPs from node inventory against actual DNS resolution. Useful 
 ---
 
 ## Mesh Commands
+
+### frameworks mesh wg generate
+
+Generate missing GitOps WireGuard identity for cluster hosts. This intentionally
+writes `cluster.yaml` and the local SOPS hosts inventory.
+
+```bash
+frameworks mesh wg generate \
+  --manifest gitops/clusters/production/cluster.yaml \
+  --hosts-file gitops/clusters/production/hosts.enc.yaml
+```
+
+Mutation commands require a local checkout. Remote GitHub sources are rejected;
+run them against a checked-out gitops repository, review the diff, then commit.
+
+### frameworks mesh wg check
+
+Read-only validation for CI and preflight.
+
+```bash
+frameworks mesh wg check --gitops-dir gitops --cluster production
+```
+
+### frameworks mesh wg rotate
+
+Rotate one host's WireGuard key. The mesh IP is preserved by default; pass
+`--readdress` only when the address must change.
+
+```bash
+frameworks mesh wg rotate core-2 --gitops-dir gitops --cluster production
+```
 
 ### frameworks mesh status
 

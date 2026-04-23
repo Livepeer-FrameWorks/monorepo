@@ -21,10 +21,7 @@ func zookeeperRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	if err != nil {
 		return nil, err
 	}
-	nodeID, _ := config.Metadata["node_id"].(int)
-	if nodeID == 0 {
-		nodeID = 1
-	}
+	nodeID := metaIntOr(config.Metadata, "node_id", 1)
 
 	vars := map[string]any{
 		"zookeeper_artifact_url":      art.URL,
@@ -48,9 +45,9 @@ func zookeeperRoleDetect(ctx context.Context, host inventory.Host, helpers RoleB
 	if err != nil {
 		return nil, err
 	}
-	result, _ := runner.Run(ctx, "systemctl is-active zookeeper 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
-	running := result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
-	bin, _ := runner.Run(ctx, "test -x /opt/zookeeper/bin/zkServer.sh && echo EXISTS")
-	exists := bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+	result, runErr := runner.Run(ctx, "systemctl is-active zookeeper 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
+	running := runErr == nil && result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
+	bin, binErr := runner.Run(ctx, "test -x /opt/zookeeper/bin/zkServer.sh && echo EXISTS")
+	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
 }

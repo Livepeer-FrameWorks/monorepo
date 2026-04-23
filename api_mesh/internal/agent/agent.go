@@ -26,6 +26,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // Metrics holds Prometheus metrics for the agent
@@ -34,11 +35,17 @@ type Metrics struct {
 	PeersConnected   *prometheus.GaugeVec
 	DNSQueries       *prometheus.CounterVec
 	WireGuardResyncs *prometheus.CounterVec
+	// LayerApplied reports which layer's config is currently on wg0:
+	// labels: layer="managed" (fresh from Quartermaster)
+	//       | "last_known" (disk cache from prior managed sync)
+	//       | "seed"       (Ansible-rendered GitOps substrate).
+	LayerApplied *prometheus.GaugeVec
 }
 
 type meshClient interface {
 	SyncMesh(ctx context.Context, req *pb.InfrastructureSyncRequest) (*pb.InfrastructureSyncResponse, error)
-	BootstrapInfrastructureNode(ctx context.Context, req *pb.BootstrapInfrastructureNodeRequest) (*pb.BootstrapInfrastructureNodeResponse, error)
+	CreateNode(ctx context.Context, req *pb.CreateNodeRequest) (*pb.NodeResponse, error)
+	CreateBootstrapToken(ctx context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error)
 }
 
 type serviceRegistryClient interface {
@@ -64,7 +71,7 @@ type Agent struct {
 	nodeID           string
 	nodeName         string
 	nodeType         string
-	enrollmentToken  string
+	clusterID        string
 	externalIP       string
 	internalIP       string
 	interfaceName    string
@@ -85,12 +92,24 @@ type Agent struct {
 	expectedServices []string
 	certSyncInterval time.Duration
 	lastCertSyncUnix atomic.Int64
+	// Startup substrate inputs and persisted managed cache.
+	staticPeersFile string
+	privateKeyFile  string
+	wireguardIP     string
+	lastKnownPath   string
 }
 
 type Config struct {
 	QuartermasterGRPCAddr string
-	ServiceToken          string // Or EnrollmentToken
-	EnrollmentToken       string // Bootstrap token for initial registration (optional)
+	ServiceToken          string
+	ClusterID             string
+	// Startup seed inputs let the agent bring wg0 up from GitOps-rendered
+	// state before the first successful Quartermaster sync.
+	StaticPeersFile       string
+	PrivateKeyFile        string
+	WireguardIP           string
+	LastKnownPath         string // defaults to {DataDir}/last_known_mesh.json
+	DataDir               string // defaults to /var/lib/privateer
 	AllowInsecure         bool
 	CACertFile            string
 	ServerName            string
@@ -142,10 +161,16 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.CertSyncInterval == 0 {
 		cfg.CertSyncInterval = 5 * time.Minute
 	}
+	if cfg.DataDir == "" {
+		cfg.DataDir = "/var/lib/privateer"
+	}
+	if cfg.LastKnownPath == "" {
+		cfg.LastKnownPath = filepath.Join(cfg.DataDir, "last_known_mesh.json")
+	}
 	if cfg.NodeType == "" {
-		cfg.NodeType = infra.NodeTypeEdge
+		cfg.NodeType = infra.NodeTypeCore
 		if cfg.Logger != nil {
-			cfg.Logger.Warnf("MESH_NODE_TYPE not set, defaulting to %q", infra.NodeTypeEdge)
+			cfg.Logger.Warnf("MESH_NODE_TYPE not set, defaulting to %q", infra.NodeTypeCore)
 		}
 	}
 	if cfg.NodeName == "" {
@@ -164,10 +189,10 @@ func New(cfg Config) (*Agent, error) {
 		}
 	}
 
-	// Initialize gRPC API Client
+	// Initialize the Quartermaster client when credentials are available.
 	client := cfg.MeshClient
 	registry := cfg.ServiceRegistryClient
-	if client == nil {
+	if client == nil && cfg.ServiceToken != "" && cfg.QuartermasterGRPCAddr != "" {
 		qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 			GRPCAddr:      cfg.QuartermasterGRPCAddr,
 			ServiceToken:  cfg.ServiceToken,
@@ -220,9 +245,9 @@ func New(cfg Config) (*Agent, error) {
 		wgManager:        wg,
 		dnsServer:        dnsSrv,
 		interfaceName:    cfg.InterfaceName,
-		enrollmentToken:  cfg.EnrollmentToken,
 		nodeType:         cfg.NodeType,
 		nodeName:         cfg.NodeName,
+		clusterID:        cfg.ClusterID,
 		externalIP:       cfg.ExternalIP,
 		internalIP:       cfg.InternalIP,
 		listenPort:       cfg.ListenPort,
@@ -237,6 +262,10 @@ func New(cfg Config) (*Agent, error) {
 		pkiBasePath:      cfg.PKIBasePath,
 		expectedServices: append([]string(nil), cfg.ExpectedServiceTypes...),
 		certSyncInterval: cfg.CertSyncInterval,
+		staticPeersFile:  cfg.StaticPeersFile,
+		privateKeyFile:   cfg.PrivateKeyFile,
+		wireguardIP:      cfg.WireguardIP,
+		lastKnownPath:    cfg.LastKnownPath,
 	}, nil
 }
 
@@ -247,6 +276,10 @@ func (a *Agent) Start() error {
 	if err := a.wgManager.Init(); err != nil {
 		return fmt.Errorf("failed to init wireguard: %w", err)
 	}
+
+	// 1b. Apply last-known / static before ever calling Quartermaster so the
+	// mesh is usable on a fresh boot or while QM is down.
+	a.applyStartupMesh()
 
 	// 2. Start DNS Server
 	go a.dnsServer.Start()
@@ -308,6 +341,151 @@ func (a *Agent) runLoop() {
 	}
 }
 
+// applyStartupMesh brings up wg0 from last_known_mesh.json (preferred) or the
+// Ansible-rendered static-peers.json.
+//
+// Self identity (own wireguard_ip, listen port, private key) is always read
+// from the identity layer on disk — never from the persisted snapshot — so
+// a GitOps key rotation always propagates on reboot.
+func (a *Agent) applyStartupMesh() {
+	if a.lastKnownPath == "" && a.staticPeersFile == "" {
+		return
+	}
+	lk, err := loadLastKnown(a.lastKnownPath)
+	if err != nil {
+		a.logger.WithError(err).Warn("Failed to load last-known mesh, will fall back to seed peers")
+	}
+	sp, err := loadStaticPeers(a.staticPeersFile)
+	if err != nil {
+		a.logger.WithError(err).Warn("Failed to load seed peers")
+	}
+
+	// Managed snapshots always apply (Quartermaster's most recent view is
+	// authoritative). Seed snapshots only apply when they match the on-disk
+	// seed hash (GitOps unchanged during downtime). Otherwise render the
+	// current seed file.
+	switch {
+	case lk != nil && lk.Source == "dynamic":
+		// Cache of a prior Quartermaster sync — applied at startup, before
+		// the live SyncMesh loop takes over with layer="managed".
+		a.applyPersistedMesh(lk, "last_known")
+	case lk != nil && sp != nil && lk.Source == "seed" && lk.Version == sp.Version:
+		a.applyPersistedMesh(lk, "seed")
+	case sp != nil && a.privateKeyFile != "" && a.wireguardIP != "":
+		a.applyStatic(sp)
+	}
+}
+
+// applyStatic configures wg0 from the Ansible-rendered static peers and
+// writes a fresh last_known_mesh.json tagged source=seed.
+func (a *Agent) applyStatic(sp *staticPeersFile) {
+	priv, err := readPrivateKey(a.privateKeyFile)
+	if err != nil {
+		a.logger.WithError(err).Warn("Seed layer: private key unavailable")
+		return
+	}
+	peers := staticPeersToWireGuard(sp.Peers)
+	cfg := wireguard.Config{
+		PrivateKey: priv,
+		Address:    fmt.Sprintf("%s/32", a.wireguardIP),
+		ListenPort: a.listenPort,
+		Peers:      peers,
+	}
+	if err := a.wgManager.Apply(cfg); err != nil {
+		a.logger.WithError(err).Error("Seed layer: failed to apply wireguard config")
+		return
+	}
+
+	dns := map[string][]string{}
+	for _, p := range sp.Peers {
+		if p.Name != "" && len(p.AllowedIPs) > 0 {
+			ip := strings.Split(p.AllowedIPs[0], "/")[0]
+			dns[p.Name] = []string{ip}
+		}
+	}
+	for name, ips := range sp.DNS {
+		if name == "" || len(ips) == 0 {
+			continue
+		}
+		dns[name] = append([]string(nil), ips...)
+	}
+	if err := a.dnsServer.UpdateRecords(dns); err != nil {
+		a.logger.WithError(err).Warn("Seed layer: failed to update DNS")
+	}
+
+	a.setLastAppliedConfig(cfg)
+	a.setLayerMetric("seed")
+
+	lk := &lastKnownMesh{
+		Source:      "seed",
+		Version:     sp.Version,
+		WireguardIP: a.wireguardIP,
+		ListenPort:  a.listenPort,
+		Peers:       staticToLastKnownPeers(sp.Peers),
+		DNS:         dns,
+	}
+	if err := writeLastKnown(a.lastKnownPath, lk); err != nil {
+		a.logger.WithError(err).Warn("Seed layer: failed to persist last-known")
+	}
+	a.logger.Info("Seed mesh layer applied from GitOps")
+}
+
+// applyPersistedMesh reapplies a snapshot loaded from last_known_mesh.json.
+// Self identity always comes from the agent's configured identity layer
+// (wireguardIP + listenPort + private key on disk) — the cached snapshot's
+// copy of those fields is ignored so a GitOps key rotation propagates.
+func (a *Agent) applyPersistedMesh(lk *lastKnownMesh, layer string) {
+	priv, err := readPrivateKey(a.privateKeyFile)
+	if err != nil {
+		a.logger.WithError(err).Warn("Persisted mesh: private key unavailable")
+		return
+	}
+	cfg := lastKnownToWireGuard(lk, priv, a.wireguardIP, a.listenPort)
+	if err := a.wgManager.Apply(cfg); err != nil {
+		a.logger.WithError(err).Error("Persisted mesh: apply failed")
+		return
+	}
+	if len(lk.DNS) > 0 {
+		if err := a.dnsServer.UpdateRecords(lk.DNS); err != nil {
+			a.logger.WithError(err).Warn("Persisted mesh: DNS update failed")
+		}
+	}
+	a.setLastAppliedConfig(cfg)
+	a.setLayerMetric(layer)
+	a.logger.Infof("Applied %s mesh layer from %s", layer, a.lastKnownPath)
+}
+
+func (a *Agent) setLayerMetric(layer string) {
+	if a.metrics == nil || a.metrics.LayerApplied == nil {
+		return
+	}
+	for _, known := range []string{"managed", "last_known", "seed"} {
+		v := 0.0
+		if known == layer {
+			v = 1.0
+		}
+		a.metrics.LayerApplied.WithLabelValues(known).Set(v)
+	}
+}
+
+func staticToLastKnownPeers(in []staticPeer) []lastKnownPeer {
+	out := make([]lastKnownPeer, len(in))
+	for i, p := range in {
+		ka := p.KeepAlive
+		if ka == 0 {
+			ka = 25
+		}
+		out[i] = lastKnownPeer{
+			Name:       p.Name,
+			PublicKey:  p.PublicKey,
+			AllowedIPs: p.AllowedIPs,
+			Endpoint:   p.Endpoint,
+			KeepAlive:  ka,
+		}
+	}
+	return out
+}
+
 func (a *Agent) syncFailed() {
 	a.consecutiveFails.Add(1)
 	if a.metrics != nil && a.metrics.SyncOperations != nil {
@@ -324,15 +502,25 @@ func (a *Agent) syncSucceeded() {
 }
 
 func (a *Agent) sync() {
-	// 1. Get Public Key
-	pubKey, err := a.wgManager.GetPublicKey()
+	// Tests may omit the Quartermaster client; startup mesh handling is
+	// independent from the managed overlay.
+	if a.client == nil {
+		return
+	}
+
+	privKey, err := readPrivateKey(a.privateKeyFile)
 	if err != nil {
-		a.logger.WithError(err).Error("Failed to get public key")
+		a.logger.WithError(err).Error("Failed to read mesh private key")
+		a.syncFailed()
+		return
+	}
+	pubKey, err := derivePublicKey(privKey)
+	if err != nil {
+		a.logger.WithError(err).Error("Failed to derive mesh public key")
 		a.syncFailed()
 		return
 	}
 
-	// 2. Call Quartermaster via gRPC
 	req := &pb.InfrastructureSyncRequest{
 		NodeId:     a.nodeID,
 		PublicKey:  pubKey,
@@ -343,49 +531,43 @@ func (a *Agent) sync() {
 	resp, err := a.client.SyncMesh(syncCtx, req)
 	cancel()
 	if err != nil {
-		if status.Code(err) == codes.NotFound && a.enrollmentToken != "" {
-			a.logger.WithError(err).Warn("Node not registered. Attempting bootstrap...")
-			bootCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
-			bootErr := a.bootstrapNode(bootCtx)
+		code := status.Code(err)
+		if code == codes.NotFound || code == codes.FailedPrecondition {
+			a.logger.WithError(err).Warn("Node identity missing or stale in Quartermaster. Re-registering from local identity")
+			registerCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
+			registerErr := a.registerNode(registerCtx, pubKey)
 			cancel()
-			if bootErr != nil {
-				a.logger.WithError(bootErr).Error("Bootstrap failed")
+			if registerErr != nil {
+				a.logger.WithError(registerErr).Error("Node registration failed")
 				a.syncFailed()
 				return
 			}
 
-			// Retry sync after successful bootstrap
+			// Retry sync after successful registration.
 			req.NodeId = a.nodeID
 			retryCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
 			resp, err = a.client.SyncMesh(retryCtx, req)
 			cancel()
 			if err != nil {
-				a.logger.WithError(err).Error("Failed to sync after bootstrap")
-				a.clearMeshState("post-bootstrap sync failed")
+				a.logger.WithError(err).Error("Failed to sync after node registration")
 				a.syncFailed()
 				return
 			}
-		} else {
+		}
+		if err != nil {
 			a.logger.WithError(err).Error("Failed to sync infrastructure")
-			if status.Code(err) == codes.NotFound {
-				a.clearMeshState("node not found")
-			}
 			a.syncFailed()
 			return
 		}
 	}
 
-	// Get Private Key
-	privKey, err := a.wgManager.GetPrivateKey()
-	if err != nil {
-		a.logger.WithError(err).Error("Failed to get private key")
+	if err := a.validateManagedSelfIdentity(resp); err != nil {
+		a.logger.WithError(err).Error("Quartermaster returned conflicting mesh self identity")
 		a.syncFailed()
 		return
 	}
 
-	// 3. Convert to WireGuard Config
 	peers := make([]wireguard.Peer, len(resp.Peers))
-	// DNS Records map: hostname -> [WireGuard IPs]
 	dnsRecords := make(map[string][]string)
 
 	for i, p := range resp.Peers {
@@ -411,8 +593,8 @@ func (a *Agent) sync() {
 
 	cfg := wireguard.Config{
 		PrivateKey: privKey,
-		Address:    fmt.Sprintf("%s/32", resp.WireguardIp),
-		ListenPort: int(resp.WireguardPort),
+		Address:    fmt.Sprintf("%s/32", a.wireguardIP),
+		ListenPort: a.listenPort,
 		Peers:      peers,
 	}
 
@@ -439,14 +621,134 @@ func (a *Agent) sync() {
 	}
 
 	a.syncSucceeded()
+	a.setLayerMetric("managed")
+	if err := writeLastKnown(a.lastKnownPath, &lastKnownMesh{
+		Source:      "dynamic",
+		Version:     resp.MeshRevision,
+		WireguardIP: a.wireguardIP,
+		ListenPort:  a.listenPort,
+		Peers:       dynamicPeersToLastKnown(resp.Peers),
+		DNS:         dnsRecords,
+	}); err != nil {
+		a.logger.WithError(err).Warn("Failed to persist last-known mesh snapshot")
+	}
 	if err := a.syncInternalCertificates(); err != nil {
 		a.logger.WithError(err).Warn("Failed to sync internal TLS materials")
 	}
 	a.logger.Info("Successfully applied wireguard config")
 }
 
+func (a *Agent) validateManagedSelfIdentity(resp *pb.InfrastructureSyncResponse) error {
+	if resp == nil {
+		return fmt.Errorf("empty sync response")
+	}
+	if strings.TrimSpace(a.wireguardIP) == "" {
+		return fmt.Errorf("local wireguard_ip is not configured")
+	}
+	if resp.GetWireguardIp() == "" {
+		return fmt.Errorf("sync response omitted wireguard_ip for node %s", a.nodeID)
+	}
+	if resp.GetWireguardIp() != a.wireguardIP {
+		return fmt.Errorf("sync response wireguard_ip %q does not match local GitOps identity %q", resp.GetWireguardIp(), a.wireguardIP)
+	}
+	if a.listenPort <= 0 {
+		return fmt.Errorf("local wireguard listen port is not configured")
+	}
+	if resp.GetWireguardPort() == 0 {
+		return fmt.Errorf("sync response omitted wireguard listen port for node %s", a.nodeID)
+	}
+	if resp.GetWireguardPort() != int32(a.listenPort) {
+		return fmt.Errorf("sync response wireguard port %d does not match local GitOps identity %d", resp.GetWireguardPort(), a.listenPort)
+	}
+	return nil
+}
+
+func dynamicPeersToLastKnown(peers []*pb.InfrastructurePeer) []lastKnownPeer {
+	out := make([]lastKnownPeer, len(peers))
+	for i, p := range peers {
+		out[i] = lastKnownPeer{
+			Name:       p.NodeName,
+			PublicKey:  p.PublicKey,
+			AllowedIPs: p.AllowedIps,
+			Endpoint:   p.Endpoint,
+			KeepAlive:  int(p.KeepAlive),
+		}
+	}
+	return out
+}
+
+func (a *Agent) registerNode(ctx context.Context, publicKey string) error {
+	if strings.TrimSpace(a.clusterID) == "" {
+		return fmt.Errorf("cluster_id is required for node registration")
+	}
+	req := &pb.CreateNodeRequest{
+		NodeId:    a.nodeID,
+		ClusterId: a.clusterID,
+		NodeName:  a.nodeName,
+		NodeType:  a.nodeType,
+	}
+	if a.externalIP != "" {
+		req.ExternalIp = &a.externalIP
+	}
+	if a.internalIP != "" {
+		req.InternalIp = &a.internalIP
+	}
+	if a.wireguardIP != "" {
+		req.WireguardIp = &a.wireguardIP
+	}
+	if strings.TrimSpace(publicKey) != "" {
+		req.WireguardPublicKey = &publicKey
+	}
+	if a.listenPort > 0 {
+		port := int32(a.listenPort)
+		req.WireguardPort = &port
+	}
+	if _, err := a.client.CreateNode(ctx, req); err != nil {
+		return err
+	}
+	a.logger.WithFields(logging.Fields{
+		"node_id":    a.nodeID,
+		"cluster_id": a.clusterID,
+	}).Info("Registered node in Quartermaster from local identity")
+	return nil
+}
+
+func (a *Agent) ensureCertIssueToken(ctx context.Context) error {
+	if strings.TrimSpace(a.certIssueToken) != "" {
+		return nil
+	}
+	if a.client == nil {
+		return fmt.Errorf("quartermaster client unavailable for cert token minting")
+	}
+	if strings.TrimSpace(a.clusterID) == "" {
+		return fmt.Errorf("cluster_id is required for cert token minting")
+	}
+	metadata, err := structpb.NewStruct(map[string]interface{}{
+		"node_id": a.nodeID,
+		"purpose": "cert_sync",
+	})
+	if err != nil {
+		return fmt.Errorf("build cert token metadata: %w", err)
+	}
+	resp, err := a.client.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
+		Name:      fmt.Sprintf("Internal Cert Sync Token for %s", a.nodeID),
+		Kind:      "infrastructure_node",
+		ClusterId: &a.clusterID,
+		Ttl:       "720h",
+		Metadata:  metadata,
+	})
+	if err != nil {
+		return fmt.Errorf("create cert sync token: %w", err)
+	}
+	a.certIssueToken = resp.GetToken().GetToken()
+	if strings.TrimSpace(a.certIssueToken) == "" {
+		return fmt.Errorf("quartermaster returned an empty cert sync token")
+	}
+	return nil
+}
+
 func (a *Agent) syncInternalCertificates() error {
-	if a.navigatorClient == nil || strings.TrimSpace(a.certIssueToken) == "" {
+	if a.navigatorClient == nil {
 		return nil
 	}
 	if len(a.expectedServices) == 0 && a.registryClient == nil {
@@ -465,6 +767,9 @@ func (a *Agent) syncInternalCertificates() error {
 	last := a.lastCertSyncUnix.Load()
 	if last > 0 && time.Duration(now-last)*time.Second < a.certSyncInterval && !a.missingInternalPKIMaterials(serviceTypes) {
 		return nil
+	}
+	if issueTokenErr := a.ensureCertIssueToken(ctx); issueTokenErr != nil {
+		return issueTokenErr
 	}
 
 	bundleResp, err := a.navigatorClient.GetCABundle(ctx, &pb.GetCABundleRequest{})
@@ -607,26 +912,6 @@ func writeAtomicFile(absPath string, content []byte, mode os.FileMode) error {
 	return os.Rename(tmpPath, absPath)
 }
 
-func (a *Agent) clearMeshState(reason string) {
-	a.logger.WithField("reason", reason).Warn("Clearing local mesh state")
-
-	if previous := a.getLastAppliedConfig(); previous != nil {
-		clearedCfg := cloneConfig(*previous)
-		clearedCfg.Peers = []wireguard.Peer{}
-		if err := a.wgManager.Apply(clearedCfg); err != nil {
-			a.logger.WithError(err).Warn("Failed to clear WireGuard peer config")
-		}
-	}
-
-	if err := a.dnsServer.UpdateRecords(map[string][]string{}); err != nil {
-		a.logger.WithError(err).Warn("Failed to clear local mesh DNS records")
-		return
-	}
-	a.lastConfigMu.Lock()
-	a.lastAppliedCfg = nil
-	a.lastConfigMu.Unlock()
-}
-
 func (a *Agent) rollbackWireGuardConfig() {
 	previous := a.getLastAppliedConfig()
 	if previous == nil {
@@ -674,42 +959,6 @@ func cloneConfig(cfg wireguard.Config) wireguard.Config {
 		ListenPort: cfg.ListenPort,
 		Peers:      peersCopy,
 	}
-}
-
-func (a *Agent) bootstrapNode(ctx context.Context) error {
-	nodeID := a.nodeID
-	req := &pb.BootstrapInfrastructureNodeRequest{
-		Token:    a.enrollmentToken,
-		NodeType: a.nodeType,
-		NodeId:   &nodeID,
-		Hostname: a.nodeName,
-	}
-	if a.externalIP != "" {
-		req.ExternalIp = &a.externalIP
-	}
-	if a.internalIP != "" {
-		req.InternalIp = &a.internalIP
-	}
-
-	resp, err := a.client.BootstrapInfrastructureNode(ctx, req)
-	if err != nil {
-		return err
-	}
-
-	if resp.GetNodeId() != "" && resp.GetNodeId() != a.nodeID {
-		a.logger.WithFields(logging.Fields{
-			"requested": a.nodeID,
-			"assigned":  resp.GetNodeId(),
-		}).Warn("Bootstrap returned a different node_id; continuing with assigned value")
-		a.nodeID = resp.GetNodeId()
-	}
-
-	a.logger.WithFields(logging.Fields{
-		"node_id":    resp.GetNodeId(),
-		"cluster_id": resp.GetClusterId(),
-	}).Info("Node bootstrapped successfully")
-
-	return nil
 }
 
 func resolveNodeID(cfg Config) string {

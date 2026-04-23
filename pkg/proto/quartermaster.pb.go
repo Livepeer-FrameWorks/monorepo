@@ -4779,6 +4779,7 @@ type InfrastructureNode struct {
 	UpdatedAt          *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`                                   // json:"updated_at"
 	Latitude           *float64               `protobuf:"fixed64,20,opt,name=latitude,proto3,oneof" json:"latitude,omitempty"`                                              // json:"latitude,omitempty"
 	Longitude          *float64               `protobuf:"fixed64,21,opt,name=longitude,proto3,oneof" json:"longitude,omitempty"`                                            // json:"longitude,omitempty"
+	WireguardPort      *int32                 `protobuf:"varint,22,opt,name=wireguard_port,json=wireguardPort,proto3,oneof" json:"wireguard_port,omitempty"`                // json:"wireguard_port,omitempty"
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -4956,6 +4957,13 @@ func (x *InfrastructureNode) GetLatitude() float64 {
 func (x *InfrastructureNode) GetLongitude() float64 {
 	if x != nil && x.Longitude != nil {
 		return *x.Longitude
+	}
+	return 0
+}
+
+func (x *InfrastructureNode) GetWireguardPort() int32 {
+	if x != nil && x.WireguardPort != nil {
+		return *x.WireguardPort
 	}
 	return 0
 }
@@ -5286,6 +5294,7 @@ type CreateNodeRequest struct {
 	DiskGb             *int32                 `protobuf:"varint,13,opt,name=disk_gb,json=diskGb,proto3,oneof" json:"disk_gb,omitempty"`                                     // json:"disk_gb,omitempty"
 	Tags               *structpb.Struct       `protobuf:"bytes,14,opt,name=tags,proto3" json:"tags,omitempty"`                                                              // json:"tags,omitempty"
 	Metadata           *structpb.Struct       `protobuf:"bytes,15,opt,name=metadata,proto3" json:"metadata,omitempty"`                                                      // json:"metadata,omitempty"
+	WireguardPort      *int32                 `protobuf:"varint,16,opt,name=wireguard_port,json=wireguardPort,proto3,oneof" json:"wireguard_port,omitempty"`                // json:"wireguard_port,omitempty"
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -5423,6 +5432,13 @@ func (x *CreateNodeRequest) GetMetadata() *structpb.Struct {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *CreateNodeRequest) GetWireguardPort() int32 {
+	if x != nil && x.WireguardPort != nil {
+		return *x.WireguardPort
+	}
+	return 0
 }
 
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest (lines 180-190)
@@ -6032,8 +6048,15 @@ type BootstrapInfrastructureNodeRequest struct {
 	ExternalIp      *string                `protobuf:"bytes,5,opt,name=external_ip,json=externalIp,proto3,oneof" json:"external_ip,omitempty"`                  // json:"external_ip,omitempty"
 	InternalIp      *string                `protobuf:"bytes,6,opt,name=internal_ip,json=internalIp,proto3,oneof" json:"internal_ip,omitempty"`                  // json:"internal_ip,omitempty"
 	TargetClusterId *string                `protobuf:"bytes,7,opt,name=target_cluster_id,json=targetClusterId,proto3,oneof" json:"target_cluster_id,omitempty"` // Target cluster (must match token binding if token has cluster_id)
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Agents in static-bootstrap mode already know their mesh identity (from the
+	// GitOps-rendered static-peers.json) before they ever reach Quartermaster.
+	// Supplying these at bootstrap lets QM persist the row with matching keys
+	// instead of overwriting via SyncMesh on first sync.
+	WireguardIp        *string `protobuf:"bytes,8,opt,name=wireguard_ip,json=wireguardIp,proto3,oneof" json:"wireguard_ip,omitempty"`                        // json:"wireguard_ip,omitempty"
+	WireguardPublicKey *string `protobuf:"bytes,9,opt,name=wireguard_public_key,json=wireguardPublicKey,proto3,oneof" json:"wireguard_public_key,omitempty"` // json:"wireguard_public_key,omitempty"
+	WireguardPort      *int32  `protobuf:"varint,10,opt,name=wireguard_port,json=wireguardPort,proto3,oneof" json:"wireguard_port,omitempty"`                // json:"wireguard_port,omitempty"
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *BootstrapInfrastructureNodeRequest) Reset() {
@@ -6113,6 +6136,27 @@ func (x *BootstrapInfrastructureNodeRequest) GetTargetClusterId() string {
 		return *x.TargetClusterId
 	}
 	return ""
+}
+
+func (x *BootstrapInfrastructureNodeRequest) GetWireguardIp() string {
+	if x != nil && x.WireguardIp != nil {
+		return *x.WireguardIp
+	}
+	return ""
+}
+
+func (x *BootstrapInfrastructureNodeRequest) GetWireguardPublicKey() string {
+	if x != nil && x.WireguardPublicKey != nil {
+		return *x.WireguardPublicKey
+	}
+	return ""
+}
+
+func (x *BootstrapInfrastructureNodeRequest) GetWireguardPort() int32 {
+	if x != nil && x.WireguardPort != nil {
+		return *x.WireguardPort
+	}
+	return 0
 }
 
 type BootstrapInfrastructureNodeResponse struct {
@@ -7481,8 +7525,11 @@ type InfrastructureSyncResponse struct {
 	WireguardPort    int32                        `protobuf:"varint,2,opt,name=wireguard_port,json=wireguardPort,proto3" json:"wireguard_port,omitempty"`                                                                                   // json:"wireguard_port"
 	Peers            []*InfrastructurePeer        `protobuf:"bytes,3,rep,name=peers,proto3" json:"peers,omitempty"`                                                                                                                         // json:"peers"
 	ServiceEndpoints map[string]*ServiceEndpoints `protobuf:"bytes,4,rep,name=service_endpoints,json=serviceEndpoints,proto3" json:"service_endpoints,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // json:"service_endpoints"
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Stable hash over the peer set (server-side), used by Privateer's
+	// last_known_mesh.json to version the dynamic snapshot and detect changes.
+	MeshRevision  string `protobuf:"bytes,5,opt,name=mesh_revision,json=meshRevision,proto3" json:"mesh_revision,omitempty"` // json:"mesh_revision,omitempty"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InfrastructureSyncResponse) Reset() {
@@ -7541,6 +7588,13 @@ func (x *InfrastructureSyncResponse) GetServiceEndpoints() map[string]*ServiceEn
 		return x.ServiceEndpoints
 	}
 	return nil
+}
+
+func (x *InfrastructureSyncResponse) GetMeshRevision() string {
+	if x != nil {
+		return x.MeshRevision
+	}
+	return ""
 }
 
 // Helper for map value in InfrastructureSyncResponse
@@ -11063,7 +11117,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x06reason\x18\x03 \x01(\tH\x00R\x06reason\x88\x01\x01B\t\n" +
 	"\a_reason\")\n" +
 	"\x0eGetNodeRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x97\b\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xd6\b\n" +
 	"\x12InfrastructureNode\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x1d\n" +
@@ -11092,7 +11146,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"updated_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
 	"\blatitude\x18\x14 \x01(\x01H\n" +
 	"R\blatitude\x88\x01\x01\x12!\n" +
-	"\tlongitude\x18\x15 \x01(\x01H\vR\tlongitude\x88\x01\x01B\x0e\n" +
+	"\tlongitude\x18\x15 \x01(\x01H\vR\tlongitude\x88\x01\x01\x12*\n" +
+	"\x0ewireguard_port\x18\x16 \x01(\x05H\fR\rwireguardPort\x88\x01\x01B\x0e\n" +
 	"\f_internal_ipB\x0e\n" +
 	"\f_external_ipB\x0f\n" +
 	"\r_wireguard_ipB\x17\n" +
@@ -11108,7 +11163,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x0f_last_heartbeatB\v\n" +
 	"\t_latitudeB\f\n" +
 	"\n" +
-	"_longitude\"E\n" +
+	"_longitudeB\x11\n" +
+	"\x0f_wireguard_port\"E\n" +
 	"\fNodeResponse\x125\n" +
 	"\x04node\x18\x01 \x01(\v2!.quartermaster.InfrastructureNodeR\x04node\"\xa7\x01\n" +
 	"\x10ListNodesRequest\x12\x1d\n" +
@@ -11137,7 +11193,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x05nodes\x18\x01 \x03(\v2!.quartermaster.InfrastructureNodeR\x05nodes\x12\x1f\n" +
 	"\vtotal_nodes\x18\x02 \x01(\x05R\n" +
 	"totalNodes\x12#\n" +
-	"\rhealthy_nodes\x18\x03 \x01(\x05R\fhealthyNodes\"\xd6\x05\n" +
+	"\rhealthy_nodes\x18\x03 \x01(\x05R\fhealthyNodes\"\x95\x06\n" +
 	"\x11CreateNodeRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1d\n" +
 	"\n" +
@@ -11157,7 +11213,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\tmemory_gb\x18\f \x01(\x05H\aR\bmemoryGb\x88\x01\x01\x12\x1c\n" +
 	"\adisk_gb\x18\r \x01(\x05H\bR\x06diskGb\x88\x01\x01\x12+\n" +
 	"\x04tags\x18\x0e \x01(\v2\x17.google.protobuf.StructR\x04tags\x123\n" +
-	"\bmetadata\x18\x0f \x01(\v2\x17.google.protobuf.StructR\bmetadataB\x0e\n" +
+	"\bmetadata\x18\x0f \x01(\v2\x17.google.protobuf.StructR\bmetadata\x12*\n" +
+	"\x0ewireguard_port\x18\x10 \x01(\x05H\tR\rwireguardPort\x88\x01\x01B\x0e\n" +
 	"\f_internal_ipB\x0e\n" +
 	"\f_external_ipB\x0f\n" +
 	"\r_wireguard_ipB\x17\n" +
@@ -11169,7 +11226,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\n" +
 	"_memory_gbB\n" +
 	"\n" +
-	"\b_disk_gb\"\xf3\x01\n" +
+	"\b_disk_gbB\x11\n" +
+	"\x0f_wireguard_port\"\xf3\x01\n" +
 	"\x1dResolveNodeFingerprintRequest\x12\x17\n" +
 	"\apeer_ip\x18\x01 \x01(\tR\x06peerIp\x12\x1d\n" +
 	"\n" +
@@ -11235,7 +11293,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x03 \x01(\tR\tclusterId\"\xd0\x02\n" +
+	"cluster_id\x18\x03 \x01(\tR\tclusterId\"\x98\x04\n" +
 	"\"BootstrapInfrastructureNodeRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1b\n" +
 	"\tnode_type\x18\x02 \x01(\tR\bnodeType\x12\x1c\n" +
@@ -11245,12 +11303,19 @@ const file_quartermaster_proto_rawDesc = "" +
 	"externalIp\x88\x01\x01\x12$\n" +
 	"\vinternal_ip\x18\x06 \x01(\tH\x02R\n" +
 	"internalIp\x88\x01\x01\x12/\n" +
-	"\x11target_cluster_id\x18\a \x01(\tH\x03R\x0ftargetClusterId\x88\x01\x01B\n" +
+	"\x11target_cluster_id\x18\a \x01(\tH\x03R\x0ftargetClusterId\x88\x01\x01\x12&\n" +
+	"\fwireguard_ip\x18\b \x01(\tH\x04R\vwireguardIp\x88\x01\x01\x125\n" +
+	"\x14wireguard_public_key\x18\t \x01(\tH\x05R\x12wireguardPublicKey\x88\x01\x01\x12*\n" +
+	"\x0ewireguard_port\x18\n" +
+	" \x01(\x05H\x06R\rwireguardPort\x88\x01\x01B\n" +
 	"\n" +
 	"\b_node_idB\x0e\n" +
 	"\f_external_ipB\x0e\n" +
 	"\f_internal_ipB\x14\n" +
-	"\x12_target_cluster_id\"\x8d\x01\n" +
+	"\x12_target_cluster_idB\x0f\n" +
+	"\r_wireguard_ipB\x17\n" +
+	"\x15_wireguard_public_keyB\x11\n" +
+	"\x0f_wireguard_port\"\x8d\x01\n" +
 	"#BootstrapInfrastructureNodeResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12 \n" +
 	"\ttenant_id\x18\x02 \x01(\tH\x00R\btenantId\x88\x01\x01\x12\x1d\n" +
@@ -11449,12 +11514,13 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\vallowed_ips\x18\x04 \x03(\tR\n" +
 	"allowedIps\x12\x1d\n" +
 	"\n" +
-	"keep_alive\x18\x05 \x01(\x05R\tkeepAlive\"\xf3\x02\n" +
+	"keep_alive\x18\x05 \x01(\x05R\tkeepAlive\"\x98\x03\n" +
 	"\x1aInfrastructureSyncResponse\x12!\n" +
 	"\fwireguard_ip\x18\x01 \x01(\tR\vwireguardIp\x12%\n" +
 	"\x0ewireguard_port\x18\x02 \x01(\x05R\rwireguardPort\x127\n" +
 	"\x05peers\x18\x03 \x03(\v2!.quartermaster.InfrastructurePeerR\x05peers\x12l\n" +
-	"\x11service_endpoints\x18\x04 \x03(\v2?.quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntryR\x10serviceEndpoints\x1ad\n" +
+	"\x11service_endpoints\x18\x04 \x03(\v2?.quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntryR\x10serviceEndpoints\x12#\n" +
+	"\rmesh_revision\x18\x05 \x01(\tR\fmeshRevision\x1ad\n" +
 	"\x15ServiceEndpointsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
 	"\x05value\x18\x02 \x01(\v2\x1f.quartermaster.ServiceEndpointsR\x05value:\x028\x01\"$\n" +

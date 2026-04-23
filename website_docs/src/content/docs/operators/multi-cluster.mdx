@@ -40,11 +40,15 @@ Cross-cluster coordination is handled exclusively by the **FoghornFederation** g
 **Via CLI provisioning (recommended for full deployments):**
 
 ```bash
-# Multi-cluster provisioning from manifest
-frameworks cluster provision --manifest cluster.yaml
+# Generate and validate GitOps-owned WireGuard identity from a local checkout.
+frameworks mesh wg generate --manifest gitops/clusters/production/cluster.yaml
+frameworks mesh wg check --gitops-dir gitops --cluster production
+
+# Provisioning is read-only against GitOps.
+frameworks cluster provision --gitops-dir gitops --cluster production
 ```
 
-When the manifest has a `clusters` section, the CLI creates all clusters, registers nodes to the correct cluster based on role-based resolution, and generates per-cluster enrollment tokens. See [Cluster Manifest: clusters](/operators/cluster-manifest#clusters) for the manifest format.
+When the manifest has a `clusters` section, the CLI creates all clusters, registers nodes to the correct cluster based on role-based resolution, and generates per-cluster enrollment tokens. The manifest must already contain complete WireGuard identity for every managed Privateer host; `cluster provision` validates that state but does not write `cluster.yaml` or `hosts.enc.yaml`. See [Cluster Manifest: clusters](/operators/cluster-manifest#clusters) for the manifest format.
 
 **Via admin command (ad-hoc cluster creation):**
 

@@ -1,4 +1,73 @@
 ---
+- name: privateer | require systemd-resolved
+  ansible.builtin.command: systemctl is-active systemd-resolved
+  register: privateer_resolved_status
+  changed_when: false
+  failed_when: privateer_resolved_status.rc != 0
+
+- name: privateer | require resolvectl
+  ansible.builtin.shell: command -v resolvectl
+  register: privateer_resolvectl_path
+  changed_when: false
+
+- name: privateer | ensure systemd-resolved drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: privateer | configure systemd-resolved split DNS
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/frameworks-privateer.conf
+    content: |
+      [Resolve]
+      DNSStubListener=yes
+    owner: root
+    group: root
+    mode: "0644"
+  register: privateer_resolved_dropin
+
+- name: privateer | restart systemd-resolved
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    state: restarted
+  when:
+    - privateer_resolved_status.rc == 0
+    - privateer_resolved_dropin.changed
+
+- name: privateer | install systemd-resolved route unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/frameworks-privateer-resolved.service
+    content: |
+      [Unit]
+      Description=FrameWorks Privateer .internal DNS route
+      Requires=systemd-resolved.service
+      After=systemd-resolved.service network-online.target
+      Before=frameworks-privateer.service
+
+      [Service]
+      Type=oneshot
+      ExecStart={{ privateer_resolvectl_path.stdout }} dns lo 127.0.0.1
+      ExecStart={{ privateer_resolvectl_path.stdout }} domain lo ~internal
+      ExecStart={{ privateer_resolvectl_path.stdout }} default-route lo no
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root
+    group: root
+    mode: "0644"
+  register: privateer_resolved_route_unit
+
+- name: privateer | enable systemd-resolved route unit
+  ansible.builtin.systemd:
+    name: frameworks-privateer-resolved
+    enabled: true
+    state: "{{ (privateer_resolved_route_unit.changed or privateer_resolved_dropin.changed) | ternary('restarted', 'started') }}"
+    daemon_reload: "{{ privateer_resolved_route_unit.changed }}"
+
 - name: Render Privateer environment file
   ansible.builtin.copy:
     dest: "{{ privateer_conf_dir }}/privateer.env"

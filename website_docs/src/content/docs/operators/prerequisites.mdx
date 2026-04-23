@@ -88,7 +88,7 @@ For multi-host deployments, you need:
 
 1. **WireGuard Mesh Network** - Secure communication between backend infrastructure nodes (central/regional/database). See [WireGuard Mesh Setup](/operators/wireguard) for configuration.
 
-2. **DNS/Hosts Configuration** - Internal name resolution via `/etc/hosts`, or Privateer’s built‑in DNS (status: testing).
+2. **systemd-resolved** - Production backend hosts must run systemd-resolved so Privateer can route `.internal` names to the local DNS listener.
 
 3. **Firewall Rules** - See [WireGuard Mesh Setup](/operators/wireguard) for mesh port guidance.
 
@@ -185,9 +185,11 @@ FrameWorks requires several external services. See [External Services](/operator
 Once prerequisites are complete:
 
 1. **Create Cluster Manifest:** See [Cluster Manifest Reference](/operators/cluster-manifest)
-2. **Deploy Infrastructure:** `frameworks cluster provision --manifest <manifest> --only infrastructure`
-3. **Initialize Databases:** `frameworks cluster init all --manifest <manifest>`
-4. **Deploy Applications:** `frameworks cluster provision --manifest <manifest> --only applications`
-5. **Verify Health:** `frameworks cluster doctor --manifest <manifest>`
+2. **Generate Mesh Identity:** `frameworks mesh wg generate --manifest <manifest> --hosts-file <hosts.enc.yaml>`
+3. **Check Mesh Identity:** `frameworks mesh wg check --manifest <manifest>`
+4. **Deploy Infrastructure:** `frameworks cluster provision --manifest <manifest> --only infrastructure`
+5. **Initialize Databases:** `frameworks cluster init all --manifest <manifest>`
+6. **Deploy Applications:** `frameworks cluster provision --manifest <manifest> --only applications`
+7. **Verify Health:** `frameworks cluster doctor --manifest <manifest>`
 
 See [CLI Reference](/operators/cli-reference) for complete command documentation.

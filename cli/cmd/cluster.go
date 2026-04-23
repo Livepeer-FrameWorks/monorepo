@@ -75,6 +75,7 @@ type resolvedCluster struct {
 	ManifestPath string
 	AgeKey       string
 	Source       inventory.ManifestSource
+	Cluster      string
 	ReleaseRepos []string
 	Cleanup      func()
 
@@ -170,6 +171,7 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 		ManifestPath: rm.Path,
 		AgeKey:       rm.AgeKey,
 		Source:       rm.Source,
+		Cluster:      rm.Cluster,
 		ReleaseRepos: resolveReleaseRepositories(cmd, cfg, ctxCfg, rm, cwd),
 		Cleanup:      rm.Cleanup,
 	}, nil
@@ -294,7 +296,7 @@ func looksLikeReleaseRepoRoot(dir string) bool {
 }
 
 func stringFlag(cmd *cobra.Command, name string) inventory.StringFlag {
-	f := cmd.Flags().Lookup(name)
+	f := cmd.Flag(name)
 	if f == nil {
 		return inventory.StringFlag{}
 	}
@@ -302,7 +304,7 @@ func stringFlag(cmd *cobra.Command, name string) inventory.StringFlag {
 }
 
 func int64Flag(cmd *cobra.Command, name string) inventory.Int64Flag {
-	f := cmd.Flags().Lookup(name)
+	f := cmd.Flag(name)
 	if f == nil {
 		return inventory.Int64Flag{}
 	}

@@ -111,6 +111,14 @@ func (g *DependencyGraph) TopologicalSort() ([][]*Task, error) {
 	return batches, nil
 }
 
+// HasTask reports whether a task with the given name exists in the graph.
+// Callers use this to emit DependsOn only for tasks actually in scope — the
+// planner doesn't pad-then-strip, it gates at emission time.
+func (g *DependencyGraph) HasTask(name string) bool {
+	_, ok := g.tasks[name]
+	return ok
+}
+
 // Validate checks for circular dependencies and missing dependencies
 func (g *DependencyGraph) Validate() error {
 	// Check for missing dependencies

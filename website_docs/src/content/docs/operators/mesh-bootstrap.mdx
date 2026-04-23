@@ -1,0 +1,152 @@
+---
+title: WireGuard Mesh Bootstrap
+description: How Privateer brings up the internal WireGuard mesh — identity, seed peers, and Quartermaster-managed overlay.
+---
+
+## Why this exists
+
+Kafka quorum, Yugabyte master traffic, and every other internal RPC ride the
+WireGuard mesh managed by Privateer. That creates a bootstrap cycle:
+Quartermaster stores peer state but lives on top of the DB, which itself
+speaks over the mesh. The cluster can't start if the mesh needs Quartermaster
+and Quartermaster needs the mesh.
+
+We break the cycle by letting GitOps carry _just enough_ mesh state to bring
+`wg0` up before Quartermaster exists. Once Quartermaster comes up over the
+mesh, Privateer overlays managed peers, DNS, and PKI transparently.
+
+## Three layers
+
+There is no "static mode" or "dynamic mode" to flip. Identity and seed are
+rendered during provisioning. The managed layer appears after the first
+successful `SyncMesh` and is then cached on disk.
+
+| Layer                         | Owner                        | Lives in                                                                                                      | Contains                                                                                   |
+| ----------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| **Identity**                  | GitOps (`mesh wg generate`)  | `cluster.yaml` + SOPS `hosts.enc.yaml`                                                                        | per-host `wireguard_ip`, `wireguard_public_key`, `wireguard_port`, `wireguard_private_key` |
+| **Seed peers + DNS**          | GitOps (rendered by Ansible) | `/etc/privateer/static-peers.json`                                                                            | every same-cluster mesh peer plus node/service aliases                                     |
+| **Managed peers + DNS + PKI** | Quartermaster                | live via `SyncMesh` gRPC; cached in `/var/lib/privateer/last_known_mesh.json` after the first successful sync | full topology                                                                              |
+
+### Precedence
+
+Per sync tick inside Privateer:
+
+1. `SyncMesh` against Quartermaster succeeded this tick → apply the response.
+   Metric `privateer_layer_applied{layer="managed"}=1`.
+2. Agent just started and `last_known_mesh.json` is present → apply it.
+   Metric `privateer_layer_applied{layer="last_known"}=1`.
+3. Otherwise apply `static-peers.json`.
+   Metric `privateer_layer_applied{layer="seed"}=1`.
+
+Identity (own mesh IP, listen port, private key) is **never** read from the
+snapshot — only from disk. A rotated key in GitOps always propagates on
+reboot; a stale cache cannot resurrect the old self-address.
+
+## Operator workflow
+
+One pass, no maintenance windows:
+
+```sh
+# 1. Generate identity + peer metadata for every host in the cluster
+frameworks mesh wg generate \
+  --manifest gitops/clusters/<cluster>/cluster.yaml \
+  --hosts-file gitops/clusters/<cluster>/hosts.enc.yaml
+
+# 2. Commit the gitops diff (public keys, mesh IPs, ports) and SOPS update
+git add gitops/clusters/<cluster>/{cluster.yaml,hosts.enc.yaml}
+git commit -m "mesh: regenerate WG identity for <cluster>"
+git push
+
+# 3. Validate identity in CI or before a prod run
+frameworks mesh wg check --manifest gitops/clusters/<cluster>/cluster.yaml
+
+# 4. Provision. This is read-only against GitOps.
+frameworks cluster provision --gitops-dir gitops --cluster <cluster>
+```
+
+- `mesh wg generate` is deterministic and idempotent: re-running it on an
+  already-populated manifest is a no-op. `mesh wg rotate <host>` regenerates
+  one host's key without touching the rest. Pass `--readdress` only when the
+  host's mesh IP must change.
+- `cluster provision` never writes `cluster.yaml` or `hosts.enc.yaml`. If
+  identity is incomplete, it fails with the exact `mesh wg generate` command
+  to run before retrying.
+- Public fields land in plaintext `cluster.yaml` via `yaml.v3` node edits
+  (comments and order preserved).
+- Private keys land in the SOPS-encrypted `hosts.enc.yaml` via the canonical
+  decrypt → edit → re-encrypt → replace flow.
+
+## `cluster.yaml` shape
+
+```yaml
+wireguard:
+  enabled: true
+  mesh_cidr: 10.88.0.0/16
+  listen_port: 51820
+
+hosts:
+  core-1:
+    external_ip: 203.0.113.10
+    wireguard_ip: 10.88.0.2
+    wireguard_public_key: <44-char base64>
+    wireguard_port: 51820
+    roles: [control]
+```
+
+There is no `bootstrap_mode` field. Anything that references one is stale
+documentation.
+
+## `hosts.enc.yaml` shape (SOPS-encrypted)
+
+```yaml
+hosts:
+  core-1:
+    external_ip: 203.0.113.10
+    user: deploy
+    wireguard_private_key: <44-char base64>
+```
+
+## On-disk layout (per host, after provisioning)
+
+| Path                                      | Source                             | Purpose                                                                  |
+| ----------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------ |
+| `/etc/privateer/wg.key`                   | Ansible render of SOPS private key | WG private key (0600 privateer:privateer)                                |
+| `/etc/privateer/privateer.env`            | Ansible render                     | SERVICE_TOKEN, QUARTERMASTER_GRPC_ADDR, MESH_WIREGUARD_IP, etc.          |
+| `/etc/privateer/static-peers.json`        | Ansible render                     | seed peer set and seed DNS aliases, sha256-versioned                     |
+| `/var/lib/privateer/last_known_mesh.json` | Privateer                          | last successful `SyncMesh` snapshot; absent until the first managed sync |
+| `/etc/wireguard/wg0.conf`                 | Privateer                          | composed at runtime from the layers above                                |
+
+## Runtime
+
+1. Systemd starts `frameworks-privateer`.
+2. Agent reads identity: `MESH_WIREGUARD_IP`, `MESH_LISTEN_PORT`,
+   `/etc/privateer/wg.key`. These are authoritative for self-address.
+3. Agent calls `applyStartupMesh` (precedence rules above). Seed DNS includes
+   host aliases and service aliases such as `quartermaster.internal`.
+4. `runLoop` ticks `SyncMesh` against Quartermaster forever. While QM is
+   unreachable the metric stays on `last_known` or `seed`.
+5. First successful `SyncMesh` flips the metric to `managed` and writes a
+   fresh `last_known_mesh.json` with `source=dynamic` and a server-computed
+   `mesh_revision`.
+
+## Diagnostics
+
+- `wg0` has no peers: `cat /etc/privateer/static-peers.json`; `journalctl -u frameworks-privateer -f`
+- `.internal` does not resolve: `systemctl status systemd-resolved`; `getent hosts quartermaster.internal`
+- Stuck on seed after QM is up: `grep QUARTERMASTER /etc/privateer/privateer.env`; `ss -tnlp | grep 19002` on the QM host
+- Stale peer IP after rotation: `cat /var/lib/privateer/last_known_mesh.json`; restart privateer on the affected host
+- Which layer is live right now: `curl -s localhost:18012/metrics | grep privateer_layer_applied`
+
+## Key rotation
+
+```sh
+frameworks mesh wg rotate core-2
+git commit -am "mesh: rotate wg key for core-2"
+git push
+frameworks cluster provision --gitops-dir gitops --cluster <cluster>
+```
+
+Peers converge across the cluster within two sync intervals: seed is
+re-rendered first, Quartermaster picks up the new public key from the next
+provision's self-seed, and every other node's next `SyncMesh` returns the
+new peer entry.

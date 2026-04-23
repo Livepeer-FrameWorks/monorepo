@@ -11,6 +11,9 @@ ExecStart={{ privateer_bin }}
 Restart=always
 RestartSec=5
 LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target

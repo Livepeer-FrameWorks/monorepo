@@ -27,6 +27,12 @@ func NewPlanner(manifest *inventory.Manifest) *Planner {
 func (p *Planner) Plan(ctx context.Context, opts ProvisionOptions) (*ExecutionPlan, error) {
 	graph := NewDependencyGraph()
 
+	// PhaseMesh is an implicit prerequisite of every other phase — infra,
+	// apps, and interfaces can all end up addressing peers over the mesh.
+	if err := p.addMeshTasks(graph); err != nil {
+		return nil, fmt.Errorf("failed to add mesh tasks: %w", err)
+	}
+
 	// Build task list based on phase
 	switch opts.Phase {
 	case PhaseInfrastructure, PhaseAll:
@@ -72,9 +78,59 @@ func (p *Planner) Plan(ctx context.Context, opts ProvisionOptions) (*ExecutionPl
 	return plan, nil
 }
 
+// addMeshTasks emits one privateer task per privateer-enabled host into
+// PhaseMesh. These run first, with no dependencies, so the mesh substrate is
+// up on every node before any infra task starts.
+func (p *Planner) addMeshTasks(graph *DependencyGraph) error {
+	svc, ok := p.manifest.Services["privateer"]
+	if !ok || !svc.Enabled {
+		return nil
+	}
+	deploy, ok := servicedefs.DeployName("privateer", svc.Deploy)
+	if !ok {
+		return fmt.Errorf("unknown service id: privateer")
+	}
+	privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
+	for _, hostName := range privateerHosts {
+		task := NewServiceTask(deploy, "privateer", hostName, hostName, PhaseMesh)
+		task.Name = "privateer-mesh-" + hostName
+		task.ClusterID = p.manifest.HostCluster(hostName)
+		graph.AddTask(task)
+	}
+	return nil
+}
+
+// meshBarrierDeps returns the names of every privateer-mesh-* task. Used as
+// a global barrier: every mesh-addressed infra task depends on *all* of
+// them, mirroring the existing "Kafka brokers depend on all controllers"
+// pattern. Empty when Privateer is not enabled.
+func (p *Planner) meshBarrierDeps() []string {
+	svc, ok := p.manifest.Services["privateer"]
+	if !ok || !svc.Enabled {
+		return nil
+	}
+	privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
+	deps := make([]string, 0, len(privateerHosts))
+	for _, h := range privateerHosts {
+		deps = append(deps, "privateer-mesh-"+h)
+	}
+	return deps
+}
+
 // addInfrastructureTasks adds infrastructure provisioning tasks
 func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 	hostDatabaseDeps := map[string][]string{}
+	meshDeps := p.meshBarrierDeps()
+
+	withMesh := func(deps []string) []string {
+		if len(meshDeps) == 0 {
+			return deps
+		}
+		out := make([]string, 0, len(deps)+len(meshDeps))
+		out = append(out, deps...)
+		out = append(out, meshDeps...)
+		return out
+	}
 
 	// Add Postgres / YugabyteDB
 	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
@@ -82,11 +138,13 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 			for _, node := range pg.Nodes {
 				task := NewTask("yugabyte", "postgres", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure)
 				task.Name = "yugabyte-node-" + strconv.Itoa(node.ID)
+				task.DependsOn = withMesh(task.DependsOn)
 				graph.AddTask(task)
 				hostDatabaseDeps[node.Host] = append(hostDatabaseDeps[node.Host], task.Name)
 			}
 		} else {
 			task := NewTask("postgres", "postgres", "", pg.Host, PhaseInfrastructure)
+			task.DependsOn = withMesh(task.DependsOn)
 			graph.AddTask(task)
 			hostDatabaseDeps[pg.Host] = append(hostDatabaseDeps[pg.Host], task.Name)
 		}
@@ -95,14 +153,18 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 	// Add Redis
 	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
 		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
-			graph.AddTask(NewTask("redis", "redis", instance.Name, instance.Host, PhaseInfrastructure))
+			task := NewTask("redis", "redis", instance.Name, instance.Host, PhaseInfrastructure)
+			task.DependsOn = withMesh(task.DependsOn)
+			graph.AddTask(task)
 		}
 	}
 
 	// Add Zookeeper
 	if p.manifest.Infrastructure.Zookeeper != nil && p.manifest.Infrastructure.Zookeeper.Enabled {
 		for _, node := range p.manifest.Infrastructure.Zookeeper.Ensemble {
-			graph.AddTask(NewTask("zookeeper", "zookeeper", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure))
+			task := NewTask("zookeeper", "zookeeper", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure)
+			task.DependsOn = withMesh(task.DependsOn)
+			graph.AddTask(task)
 		}
 	}
 
@@ -113,15 +175,17 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		// Dedicated controllers (if defined)
 		for _, ctrl := range p.manifest.Infrastructure.Kafka.Controllers {
 			task := NewTask("kafka-controller", "kafka", strconv.Itoa(ctrl.ID), ctrl.Host, PhaseInfrastructure)
+			task.DependsOn = withMesh(task.DependsOn)
 			graph.AddTask(task)
 			controllerDeps = append(controllerDeps, task.Name)
 		}
 
-		// Brokers depend on all controllers (if dedicated mode)
+		// Brokers depend on all controllers (if dedicated mode) and on every
+		// privateer-mesh task in the current graph.
 		for _, broker := range p.manifest.Infrastructure.Kafka.Brokers {
 			task := NewTask("kafka", "kafka", strconv.Itoa(broker.ID), broker.Host, PhaseInfrastructure)
 			task.Name = "kafka-broker-" + strconv.Itoa(broker.ID)
-			task.DependsOn = controllerDeps
+			task.DependsOn = withMesh(controllerDeps)
 			graph.AddTask(task)
 		}
 	}
@@ -129,10 +193,8 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 	// Add ClickHouse
 	if p.manifest.Infrastructure.ClickHouse != nil && p.manifest.Infrastructure.ClickHouse.Enabled {
 		task := NewTask("clickhouse", "clickhouse", "", p.manifest.Infrastructure.ClickHouse.Host, PhaseInfrastructure)
-		// When ClickHouse is colocated with Postgres/Yugabyte, converge the
-		// database task first so legacy listeners are moved before ClickHouse
-		// attempts to bind its steady-state ports.
 		task.DependsOn = append(task.DependsOn, hostDatabaseDeps[task.Host]...)
+		task.DependsOn = withMesh(task.DependsOn)
 		graph.AddTask(task)
 	}
 
@@ -141,28 +203,39 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 
 // addApplicationTasks adds application service provisioning tasks
 func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
-	// Application services depend on infrastructure
+	// `--only applications` runs against a cluster where infrastructure is
+	// already live: only emit infra DependsOn entries for tasks that are
+	// actually in this graph.
+	appendIfInGraph := func(deps []string, names ...string) []string {
+		for _, name := range names {
+			if graph.HasTask(name) {
+				deps = append(deps, name)
+			}
+		}
+		return deps
+	}
+
 	infraDeps := []string{}
 
 	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
 		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 			for _, node := range pg.Nodes {
-				infraDeps = append(infraDeps, "yugabyte-node-"+strconv.Itoa(node.ID))
+				infraDeps = appendIfInGraph(infraDeps, "yugabyte-node-"+strconv.Itoa(node.ID))
 			}
 		} else {
-			infraDeps = append(infraDeps, "postgres")
+			infraDeps = appendIfInGraph(infraDeps, "postgres")
 		}
 	}
 
 	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
 		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
-			infraDeps = append(infraDeps, NewTask("redis", "redis", instance.Name, "", PhaseInfrastructure).Name)
+			infraDeps = appendIfInGraph(infraDeps, NewTask("redis", "redis", instance.Name, "", PhaseInfrastructure).Name)
 		}
 	}
 
 	if p.manifest.Infrastructure.Kafka != nil && p.manifest.Infrastructure.Kafka.Enabled {
 		for _, broker := range p.manifest.Infrastructure.Kafka.Brokers {
-			infraDeps = append(infraDeps, "kafka-broker-"+strconv.Itoa(broker.ID))
+			infraDeps = appendIfInGraph(infraDeps, "kafka-broker-"+strconv.Itoa(broker.ID))
 		}
 	}
 
@@ -179,48 +252,15 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 		graph.AddTask(task)
 	}
 
-	// 2. Privateer (System Mesh)
-	// Depends on Quartermaster (for enrollment token).
-	// Privateer must be provisioned on ALL hosts so the mesh covers every node
-	// before application services deploy (they rely on mesh DNS for discovery).
-	if svc, ok := p.manifest.Services["privateer"]; ok && svc.Enabled {
-		deploy, ok := servicedefs.DeployName("privateer", svc.Deploy)
-		if !ok {
-			return fmt.Errorf("unknown service id: privateer")
-		}
-		qmDep := append([]string{}, infraDeps...)
-		if _, ok := p.manifest.Services["quartermaster"]; ok {
-			qmDep = append(qmDep, "quartermaster")
-		}
-
-		privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
-
-		for _, hostName := range privateerHosts {
-			instanceID := ""
-			if len(privateerHosts) > 1 {
-				instanceID = hostName
-			}
-			task := NewServiceTask(deploy, "privateer", instanceID, hostName, PhaseApplications)
-			task.ClusterID = p.manifest.HostCluster(hostName)
-			task.DependsOn = qmDep
-			graph.AddTask(task)
-		}
-	}
-
-	// 3. Other Applications
-	// Depend on Quartermaster AND all Privateer instances (mesh must be up first)
+	// Other Applications depend on Quartermaster AND every privateer-mesh
+	// instance (global mesh barrier), but only when those tasks are in the
+	// current graph.
 	coreDeps := append([]string{}, infraDeps...)
-	if _, ok := p.manifest.Services["quartermaster"]; ok {
-		coreDeps = append(coreDeps, "quartermaster")
-	}
+	coreDeps = appendIfInGraph(coreDeps, "quartermaster")
 	if svc, ok := p.manifest.Services["privateer"]; ok && svc.Enabled {
 		privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
-		if len(privateerHosts) == 1 {
-			coreDeps = append(coreDeps, "privateer")
-		} else {
-			for _, h := range privateerHosts {
-				coreDeps = append(coreDeps, NewServiceTask("", "privateer", h, "", PhaseApplications).Name)
-			}
+		for _, h := range privateerHosts {
+			coreDeps = appendIfInGraph(coreDeps, "privateer-mesh-"+h)
 		}
 	}
 
@@ -304,7 +344,9 @@ func EffectiveVMAgentHosts(svc inventory.ServiceConfig, hosts map[string]invento
 
 // addInterfaceTasks adds interface service provisioning tasks
 func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
-	// Interfaces depend on application services
+	// Interfaces depend on application services, but only those actually
+	// emitted into the current graph — `--only interfaces` runs against an
+	// assumed-live applications phase.
 	appDeps := []string{}
 	for name, svc := range p.manifest.Services {
 		if !svc.Enabled {
@@ -316,9 +358,12 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 		}
 		if len(hosts) > 1 {
 			for _, h := range hosts {
-				appDeps = append(appDeps, NewServiceTask("", name, h, "", PhaseApplications).Name)
+				candidate := NewServiceTask("", name, h, "", PhaseApplications).Name
+				if graph.HasTask(candidate) {
+					appDeps = append(appDeps, candidate)
+				}
 			}
-		} else {
+		} else if graph.HasTask(name) {
 			appDeps = append(appDeps, name)
 		}
 	}

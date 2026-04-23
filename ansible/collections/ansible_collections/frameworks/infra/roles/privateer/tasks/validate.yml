@@ -10,3 +10,8 @@
     url: "http://127.0.0.1:{{ privateer_port }}/health"
     status_code: 200
     return_content: false
+
+- name: Verify .internal resolution through system resolver
+  ansible.builtin.command: getent hosts quartermaster.internal
+  register: privateer_internal_resolution
+  changed_when: false

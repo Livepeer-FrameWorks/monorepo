@@ -9,40 +9,55 @@ import { Aside } from "@astrojs/starlight/components";
 
 ## Automated Mesh (Privateer)
 
-**Privateer (`api_mesh`)** fully automates the WireGuard mesh for FrameWorks backend nodes. During CLI provisioning, Privateer is deployed to every host and handles:
+**Privateer (`api_mesh`)** manages the WireGuard mesh for FrameWorks backend
+nodes. Identity is GitOps-owned and generated explicitly before provisioning;
+runtime peer/DNS state is managed by Quartermaster after the control plane is up.
 
-- WireGuard key generation and exchange
-- Peer discovery via Quartermaster's SyncMesh API
-- IP allocation from the `10.200.0.0/16` range (managed by Quartermaster)
-- Local DNS resolution (port 53) for service discovery
-- `/etc/hosts` management for mesh hostnames
+- `frameworks mesh wg generate` writes per-host `wireguard_ip`,
+  `wireguard_public_key`, `wireguard_port`, and encrypted
+  `wireguard_private_key`.
+- `frameworks mesh wg check` validates that identity in CI/preflight.
+- `frameworks cluster provision` is read-only against GitOps and fails if
+  managed Privateer hosts do not have complete identity.
+- Privateer starts from `/etc/privateer/wg.key` and
+  `/etc/privateer/static-peers.json`, then overlays Quartermaster `SyncMesh`
+  peers, service DNS, and PKI.
+- Production native hosts use systemd-resolved for `.internal` split DNS.
 
-**No manual WireGuard configuration is needed.** The CLI provisions Privateer on all hosts, verifies mesh health (DNS resolution + WireGuard peers), then proceeds to deploy application services.
+**No manual WireGuard configuration is needed on hosts.** Operators generate and
+commit identity first, then provision.
 
 ### How It Works
 
-1. CLI provisions Quartermaster (control plane)
-2. CLI runs bootstrap: creates tenant, clusters, nodes, enrollment tokens
-3. CLI deploys Privateer to every host with the enrollment token
-4. Each Privateer instance calls Quartermaster's SyncMesh RPC
-5. Quartermaster allocates a WireGuard IP from `10.200.0.0/16` and returns peer configs
-6. Privateer configures WireGuard and starts the local DNS resolver
-7. CLI verifies mesh health on all hosts before deploying services
+1. Operator runs `frameworks mesh wg generate` against a local gitops checkout.
+2. Operator reviews and commits `cluster.yaml` plus `hosts.enc.yaml`.
+3. `frameworks cluster provision --gitops-dir ... --cluster ...` validates the
+   identity and renders Privateer's key, seed peers, seed DNS, env, and systemd unit.
+4. Privateer configures `wg0` from local identity and seed state before
+   Quartermaster is reachable.
+5. Quartermaster is seeded with the same GitOps identity via `CreateNode`.
+6. Each Privateer instance calls `SyncMesh`; Quartermaster returns stored
+   identity, peers, service endpoints, and a mesh revision. It does not allocate
+   WireGuard identity dynamically.
+7. CLI verifies normal `.internal` resolution through the system resolver before
+   deploying dependent services.
 
 ### Network Architecture
 
 ```
-10.200.0.0/16 - FrameWorks Mesh (auto-assigned by Quartermaster)
+10.88.0.0/16 - Example FrameWorks mesh CIDR (generated into GitOps)
 ```
 
-IPs are allocated sequentially as nodes enroll. The mesh is a full mesh: every node has a direct WireGuard peer connection to every other node.
+Mesh IPs are unique per host and live in the cluster manifest. `external_ip`
+remains the SSH/bootstrap address and WireGuard endpoint transport address.
+Internal service traffic uses mesh IPs or `.internal` names.
 
 **Edge nodes do not join the mesh** — they communicate over the public internet.
 
 <Aside type="caution" title="Legacy Manual Mesh">
-  The manual WireGuard setup below is provided for reference only. New deployments should use
-  Privateer. If you have an existing manual mesh on `10.18.0.0/16`, Privateer will manage its own
-  mesh on `10.200.0.0/16` independently.
+  The manual WireGuard setup below is reference material only. Managed deployments should use
+  `frameworks mesh wg generate`, commit the GitOps diff, and let Privateer render/apply host
+  configuration.
 </Aside>
 
 ## Manual Setup (Legacy)

@@ -21,9 +21,9 @@ func clickhouseRoleVars(ctx context.Context, host inventory.Host, config Service
 	if port == 0 {
 		port = 9000
 	}
-	pwd, _ := config.Metadata["password"].(string)
+	pwd := metaString(config.Metadata, "password")
 	if pwd == "" {
-		pwd, _ = config.Metadata["clickhouse_password"].(string)
+		pwd = metaString(config.Metadata, "clickhouse_password")
 	}
 
 	vars := map[string]any{
@@ -58,7 +58,7 @@ func clickhouseRoleDetect(ctx context.Context, host inventory.Host, helpers Role
 	}
 	result, err := runner.Run(ctx, "systemctl is-active clickhouse-server 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
 	running := err == nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
-	bin, _ := runner.Run(ctx, "command -v clickhouse-client >/dev/null && echo EXISTS")
-	exists := bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+	bin, binErr := runner.Run(ctx, "command -v clickhouse-client >/dev/null && echo EXISTS")
+	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
 }

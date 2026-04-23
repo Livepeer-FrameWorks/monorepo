@@ -11,13 +11,11 @@ import (
 
 type linuxManager struct {
 	interfaceName string
-	configPath    string
 }
 
 func newLinuxManager(interfaceName string) Manager {
 	return &linuxManager{
 		interfaceName: interfaceName,
-		configPath:    "/etc/wireguard", // Standard location
 	}
 }
 
@@ -38,54 +36,6 @@ func (m *linuxManager) Init() error {
 	}
 
 	return nil
-}
-
-func (m *linuxManager) GetPublicKey() (string, error) {
-	ctx := context.Background()
-	// Ensure directory exists
-	if err := os.MkdirAll(m.configPath, 0700); err != nil {
-		return "", err
-	}
-
-	keyPath := fmt.Sprintf("%s/%s.key", m.configPath, m.interfaceName)
-
-	// Check if private key exists
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		// Generate private key
-		out, err := exec.CommandContext(ctx, "wg", "genkey").Output()
-		if err != nil {
-			return "", fmt.Errorf("failed to generate private key: %w", err)
-		}
-		privKey := strings.TrimSpace(string(out))
-		if err := os.WriteFile(keyPath, []byte(privKey), 0600); err != nil {
-			return "", err
-		}
-	}
-
-	// Read private key
-	privKeyBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		return "", err
-	}
-
-	// Generate public key
-	cmd := exec.CommandContext(ctx, "wg", "pubkey")
-	cmd.Stdin = bytes.NewReader(privKeyBytes)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to generate public key: %w", err)
-	}
-
-	return strings.TrimSpace(string(out)), nil
-}
-
-func (m *linuxManager) GetPrivateKey() (string, error) {
-	keyPath := fmt.Sprintf("%s/%s.key", m.configPath, m.interfaceName)
-	privKeyBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(privKeyBytes)), nil
 }
 
 func (m *linuxManager) Apply(cfg Config) error {

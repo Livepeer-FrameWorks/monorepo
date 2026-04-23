@@ -78,8 +78,8 @@ func (e *CollectionEnsurer) Ensure(ctx context.Context) (EnsureResult, error) {
 	rolesPath := filepath.Join(root, rolesSubdir)
 
 	for _, p := range []string{root, collectionsPath, rolesPath} {
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			return EnsureResult{}, fmt.Errorf("create cache dir %s: %w", p, err)
+		if mkErr := os.MkdirAll(p, 0o755); mkErr != nil {
+			return EnsureResult{}, fmt.Errorf("create cache dir %s: %w", p, mkErr)
 		}
 	}
 
@@ -88,9 +88,11 @@ func (e *CollectionEnsurer) Ensure(ctx context.Context) (EnsureResult, error) {
 		return EnsureResult{}, err
 	}
 
-	if fresh, err := sentinelMatches(root, hash); err != nil {
-		return EnsureResult{}, err
-	} else if fresh {
+	fresh, sentinelErr := sentinelMatches(root, hash)
+	if sentinelErr != nil {
+		return EnsureResult{}, sentinelErr
+	}
+	if fresh {
 		return EnsureResult{CollectionsPath: collectionsPath, RolesPath: rolesPath}, nil
 	}
 
@@ -188,7 +190,9 @@ func releaseInstallLock(f *os.File) {
 	if f == nil {
 		return
 	}
-	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+		_ = err
+	}
 	_ = f.Close()
 }
 

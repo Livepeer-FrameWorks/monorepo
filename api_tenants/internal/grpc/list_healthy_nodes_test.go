@@ -21,6 +21,16 @@ var nodeColumns = []string{
 	"last_heartbeat", "created_at", "updated_at",
 }
 
+// queryNodeColumns matches the SELECT column order in queryNode, which also
+// returns the node's stored WireGuard listen port.
+var queryNodeColumns = []string{
+	"id", "node_id", "cluster_id", "node_name", "node_type",
+	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key", "wireguard_listen_port",
+	"region", "availability_zone", "latitude", "longitude",
+	"cpu_cores", "memory_gb", "disk_gb",
+	"last_heartbeat", "created_at", "updated_at",
+}
+
 func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []driver.Value {
 	now := time.Now()
 	return []driver.Value{

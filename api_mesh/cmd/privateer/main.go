@@ -28,14 +28,23 @@ func main() {
 	// Validate required config
 	qmGRPCAddr := os.Getenv("QUARTERMASTER_GRPC_ADDR")
 	if qmGRPCAddr == "" {
-		qmGRPCAddr = "quartermaster:19002"
+		logger.Fatal("QUARTERMASTER_GRPC_ADDR is required")
 	}
 
 	serviceToken := os.Getenv("SERVICE_TOKEN")
-	enrollmentToken := os.Getenv("ENROLLMENT_TOKEN")
-
 	if serviceToken == "" {
-		logger.Fatal("SERVICE_TOKEN is required for steady-state operation")
+		logger.Fatal("SERVICE_TOKEN is required")
+	}
+
+	staticPeersFile := os.Getenv("PRIVATEER_STATIC_PEERS_FILE")
+	privateKeyFile := os.Getenv("MESH_PRIVATE_KEY_FILE")
+	meshWireguardIP := os.Getenv("MESH_WIREGUARD_IP")
+	dataDir := os.Getenv("PRIVATEER_DATA_DIR")
+	if privateKeyFile == "" {
+		logger.Fatal("MESH_PRIVATE_KEY_FILE is required")
+	}
+	if meshWireguardIP == "" {
+		logger.Fatal("MESH_WIREGUARD_IP is required")
 	}
 
 	dnsPort := 53
@@ -69,6 +78,10 @@ func main() {
 	nodeType := os.Getenv("MESH_NODE_TYPE")
 	nodeName := os.Getenv("MESH_NODE_NAME")
 	nodeID := os.Getenv("NODE_ID")
+	clusterID := os.Getenv("CLUSTER_ID")
+	if clusterID == "" {
+		logger.Fatal("CLUSTER_ID is required")
+	}
 	externalIP := os.Getenv("MESH_EXTERNAL_IP")
 	internalIP := os.Getenv("MESH_INTERNAL_IP")
 
@@ -102,6 +115,7 @@ func main() {
 		PeersConnected:   metricsCollector.NewGauge("peers_connected", "Number of connected WireGuard peers", []string{}),
 		DNSQueries:       metricsCollector.NewCounter("dns_queries_total", "DNS queries processed", []string{"type", "status"}),
 		WireGuardResyncs: metricsCollector.NewCounter("wireguard_resyncs_total", "WireGuard interface resyncs", []string{"status"}),
+		LayerApplied:     metricsCollector.NewGauge("layer_applied", "Currently-applied mesh layer (1 = active). Labels: managed (Quartermaster-fresh), last_known (disk cache), seed (GitOps substrate).", []string{"layer"}),
 	}
 
 	// Config
@@ -110,7 +124,7 @@ func main() {
 		QuartermasterGRPCAddr: qmGRPCAddr,
 		NavigatorGRPCAddr:     os.Getenv("NAVIGATOR_GRPC_ADDR"),
 		ServiceToken:          serviceToken,
-		EnrollmentToken:       enrollmentToken,
+		ClusterID:             clusterID,
 		CertIssueToken:        os.Getenv("CERT_ISSUANCE_TOKEN"),
 		AllowInsecure:         config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		CACertFile:            config.GetEnv("GRPC_TLS_CA_PATH", ""),
@@ -129,6 +143,10 @@ func main() {
 		ListenPort:            listenPort,
 		DNSPort:               dnsPort,
 		DNSUpstreams:          dnsUpstreams,
+		StaticPeersFile:       staticPeersFile,
+		PrivateKeyFile:        privateKeyFile,
+		WireguardIP:           meshWireguardIP,
+		DataDir:               dataDir,
 		Logger:                logger,
 		Metrics:               agentMetrics,
 	}

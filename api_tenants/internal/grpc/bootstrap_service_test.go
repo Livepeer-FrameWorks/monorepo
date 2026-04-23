@@ -176,7 +176,7 @@ func TestBootstrapServiceRejectsMissingNodeReference(t *testing.T) {
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
-	mock.ExpectQuery("SELECT cluster_id, COALESCE\\(wireguard_ip::text, internal_ip::text, external_ip::text\\)").
+	mock.ExpectQuery("SELECT cluster_id, wireguard_ip::text").
 		WithArgs("node-missing").
 		WillReturnError(sql.ErrNoRows)
 
@@ -259,7 +259,7 @@ func TestBootstrapServiceRejectsNodeFromDifferentCluster(t *testing.T) {
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-a").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
-	mock.ExpectQuery("SELECT cluster_id, COALESCE\\(wireguard_ip::text, internal_ip::text, external_ip::text\\)").
+	mock.ExpectQuery("SELECT cluster_id, wireguard_ip::text").
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "addr"}).AddRow("cluster-b", "10.1.0.10"))
 
@@ -272,6 +272,96 @@ func TestBootstrapServiceRejectsNodeFromDifferentCluster(t *testing.T) {
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestBootstrapServiceDerivesAdvertiseHostFromNodeID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
+	mock.ExpectQuery("SELECT cluster_id, wireguard_ip::text").
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "addr"}).AddRow("cluster-1", "10.88.0.2"))
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("commodore").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
+		WithArgs("commodore").
+		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("commodore"))
+	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT id::text, instance_id FROM quartermaster.service_instances").
+		WithArgs("commodore", "cluster-1", "http", int32(18005), "node-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO quartermaster.service_instances").
+		WithArgs(sqlmock.AnyArg(), "cluster-1", "node-1", "commodore", "http", "10.88.0.2", "/health", "v1.0.0", int32(18005), nil).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
+		WithArgs("cluster-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
+		WithArgs("commodore", "cluster-1", sqlmock.AnyArg(), "10.88.0.2", "http", int32(18005)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("(?s)SELECT.*FROM quartermaster\\.infrastructure_nodes.*WHERE node_id = \\$1").
+		WithArgs("node-1").
+		WillReturnError(sql.ErrNoRows)
+
+	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:           "commodore",
+		ClusterId:      strPtr("cluster-1"),
+		NodeId:         strPtr("node-1"),
+		AdvertiseHost:  strPtr("commodore"),
+		Port:           18005,
+		Protocol:       "http",
+		HealthEndpoint: strPtr("/health"),
+		Version:        "v1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if resp.GetAdvertiseAddr() != "10.88.0.2:18005" {
+		t.Fatalf("expected mesh advertise addr, got %q", resp.GetAdvertiseAddr())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestBootstrapServiceRequiresMeshAddressForNodeID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
+	mock.ExpectQuery("SELECT cluster_id, wireguard_ip::text").
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "addr"}).AddRow("cluster-1", nil))
+
+	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+		Type:          "commodore",
+		ClusterId:     strPtr("cluster-1"),
+		NodeId:        strPtr("node-1"),
+		AdvertiseHost: strPtr("commodore"),
+		Port:          18005,
+		Protocol:      "http",
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)

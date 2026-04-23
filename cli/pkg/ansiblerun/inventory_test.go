@@ -51,8 +51,8 @@ func TestInventoryRenderer_WritesInventoryAndGroupVars(t *testing.T) {
 		t.Fatalf("read inventory: %v", err)
 	}
 	var parsed map[string]any
-	if err := yaml.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("inventory not valid YAML: %v\n%s", err, raw)
+	if umErr := yaml.Unmarshal(raw, &parsed); umErr != nil {
+		t.Fatalf("inventory not valid YAML: %v\n%s", umErr, raw)
 	}
 
 	all, ok := parsed["all"].(map[string]any)

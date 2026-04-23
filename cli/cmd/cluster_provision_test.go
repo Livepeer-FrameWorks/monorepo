@@ -40,18 +40,6 @@ func newTestCommandWithOutput(out *bytes.Buffer) *cobra.Command {
 	return cmd
 }
 
-type fakeBootstrapTokenCreator struct {
-	token string
-	reqs  []*pb.CreateBootstrapTokenRequest
-}
-
-func (f *fakeBootstrapTokenCreator) CreateBootstrapToken(_ context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
-	f.reqs = append(f.reqs, req)
-	return &pb.CreateBootstrapTokenResponse{
-		Token: &pb.BootstrapToken{Token: f.token},
-	}, nil
-}
-
 type fakePublicServiceRegistrar struct {
 	reqs []*pb.BootstrapServiceRequest
 }
@@ -324,26 +312,6 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 	}
 	if metadata[servicedefs.LivepeerGatewayMetadataAdminPort] != "7935" {
 		t.Fatalf("expected admin port 7935, got %q", metadata[servicedefs.LivepeerGatewayMetadataAdminPort])
-	}
-}
-
-func TestEnsurePrivateerEnrollmentTokenWithClientStoresClusterToken(t *testing.T) {
-	runtimeData := map[string]interface{}{}
-	creator := &fakeBootstrapTokenCreator{token: "bt_test"}
-
-	if err := ensurePrivateerEnrollmentTokenWithClient(context.Background(), runtimeData, "tenant-1", "cluster-a", creator); err != nil {
-		t.Fatalf("ensurePrivateerEnrollmentTokenWithClient returned error: %v", err)
-	}
-
-	tokens, ok := runtimeData["enrollment_tokens"].(map[string]string)
-	if !ok {
-		t.Fatalf("expected enrollment_tokens map, got %T", runtimeData["enrollment_tokens"])
-	}
-	if tokens["cluster-a"] != "bt_test" {
-		t.Fatalf("expected stored token, got %q", tokens["cluster-a"])
-	}
-	if len(creator.reqs) != 1 || creator.reqs[0].GetClusterId() != "cluster-a" {
-		t.Fatalf("expected token creation for cluster-a, got %+v", creator.reqs)
 	}
 }
 
@@ -711,12 +679,12 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	}
 }
 
-func TestBuildTaskConfigKafkaUsesDirectControllerQuorumAddresses(t *testing.T) {
+func TestBuildTaskConfigKafkaUsesMeshControllerQuorumAddresses(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
-			"central-eu-1":      {ExternalIP: "136.144.189.92", Roles: []string{"control"}},
-			"regional-eu-1":     {ExternalIP: "91.99.189.88", Roles: []string{"data"}},
-			"frameworks-us-ctl": {ExternalIP: "5.161.86.203", Roles: []string{"data"}},
+			"central-eu-1":      {ExternalIP: "136.144.189.92", WireguardIP: "10.88.0.10", Roles: []string{"control"}},
+			"regional-eu-1":     {ExternalIP: "91.99.189.88", WireguardIP: "10.88.0.11", Roles: []string{"data"}},
+			"frameworks-us-ctl": {ExternalIP: "5.161.86.203", WireguardIP: "10.88.0.12", Roles: []string{"data"}},
 		},
 		Infrastructure: inventory.InfrastructureConfig{
 			Kafka: &inventory.KafkaConfig{
@@ -753,7 +721,7 @@ func TestBuildTaskConfigKafkaUsesDirectControllerQuorumAddresses(t *testing.T) {
 	}
 
 	got, _ := config.Metadata["controller_quorum_voters"].(string)
-	want := "100@136.144.189.92:9093,101@91.99.189.88:9093,102@5.161.86.203:9093"
+	want := "100@10.88.0.10:9093,101@10.88.0.11:9093,102@10.88.0.12:9093"
 	if got != want {
 		t.Fatalf("expected controller_quorum_voters %q, got %q", want, got)
 	}
@@ -762,8 +730,8 @@ func TestBuildTaskConfigKafkaUsesDirectControllerQuorumAddresses(t *testing.T) {
 	if !ok || len(controllers) != 3 {
 		t.Fatalf("expected 3 controller metadata entries, got %#v", config.Metadata["controllers"])
 	}
-	if host, _ := controllers[2]["host"].(string); host != "5.161.86.203" {
-		t.Fatalf("expected third controller host to stay on direct IP, got %q", host)
+	if host, _ := controllers[2]["host"].(string); host != "10.88.0.12" {
+		t.Fatalf("expected third controller host to use mesh IP, got %q", host)
 	}
 }
 
@@ -957,5 +925,44 @@ func TestResolveManifestToRepoPath(t *testing.T) {
 				t.Fatalf("resolveManifestToRepoPath(%q, %q) = %q, want %q", tt.manifestDir, tt.relPath, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestQuartermasterMeshGRPCAddrUsesMeshIP(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "core-1", GRPCPort: 19002},
+		},
+	}
+	got := quartermasterMeshGRPCAddr(manifest)
+	if got != "10.88.0.2:19002" {
+		t.Fatalf("quartermasterMeshGRPCAddr = %q, want 10.88.0.2:19002", got)
+	}
+}
+
+func TestQuartermasterMeshGRPCAddrDefaultPort(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "core-1"},
+		},
+	}
+	got := quartermasterMeshGRPCAddr(manifest)
+	if got != "10.88.0.2:19002" {
+		t.Fatalf("quartermasterMeshGRPCAddr = %q, want 10.88.0.2:19002", got)
+	}
+}
+
+func TestQuartermasterMeshGRPCAddrMissingService(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{"core-1": {ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"}},
+	}
+	if got := quartermasterMeshGRPCAddr(manifest); got != "" {
+		t.Fatalf("quartermasterMeshGRPCAddr = %q, want empty", got)
 	}
 }

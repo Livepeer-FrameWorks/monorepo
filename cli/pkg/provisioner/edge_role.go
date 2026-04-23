@@ -30,10 +30,7 @@ func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, confi
 	// Darwin user-domain deploys run entirely under $HOME. Escalating there
 	// would defeat the no-admin contract of local `edge deploy`. Linux and
 	// Darwin system-domain still need become for /etc + /Library writes.
-	become := true
-	if remoteOS == "darwin" && config.DarwinDomain == DomainUser {
-		become = false
-	}
+	become := remoteOS != "darwin" || config.DarwinDomain != DomainUser
 	vars["edge_become"] = become
 
 	root, err := FindAnsibleRoot()

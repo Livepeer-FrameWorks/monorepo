@@ -34,6 +34,17 @@ type RoleBuildHelpers struct {
 	ResolveArtifact func(name, arch, channel string, metadata map[string]any) (ResolvedArtifact, error)
 }
 
+// meshOrExternal returns metadata["advertised_host"] when populated (CLI sets
+// this on mesh-addressed infra tasks), otherwise the host's ExternalIP / name.
+// Role builders emitting advertised peer addresses should use this so existing
+// manifests keep rendering ExternalIP verbatim when no mesh address is set.
+func meshOrExternal(metadata map[string]any, host inventory.Host) string {
+	if advertised, ok := metadata["advertised_host"].(string); ok && advertised != "" {
+		return advertised
+	}
+	return hostAddressFor(host)
+}
+
 // ResolvedArtifact is the subset of gitops artifact metadata roles consume:
 // URL + checksum together pin both identity and integrity, and the version
 // string surfaces in validation output + Goss files.
@@ -316,8 +327,8 @@ func (r *RolePlaybookProvisioner) runWithOptions(ctx context.Context, host inven
 func (r *RolePlaybookProvisioner) helpers() RoleBuildHelpers {
 	return RoleBuildHelpers{
 		SSHPool:        r.sshPool,
-		DetectRemoteOS: r.BaseProvisioner.DetectRemoteArch,
-		DetectDistro:   r.BaseProvisioner.DetectDistroFamily,
+		DetectRemoteOS: r.DetectRemoteArch,
+		DetectDistro:   r.DetectDistroFamily,
 		ResolveArtifact: func(name, arch, channel string, metadata map[string]any) (ResolvedArtifact, error) {
 			artifact, err := resolveInfraArtifactFromChannel(name, arch, channel, metadata)
 			if err != nil {
@@ -332,6 +343,9 @@ func (r *RolePlaybookProvisioner) helpers() RoleBuildHelpers {
 	}
 }
 
+// hostAddressFor returns the address to reach the host on for SSH / bootstrap.
+// Always ExternalIP (falling back to the hostname for local dev). This is
+// distinct from meshAddressFor, which returns peer/advertised addresses.
 func hostAddressFor(h inventory.Host) string {
 	if h.ExternalIP != "" {
 		return h.ExternalIP

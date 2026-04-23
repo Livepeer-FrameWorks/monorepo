@@ -97,6 +97,14 @@ type Host struct {
 	Cluster    string            `yaml:"cluster,omitempty"` // Explicit cluster membership
 	Roles      []string          `yaml:"roles,omitempty"`
 	Labels     map[string]string `yaml:"labels,omitempty"`
+
+	// WireGuard mesh identity. WireguardIP and WireguardPublicKey are written
+	// to the plaintext cluster manifest by `frameworks mesh wg generate`;
+	// WireguardPrivateKey is merged in from the SOPS-encrypted host inventory.
+	WireguardIP         string `yaml:"wireguard_ip,omitempty"`
+	WireguardPublicKey  string `yaml:"wireguard_public_key,omitempty"`
+	WireguardPort       int    `yaml:"wireguard_port,omitempty"`
+	WireguardPrivateKey string `yaml:"-"`
 }
 
 // WireGuardConfig represents WireGuard mesh configuration
@@ -105,6 +113,9 @@ type WireGuardConfig struct {
 	Interface       string          `yaml:"interface,omitempty"`
 	ManageHostsFile bool            `yaml:"manage_hosts_file,omitempty"`
 	Peers           []WireGuardPeer `yaml:"peers,omitempty"`
+
+	MeshCIDR   string `yaml:"mesh_cidr,omitempty"`
+	ListenPort int    `yaml:"listen_port,omitempty"`
 }
 
 // WireGuardPeer represents a peer in the WireGuard mesh
@@ -179,8 +190,8 @@ func (pg *PostgresConfig) AllHosts() []string {
 }
 
 // MasterAddresses builds the comma-separated master addresses string for YugabyteDB.
-// Resolves host names to IPs using the provided manifest hosts map.
-func (pg *PostgresConfig) MasterAddresses(hosts map[string]Host) string {
+// resolve returns the peer address for a host name — typically manifest.MeshAddress.
+func (pg *PostgresConfig) MasterAddresses(resolve func(hostName string) string) string {
 	if len(pg.Nodes) == 0 {
 		return ""
 	}
@@ -190,11 +201,7 @@ func (pg *PostgresConfig) MasterAddresses(hosts map[string]Host) string {
 		if rpcPort == 0 {
 			rpcPort = 7100
 		}
-		h, ok := hosts[node.Host]
-		if !ok {
-			continue
-		}
-		addrs = append(addrs, fmt.Sprintf("%s:%d", h.ExternalIP, rpcPort))
+		addrs = append(addrs, fmt.Sprintf("%s:%d", resolve(node.Host), rpcPort))
 	}
 	return strings.Join(addrs, ",")
 }
@@ -367,8 +374,9 @@ type HostInventory struct {
 
 // HostConnection holds the sensitive connection details for a cluster host.
 type HostConnection struct {
-	ExternalIP string `yaml:"external_ip"`
-	User       string `yaml:"user,omitempty"`
+	ExternalIP          string `yaml:"external_ip"`
+	User                string `yaml:"user,omitempty"`
+	WireguardPrivateKey string `yaml:"wireguard_private_key,omitempty"`
 }
 
 // EdgeConnection holds the sensitive SSH target for an edge node.

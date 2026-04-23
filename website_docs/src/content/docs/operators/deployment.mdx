@@ -68,10 +68,10 @@ frameworks config set github.private-key /path/to/key.pem
 frameworks config set github.repo org/gitops
 
 # Provision from the repo (fetches cluster.yaml, hosts, .env, etc.)
-frameworks cluster provision --repo org/gitops
+frameworks cluster provision --github-repo org/gitops --cluster production
 
 # If secrets are SOPS-encrypted (recommended), specify an age key:
-frameworks cluster provision --repo org/gitops --age-key ~/.config/sops/age/keys.txt
+frameworks cluster provision --github-repo org/gitops --cluster production --age-key ~/.config/sops/age/keys.txt
 ```
 
 This fetches the cluster manifest and referenced files (env files, host inventory) from the repo, then runs the standard provision pipeline. SOPS-encrypted files — both env files and host inventory YAML — are decrypted automatically if an age key is available (see [External Services](/operators/external-services#encrypting-secrets-with-sops--age)). Operators manage config changes via pull requests.

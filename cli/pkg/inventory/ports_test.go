@@ -10,7 +10,7 @@ func TestManifestValidateDetectsPortCollisions(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-a": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-a": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Postgres: &PostgresConfig{
@@ -42,7 +42,7 @@ func TestManifestValidateDetectsGRPCPortCollisions(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-a": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-a": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
 		},
 		Services: map[string]ServiceConfig{
 			"quartermaster": {
@@ -71,7 +71,7 @@ func TestManifestValidateDetectsYugabyteTServerWebPortCollisions(t *testing.T) {
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-a": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-a": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Postgres: &PostgresConfig{
@@ -107,7 +107,7 @@ func TestManifestValidateDetectsYugabyteDefaultYSQLPortCollisions(t *testing.T) 
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-a": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-a": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
 		},
 		Infrastructure: InfrastructureConfig{
 			Postgres: &PostgresConfig{
@@ -143,7 +143,7 @@ func TestManifestValidateDetectsClickHouseAuxiliaryPortCollisions(t *testing.T) 
 		Version: "1",
 		Type:    "cluster",
 		Hosts: map[string]Host{
-			"host-a": {ExternalIP: "10.0.0.1", User: "root"},
+			"host-a": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
 		},
 		Infrastructure: InfrastructureConfig{
 			ClickHouse: &ClickHouseConfig{

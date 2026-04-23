@@ -2,12 +2,15 @@ package provisioner
 
 import (
 	"context"
+	"maps"
+	"strconv"
 	"strings"
 	"time"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	infra "frameworks/pkg/models"
 )
 
 func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
@@ -30,14 +33,72 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	if p := config.Port; p > 0 {
 		vars["privateer_port"] = p
 	}
-	if env, ok := config.Metadata["env"].(map[string]string); ok && len(env) > 0 {
+
+	env := map[string]string{}
+	maps.Copy(env, config.EnvVars)
+	if metaEnv, ok := config.Metadata["env"].(map[string]string); ok {
+		maps.Copy(env, metaEnv)
+	}
+	if host.Name != "" && env["MESH_NODE_NAME"] == "" {
+		env["MESH_NODE_NAME"] = host.Name
+	}
+	if env["MESH_NODE_TYPE"] == "" {
+		env["MESH_NODE_TYPE"] = privateerNodeType(host)
+	}
+	if host.ExternalIP != "" && env["MESH_EXTERNAL_IP"] == "" {
+		env["MESH_EXTERNAL_IP"] = host.ExternalIP
+	}
+	if env["PRIVATEER_DATA_DIR"] == "" {
+		env["PRIVATEER_DATA_DIR"] = "/var/lib/privateer"
+	}
+	if ip, ok := config.Metadata["wireguard_ip"].(string); ok && ip != "" && env["MESH_WIREGUARD_IP"] == "" {
+		env["MESH_WIREGUARD_IP"] = ip
+	}
+	if port, ok := config.Metadata["wireguard_port"].(int); ok && port > 0 && env["MESH_LISTEN_PORT"] == "" {
+		env["MESH_LISTEN_PORT"] = strconv.Itoa(port)
+	}
+	if env["PRIVATEER_STATIC_PEERS_FILE"] == "" {
+		env["PRIVATEER_STATIC_PEERS_FILE"] = "/etc/privateer/static-peers.json"
+	}
+	if priv, ok := config.Metadata["wireguard_private_key"].(string); ok && priv != "" && env["MESH_PRIVATE_KEY_FILE"] == "" {
+		env["MESH_PRIVATE_KEY_FILE"] = "/etc/privateer/wg.key"
+	}
+	if services, ok := config.Metadata["expected_internal_grpc_services"].([]string); ok && len(services) > 0 && env["EXPECTED_INTERNAL_GRPC_SERVICES"] == "" {
+		env["EXPECTED_INTERNAL_GRPC_SERVICES"] = strings.Join(services, ",")
+	}
+	if len(env) > 0 {
 		envAny := make(map[string]any, len(env))
 		for k, v := range env {
 			envAny[k] = v
 		}
 		vars["privateer_env"] = envAny
 	}
+
+	if peers, ok := config.Metadata["static_peers"].([]map[string]any); ok {
+		vars["privateer_static_peers"] = peers
+	}
+	if dns, ok := config.Metadata["static_dns"].(map[string][]string); ok {
+		vars["privateer_static_dns"] = dns
+	}
+	if ip, ok := config.Metadata["wireguard_ip"].(string); ok && ip != "" {
+		vars["privateer_wireguard_ip"] = ip
+	}
+	if priv, ok := config.Metadata["wireguard_private_key"].(string); ok && priv != "" {
+		vars["privateer_wireguard_private_key"] = priv
+	}
+	if port, ok := config.Metadata["wireguard_port"].(int); ok && port > 0 {
+		vars["privateer_wireguard_port"] = port
+	}
 	return vars, nil
+}
+
+func privateerNodeType(host inventory.Host) string {
+	for _, role := range host.Roles {
+		if role == infra.NodeTypeEdge {
+			return infra.NodeTypeEdge
+		}
+	}
+	return infra.NodeTypeCore
 }
 
 func privateerRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
@@ -50,9 +111,9 @@ func privateerRoleDetect(ctx context.Context, host inventory.Host, helpers RoleB
 	if err != nil {
 		return nil, err
 	}
-	result, _ := runner.Run(ctx, "systemctl is-active frameworks-privateer 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
-	running := result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
-	bin, _ := runner.Run(ctx, "test -x /opt/privateer/privateer && echo EXISTS")
-	exists := bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+	result, runErr := runner.Run(ctx, "systemctl is-active frameworks-privateer 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
+	running := runErr == nil && result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
+	bin, binErr := runner.Run(ctx, "test -x /opt/privateer/privateer && echo EXISTS")
+	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
 }

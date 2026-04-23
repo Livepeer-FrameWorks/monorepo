@@ -247,9 +247,10 @@ func TestBootstrapInfrastructureNode_FallbackCluster(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()). // auto-generated node-{uuid}
 		WillReturnError(sql.ErrNoRows)
 
-	// INSERT node
+	// INSERT node (id, node_id, cluster_id, node_name, node_type, external_ip,
+	// internal_ip, wireguard_ip, wireguard_public_key, latitude, longitude)
 	mock.ExpectExec("INSERT INTO quartermaster.infrastructure_nodes").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "fallback-cluster", sqlmock.AnyArg(), "core", nil, nil, nil, nil).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "fallback-cluster", sqlmock.AnyArg(), "core", nil, nil, nil, nil, nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Token usage update

@@ -13,3 +13,13 @@ privateer_tarball_path: /tmp/privateer.tar.gz
 
 privateer_env: {}
 privateer_dns_zones: []
+privateer_static_dns: {}
+
+# Seed substrate: the role renders static-peers.json + wg.key so Privateer can
+# bring up wg0 before the managed Quartermaster overlay is reachable. Each
+# peer: {name, public_key, allowed_ips, endpoint?}. DNS maps internal aliases
+# to mesh IPs and is consumed before Quartermaster is reachable.
+privateer_static_peers: []
+privateer_wireguard_ip: ""
+privateer_wireguard_private_key: ""
+privateer_wireguard_port: 51820

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"testing"
 
@@ -100,24 +101,22 @@ func TestPlan_PrivateerDepsExcludeEdge(t *testing.T) {
 		taskNames[task.Name] = true
 	}
 
-	// Privateer tasks should only exist for core hosts
-	if taskNames["privateer@edge1"] {
-		t.Error("privateer@edge1 task should not exist")
+	// Privateer-mesh tasks should only exist for core hosts
+	if taskNames["privateer-mesh-edge1"] {
+		t.Error("privateer-mesh-edge1 task should not exist")
 	}
-	if !taskNames["privateer@core1"] {
-		t.Error("privateer@core1 task should exist")
+	if !taskNames["privateer-mesh-core1"] {
+		t.Error("privateer-mesh-core1 task should exist")
 	}
-	if !taskNames["privateer@core2"] {
-		t.Error("privateer@core2 task should exist")
+	if !taskNames["privateer-mesh-core2"] {
+		t.Error("privateer-mesh-core2 task should exist")
 	}
 
-	// Bridge should depend on privateer@core1 and privateer@core2, NOT privateer@edge1
+	// Bridge should depend on privateer-mesh tasks on core hosts only.
 	for _, task := range plan.AllTasks {
 		if task.Name == "bridge" {
-			for _, dep := range task.DependsOn {
-				if dep == "privateer@edge1" {
-					t.Error("bridge depends on privateer@edge1 which should not exist")
-				}
+			if slices.Contains(task.DependsOn, "privateer-mesh-edge1") {
+				t.Error("bridge depends on privateer-mesh-edge1 which should not exist")
 			}
 		}
 	}
@@ -190,7 +189,7 @@ func TestPlan_ClickHouseDependsOnSameHostYugabyte(t *testing.T) {
 	}
 
 	var clickhouseTask *Task
-	var yugabyteBatch, clickhouseBatch int = -1, -1
+	yugabyteBatch, clickhouseBatch := -1, -1
 
 	for batchIdx, batch := range plan.Batches {
 		for _, task := range batch {
@@ -214,14 +213,72 @@ func TestPlan_ClickHouseDependsOnSameHostYugabyte(t *testing.T) {
 		t.Fatalf("expected clickhouse after yugabyte-node-1, got yugabyte batch %d clickhouse batch %d", yugabyteBatch, clickhouseBatch)
 	}
 
-	foundDep := false
-	for _, dep := range clickhouseTask.DependsOn {
-		if dep == "yugabyte-node-1" {
-			foundDep = true
-			break
+	if !slices.Contains(clickhouseTask.DependsOn, "yugabyte-node-1") {
+		t.Fatalf("expected clickhouse to depend on yugabyte-node-1, got %v", clickhouseTask.DependsOn)
+	}
+}
+
+func TestPlan_OnlyApplicationsOmitsMissingInfraDeps(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core1": {ExternalIP: "10.0.0.1", WireguardIP: "10.88.0.2", Roles: []string{"control"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{Enabled: true, Engine: "postgres", Host: "core1"},
+			Kafka:    &inventory.KafkaConfig{Enabled: true, ClusterID: "c1", Brokers: []inventory.KafkaBroker{{ID: 1, Host: "core1"}}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "core1"},
+			"privateer":     {Enabled: true},
+			"bridge":        {Enabled: true, Host: "core1"},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err != nil {
+		t.Fatalf("Plan(--only applications) failed: %v", err)
+	}
+
+	for _, task := range plan.AllTasks {
+		for _, dep := range task.DependsOn {
+			if dep == "postgres" || dep == "kafka-broker-1" {
+				t.Errorf("task %s has infra dep %s that isn't in the --only applications graph", task.Name, dep)
+			}
 		}
 	}
-	if !foundDep {
-		t.Fatalf("expected clickhouse to depend on yugabyte-node-1, got %v", clickhouseTask.DependsOn)
+}
+
+func TestPlan_AllPhasesStillHaveCompleteDeps(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core1": {ExternalIP: "10.0.0.1", WireguardIP: "10.88.0.2", Roles: []string{"control"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{Enabled: true, Engine: "postgres", Host: "core1"},
+			Kafka:    &inventory.KafkaConfig{Enabled: true, ClusterID: "c1", Brokers: []inventory.KafkaBroker{{ID: 1, Host: "core1"}}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "core1"},
+			"privateer":     {Enabled: true},
+			"bridge":        {Enabled: true, Host: "core1"},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseAll})
+	if err != nil {
+		t.Fatalf("Plan(--only all) failed: %v", err)
+	}
+	bridgeDeps := map[string]bool{}
+	for _, task := range plan.AllTasks {
+		if task.Name == "bridge" {
+			for _, d := range task.DependsOn {
+				bridgeDeps[d] = true
+			}
+		}
+	}
+	for _, need := range []string{"quartermaster", "privateer-mesh-core1", "postgres", "kafka-broker-1"} {
+		if !bridgeDeps[need] {
+			t.Errorf("bridge missing expected dep %q (have %v)", need, bridgeDeps)
+		}
 	}
 }

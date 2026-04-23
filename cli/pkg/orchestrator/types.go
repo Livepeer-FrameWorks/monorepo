@@ -10,6 +10,7 @@ import (
 type Phase string
 
 const (
+	PhaseMesh           Phase = "mesh"           // Privateer startup substrate (WG up before any infra)
 	PhaseInfrastructure Phase = "infrastructure" // Postgres, Kafka, ZK, ClickHouse
 	PhaseApplications   Phase = "applications"   // FrameWorks services
 	PhaseInterfaces     Phase = "interfaces"     // Caddy, chartroom, foredeck
