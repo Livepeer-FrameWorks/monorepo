@@ -74,6 +74,8 @@ func (p *Planner) Plan(ctx context.Context, opts ProvisionOptions) (*ExecutionPl
 
 // addInfrastructureTasks adds infrastructure provisioning tasks
 func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
+	hostDatabaseDeps := map[string][]string{}
+
 	// Add Postgres / YugabyteDB
 	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
 		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
@@ -81,9 +83,12 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 				task := NewTask("yugabyte", "postgres", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure)
 				task.Name = "yugabyte-node-" + strconv.Itoa(node.ID)
 				graph.AddTask(task)
+				hostDatabaseDeps[node.Host] = append(hostDatabaseDeps[node.Host], task.Name)
 			}
 		} else {
-			graph.AddTask(NewTask("postgres", "postgres", "", pg.Host, PhaseInfrastructure))
+			task := NewTask("postgres", "postgres", "", pg.Host, PhaseInfrastructure)
+			graph.AddTask(task)
+			hostDatabaseDeps[pg.Host] = append(hostDatabaseDeps[pg.Host], task.Name)
 		}
 	}
 
@@ -123,7 +128,12 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 
 	// Add ClickHouse
 	if p.manifest.Infrastructure.ClickHouse != nil && p.manifest.Infrastructure.ClickHouse.Enabled {
-		graph.AddTask(NewTask("clickhouse", "clickhouse", "", p.manifest.Infrastructure.ClickHouse.Host, PhaseInfrastructure))
+		task := NewTask("clickhouse", "clickhouse", "", p.manifest.Infrastructure.ClickHouse.Host, PhaseInfrastructure)
+		// When ClickHouse is colocated with Postgres/Yugabyte, converge the
+		// database task first so legacy listeners are moved before ClickHouse
+		// attempts to bind its steady-state ports.
+		task.DependsOn = append(task.DependsOn, hostDatabaseDeps[task.Host]...)
+		graph.AddTask(task)
 	}
 
 	return nil

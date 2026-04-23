@@ -1,0 +1,8 @@
+---
+- name: mistserver | configure (linux)
+  ansible.builtin.import_tasks: configure-linux.yml
+  when: ansible_facts.os_family != 'Darwin'
+
+- name: mistserver | configure (darwin)
+  ansible.builtin.import_tasks: configure-darwin.yml
+  when: ansible_facts.os_family == 'Darwin'

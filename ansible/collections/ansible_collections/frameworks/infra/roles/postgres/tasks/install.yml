@@ -1,0 +1,45 @@
+---
+# Delegates install + config rendering + service start to geerlingguy.postgresql.
+# We map our vars onto its variable surface so there is a single source of
+# truth: the FrameWorks manifest.
+- name: Install and configure PostgreSQL via geerlingguy.postgresql
+  ansible.builtin.include_role:
+    name: geerlingguy.postgresql
+    apply:
+      tags: [install, configure, service]
+  vars:
+    postgresql_version: "{{ postgres_version }}"
+    postgresql_data_dir: "{{ postgres_data_dir }}"
+    postgresql_config_path: "{{ postgres_config_dir }}"
+    postgresql_bin_path: "/usr/lib/postgresql/{{ postgres_version }}/bin"
+    postgresql_port: "{{ postgres_port }}"
+    postgresql_restarted_state: "restarted"
+    postgresql_global_config_options:
+      - option: listen_addresses
+        value: "{{ postgres_listen_addresses }}"
+      - option: port
+        value: "{{ postgres_port }}"
+      - option: max_connections
+        value: "{{ postgres_max_connections }}"
+      - option: shared_buffers
+        value: "{{ postgres_shared_buffers }}"
+      - option: password_encryption
+        value: scram-sha-256
+    postgresql_hba_entries: "{{ postgres_hba_entries }}"
+    # Seed the superuser password so init tasks can connect. geerlingguy
+    # surfaces it as postgresql_users entries; we apply it via ALTER USER
+    # after install so the password can rotate without a re-init.
+    postgresql_users_no_log: true
+    postgresql_users:
+      - name: postgres
+        password: "{{ postgres_admin_password }}"
+
+- name: Enforce postgres superuser password (rotation-safe)
+  community.postgresql.postgresql_user:
+    name: postgres
+    password: "{{ postgres_admin_password }}"
+    login_unix_socket: /var/run/postgresql
+    state: present
+  no_log: true
+  become: true
+  become_user: postgres

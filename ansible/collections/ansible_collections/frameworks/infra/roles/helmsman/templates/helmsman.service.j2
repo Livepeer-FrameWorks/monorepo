@@ -1,0 +1,16 @@
+[Unit]
+Description=FrameWorks Helmsman (edge sidecar)
+After=network-online.target frameworks-mistserver.service
+Wants=network-online.target
+
+[Service]
+User={{ helmsman_user }}
+Group={{ helmsman_group }}
+WorkingDirectory={{ helmsman_install_dir }}
+EnvironmentFile={{ helmsman_env_file }}
+ExecStart={{ helmsman_install_dir }}/helmsman
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

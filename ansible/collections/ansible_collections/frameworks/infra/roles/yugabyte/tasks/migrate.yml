@@ -1,0 +1,76 @@
+---
+# Mirror of postgres/tasks/migrate.yml for Yugabyte: TCP + scram-sha-256 auth
+# via the superuser credentials the CLI forwards through the provision flow.
+
+- name: Ensure YSQL Ansible module prerequisites
+  ansible.builtin.import_tasks: ysql_prereqs.yml
+
+- name: Ensure _migrations tracking table per database (Yugabyte)
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: "{{ db_entry }}"
+    query: |
+      CREATE TABLE IF NOT EXISTS _migrations (
+        version    TEXT NOT NULL,
+        seq        INT NOT NULL,
+        filename   TEXT NOT NULL,
+        checksum   TEXT NOT NULL,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (version, seq)
+      )
+  loop: "{{ yugabyte_migrate_items | default([]) | map(attribute='db') | unique | list }}"
+  loop_control:
+    loop_var: db_entry
+  no_log: true
+
+- name: Read applied migrations per database (Yugabyte)
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: "{{ db_entry }}"
+    query: "SELECT version || ':' || seq AS key FROM _migrations"
+  register: yugabyte_applied_queries
+  changed_when: false
+  check_mode: false
+  loop: "{{ yugabyte_migrate_items | default([]) | map(attribute='db') | unique | list }}"
+  loop_control:
+    loop_var: db_entry
+  no_log: true
+
+- name: Index applied migrations by database (Yugabyte)
+  ansible.builtin.set_fact:
+    yugabyte_applied_by_db: >-
+      {{ yugabyte_applied_by_db | default({})
+         | combine({ item.db_entry:
+                     (item.query_result | default([]) | map(attribute='key') | list) }) }}
+  loop: "{{ yugabyte_applied_queries.results | default([]) }}"
+  loop_control:
+    label: "{{ item.db_entry }}"
+
+- name: Apply pending migrations (Yugabyte)
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: "{{ item.db }}"
+    query:
+      - "{{ item.sql }}"
+      - >-
+        INSERT INTO _migrations (version, seq, filename, checksum)
+        VALUES ('{{ item.version }}', {{ item.sequence }},
+                '{{ item.filename }}', '{{ item.checksum }}')
+    autocommit: false
+  loop: "{{ yugabyte_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}/{{ item.version }}/{{ item.filename }}"
+  no_log: true
+  when:
+    - yugabyte_migrate_items | default([]) | length > 0
+    - (item.version ~ ':' ~ (item.sequence | string))
+      not in (yugabyte_applied_by_db[item.db] | default([]))

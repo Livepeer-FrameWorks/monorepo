@@ -1,0 +1,48 @@
+---
+galaxy_info:
+  role_name: caddy
+  author: FrameWorks Infra
+  description: >-
+    Install and configure Caddy from the official Cloudsmith apt repo.
+    Version and site list supplied by the FrameWorks CLI from the manifest's
+    caddy.* + ingress_sites.* entries.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Debian
+      versions: [bookworm]
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install and configure Caddy.
+    options:
+      caddy_version:
+        type: str
+        required: true
+      caddy_sites:
+        type: list
+        elements: dict
+        required: false
+        options:
+          domains:
+            type: list
+            elements: str
+            required: true
+          upstream:
+            type: str
+            required: false
+          kind:
+            type: str
+            required: false
+            default: app
+          tls_email:
+            type: str
+            required: false
+          extra_directives:
+            type: list
+            elements: str
+            required: false

@@ -1,0 +1,22 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Skip verify when converge short-circuited
+      ansible.builtin.meta: end_play
+      when: privateer_artifact_url | length == 0
+
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert frameworks-privateer running
+      ansible.builtin.assert:
+        that: ansible_facts.services['frameworks-privateer.service'].state == 'running'
+
+    - name: Wait for privateer port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ privateer_port }}"
+        timeout: 30

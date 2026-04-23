@@ -1,0 +1,7 @@
+---
+- name: Provision a Docker Compose stack
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.compose_stack

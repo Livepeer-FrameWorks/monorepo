@@ -1,0 +1,15 @@
+---
+- name: restart go_service
+  listen: go_service restart
+  ansible.builtin.systemd:
+    name: "{{ go_service_systemd_name }}"
+    state: restarted
+    daemon_reload: true
+  register: go_service_restarted
+
+- name: reload go_service
+  listen: go_service reload
+  ansible.builtin.systemd:
+    name: "{{ go_service_systemd_name }}"
+    state: reloaded
+  when: go_service_restarted is not defined

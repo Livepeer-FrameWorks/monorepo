@@ -1,0 +1,39 @@
+---
+galaxy_info:
+  role_name: redis
+  author: FrameWorks Infra
+  description: >-
+    Install and manage Redis. Thin wrapper over geerlingguy.redis that pins
+    our version, binds, and password from the FrameWorks release manifest.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install and configure a Redis server.
+    options:
+      redis_version:
+        type: str
+        required: true
+      redis_port:
+        type: int
+        required: false
+        default: 6379
+      redis_bind_interface:
+        type: str
+        required: false
+        default: "127.0.0.1"
+      redis_password:
+        type: str
+        required: false
+        no_log: true
+      redis_instance:
+        type: str
+        required: false
+        default: ""
+        description: Named instance suffix (e.g. "foghorn"); empty = default.

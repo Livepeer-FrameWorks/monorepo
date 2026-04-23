@@ -1,0 +1,16 @@
+[Unit]
+Description=Apache ZooKeeper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ zookeeper_user }}
+Group={{ zookeeper_group }}
+ExecStart={{ zookeeper_bin_dir }}/zkServer.sh start-foreground {{ zookeeper_conf_dir }}/zoo.cfg
+ExecStop={{ zookeeper_bin_dir }}/zkServer.sh stop {{ zookeeper_conf_dir }}/zoo.cfg
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

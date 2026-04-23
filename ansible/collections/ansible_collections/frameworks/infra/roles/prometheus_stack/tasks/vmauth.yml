@@ -1,0 +1,40 @@
+---
+- name: Ensure prometheus user (vmauth runs under same uid)
+  ansible.builtin.user:
+    name: "{{ prometheus_stack_user }}"
+    group: "{{ prometheus_stack_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    state: present
+
+- name: Download vmauth binary
+  ansible.builtin.get_url:
+    url: "{{ vmauth_artifact_url }}"
+    dest: /tmp/vmauth.tar.gz
+    checksum: "{{ vmauth_artifact_checksum }}"
+    mode: "0644"
+
+- name: Extract vmauth
+  ansible.builtin.unarchive:
+    src: /tmp/vmauth.tar.gz
+    dest: /usr/local/bin
+    remote_src: true
+    mode: "0755"
+    creates: "{{ vmauth_bin }}"
+
+- name: Render vmauth systemd unit
+  ansible.builtin.template:
+    src: vmauth.service.j2
+    dest: /etc/systemd/system/vmauth.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: vmauth restart
+
+- name: Ensure vmauth service
+  ansible.builtin.systemd:
+    name: vmauth
+    state: started
+    enabled: true
+    daemon_reload: true

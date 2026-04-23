@@ -1,0 +1,12 @@
+---
+- name: Populate service facts (used by time-sync probe and validate)
+  ansible.builtin.service_facts:
+
+- name: Resolve time-sync package/service for this distro family
+  ansible.builtin.set_fact:
+    yugabyte_timesync: "{{ yugabyte_timesync_by_family[ansible_facts.os_family] | default({}) }}"
+
+- name: Fail if distro family is unsupported for time-sync
+  ansible.builtin.fail:
+    msg: "yugabyte role: unsupported os_family '{{ ansible_facts.os_family }}' — add an entry to yugabyte_timesync_by_family"
+  when: yugabyte_timesync == {}

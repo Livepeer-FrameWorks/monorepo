@@ -1,0 +1,6 @@
+---
+prometheus_stack_user: prometheus
+prometheus_stack_group: prometheus
+victoriametrics_bin: /usr/local/bin/victoria-metrics
+vmagent_bin: /usr/local/bin/vmagent
+vmauth_bin: /usr/local/bin/vmauth

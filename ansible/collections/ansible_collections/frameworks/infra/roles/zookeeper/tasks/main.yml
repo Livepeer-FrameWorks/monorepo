@@ -1,0 +1,32 @@
+---
+- name: zookeeper | install
+  ansible.builtin.import_tasks: install.yml
+  tags: [install]
+
+- name: zookeeper | configure
+  ansible.builtin.import_tasks: configure.yml
+  tags: [configure]
+
+- name: zookeeper | flush handlers before service
+  ansible.builtin.meta: flush_handlers
+  tags: [configure, service]
+
+- name: zookeeper | service
+  ansible.builtin.import_tasks: service.yml
+  tags: [service]
+
+- name: zookeeper | flush handlers before validate
+  ansible.builtin.meta: flush_handlers
+  tags: [service, validate]
+
+- name: zookeeper | validate
+  ansible.builtin.import_tasks: validate.yml
+  tags: [validate]
+
+- name: zookeeper | restart
+  ansible.builtin.import_tasks: restart.yml
+  tags: [restart, never]
+
+- name: zookeeper | cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cleanup, never]

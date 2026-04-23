@@ -1,0 +1,27 @@
+---
+# Yugabyte restart order matters: tserver first (so it releases its master
+# connection), then master. The wait_for on the master RPC port gives
+# leader election time to settle before tserver reconnects.
+- name: Restart yb-tserver
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_tserver_service }}"
+    state: restarted
+
+- name: Restart yb-master
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_master_service }}"
+    state: restarted
+
+- name: Wait for yb-master RPC port after restart
+  ansible.builtin.wait_for:
+    host: "{{ yugabyte_node_address }}"
+    port: "{{ yugabyte_master_rpc_port }}"
+    timeout: 90
+    sleep: 2
+
+- name: Wait for YSQL after restart
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ yugabyte_ysql_port }}"
+    timeout: 120
+    sleep: 2

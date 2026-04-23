@@ -1,0 +1,36 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert prometheus and node_exporter running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['prometheus.service'].state == 'running'
+          - ansible_facts.services['node_exporter.service'].state == 'running'
+
+    - name: Wait for prometheus listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9090
+        timeout: 60
+
+    - name: Wait for node_exporter listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9100
+        timeout: 60
+
+    - name: Rerun role (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.prometheus_stack
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "prometheus_stack role not idempotent"

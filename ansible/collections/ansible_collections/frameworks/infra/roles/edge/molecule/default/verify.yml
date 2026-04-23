@@ -1,0 +1,39 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Skip verify when converge short-circuited
+      ansible.builtin.meta: end_play
+      when: >-
+        edge_mistserver_artifact_url | length == 0
+        or edge_helmsman_artifact_url | length == 0
+        or edge_caddy_artifact_url | length == 0
+
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert edge native services running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['frameworks-mistserver.service'].state == 'running'
+          - ansible_facts.services['frameworks-helmsman.service'].state == 'running'
+          - ansible_facts.services['frameworks-caddy.service'].state == 'running'
+        fail_msg: "edge native: one or more services not running"
+
+    - name: Wait for Caddy :443 (edge bootstrap listener)
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 443
+        timeout: 30
+
+    - name: Rerun role (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.edge
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "edge role not idempotent"

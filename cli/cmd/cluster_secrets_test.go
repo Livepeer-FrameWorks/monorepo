@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/cli/pkg/inventory"
 )
@@ -106,5 +109,70 @@ func TestResolveGeoIPMMDBPath_MaxMindMissingKeyMentionsEnvFiles(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MAXMIND_LICENSE_KEY") {
 		t.Fatalf("error should mention the canonical key, got %q", err.Error())
+	}
+}
+
+func TestGeoIPCacheFresh_MissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "GeoLite2-City.mmdb")
+	fresh, err := geoIPCacheFresh(path, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fresh {
+		t.Fatal("missing cache file should not be fresh")
+	}
+}
+
+func TestGeoIPCacheFresh_EmptyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "GeoLite2-City.mmdb")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatalf("write empty cache file: %v", err)
+	}
+	fresh, err := geoIPCacheFresh(path, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fresh {
+		t.Fatal("empty cache file should not be fresh")
+	}
+}
+
+func TestGeoIPCacheFresh_RecentFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "GeoLite2-City.mmdb")
+	now := time.Now()
+	if err := os.WriteFile(path, []byte("mmdb"), 0o644); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+	recent := now.Add(-2 * time.Hour)
+	if err := os.Chtimes(path, recent, recent); err != nil {
+		t.Fatalf("set file times: %v", err)
+	}
+	fresh, err := geoIPCacheFresh(path, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fresh {
+		t.Fatal("recent cache file should be fresh")
+	}
+}
+
+func TestGeoIPCacheFresh_StaleFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "GeoLite2-City.mmdb")
+	now := time.Now()
+	if err := os.WriteFile(path, []byte("mmdb"), 0o644); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+	stale := now.Add(-(geoIPCacheTTL + time.Hour))
+	if err := os.Chtimes(path, stale, stale); err != nil {
+		t.Fatalf("set file times: %v", err)
+	}
+	fresh, err := geoIPCacheFresh(path, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fresh {
+		t.Fatal("stale cache file should not be fresh")
 	}
 }

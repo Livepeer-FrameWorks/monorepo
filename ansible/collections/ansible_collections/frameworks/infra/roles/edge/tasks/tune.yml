@@ -1,0 +1,26 @@
+---
+# Kernel + fs tuning for a single edge host. Matches the settings edge.go
+# applied via the legacy Ansible layer: bigger socket buffers, higher
+# somaxconn, wider ephemeral range, 1M nofile limit across all users.
+
+- name: Write edge sysctl overrides
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/frameworks-edge.conf
+    mode: "0644"
+    content: |
+      net.core.rmem_max = 16777216
+      net.core.wmem_max = 16777216
+      net.core.somaxconn = 8192
+      net.ipv4.ip_local_port_range = 16384 65535
+
+- name: Write edge limits overrides
+  ansible.builtin.copy:
+    dest: /etc/security/limits.d/frameworks-edge.conf
+    mode: "0644"
+    content: |
+      * soft nofile 1048576
+      * hard nofile 1048576
+
+- name: Reload sysctl
+  ansible.builtin.command: sysctl --system
+  changed_when: false

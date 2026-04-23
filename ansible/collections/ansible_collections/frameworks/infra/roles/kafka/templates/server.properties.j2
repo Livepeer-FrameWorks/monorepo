@@ -1,0 +1,33 @@
+node.id={{ kafka_node_id }}
+{% if kafka_role == 'controller' %}
+process.roles=controller
+listeners=CONTROLLER://{{ kafka_bind_host }}:{{ kafka_controller_port }}
+controller.listener.names=CONTROLLER
+{% elif kafka_role == 'broker' %}
+process.roles=broker
+listeners=PLAINTEXT://{{ kafka_bind_host }}:{{ kafka_broker_port }}
+advertised.listeners=PLAINTEXT://{{ kafka_advertised_host }}:{{ kafka_broker_port }}
+controller.listener.names=CONTROLLER
+{% else %}
+process.roles=broker,controller
+listeners=PLAINTEXT://{{ kafka_bind_host }}:{{ kafka_broker_port }},CONTROLLER://{{ kafka_bind_host }}:{{ kafka_controller_port }}
+advertised.listeners=PLAINTEXT://{{ kafka_advertised_host }}:{{ kafka_broker_port }}
+controller.listener.names=CONTROLLER
+{% endif %}
+listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+inter.broker.listener.name=PLAINTEXT
+controller.quorum.voters={{ kafka_voters }}
+log.dirs={{ kafka_role_data_dir }}
+num.network.threads=3
+num.io.threads=8
+socket.send.buffer.bytes=102400
+socket.receive.buffer.bytes=102400
+socket.request.max.bytes=104857600
+num.partitions=1
+num.recovery.threads.per.data.dir=1
+offsets.topic.replication.factor=1
+transaction.state.log.replication.factor=1
+transaction.state.log.min.isr=1
+log.retention.hours=168
+log.segment.bytes=1073741824
+log.retention.check.interval.ms=300000

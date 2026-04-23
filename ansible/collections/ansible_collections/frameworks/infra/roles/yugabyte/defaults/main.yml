@@ -1,0 +1,52 @@
+---
+# Artifact selection — supplied by the FrameWorks CLI from the release manifest.
+# Defaults here are intentionally empty for url/checksum/version so that the
+# argument_specs in meta/main.yml force callers to supply them explicitly.
+yugabyte_artifact_url: ""
+yugabyte_artifact_checksum: ""
+yugabyte_version: ""
+
+# Runtime layout.
+yugabyte_user: yugabyte
+yugabyte_group: yugabyte
+yugabyte_install_dir: /opt/yugabyte
+yugabyte_data_dir: /var/lib/yugabyte/data
+yugabyte_cores_dir: /var/lib/yugabyte/cores
+yugabyte_tarball_path: /tmp/yugabyte.tar.gz
+
+# Network / cluster topology. master_addresses is a comma-separated list of
+# host:7100 for every yb-master in the ensemble; for single-node it's this
+# host's own address.
+yugabyte_node_address: "{{ ansible_host | default(inventory_hostname) }}"
+yugabyte_master_rpc_port: 7100
+yugabyte_master_web_port: 7000
+yugabyte_tserver_rpc_port: 9100
+yugabyte_tserver_web_port: 11000
+yugabyte_ysql_port: 5433
+yugabyte_ycql_port: 9042
+yugabyte_master_addresses: "{{ yugabyte_node_address }}:{{ yugabyte_master_rpc_port }}"
+
+# Replication + placement.
+yugabyte_replication_factor: 3
+yugabyte_placement_cloud: frameworks
+yugabyte_placement_region: eu
+yugabyte_placement_zone: "eu-{{ yugabyte_node_id | default(1) }}"
+
+# Resource limits (applied via /etc/security/limits.d and systemd unit).
+yugabyte_limit_nofile: "1048576"
+yugabyte_limit_nproc: "12000"
+
+# Service names on the target.
+yugabyte_master_service: yb-master
+yugabyte_tserver_service: yb-tserver
+
+# init: list of databases to create on first boot. Each entry: {name, owner}.
+# Owner defaults to the database name when omitted.
+yugabyte_databases: []
+yugabyte_application_password: ""
+
+# Superuser role that ysqlsh and community.postgresql use to reach the
+# cluster over scram-sha-256. The CLI supplies the password from SOPS-backed
+# shared env; empty means validate/init fail loud.
+yugabyte_superuser_role: yugabyte
+yugabyte_superuser_password: ""

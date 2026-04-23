@@ -1,0 +1,35 @@
+---
+role_name_check: 1
+
+dependency:
+  name: galaxy
+
+driver:
+  name: docker
+
+platforms:
+  - name: postgres-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        postgres_version: "16"
+        postgres_admin_password: "molecule-test-password"
+        postgres_databases:
+          - { name: periscope }
+          - { name: tenants, owner: tenants }
+
+verifier:
+  name: ansible

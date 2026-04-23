@@ -1,0 +1,18 @@
+[Unit]
+Description=Apache Kafka ({{ kafka_role }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ kafka_user }}
+Group={{ kafka_group }}
+Environment="KAFKA_HEAP_OPTS={{ kafka_heap_opts }}"
+Environment="LOG_DIR={{ kafka_role_log_dir }}"
+ExecStart={{ kafka_bin_dir }}/kafka-server-start.sh {{ kafka_properties_path }}
+ExecStop={{ kafka_bin_dir }}/kafka-server-stop.sh
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

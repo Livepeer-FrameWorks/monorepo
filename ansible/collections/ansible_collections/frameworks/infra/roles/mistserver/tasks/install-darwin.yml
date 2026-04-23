@@ -1,0 +1,55 @@
+---
+- name: Resolve Darwin layout for selected domain
+  ansible.builtin.set_fact:
+    mistserver_darwin_base_dir: >-
+      {{ mistserver_darwin_user_base_dir if mistserver_darwin_domain == 'user'
+         else mistserver_darwin_system_base_dir }}
+    mistserver_darwin_conf_dir: >-
+      {{ mistserver_darwin_user_conf_dir if mistserver_darwin_domain == 'user'
+         else mistserver_darwin_system_conf_dir }}
+    mistserver_darwin_log_dir: >-
+      {{ mistserver_darwin_user_log_dir if mistserver_darwin_domain == 'user'
+         else mistserver_darwin_system_log_dir }}
+    mistserver_darwin_plist_dir: >-
+      {{ mistserver_darwin_user_plist_dir if mistserver_darwin_domain == 'user'
+         else mistserver_darwin_system_plist_dir }}
+
+- name: Ensure Darwin directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ mistserver_darwin_base_dir }}"
+    - "{{ mistserver_darwin_base_dir }}/mistserver"
+    - "{{ mistserver_darwin_conf_dir }}"
+    - "{{ mistserver_darwin_log_dir }}"
+    - "{{ mistserver_darwin_plist_dir }}"
+
+- name: Download MistServer tarball
+  ansible.builtin.get_url:
+    url: "{{ mistserver_artifact_url }}"
+    dest: "/tmp/mistserver.tar.gz"
+    checksum: "{{ mistserver_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Set install sentinel path
+  ansible.builtin.set_fact:
+    mistserver_install_sentinel: "{{ mistserver_darwin_base_dir }}/mistserver/.installed-{{ mistserver_artifact_checksum | default('') | hash('sha1') }}"
+
+- name: Extract MistServer
+  ansible.builtin.unarchive:
+    src: "/tmp/mistserver.tar.gz"
+    dest: "{{ mistserver_darwin_base_dir }}/mistserver"
+    remote_src: true
+    creates: "{{ mistserver_install_sentinel }}"
+  notify: mistserver restart
+
+- name: Ensure MistServer binary is executable and mark install sentinel
+  ansible.builtin.shell: |
+    set -e
+    chmod 0755 "{{ mistserver_darwin_base_dir }}/mistserver/MistServer"
+    touch "{{ mistserver_install_sentinel }}"
+  args:
+    creates: "{{ mistserver_install_sentinel }}"

@@ -1,0 +1,46 @@
+---
+# ClickHouse seeds: each item carries name/database/sql. The SQL blob is
+# written to a tempfile on target (argv size safety) then streamed through
+# clickhouse-client via --queries-file.
+
+- name: Resolve a reachable local ClickHouse client host
+  ansible.builtin.include_tasks: _probe_client.yml
+
+- name: Stage ClickHouse seed SQL on target
+  ansible.builtin.copy:
+    content: "{{ item.sql }}"
+    dest: "/tmp/frameworks-clickhouse-seed-{{ item.name }}.sql"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ clickhouse_seed_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  when: clickhouse_seed_items | default([]) | length > 0
+
+- name: Apply ClickHouse seeds via clickhouse-client
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client',
+          '--host=' ~ frameworks_clickhouse_client_host,
+          '--port=' ~ (clickhouse_port_tcp | string),
+          '--database=' ~ item.database,
+          '--multiquery',
+          '--queries-file=/tmp/frameworks-clickhouse-seed-' ~ item.name ~ '.sql']
+         + (['--user=frameworks', '--password', clickhouse_default_password]
+            if clickhouse_default_password | length > 0 else []) }}
+  loop: "{{ clickhouse_seed_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+  when: clickhouse_seed_items | default([]) | length > 0
+
+- name: Remove staged seed tempfiles
+  ansible.builtin.file:
+    path: "/tmp/frameworks-clickhouse-seed-{{ item.name }}.sql"
+    state: absent
+  loop: "{{ clickhouse_seed_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: clickhouse_seed_items | default([]) | length > 0

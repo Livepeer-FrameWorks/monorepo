@@ -103,38 +103,58 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 		if pwErr != nil {
 			return pwErr
 		}
-		sqlExec, execErr := newSQLExecutor(pg.SQLAccess, pgHost, sshPool, pg.IsYugabyte(), password)
-		if execErr != nil {
-			return fmt.Errorf("create sql executor: %w", execErr)
-		}
-
-		pgProv, provErr := provisioner.NewPostgresProvisioner(sshPool, provisioner.WithSQLExecutor(sqlExec))
-		if provErr != nil {
-			return fmt.Errorf("create postgres provisioner: %w", provErr)
-		}
-		port := pg.EffectivePort()
-		dbUser := "postgres"
-		if pg.IsYugabyte() {
-			dbUser = "yugabyte"
-		}
 
 		var dbNames []string
 		for _, d := range pg.Databases {
 			dbNames = append(dbNames, d.Name)
 		}
 
-		fmt.Fprintln(cmd.OutOrStdout(), "Applying Postgres static seeds...")
-		if err := pgProv.ApplyStaticSeeds(ctx, pgHost, port, dbUser, dbNames); err != nil {
-			return fmt.Errorf("postgres static seeds: %w", err)
+		serviceName := "postgres"
+		itemsKey := "postgres_seed_items"
+		if pg.IsYugabyte() {
+			serviceName = "yugabyte"
+			itemsKey = "yugabyte_seed_items"
 		}
-		ux.Success(cmd.OutOrStdout(), "Static seeds applied")
 
-		if demo {
-			fmt.Fprintln(cmd.OutOrStdout(), "Applying Postgres demo seeds...")
-			if err := pgProv.ApplyDemoSeeds(ctx, pgHost, port, dbUser, dbNames); err != nil {
-				return fmt.Errorf("postgres demo seeds: %w", err)
+		runSeed := func(kind, label string) error {
+			items, err := provisioner.BuildPostgresSeedItems(kind, dbNames)
+			if err != nil {
+				return fmt.Errorf("%s %s seeds: %w", serviceName, kind, err)
 			}
-			ux.Success(cmd.OutOrStdout(), "Demo seeds applied")
+			if len(items) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "  No %s seeds apply for this manifest's databases\n", kind)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Applying %s %s seeds...\n", serviceName, kind)
+			cfg := provisioner.ServiceConfig{
+				Port: pg.EffectivePort(),
+				Metadata: map[string]any{
+					"postgres_password": password,
+					itemsKey:            items,
+				},
+			}
+			prov, provErr := provisioner.GetProvisioner(serviceName, sshPool)
+			if provErr != nil {
+				return provErr
+			}
+			seeder, ok := prov.(provisioner.Seeder)
+			if !ok {
+				return fmt.Errorf("%s provisioner does not implement Seeder", serviceName)
+			}
+			if err := seeder.ApplySeeds(ctx, pgHost, cfg); err != nil {
+				return fmt.Errorf("%s %s seeds: %w", serviceName, kind, err)
+			}
+			ux.Success(cmd.OutOrStdout(), label+" applied")
+			return nil
+		}
+
+		if err := runSeed("static", "Static seeds"); err != nil {
+			return err
+		}
+		if demo {
+			if err := runSeed("demo", "Demo seeds"); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -172,25 +192,33 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 					return fmt.Errorf("CLICKHOUSE_PASSWORD missing from manifest env_files — add it to your gitops secrets")
 				}
 
-				chExec, chExecErr := newCHExecutor(ch.SQLAccess, chHost, sshPool)
-				if chExecErr != nil {
-					return fmt.Errorf("create ch executor: %w", chExecErr)
-				}
-				chProv, chErr := provisioner.NewClickHouseProvisioner(sshPool, provisioner.WithCHExecutor(chExec))
-				if chErr != nil {
-					return fmt.Errorf("create clickhouse provisioner: %w", chErr)
-				}
 				chPort := ch.Port
 				if chPort == 0 {
 					chPort = 9000
 				}
-				config := provisioner.ServiceConfig{
-					Port:     chPort,
-					Metadata: map[string]any{"clickhouse_password": chPassword},
+
+				items, itemsErr := provisioner.BuildClickHouseDemoSeedItems()
+				if itemsErr != nil {
+					return fmt.Errorf("clickhouse demo seeds: %w", itemsErr)
+				}
+				chCfg := provisioner.ServiceConfig{
+					Port: chPort,
+					Metadata: map[string]any{
+						"clickhouse_password":   chPassword,
+						"clickhouse_seed_items": items,
+					},
+				}
+				chProv, chErr := provisioner.GetProvisioner("clickhouse", sshPool)
+				if chErr != nil {
+					return chErr
+				}
+				seeder, ok := chProv.(provisioner.Seeder)
+				if !ok {
+					return fmt.Errorf("clickhouse provisioner does not implement Seeder")
 				}
 
 				fmt.Fprintln(cmd.OutOrStdout(), "Applying ClickHouse demo seeds...")
-				if err := chProv.ApplyDemoSeeds(ctx, chHost, config); err != nil {
+				if err := seeder.ApplySeeds(ctx, chHost, chCfg); err != nil {
 					return fmt.Errorf("clickhouse demo seeds: %w", err)
 				}
 				ux.Success(cmd.OutOrStdout(), "ClickHouse demo seeds applied")

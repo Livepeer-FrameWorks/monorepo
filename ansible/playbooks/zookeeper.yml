@@ -1,0 +1,7 @@
+---
+- name: Provision ZooKeeper
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.zookeeper

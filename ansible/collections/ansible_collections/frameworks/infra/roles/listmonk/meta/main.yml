@@ -1,0 +1,30 @@
+---
+galaxy_info:
+  role_name: listmonk
+  author: FrameWorks Infra
+  description: >-
+    Install and run Listmonk via docker-compose. Delegates container
+    lifecycle to frameworks.infra.compose_stack; owns the compose template.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install Listmonk.
+    options:
+      listmonk_image:
+        type: str
+        required: false
+      listmonk_port:
+        type: int
+        required: false
+        default: 9001
+      listmonk_env:
+        type: dict
+        required: true
+        description: LISTMONK_* configuration (DB, SMTP) passed to compose .env.

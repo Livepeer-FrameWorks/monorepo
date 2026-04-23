@@ -1,0 +1,13 @@
+---
+# Role-level validate is a quick local port probe. End-to-end HTTPS
+# verification happens Go-side post-apply (operator-facing output). macOS
+# user-domain launchd jobs can't bind 443 without root, so the probe is
+# skipped there — Go-side verifyHTTPS still covers the final readiness
+# check against the edge domain.
+
+- name: Wait for Caddy :443 (edge bootstrap listener)
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 443
+    timeout: 60
+  when: not (ansible_facts.os_family == 'Darwin' and edge_darwin_domain == 'user')

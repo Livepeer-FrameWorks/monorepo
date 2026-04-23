@@ -1,0 +1,17 @@
+---
+- name: restart mistserver
+  listen: mistserver restart
+  ansible.builtin.systemd:
+    name: "{{ mistserver_systemd_name }}"
+    state: restarted
+    daemon_reload: true
+  register: mistserver_restarted
+  when: ansible_facts.os_family != 'Darwin'
+
+- name: restart mistserver (darwin)
+  listen: mistserver restart
+  community.general.launchd:
+    name: "{{ mistserver_darwin_label }}"
+    state: restarted
+  register: mistserver_restarted
+  when: ansible_facts.os_family == 'Darwin'

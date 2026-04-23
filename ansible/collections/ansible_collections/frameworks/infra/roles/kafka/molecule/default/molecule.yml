@@ -1,0 +1,39 @@
+---
+role_name_check: 1
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: kafka-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        kafka_version: "3.7.1"
+        kafka_artifact_url: >-
+          {{ lookup('env', 'KAFKA_ARTIFACT_URL') |
+             default('https://dlcdn.apache.org/kafka/3.7.1/kafka_2.13-3.7.1.tgz', true) }}
+        kafka_artifact_checksum: >-
+          {{ lookup('env', 'KAFKA_ARTIFACT_CHECKSUM') |
+             default('sha512:https://dlcdn.apache.org/kafka/3.7.1/kafka_2.13-3.7.1.tgz.sha512', true) }}
+        kafka_role: combined
+        kafka_node_id: 1
+        kafka_cluster_id: "MkU3OEVBNTcwNTJENDM2Qk"
+        kafka_controllers:
+          - host: 127.0.0.1
+            id: 1
+        kafka_advertised_host: "127.0.0.1"
+verifier:
+  name: ansible

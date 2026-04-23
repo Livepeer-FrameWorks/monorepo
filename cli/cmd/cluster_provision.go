@@ -527,6 +527,25 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			return fmt.Errorf("foghorn reconciliation failed: %w", err)
 		}
 
+		if batchContainsService(batch, "yugabyte") && !remainingBatchesContainService(plan.Batches[batchNum+1:], "yugabyte") {
+			fmt.Fprintln(cmd.OutOrStdout(), "")
+			if err := verifyYugabyteCluster(ctx, cmd, manifest, sshPool); err != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Yugabyte cluster verification failed: %v", err))
+				if !ignoreValidation {
+					fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
+					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+					return fmt.Errorf("yugabyte cluster verification failed: %w", err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "  Warning: continuing despite Yugabyte verification issues (--ignore-validation)")
+			}
+			if err := initializeDeferredYugabyte(ctx, cmd, manifest, sshPool, sharedEnv); err != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Yugabyte initialization failed: %v", err))
+				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
+				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				return fmt.Errorf("yugabyte initialization failed: %w", err)
+			}
+		}
+
 		// Mesh preflight gate: after a batch containing Privateer tasks,
 		// verify mesh health before proceeding to application services.
 		if batchContainsPrivateer(batch) && batchNum+1 < len(plan.Batches) {
@@ -813,6 +832,133 @@ func batchContainsService(batch []*orchestrator.Task, serviceName string) bool {
 		}
 	}
 	return false
+}
+
+func remainingBatchesContainService(batches [][]*orchestrator.Task, serviceName string) bool {
+	for _, batch := range batches {
+		if batchContainsService(batch, serviceName) {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyYugabyteCluster(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
+	pg := manifest.Infrastructure.Postgres
+	if pg == nil || !pg.Enabled || !pg.IsYugabyte() || len(pg.Nodes) == 0 {
+		return nil
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying Yugabyte cluster on %d node(s)...\n", len(pg.Nodes))
+	base := provisioner.NewBaseProvisioner("yugabyte-verify", pool)
+	var failures []string
+
+	for _, node := range pg.Nodes {
+		hostInfo, ok := manifest.Hosts[node.Host]
+		if !ok {
+			failures = append(failures, fmt.Sprintf("%s: host not found in manifest", node.Host))
+			continue
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "    Checking %s (%s)...\n", node.Host, hostInfo.ExternalIP)
+
+		result, err := base.RunCommand(ctx, hostInfo, "systemctl is-active yb-master yb-tserver 2>/dev/null")
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: systemd check failed: %v", node.Host, err))
+			continue
+		}
+		activeLines := strings.Fields(strings.TrimSpace(result.Stdout))
+		if len(activeLines) < 2 || activeLines[0] != "active" || activeLines[1] != "active" {
+			failures = append(failures, fmt.Sprintf("%s: services not active (output=%q)", node.Host, strings.TrimSpace(result.Stdout)))
+			continue
+		}
+
+		result, err = base.RunCommand(ctx, hostInfo, `
+for i in $(seq 1 30); do
+  if ss -ltn '( sport = :5433 )' 2>/dev/null | grep -q LISTEN; then
+    echo READY
+    exit 0
+  fi
+  sleep 2
+done
+echo NOT_READY
+exit 0`)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: YSQL wait failed: %v", node.Host, err))
+			continue
+		}
+		if !strings.Contains(result.Stdout, "READY") {
+			statusResult, _ := base.RunCommand(ctx, hostInfo, "systemctl status yb-master yb-tserver --no-pager --full 2>/dev/null || true")
+			logResult, _ := base.RunCommand(ctx, hostInfo, `
+set -e
+for file in \
+  /var/lib/yugabyte/yb-data/tserver/logs/yb-tserver.INFO \
+  "$(ls -1t /var/lib/yugabyte/yb-data/tserver/logs/yb-tserver.INFO* 2>/dev/null | head -n 1)" \
+  "$(ls -1t /var/lib/yugabyte/yb-data/tserver/logs/postgresql* 2>/dev/null | head -n 1)"; do
+  if [ -n "$file" ] && [ -f "$file" ]; then
+    echo "===== $file ====="
+    tail -n 80 "$file"
+  fi
+done
+`)
+			failures = append(failures, fmt.Sprintf("%s: YSQL not listening on 5433 after cluster assembly\nsystemctl:\n%s\nlogs:\n%s", node.Host, strings.TrimSpace(statusResult.Stdout), strings.TrimSpace(logResult.Stdout)))
+			continue
+		}
+
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s: yb-master/yb-tserver active, YSQL listening on :5433", node.Host))
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("%d node(s) failed Yugabyte verification:\n  %s", len(failures), strings.Join(failures, "\n  "))
+	}
+
+	ux.Success(cmd.OutOrStdout(), "Yugabyte cluster verified")
+	return nil
+}
+
+func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, sharedEnv map[string]string) error {
+	pg := manifest.Infrastructure.Postgres
+	if pg == nil || !pg.Enabled || !pg.IsYugabyte() || len(pg.Nodes) == 0 {
+		return nil
+	}
+
+	host, ok := manifest.GetHost(pg.Nodes[0].Host)
+	if !ok {
+		return fmt.Errorf("yugabyte node host %s not found", pg.Nodes[0].Host)
+	}
+
+	databases := make([]map[string]string, 0, len(pg.Databases))
+	for _, db := range pg.Databases {
+		databases = append(databases, map[string]string{
+			"name":  db.Name,
+			"owner": db.Owner,
+		})
+	}
+
+	password, err := resolveYugabytePassword(pg, sharedEnv)
+	if err != nil {
+		return err
+	}
+
+	config := provisioner.ServiceConfig{
+		Port: pg.EffectivePort(),
+		Metadata: map[string]any{
+			"databases":         databases,
+			"postgres_password": password,
+		},
+	}
+
+	prov, err := provisioner.GetProvisioner("yugabyte", pool)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "  Initializing YugabyteDB databases...")
+	if err := prov.Initialize(ctx, host, config); err != nil {
+		return err
+	}
+	ux.Success(cmd.OutOrStdout(), "YugabyteDB initialized")
+	return nil
 }
 
 func meshHostname(name string) string {
@@ -1644,7 +1790,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				}
 				if task.InstanceID != "" {
 					if brokerID, err := strconv.Atoi(task.InstanceID); err == nil {
-						config.Metadata["broker_id"] = brokerID
+						config.Metadata["node_id"] = brokerID
 					}
 				}
 				config.Metadata["cluster_id"] = manifest.Infrastructure.Kafka.ClusterID
@@ -1652,6 +1798,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if len(manifest.Infrastructure.Kafka.Controllers) > 0 {
 					// Dedicated mode: broker-only
 					config.Metadata["role"] = "broker"
+					config.Metadata["controllers"] = kafkaControllersToMetadata(manifest)
+					config.Metadata["controller_quorum_voters"] = buildDedicatedControllerQuorum(manifest)
+					config.Metadata["brokers"] = kafkaBrokersToMetadata(manifest)
 					config.Metadata["bootstrap_servers"] = buildBootstrapServers(manifest)
 				} else {
 					// Combined mode
@@ -1696,11 +1845,14 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				}
 				config.Metadata["role"] = "controller"
 				config.Metadata["cluster_id"] = manifest.Infrastructure.Kafka.ClusterID
+				config.Metadata["controllers"] = kafkaControllersToMetadata(manifest)
+				config.Metadata["controller_quorum_voters"] = buildDedicatedControllerQuorum(manifest)
+				config.Metadata["brokers"] = kafkaBrokersToMetadata(manifest)
 				config.Metadata["bootstrap_servers"] = buildBootstrapServers(manifest)
 				config.Metadata["initial_controllers"] = buildInitialControllers(manifest)
 				if task.InstanceID != "" {
 					if ctrlID, err := strconv.Atoi(task.InstanceID); err == nil {
-						config.Metadata["broker_id"] = ctrlID
+						config.Metadata["node_id"] = ctrlID
 						// Look up port from manifest controller with matching ID
 						for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
 							if ctrl.ID == ctrlID {
@@ -1791,8 +1943,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	// Override for infrastructure (Redis uses manifest mode, not forced native)
 	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "zookeeper" && task.Type != "redis" {
 		config.Mode = "native"
-		// Keep manifest-specified version for yugabyte, kafka, kafka-controller; default to "latest" for others
-		keepVersion := task.Type == "yugabyte" || task.Type == "kafka" || task.Type == "kafka-controller"
+		// Keep manifest-specified version for infra with explicit native version
+		// semantics; only fall back to "latest" for the remaining legacy cases.
+		keepVersion := task.Type == "yugabyte" || task.Type == "kafka" || task.Type == "kafka-controller" || task.Type == "clickhouse"
 		if !keepVersion || config.Version == "" {
 			config.Version = "latest"
 		}
@@ -2255,6 +2408,75 @@ func buildBootstrapServers(manifest *inventory.Manifest) string {
 	return strings.Join(servers, ",")
 }
 
+func buildDedicatedControllerQuorum(manifest *inventory.Manifest) string {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return ""
+	}
+	voters := make([]string, 0, len(manifest.Infrastructure.Kafka.Controllers))
+	for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+		host := ctrl.Host
+		if hostInfo, ok := manifest.Hosts[ctrl.Host]; ok && hostInfo.ExternalIP != "" {
+			host = hostInfo.ExternalIP
+		}
+		port := ctrl.Port
+		if port == 0 {
+			port = 9093
+		}
+		voters = append(voters, fmt.Sprintf("%d@%s:%d", ctrl.ID, host, port))
+	}
+	return strings.Join(voters, ",")
+}
+
+func kafkaControllersToMetadata(manifest *inventory.Manifest) []map[string]any {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return nil
+	}
+	controllers := make([]map[string]any, 0, len(manifest.Infrastructure.Kafka.Controllers))
+	for _, ctrl := range manifest.Infrastructure.Kafka.Controllers {
+		host := ctrl.Host
+		if hostInfo, ok := manifest.Hosts[ctrl.Host]; ok && hostInfo.ExternalIP != "" {
+			host = hostInfo.ExternalIP
+		}
+		port := ctrl.Port
+		if port == 0 {
+			port = 9093
+		}
+		entry := map[string]any{
+			"host": host,
+			"id":   ctrl.ID,
+			"port": port,
+		}
+		if ctrl.DirID != "" {
+			entry["dir_id"] = ctrl.DirID
+		}
+		controllers = append(controllers, entry)
+	}
+	return controllers
+}
+
+func kafkaBrokersToMetadata(manifest *inventory.Manifest) []map[string]any {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return nil
+	}
+	brokers := make([]map[string]any, 0, len(manifest.Infrastructure.Kafka.Brokers))
+	for _, broker := range manifest.Infrastructure.Kafka.Brokers {
+		host := broker.Host
+		if hostInfo, ok := manifest.Hosts[broker.Host]; ok && hostInfo.ExternalIP != "" {
+			host = hostInfo.ExternalIP
+		}
+		port := broker.Port
+		if port == 0 {
+			port = 9092
+		}
+		brokers = append(brokers, map[string]any{
+			"host": host,
+			"id":   broker.ID,
+			"port": port,
+		})
+	}
+	return brokers
+}
+
 func buildInitialControllers(manifest *inventory.Manifest) string {
 	if manifest == nil || manifest.Infrastructure.Kafka == nil {
 		return ""
@@ -2400,6 +2622,20 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		return nil, err
 	}
 
+	// Infrastructure roles need shared credentials during the initial
+	// Provision/Validate run as well, not only during Initialize. ClickHouse in
+	// particular applies auth in its configure path and then reuses the same
+	// credentials for init-time database creation.
+	if task.Phase == orchestrator.PhaseInfrastructure {
+		infraCreds := extractInfraCredentials(sharedEnv)
+		for k, v := range infraCreds {
+			if config.Metadata == nil {
+				config.Metadata = make(map[string]interface{})
+			}
+			config.Metadata[k] = v
+		}
+	}
+
 	// Preflight: check required external env vars
 	if required := servicedefs.RequiredExternalEnv(task.Type); len(required) > 0 {
 		var missing []servicedefs.RequiredEnvVar
@@ -2449,29 +2685,11 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 	}
 
-	// Infrastructure tasks: run Initialize + Configure after Provision/Validate.
-	// Credentials come from the preloaded shared env (same source used by every
-	// other provisioning step) so Initialize can create app users.
+	// Infrastructure tasks: run Initialize after Provision/Validate.
 	if task.Phase == orchestrator.PhaseInfrastructure {
-		infraCreds := extractInfraCredentials(sharedEnv)
-		for k, v := range infraCreds {
-			if config.Metadata == nil {
-				config.Metadata = make(map[string]interface{})
-			}
-			config.Metadata[k] = v
-		}
-
-		if err := prov.Initialize(ctx, host, config); err != nil {
-			return nil, fmt.Errorf("initialization failed for %s: %w", task.Name, err)
-		}
-
-		// Configure deploys auth credentials (e.g. ClickHouse users.xml)
-		type configurer interface {
-			Configure(ctx context.Context, host inventory.Host, config provisioner.ServiceConfig) error
-		}
-		if c, ok := prov.(configurer); ok {
-			if err := c.Configure(ctx, host, config); err != nil {
-				return nil, fmt.Errorf("configuration failed for %s: %w", task.Name, err)
+		if task.Type != "yugabyte" {
+			if err := prov.Initialize(ctx, host, config); err != nil {
+				return nil, fmt.Errorf("initialization failed for %s: %w", task.Name, err)
 			}
 		}
 	}

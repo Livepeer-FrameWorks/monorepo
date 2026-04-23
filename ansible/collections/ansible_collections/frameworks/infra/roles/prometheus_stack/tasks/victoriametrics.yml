@@ -1,0 +1,51 @@
+---
+- name: Ensure victoriametrics system user
+  ansible.builtin.user:
+    name: "{{ prometheus_stack_user }}"
+    group: "{{ prometheus_stack_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    state: present
+  when: prometheus_stack_user != ""
+
+- name: Download VictoriaMetrics binary
+  ansible.builtin.get_url:
+    url: "{{ victoriametrics_artifact_url }}"
+    dest: /tmp/victoria-metrics.tar.gz
+    checksum: "{{ victoriametrics_artifact_checksum }}"
+    mode: "0644"
+  when: victoriametrics_artifact_url | length > 0
+
+- name: Extract VictoriaMetrics
+  ansible.builtin.unarchive:
+    src: /tmp/victoria-metrics.tar.gz
+    dest: /usr/local/bin
+    remote_src: true
+    mode: "0755"
+    creates: "{{ victoriametrics_bin }}"
+  when: victoriametrics_artifact_url | length > 0
+
+- name: Ensure VictoriaMetrics storage dir
+  ansible.builtin.file:
+    path: "{{ victoriametrics_storage_path }}"
+    state: directory
+    owner: "{{ prometheus_stack_user }}"
+    group: "{{ prometheus_stack_group }}"
+    mode: "0755"
+
+- name: Render VictoriaMetrics systemd unit
+  ansible.builtin.template:
+    src: victoriametrics.service.j2
+    dest: /etc/systemd/system/victoriametrics.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: victoriametrics restart
+
+- name: Ensure victoriametrics service
+  ansible.builtin.systemd:
+    name: victoriametrics
+    state: started
+    enabled: true
+    daemon_reload: true

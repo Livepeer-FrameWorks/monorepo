@@ -1,0 +1,33 @@
+services:
+  chatwoot:
+    image: {{ chatwoot_image }}
+    container_name: frameworks-chatwoot
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        bundle exec rails db:chatwoot_prepare
+        bundle exec rails s -p 3000 -b '0.0.0.0'
+    ports:
+      - "{{ chatwoot_port }}:3000"
+    networks:
+      - frameworks
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  chatwoot-worker:
+    image: {{ chatwoot_image }}
+    container_name: frameworks-chatwoot-worker
+    restart: always
+    command: bundle exec sidekiq -C config/sidekiq.yml
+    networks:
+      - frameworks
+    depends_on:
+      chatwoot:
+        condition: service_healthy
+networks:
+  frameworks:
+    driver: bridge

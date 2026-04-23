@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 30s
+scrape_configs:
+  - job_name: edge-mist
+    metrics_path: /api2
+    static_configs:
+      - targets:
+{% if edge_mode == 'docker' %}
+          - "mistserver:8080"
+{% else %}
+          - "127.0.0.1:8080"
+{% endif %}
+        labels:
+          frameworks_mode: "edge"
+          frameworks_node: "{{ edge_node_id }}"
+          frameworks_service: "mistserver"
+  - job_name: edge-helmsman
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+{% if edge_mode == 'docker' %}
+          - "helmsman:18007"
+{% else %}
+          - "127.0.0.1:18007"
+{% endif %}
+        labels:
+          frameworks_mode: "edge"
+          frameworks_node: "{{ edge_node_id }}"
+          frameworks_service: "helmsman"

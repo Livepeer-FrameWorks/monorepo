@@ -1,0 +1,26 @@
+---
+galaxy_info:
+  role_name: hello
+  author: FrameWorks Infra
+  description: Smoke-test role used by the CLI to verify the Ansible invocation path.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Debian
+      versions: [bookworm]
+    - name: EL
+      versions: ["9"]
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Smoke-test entrypoint
+    options:
+      hello_greeting:
+        type: str
+        required: false
+        default: "FrameWorks CLI wiring is live"
+        description: Message printed by the debug task.

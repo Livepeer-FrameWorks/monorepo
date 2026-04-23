@@ -1,0 +1,17 @@
+[Unit]
+Description=FrameWorks MistServer (edge media server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ mistserver_user }}
+Group={{ mistserver_group }}
+WorkingDirectory={{ mistserver_install_dir }}
+EnvironmentFile={{ mistserver_env_file }}
+ExecStart={{ mistserver_install_dir }}/MistServer -a ${MIST_API_USERNAME}:${MIST_API_PASSWORD}
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

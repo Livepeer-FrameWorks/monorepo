@@ -1,0 +1,34 @@
+---
+role_name_check: 1
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: zookeeper-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        zookeeper_version: "3.9.2"
+        zookeeper_artifact_url: >-
+          {{ lookup('env', 'ZOOKEEPER_ARTIFACT_URL') |
+             default('https://dlcdn.apache.org/zookeeper/zookeeper-3.9.2/apache-zookeeper-3.9.2-bin.tar.gz', true) }}
+        zookeeper_artifact_checksum: >-
+          {{ lookup('env', 'ZOOKEEPER_ARTIFACT_CHECKSUM') |
+             default('sha512:https://dlcdn.apache.org/zookeeper/zookeeper-3.9.2/apache-zookeeper-3.9.2-bin.tar.gz.sha512', true) }}
+        zookeeper_node_id: 1
+        zookeeper_ensemble: []
+verifier:
+  name: ansible

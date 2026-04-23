@@ -1,0 +1,13 @@
+---
+- name: Converge
+  hosts: all
+  become: true
+  gather_facts: true
+  pre_tasks:
+    - name: Skip converge when no helmsman artifact pinned for the matrix
+      ansible.builtin.meta: end_play
+      when: helmsman_artifact_url | length == 0
+  tasks:
+    - name: Apply frameworks.infra.helmsman
+      ansible.builtin.include_role:
+        name: frameworks.infra.helmsman

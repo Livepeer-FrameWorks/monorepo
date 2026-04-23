@@ -1,0 +1,16 @@
+[Unit]
+Description=VictoriaMetrics Auth
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ prometheus_stack_user }}
+Group={{ prometheus_stack_group }}
+ExecStart={{ vmauth_bin }} \
+  -httpListenAddr=:{{ vmauth_port }} \
+  -auth.config=/etc/vmauth/config.yml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+---
+- name: Refresh service facts
+  ansible.builtin.service_facts:
+
+- name: Assert redis service running
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[redis_service_name ~ '.service'].state == 'running'
+    fail_msg: "{{ redis_service_name }} not running"
+
+- name: Wait for TCP listener
+  ansible.builtin.wait_for:
+    host: "{{ redis_bind_interface }}"
+    port: "{{ redis_port }}"
+    timeout: 30
+
+- name: PING via redis-cli (authed when password set)
+  ansible.builtin.command:
+    argv: >-
+      {{ ['redis-cli', '-h', redis_bind_interface, '-p', redis_port | string]
+         + (['-a', redis_password] if redis_password | length > 0 else [])
+         + ['PING'] }}
+  register: redis_ping
+  changed_when: false
+  no_log: "{{ redis_password | length > 0 }}"
+  failed_when: "'PONG' not in redis_ping.stdout"

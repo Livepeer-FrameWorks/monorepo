@@ -1,0 +1,27 @@
+---
+kafka_bin_dir: "{{ kafka_install_dir }}/bin"
+kafka_conf_dir: "{{ kafka_install_dir }}/config"
+kafka_install_sentinel: "{{ kafka_install_dir }}/.installed-{{ (kafka_artifact_checksum ~ kafka_artifact_url) | hash('sha256') }}"
+kafka_service_name: >-
+  {{ 'frameworks-kafka-controller' if kafka_role == 'controller' else 'frameworks-kafka' }}
+kafka_role_data_dir: >-
+  {{ (kafka_data_dir ~ '/' ~ kafka_service_name) if kafka_data_dir == '/var/lib/kafka' else kafka_data_dir }}
+kafka_role_log_dir: >-
+  {{ (kafka_log_dir ~ '/' ~ kafka_service_name) if kafka_log_dir == '/var/log/kafka' else kafka_log_dir }}
+kafka_format_sentinel: "{{ kafka_role_data_dir }}/meta.properties"
+kafka_unit_path: "/etc/systemd/system/{{ kafka_service_name }}.service"
+kafka_properties_path: "{{ kafka_conf_dir }}/{{ kafka_service_name }}.properties"
+
+kafka_java_package_by_family:
+  Debian: default-jre-headless
+  RedHat: java-17-openjdk-headless
+  Archlinux: jre17-openjdk-headless
+  Alpine: openjdk17-jre-headless
+
+kafka_voters: >-
+  {{ kafka_controller_quorum_voters
+     if (kafka_controller_quorum_voters | default('') | length > 0)
+     else (
+       kafka_controllers | map(attribute='id') | zip(kafka_controllers | map(attribute='host'))
+       | map('join', '@') | map('regex_replace', '$', ':' ~ kafka_controller_port) | join(',')
+     ) }}

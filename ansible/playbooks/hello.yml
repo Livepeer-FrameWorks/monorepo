@@ -1,0 +1,7 @@
+---
+- name: FrameWorks hello smoke-test
+  hosts: "{{ frameworks_target_group | default('all') }}"
+  gather_facts: true
+  become: false
+  roles:
+    - role: frameworks.infra.hello

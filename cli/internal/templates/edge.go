@@ -1,3 +1,13 @@
+// Package templates renders the operator-local view of the edge stack
+// (compose + Caddyfile + .edge.env) for `frameworks edge init`. This is
+// the "generate files for manual docker-compose up" workflow.
+//
+// The remote-apply path uses the Jinja equivalents under
+// ansible/collections/ansible_collections/frameworks/infra/roles/edge/templates/.
+// The two surfaces must stay shape-compatible: same service names, same
+// env keys, same ports, same bootstrap Caddyfile semantics (tls internal +
+// 503). The consistency test in edge_parity_test.go pins the invariants
+// so renames on either side fail the build.
 package templates
 
 import (

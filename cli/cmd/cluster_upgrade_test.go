@@ -60,7 +60,9 @@ func TestCollectUpgradeableServices_DeduplicatesMultiHost(t *testing.T) {
 	}
 
 	got := collectUpgradeableServices(plan)
-	want := []string{"privateer", "bridge", "commodore"}
+	// Infrastructure rides the same upgrade path as applications now that
+	// each role owns stop/restart through its handlers.
+	want := []string{"postgres", "kafka", "privateer", "bridge", "commodore"}
 
 	if len(got) != len(want) {
 		t.Fatalf("expected %d services, got %d: %v", len(want), len(got), got)

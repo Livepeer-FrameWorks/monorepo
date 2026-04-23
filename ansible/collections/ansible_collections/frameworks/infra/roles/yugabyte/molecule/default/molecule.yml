@@ -1,0 +1,44 @@
+---
+role_name_check: 1
+
+dependency:
+  name: galaxy
+
+driver:
+  name: docker
+
+platforms:
+  - name: yugabyte-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    # Systemd requires these for services to start cleanly inside a
+    # container; standard Molecule+Docker systemd pattern.
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        # Pin these to real yugabyte release coordinates for full end-to-end
+        # testing. In CI we set them via environment so each matrix entry can
+        # sweep versions; for local runs, override with --extra-vars.
+        yugabyte_version: "{{ lookup('env', 'YUGABYTE_VERSION') | default('2024.2.0.0-b145', true) }}"
+        yugabyte_artifact_url: >-
+          {{ lookup('env', 'YUGABYTE_ARTIFACT_URL') |
+             default('https://downloads.yugabyte.com/releases/2024.2.0.0/yugabyte-2024.2.0.0-b145-linux-x86_64.tar.gz', true) }}
+        yugabyte_artifact_checksum: >-
+          {{ lookup('env', 'YUGABYTE_ARTIFACT_CHECKSUM') |
+             default('sha256:0000000000000000000000000000000000000000000000000000000000000000', true) }}
+        yugabyte_replication_factor: 1
+        yugabyte_node_address: "127.0.0.1"
+
+verifier:
+  name: ansible

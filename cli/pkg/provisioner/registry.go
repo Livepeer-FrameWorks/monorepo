@@ -6,7 +6,7 @@ import (
 	"frameworks/cli/pkg/ssh"
 )
 
-// ServicePorts maps service names to their default ports
+// ServicePorts maps service names to their default ports.
 var ServicePorts = map[string]int{
 	"postgres":         5432,
 	"kafka":            9092,
@@ -49,108 +49,89 @@ var ServicePorts = map[string]int{
 	"chandler":         18020,
 }
 
-// GetProvisioner returns a provisioner for a given service
+// GetProvisioner returns the role-based provisioner for serviceName. Every
+// provisioner routes through RolePlaybookProvisioner; there is no legacy
+// fallback. Generic FrameWorks Go microservices use ServiceRoleProvisioner
+// which dispatches compose_stack.yml (docker mode) or go_service.yml (native
+// mode) based on ServiceConfig.Mode.
 func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 	port, ok := ServicePorts[serviceName]
-	if !ok {
-		// Some services (like periscope-ingest) might not have a primary HTTP port,
-		// but they still need a provisioner.
-		// If port is 0, it means no health check by default, but provisioner logic still runs.
-		if serviceName == "periscope-ingest" { // Allow 0 port for periscope-ingest
-			port = 0
-			ok = true
-		}
-		if !ok {
-			return nil, fmt.Errorf("unknown service: %s", serviceName)
-		}
+	if !ok && serviceName != "periscope-ingest" {
+		return nil, fmt.Errorf("unknown service: %s", serviceName)
 	}
 
 	switch serviceName {
+	// Infrastructure services with dedicated roles.
 	case "postgres":
-		return NewPostgresProvisioner(pool)
+		return NewRolePlaybookProvisioner("postgres", pool,
+			"frameworks.infra.postgres", "playbooks/postgres.yml",
+			postgresRoleVars, postgresRoleDetect)
 	case "kafka":
-		return NewKafkaProvisioner(pool)
+		return NewRolePlaybookProvisioner("kafka", pool,
+			"frameworks.infra.kafka", "playbooks/kafka.yml",
+			kafkaRoleVarsFor("broker"), kafkaRoleDetectFor("broker"))
 	case "kafka-controller":
-		return NewKafkaControllerProvisioner(pool)
+		return NewRolePlaybookProvisioner("kafka-controller", pool,
+			"frameworks.infra.kafka", "playbooks/kafka.yml",
+			kafkaRoleVarsFor("controller"), kafkaRoleDetectFor("controller"))
 	case "zookeeper":
-		return NewZookeeperProvisioner(pool)
+		return NewRolePlaybookProvisioner("zookeeper", pool,
+			"frameworks.infra.zookeeper", "playbooks/zookeeper.yml",
+			zookeeperRoleVars, zookeeperRoleDetect)
 	case "clickhouse":
-		return NewClickHouseProvisioner(pool)
+		return NewRolePlaybookProvisioner("clickhouse", pool,
+			"frameworks.infra.clickhouse", "playbooks/clickhouse.yml",
+			clickhouseRoleVars, clickhouseRoleDetect)
 	case "yugabyte":
-		return NewYugabyteProvisioner(pool)
+		return NewRolePlaybookProvisioner("yugabyte", pool,
+			"frameworks.infra.yugabyte", "playbooks/yugabyte.yml",
+			yugabyteRoleVars, yugabyteRoleDetect)
 	case "redis":
-		return NewRedisProvisioner(pool)
+		return NewRolePlaybookProvisioner("redis", pool,
+			"frameworks.infra.redis", "playbooks/redis.yml",
+			redisRoleVars, redisRoleDetect)
 	case "privateer":
-		return NewPrivateerProvisioner(pool), nil
-	case "chatwoot":
-		return NewChatwootProvisioner(pool), nil
-	case "deckhand":
-		return NewFlexibleProvisioner("deckhand", port, pool), nil
-	case "livepeer-gateway":
-		return NewLivepeerGatewayProvisioner(pool), nil
-	case "livepeer-signer":
-		return NewLivepeerSignerProvisioner(pool), nil
-
-	case "quartermaster":
-		return NewFlexibleProvisioner("quartermaster", port, pool), nil
-	case "commodore":
-		return NewFlexibleProvisioner("commodore", port, pool), nil
-	case "bridge":
-		return NewFlexibleProvisioner("bridge", port, pool), nil
-	case "foghorn":
-		return NewFlexibleProvisioner("foghorn", port, pool), nil
-	case "decklog":
-		return NewFlexibleProvisioner("decklog", port, pool), nil
-	case "helmsman":
-		return NewFlexibleProvisioner("helmsman", port, pool), nil
-	case "periscope-ingest":
-		return NewFlexibleProvisioner("periscope-ingest", port, pool), nil
-	case "periscope-query":
-		return NewFlexibleProvisioner("periscope-query", port, pool), nil
-	case "signalman":
-		return NewFlexibleProvisioner("signalman", port, pool), nil
-	case "purser":
-		return NewFlexibleProvisioner("purser", port, pool), nil
-	case "steward":
-		return NewFlexibleProvisioner("steward", port, pool), nil
-	case "navigator":
-		return NewFlexibleProvisioner("navigator", port, pool), nil
-	case "listmonk":
-		return NewListmonkProvisioner(pool), nil
-	case "prometheus":
-		return NewFlexibleProvisioner("prometheus", port, pool), nil
-	case "victoriametrics":
-		return NewVictoriaMetricsProvisioner(pool), nil
-	case "vmauth":
-		return NewVMAAuthProvisioner(pool), nil
-	case "vmagent":
-		return NewVMAgentProvisioner(pool), nil
-	case "grafana":
-		return NewGrafanaProvisioner(pool), nil
-	case "metabase":
-		return NewFlexibleProvisioner("metabase", port, pool), nil
-
+		return NewRolePlaybookProvisioner("privateer", pool,
+			"frameworks.infra.privateer", "playbooks/privateer.yml",
+			privateerRoleVars, privateerRoleDetect)
 	case "caddy":
-		return NewCaddyProvisioner(pool), nil
-	case "nginx":
-		return NewNginxProvisioner(pool), nil
-	case "chartroom":
-		return NewFlexibleProvisioner("chartroom", port, pool), nil
-	case "foredeck":
-		return NewFlexibleProvisioner("foredeck", port, pool), nil
-	case "logbook":
-		return NewFlexibleProvisioner("logbook", port, pool), nil
-	case "skipper":
-		return NewFlexibleProvisioner("skipper", port, pool), nil
-	case "chandler":
-		return NewFlexibleProvisioner("chandler", port, pool), nil
+		return NewRolePlaybookProvisioner("caddy", pool,
+			"frameworks.infra.caddy", "playbooks/caddy.yml",
+			caddyRoleVars, caddyRoleDetect)
+
+	// Observability stack — all four components route through prometheus_stack.
+	case "prometheus", "victoriametrics", "vmagent", "vmauth":
+		return NewRolePlaybookProvisioner(serviceName, pool,
+			"frameworks.infra.prometheus_stack", "playbooks/prometheus_stack.yml",
+			prometheusStackRoleVars, prometheusStackRoleDetect)
+
+	// Compose-based interfaces with service-specific env rendering.
+	case "listmonk":
+		return NewRolePlaybookProvisioner("listmonk", pool,
+			"frameworks.infra.listmonk", "playbooks/listmonk.yml",
+			listmonkRoleVars, listmonkRoleDetect)
+	case "chatwoot":
+		return NewRolePlaybookProvisioner("chatwoot", pool,
+			"frameworks.infra.chatwoot", "playbooks/chatwoot.yml",
+			chatwootRoleVars, chatwootRoleDetect)
+
+	// Generic FrameWorks Go microservices — dispatch on ServiceConfig.Mode.
+	case "quartermaster", "commodore", "bridge", "foghorn", "decklog", "helmsman",
+		"periscope-ingest", "periscope-query", "signalman", "purser", "steward",
+		"navigator", "chartroom", "foredeck", "logbook", "skipper", "chandler",
+		"deckhand", "metabase", "grafana", "nginx",
+		"livepeer-gateway", "livepeer-signer":
+		return NewServiceRoleProvisioner(ServiceRoleConfig{
+			ServiceName: serviceName,
+			DefaultPort: port,
+		}, pool)
 
 	default:
 		return nil, fmt.Errorf("provisioner not implemented for service: %s", serviceName)
 	}
 }
 
-// ListServices returns all known services
+// ListServices returns all known services.
 func ListServices() []string {
 	services := make([]string, 0, len(ServicePorts))
 	for name := range ServicePorts {

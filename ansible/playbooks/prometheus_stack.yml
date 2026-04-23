@@ -1,0 +1,7 @@
+---
+- name: Provision observability stack
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.prometheus_stack

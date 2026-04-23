@@ -1,0 +1,12 @@
+--master_addresses={{ yugabyte_master_addresses }}
+--rpc_bind_addresses={{ yugabyte_node_address }}:{{ yugabyte_master_rpc_port }}
+--webserver_interface={{ yugabyte_node_address }}
+--webserver_port={{ yugabyte_master_web_port }}
+--enable_ysql=true
+--fs_data_dirs={{ yugabyte_data_dir }}
+--replication_factor={{ yugabyte_replication_factor }}
+--placement_cloud={{ yugabyte_placement_cloud }}
+--placement_region={{ yugabyte_placement_region }}
+--placement_zone={{ yugabyte_placement_zone }}
+--leader_failure_max_missed_heartbeat_periods=10
+--callhome_enabled=false

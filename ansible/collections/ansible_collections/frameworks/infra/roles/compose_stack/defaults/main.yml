@@ -1,0 +1,30 @@
+---
+# Generic Docker Compose stack role. Consumers: chatwoot, listmonk,
+# livepeer-gateway, livepeer-signer, observability (docker mode), and any
+# generic FrameWorks Go microservice running in docker mode.
+#
+# The stack is applied with community.docker.docker_compose_v2 which returns
+# accurate changed/ok state via `docker compose ls --format json`.
+#
+# Callers supply exactly one of:
+#   compose_stack_compose_content  rendered docker-compose.yml YAML string
+#                                  (used by service-specific roles whose
+#                                  compose shape is non-generic, e.g.
+#                                  chatwoot app+sidekiq)
+#   compose_stack_service          {image, port, health_path} dict for the
+#                                  single-service generic shape; role
+#                                  renders compose from the packaged
+#                                  templates/generic-compose.yml.j2
+
+compose_stack_name: ""
+compose_stack_project_dir: "/opt/frameworks/{{ compose_stack_name }}"
+compose_stack_compose_content: ""
+compose_stack_service: {}
+compose_stack_env: {}
+compose_stack_pull: "policy" # policy | always | missing | never
+compose_stack_wait: true
+compose_stack_recreate: auto # auto | always | never
+# compose_stack_render_only writes compose + .env but skips docker compose
+# up (and the validate-tag `docker compose ps` probe). Used by molecule
+# scenarios that want to exercise rendering without a docker daemon.
+compose_stack_render_only: false

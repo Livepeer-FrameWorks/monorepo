@@ -1,0 +1,43 @@
+---
+# launchd has no native EnvironmentFile equivalent. Pattern: a shell wrapper
+# sources the env file, then exec-s MistServer. The plist loads the wrapper.
+
+- name: Render env file
+  ansible.builtin.copy:
+    dest: "{{ mistserver_darwin_conf_dir }}/mistserver.env"
+    content: |
+      # MistServer environment (managed by frameworks.infra.mistserver)
+      {% for k, v in (mistserver_env | dictsort) %}
+      {{ k }}={{ v }}
+      {% endfor %}
+      MIST_API_USERNAME={{ mistserver_api_user }}
+      MIST_API_PASSWORD={{ mistserver_api_password }}
+    mode: "0600"
+  no_log: true
+  notify: mistserver restart
+
+- name: Render launchd wrapper script
+  ansible.builtin.copy:
+    dest: "{{ mistserver_darwin_base_dir }}/mistserver/run.sh"
+    content: |
+      #!/bin/bash
+      set -e
+      while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[! ]*}"}"
+        [ -z "$line" ] && continue
+        case "$line" in
+          *=*) export "$line" ;;
+        esac
+      done < "{{ mistserver_darwin_conf_dir }}/mistserver.env"
+      exec "{{ mistserver_darwin_base_dir }}/mistserver/MistServer" \
+        -a "${MIST_API_USERNAME}:${MIST_API_PASSWORD}"
+    mode: "0755"
+  notify: mistserver restart
+
+- name: Render launchd plist
+  ansible.builtin.template:
+    src: mistserver.plist.j2
+    dest: "{{ mistserver_darwin_plist_dir }}/{{ mistserver_darwin_label }}.plist"
+    mode: "0644"
+  notify: mistserver restart

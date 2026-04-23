@@ -1,0 +1,119 @@
+name: Ansible
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "ansible/**"
+      - "cli/pkg/ansiblerun/**"
+      - "cli/pkg/provisioner/role_provisioner.go"
+      - "cli/pkg/provisioner/service_role.go"
+      - "cli/pkg/provisioner/*_role.go"
+      - "cli/pkg/provisioner/seed_helpers.go"
+      - "cli/pkg/provisioner/migrate_helpers.go"
+      - ".github/workflows/ansible.yml"
+  pull_request:
+    paths:
+      - "ansible/**"
+      - "cli/pkg/ansiblerun/**"
+      - "cli/pkg/provisioner/role_provisioner.go"
+      - "cli/pkg/provisioner/service_role.go"
+      - "cli/pkg/provisioner/*_role.go"
+      - "cli/pkg/provisioner/seed_helpers.go"
+      - "cli/pkg/provisioner/migrate_helpers.go"
+      - ".github/workflows/ansible.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ansible-lint + yamllint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Ansible + lint tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ansible-core==2.17.*" ansible-lint yamllint
+
+      - name: Install collections + roles
+        working-directory: ansible
+        run: |
+          mkdir -p .cache/collections .cache/roles
+          ansible-galaxy collection install -r requirements.yml -p .cache/collections
+          ansible-galaxy role install -r requirements.yml --roles-path .cache/roles
+
+      - name: ansible-lint (production profile)
+        working-directory: ansible
+        run: ansible-lint --profile=production collections/ansible_collections/frameworks/infra
+
+      - name: yamllint
+        working-directory: ansible
+        run: yamllint -s collections/ansible_collections/frameworks/infra playbooks
+
+  molecule:
+    name: "molecule: ${{ matrix.role }} on ${{ matrix.image }}"
+    runs-on: ubuntu-24.04
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        role:
+          - yugabyte
+          - postgres
+          - redis
+          - clickhouse
+          - zookeeper
+          - kafka
+          - caddy
+          - compose_stack
+          - prometheus_stack
+          - privateer
+          - chatwoot
+          - listmonk
+          - go_service
+          - mistserver
+          - helmsman
+          - edge
+        image:
+          - geerlingguy/docker-ubuntu2404-ansible:latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ansible-core==2.17.*" molecule molecule-plugins[docker] docker
+
+      - name: Install collections + roles
+        working-directory: ansible
+        run: |
+          mkdir -p .cache/collections .cache/roles
+          ansible-galaxy collection install -r requirements.yml -p .cache/collections
+          ansible-galaxy role install -r requirements.yml --roles-path .cache/roles
+
+      - name: Run molecule default scenario
+        working-directory: ansible/collections/ansible_collections/frameworks/infra/roles/${{ matrix.role }}
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/ansible/collections:${{ github.workspace }}/ansible/.cache/collections
+          ANSIBLE_ROLES_PATH: ${{ github.workspace }}/ansible/.cache/roles
+          MOLECULE_NO_LOG: "false"
+          MOLECULE_DOCKER_IMAGE: ${{ matrix.image }}
+        run: |
+          if [ -d molecule/default ]; then
+            molecule test -s default
+          else
+            echo "::notice::no molecule/default scenario for role ${{ matrix.role }} — skipping"
+          fi

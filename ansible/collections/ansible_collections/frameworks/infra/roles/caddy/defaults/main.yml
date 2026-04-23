@@ -1,0 +1,17 @@
+---
+# Caddy version — maps onto the Cloudsmith apt repo package version.
+caddy_version: "2.8.4"
+caddy_user: caddy
+caddy_group: caddy
+caddy_config_dir: /etc/caddy
+caddy_data_dir: /var/lib/caddy
+caddy_log_dir: /var/log/caddy
+
+# Ingress sites are declarative: each entry corresponds to one Caddy site
+# block. The role renders them into /etc/caddy/Caddyfile via template.
+caddy_sites: []
+caddy_global_options:
+  email: ""
+caddy_admin_listen: "localhost:2019"
+caddy_default_port_http: 80
+caddy_default_port_https: 443

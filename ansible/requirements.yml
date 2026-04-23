@@ -1,0 +1,37 @@
+---
+# External collections and roles. frameworks.infra is consumed directly from
+# the in-tree source under ./collections/ansible_collections/frameworks/infra;
+# the ansible.cfg [defaults] collections_path puts that first, so local role
+# edits take effect without an `ansible-galaxy install --force` round-trip.
+collections:
+  - name: prometheus.prometheus
+    version: "0.27.0"
+
+  - name: community.sops
+    version: "2.3.0"
+
+  - name: community.docker
+    version: "3.13.1"
+
+  - name: community.postgresql
+    version: "3.4.0"
+
+  - name: community.general
+    version: "9.5.0"
+
+  - name: ansible.posix
+    version: "1.5.4"
+
+roles:
+  - name: geerlingguy.postgresql
+    version: "3.5.2"
+
+  - name: geerlingguy.redis
+    version: "1.9.1"
+
+  - name: idealista.clickhouse
+    version: "3.3.4"
+
+  # caddy_ansible.caddy_ansible is not pinned: the Galaxy-published role is
+  # stale (latest v3.2.0 from 2022). Caddy installs from the Cloudsmith apt
+  # repo directly via frameworks.infra.caddy; no external role required.

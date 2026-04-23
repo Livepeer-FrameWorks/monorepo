@@ -1,0 +1,59 @@
+---
+galaxy_info:
+  role_name: edge
+  author: FrameWorks Infra
+  description: >-
+    Meta-role for edge-node provisioning. Orchestrates mistserver +
+    helmsman + caddy (+ optional vmagent) in docker-compose mode,
+    Linux systemd, or macOS launchd.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Provision the full edge stack on one host.
+    options:
+      edge_mode:
+        type: str
+        required: false
+        default: docker
+        choices: [docker, native]
+      edge_node_id:
+        type: str
+        required: true
+      edge_domain:
+        type: str
+        required: true
+      edge_foghorn_grpc_addr:
+        type: str
+        required: true
+      edge_enrollment_token:
+        type: str
+        required: true
+      edge_mist_api_password:
+        type: str
+        required: true
+      edge_acme_email:
+        type: str
+        required: false
+      edge_cert_pem:
+        type: str
+        required: false
+      edge_key_pem:
+        type: str
+        required: false
+      edge_ca_bundle_pem:
+        type: str
+        required: false
+      edge_telemetry_url:
+        type: str
+        required: false
+      edge_telemetry_token:
+        type: str
+        required: false
+      edge_apply_tuning:
+        type: bool
+        required: false
+        default: false

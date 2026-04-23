@@ -1,0 +1,11 @@
+---
+- name: Restart zookeeper
+  ansible.builtin.systemd:
+    name: zookeeper
+    state: restarted
+
+- name: Wait for client port after restart
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ zookeeper_client_port }}"
+    timeout: 60

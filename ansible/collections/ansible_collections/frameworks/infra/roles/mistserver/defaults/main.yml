@@ -1,0 +1,45 @@
+---
+# MistServer edge media server. Pinned artifact URL+checksum flow in from the
+# CLI (resolved out of the release manifest). Binary inside the tarball is
+# `MistServer` (capital-M) and takes `-a <user>:<password>` for API auth —
+# differences from a generic Go service that make go_service an ill fit.
+
+mistserver_artifact_url: ""
+mistserver_artifact_checksum: ""
+mistserver_version: ""
+
+mistserver_api_user: frameworks
+# Required. Go-side callers generate a random hex string per host. Stored in
+# the env file with mode 0600 so only the mistserver user can read it.
+mistserver_api_password: ""
+
+# Extra env keys mixed into the env file. `MIST_DEBUG=3` is the historical
+# default; overridable per host.
+mistserver_env:
+  MIST_DEBUG: "3"
+
+# Linux layout. Overridable if a host conflicts with another /opt user.
+mistserver_user: frameworks
+mistserver_group: frameworks
+mistserver_install_dir: /opt/frameworks/mistserver
+mistserver_env_file: /etc/frameworks/mistserver.env
+mistserver_systemd_name: frameworks-mistserver
+mistserver_unit_path: "/etc/systemd/system/{{ mistserver_systemd_name }}.service"
+mistserver_port: 8080
+
+# Darwin layout. Selected when ansible_facts.os_family == 'Darwin'. Two
+# domains supported: system (/Library/LaunchDaemons, root) and user
+# (~/Library/LaunchAgents, no sudo). The CLI picks by passing
+# mistserver_darwin_domain=system|user.
+mistserver_darwin_domain: system
+mistserver_darwin_label: com.livepeer.frameworks.mistserver
+
+mistserver_darwin_system_base_dir: /usr/local/opt/frameworks
+mistserver_darwin_system_conf_dir: /usr/local/etc/frameworks
+mistserver_darwin_system_log_dir: /usr/local/var/log/frameworks
+mistserver_darwin_system_plist_dir: /Library/LaunchDaemons
+
+mistserver_darwin_user_base_dir: "{{ ansible_env.HOME }}/.local/opt/frameworks"
+mistserver_darwin_user_conf_dir: "{{ ansible_env.HOME }}/.config/frameworks"
+mistserver_darwin_user_log_dir: "{{ ansible_env.HOME }}/.local/var/log/frameworks"
+mistserver_darwin_user_plist_dir: "{{ ansible_env.HOME }}/Library/LaunchAgents"

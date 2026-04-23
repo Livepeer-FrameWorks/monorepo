@@ -1,0 +1,76 @@
+---
+galaxy_info:
+  role_name: yugabyte
+  author: FrameWorks Infra
+  description: >-
+    Install and manage a YugabyteDB node (yb-master + yb-tserver). Artifacts
+    and versions are supplied by the FrameWorks CLI from the release manifest;
+    this role never picks its own version.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Debian
+      versions: [bookworm]
+    - name: EL
+      versions: ["9"]
+  galaxy_tags:
+    - database
+    - yugabyte
+    - distributed
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install and run a YugabyteDB node.
+    options:
+      yugabyte_artifact_url:
+        type: str
+        required: true
+        description: HTTPS URL of the pinned YugabyteDB tarball.
+      yugabyte_artifact_checksum:
+        type: str
+        required: true
+        description: "sha256 checksum prefix, e.g. 'sha256:abc123...'. Verified by get_url."
+      yugabyte_version:
+        type: str
+        required: true
+        description: Release version label (for logging/introspection).
+      yugabyte_master_addresses:
+        type: str
+        required: false
+        description: Comma-separated list of yb-master host:port entries.
+      yugabyte_replication_factor:
+        type: int
+        required: false
+        default: 3
+      yugabyte_node_address:
+        type: str
+        required: false
+      yugabyte_placement_zone:
+        type: str
+        required: false
+      yugabyte_databases:
+        type: list
+        elements: dict
+        required: false
+        description: Databases created at init-tag time.
+        options:
+          name:
+            type: str
+            required: true
+          owner:
+            type: str
+            required: false
+      yugabyte_application_password:
+        type: str
+        required: false
+        no_log: true
+        description: Password for the per-database owner role.
+      yugabyte_superuser_password:
+        type: str
+        required: true
+        no_log: true
+        description: Password for the yugabyte superuser (scram-sha-256). Required by validate + init.

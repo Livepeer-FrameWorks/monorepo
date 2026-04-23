@@ -1,0 +1,7 @@
+---
+- name: Stop and disable clickhouse-server
+  ansible.builtin.systemd:
+    name: "{{ clickhouse_service_name }}"
+    state: stopped
+    enabled: false
+  failed_when: false

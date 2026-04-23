@@ -1,0 +1,8 @@
+---
+- name: Restart clickhouse-server
+  ansible.builtin.systemd:
+    name: "{{ clickhouse_service_name }}"
+    state: restarted
+
+- name: Probe ClickHouse locally after restart
+  ansible.builtin.include_tasks: _probe_client.yml

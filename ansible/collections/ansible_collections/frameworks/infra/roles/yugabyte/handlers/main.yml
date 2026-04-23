@@ -1,0 +1,39 @@
+---
+# Handler pattern: restart sets a "restarted" marker; reload is guarded on
+# the marker so it never fires redundantly when a restart is already scheduled
+# for the same host. Pattern borrowed from prometheus-community/ansible.
+
+- name: daemon-reload systemd
+  listen: yugabyte daemon-reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart yb-master
+  listen: yugabyte restart master
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_master_service }}"
+    state: restarted
+    daemon_reload: true
+  register: yugabyte_master_restarted
+
+- name: restart yb-tserver
+  listen: yugabyte restart tserver
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_tserver_service }}"
+    state: restarted
+    daemon_reload: true
+  register: yugabyte_tserver_restarted
+
+- name: reload yb-master
+  listen: yugabyte reload master
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_master_service }}"
+    state: reloaded
+  when: yugabyte_master_restarted is not defined
+
+- name: reload yb-tserver
+  listen: yugabyte reload tserver
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_tserver_service }}"
+    state: reloaded
+  when: yugabyte_tserver_restarted is not defined

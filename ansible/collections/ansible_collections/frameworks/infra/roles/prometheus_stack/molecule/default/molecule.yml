@@ -1,0 +1,30 @@
+---
+role_name_check: 1
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: prometheus-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        # Single-node scenario: prometheus + node_exporter only. VM binaries
+        # are artifact-pinned and exercised in the production path.
+        prometheus_stack_components: [prometheus, node_exporter]
+        prometheus_version: "2.54.1"
+        node_exporter_version: "1.8.2"
+verifier:
+  name: ansible

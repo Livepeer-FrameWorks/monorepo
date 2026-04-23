@@ -1,0 +1,29 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert zookeeper running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['zookeeper.service'].state == 'running'
+
+    - name: Wait for client port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 2181
+        timeout: 30
+
+    - name: Rerun role (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.zookeeper
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "zookeeper role not idempotent"

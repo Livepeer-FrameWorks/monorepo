@@ -1,0 +1,36 @@
+---
+- name: kafka | install
+  ansible.builtin.import_tasks: install.yml
+  tags: [install]
+
+- name: kafka | configure
+  ansible.builtin.import_tasks: configure.yml
+  tags: [configure]
+
+- name: kafka | flush handlers before service
+  ansible.builtin.meta: flush_handlers
+  tags: [configure, service]
+
+- name: kafka | service
+  ansible.builtin.import_tasks: service.yml
+  tags: [service]
+
+- name: kafka | flush handlers before validate
+  ansible.builtin.meta: flush_handlers
+  tags: [service, validate]
+
+- name: kafka | validate
+  ansible.builtin.import_tasks: validate.yml
+  tags: [validate]
+
+- name: kafka | init (topics)
+  ansible.builtin.import_tasks: init.yml
+  tags: [init, never]
+
+- name: kafka | restart
+  ansible.builtin.import_tasks: restart.yml
+  tags: [restart, never]
+
+- name: kafka | cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cleanup, never]

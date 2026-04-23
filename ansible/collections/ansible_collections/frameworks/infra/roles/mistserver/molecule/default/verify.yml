@@ -1,0 +1,32 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Skip verify when converge short-circuited
+      ansible.builtin.meta: end_play
+      when: mistserver_artifact_url | length == 0
+
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert frameworks-mistserver running
+      ansible.builtin.assert:
+        that: ansible_facts.services['frameworks-mistserver.service'].state == 'running'
+
+    - name: Wait for MistServer HTTP port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ mistserver_port }}"
+        timeout: 30
+
+    - name: Rerun role (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.mistserver
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "mistserver role not idempotent"

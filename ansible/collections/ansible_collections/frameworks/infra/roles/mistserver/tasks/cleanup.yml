@@ -1,0 +1,33 @@
+---
+- name: Stop and disable systemd service (linux)
+  ansible.builtin.systemd:
+    name: "{{ mistserver_systemd_name }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: ansible_facts.os_family != 'Darwin'
+
+- name: Remove systemd unit (linux)
+  ansible.builtin.file:
+    path: "{{ mistserver_unit_path }}"
+    state: absent
+  when: ansible_facts.os_family != 'Darwin'
+
+- name: Reload systemd (linux)
+  ansible.builtin.systemd:
+    daemon_reload: true
+  changed_when: false
+  when: ansible_facts.os_family != 'Darwin'
+
+- name: Unload and remove launchd plist (darwin)
+  community.general.launchd:
+    name: "{{ mistserver_darwin_label }}"
+    state: absent
+  failed_when: false
+  when: ansible_facts.os_family == 'Darwin'
+
+- name: Remove launchd plist file (darwin)
+  ansible.builtin.file:
+    path: "{{ mistserver_darwin_plist_dir }}/{{ mistserver_darwin_label }}.plist"
+    state: absent
+  when: ansible_facts.os_family == 'Darwin'

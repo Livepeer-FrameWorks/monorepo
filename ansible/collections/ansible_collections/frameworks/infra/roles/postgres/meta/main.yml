@@ -1,0 +1,63 @@
+---
+galaxy_info:
+  role_name: postgres
+  author: FrameWorks Infra
+  description: >-
+    Install and manage PostgreSQL. Thin wrapper over
+    geerlingguy.postgresql that sets FrameWorks paths, SOPS-backed password,
+    database list, and pg_hba policy. Version is supplied by the CLI from the
+    release manifest.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+    - name: Debian
+      versions: [bookworm]
+  galaxy_tags:
+    - database
+    - postgresql
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install and configure a PostgreSQL server.
+    options:
+      postgres_version:
+        type: str
+        required: true
+        description: PostgreSQL major version (15, 16, 17, ...).
+      postgres_admin_password:
+        type: str
+        required: true
+        no_log: true
+        description: Password for the postgres superuser.
+      postgres_port:
+        type: int
+        required: false
+        default: 5432
+      postgres_listen_addresses:
+        type: str
+        required: false
+        default: "*"
+      postgres_databases:
+        type: list
+        elements: dict
+        required: false
+        description: Databases + owner roles created at init-tag time.
+        options:
+          name:
+            type: str
+            required: true
+          owner:
+            type: str
+            required: false
+      postgres_max_connections:
+        type: int
+        required: false
+        default: 200
+      postgres_shared_buffers:
+        type: str
+        required: false
+        default: "512MB"

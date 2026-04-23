@@ -1,0 +1,8 @@
+---
+- name: chatwoot | delegate restart to compose_stack
+  ansible.builtin.include_role:
+    name: frameworks.infra.compose_stack
+    tasks_from: restart.yml
+  vars:
+    compose_stack_name: chatwoot
+    compose_stack_project_dir: "{{ chatwoot_project_dir }}"

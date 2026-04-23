@@ -1,0 +1,15 @@
+---
+- name: restart zookeeper
+  listen: zookeeper restart
+  ansible.builtin.systemd:
+    name: zookeeper
+    state: restarted
+    daemon_reload: true
+  register: zookeeper_restarted
+
+- name: reload zookeeper
+  listen: zookeeper reload
+  ansible.builtin.systemd:
+    name: zookeeper
+    state: reloaded
+  when: zookeeper_restarted is not defined

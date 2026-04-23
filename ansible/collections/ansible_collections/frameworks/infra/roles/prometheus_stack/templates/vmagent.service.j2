@@ -1,0 +1,18 @@
+[Unit]
+Description=VictoriaMetrics Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ prometheus_stack_user }}
+Group={{ prometheus_stack_group }}
+ExecStart={{ vmagent_bin }} \
+  -httpListenAddr=:{{ vmagent_port }} \
+{% if vmagent_remote_write_url | length > 0 %}
+  -remoteWrite.url={{ vmagent_remote_write_url }}
+{% endif %}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

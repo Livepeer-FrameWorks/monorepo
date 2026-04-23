@@ -1,0 +1,23 @@
+---
+- name: Render Privateer environment file
+  ansible.builtin.copy:
+    dest: "{{ privateer_conf_dir }}/privateer.env"
+    content: |
+      {% for k, v in privateer_env.items() %}
+      {{ k }}={{ v }}
+      {% endfor %}
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
+    mode: "0600"
+  no_log: true
+  notify: privateer restart
+
+- name: Render systemd unit
+  ansible.builtin.template:
+    src: privateer.service.j2
+    dest: /etc/systemd/system/frameworks-privateer.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - privateer restart

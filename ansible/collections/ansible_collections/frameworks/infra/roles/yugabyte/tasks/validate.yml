@@ -1,0 +1,80 @@
+---
+- name: Confirm yb-master binary is present
+  ansible.builtin.stat:
+    path: "{{ yugabyte_bin_dir }}/yb-master"
+  register: yugabyte_master_bin
+
+- name: Assert yb-master binary exists
+  ansible.builtin.assert:
+    that:
+      - yugabyte_master_bin.stat.exists
+      - yugabyte_master_bin.stat.executable
+    fail_msg: "yb-master binary missing or not executable at {{ yugabyte_bin_dir }}/yb-master"
+
+- name: Confirm post_install.sh completion marker
+  ansible.builtin.stat:
+    path: "{{ yugabyte_post_install_sentinel }}"
+  register: yugabyte_post_install_stat
+
+- name: Assert post_install completion marker
+  ansible.builtin.assert:
+    that: yugabyte_post_install_stat.stat.exists
+    fail_msg: "yugabyte post_install sentinel missing — did post_install.sh run?"
+
+- name: Refresh service facts before validating systemd state
+  block:
+    - ansible.builtin.service_facts:
+
+    - name: Assert yb-master and yb-tserver are running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services[yugabyte_master_service ~ '.service'].state == 'running'
+          - ansible_facts.services[yugabyte_tserver_service ~ '.service'].state == 'running'
+        fail_msg: >-
+          yugabyte services not running:
+          master={{ ansible_facts.services[yugabyte_master_service ~ '.service'].state | default('missing') }},
+          tserver={{ ansible_facts.services[yugabyte_tserver_service ~ '.service'].state | default('missing') }}
+
+  rescue:
+    - name: Capture yb-tserver systemctl status
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - status
+          - "{{ yugabyte_tserver_service }}"
+          - "--no-pager"
+          - "--full"
+      register: yugabyte_tserver_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture yb-tserver journal
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - "-u"
+          - "{{ yugabyte_tserver_service }}"
+          - "-n"
+          - "100"
+          - "--no-pager"
+      register: yugabyte_tserver_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with yb-tserver diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          yb-tserver failed validation
+          systemctl status:
+          {{ yugabyte_tserver_status.stdout | default('(no output)') }}
+
+          journalctl:
+          {{ yugabyte_tserver_journal.stdout | default('(no output)') }}
+
+- name: Record successful Yugabyte bootstrap
+  ansible.builtin.file:
+    path: "{{ yugabyte_bootstrap_sentinel }}"
+    state: touch
+    owner: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    mode: "0644"

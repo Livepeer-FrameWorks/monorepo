@@ -1,0 +1,41 @@
+---
+galaxy_info:
+  role_name: mistserver
+  author: FrameWorks Infra
+  description: >-
+    Install and run MistServer as an edge media server. Linux systemd or
+    macOS launchd (system or user domain). Docker mode is served by the
+    compose_stack role, not this one.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install and run MistServer natively.
+    options:
+      mistserver_artifact_url:
+        type: str
+        required: true
+      mistserver_artifact_checksum:
+        type: str
+        required: true
+      mistserver_api_password:
+        type: str
+        required: true
+      mistserver_version:
+        type: str
+        required: false
+      mistserver_api_user:
+        type: str
+        required: false
+        default: frameworks
+      mistserver_env:
+        type: dict
+        required: false
+      mistserver_darwin_domain:
+        type: str
+        required: false
+        default: system
+        choices: [system, user]

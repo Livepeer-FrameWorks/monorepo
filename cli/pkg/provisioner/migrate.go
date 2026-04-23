@@ -1,7 +1,6 @@
 package provisioner
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
@@ -9,12 +8,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	dbsql "frameworks/pkg/database/sql"
 )
 
-// Migration represents a single versioned SQL migration file.
+// Migration represents a single versioned SQL migration file. Consumed by
+// BuildMigrationItems, which hands the set to the postgres / yugabyte role
+// via *_migrate_items vars; the role's tasks/migrate.yml does the apply.
 type Migration struct {
 	Version  string // e.g. "v1.1.0"
 	Sequence int    // parsed from NNN prefix
@@ -22,70 +22,6 @@ type Migration struct {
 	Path     string // full embed path
 	Checksum string // SHA-256 of content
 	content  string
-}
-
-// MigrationResult records a single applied migration.
-type MigrationResult struct {
-	Migration
-	AppliedAt time.Time
-}
-
-const migrationsTrackingDDL = `CREATE TABLE IF NOT EXISTS _migrations (
-	version    TEXT NOT NULL,
-	seq        INT NOT NULL,
-	filename   TEXT NOT NULL,
-	checksum   TEXT NOT NULL,
-	applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-	PRIMARY KEY (version, seq)
-)`
-
-// RunPostgresMigrations applies any pending versioned migrations from the
-// embedded filesystem to the target Postgres database.
-// If dryRun is true it returns the list of pending migrations without applying.
-func RunPostgresMigrations(ctx context.Context, exec SQLExecutor, conn ConnParams, dryRun bool) ([]MigrationResult, error) {
-	all, err := discoverMigrations("migrations")
-	if err != nil {
-		return nil, fmt.Errorf("discover migrations: %w", err)
-	}
-	if len(all) == 0 {
-		return nil, nil
-	}
-
-	if execErr := exec.Exec(ctx, conn, migrationsTrackingDDL); execErr != nil {
-		return nil, fmt.Errorf("ensure tracking table: %w", execErr)
-	}
-
-	applied, err := loadApplied(ctx, exec, conn)
-	if err != nil {
-		return nil, err
-	}
-
-	pending := filterPending(all, applied)
-	if len(pending) == 0 || dryRun {
-		results := make([]MigrationResult, len(pending))
-		for i, m := range pending {
-			results[i] = MigrationResult{Migration: m}
-		}
-		return results, nil
-	}
-
-	var results []MigrationResult
-	for _, m := range pending {
-		if err := exec.ExecTx(ctx, conn, func(tx TxExecutor) error {
-			if err := tx.Exec(ctx, m.content); err != nil {
-				return fmt.Errorf("apply %s/%s: %w", m.Version, m.Filename, err)
-			}
-			insert := fmt.Sprintf(
-				"INSERT INTO _migrations (version, seq, filename, checksum) VALUES (%s, %d, %s, %s)",
-				quoteLiteral(m.Version), m.Sequence, quoteLiteral(m.Filename), quoteLiteral(m.Checksum),
-			)
-			return tx.Exec(ctx, insert)
-		}); err != nil {
-			return results, err
-		}
-		results = append(results, MigrationResult{Migration: m, AppliedAt: time.Now()})
-	}
-	return results, nil
 }
 
 // discoverMigrations walks the embedded FS under root looking for
@@ -143,34 +79,6 @@ func parseSequence(filename string) int {
 	return n
 }
 
-func loadApplied(ctx context.Context, exec SQLExecutor, conn ConnParams) (map[string]struct{}, error) {
-	set := make(map[string]struct{})
-	err := exec.QueryRows(ctx, conn, "SELECT version, seq FROM _migrations", nil, func(scan func(dest ...any) error) error {
-		var v string
-		var s int
-		if err := scan(&v, &s); err != nil {
-			return err
-		}
-		set[fmt.Sprintf("%s:%d", v, s)] = struct{}{}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("load applied: %w", err)
-	}
-	return set, nil
-}
-
-func filterPending(all []Migration, applied map[string]struct{}) []Migration {
-	var pending []Migration
-	for _, m := range all {
-		key := fmt.Sprintf("%s:%d", m.Version, m.Sequence)
-		if _, ok := applied[key]; !ok {
-			pending = append(pending, m)
-		}
-	}
-	return pending
-}
-
 // compareSemver compares two version strings like "v1.2.3".
 // Returns -1 if a < b, 0 if equal, 1 if a > b.
 // Falls back to lexicographic comparison on parse failure.
@@ -185,7 +93,7 @@ func compareSemver(a, b string) int {
 		return v
 	}
 	va, vb := parseVer(a), parseVer(b)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if va[i] < vb[i] {
 			return -1
 		}

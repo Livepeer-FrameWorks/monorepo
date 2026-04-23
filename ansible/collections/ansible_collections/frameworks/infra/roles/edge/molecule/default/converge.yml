@@ -1,0 +1,16 @@
+---
+- name: Converge
+  hosts: all
+  become: true
+  gather_facts: true
+  pre_tasks:
+    - name: Skip converge when no edge artifacts pinned for the matrix
+      ansible.builtin.meta: end_play
+      when: >-
+        edge_mistserver_artifact_url | length == 0
+        or edge_helmsman_artifact_url | length == 0
+        or edge_caddy_artifact_url | length == 0
+  tasks:
+    - name: Apply frameworks.infra.edge (native linux)
+      ansible.builtin.include_role:
+        name: frameworks.infra.edge

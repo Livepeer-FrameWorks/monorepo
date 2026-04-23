@@ -1,0 +1,15 @@
+---
+privateer_artifact_url: ""
+privateer_artifact_checksum: ""
+privateer_version: ""
+
+privateer_user: privateer
+privateer_group: privateer
+privateer_install_dir: /opt/privateer
+privateer_conf_dir: /etc/privateer
+privateer_data_dir: /var/lib/privateer
+privateer_port: 18012
+privateer_tarball_path: /tmp/privateer.tar.gz
+
+privateer_env: {}
+privateer_dns_zones: []

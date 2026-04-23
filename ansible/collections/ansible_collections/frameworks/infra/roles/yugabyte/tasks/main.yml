@@ -1,0 +1,46 @@
+---
+- name: yugabyte | preflight
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [always]
+
+- name: yugabyte | install
+  ansible.builtin.import_tasks: install.yml
+  tags: [install]
+
+- name: yugabyte | configure
+  ansible.builtin.import_tasks: configure.yml
+  tags: [configure]
+
+# Apply any notified restarts before the service + validate phases observe
+# cluster state — otherwise validate hits the pre-restart process.
+- name: yugabyte | flush handlers before service
+  ansible.builtin.meta: flush_handlers
+  tags: [configure, service]
+
+- name: yugabyte | service
+  ansible.builtin.import_tasks: service.yml
+  tags: [service]
+
+- name: yugabyte | flush handlers before validate
+  ansible.builtin.meta: flush_handlers
+  tags: [service, validate]
+
+- name: yugabyte | validate
+  ansible.builtin.import_tasks: validate.yml
+  tags: [validate]
+
+- name: yugabyte | init
+  ansible.builtin.import_tasks: init.yml
+  tags: [init, never]
+
+- name: yugabyte | seed
+  ansible.builtin.import_tasks: seed.yml
+  tags: [seed, never]
+
+- name: yugabyte | restart
+  ansible.builtin.import_tasks: restart.yml
+  tags: [restart, never]
+
+- name: yugabyte | cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cleanup, never]

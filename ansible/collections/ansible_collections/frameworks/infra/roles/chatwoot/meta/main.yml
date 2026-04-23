@@ -1,0 +1,31 @@
+---
+galaxy_info:
+  role_name: chatwoot
+  author: FrameWorks Infra
+  description: >-
+    Install and run Chatwoot via docker-compose. Generates SECRET_KEY_BASE
+    on first apply and persists it to /etc/frameworks so sessions survive
+    restarts. Delegates container lifecycle to frameworks.infra.compose_stack.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions: [jammy, noble]
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install Chatwoot.
+    options:
+      chatwoot_image:
+        type: str
+        required: false
+      chatwoot_port:
+        type: int
+        required: false
+        default: 18092
+      chatwoot_env:
+        type: dict
+        required: false
+        description: Non-secret environment passed straight through to compose.

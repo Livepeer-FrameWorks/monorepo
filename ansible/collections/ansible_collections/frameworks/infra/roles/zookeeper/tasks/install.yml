@@ -1,0 +1,84 @@
+---
+- name: Assert Java package mapping exists for this distro family
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family in zookeeper_java_package_by_family
+    fail_msg: "frameworks.infra.zookeeper does not define a Java runtime package for os_family={{ ansible_facts.os_family }}"
+
+- name: Probe for a compatible Java runtime
+  ansible.builtin.shell:
+    cmd: |
+      if ! command -v java >/dev/null 2>&1; then
+        exit 1
+      fi
+      ver="$(java -XshowSettings:properties -version 2>&1 | awk -F'= ' '/^[[:space:]]*java.specification.version = / { print $2; exit }')"
+      major="${ver%%.*}"
+      if [ "$major" = "1" ]; then
+        rest="${ver#1.}"
+        major="${rest%%.*}"
+      fi
+      test -n "$major" && [ "$major" -ge 11 ]
+    executable: /bin/sh
+  register: zookeeper_java_runtime_probe
+  changed_when: false
+  failed_when: false
+
+- name: Install Java runtime
+  ansible.builtin.package:
+    name: "{{ zookeeper_java_package_by_family[ansible_facts.os_family] }}"
+    state: present
+  when: zookeeper_java_runtime_probe.rc != 0
+
+- name: Ensure zookeeper group
+  ansible.builtin.group:
+    name: "{{ zookeeper_group }}"
+    system: true
+
+- name: Ensure zookeeper user
+  ansible.builtin.user:
+    name: "{{ zookeeper_user }}"
+    group: "{{ zookeeper_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Ensure zookeeper dirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ zookeeper_user }}"
+    group: "{{ zookeeper_group }}"
+    mode: "0755"
+  loop:
+    - "{{ zookeeper_install_dir }}"
+    - "{{ zookeeper_data_dir }}"
+    - "{{ zookeeper_log_dir }}"
+
+- name: Download ZooKeeper tarball
+  ansible.builtin.get_url:
+    url: "{{ zookeeper_artifact_url }}"
+    dest: "{{ zookeeper_tarball_path }}"
+    checksum: "{{ zookeeper_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Extract ZooKeeper
+  ansible.builtin.unarchive:
+    src: "{{ zookeeper_tarball_path }}"
+    dest: "{{ zookeeper_install_dir }}"
+    remote_src: true
+    owner: "{{ zookeeper_user }}"
+    group: "{{ zookeeper_group }}"
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ zookeeper_install_sentinel }}"
+  notify: zookeeper restart
+
+- name: Record install sentinel
+  ansible.builtin.file:
+    path: "{{ zookeeper_install_sentinel }}"
+    state: touch
+    owner: "{{ zookeeper_user }}"
+    group: "{{ zookeeper_group }}"
+    mode: "0644"
+  changed_when: false

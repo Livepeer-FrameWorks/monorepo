@@ -1,0 +1,49 @@
+---
+role_name_check: 1
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: edge-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        edge_mode: native
+        edge_node_id: molecule-edge
+        edge_domain: edge.molecule.local
+        edge_acme_email: ops@molecule.local
+        edge_foghorn_grpc_addr: 127.0.0.1:9090
+        edge_enrollment_token: molecule-test-token
+        edge_mist_api_password: molecule-test-password
+        # Pinned artifact URLs — the edge role requires concrete tarballs
+        # for each sub-service. CI supplies them via env so a single
+        # molecule invocation can swap release lines without YAML edits.
+        # When any of the three is empty, converge + verify short-circuit
+        # cleanly (scenario becomes role-lint smoke only).
+        edge_mistserver_artifact_url: >-
+          {{ lookup('env', 'EDGE_MISTSERVER_ARTIFACT_URL') | default('', true) }}
+        edge_mistserver_artifact_checksum: >-
+          {{ lookup('env', 'EDGE_MISTSERVER_ARTIFACT_CHECKSUM') | default('', true) }}
+        edge_helmsman_artifact_url: >-
+          {{ lookup('env', 'EDGE_HELMSMAN_ARTIFACT_URL') | default('', true) }}
+        edge_helmsman_artifact_checksum: >-
+          {{ lookup('env', 'EDGE_HELMSMAN_ARTIFACT_CHECKSUM') | default('', true) }}
+        edge_caddy_artifact_url: >-
+          {{ lookup('env', 'EDGE_CADDY_ARTIFACT_URL') | default('', true) }}
+        edge_caddy_artifact_checksum: >-
+          {{ lookup('env', 'EDGE_CADDY_ARTIFACT_CHECKSUM') | default('', true) }}
+verifier:
+  name: ansible

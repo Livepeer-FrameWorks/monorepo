@@ -154,3 +154,74 @@ func TestPlan_InterfaceDepsExcludeEdge(t *testing.T) {
 		}
 	}
 }
+
+func TestPlan_ClickHouseDependsOnSameHostYugabyte(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"yuga-eu-1": {ExternalIP: "10.0.0.1"},
+			"yuga-eu-2": {ExternalIP: "10.0.0.2"},
+			"yuga-eu-3": {ExternalIP: "10.0.0.3"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Mode:    "native",
+				Version: "2025.1.3.2",
+				Nodes: []inventory.PostgresNode{
+					{Host: "yuga-eu-1", ID: 1},
+					{Host: "yuga-eu-2", ID: 2},
+					{Host: "yuga-eu-3", ID: 3},
+				},
+			},
+			ClickHouse: &inventory.ClickHouseConfig{
+				Enabled: true,
+				Mode:    "native",
+				Version: "25.9.2.1",
+				Host:    "yuga-eu-1",
+			},
+		},
+	}
+
+	planner := NewPlanner(manifest)
+	plan, err := planner.Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
+	if err != nil {
+		t.Fatalf("Plan() failed: %v", err)
+	}
+
+	var clickhouseTask *Task
+	var yugabyteBatch, clickhouseBatch int = -1, -1
+
+	for batchIdx, batch := range plan.Batches {
+		for _, task := range batch {
+			if task.Name == "clickhouse" {
+				clickhouseTask = task
+				clickhouseBatch = batchIdx
+			}
+			if task.Name == "yugabyte-node-1" {
+				yugabyteBatch = batchIdx
+			}
+		}
+	}
+
+	if clickhouseTask == nil {
+		t.Fatal("expected clickhouse task in plan")
+	}
+	if yugabyteBatch == -1 || clickhouseBatch == -1 {
+		t.Fatalf("expected both yugabyte-node-1 and clickhouse in plan, got batches: %+v", plan.Batches)
+	}
+	if clickhouseBatch <= yugabyteBatch {
+		t.Fatalf("expected clickhouse after yugabyte-node-1, got yugabyte batch %d clickhouse batch %d", yugabyteBatch, clickhouseBatch)
+	}
+
+	foundDep := false
+	for _, dep := range clickhouseTask.DependsOn {
+		if dep == "yugabyte-node-1" {
+			foundDep = true
+			break
+		}
+	}
+	if !foundDep {
+		t.Fatalf("expected clickhouse to depend on yugabyte-node-1, got %v", clickhouseTask.DependsOn)
+	}
+}

@@ -1,0 +1,18 @@
+---
+# Rolling restart: callers that want per-host ordering set `serial: 1` at the
+# play level and add a pre_task gate on under-replicated-partitions. This
+# handler is safe for single-host and single-role clusters.
+- name: restart kafka
+  listen: kafka restart
+  ansible.builtin.systemd:
+    name: "{{ kafka_service_name }}"
+    state: restarted
+    daemon_reload: true
+  register: kafka_restarted
+
+- name: reload kafka
+  listen: kafka reload
+  ansible.builtin.systemd:
+    name: "{{ kafka_service_name }}"
+    state: reloaded
+  when: kafka_restarted is not defined

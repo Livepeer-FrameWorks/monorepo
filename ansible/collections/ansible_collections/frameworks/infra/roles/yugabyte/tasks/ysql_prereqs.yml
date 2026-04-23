@@ -1,0 +1,18 @@
+---
+- name: Resolve PostgreSQL Python adapter packages for this distro family
+  ansible.builtin.set_fact:
+    yugabyte_postgresql_python_packages: >-
+      {{ yugabyte_postgresql_python_packages_by_family[ansible_facts.os_family] | default([]) }}
+
+- name: Fail if distro family is unsupported for YSQL Ansible modules
+  ansible.builtin.fail:
+    msg: >-
+      yugabyte role: unsupported os_family '{{ ansible_facts.os_family }}' for
+      community.postgresql prerequisites — add an entry to
+      yugabyte_postgresql_python_packages_by_family
+  when: yugabyte_postgresql_python_packages | length == 0
+
+- name: Install Python PostgreSQL adapter for community.postgresql modules
+  ansible.builtin.package:
+    name: "{{ yugabyte_postgresql_python_packages }}"
+    state: present

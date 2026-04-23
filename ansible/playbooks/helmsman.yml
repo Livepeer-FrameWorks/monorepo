@@ -1,0 +1,7 @@
+---
+- name: Provision Helmsman
+  hosts: all
+  become: "{{ (ansible_os_family | default('Linux')) != 'Darwin' }}"
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.helmsman

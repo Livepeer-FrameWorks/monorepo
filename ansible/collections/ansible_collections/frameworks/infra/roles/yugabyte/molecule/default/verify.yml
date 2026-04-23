@@ -1,0 +1,61 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert yb-master service is running and enabled
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['yb-master.service'].state == 'running'
+          - ansible_facts.services['yb-master.service'].status == 'enabled'
+        fail_msg: "yb-master not running/enabled"
+
+    - name: Assert yb-tserver service is running and enabled
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['yb-tserver.service'].state == 'running'
+          - ansible_facts.services['yb-tserver.service'].status == 'enabled'
+        fail_msg: "yb-tserver not running/enabled"
+
+    - name: Confirm YSQL listener responds
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 5433
+        timeout: 30
+
+    - name: Confirm yb-master binary is present and executable
+      ansible.builtin.stat:
+        path: /opt/yugabyte/bin/yb-master
+      register: master_bin
+
+    - name: Assert binary
+      ansible.builtin.assert:
+        that:
+          - master_bin.stat.exists
+          - master_bin.stat.executable
+
+    - name: Confirm installation sentinel + post-install sentinel
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: sentinels
+      loop:
+        - /opt/yugabyte/.post_install_done
+
+    - name: Assert sentinels
+      ansible.builtin.assert:
+        that: sentinels.results | map(attribute='stat.exists') | list == [true]
+
+    - name: Rerun role to verify idempotence (should report changed=0)
+      ansible.builtin.include_role:
+        name: frameworks.infra.yugabyte
+      register: idem
+      check_mode: false
+
+    - name: Fail if any task reported changed on second apply
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "yugabyte role is not idempotent — changed=true on second apply"

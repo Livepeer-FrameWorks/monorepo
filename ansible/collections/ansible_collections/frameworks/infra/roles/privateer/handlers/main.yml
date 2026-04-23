@@ -1,0 +1,15 @@
+---
+- name: restart privateer
+  listen: privateer restart
+  ansible.builtin.systemd:
+    name: frameworks-privateer
+    state: restarted
+    daemon_reload: true
+  register: privateer_restarted
+
+- name: reload privateer
+  listen: privateer reload
+  ansible.builtin.systemd:
+    name: frameworks-privateer
+    state: reloaded
+  when: privateer_restarted is not defined

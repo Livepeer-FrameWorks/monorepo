@@ -1,0 +1,167 @@
+---
+title: Ansible-driven provisioning
+description: How the FrameWorks CLI drives provisioning via Ansible roles and how to hook it up to gitops CI.
+---
+
+The CLI provisions, validates, and updates infrastructure by invoking
+`ansible-playbook` under the hood via the `apenella/go-ansible` v2 library.
+All role content lives in a single collection at `ansible/collections/ansible_collections/frameworks/infra`;
+external community content (Postgres, Redis, ClickHouse, Prometheus, Caddy) is
+pinned in `ansible/requirements.yml` and installed into `ansible/.cache/` by
+`make ansible-galaxy-install`.
+
+## Directory layout
+
+```
+ansible/
+├── requirements.yml         # pinned external collections + roles
+├── ansible.cfg              # collections_path, vars plugin, roles_path
+├── playbooks/               # one playbook per service
+└── collections/ansible_collections/frameworks/infra/
+    ├── galaxy.yml
+    └── roles/
+        ├── yugabyte/    (hand-written, artifact-pinned)
+        ├── kafka/       (hand-written, KRaft)
+        ├── zookeeper/   (hand-written)
+        ├── postgres/    (wraps geerlingguy.postgresql)
+        ├── redis/       (wraps geerlingguy.redis)
+        ├── clickhouse/  (wraps idealista.clickhouse)
+        ├── prometheus_stack/
+        ├── caddy/
+        ├── privateer/
+        ├── compose_stack/ (generic; consumers: chatwoot, listmonk, edge)
+        ├── mistserver/    (hand-written, edge media server)
+        ├── helmsman/      (hand-written, edge sidecar)
+        └── edge/          (meta-role; composes mistserver+helmsman+caddy
+                             native, or delegates to compose_stack in docker)
+```
+
+## Command mapping
+
+The CLI's subcommands map onto role tags:
+
+| CLI                           | Ansible tags                         | Flags            |
+| ----------------------------- | ------------------------------------ | ---------------- |
+| `cluster provision`           | `install,configure,service,validate` | —                |
+| `cluster provision --dry-run` | `install,configure,service`          | `--check --diff` |
+| `cluster doctor`              | (observed-state survey, no role run) | —                |
+| `cluster upgrade`             | `install,configure,service,validate` | —                |
+| `cluster upgrade --dry-run`   | `install,configure,service`          | `--check --diff` |
+| `cluster init`                | `init`                               | —                |
+| `cluster seed`                | `seed`                               | —                |
+| `cluster migrate`             | `migrate`                            | —                |
+| `cluster migrate --dry-run`   | `migrate`                            | `--check --diff` |
+| `cluster restart`             | `restart`                            | —                |
+| `cluster drift`               | (observed-state survey, no role run) | —                |
+
+`cluster drift` and `cluster doctor` / `cluster status` are observed-state
+surveys built on top of the detect + health layers. They run direct port /
+HTTP / SQL probes from the CLI host rather than invoking a role, because
+"is the service reachable and healthy?" is a question SSH-free network
+probes answer correctly and faster than a full Ansible play.
+
+For a role-level diff of what would change on apply, use
+`cluster provision --dry-run`: it invokes ansible-playbook with
+`--check --diff` per service, so the full Ansible diff (file contents,
+package versions, unit changes) is surfaced inline in the plan.
+
+Tags are supplied to ansible-playbook via `-t`, so a role that short-circuits
+(e.g. the install tasks on an already-installed host) runs near-instantly.
+
+## Secrets
+
+`community.sops` v2.3.0 is loaded as an Ansible vars plugin. Files named
+`group_vars/<group>.sops.yml` or `host_vars/<host>.sops.yml` are decrypted
+transparently when Ansible loads group/host vars. The CLI forwards
+`SOPS_AGE_KEY_FILE` into the ansible-playbook subprocess environment; no
+in-Go decrypt before handoff.
+
+## Gitops CI integration
+
+The CLI is the same binary locally and in CI. A typical gitops-repo workflow:
+
+```yaml
+# .github/workflows/cluster-apply.yml inside your gitops repo
+name: Cluster apply
+on:
+  pull_request:
+    paths: ["clusters/**"]
+  push:
+    branches: [main]
+    paths: ["clusters/**"]
+
+permissions:
+  contents: read
+  pull-requests: write # so --check runs can post a diff
+
+jobs:
+  plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install frameworks CLI
+        run: |
+          curl -sSfL https://github.com/frameworks-network/monorepo/releases/latest/download/frameworks-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin frameworks
+      - name: Install Ansible runtime
+        run: pip install "ansible-core==2.17.*"
+      - name: Plan (check + diff)
+        env:
+          SOPS_AGE_KEY_FILE: ${{ secrets.SOPS_AGE_KEY_FILE_PATH }}
+        run: |
+          frameworks cluster provision \
+            --gitops-dir . --cluster ${{ vars.CLUSTER_NAME }} \
+            --dry-run 2>&1 | tee plan.txt
+      - uses: mshick/add-pr-comment@v2
+        with:
+          message-path: plan.txt
+
+  apply:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    environment: production # requires approval
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install frameworks CLI
+        run: |
+          curl -sSfL https://github.com/frameworks-network/monorepo/releases/latest/download/frameworks-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin frameworks
+      - name: Install Ansible runtime
+        run: pip install "ansible-core==2.17.*"
+      - name: Cache Ansible collections
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/frameworks/ansible-collections
+          key: ansible-collections-${{ hashFiles('**/ansible/requirements.yml') }}
+      - name: Apply
+        env:
+          SOPS_AGE_KEY_FILE: ${{ secrets.SOPS_AGE_KEY_FILE_PATH }}
+        run: |
+          frameworks cluster provision \
+            --gitops-dir . --cluster ${{ vars.CLUSTER_NAME }}
+```
+
+The CLI's collection-install step is idempotent and keyed on
+`sha256(requirements.yml)` — unchanged inputs skip the `ansible-galaxy` call
+entirely.
+
+## Local testing
+
+- `make provision-hello` — end-to-end smoke against localhost with the
+  `hello` role.
+- `make ansible-check` — syntax-check every playbook under `ansible/playbooks/`.
+- `make ansible-lint` — ansible-lint production profile on the collection.
+- `make ansible-yamllint` — yamllint on role + playbook YAML.
+- `make ansible-test` — the above, chained.
+- `molecule test -s default` inside any role directory — full converge +
+  idempotence with Docker driver.
+
+## Edge provisioning
+
+Edge-node provisioning (`edge provision`, `edge deploy`) runs through the
+`frameworks.infra.edge` meta-role, which composes `frameworks.infra.mistserver`,
+`frameworks.infra.helmsman`, and an edge-shaped Caddy install (plus an optional
+vmagent) in docker, Linux systemd, or macOS launchd mode. Preflight probes and
+post-apply HTTPS verification stay in Go so operators see fast-fail messages
+inline with the role output.

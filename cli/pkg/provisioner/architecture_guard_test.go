@@ -19,17 +19,35 @@ import (
 // no ExecuteScript-for-install, no running-state skip gate) stay scoped.
 
 // repoSourceRoots returns the absolute paths of the trees this guard walks.
-// Derived from runtime.Caller so the tests work regardless of CWD.
-func repoSourceRoots(t *testing.T) (provisionerDir, ansibleDir string) {
+// Derived from runtime.Caller so the tests work regardless of CWD. All
+// Ansible content now lives in the repo-root ansible/ collection tree; the
+// former cli/pkg/ansible Go-side task layer has been deleted.
+func repoSourceRoots(t *testing.T) (provisionerDir string, ansibleDirs []string) {
 	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
 	provisionerDir = filepath.Dir(thisFile)
-	cliPkg := filepath.Dir(provisionerDir)
-	ansibleDir = filepath.Join(cliPkg, "ansible")
-	return provisionerDir, ansibleDir
+	cliPkgDir := filepath.Dir(provisionerDir)
+
+	// Walk up from cli/pkg to find the monorepo root (holds the top-level
+	// ansible/ collection tree).
+	dir := filepath.Dir(cliPkgDir) // -> cli/
+	for {
+		candidate := filepath.Join(dir, "ansible", "collections")
+		if _, err := os.Stat(candidate); err == nil {
+			return provisionerDir, []string{filepath.Join(dir, "ansible")}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	// Fallback: no collection tree located. Ansible-scope rules become
+	// no-ops rather than silently passing.
+	return provisionerDir, nil
 }
 
 func sourceFilesIn(t *testing.T, roots ...string) []string {
@@ -38,15 +56,33 @@ func sourceFilesIn(t *testing.T, roots ...string) []string {
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
+				// Missing roots are allowed: tests running from an isolated
+				// checkout may not have both trees present. Skip silently.
+				if os.IsNotExist(err) {
+					return nil
+				}
 				return err
 			}
-			if d.IsDir() || !strings.HasSuffix(p, ".go") {
+			if d.IsDir() {
+				// Skip per-role molecule scenarios (ephemeral test fixtures).
+				if d.Name() == "molecule" {
+					return filepath.SkipDir
+				}
+				// Skip galaxy cache + ephemeral run artifacts.
+				if d.Name() == ".cache" || strings.HasPrefix(d.Name(), ".ansible-run") {
+					return filepath.SkipDir
+				}
 				return nil
 			}
-			if strings.HasSuffix(p, "_test.go") {
-				return nil
+			name := d.Name()
+			switch {
+			case strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go"):
+				files = append(files, p)
+			case strings.HasSuffix(name, ".yml"), strings.HasSuffix(name, ".yaml"):
+				files = append(files, p)
+			case strings.HasSuffix(name, ".j2"):
+				files = append(files, p)
 			}
-			files = append(files, p)
 			return nil
 		})
 		if err != nil {
@@ -106,13 +142,13 @@ func TestArchitectureGuard_noRawUnarchiveLiterals(t *testing.T) {
 	// the non-empty creates-sentinel guardrail applies uniformly. The helper
 	// that emits the module name (tasks.go) and the linter that inspects it
 	// (lint.go) are the canonical definitions and are allow-listed.
-	prov, ansible := repoSourceRoots(t)
+	prov, ansibleRoots := repoSourceRoots(t)
 	allowListPaths := map[string]bool{
 		"tasks.go": true,
 		"lint.go":  true,
 	}
 	pat := regexp.MustCompile(`"ansible\.builtin\.unarchive"`)
-	scanSources(t, "use-TaskUnarchive-helper", sourceFilesIn(t, prov, ansible), pat, func(path, line string) bool {
+	scanSources(t, "use-TaskUnarchive-helper", sourceFilesIn(t, append([]string{prov}, ansibleRoots...)...), pat, func(path, line string) bool {
 		return allowListPaths[filepath.Base(path)]
 	})
 }
@@ -144,7 +180,7 @@ func TestArchitectureGuard_noCompatibilityNarrationInComments(t *testing.T) {
 	//
 	// Applies to both the provisioner tree and the ansible task layer —
 	// narration drift shows up first in whichever file is touched last.
-	prov, ansible := repoSourceRoots(t)
+	prov, ansibleRoots := repoSourceRoots(t)
 	bannedSubstrings := []string{
 		"kept for drift",
 		"kept for callers",
@@ -168,14 +204,18 @@ func TestArchitectureGuard_noCompatibilityNarrationInComments(t *testing.T) {
 		regexp.MustCompile(`\bmaybe\b`),
 		regexp.MustCompile(`\bfor now\b`),
 	}
-	for _, path := range sourceFilesIn(t, prov, ansible) {
+	for _, path := range sourceFilesIn(t, append([]string{prov}, ansibleRoots...)...) {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		for i, line := range strings.Split(string(body), "\n") {
 			trim := strings.TrimSpace(line)
-			if !strings.HasPrefix(trim, "//") {
+			// Go comments start with //, YAML/Jinja comments with #. Both
+			// need narration-free local invariants.
+			isComment := strings.HasPrefix(trim, "//") ||
+				strings.HasPrefix(trim, "#")
+			if !isComment {
 				continue
 			}
 			for _, phrase := range bannedSubstrings {

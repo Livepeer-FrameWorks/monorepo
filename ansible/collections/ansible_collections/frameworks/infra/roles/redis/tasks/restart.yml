@@ -1,0 +1,11 @@
+---
+- name: Restart redis
+  ansible.builtin.systemd:
+    name: "{{ redis_service_name }}"
+    state: restarted
+
+- name: Wait for redis TCP listener after restart
+  ansible.builtin.wait_for:
+    host: "{{ redis_bind_interface }}"
+    port: "{{ redis_port }}"
+    timeout: 30

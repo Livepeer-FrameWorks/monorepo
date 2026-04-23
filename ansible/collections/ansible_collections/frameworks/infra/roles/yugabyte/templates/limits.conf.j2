@@ -1,0 +1,6 @@
+{{ yugabyte_user }} soft core unlimited
+{{ yugabyte_user }} hard core unlimited
+{{ yugabyte_user }} soft nofile {{ yugabyte_limit_nofile }}
+{{ yugabyte_user }} hard nofile {{ yugabyte_limit_nofile }}
+{{ yugabyte_user }} soft nproc {{ yugabyte_limit_nproc }}
+{{ yugabyte_user }} hard nproc {{ yugabyte_limit_nproc }}

@@ -1,0 +1,92 @@
+{#
+  Remote-apply edge compose file. Paired with the operator-local Go
+  renderer at cli/internal/templates/edge/docker-compose.edge.yml.tmpl —
+  both must agree on service names (caddy/mistserver/helmsman [+vmagent]),
+  published ports, volume layout, and env-file semantics. The Go-side
+  TestEdgeTemplateParity test in cli/internal/templates asserts shape.
+#}
+version: "3.9"
+
+services:
+  caddy:
+    image: caddy:2
+    container_name: edge-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - ACME_AGREE=true
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./maintenance.html:/etc/caddy/maintenance.html:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./certs:/etc/frameworks/certs
+      - caddy_admin:/run/caddy
+    restart: unless-stopped
+
+  mistserver:
+    image: mistserver:latest
+    container_name: mistserver
+    command:
+      - MistController
+      - -c
+      - /etc/mistserver.conf
+      - -a
+      - "frameworks:{{ edge_mist_api_password }}"
+    shm_size: "1g"
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    environment:
+      - MIST_DEBUG=3
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  helmsman:
+    image: frameworks/helmsman:latest
+    container_name: helmsman
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    env_file:
+      - .edge.env
+    environment:
+      - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
+      - MISTSERVER_URL=http://mistserver:8080
+      - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
+      - MIST_API_USERNAME=frameworks
+      - MIST_API_PASSWORD={{ edge_mist_api_password }}
+    volumes:
+      - ./certs:/etc/frameworks/certs
+      - ./pki:/etc/frameworks/pki
+      - ./telemetry:/etc/frameworks/telemetry
+      - caddy_admin:/run/caddy
+    expose:
+      - "18007"
+    restart: unless-stopped
+{% if edge_telemetry_url | length > 0 %}
+
+  vmagent:
+    image: victoriametrics/vmagent:v1.122.0
+    container_name: frameworks-edge-vmagent
+    command:
+      - -httpListenAddr=:8430
+      - -promscrape.config=/etc/frameworks/vmagent-edge.yml
+      - -remoteWrite.url={{ edge_telemetry_url }}
+{% if edge_telemetry_token | length > 0 %}
+      - -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token
+{% endif %}
+    volumes:
+      - ./vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro
+      - ./telemetry:/etc/frameworks/telemetry:ro
+    restart: unless-stopped
+{% endif %}
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  caddy_admin: {}

@@ -1,0 +1,28 @@
+---
+- name: clickhouse | install + configure + service (via idealista.clickhouse)
+  ansible.builtin.import_tasks: install.yml
+  tags: [install, configure, service]
+
+- name: clickhouse | flush handlers before validate
+  ansible.builtin.meta: flush_handlers
+  tags: [service, validate]
+
+- name: clickhouse | validate
+  ansible.builtin.import_tasks: validate.yml
+  tags: [validate]
+
+- name: clickhouse | init
+  ansible.builtin.import_tasks: init.yml
+  tags: [init, never]
+
+- name: clickhouse | seed
+  ansible.builtin.import_tasks: seed.yml
+  tags: [seed, never]
+
+- name: clickhouse | restart
+  ansible.builtin.import_tasks: restart.yml
+  tags: [restart, never]
+
+- name: clickhouse | cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cleanup, never]

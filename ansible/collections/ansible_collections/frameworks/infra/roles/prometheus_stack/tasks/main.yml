@@ -1,0 +1,36 @@
+---
+- name: prometheus_stack | prometheus + node_exporter via prometheus-community
+  ansible.builtin.import_tasks: prometheus_community.yml
+  tags: [install, configure, service]
+  when: "'prometheus' in prometheus_stack_components or 'node_exporter' in prometheus_stack_components"
+
+- name: prometheus_stack | victoriametrics
+  ansible.builtin.import_tasks: victoriametrics.yml
+  tags: [install, configure, service]
+  when: "'victoriametrics' in prometheus_stack_components"
+
+- name: prometheus_stack | vmagent
+  ansible.builtin.import_tasks: vmagent.yml
+  tags: [install, configure, service]
+  when: "'vmagent' in prometheus_stack_components"
+
+- name: prometheus_stack | vmauth
+  ansible.builtin.import_tasks: vmauth.yml
+  tags: [install, configure, service]
+  when: "'vmauth' in prometheus_stack_components"
+
+- name: prometheus_stack | flush handlers before validate
+  ansible.builtin.meta: flush_handlers
+  tags: [service, validate]
+
+- name: prometheus_stack | validate
+  ansible.builtin.import_tasks: validate.yml
+  tags: [validate]
+
+- name: prometheus_stack | restart
+  ansible.builtin.import_tasks: restart.yml
+  tags: [restart, never]
+
+- name: prometheus_stack | cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cleanup, never]

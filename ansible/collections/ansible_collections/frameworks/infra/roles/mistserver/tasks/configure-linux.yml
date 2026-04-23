@@ -1,0 +1,25 @@
+---
+- name: Render env file
+  ansible.builtin.copy:
+    dest: "{{ mistserver_env_file }}"
+    content: |
+      # MistServer environment (managed by frameworks.infra.mistserver)
+      {% for k, v in (mistserver_env | dictsort) %}
+      {{ k }}={{ v }}
+      {% endfor %}
+      MIST_API_USERNAME={{ mistserver_api_user }}
+      MIST_API_PASSWORD={{ mistserver_api_password }}
+    owner: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+    mode: "0600"
+  no_log: true
+  notify: mistserver restart
+
+- name: Render systemd unit
+  ansible.builtin.template:
+    src: mistserver.service.j2
+    dest: "{{ mistserver_unit_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: mistserver restart

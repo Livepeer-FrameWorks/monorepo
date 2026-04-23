@@ -1,0 +1,20 @@
+{
+    admin unix//run/caddy/admin.sock
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+:443 {
+    tls internal
+
+    handle_path /webhooks/* {
+        reverse_proxy helmsman:18007
+    }
+
+    respond "Node bootstrapping - awaiting activation" 503
+}
+
+:80 {
+    respond "Node bootstrapping" 503
+}

@@ -1,0 +1,20 @@
+---
+zookeeper_artifact_url: ""
+zookeeper_artifact_checksum: ""
+zookeeper_version: ""
+
+zookeeper_user: zookeeper
+zookeeper_group: zookeeper
+zookeeper_install_dir: /opt/zookeeper
+zookeeper_data_dir: /var/lib/zookeeper
+zookeeper_log_dir: /var/log/zookeeper
+zookeeper_tarball_path: /tmp/zookeeper.tar.gz
+
+zookeeper_client_port: 2181
+zookeeper_peer_port: 2888
+zookeeper_leader_port: 3888
+
+# Ensemble members: [{host, id}]. For a single-node dev setup, leave empty
+# and the role renders myid=1 with no peer entries.
+zookeeper_ensemble: []
+zookeeper_node_id: 1

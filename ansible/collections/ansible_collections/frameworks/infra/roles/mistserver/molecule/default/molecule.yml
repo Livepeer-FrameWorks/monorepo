@@ -1,0 +1,33 @@
+---
+role_name_check: 1
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: mistserver-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        mistserver_version: dev
+        # CI supplies the pinned artifact via env so the scenario runs end-to-
+        # end when a real tarball is available and skips cleanly otherwise.
+        mistserver_artifact_url: >-
+          {{ lookup('env', 'MISTSERVER_ARTIFACT_URL') | default('', true) }}
+        mistserver_artifact_checksum: >-
+          {{ lookup('env', 'MISTSERVER_ARTIFACT_CHECKSUM') | default('', true) }}
+        mistserver_api_password: "molecule-test-only-password"
+verifier:
+  name: ansible

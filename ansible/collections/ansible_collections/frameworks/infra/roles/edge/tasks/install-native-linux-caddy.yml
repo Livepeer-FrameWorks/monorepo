@@ -1,0 +1,124 @@
+---
+# Edge-native Caddy install. Distinct from frameworks.infra.caddy (which is
+# an apt-based install for cluster nodes) because edge uses a pinned binary
+# tarball and a dedicated systemd unit name so both can coexist on hosts
+# that happen to run both.
+
+- name: Ensure caddy group exists
+  ansible.builtin.group:
+    name: caddy
+    system: true
+
+- name: Ensure caddy user exists
+  ansible.builtin.user:
+    name: caddy
+    group: caddy
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Ensure caddy directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "0755"
+  loop:
+    - { path: /opt/frameworks/caddy }
+    - { path: /etc/caddy, owner: caddy, group: caddy }
+    - { path: /var/lib/caddy, owner: caddy, group: caddy }
+
+- name: Download Caddy tarball
+  ansible.builtin.get_url:
+    url: "{{ edge_caddy_artifact_url }}"
+    dest: "/tmp/caddy.tar.gz"
+    checksum: "{{ edge_caddy_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Set caddy install sentinel path
+  ansible.builtin.set_fact:
+    edge_caddy_install_sentinel: "/opt/frameworks/caddy/.installed-{{ edge_caddy_artifact_checksum | default('') | hash('sha1') }}"
+
+- name: Extract Caddy
+  ansible.builtin.unarchive:
+    src: "/tmp/caddy.tar.gz"
+    dest: "/opt/frameworks/caddy"
+    remote_src: true
+    creates: "{{ edge_caddy_install_sentinel }}"
+  notify: edge caddy restart
+
+- name: Ensure Caddy binary is executable and mark install sentinel
+  ansible.builtin.shell: |
+    set -e
+    chmod 0755 /opt/frameworks/caddy/caddy
+    touch "{{ edge_caddy_install_sentinel }}"
+  args:
+    creates: "{{ edge_caddy_install_sentinel }}"
+
+- name: Render bootstrap Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.native.j2
+    dest: /etc/caddy/Caddyfile
+    owner: caddy
+    group: caddy
+    mode: "0644"
+  notify: edge caddy restart
+
+- name: Render edge caddy env
+  ansible.builtin.copy:
+    dest: /etc/frameworks/caddy.env
+    content: |
+      CADDY_EMAIL={{ edge_acme_email | default('', true) }}
+    owner: caddy
+    group: caddy
+    mode: "0600"
+  notify: edge caddy restart
+
+- name: Render edge caddy systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/frameworks-caddy.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=FrameWorks Caddy Reverse Proxy (edge)
+      After=network-online.target frameworks-mistserver.service frameworks-helmsman.service
+      Wants=network-online.target
+
+      [Service]
+      User=caddy
+      Group=caddy
+      WorkingDirectory=/etc/caddy
+      EnvironmentFile=/etc/frameworks/caddy.env
+      ExecStart=/opt/frameworks/caddy/caddy run --config /etc/caddy/Caddyfile
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: edge caddy restart
+
+- name: Chown edge cert for caddy (when present)
+  ansible.builtin.file:
+    path: "{{ edge_cert_dir }}/cert.pem"
+    owner: caddy
+    group: caddy
+  when: edge_cert_pem | length > 0
+
+- name: Chown edge key for caddy (when present)
+  ansible.builtin.file:
+    path: "{{ edge_cert_dir }}/key.pem"
+    owner: caddy
+    group: caddy
+  when: edge_key_pem | length > 0
+
+- name: Flush handlers before starting edge caddy
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure edge caddy service is running
+  ansible.builtin.systemd:
+    name: frameworks-caddy
+    state: started
+    enabled: true
+    daemon_reload: true

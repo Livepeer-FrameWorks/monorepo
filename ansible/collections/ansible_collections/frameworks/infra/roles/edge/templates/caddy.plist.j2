@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.livepeer.frameworks.caddy</string>
+    <key>Program</key>
+    <string>/bin/bash</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{ edge_darwin_base_dir }}/caddy/run.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{ edge_darwin_conf_dir }}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{{ edge_darwin_log_dir }}/com.livepeer.frameworks.caddy.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ edge_darwin_log_dir }}/com.livepeer.frameworks.caddy.err</string>
+</dict>
+</plist>

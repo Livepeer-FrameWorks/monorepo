@@ -1,0 +1,3 @@
+---
+privateer_bin: "{{ privateer_install_dir }}/privateer"
+privateer_install_sentinel: "{{ privateer_install_dir }}/.installed-{{ (privateer_artifact_checksum ~ privateer_artifact_url) | hash('sha256') }}"

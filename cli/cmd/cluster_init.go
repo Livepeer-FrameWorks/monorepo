@@ -149,21 +149,16 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 	if err != nil {
 		return err
 	}
-	sqlExec, execErr := newSQLExecutor(pg.SQLAccess, host, pool, pg.IsYugabyte(), password)
-	if execErr != nil {
-		return fmt.Errorf("create sql executor: %w", execErr)
-	}
-	opt := provisioner.WithSQLExecutor(sqlExec)
+	// The role's init tag uses community.postgresql over the network;
+	// password is propagated as a role var via the registry-provided
+	// provisioner, which reads postgres_password from metadata.
+	config.Metadata["postgres_password"] = password
 
+	service := "postgres"
 	if pg.IsYugabyte() {
-		prov, provErr := provisioner.NewYugabyteProvisioner(pool, opt)
-		if provErr != nil {
-			return provErr
-		}
-		return prov.Initialize(ctx, host, config)
+		service = "yugabyte"
 	}
-
-	prov, provErr := provisioner.NewPostgresProvisioner(pool, opt)
+	prov, provErr := provisioner.GetProvisioner(service, pool)
 	if provErr != nil {
 		return provErr
 	}
@@ -190,13 +185,11 @@ func initKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Mani
 		return fmt.Errorf("kafka broker host %s not found", broker.Host)
 	}
 
-	// Create provisioner
-	prov, err := provisioner.NewKafkaProvisioner(pool)
+	prov, err := provisioner.GetProvisioner("kafka", pool)
 	if err != nil {
 		return err
 	}
 
-	// Build topics config
 	topicsConfig := []map[string]interface{}{}
 	for _, topic := range manifest.Infrastructure.Kafka.Topics {
 		topicCfg := map[string]interface{}{
@@ -204,11 +197,9 @@ func initKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Mani
 			"partitions":         topic.Partitions,
 			"replication_factor": topic.ReplicationFactor,
 		}
-
 		if len(topic.Config) > 0 {
 			topicCfg["config"] = topic.Config
 		}
-
 		topicsConfig = append(topicsConfig, topicCfg)
 	}
 
@@ -219,12 +210,7 @@ func initKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Mani
 		},
 	}
 
-	// Initialize
-	if err := prov.Initialize(ctx, host, config); err != nil {
-		return err
-	}
-
-	return nil
+	return prov.Initialize(ctx, host, config)
 }
 
 // initClickHouse initializes ClickHouse databases and tables
@@ -243,12 +229,7 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, manifest *inventory
 	}
 
 	ch := manifest.Infrastructure.ClickHouse
-	chExec, chExecErr := newCHExecutor(ch.SQLAccess, host, pool)
-	if chExecErr != nil {
-		return fmt.Errorf("create ch executor: %w", chExecErr)
-	}
-
-	prov, err := provisioner.NewClickHouseProvisioner(pool, provisioner.WithCHExecutor(chExec))
+	prov, err := provisioner.GetProvisioner("clickhouse", pool)
 	if err != nil {
 		return err
 	}
@@ -260,10 +241,5 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, manifest *inventory
 		},
 	}
 
-	// Initialize
-	if err := prov.Initialize(ctx, host, config); err != nil {
-		return err
-	}
-
-	return nil
+	return prov.Initialize(ctx, host, config)
 }

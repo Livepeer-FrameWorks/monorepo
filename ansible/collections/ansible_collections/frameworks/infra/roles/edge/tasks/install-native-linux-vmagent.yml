@@ -1,0 +1,97 @@
+---
+# Edge-local vmagent. Writes a scrape config for the edge services and runs
+# vmagent as a dedicated systemd unit. Kept here (not in prometheus_stack)
+# because the scrape targets and unit name are edge-shaped.
+
+- name: Ensure edge vmagent directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: frameworks
+    group: frameworks
+    mode: "0755"
+  loop:
+    - /opt/frameworks/vmagent-edge
+    - /etc/frameworks/telemetry
+    - /var/log/frameworks
+
+- name: Render vmagent scrape config
+  ansible.builtin.template:
+    src: vmagent-edge.yml.j2
+    dest: /etc/frameworks/vmagent-edge.yml
+    owner: frameworks
+    group: frameworks
+    mode: "0644"
+  notify: edge vmagent restart
+
+- name: Stage telemetry token (when provided)
+  ansible.builtin.copy:
+    dest: /etc/frameworks/telemetry/token
+    content: "{{ edge_telemetry_token }}\n"
+    owner: frameworks
+    group: frameworks
+    mode: "0600"
+  when: edge_telemetry_token | length > 0
+  no_log: true
+
+- name: Download vmutils tarball
+  ansible.builtin.get_url:
+    url: "{{ edge_vmagent_artifact_url }}"
+    dest: "/tmp/vmagent-edge.tar.gz"
+    checksum: "{{ edge_vmagent_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Set vmagent install sentinel path
+  ansible.builtin.set_fact:
+    edge_vmagent_install_sentinel: "/opt/frameworks/vmagent-edge/.installed-{{ edge_vmagent_artifact_checksum | default('') | hash('sha1') }}"
+
+- name: Extract vmutils tarball
+  ansible.builtin.unarchive:
+    src: "/tmp/vmagent-edge.tar.gz"
+    dest: "/tmp"
+    remote_src: true
+    creates: "{{ edge_vmagent_install_sentinel }}"
+  notify: edge vmagent restart
+
+- name: Install vmagent-prod binary and mark sentinel
+  ansible.builtin.shell: |
+    set -e
+    install -m 0755 -o frameworks -g frameworks /tmp/vmagent-prod /opt/frameworks/vmagent-edge/vmagent
+    touch "{{ edge_vmagent_install_sentinel }}"
+    chown frameworks:frameworks "{{ edge_vmagent_install_sentinel }}"
+  args:
+    creates: "{{ edge_vmagent_install_sentinel }}"
+
+- name: Render vmagent systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/frameworks-vmagent-edge.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=FrameWorks vmagent (edge telemetry)
+      After=network-online.target frameworks-mistserver.service frameworks-helmsman.service
+      Wants=network-online.target
+
+      [Service]
+      User=frameworks
+      Group=frameworks
+      WorkingDirectory=/opt/frameworks/vmagent-edge
+      ExecStart=/opt/frameworks/vmagent-edge/vmagent -httpListenAddr=:8430 -promscrape.config=/etc/frameworks/vmagent-edge.yml -remoteWrite.url={{ edge_telemetry_url }}{{ ' -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token' if edge_telemetry_token | length > 0 else '' }}
+      Restart=always
+      RestartSec=5
+      LimitNOFILE=1048576
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: edge vmagent restart
+
+- name: Flush handlers before starting edge vmagent
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure edge vmagent service is running
+  ansible.builtin.systemd:
+    name: frameworks-vmagent-edge
+    state: started
+    enabled: true
+    daemon_reload: true

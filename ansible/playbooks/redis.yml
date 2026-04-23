@@ -1,0 +1,7 @@
+---
+- name: Provision Redis
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.redis

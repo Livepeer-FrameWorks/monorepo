@@ -1,0 +1,106 @@
+---
+# Time-sync: install + start chrony only if no time-sync daemon is already
+# active on the host. Probe uses service_facts populated in preflight.
+- name: Check whether any time-sync service is already running
+  ansible.builtin.set_fact:
+    yugabyte_timesync_running: >-
+      {{ ((ansible_facts.services | default({})) | dict2items
+         | selectattr('key', 'in', ['chronyd.service', 'chrony.service', 'systemd-timesyncd.service', 'ntpd.service', 'ntp.service'])
+         | selectattr('value.state', 'equalto', 'running')
+         | list | length) > 0 }}
+
+- name: Install time-sync package
+  ansible.builtin.package:
+    name: "{{ yugabyte_timesync.package }}"
+    state: present
+  when: not yugabyte_timesync_running
+
+- name: Enable and start time-sync service
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_timesync.service }}"
+    state: started
+    enabled: true
+  when: not yugabyte_timesync_running
+
+# curl is required by yugabyte's post_install.sh; the package name is 'curl'
+# across all supported distro families so a single package task is correct.
+- name: Ensure curl is installed
+  ansible.builtin.package:
+    name: curl
+    state: present
+
+- name: Ensure yugabyte group
+  ansible.builtin.group:
+    name: "{{ yugabyte_group }}"
+    system: true
+    state: present
+
+- name: Ensure yugabyte user
+  ansible.builtin.user:
+    name: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    state: present
+
+- name: Ensure yugabyte directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    mode: "0755"
+  loop:
+    - "{{ yugabyte_install_dir }}"
+    - "{{ yugabyte_conf_dir }}"
+    - "{{ yugabyte_data_dir }}"
+    - "{{ yugabyte_cores_dir }}"
+
+- name: Download pinned YugabyteDB tarball
+  ansible.builtin.get_url:
+    url: "{{ yugabyte_artifact_url }}"
+    dest: "{{ yugabyte_tarball_path }}"
+    checksum: "{{ yugabyte_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+# Version-keyed sentinel: the archive is re-extracted on a URL/checksum change.
+# On unchanged inputs, `creates:` short-circuits on the sentinel file and the
+# task reports ok (not changed).
+- name: Extract YugabyteDB tarball into install dir
+  ansible.builtin.unarchive:
+    src: "{{ yugabyte_tarball_path }}"
+    dest: "{{ yugabyte_install_dir }}"
+    remote_src: true
+    owner: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ yugabyte_install_sentinel }}"
+  notify:
+    - yugabyte restart master
+    - yugabyte restart tserver
+
+- name: Run YugabyteDB post_install.sh (relocates embedded absolute paths)
+  ansible.builtin.command: "{{ yugabyte_bin_dir }}/post_install.sh"
+  args:
+    creates: "{{ yugabyte_post_install_sentinel }}"
+  register: yugabyte_post_install
+
+- name: Record post_install completion marker
+  ansible.builtin.file:
+    path: "{{ yugabyte_post_install_sentinel }}"
+    state: touch
+    owner: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    mode: "0644"
+  when: yugabyte_post_install is changed
+
+- name: Record installation sentinel
+  ansible.builtin.file:
+    path: "{{ yugabyte_install_sentinel }}"
+    state: touch
+    owner: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    mode: "0644"
+  changed_when: false

@@ -1,0 +1,82 @@
+---
+- name: Ensure edge project directory
+  ansible.builtin.file:
+    path: "{{ edge_base_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure edge docker-mode support directories
+  ansible.builtin.file:
+    path: "{{ edge_base_dir }}/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - pki
+    - telemetry
+    - certs
+
+- name: Mirror CA bundle into compose project (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/pki/ca.crt"
+    content: "{{ edge_ca_bundle_pem }}"
+    mode: "0644"
+  when: edge_ca_bundle_pem | length > 0
+  no_log: true
+
+- name: Mirror edge TLS cert into compose project (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/certs/cert.pem"
+    content: "{{ edge_cert_pem }}"
+    mode: "0644"
+  when: edge_cert_pem | length > 0
+  no_log: true
+
+- name: Mirror edge TLS key into compose project (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/certs/key.pem"
+    content: "{{ edge_key_pem }}"
+    mode: "0600"
+  when: edge_key_pem | length > 0
+  no_log: true
+
+- name: Mirror telemetry token (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_base_dir }}/telemetry/token"
+    content: "{{ edge_telemetry_token }}\n"
+    mode: "0600"
+  when: edge_telemetry_url | length > 0 and edge_telemetry_token | length > 0
+  no_log: true
+
+- name: Render vmagent scrape config (when telemetry enabled)
+  ansible.builtin.template:
+    src: vmagent-edge.yml.j2
+    dest: "{{ edge_base_dir }}/vmagent-edge.yml"
+    mode: "0644"
+  when: edge_telemetry_url | length > 0
+
+- name: Render maintenance page
+  ansible.builtin.template:
+    src: maintenance.html.j2
+    dest: "{{ edge_base_dir }}/maintenance.html"
+    mode: "0644"
+
+- name: Render bootstrap Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.docker.j2
+    dest: "{{ edge_base_dir }}/Caddyfile"
+    mode: "0644"
+
+- name: Render edge env file
+  ansible.builtin.template:
+    src: edge.env.j2
+    dest: "{{ edge_base_dir }}/.edge.env"
+    mode: "0600"
+  no_log: true
+
+- name: Delegate to compose_stack for edge
+  ansible.builtin.include_role:
+    name: frameworks.infra.compose_stack
+  vars:
+    compose_stack_name: edge
+    compose_stack_project_dir: "{{ edge_base_dir }}"
+    compose_stack_compose_content: "{{ lookup('template', 'compose.yml.j2') }}"

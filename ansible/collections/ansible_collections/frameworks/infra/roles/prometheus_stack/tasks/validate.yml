@@ -1,0 +1,38 @@
+---
+- name: Refresh service facts
+  ansible.builtin.service_facts:
+
+- name: Validate prometheus listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ prometheus_port }}"
+    timeout: 30
+  when: "'prometheus' in prometheus_stack_components"
+
+- name: Validate node_exporter listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ node_exporter_port }}"
+    timeout: 30
+  when: "'node_exporter' in prometheus_stack_components"
+
+- name: Validate victoriametrics listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ victoriametrics_port }}"
+    timeout: 30
+  when: "'victoriametrics' in prometheus_stack_components"
+
+- name: Validate vmagent listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ vmagent_port }}"
+    timeout: 30
+  when: "'vmagent' in prometheus_stack_components"
+
+- name: Validate vmauth listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ vmauth_port }}"
+    timeout: 30
+  when: "'vmauth' in prometheus_stack_components"

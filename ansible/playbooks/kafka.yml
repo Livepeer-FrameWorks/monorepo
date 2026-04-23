@@ -1,0 +1,8 @@
+---
+- name: Provision Kafka (rolling when multi-host)
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1
+  roles:
+    - role: frameworks.infra.kafka

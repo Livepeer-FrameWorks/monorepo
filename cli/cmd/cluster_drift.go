@@ -5,18 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"text/tabwriter"
 	"time"
 
-	"frameworks/cli/internal/compare"
-	"frameworks/cli/pkg/artifacts"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
-	"frameworks/cli/pkg/orchestrator"
-	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -31,13 +26,12 @@ const (
 )
 
 type clusterDriftEntry struct {
-	Host        string                `json:"host"`
-	Service     string                `json:"service"`
-	Status      string                `json:"status"`
-	Mode        string                `json:"mode,omitempty"`
-	Version     string                `json:"version,omitempty"`
-	Detail      string                `json:"detail,omitempty"`
-	ConfigFiles *artifacts.ConfigDiff `json:"config_files,omitempty"`
+	Host    string `json:"host"`
+	Service string `json:"service"`
+	Status  string `json:"status"`
+	Mode    string `json:"mode,omitempty"`
+	Version string `json:"version,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 type clusterDriftSummary struct {
@@ -96,21 +90,6 @@ func runClusterDrift(cmd *cobra.Command, rc *resolvedCluster) error {
 
 	entries := collectClusterDriftEntries(ctx, manifest, gitopsManifest, sshPool)
 
-	manifestDir := filepath.Dir(rc.ManifestPath)
-	sharedEnv, sharedEnvErr := rc.SharedEnv()
-	if sharedEnvErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: config diff degraded — load manifest env_files: %v\n", sharedEnvErr)
-		sharedEnv = nil
-	}
-	targets := buildClusterDriftTargets(manifest)
-	for i := range entries {
-		if i >= len(targets) {
-			break
-		}
-		t := targets[i]
-		entries[i].ConfigFiles = computeClusterTargetConfigDiff(ctx, t, manifest, manifestDir, sharedEnv, rc.ReleaseRepos, gitopsManifest, sshPool, sshKey)
-	}
-
 	rep := clusterDriftReport{
 		Cluster:         fmt.Sprintf("%s-%s", manifest.Type, manifest.Profile),
 		Channel:         channel,
@@ -153,72 +132,6 @@ func collectClusterDriftEntries(ctx context.Context, manifest *inventory.Manifes
 		return detect.NewDetector(sshPool, host)
 	}
 	return collectClusterDriftEntriesWith(ctx, manifest, gitopsManifest, factory)
-}
-
-// computeClusterTargetConfigDiff returns the ConfigDiff for one target, or
-// a single-entry diff carrying a probe_error status when desired-state
-// reconstruction fails. This keeps operators informed instead of silently
-// dropping the config_files field.
-func computeClusterTargetConfigDiff(
-	ctx context.Context,
-	t clusterDriftTarget,
-	manifest *inventory.Manifest,
-	manifestDir string,
-	sharedEnv map[string]string,
-	releaseRepos []string,
-	gitopsManifest *gitops.Manifest,
-	sshPool *fwssh.Pool,
-	sshKey string,
-) *artifacts.ConfigDiff {
-	targetID := artifacts.TargetID{Host: t.Host, Display: t.Display, Deploy: t.Deploy}
-	inconclusive := func(detail string) *artifacts.ConfigDiff {
-		return &artifacts.ConfigDiff{
-			Target: targetID,
-			Entries: []artifacts.ConfigDiffEntry{
-				{Status: artifacts.StatusProbeError, Detail: detail},
-			},
-		}
-	}
-	host, ok := manifest.GetHost(t.Host)
-	if !ok {
-		return inconclusive(fmt.Sprintf("host %q not in manifest", t.Host))
-	}
-	cfg, buildErr := buildClusterTargetConfig(t, host, manifest, manifestDir, sharedEnv, releaseRepos)
-	if buildErr != nil {
-		return inconclusive(fmt.Sprintf("resolve desired config: %v", buildErr))
-	}
-	imageRef := cfg.Image
-	if imageRef == "" && gitopsManifest != nil {
-		if info, infoErr := gitopsManifest.GetServiceInfo(t.Deploy); infoErr == nil {
-			imageRef = info.FullImage
-		}
-	}
-	arts := ClusterArtifactsFor(t, host, cfg, imageRef)
-	if len(arts) == 0 {
-		return nil
-	}
-	runner := compare.NewSSHRunner(sshPool, &fwssh.ConnectionConfig{
-		Address:  host.ExternalIP,
-		User:     host.User,
-		HostName: host.Name,
-		KeyPath:  sshKey,
-	})
-	diff := compare.CompareTarget(ctx, targetID, arts, runner)
-	return &diff
-}
-
-// buildClusterTargetConfig reconstructs the ServiceConfig apply would
-// produce for one drift target. Runtime data is passed as nil — drift
-// declares runtime-injected keys via DesiredArtifact.IgnoreKeys so
-// they are excluded from env comparison rather than reported as drift.
-func buildClusterTargetConfig(t clusterDriftTarget, _ inventory.Host, manifest *inventory.Manifest, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
-	task := &orchestrator.Task{
-		Type:       t.Deploy,
-		ServiceID:  t.Display,
-		InstanceID: t.Role,
-		Host:       t.Host,
-	}
-	return buildTaskConfig(task, manifest, nil, false, manifestDir, sharedEnv, releaseRepos)
 }
 
 // clusterDriftTarget identifies one probe site. Display is the operator-
@@ -409,9 +322,6 @@ func countClusterDriftDivergences(entries []clusterDriftEntry) int {
 		if e.Status != driftClusterOK {
 			n++
 		}
-		if e.ConfigFiles != nil {
-			n += e.ConfigFiles.Divergences()
-		}
 	}
 	return n
 }
@@ -433,9 +343,6 @@ func renderClusterDriftText(w io.Writer, rep clusterDriftReport) {
 			} else {
 				detail = "-"
 			}
-		}
-		if e.ConfigFiles != nil && e.ConfigFiles.Divergences() > 0 {
-			detail += fmt.Sprintf(" | config: %d divergent", e.ConfigFiles.Divergences())
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Host, e.Service, e.Status, detail)
 	}

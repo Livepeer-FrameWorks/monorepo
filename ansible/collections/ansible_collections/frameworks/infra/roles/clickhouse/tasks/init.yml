@@ -1,0 +1,17 @@
+---
+- name: Resolve a reachable local ClickHouse client host
+  ansible.builtin.include_tasks: _probe_client.yml
+
+- name: Create databases
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client', '--host=' ~ frameworks_clickhouse_client_host, '--port=' ~ (clickhouse_port_tcp | string),
+          '-q', 'CREATE DATABASE IF NOT EXISTS ' ~ item]
+         + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
+  loop: "{{ clickhouse_databases }}"
+  loop_control:
+    label: "{{ item }}"
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+  register: ch_db_create
+  changed_when: ch_db_create.rc == 0
+  when: clickhouse_databases | length > 0

@@ -1,0 +1,29 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert frameworks-kafka running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['frameworks-kafka.service'].state == 'running'
+
+    - name: Wait for broker port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9092
+        timeout: 60
+
+    - name: Rerun role (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.kafka
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "kafka role not idempotent"

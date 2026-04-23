@@ -550,6 +550,9 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 	}
 }
 
+// runDoctor is an observed-state survey: direct port / HTTP / SQL probes
+// from the CLI host. For a role-level diff of what would change on apply,
+// use `cluster provision --dry-run` (ansible-playbook --check --diff).
 func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	manifest := rc.Manifest
 	out := cmd.OutOrStdout()

@@ -1,0 +1,14 @@
+---
+- name: edge caddy restart
+  listen: edge caddy restart
+  ansible.builtin.systemd:
+    name: frameworks-caddy
+    state: restarted
+    daemon_reload: true
+
+- name: edge vmagent restart
+  listen: edge vmagent restart
+  ansible.builtin.systemd:
+    name: frameworks-vmagent-edge
+    state: restarted
+    daemon_reload: true

@@ -1,0 +1,13 @@
+---
+- name: Converge
+  hosts: all
+  become: true
+  gather_facts: true
+  pre_tasks:
+    - name: Skip converge when no mistserver artifact pinned for the matrix
+      ansible.builtin.meta: end_play
+      when: mistserver_artifact_url | length == 0
+  tasks:
+    - name: Apply frameworks.infra.mistserver
+      ansible.builtin.include_role:
+        name: frameworks.infra.mistserver

@@ -1,0 +1,65 @@
+---
+- name: Ensure frameworks group
+  ansible.builtin.group:
+    name: "{{ go_service_group }}"
+    system: true
+
+- name: Ensure frameworks user
+  ansible.builtin.user:
+    name: "{{ go_service_user }}"
+    group: "{{ go_service_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Ensure directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ go_service_user }}"
+    group: "{{ go_service_group }}"
+    mode: "0755"
+  loop:
+    - /etc/frameworks
+    - "{{ go_service_install_dir }}"
+
+- name: Install unzip (zip archives only)
+  ansible.builtin.package:
+    name: unzip
+    state: present
+  when: go_service_is_zip | bool
+
+- name: Download pinned artifact
+  ansible.builtin.get_url:
+    url: "{{ go_service_artifact_url }}"
+    dest: "{{ go_service_asset_path }}"
+    checksum: "{{ go_service_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Extract artifact
+  ansible.builtin.unarchive:
+    src: "{{ go_service_asset_path }}"
+    dest: "{{ go_service_install_dir }}"
+    remote_src: true
+    owner: "{{ go_service_user }}"
+    group: "{{ go_service_group }}"
+    creates: "{{ go_service_install_sentinel }}"
+  notify: go_service restart
+
+# Vendor releases use one of three filename conventions inside the archive;
+# pick whichever shipped, then mark the sentinel.
+- name: Normalize extracted binary name
+  ansible.builtin.shell: |
+    set -e
+    if [ -f "{{ go_service_install_dir }}/frameworks-{{ go_service_name }}" ]; then
+      cp "{{ go_service_install_dir }}/frameworks-{{ go_service_name }}" "{{ go_service_install_dir }}/{{ go_service_name }}"
+    fi
+    if [ -f "{{ go_service_install_dir }}/frameworks" ]; then
+      cp "{{ go_service_install_dir }}/frameworks" "{{ go_service_install_dir }}/{{ go_service_name }}"
+    fi
+    chmod +x "{{ go_service_install_dir }}/{{ go_service_name }}"
+    touch "{{ go_service_install_sentinel }}"
+    chown {{ go_service_user }}:{{ go_service_group }} "{{ go_service_install_sentinel }}" "{{ go_service_install_dir }}/{{ go_service_name }}"
+  args:
+    creates: "{{ go_service_install_sentinel }}"

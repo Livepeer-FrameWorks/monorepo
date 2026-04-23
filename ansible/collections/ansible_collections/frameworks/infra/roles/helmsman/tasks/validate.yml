@@ -1,0 +1,6 @@
+---
+- name: Wait for Helmsman port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ helmsman_port }}"
+    timeout: 60

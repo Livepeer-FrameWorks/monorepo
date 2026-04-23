@@ -32,19 +32,19 @@ type Provisioner interface {
 
 // ServiceConfig holds service-specific configuration
 type ServiceConfig struct {
-	Mode       string                 // "docker" or "native"
-	Version    string                 // Service version
-	Image      string                 // Docker image (optional override)
-	BinaryURL  string                 // Native binary URL (optional override)
-	DeployName string                 // Container/service name (optional override)
-	Port       int                    // Primary port
-	Ports      []int                  // Additional ports
-	EnvFile    string                 // Path to env file
-	EnvVars    map[string]string      // Merged env vars to write to the service env file
-	DependsOn  []string               // Service dependencies
-	Metadata   map[string]interface{} // Service-specific config
-	Force      bool                   // Force re-provision even if exists
-	DeferStart bool                   // Deploy but don't start (missing required config)
+	Mode       string            // "docker" or "native"
+	Version    string            // Service version
+	Image      string            // Docker image (optional override)
+	BinaryURL  string            // Native binary URL (optional override)
+	DeployName string            // Container/service name (optional override)
+	Port       int               // Primary port
+	Ports      []int             // Additional ports
+	EnvFile    string            // Path to env file
+	EnvVars    map[string]string // Merged env vars to write to the service env file
+	DependsOn  []string          // Service dependencies
+	Metadata   map[string]any    // Service-specific config
+	Force      bool              // Force re-provision even if exists
+	DeferStart bool              // Deploy but don't start (missing required config)
 }
 
 // ProvisionContext holds context for provisioning operations
@@ -80,27 +80,36 @@ type InitializeResult struct {
 	ItemsCreated []string // Databases, topics, tables created
 }
 
-// ProvisionerOption configures optional behavior for provisioner constructors.
-type ProvisionerOption interface {
-	applyPostgres(*PostgresProvisioner)
-	applyYugabyte(*YugabyteProvisioner)
-	applyClickHouse(*ClickHouseProvisioner)
+// Seeder is the optional capability a Provisioner implements when it can
+// apply out-of-band SQL seeds to the service it manages. The cluster seed
+// command type-asserts to this. Seed payloads (database + SQL) travel via
+// ServiceConfig.Metadata — the role's VarsBuilder forwards them into role
+// variables the tasks/seed.yml path consumes.
+type Seeder interface {
+	ApplySeeds(ctx context.Context, host inventory.Host, config ServiceConfig) error
 }
 
-type withSQLExecutor struct{ exec SQLExecutor }
+// Migrator is the optional capability a Provisioner implements when it can
+// apply versioned SQL migrations. The cluster migrate command type-asserts
+// to this. When dryRun is true, the underlying Ansible invocation runs in
+// --check --diff mode so pending migrations are reported without applying.
+type Migrator interface {
+	ApplyMigrations(ctx context.Context, host inventory.Host, config ServiceConfig, dryRun bool) error
+}
 
-func (o withSQLExecutor) applyPostgres(p *PostgresProvisioner)     { p.sql = o.exec }
-func (o withSQLExecutor) applyYugabyte(p *YugabyteProvisioner)     { p.sql = o.exec }
-func (o withSQLExecutor) applyClickHouse(_ *ClickHouseProvisioner) {}
+// CheckDiffer is the optional capability a Provisioner implements when it
+// can report the would-change set for a host via ansible-playbook
+// --check --diff. cluster provision --dry-run and cluster upgrade
+// --dry-run type-assert to this.
+type CheckDiffer interface {
+	CheckDiff(ctx context.Context, host inventory.Host, config ServiceConfig) error
+}
 
-// WithSQLExecutor overrides the default DirectExecutor for Postgres/YugabyteDB provisioners.
-func WithSQLExecutor(exec SQLExecutor) ProvisionerOption { return withSQLExecutor{exec: exec} }
-
-type withCHExecutor struct{ exec CHExecutor }
-
-func (o withCHExecutor) applyPostgres(_ *PostgresProvisioner)     {}
-func (o withCHExecutor) applyYugabyte(_ *YugabyteProvisioner)     {}
-func (o withCHExecutor) applyClickHouse(p *ClickHouseProvisioner) { p.ch = o.exec }
-
-// WithCHExecutor overrides the default DirectCHExecutor for ClickHouse provisioners.
-func WithCHExecutor(exec CHExecutor) ProvisionerOption { return withCHExecutor{exec: exec} }
+// Restarter is the optional capability a Provisioner implements when it can
+// cleanly restart its managed service(s) via Ansible. cluster restart
+// type-asserts to this so services with non-standard unit names
+// (clickhouse-server, postgresql, yb-master + yb-tserver) are handled by
+// their role's tasks/restart.yml instead of a Go-side unit-name guess.
+type Restarter interface {
+	Restart(ctx context.Context, host inventory.Host, config ServiceConfig) error
+}

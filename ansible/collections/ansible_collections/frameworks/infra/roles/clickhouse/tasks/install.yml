@@ -1,0 +1,118 @@
+---
+- name: Install ClickHouse packages via idealista.clickhouse (Debian family)
+  ansible.builtin.import_role:
+    name: idealista.clickhouse
+    tasks_from: install-Debian.yml
+  tags: [install]
+  vars:
+    clickhouse_version: "{{ clickhouse_version }}"
+    clickhouse_http_port: "{{ clickhouse_port_http }}"
+    clickhouse_tcp_port: "{{ clickhouse_port_tcp }}"
+    clickhouse_interserver_http_port: "{{ clickhouse_port_interserver }}"
+    clickhouse_path: "{{ clickhouse_path }}"
+    clickhouse_tmp_path: "{{ clickhouse_tmp_path }}"
+    clickhouse_log_path: "{{ clickhouse_log_path }}"
+    clickhouse_default_password_sha256: "{{ clickhouse_default_password | hash('sha256') }}"
+    clickhouse_default_users: "{{ frameworks_clickhouse_default_users }}"
+    clickhouse_default_quotas: "{{ frameworks_clickhouse_default_quotas }}"
+
+- name: Configure ClickHouse via idealista.clickhouse
+  ansible.builtin.import_role:
+    name: idealista.clickhouse
+    tasks_from: config/clickhouse.yml
+  tags: [configure]
+  vars:
+    clickhouse_version: "{{ clickhouse_version }}"
+    clickhouse_http_port: "{{ clickhouse_port_http }}"
+    clickhouse_tcp_port: "{{ clickhouse_port_tcp }}"
+    clickhouse_interserver_http_port: "{{ clickhouse_port_interserver }}"
+    clickhouse_path: "{{ clickhouse_path }}"
+    clickhouse_tmp_path: "{{ clickhouse_tmp_path }}"
+    clickhouse_log_path: "{{ clickhouse_log_path }}"
+    clickhouse_default_password_sha256: "{{ clickhouse_default_password | hash('sha256') }}"
+    clickhouse_default_users: "{{ frameworks_clickhouse_default_users }}"
+    clickhouse_default_quotas: "{{ frameworks_clickhouse_default_quotas }}"
+
+- name: Remove legacy listen_host overrides before starting ClickHouse
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/clickhouse-server/config.d/99-listen_host.xml
+    - /etc/clickhouse-server/config.d/listen-host.xml
+
+- name: Write managed ClickHouse listen-host override
+  ansible.builtin.copy:
+    dest: /etc/clickhouse-server/config.d/listen-host.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: "0644"
+    content: |
+      <clickhouse>
+        <listen_host>{{ clickhouse_listen_host }}</listen_host>
+      </clickhouse>
+
+- name: Remove broken upstream TLS block when ClickHouse TLS is disabled
+  block:
+    - name: Remove upstream TLS drop-in when ClickHouse TLS is disabled
+      ansible.builtin.file:
+        path: /etc/clickhouse-server/config.d/openssl.xml
+        state: absent
+
+    - name: Remove unconditional openSSL block from config.xml when ClickHouse TLS is disabled
+      ansible.builtin.replace:
+        path: /etc/clickhouse-server/config.xml
+        regexp: '(?s)\n  <openSSL>.*?\n  </openSSL>\n'
+        replace: "\n"
+  when: not (clickhouse_enable_ssl | default(false) | bool)
+
+- name: Normalize malformed upstream default quota in users.xml
+  ansible.builtin.replace:
+    path: /etc/clickhouse-server/users.xml
+    regexp: "(<execution_time>)0gv(</execution_time>)"
+    replace: '\g<1>0\g<2>'
+
+- name: Start ClickHouse service
+  tags: [service]
+  block:
+    - name: Ensure clickhouse-server is enabled and started
+      ansible.builtin.systemd:
+        name: "{{ clickhouse_service_name }}"
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Probe ClickHouse locally after start
+      ansible.builtin.include_tasks: _probe_client.yml
+
+  rescue:
+    - name: Capture clickhouse-server systemctl status after failed start
+      ansible.builtin.command: systemctl status {{ clickhouse_service_name }} --no-pager --full
+      register: clickhouse_systemctl_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture clickhouse-server journal after failed start
+      ansible.builtin.command: journalctl -u {{ clickhouse_service_name }} -n 100 --no-pager
+      register: clickhouse_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Capture clickhouse-server error log after failed start
+      ansible.builtin.command: tail -n 100 /var/log/clickhouse-server/clickhouse-server.err.log
+      register: clickhouse_err_log
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with ClickHouse startup diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          clickhouse-server failed to start cleanly
+          systemctl status:
+          {{ clickhouse_systemctl_status.stdout | default('(no output)') }}
+
+          journalctl:
+          {{ clickhouse_journal.stdout | default('(no output)') }}
+
+          clickhouse-server.err.log:
+          {{ clickhouse_err_log.stdout | default('(no output)') }}

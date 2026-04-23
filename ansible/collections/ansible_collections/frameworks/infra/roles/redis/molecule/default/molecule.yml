@@ -1,0 +1,34 @@
+---
+role_name_check: 1
+
+dependency:
+  name: galaxy
+
+driver:
+  name: docker
+
+platforms:
+  - name: redis-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        redis_version: "7.2"
+        redis_port: 6379
+        redis_bind_interface: "127.0.0.1"
+        redis_password: "molecule-test"
+
+verifier:
+  name: ansible

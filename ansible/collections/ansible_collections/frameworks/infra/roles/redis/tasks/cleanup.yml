@@ -1,0 +1,7 @@
+---
+- name: Stop and disable redis
+  ansible.builtin.systemd:
+    name: "{{ redis_service_name }}"
+    state: stopped
+    enabled: false
+  failed_when: false

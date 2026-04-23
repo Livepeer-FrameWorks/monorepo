@@ -1,0 +1,32 @@
+---
+- name: edge | prepare shared state
+  ansible.builtin.import_tasks: prepare.yml
+  tags: [install, configure]
+
+- name: edge | apply kernel/fs tuning
+  ansible.builtin.import_tasks: tune.yml
+  when: edge_apply_tuning | bool and ansible_facts.os_family != 'Darwin'
+  tags: [configure]
+
+- name: edge | install (docker)
+  ansible.builtin.import_tasks: install-docker.yml
+  when: edge_mode == 'docker'
+  tags: [install, configure, service, validate]
+
+- name: edge | install (native-linux)
+  ansible.builtin.import_tasks: install-native-linux.yml
+  when: edge_mode == 'native' and ansible_facts.os_family != 'Darwin'
+  tags: [install, configure, service, validate]
+
+- name: edge | install (native-darwin)
+  ansible.builtin.import_tasks: install-native-darwin.yml
+  when: edge_mode == 'native' and ansible_facts.os_family == 'Darwin'
+  tags: [install, configure, service, validate]
+
+- name: edge | validate
+  ansible.builtin.import_tasks: validate.yml
+  tags: [validate]
+
+- name: edge | cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cleanup, never]

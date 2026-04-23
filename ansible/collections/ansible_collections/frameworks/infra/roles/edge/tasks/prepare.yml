@@ -1,0 +1,38 @@
+---
+# Shared setup across both modes: directories, CA bundle, optional certs.
+# The role itself owns these so sub-roles don't each reinvent filesystem
+# prep. All paths are controlled by edge_* defaults.
+
+- name: Ensure edge config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ edge_conf_dir }}"
+    - "{{ edge_conf_dir }}/pki"
+    - "{{ edge_cert_dir }}"
+
+- name: Stage internal CA bundle (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_ca_path }}"
+    content: "{{ edge_ca_bundle_pem }}"
+    mode: "0644"
+  when: edge_ca_bundle_pem | length > 0
+  no_log: true
+
+- name: Stage edge TLS cert (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_cert_dir }}/cert.pem"
+    content: "{{ edge_cert_pem }}"
+    mode: "0644"
+  when: edge_cert_pem | length > 0
+  no_log: true
+
+- name: Stage edge TLS key (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_cert_dir }}/key.pem"
+    content: "{{ edge_key_pem }}"
+    mode: "0600"
+  when: edge_key_pem | length > 0
+  no_log: true

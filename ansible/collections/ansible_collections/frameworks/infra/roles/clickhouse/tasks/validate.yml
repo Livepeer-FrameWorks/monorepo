@@ -1,0 +1,58 @@
+---
+- name: Validate ClickHouse service and local client readiness
+  block:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert clickhouse-server running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services.get(clickhouse_service_name ~ '.service', {}).get('state') == 'running'
+        fail_msg: >-
+          clickhouse-server not running
+          (state={{ ansible_facts.services.get(clickhouse_service_name ~ '.service', {}).get('state', 'missing') }})
+
+    - name: Probe ClickHouse locally during validation
+      ansible.builtin.include_tasks: _probe_client.yml
+
+    - name: Confirm SELECT version() via clickhouse-client
+      ansible.builtin.command:
+        argv: >-
+          {{ ['clickhouse-client', '--host=' ~ frameworks_clickhouse_client_host, '--port=' ~ (clickhouse_port_tcp | string), '-q', 'SELECT version()']
+             + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
+      register: ch_version
+      changed_when: false
+      no_log: "{{ clickhouse_default_password | length > 0 }}"
+      failed_when: ch_version.rc != 0 or ch_version.stdout | length == 0
+
+  rescue:
+    - name: Capture clickhouse-server systemctl status after failed validation
+      ansible.builtin.command: systemctl status {{ clickhouse_service_name }} --no-pager --full
+      register: clickhouse_systemctl_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture clickhouse-server journal after failed validation
+      ansible.builtin.command: journalctl -u {{ clickhouse_service_name }} -n 100 --no-pager
+      register: clickhouse_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Capture clickhouse-server error log after failed validation
+      ansible.builtin.command: tail -n 100 /var/log/clickhouse-server/clickhouse-server.err.log
+      register: clickhouse_err_log
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with ClickHouse validation diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          clickhouse-server failed validation
+          systemctl status:
+          {{ clickhouse_systemctl_status.stdout | default('(no output)') }}
+
+          journalctl:
+          {{ clickhouse_journal.stdout | default('(no output)') }}
+
+          clickhouse-server.err.log:
+          {{ clickhouse_err_log.stdout | default('(no output)') }}

@@ -1,0 +1,27 @@
+---
+galaxy_info:
+  role_name: privateer
+  author: FrameWorks Infra
+  description: Install and manage the FrameWorks Privateer mesh/PKI service.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install Privateer.
+    options:
+      privateer_artifact_url:
+        type: str
+        required: true
+      privateer_artifact_checksum:
+        type: str
+        required: true
+      privateer_version:
+        type: str
+        required: true
+      privateer_port:
+        type: int
+        required: false
+        default: 18012

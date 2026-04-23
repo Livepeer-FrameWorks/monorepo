@@ -1,0 +1,17 @@
+---
+- name: restart helmsman
+  listen: helmsman restart
+  ansible.builtin.systemd:
+    name: "{{ helmsman_systemd_name }}"
+    state: restarted
+    daemon_reload: true
+  register: helmsman_restarted
+  when: ansible_facts.os_family != 'Darwin'
+
+- name: restart helmsman (darwin)
+  listen: helmsman restart
+  community.general.launchd:
+    name: "{{ helmsman_darwin_label }}"
+    state: restarted
+  register: helmsman_restarted
+  when: ansible_facts.os_family == 'Darwin'

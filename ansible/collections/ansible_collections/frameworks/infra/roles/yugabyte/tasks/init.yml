@@ -1,0 +1,68 @@
+---
+# YSQL is PostgreSQL-wire-compatible; community.postgresql reaches the cluster
+# through 127.0.0.1 with the configured scram-sha-256 superuser auth. The
+# yugabyte superuser password is expected to be present (SOPS-backed); init
+# fails loud if it isn't.
+
+- name: Ensure YSQL Ansible module prerequisites
+  ansible.builtin.import_tasks: ysql_prereqs.yml
+
+- name: Assert superuser password is present
+  ansible.builtin.assert:
+    that: yugabyte_superuser_password | length > 0
+    fail_msg: "yugabyte_superuser_password required for init; supply via SOPS-backed metadata.postgres_password"
+
+- name: Derive application owner roles
+  ansible.builtin.set_fact:
+    yugabyte_database_owners: "{{ (yugabyte_database_owners | default([])) + [item.owner | default(item.name)] }}"
+  loop: "{{ yugabyte_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: yugabyte_databases | length > 0
+
+- name: Create application owner role (per unique owner)
+  community.postgresql.postgresql_user:
+    name: "{{ item }}"
+    password: "{{ yugabyte_application_password }}"
+    role_attr_flags: LOGIN
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: yugabyte
+    state: present
+  loop: "{{ yugabyte_database_owners | default([]) | reject('equalto', '') | unique | list }}"
+  no_log: true
+  when:
+    - yugabyte_application_password | length > 0
+    - yugabyte_databases | length > 0
+
+- name: Create databases
+  community.postgresql.postgresql_db:
+    name: "{{ item.name }}"
+    owner: "{{ item.owner | default(item.name) }}"
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    state: present
+  loop: "{{ yugabyte_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  when: yugabyte_databases | length > 0
+
+- name: Grant database ownership to owner role
+  community.postgresql.postgresql_owner:
+    db: "{{ item.name }}"
+    new_owner: "{{ item.owner | default(item.name) }}"
+    obj_type: database
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+  loop: "{{ yugabyte_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  when: yugabyte_databases | length > 0

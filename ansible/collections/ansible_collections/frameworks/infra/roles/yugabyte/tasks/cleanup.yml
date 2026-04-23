@@ -1,0 +1,28 @@
+---
+- name: Stop and disable yb-tserver
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_tserver_service }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Stop and disable yb-master
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_master_service }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove yugabyte systemd unit files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ yugabyte_master_unit_path }}"
+    - "{{ yugabyte_tserver_unit_path }}"
+  notify: []
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  changed_when: false

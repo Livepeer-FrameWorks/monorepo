@@ -1,0 +1,32 @@
+---
+- name: Apply mistserver sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.mistserver
+  vars:
+    mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
+    mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_api_password: "{{ edge_mist_api_password }}"
+
+- name: Apply helmsman sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.helmsman
+  vars:
+    helmsman_artifact_url: "{{ edge_helmsman_artifact_url }}"
+    helmsman_artifact_checksum: "{{ edge_helmsman_artifact_checksum }}"
+    helmsman_node_id: "{{ edge_node_id }}"
+    helmsman_edge_domain: "{{ edge_domain }}"
+    helmsman_acme_email: "{{ edge_acme_email | default('', true) }}"
+    helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
+    helmsman_enrollment_token: "{{ edge_enrollment_token }}"
+    helmsman_deploy_mode: native
+    helmsman_mist_upstream: "localhost:8080"
+    helmsman_webhook_upstream: "localhost:18007"
+    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_ca_bundle_pem | length > 0 else '' }}"
+
+- name: Apply caddy bootstrap
+  ansible.builtin.import_tasks: install-native-linux-caddy.yml
+
+- name: Apply vmagent edge telemetry (when enabled)
+  ansible.builtin.import_tasks: install-native-linux-vmagent.yml
+  when: edge_telemetry_url | length > 0

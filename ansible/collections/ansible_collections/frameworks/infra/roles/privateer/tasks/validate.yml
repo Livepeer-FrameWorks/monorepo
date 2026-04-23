@@ -1,0 +1,12 @@
+---
+- name: Wait for privateer port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ privateer_port }}"
+    timeout: 30
+
+- name: Probe /health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ privateer_port }}/health"
+    status_code: 200
+    return_content: false

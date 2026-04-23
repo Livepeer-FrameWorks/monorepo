@@ -1,0 +1,17 @@
+---
+- name: Stop and disable kafka unit
+  ansible.builtin.systemd:
+    name: "{{ kafka_service_name }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove kafka systemd unit
+  ansible.builtin.file:
+    path: "{{ kafka_unit_path }}"
+    state: absent
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  changed_when: false

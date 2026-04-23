@@ -1,0 +1,10 @@
+---
+- name: Provision an edge node
+  hosts: all
+  # Linux + darwin system-domain need become=true for /Library/LaunchDaemons
+  # and /etc writes; darwin user-domain (local `edge deploy`) runs entirely
+  # under $HOME and must not escalate. The CLI sets edge_become accordingly.
+  become: "{{ edge_become | default(true) }}"
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.edge

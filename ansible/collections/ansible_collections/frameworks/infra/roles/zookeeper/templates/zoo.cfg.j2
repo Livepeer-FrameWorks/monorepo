@@ -1,0 +1,10 @@
+tickTime=2000
+initLimit=10
+syncLimit=5
+dataDir={{ zookeeper_data_dir }}
+clientPort={{ zookeeper_client_port }}
+4lw.commands.whitelist=ruok,stat,conf,mntr
+admin.enableServer=false
+{% for node in zookeeper_ensemble %}
+server.{{ node.id }}={{ node.host }}:{{ zookeeper_peer_port }}:{{ zookeeper_leader_port }}
+{% endfor %}

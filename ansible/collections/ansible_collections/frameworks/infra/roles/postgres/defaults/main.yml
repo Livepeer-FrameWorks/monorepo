@@ -1,0 +1,50 @@
+---
+# Version pinning — the CLI passes this from config/infrastructure.yaml.
+postgres_version: "16"
+
+# Listener — bind publicly so cluster-internal reachability works without
+# fronting Postgres with a TCP proxy. Production restricts access via the
+# firewall layer, not via listen address.
+postgres_listen_addresses: "*"
+postgres_port: 5432
+
+# Paths mirror the Debian/Ubuntu package defaults that geerlingguy.postgresql
+# uses — explicit here so templates that reference them stay portable when
+# we extend to RHEL/Arch.
+postgres_data_dir: "/var/lib/postgresql/{{ postgres_version }}/main"
+postgres_config_dir: "/etc/postgresql/{{ postgres_version }}/main"
+
+# Secrets — the CLI injects postgres_admin_password via extra-vars from the
+# SOPS-decrypted shared env. Never commit a real value here.
+postgres_admin_password: ""
+
+# Databases to create at init-tag time. Each entry: {name, owner}. Owner
+# defaults to the database name; role resolution handles that downstream.
+postgres_databases: []
+
+# pg_hba entries rendered into Postgres's client auth file. Defaults allow
+# local peer auth for the postgres superuser plus scram-sha-256 password auth
+# from the cluster-internal network.
+postgres_hba_entries:
+  - type: local
+    database: all
+    user: postgres
+    auth_method: peer
+  - type: local
+    database: all
+    user: all
+    auth_method: peer
+  - type: host
+    database: all
+    user: all
+    address: "127.0.0.1/32"
+    auth_method: scram-sha-256
+  - type: host
+    database: all
+    user: all
+    address: "::1/128"
+    auth_method: scram-sha-256
+
+# Performance defaults — overridable from the manifest's `tuning:` block.
+postgres_max_connections: 200
+postgres_shared_buffers: "512MB"

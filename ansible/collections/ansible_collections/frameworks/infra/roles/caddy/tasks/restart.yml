@@ -1,0 +1,13 @@
+---
+# Caddy prefers reload for config rotation (SIGHUP keeps active streams);
+# cluster restart forces a full restart because the operator opted into it.
+- name: Restart caddy
+  ansible.builtin.systemd:
+    name: caddy
+    state: restarted
+
+- name: Wait for admin API after restart
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 2019
+    timeout: 15

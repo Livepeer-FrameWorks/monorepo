@@ -1,0 +1,58 @@
+---
+# Post-provision structural assertions exercised by the goss-based verifier in
+# production. Molecule's Ansible verifier runs verify.yml (above) for the
+# converge + idempotence check; this file is shipped alongside so that
+# `goss -g goss.yaml validate` can run against the live host outside Molecule.
+service:
+  yb-master:
+    enabled: true
+    running: true
+  yb-tserver:
+    enabled: true
+    running: true
+
+port:
+  tcp:5433:
+    listening: true
+  tcp:7100:
+    listening: true
+  tcp:9100:
+    listening: true
+
+file:
+  /opt/yugabyte/bin/yb-master:
+    exists: true
+    filetype: file
+    mode: "0755"
+  /opt/yugabyte/bin/yb-tserver:
+    exists: true
+    filetype: file
+    mode: "0755"
+  /opt/yugabyte/.post_install_done:
+    exists: true
+  /opt/yugabyte/conf/master.conf:
+    exists: true
+    contains:
+      - /--master_addresses=/
+      - /--replication_factor=/
+  /opt/yugabyte/conf/tserver.conf:
+    exists: true
+    contains:
+      - /--tserver_master_addrs=/
+      - /--pgsql_proxy_bind_address=/
+  /etc/systemd/system/yb-master.service:
+    exists: true
+    contains:
+      - "ExecStart=/opt/yugabyte/bin/yb-master"
+  /etc/systemd/system/yb-tserver.service:
+    exists: true
+    contains:
+      - "ExecStart=/opt/yugabyte/bin/yb-tserver"
+
+user:
+  yugabyte:
+    exists: true
+
+group:
+  yugabyte:
+    exists: true

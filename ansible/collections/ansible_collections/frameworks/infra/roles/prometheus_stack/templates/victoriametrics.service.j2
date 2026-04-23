@@ -1,0 +1,18 @@
+[Unit]
+Description=VictoriaMetrics single-node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ prometheus_stack_user }}
+Group={{ prometheus_stack_group }}
+ExecStart={{ victoriametrics_bin }} \
+  -storageDataPath={{ victoriametrics_storage_path }} \
+  -retentionPeriod={{ victoriametrics_retention_period }} \
+  -httpListenAddr=:{{ victoriametrics_port }}
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

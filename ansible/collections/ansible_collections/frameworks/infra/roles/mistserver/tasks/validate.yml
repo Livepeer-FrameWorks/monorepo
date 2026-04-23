@@ -1,0 +1,6 @@
+---
+- name: Wait for MistServer HTTP port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ mistserver_port }}"
+    timeout: 60

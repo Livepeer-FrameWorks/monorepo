@@ -1,0 +1,60 @@
+---
+galaxy_info:
+  role_name: helmsman
+  author: FrameWorks Infra
+  description: >-
+    Install and run Helmsman on an edge host. Linux systemd or macOS
+    launchd (system or user domain). Docker mode is served by
+    compose_stack, not this role.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install and run Helmsman natively.
+    options:
+      helmsman_artifact_url:
+        type: str
+        required: true
+      helmsman_artifact_checksum:
+        type: str
+        required: true
+      helmsman_node_id:
+        type: str
+        required: true
+      helmsman_edge_domain:
+        type: str
+        required: true
+      helmsman_foghorn_grpc_addr:
+        type: str
+        required: true
+      helmsman_enrollment_token:
+        type: str
+        required: true
+      helmsman_mist_api_password:
+        type: str
+        required: true
+      helmsman_version:
+        type: str
+        required: false
+      helmsman_deploy_mode:
+        type: str
+        required: false
+        default: native
+        choices: [docker, native]
+      helmsman_acme_email:
+        type: str
+        required: false
+      helmsman_grpc_tls_ca_path:
+        type: str
+        required: false
+      helmsman_extra_env:
+        type: dict
+        required: false
+      helmsman_darwin_domain:
+        type: str
+        required: false
+        default: system
+        choices: [system, user]

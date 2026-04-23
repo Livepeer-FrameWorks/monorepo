@@ -1,0 +1,32 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Skip verify when converge short-circuited
+      ansible.builtin.meta: end_play
+      when: helmsman_artifact_url | length == 0
+
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert frameworks-helmsman running
+      ansible.builtin.assert:
+        that: ansible_facts.services['frameworks-helmsman.service'].state == 'running'
+
+    - name: Wait for Helmsman port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ helmsman_port }}"
+        timeout: 30
+
+    - name: Rerun role (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.helmsman
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "helmsman role not idempotent"

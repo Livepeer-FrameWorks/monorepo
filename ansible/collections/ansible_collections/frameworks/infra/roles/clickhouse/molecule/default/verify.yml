@@ -1,0 +1,29 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert clickhouse-server running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['clickhouse-server.service'].state == 'running'
+
+    - name: Wait for TCP listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9000
+        timeout: 60
+
+    - name: Rerun for idempotence
+      ansible.builtin.include_role:
+        name: frameworks.infra.clickhouse
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "clickhouse role not idempotent"

@@ -1,0 +1,9 @@
+---
+- name: Stop prometheus stack services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+  loop: "{{ ['prometheus', 'node_exporter', 'victoriametrics', 'vmagent', 'vmauth']
+    | intersect(prometheus_stack_components | map('regex_replace', '^prometheus$', 'prometheus')) }}"

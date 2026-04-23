@@ -1,0 +1,35 @@
+---
+role_name_check: 1
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: helmsman-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        helmsman_version: dev
+        helmsman_artifact_url: >-
+          {{ lookup('env', 'HELMSMAN_ARTIFACT_URL') | default('', true) }}
+        helmsman_artifact_checksum: >-
+          {{ lookup('env', 'HELMSMAN_ARTIFACT_CHECKSUM') | default('', true) }}
+        helmsman_node_id: molecule-edge
+        helmsman_edge_domain: edge.molecule.local
+        helmsman_foghorn_grpc_addr: 127.0.0.1:9090
+        helmsman_enrollment_token: molecule-test-token
+        helmsman_mist_api_password: molecule-test-password
+verifier:
+  name: ansible

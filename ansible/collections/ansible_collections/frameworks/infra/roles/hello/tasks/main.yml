@@ -1,0 +1,17 @@
+---
+- name: Report wiring status
+  ansible.builtin.debug:
+    msg: "{{ hello_greeting }} (ansible={{ ansible_version.full }}, host={{ inventory_hostname }})"
+  tags:
+    - validate
+    - install
+
+- name: Assert SOPS vars plugin reached this play
+  ansible.builtin.assert:
+    that:
+      - hello_greeting is string
+      - hello_greeting | length > 0
+    fail_msg: "hello_greeting missing — vars/extra_vars wiring is broken"
+    success_msg: "vars wiring confirmed"
+  tags:
+    - validate

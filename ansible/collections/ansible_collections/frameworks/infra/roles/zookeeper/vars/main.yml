@@ -1,0 +1,10 @@
+---
+zookeeper_bin_dir: "{{ zookeeper_install_dir }}/bin"
+zookeeper_conf_dir: "{{ zookeeper_install_dir }}/conf"
+zookeeper_install_sentinel: "{{ zookeeper_install_dir }}/.installed-{{ (zookeeper_artifact_checksum ~ zookeeper_artifact_url) | hash('sha256') }}"
+
+zookeeper_java_package_by_family:
+  Debian: default-jre-headless
+  RedHat: java-17-openjdk-headless
+  Archlinux: jre17-openjdk-headless
+  Alpine: openjdk17-jre-headless

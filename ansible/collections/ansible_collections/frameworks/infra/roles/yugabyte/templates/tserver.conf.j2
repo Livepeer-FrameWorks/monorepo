@@ -1,0 +1,14 @@
+--tserver_master_addrs={{ yugabyte_master_addresses }}
+--rpc_bind_addresses={{ yugabyte_node_address }}:{{ yugabyte_tserver_rpc_port }}
+--webserver_interface={{ yugabyte_node_address }}
+--webserver_port={{ yugabyte_tserver_web_port }}
+--enable_ysql=true
+--pgsql_proxy_bind_address=0.0.0.0:{{ yugabyte_ysql_port }}
+--cql_proxy_bind_address=0.0.0.0:{{ yugabyte_ycql_port }}
+--fs_data_dirs={{ yugabyte_data_dir }}
+--ysql_enable_auth=true
+--ysql_hba_conf_csv="host all all 0.0.0.0/0 scram-sha-256,host all all ::0/0 scram-sha-256"
+--placement_cloud={{ yugabyte_placement_cloud }}
+--placement_region={{ yugabyte_placement_region }}
+--placement_zone={{ yugabyte_placement_zone }}
+--callhome_enabled=false

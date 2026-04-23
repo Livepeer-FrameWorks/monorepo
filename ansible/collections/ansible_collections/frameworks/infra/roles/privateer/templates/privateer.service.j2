@@ -1,0 +1,16 @@
+[Unit]
+Description=FrameWorks Privateer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ privateer_user }}
+Group={{ privateer_group }}
+EnvironmentFile={{ privateer_conf_dir }}/privateer.env
+ExecStart={{ privateer_bin }}
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

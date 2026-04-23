@@ -3,11 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"frameworks/cli/internal/ux"
-	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 
@@ -21,19 +22,15 @@ func newClusterRestartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restart <service>",
 		Short: "Restart a service",
-		Long: `Restart a service running on the cluster.
+		Long: `Restart a service running on the cluster via its Ansible role.
 
-For Docker mode:
-  - Uses 'docker compose restart'
+Each role's tasks/restart.yml knows the correct unit or compose names for
+its managed service(s): clickhouse-server, postgresql, yb-master + yb-tserver,
+caddy, frameworks-kafka, docker-compose stacks, etc. Cluster restart
+type-asserts the service's provisioner to Restarter and delegates there.
 
-For native mode (systemd):
-  - Uses 'systemctl restart frameworks-<service>'
-
-The restart command automatically detects the service mode and uses
-the appropriate restart method.
-
-After restart, the command can optionally validate that the service
-is healthy using health checks.`,
+After restart, pass --validate to run the role's tasks/validate.yml (port
+probes, /health check, etc.) to confirm the service came back healthy.`,
 		Example: `  frameworks cluster restart quartermaster
   frameworks cluster restart bridge --validate`,
 		Args: cobra.ExactArgs(1),
@@ -43,20 +40,22 @@ is healthy using health checks.`,
 				return err
 			}
 			defer rc.Cleanup()
-			return runRestart(cmd, rc.Manifest, args[0], validate)
+			return runRestart(cmd, rc, args[0], validate)
 		},
 	}
 
-	cmd.Flags().BoolVar(&validate, "validate", false, "Validate service health after restart")
+	cmd.Flags().BoolVar(&validate, "validate", false, "Validate service health after restart via the role's validate tag")
 
 	return cmd
 }
 
-// runRestart executes the restart command against an already-loaded manifest.
-func runRestart(cmd *cobra.Command, manifest *inventory.Manifest, serviceName string, validate bool) error {
+// runRestart executes the restart via the service's Restarter interface so
+// the role picks the right systemd unit or compose project without the CLI
+// having to guess frameworks-<service>.
+func runRestart(cmd *cobra.Command, rc *resolvedCluster, serviceName string, validate bool) error {
+	manifest := rc.Manifest
 	var err error
 
-	// Resolve deploy name
 	var deployName string
 	if svcCfg, ok := manifest.Services[serviceName]; ok {
 		deployName, err = resolveDeployName(serviceName, svcCfg)
@@ -77,48 +76,7 @@ func runRestart(cmd *cobra.Command, manifest *inventory.Manifest, serviceName st
 		deployName = serviceName // infrastructure services use canonical IDs
 	}
 
-	// Find host for service
-	var host inventory.Host
-	var found bool
-
-	// Check infrastructure
-	if serviceName == "postgres" && manifest.Infrastructure.Postgres.Enabled {
-		host, found = manifest.GetHost(manifest.Infrastructure.Postgres.Host)
-	} else if serviceName == "kafka" && manifest.Infrastructure.Kafka.Enabled {
-		if len(manifest.Infrastructure.Kafka.Brokers) > 0 {
-			host, found = manifest.GetHost(manifest.Infrastructure.Kafka.Brokers[0].Host)
-		}
-	} else if serviceName == "clickhouse" && manifest.Infrastructure.ClickHouse.Enabled {
-		host, found = manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
-	}
-
-	// Check application services
-	if !found {
-		if svcConfig, ok := manifest.Services[serviceName]; ok {
-			if svcConfig.Enabled {
-				host, found = manifest.GetHost(svcConfig.Host)
-			}
-		}
-	}
-
-	// Check interfaces
-	if !found {
-		if ifaceConfig, ok := manifest.Interfaces[serviceName]; ok {
-			if ifaceConfig.Enabled {
-				host, found = manifest.GetHost(ifaceConfig.Host)
-			}
-		}
-	}
-
-	// Check observability
-	if !found {
-		if obsConfig, ok := manifest.Observability[serviceName]; ok {
-			if obsConfig.Enabled {
-				host, found = manifest.GetHost(obsConfig.Host)
-			}
-		}
-	}
-
+	host, found := resolveServiceHost(manifest, serviceName)
 	if !found {
 		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
 	}
@@ -128,102 +86,109 @@ func runRestart(cmd *cobra.Command, manifest *inventory.Manifest, serviceName st
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Create SSH pool
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	// Detect service mode
-	detector := detect.NewDetector(sshPool, host)
-	state, err := detector.Detect(ctx, deployName)
+	prov, err := provisioner.GetProvisioner(deployName, sshPool)
 	if err != nil {
-		return fmt.Errorf("failed to detect service: %w", err)
+		return fmt.Errorf("get provisioner for %s: %w", deployName, err)
+	}
+	restarter, ok := prov.(provisioner.Restarter)
+	if !ok {
+		return fmt.Errorf("provisioner for %s does not support role-based restart", deployName)
 	}
 
-	if !state.Exists {
-		return fmt.Errorf("service %s does not exist on %s", serviceName, host.ExternalIP)
+	// Build the same ServiceConfig surface provision would pass so the
+	// role's restart.yml has access to env-derived unit names, ports, etc.
+	task := &orchestrator.Task{
+		Name:       serviceName,
+		Type:       deployName,
+		ServiceID:  serviceName,
+		Host:       host.Name,
+		Phase:      orchestrator.PhaseApplications,
+		Idempotent: true,
 	}
-
-	// Build restart command based on mode
-	var restartCmd string
-	switch state.Mode {
-	case "docker":
-		restartCmd = fmt.Sprintf("cd /opt/frameworks/%s && docker compose restart", deployName)
-
-	case "native":
-		restartCmd = fmt.Sprintf("systemctl restart frameworks-%s", deployName)
-
-	default:
-		return fmt.Errorf("unknown service mode: %s (cannot determine restart method)", state.Mode)
+	manifestDir := filepath.Dir(rc.ManifestPath)
+	sharedEnv, envErr := rc.SharedEnv()
+	if envErr != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "  warning: shared env decrypt failed: %v\n", envErr)
+		sharedEnv = nil
 	}
-
-	// Get runner
-	var runner ssh.Runner
-	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
-		runner = ssh.NewLocalRunner("")
-	} else {
-		sshConfig := &ssh.ConnectionConfig{
-			Address:  host.ExternalIP,
-			Port:     22,
-			User:     host.User,
-			HostName: host.Name,
-			Timeout:  30 * time.Second,
-		}
-		runner, err = sshPool.Get(sshConfig)
-		if err != nil {
-			return fmt.Errorf("failed to connect to host: %w", err)
-		}
+	config, cfgErr := buildTaskConfig(task, manifest, map[string]any{}, false, manifestDir, sharedEnv, rc.ReleaseRepos)
+	if cfgErr != nil {
+		return fmt.Errorf("build restart config: %w", cfgErr)
 	}
+	rc.applyReleaseMetadata(config.Metadata)
 
-	// Execute restart command
-	result, err := runner.Run(ctx, restartCmd)
-	if err != nil {
-		return fmt.Errorf("failed to restart service: %w", err)
-	}
-
-	if result.ExitCode != 0 {
-		ux.FormatError(cmd.ErrOrStderr(), fmt.Errorf("restart command exited with code %d: %s", result.ExitCode, result.Stderr), fmt.Sprintf("check `frameworks cluster logs %s` for details", serviceName))
-		return fmt.Errorf("restart command exited with code %d", result.ExitCode)
+	if err := restarter.Restart(ctx, host, config); err != nil {
+		return fmt.Errorf("restart %s: %w", serviceName, err)
 	}
 
 	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s restarted", serviceName))
 
 	if validate {
 		fmt.Fprintln(cmd.OutOrStdout(), "Validating service health...")
-
 		time.Sleep(3 * time.Second)
-
-		prov, err := provisioner.GetProvisioner(deployName, sshPool)
-		if err != nil {
-			ux.Warn(cmd.ErrOrStderr(), "Cannot validate (unknown service type)")
-			return nil
-		}
-
-		portCfg := inventory.ServiceConfig{}
-		if svcCfg, ok := manifest.Services[serviceName]; ok {
-			portCfg = svcCfg
-		} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
-			portCfg = ifaceCfg
-		} else if obsCfg, ok := manifest.Observability[serviceName]; ok {
-			portCfg = obsCfg
-		}
-		port, err := resolvePort(serviceName, portCfg)
-		if err != nil {
-			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Cannot resolve port for validation: %v", err))
-			return nil
-		}
-		config := provisioner.ServiceConfig{
-			Mode: state.Mode,
-			Port: port,
-		}
-
 		if err := prov.Validate(ctx, host, config); err != nil {
 			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Validation failed: %v", err))
 			return fmt.Errorf("service restarted but health check failed")
 		}
-
 		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Service is healthy\n")
 	}
 
 	return nil
+}
+
+// resolveServiceHost walks the manifest in the same order as upgrade +
+// provision: infrastructure first, then application services, interfaces,
+// observability.
+func resolveServiceHost(manifest *inventory.Manifest, serviceName string) (inventory.Host, bool) {
+	switch serviceName {
+	case "postgres":
+		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+			return manifest.GetHost(pg.Host)
+		}
+	case "yugabyte":
+		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() && len(pg.Nodes) > 0 {
+			return manifest.GetHost(pg.Nodes[0].Host)
+		}
+	case "kafka":
+		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Brokers) > 0 {
+			return manifest.GetHost(k.Brokers[0].Host)
+		}
+	case "kafka-controller":
+		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Controllers) > 0 {
+			return manifest.GetHost(k.Controllers[0].Host)
+		}
+	case "zookeeper":
+		if z := manifest.Infrastructure.Zookeeper; z != nil && z.Enabled && len(z.Ensemble) > 0 {
+			return manifest.GetHost(z.Ensemble[0].Host)
+		}
+	case "clickhouse":
+		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+			return manifest.GetHost(ch.Host)
+		}
+	case "redis":
+		if r := manifest.Infrastructure.Redis; r != nil && r.Enabled && len(r.Instances) > 0 {
+			return manifest.GetHost(r.Instances[0].Host)
+		}
+	}
+
+	if svc, ok := manifest.Services[serviceName]; ok && svc.Enabled {
+		if h, found := manifest.GetHost(svc.Host); found {
+			return h, true
+		}
+	}
+	if iface, ok := manifest.Interfaces[serviceName]; ok && iface.Enabled {
+		if h, found := manifest.GetHost(iface.Host); found {
+			return h, true
+		}
+	}
+	if obs, ok := manifest.Observability[serviceName]; ok && obs.Enabled {
+		if h, found := manifest.GetHost(obs.Host); found {
+			return h, true
+		}
+	}
+	return inventory.Host{}, false
 }

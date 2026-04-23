@@ -1,0 +1,12 @@
+---
+- name: Restart {{ go_service_systemd_name }}
+  ansible.builtin.systemd:
+    name: "{{ go_service_systemd_name }}"
+    state: restarted
+
+- name: Wait for {{ go_service_name }} port after restart
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ go_service_port }}"
+    timeout: 60
+  when: go_service_port | int > 0

@@ -1,0 +1,33 @@
+---
+role_name_check: 1
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: privateer-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        privateer_version: "dev"
+        # Molecule supplies artifact URL + checksum via env so CI can swap
+        # them per matrix entry without editing YAML.
+        privateer_artifact_url: >-
+          {{ lookup('env', 'PRIVATEER_ARTIFACT_URL') | default('', true) }}
+        privateer_artifact_checksum: >-
+          {{ lookup('env', 'PRIVATEER_ARTIFACT_CHECKSUM') | default('', true) }}
+        privateer_port: 18012
+verifier:
+  name: ansible

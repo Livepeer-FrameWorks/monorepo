@@ -23,7 +23,11 @@ func newClusterMigrateCmd() *cobra.Command {
 
 Migrations are tracked in a _migrations table per database.
 Each migration runs inside a transaction and is recorded on success.
-Safe to run multiple times — already-applied migrations are skipped.`,
+Safe to run multiple times — already-applied migrations are skipped.
+
+The underlying Ansible role filters applied vs pending on the target; in
+--dry-run mode the role runs under ansible-playbook --check --diff so
+nothing is actually written.`,
 		Example: `  frameworks cluster migrate --dry-run
   frameworks cluster migrate`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -36,7 +40,7 @@ Safe to run multiple times — already-applied migrations are skipped.`,
 		},
 	}
 
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "List pending migrations without applying")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report pending migrations via ansible --check --diff without applying")
 
 	return cmd
 }
@@ -63,18 +67,27 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool) error {
 		}
 	}
 
-	port := pg.EffectivePort()
-	dbUser := "postgres"
-	if pg.IsYugabyte() {
-		dbUser = "yugabyte"
+	databases := pg.Databases
+	if len(databases) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No databases configured in manifest.")
+		return nil
+	}
+	dbNames := make([]string, 0, len(databases))
+	for _, d := range databases {
+		dbNames = append(dbNames, d.Name)
 	}
 
-	sshKey := stringFlag(cmd, "ssh-key").Value
-	sshPool := ssh.NewPool(30*time.Second, sshKey)
-	defer sshPool.Close()
+	items, err := provisioner.BuildMigrationItems(dbNames)
+	if err != nil {
+		return fmt.Errorf("collect migrations: %w", err)
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No migration files found under pkg/database/sql/migrations.")
+		return nil
+	}
 
-	// Only decrypt manifest env_files when Yugabyte actually needs a password.
-	// Vanilla Postgres uses peer auth and needs no secret.
+	// Yugabyte-over-TCP requires a password; vanilla Postgres uses peer auth
+	// and does not.
 	var sharedEnv map[string]string
 	if pg.IsYugabyte() && pg.Password == "" {
 		env, sErr := rc.SharedEnv()
@@ -87,50 +100,53 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	exec, err := newSQLExecutor(pg.SQLAccess, pgHost, sshPool, pg.IsYugabyte(), password)
-	if err != nil {
-		return err
-	}
+
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := ssh.NewPool(30*time.Second, sshKey)
+	defer sshPool.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	databases := pg.Databases
-	if len(databases) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No databases configured in manifest.")
-		return nil
+	serviceName := "postgres"
+	itemsKey := "postgres_migrate_items"
+	if pg.IsYugabyte() {
+		serviceName = "yugabyte"
+		itemsKey = "yugabyte_migrate_items"
 	}
 
-	totalApplied := 0
-	for _, db := range databases {
-		conn := provisioner.ConnParams{Host: pgHost.ExternalIP, Port: port, User: dbUser, Database: db.Name}
+	prov, err := provisioner.GetProvisioner(serviceName, sshPool)
+	if err != nil {
+		return err
+	}
+	migrator, ok := prov.(provisioner.Migrator)
+	if !ok {
+		return fmt.Errorf("%s provisioner does not implement Migrator", serviceName)
+	}
 
-		results, err := provisioner.RunPostgresMigrations(ctx, exec, conn, dryRun)
-		if err != nil {
-			return fmt.Errorf("migrate %s: %w", db.Name, err)
-		}
-
-		if len(results) == 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "  %s: up to date\n", db.Name)
-			continue
-		}
-
-		verb := "Applied"
-		if dryRun {
-			verb = "Pending"
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s %d migration(s)\n", db.Name, verb, len(results))
-		for _, r := range results {
-			fmt.Fprintf(cmd.OutOrStdout(), "    %s %s/%s\n", verb, r.Version, r.Filename)
-		}
-		totalApplied += len(results)
+	cfg := provisioner.ServiceConfig{
+		Port: pg.EffectivePort(),
+		Metadata: map[string]any{
+			"postgres_password": password,
+			itemsKey:            items,
+		},
 	}
 
 	if dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n%d pending migration(s) across %d database(s)\n", totalApplied, len(databases))
+		fmt.Fprintln(cmd.OutOrStdout(), "Running migrate in --check --diff mode (no writes)")
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "Applying pending migrations")
+	}
+
+	if err := migrator.ApplyMigrations(ctx, pgHost, cfg, dryRun); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+
+	if dryRun {
+		fmt.Fprintln(cmd.OutOrStdout(), "Dry-run complete; ansible check output above shows pending changes")
 		return nil
 	}
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Applied %d migration(s)", totalApplied))
+	ux.Success(cmd.OutOrStdout(), "Migrations applied")
 	ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
 		{Cmd: "frameworks cluster status", Why: "Verify deployed services are healthy after schema changes."},
 	})

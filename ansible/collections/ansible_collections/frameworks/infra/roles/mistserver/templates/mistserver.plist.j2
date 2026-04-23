@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{ mistserver_darwin_label }}</string>
+    <key>Program</key>
+    <string>/bin/bash</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{ mistserver_darwin_base_dir }}/mistserver/run.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{ mistserver_darwin_base_dir }}/mistserver</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{{ mistserver_darwin_log_dir }}/{{ mistserver_darwin_label }}.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ mistserver_darwin_log_dir }}/{{ mistserver_darwin_label }}.err</string>
+</dict>
+</plist>

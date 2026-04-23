@@ -1,0 +1,7 @@
+---
+- name: Provision Privateer
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.privateer

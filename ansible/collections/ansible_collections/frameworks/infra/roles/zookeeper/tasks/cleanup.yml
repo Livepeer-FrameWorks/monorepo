@@ -1,0 +1,17 @@
+---
+- name: Stop and disable zookeeper
+  ansible.builtin.systemd:
+    name: zookeeper
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove zookeeper systemd unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/zookeeper.service
+    state: absent
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  changed_when: false

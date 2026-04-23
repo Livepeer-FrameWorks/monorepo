@@ -1,0 +1,33 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert caddy running
+      ansible.builtin.assert:
+        that: ansible_facts.services['caddy.service'].state == 'running'
+
+    - name: Wait for admin API
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 2019
+        timeout: 15
+
+    - name: Probe admin config endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:2019/config/"
+        status_code: 200
+
+    - name: Rerun role (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.caddy
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "caddy role not idempotent"

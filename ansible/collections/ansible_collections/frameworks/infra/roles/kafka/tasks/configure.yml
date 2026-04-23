@@ -1,0 +1,29 @@
+---
+- name: Render server.properties
+  ansible.builtin.template:
+    src: server.properties.j2
+    dest: "{{ kafka_properties_path }}"
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    mode: "0644"
+  notify: kafka restart
+
+- name: Render systemd unit
+  ansible.builtin.template:
+    src: kafka.service.j2
+    dest: "{{ kafka_unit_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: kafka restart
+
+- name: Format KRaft storage (once per cluster, sentinel on meta.properties)
+  ansible.builtin.command: >-
+    {{ kafka_bin_dir }}/kafka-storage.sh format
+    -t {{ kafka_cluster_id }}
+    -c {{ kafka_properties_path }}
+    --ignore-formatted
+  args:
+    creates: "{{ kafka_format_sentinel }}"
+  become: true
+  become_user: "{{ kafka_user }}"

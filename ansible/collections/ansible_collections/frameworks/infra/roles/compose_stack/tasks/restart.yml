@@ -1,0 +1,6 @@
+---
+- name: Restart compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ compose_stack_project_dir }}"
+    state: restarted
+    wait: true

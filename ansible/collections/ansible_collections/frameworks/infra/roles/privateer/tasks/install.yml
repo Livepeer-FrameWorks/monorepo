@@ -1,0 +1,54 @@
+---
+- name: Ensure privateer group
+  ansible.builtin.group:
+    name: "{{ privateer_group }}"
+    system: true
+
+- name: Ensure privateer user
+  ansible.builtin.user:
+    name: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Ensure privateer directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
+    mode: "0755"
+  loop:
+    - "{{ privateer_install_dir }}"
+    - "{{ privateer_conf_dir }}"
+    - "{{ privateer_data_dir }}"
+
+- name: Download Privateer artifact
+  ansible.builtin.get_url:
+    url: "{{ privateer_artifact_url }}"
+    dest: "{{ privateer_tarball_path }}"
+    checksum: "{{ privateer_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Extract Privateer
+  ansible.builtin.unarchive:
+    src: "{{ privateer_tarball_path }}"
+    dest: "{{ privateer_install_dir }}"
+    remote_src: true
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ privateer_install_sentinel }}"
+  notify: privateer restart
+
+- name: Record install sentinel
+  ansible.builtin.file:
+    path: "{{ privateer_install_sentinel }}"
+    state: touch
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
+    mode: "0644"
+  changed_when: false

@@ -1,0 +1,58 @@
+---
+- name: Ensure frameworks group
+  ansible.builtin.group:
+    name: "{{ mistserver_group }}"
+    system: true
+
+- name: Ensure frameworks user
+  ansible.builtin.user:
+    name: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Ensure directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+    mode: "0755"
+  loop:
+    - /etc/frameworks
+    - "{{ mistserver_install_dir }}"
+
+- name: Download MistServer tarball
+  ansible.builtin.get_url:
+    url: "{{ mistserver_artifact_url }}"
+    dest: "/tmp/mistserver.tar.gz"
+    checksum: "{{ mistserver_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+# Version-keyed sentinel rotates on a pinned-version bump so the extract and
+# chmod steps rerun exactly when the tarball identity changes.
+- name: Set install sentinel path
+  ansible.builtin.set_fact:
+    mistserver_install_sentinel: "{{ mistserver_install_dir }}/.installed-{{ mistserver_artifact_checksum | default('') | hash('sha1') }}"
+
+- name: Extract MistServer
+  ansible.builtin.unarchive:
+    src: "/tmp/mistserver.tar.gz"
+    dest: "{{ mistserver_install_dir }}"
+    remote_src: true
+    owner: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+    creates: "{{ mistserver_install_sentinel }}"
+  notify: mistserver restart
+
+- name: Ensure MistServer binary is executable and mark install sentinel
+  ansible.builtin.shell: |
+    set -e
+    chmod 0755 "{{ mistserver_install_dir }}/MistServer"
+    chown {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_dir }}/MistServer"
+    touch "{{ mistserver_install_sentinel }}"
+    chown {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_sentinel }}"
+  args:
+    creates: "{{ mistserver_install_sentinel }}"

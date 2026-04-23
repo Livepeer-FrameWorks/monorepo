@@ -1,0 +1,32 @@
+---
+role_name_check: 1
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: listmonk-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        # Default is render-only: compose_stack writes docker-compose.yml +
+        # .env but skips `docker compose up`. CI exercises the Jinja
+        # render + var flow. Live converge (image pull + Postgres dep)
+        # is opt-in via LISTMONK_MOLECULE_LIVE=1.
+        compose_stack_render_only: "{{ lookup('env', 'LISTMONK_MOLECULE_LIVE') | default('', true) | length == 0 }}"
+        listmonk_env:
+          LISTMONK_app__address: "0.0.0.0:9000"
+verifier:
+  name: ansible

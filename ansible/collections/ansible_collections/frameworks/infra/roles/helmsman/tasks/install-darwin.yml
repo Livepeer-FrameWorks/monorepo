@@ -1,0 +1,61 @@
+---
+- name: Resolve Darwin layout for selected domain
+  ansible.builtin.set_fact:
+    helmsman_darwin_base_dir: >-
+      {{ helmsman_darwin_user_base_dir if helmsman_darwin_domain == 'user'
+         else helmsman_darwin_system_base_dir }}
+    helmsman_darwin_conf_dir: >-
+      {{ helmsman_darwin_user_conf_dir if helmsman_darwin_domain == 'user'
+         else helmsman_darwin_system_conf_dir }}
+    helmsman_darwin_log_dir: >-
+      {{ helmsman_darwin_user_log_dir if helmsman_darwin_domain == 'user'
+         else helmsman_darwin_system_log_dir }}
+    helmsman_darwin_plist_dir: >-
+      {{ helmsman_darwin_user_plist_dir if helmsman_darwin_domain == 'user'
+         else helmsman_darwin_system_plist_dir }}
+
+- name: Ensure Darwin directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ helmsman_darwin_base_dir }}"
+    - "{{ helmsman_darwin_base_dir }}/helmsman"
+    - "{{ helmsman_darwin_conf_dir }}"
+    - "{{ helmsman_darwin_log_dir }}"
+    - "{{ helmsman_darwin_plist_dir }}"
+
+- name: Download Helmsman asset
+  ansible.builtin.get_url:
+    url: "{{ helmsman_artifact_url }}"
+    dest: "/tmp/helmsman.asset"
+    checksum: "{{ helmsman_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Set install sentinel path
+  ansible.builtin.set_fact:
+    helmsman_install_sentinel: "{{ helmsman_darwin_base_dir }}/helmsman/.installed-{{ helmsman_artifact_checksum | default('') | hash('sha1') }}"
+
+- name: Extract Helmsman
+  ansible.builtin.unarchive:
+    src: "/tmp/helmsman.asset"
+    dest: "{{ helmsman_darwin_base_dir }}/helmsman"
+    remote_src: true
+    creates: "{{ helmsman_install_sentinel }}"
+  notify: helmsman restart
+
+- name: Normalize extracted binary name
+  ansible.builtin.shell: |
+    set -e
+    cd "{{ helmsman_darwin_base_dir }}/helmsman"
+    if ls frameworks-helmsman-* >/dev/null 2>&1; then
+      mv frameworks-helmsman-* helmsman
+    elif [ -f frameworks ]; then
+      mv frameworks helmsman
+    fi
+    chmod 0755 helmsman
+    touch "{{ helmsman_install_sentinel }}"
+  args:
+    creates: "{{ helmsman_install_sentinel }}"

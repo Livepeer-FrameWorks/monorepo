@@ -1,0 +1,69 @@
+---
+- name: Ensure frameworks group
+  ansible.builtin.group:
+    name: "{{ helmsman_group }}"
+    system: true
+
+- name: Ensure frameworks user
+  ansible.builtin.user:
+    name: "{{ helmsman_user }}"
+    group: "{{ helmsman_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Ensure directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ helmsman_user }}"
+    group: "{{ helmsman_group }}"
+    mode: "0755"
+  loop:
+    - /etc/frameworks
+    - "{{ helmsman_install_dir }}"
+
+- name: Install unzip (zip archives only)
+  ansible.builtin.package:
+    name: unzip
+    state: present
+  when: helmsman_is_zip | bool
+
+- name: Download Helmsman asset
+  ansible.builtin.get_url:
+    url: "{{ helmsman_artifact_url }}"
+    dest: "/tmp/helmsman.asset"
+    checksum: "{{ helmsman_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Set install sentinel path
+  ansible.builtin.set_fact:
+    helmsman_install_sentinel: "{{ helmsman_install_dir }}/.installed-{{ helmsman_artifact_checksum | default('') | hash('sha1') }}"
+
+- name: Extract Helmsman
+  ansible.builtin.unarchive:
+    src: "/tmp/helmsman.asset"
+    dest: "{{ helmsman_install_dir }}"
+    remote_src: true
+    owner: "{{ helmsman_user }}"
+    group: "{{ helmsman_group }}"
+    creates: "{{ helmsman_install_sentinel }}"
+  notify: helmsman restart
+
+# Release archives ship the binary under one of three names; normalize to
+# "helmsman" then mark the sentinel so this block is a true once-per-pin op.
+- name: Normalize extracted binary name
+  ansible.builtin.shell: |
+    set -e
+    if ls "{{ helmsman_install_dir }}"/frameworks-helmsman-* >/dev/null 2>&1; then
+      mv "{{ helmsman_install_dir }}"/frameworks-helmsman-* "{{ helmsman_install_dir }}/helmsman"
+    elif [ -f "{{ helmsman_install_dir }}/frameworks" ]; then
+      mv "{{ helmsman_install_dir }}/frameworks" "{{ helmsman_install_dir }}/helmsman"
+    fi
+    chmod 0755 "{{ helmsman_install_dir }}/helmsman"
+    chown {{ helmsman_user }}:{{ helmsman_group }} "{{ helmsman_install_dir }}/helmsman"
+    touch "{{ helmsman_install_sentinel }}"
+    chown {{ helmsman_user }}:{{ helmsman_group }} "{{ helmsman_install_sentinel }}"
+  args:
+    creates: "{{ helmsman_install_sentinel }}"

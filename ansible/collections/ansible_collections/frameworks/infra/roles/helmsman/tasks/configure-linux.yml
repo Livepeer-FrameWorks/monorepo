@@ -1,0 +1,23 @@
+---
+- name: Render env file
+  ansible.builtin.copy:
+    dest: "{{ helmsman_env_file }}"
+    content: |
+      # Helmsman edge environment (managed by frameworks.infra.helmsman)
+      {% for k, v in (helmsman_env_full | dictsort) %}
+      {{ k }}={{ v }}
+      {% endfor %}
+    owner: "{{ helmsman_user }}"
+    group: "{{ helmsman_group }}"
+    mode: "0600"
+  no_log: true
+  notify: helmsman restart
+
+- name: Render systemd unit
+  ansible.builtin.template:
+    src: helmsman.service.j2
+    dest: "{{ helmsman_unit_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: helmsman restart

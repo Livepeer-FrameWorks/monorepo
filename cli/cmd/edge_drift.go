@@ -10,15 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/cli/internal/compare"
 	"frameworks/cli/internal/readiness"
-	tmpl "frameworks/cli/internal/templates"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
-	"frameworks/cli/pkg/artifacts"
-	"frameworks/cli/pkg/inventory"
-	"frameworks/cli/pkg/provisioner"
-	fwssh "frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
 )
@@ -63,14 +57,13 @@ type edgeDriftSummary struct {
 }
 
 type edgeDriftReport struct {
-	Node        string                   `json:"node,omitempty"`
-	Domain      string                   `json:"domain,omitempty"`
-	Mode        string                   `json:"mode"`
-	Services    []edgeDriftServiceStatus `json:"services"`
-	Config      []edgeDriftConfigStatus  `json:"config"`
-	ConfigFiles *artifacts.ConfigDiff    `json:"config_files,omitempty"`
-	Health      *edgeDriftHealth         `json:"health,omitempty"`
-	Summary     edgeDriftSummary         `json:"summary"`
+	Node     string                   `json:"node,omitempty"`
+	Domain   string                   `json:"domain,omitempty"`
+	Mode     string                   `json:"mode"`
+	Services []edgeDriftServiceStatus `json:"services"`
+	Config   []edgeDriftConfigStatus  `json:"config"`
+	Health   *edgeDriftHealth         `json:"health,omitempty"`
+	Summary  edgeDriftSummary         `json:"summary"`
 }
 
 func newEdgeDriftCmd() *cobra.Command {
@@ -84,6 +77,9 @@ Reports whether each edge service (caddy, mistserver, helmsman) is running in
 the expected stack, whether required .edge.env keys are present, and whether
 the HTTPS health endpoint is reachable. Probes both docker and native stacks
 so a service running under the wrong manager surfaces as wrong_mode.
+
+Role-level config+binary diff is owned by ` + "`edge provision --dry-run`" + `
+(ansible-playbook --check --diff). ` + "`edge drift`" + ` is observed-state only.
 
 Exits non-zero on any divergence, so CI can gate on it.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -157,21 +153,18 @@ func runEdgeDrift(ctx context.Context, dir, domainFlag, sshTarget, sshKey string
 		}
 	}
 
-	configFiles := runEdgeConfigDiff(ctx, dir, sshTarget, sshKey, nodeID, effectiveDomain, foghornAddr, telemetryURL, deployMode)
-
 	var health *edgeDriftHealth
 	if effectiveDomain != "" {
 		health = probeEdgeHTTPS(ctx, effectiveDomain)
 	}
 
 	rep := edgeDriftReport{
-		Node:        nodeID,
-		Domain:      effectiveDomain,
-		Mode:        deployMode,
-		Services:    services,
-		Config:      config,
-		ConfigFiles: configFiles,
-		Health:      health,
+		Node:     nodeID,
+		Domain:   effectiveDomain,
+		Mode:     deployMode,
+		Services: services,
+		Config:   config,
+		Health:   health,
 	}
 	rep.Summary = edgeDriftSummary{
 		Total:       len(services) + len(config) + boolAsInt(health != nil),
@@ -327,150 +320,6 @@ func probeEdgeHTTPS(ctx context.Context, domain string) *edgeDriftHealth {
 	return &edgeDriftHealth{URL: url, Status: driftHealthMismatch, Detail: fmt.Sprintf("http %d", resp.StatusCode)}
 }
 
-// runEdgeConfigDiff builds the desired edge artifacts from the observed
-// .edge.env values and compares them against the host. Returns nil when
-// prerequisites for a sensible diff are missing (NODE_ID empty or no
-// domain resolvable), so the caller skips the config-files section.
-func runEdgeConfigDiff(ctx context.Context, dir, sshTarget, sshKey, nodeID, domain, foghornAddr, telemetryURL, deployMode string) *artifacts.ConfigDiff {
-	if nodeID == "" {
-		return nil
-	}
-	acmeEmail := readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile, "ACME_EMAIL")
-	enrollmentToken := readRemoteEnvFileKey(ctx, sshTarget, sshKey, dir, edgeDriftEnvFile, "EDGE_ENROLLMENT_TOKEN")
-	vars := tmpl.EdgeVars{
-		NodeID:          nodeID,
-		EdgeDomain:      domain,
-		AcmeEmail:       acmeEmail,
-		FoghornGRPCAddr: foghornAddr,
-		EnrollmentToken: enrollmentToken,
-		Mode:            deployMode,
-		TelemetryURL:    telemetryURL,
-	}
-	vars.SetModeDefaults()
-
-	remoteOS := detectEdgeOS(ctx, sshTarget, sshKey)
-	mode := provisioner.EdgeArtifactsForMode{
-		Mode:        deployMode,
-		RemoteOS:    remoteOS,
-		TelemetryOn: strings.TrimSpace(telemetryURL) != "",
-		Domain:      domain,
-	}
-	if remoteOS == "darwin" {
-		base, conf, plist := detectDarwinEdgePaths(ctx, sshTarget, sshKey)
-		mode.BaseDir = base
-		mode.ConfDir = conf
-		mode.PlistDir = plist
-	}
-	arts, err := provisioner.ArtifactsForEdge(inventory.Host{}, vars, mode)
-	if err != nil || len(arts) == 0 {
-		return nil
-	}
-	runner, cleanup := buildEdgeRunner(sshTarget, sshKey)
-	if cleanup != nil {
-		defer cleanup()
-	}
-	if runner == nil {
-		return nil
-	}
-	targetHost := sshTarget
-	if targetHost == "" {
-		targetHost = "local"
-	}
-	diff := compare.CompareTarget(ctx, artifacts.TargetID{Host: targetHost, Display: "edge", Deploy: "edge"}, arts, runner)
-	return &diff
-}
-
-// detectDarwinEdgePaths picks user-domain paths when the user-domain
-// directory exists, otherwise system-domain. Mirrors darwinPaths() in the
-// provisioner so apply and drift resolve to the same placement.
-func detectDarwinEdgePaths(ctx context.Context, sshTarget, sshKey string) (baseDir, confDir, plistDir string) {
-	home := remoteHome(ctx, sshTarget, sshKey)
-	if home != "" {
-		userBase := home + "/.local/opt/frameworks"
-		probe := fmt.Sprintf("test -d %s", userBase)
-		var exit int
-		if strings.TrimSpace(sshTarget) != "" {
-			code, _, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", probe}, "")
-			exit = code
-			if err != nil && exit == 0 {
-				exit = 1
-			}
-		} else {
-			code, _, _, err := xexec.Run(ctx, "sh", []string{"-c", probe}, "")
-			exit = code
-			if err != nil && exit == 0 {
-				exit = 1
-			}
-		}
-		if exit == 0 {
-			return userBase, home + "/.config/frameworks", home + "/Library/LaunchAgents"
-		}
-	}
-	return "/usr/local/opt/frameworks", "/usr/local/etc/frameworks", "/Library/LaunchDaemons"
-}
-
-// remoteHome resolves $HOME on the target — local or SSH.
-func remoteHome(ctx context.Context, sshTarget, sshKey string) string {
-	var out string
-	if strings.TrimSpace(sshTarget) != "" {
-		_, stdout, _, err := xexec.RunSSHWithKey(ctx, sshTarget, sshKey, "sh", []string{"-c", "printf %s \"$HOME\""}, "")
-		if err != nil {
-			return ""
-		}
-		out = stdout
-	} else {
-		_, stdout, _, err := xexec.Run(ctx, "sh", []string{"-c", "printf %s \"$HOME\""}, "")
-		if err != nil {
-			return ""
-		}
-		out = stdout
-	}
-	return strings.TrimSpace(out)
-}
-
-func buildEdgeRunner(sshTarget, sshKey string) (compare.Runner, func()) {
-	if strings.TrimSpace(sshTarget) == "" {
-		return compare.LocalRunner{}, nil
-	}
-	parsed, ok := parseSSHTarget(sshTarget)
-	if !ok {
-		return nil, nil
-	}
-	pool := fwssh.NewPool(10*time.Second, sshKey)
-	cfg := &fwssh.ConnectionConfig{
-		Address: parsed.Host,
-		User:    parsed.User,
-		Port:    parsed.Port,
-		KeyPath: sshKey,
-	}
-	return compare.NewSSHRunner(pool, cfg), func() { _ = pool.Close() }
-}
-
-type sshTargetParts struct {
-	User string
-	Host string
-	Port int
-}
-
-func parseSSHTarget(target string) (sshTargetParts, bool) {
-	parts := sshTargetParts{Port: 22}
-	user, rest, found := strings.Cut(target, "@")
-	if !found {
-		return parts, false
-	}
-	parts.User = user
-	if colon := strings.LastIndex(rest, ":"); colon >= 0 {
-		var p int
-		_, err := fmt.Sscanf(rest[colon+1:], "%d", &p)
-		if err == nil && p > 0 {
-			parts.Port = p
-			rest = rest[:colon]
-		}
-	}
-	parts.Host = rest
-	return parts, parts.Host != ""
-}
-
 func countEdgeDriftDivergences(rep edgeDriftReport) int {
 	n := 0
 	for _, s := range rep.Services {
@@ -492,9 +341,6 @@ func countEdgeDriftDivergences(rep edgeDriftReport) int {
 	}
 	if rep.Health != nil && rep.Health.Status != driftHealthOK {
 		n++
-	}
-	if rep.ConfigFiles != nil {
-		n += rep.ConfigFiles.Divergences()
 	}
 	return n
 }
@@ -543,25 +389,6 @@ func renderEdgeDriftText(w io.Writer, rep edgeDriftReport) {
 	}
 	fmt.Fprintln(w)
 
-	if rep.ConfigFiles != nil && len(rep.ConfigFiles.Entries) > 0 {
-		ux.Subheading(w, "Config files:")
-		for _, e := range rep.ConfigFiles.Entries {
-			line := fmt.Sprintf("%-50s %s", e.Path, edgeConfigFileStatus(e.Status))
-			if e.Env != nil && e.Env.HasDifferences() {
-				line += fmt.Sprintf("  (+%d/-%d/Δ%d)", len(e.Env.Added), len(e.Env.Removed), len(e.Env.Changed))
-			}
-			if e.Detail != "" {
-				line += "  " + e.Detail
-			}
-			if e.Status == artifacts.StatusMatch {
-				ux.Success(w, line)
-			} else {
-				ux.Fail(w, line)
-			}
-		}
-		fmt.Fprintln(w)
-	}
-
 	if rep.Health != nil {
 		ux.Subheading(w, "Health:")
 		line := fmt.Sprintf("%-30s %s", rep.Health.URL, rep.Health.Status)
@@ -581,20 +408,6 @@ func renderEdgeDriftText(w io.Writer, rep edgeDriftReport) {
 	} else {
 		ux.Fail(w, fmt.Sprintf("%d divergence(s) in %d checks", rep.Summary.Divergences, rep.Summary.Total))
 	}
-}
-
-func edgeConfigFileStatus(s artifacts.ConfigDiffStatus) string {
-	switch s {
-	case artifacts.StatusMatch:
-		return "ok"
-	case artifacts.StatusDiffer:
-		return "differ"
-	case artifacts.StatusMissingOnHost:
-		return "missing_on_host"
-	case artifacts.StatusProbeError:
-		return "probe_error"
-	}
-	return "unknown"
 }
 
 func boolAsInt(b bool) int {

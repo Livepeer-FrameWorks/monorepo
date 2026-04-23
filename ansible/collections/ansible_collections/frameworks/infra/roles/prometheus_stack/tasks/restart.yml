@@ -1,0 +1,13 @@
+---
+- name: Restart prometheus stack services that are installed
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+  failed_when: false
+  loop:
+    - prometheus
+    - node_exporter
+    - victoriametrics
+    - vmagent
+    - vmauth
+  when: prometheus_stack_components is defined and item in prometheus_stack_components

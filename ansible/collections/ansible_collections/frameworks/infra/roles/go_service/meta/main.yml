@@ -1,0 +1,39 @@
+---
+galaxy_info:
+  role_name: go_service
+  author: FrameWorks Infra
+  description: >-
+    Generic native-mode installer for FrameWorks Go microservices. Downloads
+    a pinned artifact, drops env file + systemd unit, starts the service.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install and run a native Go microservice.
+    options:
+      go_service_name:
+        type: str
+        required: true
+      go_service_artifact_url:
+        type: str
+        required: true
+      go_service_artifact_checksum:
+        type: str
+        required: true
+      go_service_version:
+        type: str
+        required: false
+      go_service_port:
+        type: int
+        required: false
+        default: 0
+      go_service_env:
+        type: dict
+        required: false
+      go_service_defer_start:
+        type: bool
+        required: false
+        default: false

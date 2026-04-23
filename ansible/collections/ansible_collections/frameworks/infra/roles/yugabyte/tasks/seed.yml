@@ -1,0 +1,21 @@
+---
+# YSQL is scram-sha-256 over TCP; peer auth is not available. The CLI passes
+# the superuser password (yugabyte_superuser_password) plus a list of
+# {db, sql} items via extra-vars.
+
+- name: Ensure YSQL Ansible module prerequisites
+  ansible.builtin.import_tasks: ysql_prereqs.yml
+
+- name: Apply SQL seeds via YSQL
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: "{{ item.db }}"
+    query: "{{ item.sql }}"
+  loop: "{{ yugabyte_seed_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  no_log: true
+  when: yugabyte_seed_items | default([]) | length > 0

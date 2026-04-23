@@ -1,0 +1,30 @@
+---
+- name: Build helmsman env map
+  ansible.builtin.set_fact:
+    helmsman_env_full: >-
+      {{ {
+        'NODE_ID': helmsman_node_id,
+        'EDGE_PUBLIC_URL': 'https://' ~ helmsman_edge_domain ~ '/view',
+        'EDGE_DOMAIN': helmsman_edge_domain,
+        'FOGHORN_CONTROL_ADDR': helmsman_foghorn_grpc_addr,
+        'EDGE_ENROLLMENT_TOKEN': helmsman_enrollment_token,
+        'ACME_EMAIL': helmsman_acme_email | default('', true),
+        'DEPLOY_MODE': helmsman_deploy_mode,
+        'MISTSERVER_URL': 'http://' ~ helmsman_mist_upstream,
+        'HELMSMAN_WEBHOOK_URL': 'http://' ~ helmsman_webhook_upstream,
+        'CADDY_ADMIN_URL': helmsman_caddy_admin_url,
+        'MIST_API_USERNAME': helmsman_mist_api_user,
+        'MIST_API_PASSWORD': helmsman_mist_api_password,
+        }
+        | combine({'GRPC_TLS_CA_PATH': helmsman_grpc_tls_ca_path}
+                  if helmsman_grpc_tls_ca_path | length > 0 else {})
+        | combine(helmsman_extra_env | default({}, true))
+      }}
+
+- name: helmsman | configure (linux)
+  ansible.builtin.import_tasks: configure-linux.yml
+  when: ansible_facts.os_family != 'Darwin'
+
+- name: helmsman | configure (darwin)
+  ansible.builtin.import_tasks: configure-darwin.yml
+  when: ansible_facts.os_family == 'Darwin'

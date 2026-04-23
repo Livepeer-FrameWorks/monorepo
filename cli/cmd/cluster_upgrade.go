@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"maps"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +20,14 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+// copyMetadata shallow-copies the metadata map so rollback can mutate its
+// own version/mode without leaking into the forward-upgrade config.
+func copyMetadata(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	maps.Copy(out, in)
+	return out
+}
 
 // newClusterUpgradeCmd creates the upgrade command
 func newClusterUpgradeCmd() *cobra.Command {
@@ -132,15 +142,40 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	var host inventory.Host
 	var found bool
 
-	// Check infrastructure
-	if serviceName == "postgres" && manifest.Infrastructure.Postgres.Enabled {
-		host, found = manifest.GetHost(manifest.Infrastructure.Postgres.Host)
-	} else if serviceName == "kafka" && manifest.Infrastructure.Kafka.Enabled {
-		if len(manifest.Infrastructure.Kafka.Brokers) > 0 {
-			host, found = manifest.GetHost(manifest.Infrastructure.Kafka.Brokers[0].Host)
+	// Check infrastructure — every role-backed infra service resolves to a
+	// single primary host for single-node upgrades. Multi-host infra
+	// (ensemble Yugabyte, Kafka KRaft) upgrades one host at a time via
+	// Provision's idempotent role-run; the CLI currently targets the first
+	// node in each case.
+	switch serviceName {
+	case "postgres":
+		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+			host, found = manifest.GetHost(pg.Host)
 		}
-	} else if serviceName == "clickhouse" && manifest.Infrastructure.ClickHouse.Enabled {
-		host, found = manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
+	case "yugabyte":
+		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() && len(pg.Nodes) > 0 {
+			host, found = manifest.GetHost(pg.Nodes[0].Host)
+		}
+	case "kafka":
+		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Brokers) > 0 {
+			host, found = manifest.GetHost(k.Brokers[0].Host)
+		}
+	case "kafka-controller":
+		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Controllers) > 0 {
+			host, found = manifest.GetHost(k.Controllers[0].Host)
+		}
+	case "zookeeper":
+		if z := manifest.Infrastructure.Zookeeper; z != nil && z.Enabled && len(z.Ensemble) > 0 {
+			host, found = manifest.GetHost(z.Ensemble[0].Host)
+		}
+	case "clickhouse":
+		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+			host, found = manifest.GetHost(ch.Host)
+		}
+	case "redis":
+		if r := manifest.Infrastructure.Redis; r != nil && r.Enabled && len(r.Instances) > 0 {
+			host, found = manifest.GetHost(r.Instances[0].Host)
+		}
 	}
 
 	// Check application services
@@ -228,11 +263,56 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		return nil
 	}
 
+	// Build the same ServiceConfig the real provision flow uses — role vars
+	// builders depend on env + manifest-derived metadata, not just
+	// Mode/Version/Port. A synthetic orchestrator.Task feeds buildTaskConfig.
+	task := &orchestrator.Task{
+		Name:       serviceName,
+		Type:       deployName,
+		ServiceID:  serviceName,
+		InstanceID: "",
+		Host:       host.Name,
+		Phase:      orchestrator.PhaseApplications,
+		Idempotent: true,
+	}
+	manifestDir := filepath.Dir(rc.ManifestPath)
+	sharedEnv, envErr := rc.SharedEnv()
+	if envErr != nil {
+		// Upgrades for services that rely on SOPS-backed secrets fail
+		// loud; non-secret services still work because their vars
+		// builders tolerate missing env values.
+		fmt.Fprintf(cmd.OutOrStderr(), "  warning: shared env decrypt failed: %v\n", envErr)
+		sharedEnv = nil
+	}
+	config, err := buildTaskConfig(task, manifest, map[string]interface{}{}, true, manifestDir, sharedEnv, rc.ReleaseRepos)
+	if err != nil {
+		return fmt.Errorf("build upgrade config: %w", err)
+	}
+	// Override the resolved version with the one requested by the upgrade
+	// command; buildTaskConfig pulls from the manifest, which may be pinned
+	// to a different version than the user is moving to.
+	config.Version = version
+	config.Mode = state.Mode
+	rc.applyReleaseMetadata(config.Metadata)
+
 	if dryRun {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[DRY-RUN] Would upgrade %s from %s to %s\n", serviceName, state.Version, svcInfo.Version)
 		fmt.Fprintf(cmd.OutOrStdout(), "  Mode: %s\n", state.Mode)
 		if state.Mode == "docker" {
 			fmt.Fprintf(cmd.OutOrStdout(), "  New image: %s\n", svcInfo.FullImage)
+		}
+		prov, provErr := provisioner.GetProvisioner(deployName, sshPool)
+		if provErr != nil {
+			return fmt.Errorf("failed to get provisioner: %w", provErr)
+		}
+		checker, ok := prov.(provisioner.CheckDiffer)
+		if !ok {
+			fmt.Fprintln(cmd.OutOrStdout(), "\n(provisioner does not support --check --diff; preview above is the summary)")
+			return nil
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "\nRunning ansible-playbook --check --diff against the target...")
+		if checkErr := checker.CheckDiff(ctx, host, config); checkErr != nil {
+			return fmt.Errorf("dry-run: %w", checkErr)
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "\nDry-run complete. Use without --dry-run to execute.")
 		return nil
@@ -253,38 +333,18 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		}
 	}
 
-	// Stop service
-	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/6] Stopping service...\n")
-	if errStop := stopService(ctx, host, deployName, state.Mode, sshPool); errStop != nil {
-		return fmt.Errorf("failed to stop service: %w", errStop)
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Service stopped\n")
-
-	// Get provisioner and re-provision with new version
-	fmt.Fprintf(cmd.OutOrStdout(), "\n[4/6] Deploying new version...\n")
+	// Role-backed services handle stop/restart via handlers notified on
+	// binary/config change — explicit stop between install phases would
+	// only duplicate work the role already does.
+	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/6] Getting provisioner...\n")
 	prov, err := provisioner.GetProvisioner(deployName, sshPool)
 	if err != nil {
 		return fmt.Errorf("failed to get provisioner: %w", err)
 	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Provisioner ready\n")
 
-	portCfg := inventory.ServiceConfig{}
-	if svcCfg, ok := manifest.Services[serviceName]; ok {
-		portCfg = svcCfg
-	} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
-		portCfg = ifaceCfg
-	}
-	port, err := resolvePort(serviceName, portCfg)
-	if err != nil {
-		return fmt.Errorf("failed to resolve port for %s: %w", serviceName, err)
-	}
-
-	config := provisioner.ServiceConfig{
-		Mode:     state.Mode,
-		Version:  version,
-		Port:     port,
-		Metadata: make(map[string]interface{}),
-	}
-	rc.applyReleaseMetadata(config.Metadata)
+	// Deploy new version
+	fmt.Fprintf(cmd.OutOrStdout(), "\n[4/6] Deploying new version...\n")
 
 	// Provision (this pulls new image or downloads new binary and starts)
 	if err := prov.Provision(ctx, host, config); err != nil {
@@ -309,13 +369,13 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 			if !noRollback {
 				fmt.Fprintf(cmd.OutOrStdout(), "\n[ROLLBACK] Reverting to previous version %s...\n", previousVersion)
 
-				rollbackConfig := provisioner.ServiceConfig{
-					Mode:     previousMode,
-					Version:  previousVersion,
-					Port:     port,
-					Metadata: make(map[string]interface{}),
-					Force:    true,
-				}
+				// Rollback uses the same config surface but pinned to the
+				// previous version/mode the host was running before upgrade.
+				rollbackConfig := config
+				rollbackConfig.Version = previousVersion
+				rollbackConfig.Mode = previousMode
+				rollbackConfig.Force = true
+				rollbackConfig.Metadata = copyMetadata(config.Metadata)
 				rc.applyReleaseMetadata(rollbackConfig.Metadata)
 
 				if cleanupErr := prov.Cleanup(ctx, host, rollbackConfig); cleanupErr != nil {
@@ -475,60 +535,16 @@ func waitForHealth(ctx context.Context, check func() error, interval, timeout ti
 	}
 }
 
-// stopService stops a service based on its mode
-func stopService(ctx context.Context, host inventory.Host, serviceName, mode string, pool *ssh.Pool) error {
-	var stopCmd string
-	switch mode {
-	case "docker":
-		stopCmd = fmt.Sprintf("cd /opt/frameworks/%s && docker compose stop", serviceName)
-	case "native":
-		stopCmd = fmt.Sprintf("systemctl stop frameworks-%s", serviceName)
-	default:
-		return fmt.Errorf("unknown service mode: %s", mode)
-	}
-
-	// Get runner
-	var runner ssh.Runner
-	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
-		runner = ssh.NewLocalRunner("")
-	} else {
-		sshConfig := &ssh.ConnectionConfig{
-			Address:  host.ExternalIP,
-			Port:     22,
-			User:     host.User,
-			HostName: host.Name,
-			Timeout:  30 * time.Second,
-		}
-		var err error
-		runner, err = pool.Get(sshConfig)
-		if err != nil {
-			return fmt.Errorf("failed to connect to host: %w", err)
-		}
-	}
-
-	result, err := runner.Run(ctx, stopCmd)
-	if err != nil {
-		return fmt.Errorf("failed to execute stop command: %w", err)
-	}
-
-	if result.ExitCode != 0 {
-		return fmt.Errorf("stop command failed: %s", result.Stderr)
-	}
-
-	return nil
-}
-
 // collectUpgradeableServices extracts deduplicated service IDs from an
 // execution plan, stripping the @host suffix that the planner appends for
-// multi-host replicated services.
+// multi-host replicated services. Infrastructure is included now that
+// role-based provisioners own their own restart semantics via notified
+// handlers — `cluster upgrade --all` no longer needs to carve it out.
 func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
 	seen := make(map[string]bool)
 	var services []string
 	for _, batch := range plan.Batches {
 		for _, task := range batch {
-			if task.Phase == orchestrator.PhaseInfrastructure {
-				continue
-			}
 			svcID := task.ServiceID
 			if !seen[svcID] {
 				seen[svcID] = true

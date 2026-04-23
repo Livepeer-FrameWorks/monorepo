@@ -1,0 +1,19 @@
+---
+# Seed SQL delivered as a list of {db, sql} items via extra-vars. The CLI
+# reads from its embedded SQL tree, filters to databases the manifest
+# actually defines, and populates postgres_seed_items before calling this
+# tag. Empty list is a no-op; postgres superuser authenticates over the
+# Unix socket via peer auth.
+
+- name: Apply SQL seeds to target databases
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    db: "{{ item.db }}"
+    query: "{{ item.sql }}"
+  loop: "{{ postgres_seed_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  no_log: true
+  when: postgres_seed_items | default([]) | length > 0

@@ -1,0 +1,26 @@
+---
+- name: Refresh service facts
+  ansible.builtin.service_facts:
+
+- name: Assert postgresql service running
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[postgres_service_name ~ '.service'].state == 'running'
+    fail_msg: "postgresql not running"
+
+- name: Wait for TCP listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ postgres_port }}"
+    timeout: 30
+
+- name: Confirm SELECT version() via peer auth
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    db: postgres
+    query: "SELECT version()"
+  register: postgres_version_probe
+  changed_when: false
+  failed_when: "'PostgreSQL' not in (postgres_version_probe.query_result[0].version | default(''))"

@@ -1,0 +1,88 @@
+---
+galaxy_info:
+  role_name: kafka
+  author: FrameWorks Infra
+  description: >-
+    Install and manage Apache Kafka in KRaft mode (broker, controller, or
+    combined). Artifact + cluster_id supplied by the CLI; rolling restart
+    via serial:1 is the operator responsibility on the calling playbook.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install a Kafka node in KRaft mode.
+    options:
+      kafka_artifact_url:
+        type: str
+        required: true
+      kafka_artifact_checksum:
+        type: str
+        required: true
+      kafka_version:
+        type: str
+        required: true
+      kafka_role:
+        type: str
+        required: false
+        choices: [broker, controller, combined]
+        default: broker
+      kafka_node_id:
+        type: int
+        required: true
+      kafka_cluster_id:
+        type: str
+        required: true
+        description: Stable UUID shared across the entire cluster.
+      kafka_controllers:
+        type: list
+        elements: dict
+        required: true
+        options:
+          host:
+            type: str
+            required: true
+          id:
+            type: int
+            required: true
+          port:
+            type: int
+            required: false
+          dir_id:
+            type: str
+            required: false
+      kafka_bootstrap_brokers:
+        type: list
+        elements: dict
+        required: false
+        options:
+          host:
+            type: str
+            required: true
+          id:
+            type: int
+            required: true
+          port:
+            type: int
+            required: false
+      kafka_topics:
+        type: list
+        elements: dict
+        required: false
+        options:
+          name:
+            type: str
+            required: true
+          partitions:
+            type: int
+            required: false
+            default: 1
+          replication_factor:
+            type: int
+            required: false
+            default: 1
+          config:
+            type: dict
+            required: false

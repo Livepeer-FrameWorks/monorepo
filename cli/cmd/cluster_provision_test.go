@@ -711,6 +711,62 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	}
 }
 
+func TestBuildTaskConfigKafkaUsesDirectControllerQuorumAddresses(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-eu-1":      {ExternalIP: "136.144.189.92", Roles: []string{"control"}},
+			"regional-eu-1":     {ExternalIP: "91.99.189.88", Roles: []string{"data"}},
+			"frameworks-us-ctl": {ExternalIP: "5.161.86.203", Roles: []string{"data"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled: true,
+				Version: "4.2.0",
+				Controllers: []inventory.KafkaController{
+					{Host: "central-eu-1", ID: 100, Port: 9093, DirID: "dir-a"},
+					{Host: "regional-eu-1", ID: 101, Port: 9093, DirID: "dir-b"},
+					{Host: "frameworks-us-ctl", ID: 102, Port: 9093, DirID: "dir-c"},
+				},
+				Brokers: []inventory.KafkaBroker{
+					{Host: "central-eu-1", ID: 1, Port: 9092},
+					{Host: "regional-eu-1", ID: 2, Port: 9092},
+					{Host: "frameworks-us-ctl", ID: 3, Port: 9092},
+				},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"privateer": {Enabled: true},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:       "kafka-broker-2",
+		Type:       "kafka",
+		ServiceID:  "kafka",
+		InstanceID: "2",
+		Host:       "regional-eu-1",
+		Phase:      orchestrator.PhaseInfrastructure,
+	}
+
+	config, err := buildTaskConfig(task, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+
+	got, _ := config.Metadata["controller_quorum_voters"].(string)
+	want := "100@136.144.189.92:9093,101@91.99.189.88:9093,102@5.161.86.203:9093"
+	if got != want {
+		t.Fatalf("expected controller_quorum_voters %q, got %q", want, got)
+	}
+
+	controllers, ok := config.Metadata["controllers"].([]map[string]any)
+	if !ok || len(controllers) != 3 {
+		t.Fatalf("expected 3 controller metadata entries, got %#v", config.Metadata["controllers"])
+	}
+	if host, _ := controllers[2]["host"].(string); host != "5.161.86.203" {
+		t.Fatalf("expected third controller host to stay on direct IP, got %q", host)
+	}
+}
+
 func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *testing.T) {
 	envFile := writeTestEnvFile(t, "LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
 	manifest := &inventory.Manifest{

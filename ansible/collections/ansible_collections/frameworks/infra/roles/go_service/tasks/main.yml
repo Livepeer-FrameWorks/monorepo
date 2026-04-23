@@ -1,0 +1,41 @@
+---
+- name: go_service | install
+  ansible.builtin.import_tasks: install.yml
+  tags: [install]
+
+- name: go_service | configure
+  ansible.builtin.import_tasks: configure.yml
+  tags: [configure]
+
+- name: go_service | flush handlers before service
+  ansible.builtin.meta: flush_handlers
+  tags: [configure, service]
+
+- name: go_service | service
+  ansible.builtin.import_tasks: service.yml
+  tags: [service]
+  when: not go_service_defer_start
+
+- name: go_service | daemon-reload (deferred start)
+  ansible.builtin.systemd:
+    daemon_reload: true
+  changed_when: false
+  tags: [service]
+  when: go_service_defer_start
+
+- name: go_service | flush handlers before validate
+  ansible.builtin.meta: flush_handlers
+  tags: [service, validate]
+
+- name: go_service | validate
+  ansible.builtin.import_tasks: validate.yml
+  tags: [validate]
+  when: not go_service_defer_start
+
+- name: go_service | restart
+  ansible.builtin.import_tasks: restart.yml
+  tags: [restart, never]
+
+- name: go_service | cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cleanup, never]

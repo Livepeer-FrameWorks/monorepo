@@ -1,0 +1,5 @@
+---
+listmonk_image: "listmonk/listmonk:v4.0.1"
+listmonk_port: 9001
+listmonk_project_dir: /opt/frameworks/listmonk
+listmonk_env: {}

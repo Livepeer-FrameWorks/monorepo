@@ -1,0 +1,32 @@
+---
+namespace: frameworks
+name: infra
+version: 0.1.0
+readme: README.md
+authors:
+  - FrameWorks Infra <ops@frameworks.network>
+description: >-
+  FrameWorks infrastructure roles. Each role installs and configures one
+  service (Kafka, Yugabyte, ClickHouse, Postgres, Zookeeper, Redis, Caddy,
+  observability stack, docker-compose stacks, edge). All version and artifact
+  selection is driven by role variables supplied by the FrameWorks CLI from
+  the release manifest — roles never decide their own versions.
+license:
+  - AGPL-3.0-or-later
+tags:
+  - infrastructure
+  - provisioning
+  - frameworks
+dependencies:
+  community.sops: ">=2.3.0,<3.0.0"
+  community.docker: ">=3.13.0,<4.0.0"
+  community.postgresql: ">=3.4.0,<4.0.0"
+  community.general: ">=9.0.0,<10.0.0"
+  ansible.posix: ">=1.5.0,<2.0.0"
+repository: https://github.com/frameworks-network/monorepo
+documentation: https://github.com/frameworks-network/monorepo/tree/master/ansible
+build_ignore:
+  - "*.tar.gz"
+  - .ansible
+  - .cache
+  - molecule

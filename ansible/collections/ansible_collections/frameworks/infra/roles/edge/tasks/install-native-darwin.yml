@@ -1,0 +1,82 @@
+---
+- name: Resolve Darwin layout for selected domain
+  ansible.builtin.set_fact:
+    edge_darwin_base_dir: >-
+      {{ edge_darwin_user_base_dir if edge_darwin_domain == 'user'
+         else edge_darwin_system_base_dir }}
+    edge_darwin_conf_dir: >-
+      {{ edge_darwin_user_conf_dir if edge_darwin_domain == 'user'
+         else edge_darwin_system_conf_dir }}
+    edge_darwin_log_dir: >-
+      {{ edge_darwin_user_log_dir if edge_darwin_domain == 'user'
+         else edge_darwin_system_log_dir }}
+    edge_darwin_plist_dir: >-
+      {{ edge_darwin_user_plist_dir if edge_darwin_domain == 'user'
+         else edge_darwin_system_plist_dir }}
+
+- name: Ensure Darwin edge directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ edge_darwin_base_dir }}"
+    - "{{ edge_darwin_conf_dir }}"
+    - "{{ edge_darwin_log_dir }}"
+    - "{{ edge_darwin_plist_dir }}"
+    - "{{ edge_darwin_conf_dir }}/pki"
+    - "{{ edge_darwin_conf_dir }}/certs"
+
+- name: Stage internal CA bundle on Darwin (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
+    content: "{{ edge_ca_bundle_pem }}"
+    mode: "0644"
+  when: edge_ca_bundle_pem | length > 0
+  no_log: true
+
+- name: Stage edge TLS cert on Darwin (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_darwin_conf_dir }}/certs/cert.pem"
+    content: "{{ edge_cert_pem }}"
+    mode: "0644"
+  when: edge_cert_pem | length > 0
+  no_log: true
+
+- name: Stage edge TLS key on Darwin (when provided)
+  ansible.builtin.copy:
+    dest: "{{ edge_darwin_conf_dir }}/certs/key.pem"
+    content: "{{ edge_key_pem }}"
+    mode: "0600"
+  when: edge_key_pem | length > 0
+  no_log: true
+
+- name: Apply mistserver sub-role (darwin)
+  ansible.builtin.include_role:
+    name: frameworks.infra.mistserver
+  vars:
+    mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
+    mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_darwin_domain: "{{ edge_darwin_domain }}"
+
+- name: Apply helmsman sub-role (darwin)
+  ansible.builtin.include_role:
+    name: frameworks.infra.helmsman
+  vars:
+    helmsman_artifact_url: "{{ edge_helmsman_artifact_url }}"
+    helmsman_artifact_checksum: "{{ edge_helmsman_artifact_checksum }}"
+    helmsman_node_id: "{{ edge_node_id }}"
+    helmsman_edge_domain: "{{ edge_domain }}"
+    helmsman_acme_email: "{{ edge_acme_email | default('', true) }}"
+    helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
+    helmsman_enrollment_token: "{{ edge_enrollment_token }}"
+    helmsman_deploy_mode: native
+    helmsman_mist_upstream: "localhost:8080"
+    helmsman_webhook_upstream: "localhost:18007"
+    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir ~ '/pki/ca.crt' if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_darwin_domain: "{{ edge_darwin_domain }}"
+
+- name: Apply caddy bootstrap (darwin)
+  ansible.builtin.import_tasks: install-native-darwin-caddy.yml

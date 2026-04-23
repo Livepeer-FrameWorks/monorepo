@@ -1,0 +1,53 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert postgresql running and enabled
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['postgresql.service'].state == 'running'
+          - ansible_facts.services['postgresql.service'].status == 'enabled'
+
+    - name: Wait for TCP listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 5432
+        timeout: 30
+
+    - name: Run init tag to seed databases
+      ansible.builtin.include_role:
+        name: frameworks.infra.postgres
+        apply:
+          tags: [init]
+      vars:
+        postgres_databases:
+          - { name: periscope }
+          - { name: tenants, owner: tenants }
+
+    - name: Confirm databases exist
+      become: true
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        login_unix_socket: /var/run/postgresql
+        db: postgres
+        query: "SELECT datname FROM pg_database WHERE datname IN ('periscope', 'tenants')"
+      register: dbs
+
+    - name: Assert both databases present
+      ansible.builtin.assert:
+        that: dbs.query_result | map(attribute='datname') | list | sort == ['periscope', 'tenants']
+
+    - name: Rerun role for idempotence
+      ansible.builtin.include_role:
+        name: frameworks.infra.postgres
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "postgres role not idempotent"

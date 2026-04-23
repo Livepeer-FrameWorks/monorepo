@@ -1,0 +1,7 @@
+---
+- name: Provision a generic FrameWorks Go microservice
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.go_service

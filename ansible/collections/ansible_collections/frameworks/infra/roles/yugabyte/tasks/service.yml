@@ -1,0 +1,109 @@
+---
+- name: Check whether Yugabyte bootstrap previously completed
+  ansible.builtin.stat:
+    path: "{{ yugabyte_bootstrap_sentinel }}"
+  register: yugabyte_bootstrap_sentinel_stat
+
+- name: Check for master consensus metadata
+  ansible.builtin.stat:
+    path: "{{ yugabyte_master_consensus_meta_path }}"
+  register: yugabyte_master_consensus_meta_stat
+
+- name: Check for master tablet metadata
+  ansible.builtin.stat:
+    path: "{{ yugabyte_master_tablet_meta_path }}"
+  register: yugabyte_master_tablet_meta_stat
+
+- name: Recover from stale partial yb-master bootstrap
+  block:
+    - name: Stop yb-tserver before scrubbing stale master state
+      ansible.builtin.systemd:
+        name: "{{ yugabyte_tserver_service }}"
+        state: stopped
+      failed_when: false
+
+    - name: Stop yb-master before scrubbing stale master state
+      ansible.builtin.systemd:
+        name: "{{ yugabyte_master_service }}"
+        state: stopped
+      failed_when: false
+
+    - name: Remove stale master metadata directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ yugabyte_master_root_dir }}"
+        - "{{ yugabyte_pg_data_dir }}"
+  when:
+    - not yugabyte_bootstrap_sentinel_stat.stat.exists
+    - yugabyte_master_tablet_meta_stat.stat.exists
+    - not yugabyte_master_consensus_meta_stat.stat.exists
+
+- name: Start and verify yb-master
+  block:
+    - name: Start yb-master
+      ansible.builtin.systemd:
+        name: "{{ yugabyte_master_service }}"
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Wait for yb-master RPC port before starting tserver
+      ansible.builtin.wait_for:
+        host: "{{ yugabyte_node_address }}"
+        port: "{{ yugabyte_master_rpc_port }}"
+        timeout: 120
+        sleep: 2
+
+    - name: Refresh service facts after starting yb-master
+      ansible.builtin.service_facts:
+
+    - name: Assert yb-master is running before starting tserver
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services.get(yugabyte_master_service ~ '.service', {}).get('state') == 'running'
+        fail_msg: >-
+          yb-master not running
+          (state={{ ansible_facts.services.get(yugabyte_master_service ~ '.service', {}).get('state', 'missing') }})
+  rescue:
+    - name: Capture yb-master systemctl status
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - status
+          - "{{ yugabyte_master_service }}"
+          - "--no-pager"
+          - "--full"
+      register: yugabyte_master_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture yb-master journal
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - "-u"
+          - "{{ yugabyte_master_service }}"
+          - "-n"
+          - "100"
+          - "--no-pager"
+      register: yugabyte_master_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with yb-master diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          yb-master failed to stay running
+          systemctl status:
+          {{ yugabyte_master_status.stdout | default('(no output)') }}
+
+          journalctl:
+          {{ yugabyte_master_journal.stdout | default('(no output)') }}
+
+- name: Start yb-tserver
+  ansible.builtin.systemd:
+    name: "{{ yugabyte_tserver_service }}"
+    state: started
+    enabled: true

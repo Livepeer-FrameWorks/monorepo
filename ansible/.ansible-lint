@@ -1,0 +1,9 @@
+---
+profile: production
+exclude_paths:
+  - .cache/
+  - collections/ansible_collections/frameworks/infra/roles/*/molecule/
+skip_list:
+  # 'risky-file-permissions' triggers on our templates where perms match the
+  # downstream package's own defaults — documented per-template.
+  - risky-file-permissions

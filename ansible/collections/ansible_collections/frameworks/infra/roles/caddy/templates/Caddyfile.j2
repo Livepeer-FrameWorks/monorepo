@@ -1,0 +1,18 @@
+{
+{% if caddy_global_options.email | default('') | length > 0 %}
+    email {{ caddy_global_options.email }}
+{% endif %}
+    admin {{ caddy_admin_listen }}
+}
+
+{% for site in caddy_sites %}
+{{ site.domains | join(', ') }} {
+{% if site.upstream is defined and site.upstream | length > 0 %}
+    reverse_proxy {{ site.upstream }}
+{% endif %}
+{% for directive in site.extra_directives | default([]) %}
+    {{ directive }}
+{% endfor %}
+}
+
+{% endfor %}

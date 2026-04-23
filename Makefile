@@ -2,7 +2,8 @@
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
+		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
+		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check provision-hello
 
 # Prefer annotated git tags like v1.2.3; fallback to describe or dev
 VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exact-match 2>/dev/null || git describe --tags --match "v[0-9]*" --dirty --always 2>/dev/null || echo "0.0.0-dev")
@@ -648,3 +649,55 @@ dead-code: dead-code-go dead-code-ts dead-code-report
 	@echo "  1. Review $(REPORTS_DIR)/DEAD_CODE_SUMMARY.md"
 	@echo "  2. Investigate individual reports for details"
 	@echo "  3. Create issues/PRs for confirmed dead code removal"
+
+# ---- Ansible (collection-driven provisioning) -----------------------------
+# ansible-galaxy-install   resolve collections into a local cache.
+# ansible-lint             lint the frameworks.infra collection.
+# ansible-check            syntax-check every playbook under ansible/playbooks.
+# provision-hello          end-to-end wiring smoke against localhost.
+
+ANSIBLE_DIR := ansible
+ANSIBLE_REQUIREMENTS_REL := requirements.yml
+ANSIBLE_CACHE_REL := .cache/collections
+ANSIBLE_PLAYBOOKS := $(wildcard $(ANSIBLE_DIR)/playbooks/*.yml)
+
+ansible-galaxy-install:
+	@echo "=== Installing Ansible collections ==="
+	@mkdir -p $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL) $(ANSIBLE_DIR)/.cache/roles
+	cd $(ANSIBLE_DIR) && ansible-galaxy collection install -r $(ANSIBLE_REQUIREMENTS_REL) -p $(ANSIBLE_CACHE_REL)
+	@echo "=== Installing Ansible roles ==="
+	cd $(ANSIBLE_DIR) && ansible-galaxy role install -r $(ANSIBLE_REQUIREMENTS_REL) --roles-path .cache/roles
+
+ansible-lint: ansible-galaxy-install
+	@echo "=== Linting frameworks.infra collection ==="
+	cd $(ANSIBLE_DIR) && ansible-lint --profile=production \
+		collections/ansible_collections/frameworks/infra
+
+ansible-yamllint:
+	@echo "=== yamllint on ansible tree ==="
+	cd $(ANSIBLE_DIR) && yamllint -s collections/ansible_collections/frameworks/infra playbooks
+
+ansible-test: ansible-galaxy-install ansible-check ansible-lint ansible-yamllint
+	@echo "=== ansible test suite complete ==="
+
+# Syntax check each playbook. ANSIBLE_COLLECTIONS_PATH deliberately not set —
+# ansible.cfg [defaults] collections_path already lists the source tree first
+# (./collections) followed by the install cache (./.cache/collections), so
+# exporting the env var would clobber that ordering and lose the source.
+ansible-check: ansible-galaxy-install
+	@echo "=== Syntax-checking playbooks ==="
+	@for pb in $(ANSIBLE_PLAYBOOKS); do \
+		echo "  $$pb"; \
+		relpb=$${pb#$(ANSIBLE_DIR)/}; \
+		( cd $(ANSIBLE_DIR) && \
+		  ansible-playbook --syntax-check "$$relpb" \
+			-i localhost, -c local \
+		) || exit 1; \
+	done
+
+provision-hello: ansible-galaxy-install
+	@echo "=== Running hello-role smoke test ==="
+	cd cli && go run ./internal/ansiblesmoke \
+		-requirements ../$(ANSIBLE_DIR)/$(ANSIBLE_REQUIREMENTS_REL) \
+		-playbook ../$(ANSIBLE_DIR)/playbooks/hello.yml \
+		-cache-dir ../$(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL)

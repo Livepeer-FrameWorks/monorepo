@@ -1,0 +1,11 @@
+---
+- name: Restart privateer
+  ansible.builtin.systemd:
+    name: frameworks-privateer
+    state: restarted
+
+- name: Wait for privateer listener after restart
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ privateer_port }}"
+    timeout: 30

@@ -1,0 +1,7 @@
+---
+- name: Wait for service port (when defined)
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ go_service_port }}"
+    timeout: 60
+  when: go_service_port | int > 0

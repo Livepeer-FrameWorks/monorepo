@@ -27,12 +27,7 @@ func (m *Manifest) validatePortCollisions() error {
 	}
 
 	if m.Infrastructure.Postgres != nil && m.Infrastructure.Postgres.Enabled {
-		port := m.Infrastructure.Postgres.Port
-		if port == 0 {
-			if defaultPort, ok := servicedefs.DefaultPort("postgres"); ok {
-				port = defaultPort
-			}
-		}
+		port := m.Infrastructure.Postgres.EffectivePort()
 		if err := addPort(m.Infrastructure.Postgres.Host, port, "postgres"); err != nil {
 			return err
 		}
@@ -42,16 +37,59 @@ func (m *Manifest) validatePortCollisions() error {
 				return err
 			}
 		}
+		if m.Infrastructure.Postgres.IsYugabyte() {
+			const (
+				yugabyteMasterRPCPort  = 7100
+				yugabyteMasterWebPort  = 7000
+				yugabyteTServerRPCPort = 9100
+				yugabyteTServerWebPort = 11000
+				yugabyteYCQLPort       = 9042
+			)
+
+			for _, node := range m.Infrastructure.Postgres.Nodes {
+				owner := fmt.Sprintf("yugabyte-node-%d", node.ID)
+				masterRPCPort := node.RpcPort
+				if masterRPCPort == 0 {
+					masterRPCPort = yugabyteMasterRPCPort
+				}
+				if err := addPort(node.Host, masterRPCPort, owner+"-master-rpc"); err != nil {
+					return err
+				}
+				if err := addPort(node.Host, yugabyteMasterWebPort, owner+"-master-web"); err != nil {
+					return err
+				}
+				if err := addPort(node.Host, yugabyteTServerRPCPort, owner+"-tserver-rpc"); err != nil {
+					return err
+				}
+				if err := addPort(node.Host, yugabyteTServerWebPort, owner+"-tserver-web"); err != nil {
+					return err
+				}
+				if err := addPort(node.Host, yugabyteYCQLPort, owner+"-ycql"); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	if m.Infrastructure.ClickHouse != nil && m.Infrastructure.ClickHouse.Enabled {
+		const (
+			clickhouseHTTPPort        = 8123
+			clickhouseInterserverPort = 9009
+		)
+
 		port := m.Infrastructure.ClickHouse.Port
 		if port == 0 {
 			if defaultPort, ok := servicedefs.DefaultPort("clickhouse"); ok {
 				port = defaultPort
 			}
 		}
-		if err := addPort(m.Infrastructure.ClickHouse.Host, port, "clickhouse"); err != nil {
+		if err := addPort(m.Infrastructure.ClickHouse.Host, port, "clickhouse-native"); err != nil {
+			return err
+		}
+		if err := addPort(m.Infrastructure.ClickHouse.Host, clickhouseHTTPPort, "clickhouse-http"); err != nil {
+			return err
+		}
+		if err := addPort(m.Infrastructure.ClickHouse.Host, clickhouseInterserverPort, "clickhouse-interserver"); err != nil {
 			return err
 		}
 	}

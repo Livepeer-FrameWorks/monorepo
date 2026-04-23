@@ -1,0 +1,13 @@
+---
+- name: Wait for client port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ zookeeper_client_port }}"
+    timeout: 60
+
+- name: Probe with ruok four-letter-word
+  ansible.builtin.shell: >
+    echo ruok | nc -w 5 127.0.0.1 {{ zookeeper_client_port }}
+  register: ruok
+  changed_when: false
+  failed_when: "'imok' not in ruok.stdout"

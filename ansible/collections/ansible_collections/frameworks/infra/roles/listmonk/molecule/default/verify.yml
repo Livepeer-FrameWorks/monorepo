@@ -1,0 +1,51 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Assert listmonk compose file rendered
+      ansible.builtin.stat:
+        path: "{{ listmonk_project_dir }}/docker-compose.yml"
+      register: compose_stat
+
+    - name: Compose YAML must exist after render
+      ansible.builtin.assert:
+        that: compose_stat.stat.exists
+        fail_msg: "listmonk role did not write docker-compose.yml"
+
+    - name: Read rendered compose for shape assertions
+      ansible.builtin.slurp:
+        src: "{{ listmonk_project_dir }}/docker-compose.yml"
+      register: compose_bytes
+
+    - name: Compose must contain the pinned image + app address
+      ansible.builtin.assert:
+        that:
+          - "'listmonk/listmonk:' in (compose_bytes.content | b64decode)"
+          - "'LISTMONK_app__address' in (compose_bytes.content | b64decode) or ((compose_bytes.content | b64decode) | regex_search('9001:9000'))"
+        fail_msg: "listmonk compose render missing expected fields"
+
+    - name: Live-converge probes (skipped in render-only mode)
+      when: not (compose_stack_render_only | default(false) | bool)
+      block:
+        - name: Confirm listmonk compose stack is up
+          ansible.builtin.command: docker compose -f {{ listmonk_project_dir }}/docker-compose.yml ps --format json
+          register: listmonk_ps
+          changed_when: false
+
+        - name: Assert at least one running container
+          ansible.builtin.assert:
+            that:
+              - listmonk_ps.stdout | from_json | selectattr('State', 'equalto', 'running') | list | length >= 1
+            fail_msg: "listmonk: expected at least one running container, got {{ listmonk_ps.stdout }}"
+
+    - name: Rerun role (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.listmonk
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "listmonk role not idempotent"

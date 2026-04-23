@@ -1,0 +1,38 @@
+---
+galaxy_info:
+  role_name: zookeeper
+  author: FrameWorks Infra
+  description: Install and manage an Apache ZooKeeper ensemble member.
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install a ZooKeeper node.
+    options:
+      zookeeper_artifact_url:
+        type: str
+        required: true
+      zookeeper_artifact_checksum:
+        type: str
+        required: true
+      zookeeper_version:
+        type: str
+        required: true
+      zookeeper_node_id:
+        type: int
+        required: false
+        default: 1
+      zookeeper_ensemble:
+        type: list
+        elements: dict
+        required: false
+        options:
+          host:
+            type: str
+            required: true
+          id:
+            type: int
+            required: true

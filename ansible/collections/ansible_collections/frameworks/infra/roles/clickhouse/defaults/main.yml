@@ -1,0 +1,71 @@
+---
+# Version supplied by the CLI from the release manifest. idealista.clickhouse
+# installs from Altinity's apt/yum repos, so this is the repo package version.
+clickhouse_version: "24.8"
+
+# Listen on all interfaces by default so the cluster-facing probe works. In
+# production the firewall layer restricts access; the role does not open
+# ports itself.
+clickhouse_listen_host: "::"
+clickhouse_port_http: 8123
+clickhouse_port_tcp: 9000
+clickhouse_port_interserver: 9009
+
+# Data + log locations mirror the Debian package layout idealista uses.
+clickhouse_path: /var/lib/clickhouse
+clickhouse_tmp_path: /var/lib/clickhouse/tmp
+clickhouse_log_path: /var/log/clickhouse-server
+
+# SOPS-backed passwords. Never commit real values.
+clickhouse_default_password: ""
+clickhouse_databases: []
+clickhouse_users: []
+clickhouse_enable_ssl: false
+
+# idealista.clickhouse currently ships a malformed default quota value
+# (`execution_time: 0gv`). Override it locally until the upstream role is fixed.
+frameworks_clickhouse_default_quotas:
+  - name: default
+    duration: 3600
+    queries: 0
+    errors: 0
+    result_rows: 0
+    read_rows: 0
+    execution_time: 0
+
+# idealista.clickhouse does not consume a standalone
+# `clickhouse_default_password_sha256` variable in the XML-driven config path.
+# Override the rendered default users directly so the `default` user password
+# actually lands in users.xml before the service starts.
+frameworks_clickhouse_default_users: >-
+  {{
+    [
+      {
+        'name': 'default',
+        'networks': ['::1', '127.0.0.1'],
+        'profile': 'default',
+        'quota': 'default',
+      } | combine(
+        {'password_sha256_hex': (clickhouse_default_password | hash('sha256'))}
+        if clickhouse_default_password | length > 0 else {}
+      ),
+      {
+        'name': 'readonly',
+        'password': 'readonly',
+        'networks': ['::1', '127.0.0.1'],
+        'profile': 'readonly',
+        'quota': 'default',
+      },
+    ]
+  }}
+
+# Probe the local listener addresses we expect to work for the configured
+# family. When ClickHouse listens on `::`, hosts may still differ on whether
+# IPv4-mapped loopback is accepted, so try both loopback families locally.
+frameworks_clickhouse_probe_hosts: >-
+  {{
+    ['::1', '127.0.0.1'] if clickhouse_listen_host == '::'
+    else ['127.0.0.1'] if clickhouse_listen_host in ['0.0.0.0', '']
+    else [clickhouse_listen_host]
+  }}
+frameworks_clickhouse_probe_host: "{{ frameworks_clickhouse_probe_hosts | first }}"

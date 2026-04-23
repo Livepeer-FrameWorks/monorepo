@@ -1,0 +1,33 @@
+---
+# Read-only compose status probe. community.docker.docker_compose_v2 treats
+# state: present as "apply"; running it in validate would recreate containers
+# on drift. Shell out to `docker compose ps --format json` instead, filter to
+# this project, assert at least one container is running.
+- name: Query compose status
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - "--project-directory"
+      - "{{ compose_stack_project_dir }}"
+      - ps
+      - "--format"
+      - json
+  register: compose_ps
+  changed_when: false
+  when: not (compose_stack_render_only | default(false) | bool)
+
+- name: Parse compose ps output
+  ansible.builtin.set_fact:
+    compose_stack_running_count: >-
+      {{ (compose_ps.stdout | trim).splitlines()
+         | map('from_json')
+         | selectattr('State', 'equalto', 'running')
+         | list | length }}
+  when: compose_ps.stdout | trim | length > 0
+
+- name: Assert at least one running container
+  ansible.builtin.assert:
+    that: compose_stack_running_count | default(0) | int > 0
+    fail_msg: "compose_stack[{{ compose_stack_name }}]: no running containers"
+  when: not (compose_stack_render_only | default(false) | bool)

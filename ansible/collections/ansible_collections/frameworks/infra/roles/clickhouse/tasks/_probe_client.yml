@@ -1,0 +1,30 @@
+---
+- name: Probe ClickHouse locally via clickhouse-client
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client', '--host=' ~ item, '--port=' ~ (clickhouse_port_tcp | string), '-q', 'SELECT 1']
+         + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
+  loop: "{{ frameworks_clickhouse_probe_hosts }}"
+  register: clickhouse_probe_results
+  changed_when: false
+  failed_when: false
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+
+- name: Select reachable local ClickHouse probe host
+  ansible.builtin.set_fact:
+    frameworks_clickhouse_client_host: >-
+      {{
+        (clickhouse_probe_results.results
+         | selectattr('rc', 'equalto', 0)
+         | map(attribute='item')
+         | list
+         | first) | default('')
+      }}
+
+- name: Assert ClickHouse local probe succeeded
+  ansible.builtin.assert:
+    that:
+      - frameworks_clickhouse_client_host | length > 0
+    fail_msg: >-
+      clickhouse-client could not connect via any local probe host
+      (hosts={{ frameworks_clickhouse_probe_hosts | join(', ') }})

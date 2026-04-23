@@ -1,0 +1,75 @@
+---
+- name: Delegate cleanup to compose_stack (docker mode)
+  ansible.builtin.include_role:
+    name: frameworks.infra.compose_stack
+    tasks_from: cleanup.yml
+  vars:
+    compose_stack_name: edge
+    compose_stack_project_dir: "{{ edge_base_dir }}"
+  when: edge_mode == 'docker'
+
+- name: Stop edge-native systemd services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+  loop:
+    - frameworks-caddy
+    - frameworks-helmsman
+    - frameworks-mistserver
+    - frameworks-vmagent-edge
+  when: edge_mode == 'native' and ansible_facts.os_family != 'Darwin'
+
+- name: Remove edge-native unit files
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.service"
+    state: absent
+  loop:
+    - frameworks-caddy
+    - frameworks-helmsman
+    - frameworks-mistserver
+    - frameworks-vmagent-edge
+  when: edge_mode == 'native' and ansible_facts.os_family != 'Darwin'
+
+- name: Reload systemd after unit removal
+  ansible.builtin.systemd:
+    daemon_reload: true
+  changed_when: false
+  when: edge_mode == 'native' and ansible_facts.os_family != 'Darwin'
+
+- name: Resolve Darwin plist dir for cleanup
+  ansible.builtin.set_fact:
+    edge_darwin_plist_dir: >-
+      {{ edge_darwin_user_plist_dir if edge_darwin_domain == 'user'
+         else edge_darwin_system_plist_dir }}
+  when: edge_mode == 'native' and ansible_facts.os_family == 'Darwin'
+
+- name: Delegate Darwin cleanup to mistserver sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.mistserver
+    tasks_from: cleanup.yml
+  vars:
+    mistserver_darwin_domain: "{{ edge_darwin_domain }}"
+  when: edge_mode == 'native' and ansible_facts.os_family == 'Darwin'
+
+- name: Delegate Darwin cleanup to helmsman sub-role
+  ansible.builtin.include_role:
+    name: frameworks.infra.helmsman
+    tasks_from: cleanup.yml
+  vars:
+    helmsman_darwin_domain: "{{ edge_darwin_domain }}"
+  when: edge_mode == 'native' and ansible_facts.os_family == 'Darwin'
+
+- name: Unload edge Caddy launchd job (darwin)
+  community.general.launchd:
+    name: com.livepeer.frameworks.caddy
+    state: absent
+  failed_when: false
+  when: edge_mode == 'native' and ansible_facts.os_family == 'Darwin'
+
+- name: Remove edge Caddy launchd plist (darwin)
+  ansible.builtin.file:
+    path: "{{ edge_darwin_plist_dir }}/com.livepeer.frameworks.caddy.plist"
+    state: absent
+  when: edge_mode == 'native' and ansible_facts.os_family == 'Darwin'

@@ -1,0 +1,86 @@
+---
+- name: Render /etc/security/limits.d/yugabyte.conf
+  ansible.builtin.template:
+    src: limits.conf.j2
+    dest: /etc/security/limits.d/yugabyte.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Render /etc/sysctl.d/99-yugabyte.conf
+  ansible.builtin.template:
+    src: sysctl.conf.j2
+    dest: /etc/sysctl.d/99-yugabyte.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: yugabyte_sysctl
+
+- name: Reapply sysctl settings from /etc/sysctl.d
+  ansible.builtin.command: sysctl --system
+  when: yugabyte_sysctl is changed
+  changed_when: false
+
+# Disable transparent hugepages (recommended by Yugabyte). Idempotent via a
+# when-gate that checks current state before writing.
+- name: Read THP enabled state
+  ansible.builtin.command: cat /sys/kernel/mm/transparent_hugepage/enabled
+  register: yugabyte_thp_enabled
+  changed_when: false
+  check_mode: false
+
+- name: Disable transparent hugepages (enabled)
+  ansible.builtin.shell: echo never > /sys/kernel/mm/transparent_hugepage/enabled
+  when: '"[never]" not in yugabyte_thp_enabled.stdout'
+  changed_when: '"[never]" not in yugabyte_thp_enabled.stdout'
+
+- name: Read THP defrag state
+  ansible.builtin.command: cat /sys/kernel/mm/transparent_hugepage/defrag
+  register: yugabyte_thp_defrag
+  changed_when: false
+  check_mode: false
+
+- name: Disable transparent hugepages (defrag)
+  ansible.builtin.shell: echo never > /sys/kernel/mm/transparent_hugepage/defrag
+  when: '"[never]" not in yugabyte_thp_defrag.stdout'
+  changed_when: '"[never]" not in yugabyte_thp_defrag.stdout'
+
+- name: Render yb-master flagfile
+  ansible.builtin.template:
+    src: master.conf.j2
+    dest: "{{ yugabyte_master_conf_path }}"
+    owner: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    mode: "0644"
+  notify: yugabyte restart master
+
+- name: Render yb-tserver flagfile
+  ansible.builtin.template:
+    src: tserver.conf.j2
+    dest: "{{ yugabyte_tserver_conf_path }}"
+    owner: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    mode: "0644"
+  notify: yugabyte restart tserver
+
+- name: Render yb-master systemd unit
+  ansible.builtin.template:
+    src: yb-master.service.j2
+    dest: "{{ yugabyte_master_unit_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - yugabyte daemon-reload
+    - yugabyte restart master
+
+- name: Render yb-tserver systemd unit
+  ansible.builtin.template:
+    src: yb-tserver.service.j2
+    dest: "{{ yugabyte_tserver_unit_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - yugabyte daemon-reload
+    - yugabyte restart tserver

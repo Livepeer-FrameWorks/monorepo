@@ -1,0 +1,17 @@
+[Unit]
+Description=YugabyteDB Master
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ yugabyte_user }}
+Group={{ yugabyte_group }}
+ExecStart={{ yugabyte_bin_dir }}/yb-master --flagfile {{ yugabyte_master_conf_path }}
+Restart=always
+RestartSec=5
+LimitNOFILE={{ yugabyte_limit_nofile }}
+LimitNPROC={{ yugabyte_limit_nproc }}
+LimitCORE=infinity
+
+[Install]
+WantedBy=multi-user.target

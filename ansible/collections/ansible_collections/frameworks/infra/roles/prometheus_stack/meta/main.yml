@@ -1,0 +1,35 @@
+---
+galaxy_info:
+  role_name: prometheus_stack
+  author: FrameWorks Infra
+  description: >-
+    Observability stack: Prometheus + node_exporter (via prometheus-community)
+    and VictoriaMetrics / vmagent / vmauth (hand-written atop the
+    artifact-pinning spine since prometheus-community does not ship them).
+  license: AGPL-3.0-or-later
+  min_ansible_version: "2.15"
+
+dependencies: []
+
+argument_specs:
+  main:
+    short_description: Install the observability stack on a host.
+    options:
+      prometheus_stack_components:
+        type: list
+        elements: str
+        required: false
+        default: [prometheus, node_exporter]
+        choices: [prometheus, node_exporter, victoriametrics, vmagent, vmauth]
+      prometheus_version:
+        type: str
+        required: false
+      victoriametrics_artifact_url:
+        type: str
+        required: false
+      victoriametrics_artifact_checksum:
+        type: str
+        required: false
+      vmagent_remote_write_url:
+        type: str
+        required: false

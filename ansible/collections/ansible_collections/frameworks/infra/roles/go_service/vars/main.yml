@@ -1,0 +1,4 @@
+---
+go_service_install_sentinel: "{{ go_service_install_dir }}/.installed-{{ (go_service_artifact_checksum ~ go_service_artifact_url) | hash('sha256') }}"
+go_service_systemd_name: "frameworks-{{ go_service_name }}"
+go_service_is_zip: "{{ go_service_artifact_url.endswith('.zip') }}"

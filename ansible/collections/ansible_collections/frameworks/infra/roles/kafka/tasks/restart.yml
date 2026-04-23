@@ -1,0 +1,19 @@
+---
+- name: Restart kafka
+  ansible.builtin.systemd:
+    name: "{{ kafka_service_name }}"
+    state: restarted
+
+- name: Wait for broker port (broker or combined only)
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ kafka_broker_port }}"
+    timeout: 120
+  when: kafka_role in ['broker', 'combined']
+
+- name: Wait for controller port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ kafka_controller_port }}"
+    timeout: 120
+  when: kafka_role in ['controller', 'combined']

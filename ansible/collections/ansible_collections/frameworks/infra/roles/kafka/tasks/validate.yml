@@ -1,0 +1,67 @@
+---
+- name: Validate kafka service and listeners
+  block:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert kafka service is running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services.get(kafka_service_name ~ '.service', {}).get('state') == 'running'
+        fail_msg: >-
+          {{ kafka_service_name }} not running
+          (state={{ ansible_facts.services.get(kafka_service_name ~ '.service', {}).get('state', 'missing') }})
+
+    - name: Wait for broker port (broker or combined only)
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ kafka_broker_port }}"
+        timeout: 30
+      when: kafka_role in ['broker', 'combined']
+
+    - name: Wait for controller port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ kafka_controller_port }}"
+        timeout: 30
+      when: kafka_role in ['controller', 'combined']
+
+    - name: Probe broker API via kafka-broker-api-versions
+      ansible.builtin.command: >-
+        {{ kafka_bin_dir }}/kafka-broker-api-versions.sh
+        --bootstrap-server 127.0.0.1:{{ kafka_broker_port }}
+      register: broker_probe
+      changed_when: false
+      failed_when: broker_probe.rc != 0
+      when: kafka_role in ['broker', 'combined']
+  rescue:
+    - name: Capture kafka systemctl status after failed start
+      ansible.builtin.command: "systemctl status {{ kafka_service_name }} --no-pager -l"
+      register: kafka_systemctl_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture kafka journal after failed start
+      ansible.builtin.command: "journalctl -u {{ kafka_service_name }} --no-pager -n 200"
+      register: kafka_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Capture kafka server log after failed start
+      ansible.builtin.command: "tail -n 200 {{ kafka_role_log_dir }}/server.log"
+      register: kafka_server_log
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with Kafka startup diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          {{ kafka_service_name }} failed validation
+          systemctl status:
+          {{ kafka_systemctl_status.stdout | default('(no systemctl output)') }}
+
+          journalctl:
+          {{ kafka_journal.stdout | default('(no journal output)') }}
+
+          server.log:
+          {{ kafka_server_log.stdout | default('(no server.log output)') }}

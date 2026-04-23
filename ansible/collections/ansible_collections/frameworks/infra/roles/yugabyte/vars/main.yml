@@ -1,0 +1,43 @@
+---
+# Derived paths — not intended for user override.
+yugabyte_conf_dir: "{{ yugabyte_install_dir }}/conf"
+yugabyte_bin_dir: "{{ yugabyte_install_dir }}/bin"
+yugabyte_post_install_sentinel: "{{ yugabyte_install_dir }}/.post_install_done"
+yugabyte_master_conf_path: "{{ yugabyte_conf_dir }}/master.conf"
+yugabyte_tserver_conf_path: "{{ yugabyte_conf_dir }}/tserver.conf"
+yugabyte_master_unit_path: "/etc/systemd/system/{{ yugabyte_master_service }}.service"
+yugabyte_tserver_unit_path: "/etc/systemd/system/{{ yugabyte_tserver_service }}.service"
+yugabyte_master_tablet_id: "00000000000000000000000000000000"
+yugabyte_bootstrap_sentinel: "{{ yugabyte_data_dir }}/.frameworks-bootstrap-complete"
+yugabyte_pg_data_dir: "{{ yugabyte_data_dir }}/pg_data"
+yugabyte_master_root_dir: "{{ yugabyte_data_dir }}/yb-data/master"
+yugabyte_master_consensus_meta_path: "{{ yugabyte_master_root_dir }}/consensus-meta/{{ yugabyte_master_tablet_id }}"
+yugabyte_master_tablet_meta_path: "{{ yugabyte_master_root_dir }}/tablet-meta/{{ yugabyte_master_tablet_id }}"
+
+# Version-keyed sentinel: changes whenever the archive URL+checksum change,
+# which re-triggers unarchive + post_install on upgrade.
+yugabyte_install_sentinel: "{{ yugabyte_install_dir }}/.installed-{{ (yugabyte_artifact_checksum ~ yugabyte_artifact_url) | hash('sha256') }}"
+
+# Time-sync per distro family. chronyd on RHEL/Arch, chrony on Debian.
+yugabyte_timesync_by_family:
+  Debian:
+    package: chrony
+    service: chrony
+  RedHat:
+    package: chrony
+    service: chronyd
+  Archlinux:
+    package: chrony
+    service: chronyd
+  Alpine:
+    package: chrony
+    service: chronyd
+
+# community.postgresql runs on the managed host and requires a psycopg driver
+# there; init/seed/migrate may be invoked standalone via tags, so this cannot
+# rely on the install phase having already run.
+yugabyte_postgresql_python_packages_by_family:
+  Debian:
+    - python3-psycopg2
+  RedHat:
+    - python3-psycopg2

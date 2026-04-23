@@ -1,0 +1,85 @@
+---
+# Edge-native Caddy on Darwin. Downloads the pinned tarball, writes a
+# launchd wrapper that reads caddy.env, and loads the plist. Matches the
+# pattern mistserver + helmsman use so the three services have the same
+# shape on macOS.
+
+- name: Ensure Darwin caddy directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ edge_darwin_base_dir }}/caddy"
+    - "{{ edge_darwin_conf_dir }}"
+    - "{{ edge_darwin_log_dir }}"
+    - "{{ edge_darwin_plist_dir }}"
+
+- name: Download Caddy tarball (darwin)
+  ansible.builtin.get_url:
+    url: "{{ edge_caddy_artifact_url }}"
+    dest: "/tmp/caddy.tar.gz"
+    checksum: "{{ edge_caddy_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Set caddy install sentinel path (darwin)
+  ansible.builtin.set_fact:
+    edge_caddy_install_sentinel: "{{ edge_darwin_base_dir }}/caddy/.installed-{{ edge_caddy_artifact_checksum | default('') | hash('sha1') }}"
+
+- name: Extract Caddy (darwin)
+  ansible.builtin.unarchive:
+    src: "/tmp/caddy.tar.gz"
+    dest: "{{ edge_darwin_base_dir }}/caddy"
+    remote_src: true
+    creates: "{{ edge_caddy_install_sentinel }}"
+
+- name: Mark caddy install sentinel and ensure binary is executable (darwin)
+  ansible.builtin.shell: |
+    set -e
+    chmod 0755 "{{ edge_darwin_base_dir }}/caddy/caddy"
+    touch "{{ edge_caddy_install_sentinel }}"
+  args:
+    creates: "{{ edge_caddy_install_sentinel }}"
+
+- name: Render Caddyfile (darwin)
+  ansible.builtin.template:
+    src: Caddyfile.native.j2
+    dest: "{{ edge_darwin_conf_dir }}/Caddyfile"
+    mode: "0644"
+
+- name: Render caddy env file (darwin)
+  ansible.builtin.copy:
+    dest: "{{ edge_darwin_conf_dir }}/caddy.env"
+    content: |
+      CADDY_EMAIL={{ edge_acme_email | default('', true) }}
+    mode: "0600"
+
+- name: Render launchd wrapper for caddy
+  ansible.builtin.copy:
+    dest: "{{ edge_darwin_base_dir }}/caddy/run.sh"
+    content: |
+      #!/bin/bash
+      set -e
+      while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[! ]*}"}"
+        [ -z "$line" ] && continue
+        case "$line" in
+          *=*) export "$line" ;;
+        esac
+      done < "{{ edge_darwin_conf_dir }}/caddy.env"
+      exec "{{ edge_darwin_base_dir }}/caddy/caddy" run --config "{{ edge_darwin_conf_dir }}/Caddyfile"
+    mode: "0755"
+
+- name: Render launchd plist for caddy
+  ansible.builtin.template:
+    src: caddy.plist.j2
+    dest: "{{ edge_darwin_plist_dir }}/com.livepeer.frameworks.caddy.plist"
+    mode: "0644"
+
+- name: Ensure caddy launchd job loaded
+  community.general.launchd:
+    name: com.livepeer.frameworks.caddy
+    state: started
+    enabled: true

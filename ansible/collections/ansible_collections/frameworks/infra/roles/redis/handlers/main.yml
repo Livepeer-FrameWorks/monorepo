@@ -1,0 +1,14 @@
+---
+- name: restart redis
+  listen: redis restart
+  ansible.builtin.systemd:
+    name: "{{ redis_service_name }}"
+    state: restarted
+  register: redis_restarted
+
+- name: reload redis
+  listen: redis reload
+  ansible.builtin.systemd:
+    name: "{{ redis_service_name }}"
+    state: reloaded
+  when: redis_restarted is not defined

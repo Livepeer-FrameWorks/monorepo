@@ -1,0 +1,29 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert redis running
+      ansible.builtin.assert:
+        that: ansible_facts.services['redis-server.service'].state == 'running'
+
+    - name: PING
+      ansible.builtin.command: redis-cli -a molecule-test PING
+      register: ping
+      changed_when: false
+      no_log: true
+      failed_when: "'PONG' not in ping.stdout"
+
+    - name: Rerun for idempotence
+      ansible.builtin.include_role:
+        name: frameworks.infra.redis
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "redis role not idempotent"

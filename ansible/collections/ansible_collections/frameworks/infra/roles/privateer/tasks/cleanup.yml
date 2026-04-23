@@ -1,0 +1,17 @@
+---
+- name: Stop and disable privateer
+  ansible.builtin.systemd:
+    name: frameworks-privateer
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove privateer systemd unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/frameworks-privateer.service
+    state: absent
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  changed_when: false
