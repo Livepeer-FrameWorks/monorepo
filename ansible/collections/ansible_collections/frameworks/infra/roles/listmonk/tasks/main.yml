@@ -1,5 +1,5 @@
 ---
-- name: listmonk | delegate lifecycle to compose_stack
+- name: Listmonk | delegate lifecycle to compose_stack
   ansible.builtin.include_role:
     name: frameworks.infra.compose_stack
   vars:
@@ -8,11 +8,11 @@
     compose_stack_compose_content: "{{ lookup('template', 'compose.yml.j2') }}"
     compose_stack_env: "{{ listmonk_env }}"
 
-- name: listmonk | restart
+- name: Listmonk | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
-- name: listmonk | cleanup delegates to compose_stack
+- name: Listmonk | cleanup delegates to compose_stack
   ansible.builtin.include_role:
     name: frameworks.infra.compose_stack
     tasks_from: cleanup.yml

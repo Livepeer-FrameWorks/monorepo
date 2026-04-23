@@ -1,5 +1,5 @@
 ---
-- name: privateer | install host networking tools
+- name: Privateer | install host networking tools
   ansible.builtin.package:
     name: >-
       {{

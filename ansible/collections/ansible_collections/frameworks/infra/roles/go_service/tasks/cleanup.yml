@@ -6,7 +6,7 @@
     enabled: false
   failed_when: false
 
-- name: Remove {{ go_service_systemd_name }} unit file
+- name: Remove unit file {{ go_service_systemd_name }}
   ansible.builtin.file:
     path: "{{ go_service_unit_path }}"
     state: absent

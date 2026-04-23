@@ -5,11 +5,7 @@
     apply:
       tags: [install, configure, service]
   vars:
-    prometheus_version: "{{ prometheus_version }}"
     prometheus_web_listen_address: "0.0.0.0:{{ prometheus_port }}"
-    prometheus_storage_retention: "{{ prometheus_storage_retention }}"
-    prometheus_external_labels: "{{ prometheus_external_labels }}"
-    prometheus_scrape_configs: "{{ prometheus_scrape_configs }}"
   when: "'prometheus' in prometheus_stack_components"
 
 - name: Install node_exporter via prometheus.prometheus.node_exporter
@@ -18,6 +14,5 @@
     apply:
       tags: [install, configure, service]
   vars:
-    node_exporter_version: "{{ node_exporter_version }}"
     node_exporter_web_listen_address: "0.0.0.0:{{ node_exporter_port }}"
   when: "'node_exporter' in prometheus_stack_components"

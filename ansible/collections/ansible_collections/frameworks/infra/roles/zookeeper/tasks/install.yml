@@ -8,6 +8,7 @@
 - name: Probe for a compatible Java runtime
   ansible.builtin.shell:
     cmd: |
+      set -o pipefail
       if ! command -v java >/dev/null 2>&1; then
         exit 1
       fi
@@ -18,7 +19,7 @@
         major="${rest%%.*}"
       fi
       test -n "$major" && [ "$major" -ge 11 ]
-    executable: /bin/sh
+    executable: /bin/bash
   register: zookeeper_java_runtime_probe
   changed_when: false
   failed_when: false

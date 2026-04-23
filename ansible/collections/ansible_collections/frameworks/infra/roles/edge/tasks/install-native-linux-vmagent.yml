@@ -77,7 +77,11 @@
       User=frameworks
       Group=frameworks
       WorkingDirectory=/opt/frameworks/vmagent-edge
-      ExecStart=/opt/frameworks/vmagent-edge/vmagent -httpListenAddr=:8430 -promscrape.config=/etc/frameworks/vmagent-edge.yml -remoteWrite.url={{ edge_telemetry_url }}{{ ' -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token' if edge_telemetry_token | length > 0 else '' }}
+      ExecStart=/opt/frameworks/vmagent-edge/vmagent \
+        -httpListenAddr=:8430 \
+        -promscrape.config=/etc/frameworks/vmagent-edge.yml \
+        -remoteWrite.url={{ edge_telemetry_url }}{% if edge_telemetry_token | length > 0 %} \
+        -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token{% endif %}
       Restart=always
       RestartSec=5
       LimitNOFILE=1048576

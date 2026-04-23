@@ -1,5 +1,6 @@
 ---
 profile: production
+offline: true
 exclude_paths:
   - .cache/
   - collections/ansible_collections/frameworks/infra/roles/*/molecule/
@@ -7,3 +8,6 @@ skip_list:
   # 'risky-file-permissions' triggers on our templates where perms match the
   # downstream package's own defaults — documented per-template.
   - risky-file-permissions
+  # These roles intentionally expose variables consumed by upstream Galaxy
+  # roles and release-manifest inputs that do not use the local role prefix.
+  - var-naming[no-role-prefix]

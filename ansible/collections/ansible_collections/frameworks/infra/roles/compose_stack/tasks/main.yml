@@ -1,20 +1,20 @@
 ---
-- name: compose_stack | install (pull + up)
+- name: Compose_stack | install (pull + up)
   ansible.builtin.import_tasks: install.yml
   tags: [install, configure, service]
 
-- name: compose_stack | flush handlers before validate
+- name: Compose_stack | flush handlers before validate
   ansible.builtin.meta: flush_handlers
   tags: [service, validate]
 
-- name: compose_stack | validate
+- name: Compose_stack | validate
   ansible.builtin.import_tasks: validate.yml
   tags: [validate]
 
-- name: compose_stack | restart
+- name: Compose_stack | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
-- name: compose_stack | cleanup
+- name: Compose_stack | cleanup
   ansible.builtin.import_tasks: cleanup.yml
   tags: [cleanup, never]

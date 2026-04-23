@@ -1,32 +1,32 @@
 ---
-- name: mistserver | install
+- name: Mistserver | install
   ansible.builtin.import_tasks: install.yml
   tags: [install]
 
-- name: mistserver | configure
+- name: Mistserver | configure
   ansible.builtin.import_tasks: configure.yml
   tags: [configure]
 
-- name: mistserver | flush handlers before service
+- name: Mistserver | flush handlers before service
   ansible.builtin.meta: flush_handlers
   tags: [configure, service]
 
-- name: mistserver | service
+- name: Mistserver | service
   ansible.builtin.import_tasks: service.yml
   tags: [service]
 
-- name: mistserver | flush handlers before validate
+- name: Mistserver | flush handlers before validate
   ansible.builtin.meta: flush_handlers
   tags: [service, validate]
 
-- name: mistserver | validate
+- name: Mistserver | validate
   ansible.builtin.import_tasks: validate.yml
   tags: [validate]
 
-- name: mistserver | restart
+- name: Mistserver | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
-- name: mistserver | cleanup
+- name: Mistserver | cleanup
   ansible.builtin.import_tasks: cleanup.yml
   tags: [cleanup, never]

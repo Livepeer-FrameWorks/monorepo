@@ -1,12 +1,12 @@
 ---
-- name: restart postgresql
+- name: Restart postgresql
   listen: postgres restart
   ansible.builtin.systemd:
     name: "{{ postgres_service_name }}"
     state: restarted
   register: postgres_restarted
 
-- name: reload postgresql
+- name: Reload postgresql
   listen: postgres reload
   ansible.builtin.systemd:
     name: "{{ postgres_service_name }}"

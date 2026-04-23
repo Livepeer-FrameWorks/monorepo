@@ -1,32 +1,32 @@
 ---
-- name: postgres | install + configure + service (via geerlingguy.postgresql)
+- name: Postgres | install + configure + service (via geerlingguy.postgresql)
   ansible.builtin.import_tasks: install.yml
   tags: [install, configure, service]
 
-- name: postgres | flush handlers before validate
+- name: Postgres | flush handlers before validate
   ansible.builtin.meta: flush_handlers
   tags: [service, validate]
 
-- name: postgres | validate
+- name: Postgres | validate
   ansible.builtin.import_tasks: validate.yml
   tags: [validate]
 
-- name: postgres | init
+- name: Postgres | init
   ansible.builtin.import_tasks: init.yml
   tags: [init, never]
 
-- name: postgres | seed
+- name: Postgres | seed
   ansible.builtin.import_tasks: seed.yml
   tags: [seed, never]
 
-- name: postgres | migrate
+- name: Postgres | migrate
   ansible.builtin.import_tasks: migrate.yml
   tags: [migrate, never]
 
-- name: postgres | restart
+- name: Postgres | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
-- name: postgres | cleanup
+- name: Postgres | cleanup
   ansible.builtin.import_tasks: cleanup.yml
   tags: [cleanup, never]

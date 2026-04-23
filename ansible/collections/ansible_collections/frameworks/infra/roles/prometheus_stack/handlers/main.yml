@@ -1,5 +1,5 @@
 ---
-- name: restart victoriametrics
+- name: Restart victoriametrics
   listen: victoriametrics restart
   ansible.builtin.systemd:
     name: victoriametrics
@@ -7,7 +7,7 @@
     daemon_reload: true
   register: victoriametrics_restarted
 
-- name: restart vmagent
+- name: Restart vmagent
   listen: vmagent restart
   ansible.builtin.systemd:
     name: vmagent
@@ -15,7 +15,7 @@
     daemon_reload: true
   register: vmagent_restarted
 
-- name: restart vmauth
+- name: Restart vmauth
   listen: vmauth restart
   ansible.builtin.systemd:
     name: vmauth

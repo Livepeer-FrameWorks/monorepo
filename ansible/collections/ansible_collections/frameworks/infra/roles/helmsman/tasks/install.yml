@@ -1,8 +1,8 @@
 ---
-- name: helmsman | install (linux)
+- name: Helmsman | install (linux)
   ansible.builtin.import_tasks: install-linux.yml
   when: ansible_facts.os_family != 'Darwin'
 
-- name: helmsman | install (darwin)
+- name: Helmsman | install (darwin)
   ansible.builtin.import_tasks: install-darwin.yml
   when: ansible_facts.os_family == 'Darwin'

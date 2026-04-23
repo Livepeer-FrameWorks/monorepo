@@ -4,7 +4,7 @@
     name: "{{ go_service_systemd_name }}"
     state: restarted
 
-- name: Wait for {{ go_service_name }} port after restart
+- name: Wait for port after restart {{ go_service_name }}
   ansible.builtin.wait_for:
     host: 127.0.0.1
     port: "{{ go_service_port }}"

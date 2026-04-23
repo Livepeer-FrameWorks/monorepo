@@ -1,16 +1,16 @@
 ---
-- name: privateer | require systemd-resolved
+- name: Privateer | require systemd-resolved # noqa: command-instead-of-module
   ansible.builtin.command: systemctl is-active systemd-resolved
   register: privateer_resolved_status
   changed_when: false
   failed_when: privateer_resolved_status.rc != 0
 
-- name: privateer | require resolvectl
-  ansible.builtin.shell: command -v resolvectl
+- name: Privateer | require resolvectl
+  ansible.builtin.command: which resolvectl
   register: privateer_resolvectl_path
   changed_when: false
 
-- name: privateer | ensure systemd-resolved drop-in directory
+- name: Privateer | ensure systemd-resolved drop-in directory
   ansible.builtin.file:
     path: /etc/systemd/resolved.conf.d
     state: directory
@@ -18,7 +18,7 @@
     group: root
     mode: "0755"
 
-- name: privateer | configure systemd-resolved split DNS
+- name: Privateer | configure systemd-resolved split DNS
   ansible.builtin.copy:
     dest: /etc/systemd/resolved.conf.d/frameworks-privateer.conf
     content: |
@@ -29,7 +29,7 @@
     mode: "0644"
   register: privateer_resolved_dropin
 
-- name: privateer | restart systemd-resolved
+- name: Privateer | restart systemd-resolved
   ansible.builtin.systemd:
     name: systemd-resolved
     state: restarted
@@ -37,7 +37,7 @@
     - privateer_resolved_status.rc == 0
     - privateer_resolved_dropin.changed
 
-- name: privateer | install systemd-resolved route unit
+- name: Privateer | install systemd-resolved route unit
   ansible.builtin.copy:
     dest: /etc/systemd/system/frameworks-privateer-resolved.service
     content: |
@@ -61,7 +61,7 @@
     mode: "0644"
   register: privateer_resolved_route_unit
 
-- name: privateer | enable systemd-resolved route unit
+- name: Privateer | enable systemd-resolved route unit
   ansible.builtin.systemd:
     name: frameworks-privateer-resolved
     enabled: true

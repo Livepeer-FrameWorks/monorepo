@@ -1,32 +1,32 @@
 ---
-- name: helmsman | install
+- name: Helmsman | install
   ansible.builtin.import_tasks: install.yml
   tags: [install]
 
-- name: helmsman | configure
+- name: Helmsman | configure
   ansible.builtin.import_tasks: configure.yml
   tags: [configure]
 
-- name: helmsman | flush handlers before service
+- name: Helmsman | flush handlers before service
   ansible.builtin.meta: flush_handlers
   tags: [configure, service]
 
-- name: helmsman | service
+- name: Helmsman | service
   ansible.builtin.import_tasks: service.yml
   tags: [service]
 
-- name: helmsman | flush handlers before validate
+- name: Helmsman | flush handlers before validate
   ansible.builtin.meta: flush_handlers
   tags: [service, validate]
 
-- name: helmsman | validate
+- name: Helmsman | validate
   ansible.builtin.import_tasks: validate.yml
   tags: [validate]
 
-- name: helmsman | restart
+- name: Helmsman | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
-- name: helmsman | cleanup
+- name: Helmsman | cleanup
   ansible.builtin.import_tasks: cleanup.yml
   tags: [cleanup, never]

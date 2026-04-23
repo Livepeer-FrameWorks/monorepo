@@ -1,5 +1,5 @@
 ---
-- name: privateer | assert mesh identity inputs
+- name: Privateer | assert mesh identity inputs
   ansible.builtin.assert:
     that:
       - privateer_wireguard_ip | length > 0
@@ -13,16 +13,16 @@
     fail_msg: "privateer requires complete GitOps WireGuard identity and control-plane env"
   no_log: true
 
-- name: privateer | render static-peers.json
+- name: Privateer | render static-peers.json
   ansible.builtin.copy:
     dest: "{{ privateer_conf_dir }}/static-peers.json"
-    content: "{{ {'version': ({'peers': privateer_static_peers, 'dns': privateer_static_dns} | to_json | hash('sha256')), 'peers': privateer_static_peers, 'dns': privateer_static_dns} | to_nice_json }}"
+    content: "{{ {'version': ({'peers': privateer_static_peers, 'dns': privateer_static_dns} | to_json | hash('sha256')), 'peers': privateer_static_peers, 'dns': privateer_static_dns} | to_nice_json }}" # yamllint disable-line rule:line-length
     owner: "{{ privateer_user }}"
     group: "{{ privateer_group }}"
     mode: "0640"
   notify: privateer restart
 
-- name: privateer | render wg.key
+- name: Privateer | render wg.key
   ansible.builtin.copy:
     dest: "{{ privateer_conf_dir }}/wg.key"
     content: "{{ privateer_wireguard_private_key }}"

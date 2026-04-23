@@ -1,9 +1,9 @@
 ---
-- name: chatwoot | ensure secret key
+- name: Chatwoot | ensure secret key
   ansible.builtin.import_tasks: secret.yml
   tags: [install, configure, service]
 
-- name: chatwoot | delegate lifecycle to compose_stack
+- name: Chatwoot | delegate lifecycle to compose_stack
   ansible.builtin.include_role:
     name: frameworks.infra.compose_stack
   vars:
@@ -12,11 +12,11 @@
     compose_stack_compose_content: "{{ lookup('template', 'compose.yml.j2') }}"
     compose_stack_env: "{{ chatwoot_env | combine({'SECRET_KEY_BASE': chatwoot_secret_key_value}) }}"
 
-- name: chatwoot | restart
+- name: Chatwoot | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
-- name: chatwoot | cleanup delegates to compose_stack
+- name: Chatwoot | cleanup delegates to compose_stack
   ansible.builtin.include_role:
     name: frameworks.infra.compose_stack
     tasks_from: cleanup.yml

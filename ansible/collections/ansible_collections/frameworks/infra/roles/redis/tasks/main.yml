@@ -1,20 +1,20 @@
 ---
-- name: redis | install + configure + service (via geerlingguy.redis)
+- name: Redis | install + configure + service (via geerlingguy.redis)
   ansible.builtin.import_tasks: install.yml
   tags: [install, configure, service]
 
-- name: redis | flush handlers before validate
+- name: Redis | flush handlers before validate
   ansible.builtin.meta: flush_handlers
   tags: [service, validate]
 
-- name: redis | validate
+- name: Redis | validate
   ansible.builtin.import_tasks: validate.yml
   tags: [validate]
 
-- name: redis | restart
+- name: Redis | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
-- name: redis | cleanup
+- name: Redis | cleanup
   ansible.builtin.import_tasks: cleanup.yml
   tags: [cleanup, never]

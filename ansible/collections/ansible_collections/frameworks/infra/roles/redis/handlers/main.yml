@@ -1,12 +1,12 @@
 ---
-- name: restart redis
+- name: Restart redis
   listen: redis restart
   ansible.builtin.systemd:
     name: "{{ redis_service_name }}"
     state: restarted
   register: redis_restarted
 
-- name: reload redis
+- name: Reload redis
   listen: redis reload
   ansible.builtin.systemd:
     name: "{{ redis_service_name }}"

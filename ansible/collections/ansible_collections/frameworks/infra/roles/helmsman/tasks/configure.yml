@@ -21,10 +21,10 @@
         | combine(helmsman_extra_env | default({}, true))
       }}
 
-- name: helmsman | configure (linux)
+- name: Helmsman | configure (linux)
   ansible.builtin.import_tasks: configure-linux.yml
   when: ansible_facts.os_family != 'Darwin'
 
-- name: helmsman | configure (darwin)
+- name: Helmsman | configure (darwin)
   ansible.builtin.import_tasks: configure-darwin.yml
   when: ansible_facts.os_family == 'Darwin'

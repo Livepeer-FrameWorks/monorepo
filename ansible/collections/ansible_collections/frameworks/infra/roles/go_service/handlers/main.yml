@@ -1,5 +1,5 @@
 ---
-- name: restart go_service
+- name: Restart go_service
   listen: go_service restart
   ansible.builtin.systemd:
     name: "{{ go_service_systemd_name }}"
@@ -7,7 +7,7 @@
     daemon_reload: true
   register: go_service_restarted
 
-- name: reload go_service
+- name: Reload go_service
   listen: go_service reload
   ansible.builtin.systemd:
     name: "{{ go_service_systemd_name }}"

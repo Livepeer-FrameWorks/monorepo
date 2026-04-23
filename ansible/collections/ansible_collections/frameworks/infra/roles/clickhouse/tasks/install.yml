@@ -5,13 +5,9 @@
     tasks_from: install-Debian.yml
   tags: [install]
   vars:
-    clickhouse_version: "{{ clickhouse_version }}"
     clickhouse_http_port: "{{ clickhouse_port_http }}"
     clickhouse_tcp_port: "{{ clickhouse_port_tcp }}"
     clickhouse_interserver_http_port: "{{ clickhouse_port_interserver }}"
-    clickhouse_path: "{{ clickhouse_path }}"
-    clickhouse_tmp_path: "{{ clickhouse_tmp_path }}"
-    clickhouse_log_path: "{{ clickhouse_log_path }}"
     clickhouse_default_password_sha256: "{{ clickhouse_default_password | hash('sha256') }}"
     clickhouse_default_users: "{{ frameworks_clickhouse_default_users }}"
     clickhouse_default_quotas: "{{ frameworks_clickhouse_default_quotas }}"
@@ -22,13 +18,9 @@
     tasks_from: config/clickhouse.yml
   tags: [configure]
   vars:
-    clickhouse_version: "{{ clickhouse_version }}"
     clickhouse_http_port: "{{ clickhouse_port_http }}"
     clickhouse_tcp_port: "{{ clickhouse_port_tcp }}"
     clickhouse_interserver_http_port: "{{ clickhouse_port_interserver }}"
-    clickhouse_path: "{{ clickhouse_path }}"
-    clickhouse_tmp_path: "{{ clickhouse_tmp_path }}"
-    clickhouse_log_path: "{{ clickhouse_log_path }}"
     clickhouse_default_password_sha256: "{{ clickhouse_default_password | hash('sha256') }}"
     clickhouse_default_users: "{{ frameworks_clickhouse_default_users }}"
     clickhouse_default_quotas: "{{ frameworks_clickhouse_default_quotas }}"
@@ -53,6 +45,7 @@
       </clickhouse>
 
 - name: Remove broken upstream TLS block when ClickHouse TLS is disabled
+  when: not (clickhouse_enable_ssl | default(false) | bool)
   block:
     - name: Remove upstream TLS drop-in when ClickHouse TLS is disabled
       ansible.builtin.file:
@@ -64,7 +57,6 @@
         path: /etc/clickhouse-server/config.xml
         regexp: '(?s)\n  <openSSL>.*?\n  </openSSL>\n'
         replace: "\n"
-  when: not (clickhouse_enable_ssl | default(false) | bool)
 
 - name: Normalize malformed upstream default quota in users.xml
   ansible.builtin.replace:

@@ -1,12 +1,12 @@
 ---
-- name: reload caddy
+- name: Reload caddy
   listen: caddy reload
   ansible.builtin.systemd:
     name: caddy
     state: reloaded
   register: caddy_reloaded
 
-- name: restart caddy
+- name: Restart caddy
   listen: caddy restart
   ansible.builtin.systemd:
     name: caddy

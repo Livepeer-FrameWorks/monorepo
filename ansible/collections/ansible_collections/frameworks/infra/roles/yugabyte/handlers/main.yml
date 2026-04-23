@@ -3,12 +3,12 @@
 # the marker so it never fires redundantly when a restart is already scheduled
 # for the same host. Pattern borrowed from prometheus-community/ansible.
 
-- name: daemon-reload systemd
+- name: Daemon-reload systemd
   listen: yugabyte daemon-reload
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: restart yb-master
+- name: Restart yb-master
   listen: yugabyte restart master
   ansible.builtin.systemd:
     name: "{{ yugabyte_master_service }}"
@@ -16,7 +16,7 @@
     daemon_reload: true
   register: yugabyte_master_restarted
 
-- name: restart yb-tserver
+- name: Restart yb-tserver
   listen: yugabyte restart tserver
   ansible.builtin.systemd:
     name: "{{ yugabyte_tserver_service }}"
@@ -24,14 +24,14 @@
     daemon_reload: true
   register: yugabyte_tserver_restarted
 
-- name: reload yb-master
+- name: Reload yb-master
   listen: yugabyte reload master
   ansible.builtin.systemd:
     name: "{{ yugabyte_master_service }}"
     state: reloaded
   when: yugabyte_master_restarted is not defined
 
-- name: reload yb-tserver
+- name: Reload yb-tserver
   listen: yugabyte reload tserver
   ansible.builtin.systemd:
     name: "{{ yugabyte_tserver_service }}"

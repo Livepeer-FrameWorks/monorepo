@@ -1,5 +1,5 @@
 ---
-- name: restart privateer
+- name: Restart privateer
   listen: privateer restart
   ansible.builtin.systemd:
     name: frameworks-privateer
@@ -7,7 +7,7 @@
     daemon_reload: true
   register: privateer_restarted
 
-- name: reload privateer
+- name: Reload privateer
   listen: privateer reload
   ansible.builtin.systemd:
     name: frameworks-privateer

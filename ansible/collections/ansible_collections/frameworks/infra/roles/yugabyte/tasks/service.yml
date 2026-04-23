@@ -15,6 +15,10 @@
   register: yugabyte_master_tablet_meta_stat
 
 - name: Recover from stale partial yb-master bootstrap
+  when:
+    - not yugabyte_bootstrap_sentinel_stat.stat.exists
+    - yugabyte_master_tablet_meta_stat.stat.exists
+    - not yugabyte_master_consensus_meta_stat.stat.exists
   block:
     - name: Stop yb-tserver before scrubbing stale master state
       ansible.builtin.systemd:
@@ -35,10 +39,6 @@
       loop:
         - "{{ yugabyte_master_root_dir }}"
         - "{{ yugabyte_pg_data_dir }}"
-  when:
-    - not yugabyte_bootstrap_sentinel_stat.stat.exists
-    - yugabyte_master_tablet_meta_stat.stat.exists
-    - not yugabyte_master_consensus_meta_stat.stat.exists
 
 - name: Start and verify yb-master
   block:

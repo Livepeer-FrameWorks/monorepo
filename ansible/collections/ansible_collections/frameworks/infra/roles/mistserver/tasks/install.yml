@@ -1,8 +1,8 @@
 ---
-- name: mistserver | install (linux)
+- name: Mistserver | install (linux)
   ansible.builtin.import_tasks: install-linux.yml
   when: ansible_facts.os_family != 'Darwin'
 
-- name: mistserver | install (darwin)
+- name: Mistserver | install (darwin)
   ansible.builtin.import_tasks: install-darwin.yml
   when: ansible_facts.os_family == 'Darwin'

@@ -1,12 +1,12 @@
 ---
-- name: restart clickhouse
+- name: Restart clickhouse
   listen: clickhouse restart
   ansible.builtin.systemd:
     name: "{{ clickhouse_service_name }}"
     state: restarted
   register: clickhouse_restarted
 
-- name: reload clickhouse
+- name: Reload clickhouse
   listen: clickhouse reload
   ansible.builtin.systemd:
     name: "{{ clickhouse_service_name }}"

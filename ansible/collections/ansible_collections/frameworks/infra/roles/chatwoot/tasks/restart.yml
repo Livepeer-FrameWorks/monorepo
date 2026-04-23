@@ -1,5 +1,5 @@
 ---
-- name: chatwoot | delegate restart to compose_stack
+- name: Chatwoot | delegate restart to compose_stack
   ansible.builtin.include_role:
     name: frameworks.infra.compose_stack
     tasks_from: restart.yml

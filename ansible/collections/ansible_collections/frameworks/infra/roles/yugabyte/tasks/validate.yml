@@ -23,7 +23,8 @@
 
 - name: Refresh service facts before validating systemd state
   block:
-    - ansible.builtin.service_facts:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
 
     - name: Assert yb-master and yb-tserver are running
       ansible.builtin.assert:

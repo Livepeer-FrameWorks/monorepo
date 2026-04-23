@@ -5,9 +5,4 @@
     apply:
       tags: [install, configure, service]
   vars:
-    redis_version: "{{ redis_version }}"
-    redis_port: "{{ redis_port }}"
-    redis_bind_interface: "{{ redis_bind_interface }}"
     redis_requirepass: "{{ redis_password }}"
-    redis_maxmemory: "{{ redis_maxmemory }}"
-    redis_appendonly: "{{ redis_appendonly }}"

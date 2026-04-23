@@ -31,7 +31,7 @@
     # after install so the password can rotate without a re-init.
     postgresql_users_no_log: true
     postgresql_users:
-      - name: postgres
+      - name: Postgres
         password: "{{ postgres_admin_password }}"
 
 - name: Enforce postgres superuser password (rotation-safe)

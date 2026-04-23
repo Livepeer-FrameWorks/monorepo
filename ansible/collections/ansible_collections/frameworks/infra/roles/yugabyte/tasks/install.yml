@@ -87,7 +87,7 @@
     creates: "{{ yugabyte_post_install_sentinel }}"
   register: yugabyte_post_install
 
-- name: Record post_install completion marker
+- name: Record post_install completion marker # noqa: no-handler
   ansible.builtin.file:
     path: "{{ yugabyte_post_install_sentinel }}"
     state: touch

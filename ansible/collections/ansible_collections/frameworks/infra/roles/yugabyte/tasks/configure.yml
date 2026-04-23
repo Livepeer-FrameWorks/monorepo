@@ -16,7 +16,7 @@
     mode: "0644"
   register: yugabyte_sysctl
 
-- name: Reapply sysctl settings from /etc/sysctl.d
+- name: Reapply sysctl settings from /etc/sysctl.d # noqa: no-handler
   ansible.builtin.command: sysctl --system
   when: yugabyte_sysctl is changed
   changed_when: false

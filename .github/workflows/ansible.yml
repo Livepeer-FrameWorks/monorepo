@@ -37,11 +37,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
+          cache-dependency-path: ansible/requirements-ci-lint.txt
 
       - name: Install Ansible + lint tooling
         run: |
           python -m pip install --upgrade pip
-          pip install "ansible-core==2.17.*" ansible-lint yamllint
+          pip install -r ansible/requirements-ci-lint.txt
 
       - name: Install collections + roles
         working-directory: ansible
@@ -91,11 +92,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
+          cache-dependency-path: ansible/requirements-ci-molecule.txt
 
       - name: Install tooling
         run: |
           python -m pip install --upgrade pip
-          pip install "ansible-core==2.17.*" molecule molecule-plugins[docker] docker
+          pip install -r ansible/requirements-ci-molecule.txt
 
       - name: Install collections + roles
         working-directory: ansible

@@ -1,32 +1,32 @@
 ---
-- name: caddy | install
+- name: Caddy | install
   ansible.builtin.import_tasks: install.yml
   tags: [install]
 
-- name: caddy | configure
+- name: Caddy | configure
   ansible.builtin.import_tasks: configure.yml
   tags: [configure]
 
-- name: caddy | flush handlers before service
+- name: Caddy | flush handlers before service
   ansible.builtin.meta: flush_handlers
   tags: [configure, service]
 
-- name: caddy | service
+- name: Caddy | service
   ansible.builtin.import_tasks: service.yml
   tags: [service]
 
-- name: caddy | flush handlers before validate
+- name: Caddy | flush handlers before validate
   ansible.builtin.meta: flush_handlers
   tags: [service, validate]
 
-- name: caddy | validate
+- name: Caddy | validate
   ansible.builtin.import_tasks: validate.yml
   tags: [validate]
 
-- name: caddy | restart
+- name: Caddy | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
-- name: caddy | cleanup
+- name: Caddy | cleanup
   ansible.builtin.import_tasks: cleanup.yml
   tags: [cleanup, never]

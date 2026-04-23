@@ -659,18 +659,20 @@ dead-code: dead-code-go dead-code-ts dead-code-report
 ANSIBLE_DIR := ansible
 ANSIBLE_REQUIREMENTS_REL := requirements.yml
 ANSIBLE_CACHE_REL := .cache/collections
+ANSIBLE_LOCAL_TEMP := $(CURDIR)/$(ANSIBLE_DIR)/.cache/tmp
+ANSIBLE_ENV := ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP)
 ANSIBLE_PLAYBOOKS := $(wildcard $(ANSIBLE_DIR)/playbooks/*.yml)
 
 ansible-galaxy-install:
 	@echo "=== Installing Ansible collections ==="
-	@mkdir -p $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL) $(ANSIBLE_DIR)/.cache/roles
-	cd $(ANSIBLE_DIR) && ansible-galaxy collection install -r $(ANSIBLE_REQUIREMENTS_REL) -p $(ANSIBLE_CACHE_REL)
+	@mkdir -p $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL) $(ANSIBLE_DIR)/.cache/roles $(ANSIBLE_LOCAL_TEMP)
+	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy collection install -r $(ANSIBLE_REQUIREMENTS_REL) -p $(ANSIBLE_CACHE_REL)
 	@echo "=== Installing Ansible roles ==="
-	cd $(ANSIBLE_DIR) && ansible-galaxy role install -r $(ANSIBLE_REQUIREMENTS_REL) --roles-path .cache/roles
+	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy role install -r $(ANSIBLE_REQUIREMENTS_REL) --roles-path .cache/roles
 
 ansible-lint: ansible-galaxy-install
 	@echo "=== Linting frameworks.infra collection ==="
-	cd $(ANSIBLE_DIR) && ansible-lint --profile=production \
+	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-lint --profile=production \
 		collections/ansible_collections/frameworks/infra
 
 ansible-yamllint:
@@ -690,7 +692,7 @@ ansible-check: ansible-galaxy-install
 		echo "  $$pb"; \
 		relpb=$${pb#$(ANSIBLE_DIR)/}; \
 		( cd $(ANSIBLE_DIR) && \
-		  ansible-playbook --syntax-check "$$relpb" \
+		  $(ANSIBLE_ENV) ansible-playbook --syntax-check "$$relpb" \
 			-i localhost, -c local \
 		) || exit 1; \
 	done
