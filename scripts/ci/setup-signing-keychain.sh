@@ -69,5 +69,9 @@ while IFS= read -r keychain; do
   fi
 done < <(security list-keychains -d user)
 
-security list-keychains -d user -s "$KEYCHAIN_PATH" "${existing_keychains[@]}"
+if ((${#existing_keychains[@]})); then
+  security list-keychains -d user -s "$KEYCHAIN_PATH" "${existing_keychains[@]}"
+else
+  security list-keychains -d user -s "$KEYCHAIN_PATH"
+fi
 security find-identity -v "$KEYCHAIN_PATH"
