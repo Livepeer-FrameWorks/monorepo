@@ -50,7 +50,7 @@ Always backup current state before restoring.`,
 	}
 
 	cmd.Flags().StringVar(&backupPath, "from", "", "Path to backup file or directory (required)")
-	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip health validation after restore")
+	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip service health validation after postgres/clickhouse restore")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt (DANGEROUS)")
 
 	_ = cmd.MarkFlagRequired("from") //nolint:errcheck // flag was just defined above
@@ -95,7 +95,7 @@ func runRestore(cmd *cobra.Command, manifest *inventory.Manifest, component, bac
 	case "clickhouse":
 		return restoreClickHouse(ctx, cmd, manifest, backupPath, skipValidation, sshPool)
 	case "volumes":
-		return restoreVolumes(ctx, cmd, manifest, backupPath, skipValidation, sshPool)
+		return restoreVolumes(ctx, cmd, manifest, backupPath, sshPool)
 	case "config":
 		return restoreConfig(ctx, cmd, manifest, backupPath, sshPool)
 	default:
@@ -243,7 +243,7 @@ done
 }
 
 // restoreVolumes restores Docker volumes from tar.gz
-func restoreVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, backupPath string, skipValidation bool, pool *ssh.Pool) error {
+func restoreVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, backupPath string, pool *ssh.Pool) error {
 	// Restore to first host
 	var host inventory.Host
 	for _, h := range manifest.Hosts {

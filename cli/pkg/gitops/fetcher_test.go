@@ -32,6 +32,71 @@ func TestResolveVersionNormalization(t *testing.T) {
 	}
 }
 
+func TestResolveManifestToRepoPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		manifestDir string
+		relPath     string
+		want        string
+		wantErr     bool
+	}{
+		{
+			name:        "env_files entry with parent traversal",
+			manifestDir: "clusters/production",
+			relPath:     "../../secrets/production.env",
+			want:        "secrets/production.env",
+		},
+		{
+			name:        "hosts_file in same directory",
+			manifestDir: "clusters/production",
+			relPath:     "hosts.enc.yaml",
+			want:        "clusters/production/hosts.enc.yaml",
+		},
+		{
+			name:        "absolute path rejected in repo mode",
+			manifestDir: "clusters/production",
+			relPath:     "/etc/frameworks/env",
+			wantErr:     true,
+		},
+		{
+			name:        "path escaping repo root is rejected",
+			manifestDir: "clusters/production",
+			relPath:     "../../../escape",
+			wantErr:     true,
+		},
+		{
+			name:        "root-level manifest same-dir ref",
+			manifestDir: ".",
+			relPath:     "secrets.env",
+			want:        "secrets.env",
+		},
+		{
+			name:        "root-level manifest parent escape rejected",
+			manifestDir: ".",
+			relPath:     "../outside",
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveManifestToRepoPath(tt.manifestDir, tt.relPath)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for relPath=%q, got %q", tt.relPath, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolveManifestToRepoPath(%q, %q) = %q, want %q", tt.manifestDir, tt.relPath, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFetchPinnedVersion(t *testing.T) {
 	t.Parallel()
 

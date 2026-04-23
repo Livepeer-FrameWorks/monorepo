@@ -100,7 +100,7 @@ func TestResolveYugabytePassword_YugabyteNoSecretErrors(t *testing.T) {
 }
 
 func TestResolveGeoIPMMDBPath_MaxMindMissingKeyMentionsEnvFiles(t *testing.T) {
-	_, _, err := resolveGeoIPMMDBPath(context.TODO(), nil, "maxmind", "", "")
+	_, _, err := resolveGeoIPMMDBPath(context.TODO(), "maxmind", "", "")
 	if err == nil {
 		t.Fatal("expected error when MaxMind source has no license key")
 	}

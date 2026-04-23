@@ -92,7 +92,7 @@ func runSyncGeoIP(cmd *cobra.Command, rc *resolvedCluster, licenseKey, source, f
 		licenseKey = effectiveGeoIPLicenseKey(sharedEnv, licenseKey)
 	}
 
-	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, manifest, source, filePath, licenseKey)
+	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, source, filePath, licenseKey)
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func effectiveGeoIPServices(manifest *inventory.Manifest, services []string) []s
 	return []string{"foghorn", "quartermaster"}
 }
 
-func resolveGeoIPMMDBPath(ctx context.Context, manifest *inventory.Manifest, source, filePath, licenseKey string) (string, func(), error) {
+func resolveGeoIPMMDBPath(ctx context.Context, source, filePath, licenseKey string) (string, func(), error) {
 	switch source {
 	case "file":
 		if filePath == "" {

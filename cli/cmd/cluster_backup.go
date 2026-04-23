@@ -44,7 +44,7 @@ func newClusterBackupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup <component>",
 		Short: "Backup cluster components",
-		Long: `Backup cluster components to local or remote storage.
+		Long: `Backup cluster components to local storage.
 
 Supported components:
   postgres    - Backup all PostgreSQL databases
@@ -54,7 +54,7 @@ Supported components:
   all         - Backup everything (postgres + clickhouse + volumes + config)
 
 Backups are stored in the output directory with timestamps.
-Optionally upload to S3/GCS after backup (requires --upload flag).`,
+Remote upload is not implemented; --skip-upload is accepted as a deprecated no-op.`,
 		Example: `  frameworks cluster backup postgres --output /backups
   frameworks cluster backup all --output /backups`,
 		Args: cobra.ExactArgs(1),
@@ -64,18 +64,18 @@ Optionally upload to S3/GCS after backup (requires --upload flag).`,
 				return err
 			}
 			defer rc.Cleanup()
-			return runBackup(cmd, rc.Manifest, args[0], outputDir, skipUpload)
+			return runBackup(cmd, rc.Manifest, args[0], outputDir)
 		},
 	}
 
 	cmd.Flags().StringVarP(&outputDir, "output", "o", "./backups", "Output directory for backups")
-	cmd.Flags().BoolVar(&skipUpload, "skip-upload", true, "Skip upload to remote storage")
+	cmd.Flags().BoolVar(&skipUpload, "skip-upload", true, "Deprecated no-op; backups are local-only")
 
 	return cmd
 }
 
 // runBackup executes the backup command against an already-loaded manifest.
-func runBackup(cmd *cobra.Command, manifest *inventory.Manifest, component, outputDir string, skipUpload bool) error {
+func runBackup(cmd *cobra.Command, manifest *inventory.Manifest, component, outputDir string) error {
 	timestamp := time.Now().Format("20060102-150405")
 	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Starting backup: %s (timestamp: %s)", component, timestamp))
 	fmt.Fprintf(cmd.OutOrStdout(), "Output directory: %s\n\n", outputDir)

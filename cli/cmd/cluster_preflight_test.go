@@ -206,7 +206,6 @@ func TestAnyManifestSourceConfigured_envVarReturnsTrue(t *testing.T) {
 }
 
 func TestResolvePostgresConnectivityHostUsesFirstNodeForYugabyte(t *testing.T) {
-	manifest := &inventory.Manifest{}
 	pg := &inventory.PostgresConfig{
 		Engine: "yugabyte",
 		Nodes: []inventory.PostgresNode{
@@ -215,16 +214,15 @@ func TestResolvePostgresConnectivityHostUsesFirstNodeForYugabyte(t *testing.T) {
 		},
 	}
 
-	if got := resolvePostgresConnectivityHost(manifest, pg); got != "yuga-1" {
+	if got := resolvePostgresConnectivityHost(pg); got != "yuga-1" {
 		t.Fatalf("expected first Yugabyte node host, got %q", got)
 	}
 }
 
 func TestResolvePostgresConnectivityHostFallsBackToSingleHost(t *testing.T) {
-	manifest := &inventory.Manifest{}
 	pg := &inventory.PostgresConfig{Host: "postgres-1"}
 
-	if got := resolvePostgresConnectivityHost(manifest, pg); got != "postgres-1" {
+	if got := resolvePostgresConnectivityHost(pg); got != "postgres-1" {
 		t.Fatalf("expected postgres host fallback, got %q", got)
 	}
 }

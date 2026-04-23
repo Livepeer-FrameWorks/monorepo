@@ -442,7 +442,7 @@ frameworks cluster backup <component> [flags]
 
 - `--manifest string` - Cluster manifest file
 - `--output string` - Output directory (default: `./backups`)
-- `--skip-upload` - Placeholder only (uploads are not wired yet)
+- `--skip-upload` - Deprecated no-op; backups are local-only
 
 **Examples:**
 
@@ -488,7 +488,7 @@ frameworks cluster restore <component> [flags]
 
 - `--manifest string` - Cluster manifest file
 - `--from string` - Path to backup file or directory (required)
-- `--skip-validation` - Skip health validation after restore
+- `--skip-validation` - Skip service health validation after postgres/clickhouse restore
 - `--yes` - Skip confirmation prompt
 
 **Examples:**

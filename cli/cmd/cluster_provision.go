@@ -606,7 +606,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	}
 
 	// Post-provision: bootstrap Purser cluster pricing, admin user, control-plane validation
-	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData, releaseRepos); err != nil {
+	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData); err != nil {
 		return err
 	}
 
@@ -615,7 +615,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 // postProvisionFinalize handles Purser pricing bootstrap, optional admin user creation,
 // and control-plane validation after all service batches are complete.
-func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}, releaseRepos []string) error {
+func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
 	systemTenantID, ok := runtimeData["system_tenant_id"].(string)
 	serviceToken, stOK := runtimeData["service_token"].(string)
 
@@ -1149,7 +1149,7 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 	defer client.Close()
 
 	runtimeData["quartermaster_grpc_addr"] = grpcAddr
-	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, host, runtimeData, manifestDir, sharedEnv, releaseRepos, client)
+	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, runtimeData, manifestDir, sharedEnv, releaseRepos, client)
 }
 
 func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}) error {
@@ -1176,10 +1176,10 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 	}
 	defer client.Close()
 
-	return registerIngressDesiredStateWithClient(ctx, out, manifest, task, host, client)
+	return registerIngressDesiredStateWithClient(ctx, out, manifest, task, client)
 }
 
-func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string, registrar publicServiceRegistrar) error {
+func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string, registrar publicServiceRegistrar) error {
 	serviceName := task.ServiceID
 	serviceType, ok := publicServiceType(serviceName)
 	if !ok || selfRegisters(serviceName) {
@@ -1241,7 +1241,7 @@ func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer,
 	return nil
 }
 
-func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, registrar ingressDesiredStateRegistrar) error {
+func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, registrar ingressDesiredStateRegistrar) error {
 	if manifest.RootDomain == "" {
 		return nil
 	}
@@ -2010,7 +2010,7 @@ func ensureProvisionGeoIP(ctx context.Context, out io.Writer, manifest *inventor
 	licenseKey := effectiveGeoIPLicenseKey(sharedEnv, "")
 	remotePath := effectiveGeoIPRemotePath(manifest, "")
 
-	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, manifest, source, filePath, licenseKey)
+	mmdbPath, cleanup, err := resolveGeoIPMMDBPath(ctx, source, filePath, licenseKey)
 	if err != nil {
 		return fmt.Errorf("geoip provisioning failed: %w", err)
 	}
@@ -3419,7 +3419,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	applyProductionRuntimeDefaults(manifest, baseName, env)
+	applyProductionRuntimeDefaults(manifest, env)
 	if err := validateProductionServiceEnv(manifest, baseName, env); err != nil {
 		return nil, err
 	}
@@ -3476,7 +3476,7 @@ func isDevProfile(manifest *inventory.Manifest) bool {
 	return p == "dev" || p == "development"
 }
 
-func applyProductionRuntimeDefaults(manifest *inventory.Manifest, serviceID string, env map[string]string) {
+func applyProductionRuntimeDefaults(manifest *inventory.Manifest, env map[string]string) {
 	if isDevProfile(manifest) {
 		return
 	}
@@ -3877,20 +3877,4 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	ux.Success(cmd.OutOrStdout(), "Mesh healthy on all privateer hosts")
 	return nil
-}
-
-// resolveManifestToRepoPath rejects absolute paths and paths that
-// escape the repo root ("../..") - GitHub API fetches must stay inside
-// the checkout.
-//
-//nolint:unused // exercised by cluster_provision_test.go
-func resolveManifestToRepoPath(manifestDir, relPath string) (string, error) {
-	if filepath.IsAbs(relPath) {
-		return "", fmt.Errorf("absolute path %q is not valid in a repository manifest", relPath)
-	}
-	resolved := filepath.Clean(filepath.Join(manifestDir, relPath))
-	if strings.HasPrefix(resolved, "..") {
-		return "", fmt.Errorf("path %q resolves outside repository root (resolved to %q)", relPath, resolved)
-	}
-	return resolved, nil
 }

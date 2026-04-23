@@ -64,7 +64,7 @@ func newClusterPreflightCmd() *cobra.Command {
 
 				fmt.Fprintln(cmd.OutOrStdout(), "\nInfrastructure connectivity:")
 				if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
-					pgHost := resolvePostgresConnectivityHost(manifest, pg)
+					pgHost := resolvePostgresConnectivityHost(pg)
 					if host, ok := manifest.GetHost(pgHost); ok {
 						pgHost = host.ExternalIP
 					}
@@ -145,7 +145,7 @@ func newClusterPreflightCmd() *cobra.Command {
 	return cmd
 }
 
-func resolvePostgresConnectivityHost(manifest *inventory.Manifest, pg *inventory.PostgresConfig) string {
+func resolvePostgresConnectivityHost(pg *inventory.PostgresConfig) string {
 	if pg == nil {
 		return ""
 	}
