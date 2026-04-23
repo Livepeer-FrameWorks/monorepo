@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -21,12 +21,20 @@ const defaultListmonkImage = "listmonk/listmonk:v4.0.1"
 // so it needs its own provisioner instead of FlexibleProvisioner.
 type ListmonkProvisioner struct {
 	*BaseProvisioner
+	pool     *ssh.Pool
+	executor *ansible.Executor
 }
 
 // NewListmonkProvisioner creates a new Listmonk provisioner.
 func NewListmonkProvisioner(pool *ssh.Pool) *ListmonkProvisioner {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		panic(fmt.Sprintf("create ansible executor for listmonk: %v", err))
+	}
 	return &ListmonkProvisioner{
 		BaseProvisioner: NewBaseProvisioner("listmonk", pool),
+		pool:            pool,
+		executor:        executor,
 	}
 }
 
@@ -208,19 +216,16 @@ networks:
 
 // Validate checks if Listmonk is healthy.
 func (l *ListmonkProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	checker := &health.HTTPChecker{
-		Path:    "/health",
-		Timeout: 5,
-	}
 	port := config.Port
 	if port == 0 {
 		port = 9001
 	}
-	result := checker.Check(host.ExternalIP, port)
-	if !result.OK {
-		return fmt.Errorf("listmonk health check failed: %s", result.Error)
+	url := fmt.Sprintf("http://127.0.0.1:%d/health", port)
+	tasks := []ansible.Task{
+		waitForTCP("wait for listmonk listener", "127.0.0.1", port, 30),
+		uriOK("listmonk /health", url, 200),
 	}
-	return nil
+	return runValidatePlaybook(ctx, l.executor, l.pool.DefaultKeyPath(), host, "listmonk", tasks)
 }
 
 // Initialize is a no-op — Listmonk runs --install --idempotent on startup.

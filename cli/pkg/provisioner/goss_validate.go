@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/inventory"
@@ -57,12 +58,48 @@ func runGossValidate(
 			"ansible_ssh_private_key_file": sshKeyPath,
 		},
 	})
-	result, execErr := executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: false})
-	if execErr != nil {
-		return fmt.Errorf("goss validate for %s failed: %w\nOutput: %s", serviceName, execErr, result.Output)
+	return retryGossValidate(ctx, serviceName, func() (*ansible.ExecuteResult, error) {
+		return executor.ExecutePlaybook(ctx, playbook, inv, ansible.ExecuteOptions{Verbose: false})
+	})
+}
+
+func retryGossValidate(ctx context.Context, serviceName string, run func() (*ansible.ExecuteResult, error)) error {
+	const (
+		maxAttempts = 10
+		retryDelay  = 2 * time.Second
+	)
+
+	var lastResult *ansible.ExecuteResult
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		result, execErr := run()
+		lastResult = result
+		lastErr = execErr
+
+		if execErr == nil && result != nil && result.Success {
+			return nil
+		}
+		if attempt == maxAttempts {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(retryDelay):
+		}
 	}
-	if !result.Success {
-		return fmt.Errorf("goss validate for %s failed\nOutput: %s", serviceName, result.Output)
+
+	if lastErr != nil {
+		output := ""
+		if lastResult != nil {
+			output = lastResult.Output
+		}
+		return fmt.Errorf("goss validate for %s failed: %w\nOutput: %s", serviceName, lastErr, output)
 	}
-	return nil
+	if lastResult != nil {
+		return fmt.Errorf("goss validate for %s failed\nOutput: %s", serviceName, lastResult.Output)
+	}
+	return fmt.Errorf("goss validate for %s failed", serviceName)
 }

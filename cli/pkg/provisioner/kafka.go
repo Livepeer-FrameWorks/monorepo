@@ -3,11 +3,11 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -249,10 +249,8 @@ func validateApacheKafkaVersion(version string) error {
 	return nil
 }
 
-// Validate checks if Kafka is healthy.
-// Controllers use TCP check (no broker protocol on controller listener).
-// Brokers and combined-mode nodes use Sarama broker check. goss runs first to
-// catch structural regressions before the protocol-level check.
+// Validate checks Kafka structural state via goss, then uses a TCP check for
+// controllers and a broker protocol check for broker listeners.
 func (k *KafkaProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	role, _ := config.Metadata["role"].(string) //nolint:errcheck // metadata validated by schema
 
@@ -266,9 +264,6 @@ func (k *KafkaProvisioner) Validate(ctx context.Context, host inventory.Host, co
 			Services: map[string]ansible.GossService{
 				unit: {Running: true, Enabled: true},
 			},
-			Ports: map[string]ansible.GossPort{
-				fmt.Sprintf("tcp:%d", config.Port): {Listening: true},
-			},
 			Files: map[string]ansible.GossFile{
 				filePresent: {Exists: true},
 			},
@@ -279,25 +274,37 @@ func (k *KafkaProvisioner) Validate(ctx context.Context, host inventory.Host, co
 		}
 	}
 
+	clusterIP := host.ExternalIP
+	if clusterIP == "" {
+		clusterIP = "127.0.0.1"
+	}
+
+	// Controllers speak only the KRaft peer protocol; no broker handshake
+	// a client can do. wait_for on the cluster IP + port handles all the
+	// 0.0.0.0 / [::] / explicit-IP binding variations the kernel exposes,
+	// so we don't need a brittle ss-text regex.
 	if role == "controller" {
-		checker := &health.TCPChecker{}
-		result := checker.Check(host.ExternalIP, config.Port)
-		if !result.OK {
-			return fmt.Errorf("kafka controller health check failed: %s", result.Error)
+		tasks := []ansible.Task{
+			waitForTCP("wait for kafka controller", clusterIP, config.Port, 30),
 		}
-		return nil
+		return runValidatePlaybook(ctx, k.executor, k.sshPool.DefaultKeyPath(), host, "kafka-controller", tasks)
 	}
 
-	checker := &health.KafkaChecker{}
-	result := checker.Check(host.ExternalIP, config.Port)
-	if !result.OK {
-		return fmt.Errorf("kafka health check failed: %s", result.Error)
+	// Broker: bundled CLI tool against the cluster-facing bootstrap address.
+	// Exercises the wire protocol AND the advertised-listener binding.
+	tasks := []ansible.Task{
+		waitForTCP("wait for kafka broker", clusterIP, config.Port, 30),
+		commandOK("kafka broker api versions",
+			"/opt/kafka/bin/kafka-broker-api-versions.sh",
+			"--bootstrap-server", fmt.Sprintf("%s:%d", clusterIP, config.Port)),
 	}
-
-	return nil
+	return runValidatePlaybook(ctx, k.executor, k.sshPool.DefaultKeyPath(), host, "kafka-broker", tasks)
 }
 
-// Initialize creates Kafka topics (broker-only; controllers skip this).
+// Initialize creates Kafka topics (broker-only; controllers skip this). Runs
+// /opt/kafka/bin/kafka-topics.sh on the broker host via SSH so the CLI never
+// needs to reach the broker port directly. --if-exists / --if-not-exists
+// gates keep reruns idempotent.
 func (k *KafkaProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	role, _ := config.Metadata["role"].(string) //nolint:errcheck // metadata validated by schema
 	if role == "controller" {
@@ -310,33 +317,41 @@ func (k *KafkaProvisioner) Initialize(ctx context.Context, host inventory.Host, 
 		return nil
 	}
 
-	broker := fmt.Sprintf("%s:%d", host.ExternalIP, config.Port)
-	brokers := []string{broker}
+	clusterIP := host.ExternalIP
+	if clusterIP == "" {
+		clusterIP = "127.0.0.1"
+	}
+	bootstrap := fmt.Sprintf("%s:%d", clusterIP, config.Port)
+	topicsBin := "/opt/kafka/bin/kafka-topics.sh"
 
+	tasks := make([]ansible.Task, 0, len(topicsConfig))
 	for _, topicCfg := range topicsConfig {
-		name := topicCfg["name"].(string)                          //nolint:errcheck // config validated by schema
-		partitions := int32(topicCfg["partitions"].(int))          //nolint:errcheck // config validated by schema
-		replication := int16(topicCfg["replication_factor"].(int)) //nolint:errcheck // config validated by schema
+		name, _ := topicCfg["name"].(string)                   //nolint:errcheck // schema-validated
+		partitions, _ := topicCfg["partitions"].(int)          //nolint:errcheck
+		replication, _ := topicCfg["replication_factor"].(int) //nolint:errcheck
 
-		kafkaConfig := make(map[string]*string)
+		argv := []string{topicsBin,
+			"--bootstrap-server", bootstrap,
+			"--create", "--if-not-exists",
+			"--topic", name,
+			"--partitions", fmt.Sprintf("%d", partitions),
+			"--replication-factor", fmt.Sprintf("%d", replication),
+		}
 		if cfg, ok := topicCfg["config"].(map[string]any); ok {
-			for k, v := range cfg {
-				val := fmt.Sprintf("%v", v)
-				kafkaConfig[k] = &val
+			keys := make([]string, 0, len(cfg))
+			for key := range cfg {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				argv = append(argv, "--config", fmt.Sprintf("%s=%v", key, cfg[key]))
 			}
 		}
-
-		created, err := CreateKafkaTopicIfNotExists(brokers, name, partitions, replication, kafkaConfig)
-		if err != nil {
-			return fmt.Errorf("failed to create topic %s: %w", name, err)
-		}
-
-		if created {
-			fmt.Printf("✓ Created topic: %s (partitions=%d, replication=%d)\n", name, partitions, replication)
-		} else {
-			fmt.Printf("Topic %s already exists\n", name)
-		}
+		tasks = append(tasks, commandOK("create kafka topic "+name, argv...))
 	}
 
+	if err := runValidatePlaybook(ctx, k.executor, k.sshPool.DefaultKeyPath(), host, "kafka-topics", tasks); err != nil {
+		return fmt.Errorf("failed to create kafka topics: %w", err)
+	}
 	return nil
 }

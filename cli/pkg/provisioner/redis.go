@@ -10,7 +10,6 @@ import (
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -300,14 +299,20 @@ func (r *RedisProvisioner) provisionNative(ctx context.Context, host inventory.H
 	return nil
 }
 
-// Validate checks if Redis is healthy via TCP.
+// Validate runs redis-cli PING against the cluster-facing IP from inside
+// the host. wait_for gates the TCP listener first, then PING exercises the
+// RESP handshake.
 func (r *RedisProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	checker := &health.TCPChecker{}
-	result := checker.Check(host.ExternalIP, config.Port)
-	if !result.OK {
-		return fmt.Errorf("redis health check failed: %s", result.Error)
+	clusterIP := host.ExternalIP
+	if clusterIP == "" {
+		clusterIP = "127.0.0.1"
 	}
-	return nil
+	tasks := []ansible.Task{
+		waitForTCP("wait for redis listener", clusterIP, config.Port, 30),
+		shellValidate("redis PING",
+			fmt.Sprintf(`redis-cli -h %s -p %d PING | grep -q PONG`, clusterIP, config.Port)),
+	}
+	return runValidatePlaybook(ctx, r.executor, r.sshPool.DefaultKeyPath(), host, "redis", tasks)
 }
 
 // Initialize is a no-op for Redis.

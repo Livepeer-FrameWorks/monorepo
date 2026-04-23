@@ -33,6 +33,23 @@ var JavaRuntimePackages = DistroPackageMap{
 	"arch":   {PackageName: "jre-openjdk-headless"},
 }
 
+// JavaRuntimeTasks installs the distro-correct Java package only when the host
+// does not already expose a compatible `java` (major >= 11).
+func JavaRuntimeTasks(spec DistroPackageSpec) []Task {
+	probe := TaskShell(
+		`if ! command -v java >/dev/null 2>&1; then exit 1; fi; ver="$(java -version 2>&1 | sed -nE '1s/.*version "((1\.([0-9]+))|([0-9]+)).*/\3\4/p')"; test -n "$ver" && [ "$ver" -ge 11 ]`,
+		ShellOpts{ChangedWhen: "false"},
+	)
+	probe.Name = "probe java runtime"
+	probe.Register = "frameworks_java_runtime_probe"
+	probe.Ignore = true
+
+	pkg := TaskPackage(spec.PackageName, PackagePresent)
+	pkg.When = "frameworks_java_runtime_probe.rc != 0"
+
+	return []Task{probe, pkg}
+}
+
 // TimeSyncPackages is the per-distro chrony package. ServiceName differs:
 // Debian's unit is chrony, RHEL/Arch's is chronyd.
 var TimeSyncPackages = DistroPackageMap{

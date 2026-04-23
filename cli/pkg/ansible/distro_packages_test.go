@@ -48,3 +48,40 @@ func TestResolveDistroPackage_missingFamilyReportsNotFound(t *testing.T) {
 		t.Error("unknown family should not resolve")
 	}
 }
+
+func TestJavaRuntimeTasks_probeAndConditionalPackageInstall(t *testing.T) {
+	t.Parallel()
+
+	tasks := JavaRuntimeTasks(DistroPackageSpec{PackageName: "jre-openjdk-headless"})
+	if len(tasks) != 2 {
+		t.Fatalf("JavaRuntimeTasks() len = %d, want 2", len(tasks))
+	}
+
+	probe := tasks[0]
+	if probe.Name != "probe java runtime" {
+		t.Fatalf("probe.Name = %q, want %q", probe.Name, "probe java runtime")
+	}
+	if probe.Module != "ansible.builtin.shell" {
+		t.Fatalf("probe.Module = %q, want ansible.builtin.shell", probe.Module)
+	}
+	if probe.Register != "frameworks_java_runtime_probe" {
+		t.Fatalf("probe.Register = %q, want frameworks_java_runtime_probe", probe.Register)
+	}
+	if !probe.Ignore {
+		t.Fatal("probe must ignore errors so missing/incompatible java falls through to package install")
+	}
+	if probe.ChangedWhen != "false" {
+		t.Fatalf("probe.ChangedWhen = %q, want false", probe.ChangedWhen)
+	}
+
+	pkg := tasks[1]
+	if pkg.Module != "ansible.builtin.package" {
+		t.Fatalf("pkg.Module = %q, want ansible.builtin.package", pkg.Module)
+	}
+	if got := pkg.Args["name"]; got != "jre-openjdk-headless" {
+		t.Fatalf("pkg.Args[name] = %#v, want jre-openjdk-headless", got)
+	}
+	if pkg.When != "frameworks_java_runtime_probe.rc != 0" {
+		t.Fatalf("pkg.When = %q, want probe failure gate", pkg.When)
+	}
+}

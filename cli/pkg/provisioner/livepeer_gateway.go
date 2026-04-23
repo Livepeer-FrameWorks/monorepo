@@ -13,7 +13,6 @@ import (
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -541,8 +540,8 @@ func (p *LivepeerGatewayProvisioner) Validate(ctx context.Context, host inventor
 	}
 	if _, remoteArch, err := p.DetectRemoteArch(ctx, host); err == nil && config.Mode == "native" {
 		spec := ansible.RenderGossYAML(ansible.GossSpec{
-			Ports: map[string]ansible.GossPort{
-				fmt.Sprintf("tcp:%d", port): {Listening: true},
+			Services: map[string]ansible.GossService{
+				"frameworks-livepeer-gateway": {Running: true, Enabled: true},
 			},
 			Files: map[string]ansible.GossFile{
 				"/opt/frameworks/livepeer-gateway/livepeer": {Exists: true},
@@ -553,11 +552,12 @@ func (p *LivepeerGatewayProvisioner) Validate(ctx context.Context, host inventor
 			return fmt.Errorf("livepeer-gateway goss validate failed: %w", gossErr)
 		}
 	}
-	checker := &health.HTTPChecker{Path: "/status", Timeout: 10}
-	if result := checker.Check(host.ExternalIP, port); !result.OK {
-		return fmt.Errorf("livepeer-gateway health check failed: %s", result.Error)
+	url := fmt.Sprintf("http://127.0.0.1:%d/status", port)
+	tasks := []ansible.Task{
+		waitForTCP("wait for livepeer-gateway listener", "127.0.0.1", port, 30),
+		uriOK("livepeer-gateway /status", url, 200),
 	}
-	return nil
+	return runValidatePlaybook(ctx, p.executor, p.sshPool.DefaultKeyPath(), host, "livepeer-gateway", tasks)
 }
 
 func (p *LivepeerGatewayProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {

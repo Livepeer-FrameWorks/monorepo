@@ -7,7 +7,6 @@ import (
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -29,7 +28,8 @@ func NewPostgresProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (*Postgre
 	p := &PostgresProvisioner{
 		BaseProvisioner: NewBaseProvisioner("postgres", pool),
 		executor:        executor,
-		sql:             &DirectExecutor{},
+		// sql stays nil in production — sqlExecFor builds an SSHExecutor
+		// per-host. Tests inject a mock via WithSQLExecutor.
 	}
 	for _, opt := range opts {
 		opt.applyPostgres(p)
@@ -123,49 +123,59 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, host inventory.Host
 	return nil
 }
 
-// Validate checks Postgres structural state via goss (service running, port
-// listening) then the protocol-level health check and database readiness.
-// Goss is skipped when an arch probe fails — protocol check still runs.
+// Validate asserts Postgres is up and every expected database is reachable.
+// Uses peer auth through the Unix socket (sudo -u postgres, no -h), which
+// matches pg_hba's "local all postgres peer" rule — no password required,
+// no TCP. A separate wait_for on the cluster IP verifies the TCP listener
+// is also bound where remote peers expect it.
 func (p *PostgresProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	if _, remoteArch, err := p.DetectRemoteArch(ctx, host); err == nil {
-		// Package-install sets up "postgresql" on debian, "postgresql-*" on rhel;
-		// source-build leaves it at "postgresql". Assert on port + the
-		// canonical data dir rather than a distro-specific unit name.
-		spec := ansible.RenderGossYAML(ansible.GossSpec{
-			Ports: map[string]ansible.GossPort{
-				fmt.Sprintf("tcp:%d", config.Port): {Listening: true},
-			},
-		})
-		if gossErr := runGossValidate(ctx, p.executor, p.sshPool.DefaultKeyPath(), host,
-			"postgres", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
-			return fmt.Errorf("postgres goss validate failed: %w", gossErr)
-		}
+	port := config.Port
+	if port == 0 {
+		port = 5432
 	}
-
-	checker := &health.PostgresChecker{
-		User:     "postgres",
-		Password: "",
-		Database: "postgres",
+	clusterIP := host.ExternalIP
+	if clusterIP == "" {
+		clusterIP = "127.0.0.1"
 	}
-
-	result := checker.Check(host.ExternalIP, config.Port)
-	if !result.OK {
-		return fmt.Errorf("postgres health check failed: %s", result.Error)
+	tasks := []ansible.Task{
+		waitForTCP("wait for postgres listener", clusterIP, port, 30),
+		commandOK("postgres SELECT 1",
+			"sudo", "-u", "postgres", "psql", "-p", fmt.Sprintf("%d", port),
+			"-d", "postgres", "-tAc", "SELECT 1"),
 	}
-
-	dbNames := databaseNamesFromMetadata(config.Metadata)
-	if len(dbNames) > 0 {
-		dbResult := checker.CheckDatabases(host.ExternalIP, config.Port, dbNames)
-		if !dbResult.OK {
-			return fmt.Errorf("postgres database readiness failed: %s", dbResult.Error)
-		}
+	for _, db := range databaseNamesFromMetadata(config.Metadata) {
+		tasks = append(tasks, commandOK("postgres db="+db+" readiness",
+			"sudo", "-u", "postgres", "psql", "-p", fmt.Sprintf("%d", port),
+			"-d", db, "-tAc", "SELECT 1"))
 	}
-
-	return nil
+	return runValidatePlaybook(ctx, p.executor, p.sshPool.DefaultKeyPath(), host, "postgres", tasks)
 }
 
-// Initialize creates databases and runs migrations
+// sqlExecFor returns the SQLExecutor the provisioner should use against host.
+// Tests inject a mock via WithSQLExecutor; production builds an SSHExecutor
+// that pipes SQL to psql on the host itself. Postgres uses peer auth over
+// the Unix socket (no TCP, no password), so the CLI never needs a direct
+// network path to the service port.
+func (p *PostgresProvisioner) sqlExecFor(host inventory.Host) (SQLExecutor, error) {
+	if p.sql != nil {
+		return p.sql, nil
+	}
+	runner, err := p.GetRunner(host)
+	if err != nil {
+		return nil, fmt.Errorf("get ssh runner: %w", err)
+	}
+	return &SSHExecutor{Runner: runner, UsePeerAuth: true}, nil
+}
+
+// Initialize creates databases and runs migrations via psql on the host
+// over SSH. conn.Host is a placeholder for the executor's log formatting —
+// SSHExecutor with UsePeerAuth=true connects via sudo + Unix socket and
+// ignores the Host field.
 func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	exec, err := p.sqlExecFor(host)
+	if err != nil {
+		return err
+	}
 	conn := ConnParams{Host: host.ExternalIP, Port: config.Port, User: "postgres", Database: "postgres"}
 
 	dbList, ok := config.Metadata["databases"].([]map[string]string)
@@ -179,7 +189,7 @@ func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		owner := db["owner"]
 		dbNames = append(dbNames, dbName)
 
-		created, err := CreateDatabaseIfNotExists(ctx, p.sql, conn, dbName, owner)
+		created, err := CreateDatabaseIfNotExists(ctx, exec, conn, dbName, owner)
 		if err != nil {
 			return fmt.Errorf("failed to create database %s: %w", dbName, err)
 		}
@@ -191,16 +201,14 @@ func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		}
 
 		dbConn := ConnParams{Host: host.ExternalIP, Port: config.Port, User: "postgres", Database: dbName}
-		if err := pgInitializeDatabase(ctx, p.sql, dbConn, dbName); err != nil {
+		if err := pgInitializeDatabase(ctx, exec, dbConn, dbName); err != nil {
 			return fmt.Errorf("failed to initialize database %s: %w", dbName, err)
 		}
 	}
 
 	pgPass, _ := config.Metadata["postgres_password"].(string)
 	if pgPass != "" {
-		// Create per-database roles from the owner field in each database entry.
-		// Each owner role gets access to its own database only.
-		ownerDBs := make(map[string][]string) // owner -> list of db names
+		ownerDBs := make(map[string][]string)
 		for _, db := range dbList {
 			owner := db["owner"]
 			if owner == "" {
@@ -209,7 +217,7 @@ func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Hos
 			ownerDBs[owner] = append(ownerDBs[owner], db["name"])
 		}
 		for owner, dbs := range ownerDBs {
-			if err := pgCreateApplicationUser(ctx, p.sql, conn, owner, pgPass, dbs); err != nil {
+			if err := pgCreateApplicationUser(ctx, exec, conn, owner, pgPass, dbs); err != nil {
 				return fmt.Errorf("failed to create application user %s: %w", owner, err)
 			}
 		}
@@ -222,13 +230,17 @@ func (p *PostgresProvisioner) Initialize(ctx context.Context, host inventory.Hos
 // Only databases present in manifestDBs are seeded; others are skipped so
 // partial profiles (e.g. analytics-only without purser) don't fail.
 func (p *PostgresProvisioner) ApplyStaticSeeds(ctx context.Context, host inventory.Host, port int, user string, manifestDBs []string) error {
+	exec, err := p.sqlExecFor(host)
+	if err != nil {
+		return err
+	}
 	have := dbSet(manifestDBs)
 	for db, path := range staticSeeds {
 		if _, ok := have[db]; !ok {
 			continue
 		}
 		conn := ConnParams{Host: host.ExternalIP, Port: port, User: user, Database: db}
-		if err := execEmbeddedSQL(ctx, p.sql, conn, path); err != nil {
+		if err := execEmbeddedSQL(ctx, exec, conn, path); err != nil {
 			return fmt.Errorf("static seed %s: %w", db, err)
 		}
 	}
@@ -238,13 +250,17 @@ func (p *PostgresProvisioner) ApplyStaticSeeds(ctx context.Context, host invento
 // ApplyDemoSeeds applies demo data (sample tenant, user, stream) for development.
 // Only databases present in manifestDBs are seeded.
 func (p *PostgresProvisioner) ApplyDemoSeeds(ctx context.Context, host inventory.Host, port int, user string, manifestDBs []string) error {
+	exec, err := p.sqlExecFor(host)
+	if err != nil {
+		return err
+	}
 	have := dbSet(manifestDBs)
 	for db, path := range demoSeeds {
 		if _, ok := have[db]; !ok {
 			continue
 		}
 		conn := ConnParams{Host: host.ExternalIP, Port: port, User: user, Database: db}
-		if err := execEmbeddedSQL(ctx, p.sql, conn, path); err != nil {
+		if err := execEmbeddedSQL(ctx, exec, conn, path); err != nil {
 			return fmt.Errorf("demo seed %s: %w", db, err)
 		}
 	}

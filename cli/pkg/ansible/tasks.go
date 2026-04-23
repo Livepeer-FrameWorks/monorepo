@@ -33,6 +33,15 @@ type SystemdOpts struct {
 	When         string
 }
 
+// WaitForOpts configures TaskWaitForPort.
+type WaitForOpts struct {
+	Host    string
+	Delay   int
+	Timeout int
+	Sleep   int
+	When    string
+}
+
 // ShellOpts configures TaskShell. At least one of Creates, Removes, When, or
 // ChangedWhen must be set — TaskShell panics otherwise. This keeps the escape
 // hatch idempotent by construction. Extra passes rarely-needed shell-module
@@ -175,6 +184,35 @@ func TaskSystemdService(name string, opts SystemdOpts) Task {
 	return Task{
 		Name:   "systemd " + name,
 		Module: "ansible.builtin.systemd_service",
+		Args:   args,
+		When:   opts.When,
+	}
+}
+
+// TaskWaitForPort emits ansible.builtin.wait_for for listener readiness after
+// systemd_service. When Host is empty, Ansible defaults to 127.0.0.1, so
+// callers must pass the real listener address for services that are not meant
+// to be probed via loopback.
+func TaskWaitForPort(port int, opts WaitForOpts) Task {
+	args := map[string]any{
+		"port":  port,
+		"state": "started",
+	}
+	if opts.Host != "" {
+		args["host"] = opts.Host
+	}
+	if opts.Delay > 0 {
+		args["delay"] = opts.Delay
+	}
+	if opts.Timeout > 0 {
+		args["timeout"] = opts.Timeout
+	}
+	if opts.Sleep > 0 {
+		args["sleep"] = opts.Sleep
+	}
+	return Task{
+		Name:   "wait for port " + strconv.Itoa(port),
+		Module: "ansible.builtin.wait_for",
 		Args:   args,
 		When:   opts.When,
 	}

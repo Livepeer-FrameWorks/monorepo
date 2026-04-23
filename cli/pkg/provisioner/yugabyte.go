@@ -128,8 +128,9 @@ func NewYugabyteProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (Provisio
 	}
 	p := &YugabyteProvisioner{
 		BaseProvisioner: NewBaseProvisioner("yugabyte", pool),
-		sql:             &DirectExecutor{},
-		executor:        executor,
+		// sql stays nil in production — sqlExecFor builds an SSHExecutor
+		// per-host wired to /opt/yugabyte/bin/ysqlsh. Tests inject a mock.
+		executor: executor,
 	}
 	for _, opt := range opts {
 		opt.applyYugabyte(p)
@@ -382,12 +383,13 @@ func yugabyteProvisionTasks(params YugabyteNativeParams, artifactURL, artifactCh
 		// picks up the newly-written unit files.
 		ansible.TaskSystemdService("yb-master", ansible.SystemdOpts{State: "started", Enabled: ansible.BoolPtr(true), DaemonReload: true}),
 		ansible.TaskSystemdService("yb-tserver", ansible.SystemdOpts{State: "started", Enabled: ansible.BoolPtr(true)}),
+		ansible.TaskWaitForPort(params.YSQLPort, ansible.WaitForOpts{Host: "127.0.0.1", Timeout: 90, Sleep: 1}),
 	)
 	return tasks
 }
 
 // Validate checks YugabyteDB health on three levels: goss asserts host-level
-// structural state (services, ports, installed binary), then a YSQL query
+// structural state (services, installed binary), then a YSQL query
 // confirms the DB is accepting connections, then yb-admin reports tablet
 // server liveness. The goss step runs first so structural regressions are
 // flagged before we try the network round-trip.
@@ -403,9 +405,6 @@ func (y *YugabyteProvisioner) Validate(ctx context.Context, host inventory.Host,
 				"yb-master":  {Running: true, Enabled: true},
 				"yb-tserver": {Running: true, Enabled: true},
 			},
-			Ports: map[string]ansible.GossPort{
-				fmt.Sprintf("tcp:%d", port): {Listening: true},
-			},
 			Files: map[string]ansible.GossFile{
 				"/opt/yugabyte/bin/yb-master":      {Exists: true},
 				"/opt/yugabyte/.post_install_done": {Exists: true},
@@ -417,26 +416,46 @@ func (y *YugabyteProvisioner) Validate(ctx context.Context, host inventory.Host,
 		}
 	}
 
-	conn := ConnParams{Host: host.ExternalIP, Port: port, User: "yugabyte", Database: "yugabyte"}
-
-	var version string
-	if err := y.sql.QueryRow(ctx, conn, "SELECT version()", nil, &version); err != nil {
-		return fmt.Errorf("yugabyte YSQL query failed: %w", err)
+	clusterIP := host.ExternalIP
+	if clusterIP == "" {
+		clusterIP = "127.0.0.1"
 	}
-
-	if !strings.Contains(version, "YugabyteDB") {
-		return fmt.Errorf("unexpected version string (expected YugabyteDB): %s", version)
+	tasks := []ansible.Task{
+		waitForTCP("wait for ysql listener", clusterIP, port, 60),
+		shellValidate("yugabyte SELECT version()",
+			fmt.Sprintf(`sudo -u yugabyte /opt/yugabyte/bin/ysqlsh -h %s -p %d -U yugabyte -d yugabyte -tAc "SELECT version()" | grep -q YugabyteDB`,
+				clusterIP, port)),
 	}
-
-	tsResult, err := y.RunCommand(ctx, host,
-		"/opt/yugabyte/bin/yb-admin -master_addresses $(cat /opt/yugabyte/conf/master.conf | grep master_addresses | cut -d= -f2) list_all_tablet_servers 2>/dev/null | grep -c ALIVE || echo 0")
-	if err == nil && tsResult.ExitCode == 0 {
-		count := strings.TrimSpace(tsResult.Stdout)
-		fmt.Printf("  tablet servers alive: %s\n", count)
+	if err := runValidatePlaybook(ctx, y.executor, y.sshPool.DefaultKeyPath(), host, "yugabyte", tasks); err != nil {
+		return err
 	}
 
 	fmt.Printf("✓ YugabyteDB healthy on %s (YSQL port %d)\n", host.ExternalIP, port)
 	return nil
+}
+
+// sqlExecFor returns the SQLExecutor for YSQL operations on host. Tests
+// inject a mock via WithYugabyteSQLExecutor; production pipes SQL through
+// /opt/yugabyte/bin/ysqlsh on the host over SSH, so the CLI never needs
+// direct network access to YSQL.
+func (y *YugabyteProvisioner) sqlExecFor(host inventory.Host, config ServiceConfig) (SQLExecutor, error) {
+	if y.sql != nil {
+		return y.sql, nil
+	}
+	runner, err := y.GetRunner(host)
+	if err != nil {
+		return nil, fmt.Errorf("get ssh runner: %w", err)
+	}
+	pwd, _ := config.Metadata["yugabyte_password"].(string) //nolint:errcheck // zero value is the no-password path
+	return &SSHExecutor{
+		Runner:     runner,
+		BinaryPath: "/opt/yugabyte/bin/ysqlsh",
+		// YSQL's pg_hba is scram-sha-256 on all interfaces; there is no
+		// peer-auth shortcut, so we authenticate via PGPASSFILE when a
+		// password is configured.
+		UsePeerAuth: false,
+		Password:    pwd,
+	}, nil
 }
 
 // Initialize creates databases and application user via YSQL
@@ -444,6 +463,10 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 	port := config.Port
 	if port == 0 {
 		port = 5433
+	}
+	exec, err := y.sqlExecFor(host, config)
+	if err != nil {
+		return err
 	}
 
 	conn := ConnParams{Host: host.ExternalIP, Port: port, User: "yugabyte", Database: "yugabyte"}
@@ -458,7 +481,7 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		dbName := dbEntry["name"]
 		dbNames = append(dbNames, dbName)
 
-		created, err := CreateDatabaseIfNotExists(ctx, y.sql, conn, dbName, "")
+		created, err := CreateDatabaseIfNotExists(ctx, exec, conn, dbName, "")
 		if err != nil {
 			return fmt.Errorf("failed to create database %s: %w", dbName, err)
 		}
@@ -470,7 +493,7 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 		}
 
 		dbConn := ConnParams{Host: host.ExternalIP, Port: port, User: "yugabyte", Database: dbName}
-		if err := pgInitializeDatabase(ctx, y.sql, dbConn, dbName); err != nil {
+		if err := pgInitializeDatabase(ctx, exec, dbConn, dbName); err != nil {
 			return fmt.Errorf("failed to initialize database %s: %w", dbName, err)
 		}
 	}
@@ -486,7 +509,7 @@ func (y *YugabyteProvisioner) Initialize(ctx context.Context, host inventory.Hos
 			ownerDBs[owner] = append(ownerDBs[owner], db["name"])
 		}
 		for owner, dbs := range ownerDBs {
-			if err := pgCreateApplicationUser(ctx, y.sql, conn, owner, pgPass, dbs); err != nil {
+			if err := pgCreateApplicationUser(ctx, exec, conn, owner, pgPass, dbs); err != nil {
 				return fmt.Errorf("failed to create application user %s: %w", owner, err)
 			}
 		}

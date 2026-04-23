@@ -282,30 +282,37 @@ func (c *CaddyProvisioner) provisionNative(ctx context.Context, host inventory.H
 	return nil
 }
 
-// Validate runs goss for structural state (service running, ports listening)
-// then checks the admin API and public listeners. The public-port checks are
-// TCP-only because edge Caddy commonly redirects :80 -> :443 and config-less
-// templates may not serve /health.
+// Validate checks native package state via goss, then checks the admin API and
+// public listeners.
 func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	if _, remoteArch, err := c.DetectRemoteArch(ctx, host); err == nil {
-		spec := ansible.RenderGossYAML(ansible.GossSpec{
-			Ports: map[string]ansible.GossPort{
-				"tcp:2019": {Listening: true},
-				"tcp:80":   {Listening: true},
-				"tcp:443":  {Listening: true},
-			},
-		})
-		if gossErr := runGossValidate(ctx, c.executor, c.pool.DefaultKeyPath(), host,
-			"caddy", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
-			return fmt.Errorf("caddy goss validate failed: %w", gossErr)
+	if config.Mode == "native" {
+		if _, remoteArch, err := c.DetectRemoteArch(ctx, host); err == nil {
+			spec := ansible.RenderGossYAML(ansible.GossSpec{
+				Services: map[string]ansible.GossService{
+					"caddy": {Running: true, Enabled: true},
+				},
+				Files: map[string]ansible.GossFile{
+					"/etc/caddy/Caddyfile": {Exists: true},
+				},
+			})
+			if gossErr := runGossValidate(ctx, c.executor, c.pool.DefaultKeyPath(), host,
+				"caddy", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+				return fmt.Errorf("caddy goss validate failed: %w", gossErr)
+			}
 		}
 	}
 
-	admin := &health.HTTPChecker{Path: "/health", Timeout: 5}
-	if result := admin.Check(host.ExternalIP, 2019); !result.OK {
-		return fmt.Errorf("caddy admin API health check failed: %s", result.Error)
+	// Admin API is 127.0.0.1 only; validate via uri from inside the host.
+	adminTasks := []ansible.Task{
+		waitForTCP("wait for caddy admin", "127.0.0.1", 2019, 10),
+		uriOK("caddy admin /config/", "http://127.0.0.1:2019/config/", 200),
+	}
+	if err := runValidatePlaybook(ctx, c.executor, c.pool.DefaultKeyPath(), host, "caddy-admin", adminTasks); err != nil {
+		return err
 	}
 
+	// Public 80/443 is deliberately internet-facing; external TCP from the
+	// CLI is the correct network plane for those.
 	publicHTTP := &health.TCPChecker{Timeout: 5 * time.Second}
 	if result := publicHTTP.Check(host.ExternalIP, 80); !result.OK {
 		return fmt.Errorf("caddy public HTTP port check failed: %s", result.Error)

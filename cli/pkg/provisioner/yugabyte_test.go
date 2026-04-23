@@ -149,6 +149,25 @@ func TestYugabyteProvisionTasks_systemdStartsMasterBeforeTServer(t *testing.T) {
 	}
 }
 
+func TestYugabyteProvisionTasks_waitsOnLoopback(t *testing.T) {
+	t.Parallel()
+	params := YugabyteNativeParams{
+		NodeIP:   "10.0.0.7",
+		YSQLPort: 5433,
+	}
+	tasks := yugabyteProvisionTasks(params, "https://x/a.tgz", "sha256:aa", testTimesyncSpec)
+	for _, task := range tasks {
+		if task.Module != "ansible.builtin.wait_for" {
+			continue
+		}
+		if task.Args["host"] != "127.0.0.1" {
+			t.Fatalf("wait_for host = %v, want 127.0.0.1", task.Args["host"])
+		}
+		return
+	}
+	t.Fatal("expected wait_for task in yugabyte provision tasks")
+}
+
 func TestYugabyteProvisionTasks_configsMatchParams(t *testing.T) {
 	t.Parallel()
 	params := YugabyteNativeParams{

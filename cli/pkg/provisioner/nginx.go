@@ -384,25 +384,23 @@ func nginxPackageNames(family string, requiresGeoIP bool) []string {
 	}
 }
 
-// Validate runs goss (service + ports + config file present), then the
-// /health HTTP probe, then TCP on 80/443.
+// Validate runs goss in native mode, then the /health HTTP probe and TLS port
+// check.
 func (n *NginxProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	if _, remoteArch, err := n.DetectRemoteArch(ctx, host); err == nil {
-		spec := ansible.RenderGossYAML(ansible.GossSpec{
-			Services: map[string]ansible.GossService{
-				"nginx": {Running: true, Enabled: true},
-			},
-			Ports: map[string]ansible.GossPort{
-				"tcp:80":  {Listening: true},
-				"tcp:443": {Listening: true},
-			},
-			Files: map[string]ansible.GossFile{
-				"/etc/nginx/nginx.conf": {Exists: true},
-			},
-		})
-		if gossErr := runGossValidate(ctx, n.executor, n.pool.DefaultKeyPath(), host,
-			"nginx", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
-			return fmt.Errorf("nginx goss validate failed: %w", gossErr)
+	if config.Mode == "native" {
+		if _, remoteArch, err := n.DetectRemoteArch(ctx, host); err == nil {
+			spec := ansible.RenderGossYAML(ansible.GossSpec{
+				Services: map[string]ansible.GossService{
+					"nginx": {Running: true, Enabled: true},
+				},
+				Files: map[string]ansible.GossFile{
+					"/etc/nginx/nginx.conf": {Exists: true},
+				},
+			})
+			if gossErr := runGossValidate(ctx, n.executor, n.pool.DefaultKeyPath(), host,
+				"nginx", platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch, spec); gossErr != nil {
+				return fmt.Errorf("nginx goss validate failed: %w", gossErr)
+			}
 		}
 	}
 

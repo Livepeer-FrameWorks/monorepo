@@ -12,7 +12,6 @@ import (
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -475,8 +474,8 @@ func (p *LivepeerSignerProvisioner) Validate(ctx context.Context, host inventory
 	}
 	if _, remoteArch, err := p.DetectRemoteArch(ctx, host); err == nil && config.Mode == "native" {
 		spec := ansible.RenderGossYAML(ansible.GossSpec{
-			Ports: map[string]ansible.GossPort{
-				fmt.Sprintf("tcp:%d", port): {Listening: true},
+			Services: map[string]ansible.GossService{
+				"frameworks-livepeer-signer": {Running: true, Enabled: true},
 			},
 			Files: map[string]ansible.GossFile{
 				"/opt/frameworks/livepeer-signer/livepeer": {Exists: true},
@@ -487,11 +486,12 @@ func (p *LivepeerSignerProvisioner) Validate(ctx context.Context, host inventory
 			return fmt.Errorf("livepeer-signer goss validate failed: %w", gossErr)
 		}
 	}
-	checker := &health.HTTPChecker{Path: "/status", Timeout: 10}
-	if result := checker.Check(host.ExternalIP, port); !result.OK {
-		return fmt.Errorf("livepeer-signer health check failed: %s", result.Error)
+	url := fmt.Sprintf("http://127.0.0.1:%d/status", port)
+	tasks := []ansible.Task{
+		waitForTCP("wait for livepeer-signer listener", "127.0.0.1", port, 30),
+		uriOK("livepeer-signer /status", url, 200),
 	}
-	return nil
+	return runValidatePlaybook(ctx, p.executor, p.sshPool.DefaultKeyPath(), host, "livepeer-signer", tasks)
 }
 
 func (p *LivepeerSignerProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {

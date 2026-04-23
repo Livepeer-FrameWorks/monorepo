@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -19,12 +19,20 @@ const defaultChatwootImage = "chatwoot/chatwoot:v3.14.0"
 // ChatwootProvisioner provisions the self-hosted Chatwoot support chat (app + Sidekiq worker).
 type ChatwootProvisioner struct {
 	*BaseProvisioner
+	pool     *ssh.Pool
+	executor *ansible.Executor
 }
 
 // NewChatwootProvisioner creates a new Chatwoot provisioner.
 func NewChatwootProvisioner(pool *ssh.Pool) *ChatwootProvisioner {
+	executor, err := ansible.NewExecutor("")
+	if err != nil {
+		panic(fmt.Sprintf("create ansible executor for chatwoot: %v", err))
+	}
 	return &ChatwootProvisioner{
 		BaseProvisioner: NewBaseProvisioner("chatwoot", pool),
+		pool:            pool,
+		executor:        executor,
 	}
 }
 
@@ -269,19 +277,16 @@ networks:
 
 // Validate checks if Chatwoot is healthy.
 func (c *ChatwootProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	checker := &health.HTTPChecker{
-		Path:    "/api",
-		Timeout: 10,
-	}
 	port := config.Port
 	if port == 0 {
 		port = 18092
 	}
-	result := checker.Check(host.ExternalIP, port)
-	if !result.OK {
-		return fmt.Errorf("chatwoot health check failed: %s", result.Error)
+	url := fmt.Sprintf("http://127.0.0.1:%d/api", port)
+	tasks := []ansible.Task{
+		waitForTCP("wait for chatwoot listener", "127.0.0.1", port, 30),
+		uriOK("chatwoot /api", url, 200),
 	}
-	return nil
+	return runValidatePlaybook(ctx, c.executor, c.pool.DefaultKeyPath(), host, "chatwoot", tasks)
 }
 
 // Initialize is a no-op — Rails migrations run on container startup.

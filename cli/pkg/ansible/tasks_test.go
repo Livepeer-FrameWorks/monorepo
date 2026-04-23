@@ -161,6 +161,43 @@ func TestTaskSystemdService_nilEnabledOmitsKey(t *testing.T) {
 	}
 }
 
+func TestTaskWaitForPort_defaultsToStarted(t *testing.T) {
+	t.Parallel()
+	task := TaskWaitForPort(9093, WaitForOpts{})
+	if task.Module != "ansible.builtin.wait_for" {
+		t.Fatalf("wrong module: %q", task.Module)
+	}
+	if task.Args["port"] != 9093 {
+		t.Fatalf("port not propagated: %v", task.Args["port"])
+	}
+	if task.Args["state"] != "started" {
+		t.Fatalf("state must default to started; got %v", task.Args["state"])
+	}
+	if _, ok := task.Args["host"]; ok {
+		t.Fatal("host key must be absent when Host is empty")
+	}
+}
+
+func TestTaskWaitForPort_optionalArgsPropagate(t *testing.T) {
+	t.Parallel()
+	task := TaskWaitForPort(8123, WaitForOpts{
+		Host:    "0.0.0.0",
+		Delay:   2,
+		Timeout: 30,
+		Sleep:   1,
+		When:    "service_ready | default(true)",
+	})
+	if task.Args["host"] != "0.0.0.0" {
+		t.Fatalf("host not propagated: %v", task.Args["host"])
+	}
+	if task.Args["delay"] != 2 || task.Args["timeout"] != 30 || task.Args["sleep"] != 1 {
+		t.Fatalf("delay/timeout/sleep not propagated: %+v", task.Args)
+	}
+	if task.When != "service_ready | default(true)" {
+		t.Fatalf("when not propagated: %q", task.When)
+	}
+}
+
 func TestTaskShell_panicsWithoutGuard(t *testing.T) {
 	t.Parallel()
 	defer func() {

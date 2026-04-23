@@ -552,6 +552,16 @@ func ArtifactsForClickHouse(host inventory.Host, config ServiceConfig) []artifac
 	}
 	return []artifacts.DesiredArtifact{
 		{
+			Path:    "/etc/clickhouse-server/config.d/listen-host.xml",
+			Kind:    artifacts.KindFileHash,
+			Content: BuildClickHouseListenHostConfig(),
+		},
+		{
+			Path:    "/etc/systemd/system/clickhouse-server.service",
+			Kind:    artifacts.KindFileHash,
+			Content: BuildClickHouseSystemdUnit(),
+		},
+		{
 			Path:    "/etc/clickhouse-server/users.xml",
 			Kind:    artifacts.KindFileHash,
 			Content: BuildClickHouseUsersXML(),

@@ -456,9 +456,27 @@ func (p *PrivateerProvisioner) configureDNS(ctx context.Context, host inventory.
 	return nil
 }
 
-// Validate runs goss (service + installed binary present) then the
-// WaitForService poll.
+// Validate asserts the privateer systemd unit is running via the standard
+// ansible.builtin.service_facts lookup, then goss structural backstop.
 func (p *PrivateerProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	tasks := []ansible.Task{
+		{
+			Name:   "gather service facts",
+			Module: "ansible.builtin.service_facts",
+		},
+		{
+			Name:   "assert privateer service running",
+			Module: "ansible.builtin.assert",
+			Args: map[string]any{
+				"that":     []string{"ansible_facts.services['privateer.service'].state == 'running'"},
+				"fail_msg": "privateer.service not running on host",
+				"quiet":    true,
+			},
+		},
+	}
+	if err := runValidatePlaybook(ctx, p.executor, p.sshPool.DefaultKeyPath(), host, "privateer", tasks); err != nil {
+		return err
+	}
 	if _, remoteArch, err := p.DetectRemoteArch(ctx, host); err == nil {
 		spec := ansible.RenderGossYAML(ansible.GossSpec{
 			Services: map[string]ansible.GossService{
@@ -473,7 +491,7 @@ func (p *PrivateerProvisioner) Validate(ctx context.Context, host inventory.Host
 			return fmt.Errorf("privateer goss validate failed: %w", gossErr)
 		}
 	}
-	return p.WaitForService(ctx, host, "privateer", 10)
+	return nil
 }
 
 // Initialize - no op

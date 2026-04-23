@@ -3,10 +3,10 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	dbsql "frameworks/pkg/database/sql"
@@ -27,8 +27,9 @@ func NewClickHouseProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (*Click
 	}
 	p := &ClickHouseProvisioner{
 		BaseProvisioner: NewBaseProvisioner("clickhouse", pool),
-		ch:              &DirectCHExecutor{},
-		executor:        executor,
+		// ch stays nil in production — chExecFor builds an SSHCHExecutor
+		// per-host wired to clickhouse-client. Tests inject a mock.
+		executor: executor,
 	}
 	for _, opt := range opts {
 		opt.applyClickHouse(p)
@@ -39,6 +40,33 @@ func NewClickHouseProvisioner(pool *ssh.Pool, opts ...ProvisionerOption) (*Click
 // Detect checks if ClickHouse is installed and running
 func (c *ClickHouseProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
 	return c.CheckExists(ctx, host, "clickhouse")
+}
+
+// Cleanup stops the managed ClickHouse unit during rollback.
+func (c *ClickHouseProvisioner) Cleanup(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	if config.Mode != "native" {
+		return c.BaseProvisioner.Cleanup(ctx, host, config)
+	}
+
+	attempts := []string{
+		"systemctl stop clickhouse-server",
+		"systemctl kill clickhouse-server",
+	}
+
+	var errMessages []string
+	for _, cmd := range attempts {
+		result, err := c.RunCommand(ctx, host, cmd)
+		if err == nil && result.ExitCode == 0 {
+			return nil
+		}
+		if err != nil {
+			errMessages = append(errMessages, fmt.Sprintf("%s: %v", cmd, err))
+		} else if result != nil && result.ExitCode != 0 {
+			errMessages = append(errMessages, fmt.Sprintf("%s: %s", cmd, result.Stderr))
+		}
+	}
+
+	return fmt.Errorf("cleanup failed for clickhouse: %s", strings.Join(errMessages, "; "))
 }
 
 // Provision installs ClickHouse using declarative Ansible tasks. Every distro
@@ -70,11 +98,42 @@ func (c *ClickHouseProvisioner) Provision(ctx context.Context, host inventory.Ho
 	}
 
 	tasks := clickhouseInstallTasks(artifact.URL, artifact.Checksum)
+	listenHostTask := ansible.Task{
+		Name:   "copy /etc/clickhouse-server/config.d/listen-host.xml",
+		Module: "ansible.builtin.copy",
+		Args: map[string]any{
+			"dest":    "/etc/clickhouse-server/config.d/listen-host.xml",
+			"content": string(BuildClickHouseListenHostConfig()),
+			"mode":    "0644",
+		},
+		Register: "clickhouse_listen_host",
+	}
+	unitTask := ansible.Task{
+		Name:   "copy /etc/systemd/system/clickhouse-server.service",
+		Module: "ansible.builtin.copy",
+		Args: map[string]any{
+			"dest":    "/etc/systemd/system/clickhouse-server.service",
+			"content": string(BuildClickHouseSystemdUnit()),
+			"mode":    "0644",
+		},
+		Register: "clickhouse_unit",
+	}
+	tasks = append(tasks, listenHostTask, unitTask)
+	port := config.Port
+	if port == 0 {
+		port = 9000
+	}
 	tasks = append(tasks, ansible.TaskSystemdService("clickhouse-server", ansible.SystemdOpts{
 		State:        "started",
 		Enabled:      ansible.BoolPtr(true),
 		DaemonReload: true,
 	}))
+	tasks = append(tasks, ansible.TaskSystemdService("clickhouse-server", ansible.SystemdOpts{
+		State:        "restarted",
+		DaemonReload: true,
+		When:         "clickhouse_install is changed or clickhouse_listen_host is changed or clickhouse_unit is changed",
+	}))
+	tasks = append(tasks, ansible.TaskWaitForPort(port, ansible.WaitForOpts{Host: "127.0.0.1", Timeout: 60, Sleep: 1}))
 
 	playbook := &ansible.Playbook{
 		Name:  "Provision ClickHouse",
@@ -115,13 +174,20 @@ func (c *ClickHouseProvisioner) Provision(ctx context.Context, host inventory.Ho
 // (release-manifest-pinned). Tarball wraps a single
 // `clickhouse-common-static-<version>-<arch>/` top dir; --strip-components=1
 // drops it so the inner usr/bin/clickhouse lands at
-// /tmp/clickhouse-install/usr/bin/clickhouse. Works identically on Debian,
-// RHEL, and Arch — `clickhouse install` bootstraps everything distro-specific.
+// /tmp/clickhouse-install/usr/bin/clickhouse. The installer bootstraps
+// users, configs, and data/log directories; the repo owns the systemd unit.
 func clickhouseInstallTasks(artifactURL, artifactChecksum string) []ansible.Task {
 	// Sentinels rotate with the pinned artifact identity so version bumps
 	// trigger re-extract + re-install instead of silently skipping.
 	extractSentinel := ansible.ArtifactSentinel("/tmp/clickhouse-install", artifactChecksum+artifactURL)
 	installSentinel := ansible.ArtifactSentinel("/var/lib/clickhouse", artifactChecksum+artifactURL)
+	installTask := ansible.TaskShell(
+		"/tmp/clickhouse-install/usr/bin/clickhouse install --noninteractive --user clickhouse --group clickhouse && "+
+			"install -d -o clickhouse -g clickhouse /var/lib/clickhouse && "+
+			"touch "+installSentinel+" && chown clickhouse:clickhouse "+installSentinel,
+		ansible.ShellOpts{Creates: installSentinel},
+	)
+	installTask.Register = "clickhouse_install"
 	return []ansible.Task{
 		ansible.TaskPackage("curl", ansible.PackagePresent),
 		ansible.TaskPackage("tar", ansible.PackagePresent),
@@ -137,27 +203,20 @@ func clickhouseInstallTasks(artifactURL, artifactChecksum string) []ansible.Task
 		ansible.TaskUnarchive("/tmp/clickhouse.tgz", "/tmp/clickhouse-install", extractSentinel,
 			ansible.UnarchiveOpts{StripComponents: 1}),
 		ansible.TaskShell("touch "+extractSentinel, ansible.ShellOpts{Creates: extractSentinel}),
-		// Vendor's `clickhouse install` bootstraps /etc, /var/lib, users, and
-		// the systemd unit. Version-keyed sentinel so a pin bump re-runs it.
-		ansible.TaskShell(
-			"/tmp/clickhouse-install/usr/bin/clickhouse install --noninteractive --user clickhouse --group clickhouse && "+
-				"install -d -o clickhouse -g clickhouse /var/lib/clickhouse && "+
-				"touch "+installSentinel+" && chown clickhouse:clickhouse "+installSentinel,
-			ansible.ShellOpts{Creates: installSentinel},
-		),
+		// Vendor's `clickhouse install` bootstraps /etc, /var/lib, log/pid
+		// dirs, and the clickhouse user/group. Version-keyed sentinel so a pin
+		// bump re-runs it.
+		installTask,
 	}
 }
 
-// Validate checks ClickHouse structural state via goss, then the HTTP
-// health endpoint.
+// Validate checks ClickHouse structural state via goss, then the native
+// protocol endpoint.
 func (c *ClickHouseProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	if _, remoteArch, err := c.DetectRemoteArch(ctx, host); err == nil {
 		spec := ansible.RenderGossYAML(ansible.GossSpec{
 			Services: map[string]ansible.GossService{
 				"clickhouse-server": {Running: true, Enabled: true},
-			},
-			Ports: map[string]ansible.GossPort{
-				fmt.Sprintf("tcp:%d", config.Port): {Listening: true},
 			},
 			Files: map[string]ansible.GossFile{
 				"/usr/bin/clickhouse-server": {Exists: true},
@@ -169,25 +228,42 @@ func (c *ClickHouseProvisioner) Validate(ctx context.Context, host inventory.Hos
 		}
 	}
 
-	checker := &health.ClickHouseChecker{
-		User:     "default",
-		Password: "",
-		Database: "default",
+	clusterIP := host.ExternalIP
+	if clusterIP == "" {
+		clusterIP = "127.0.0.1"
 	}
-
-	result := checker.Check(host.ExternalIP, config.Port)
-	if !result.OK {
-		return fmt.Errorf("clickhouse health check failed: %s", result.Error)
+	tasks := []ansible.Task{
+		waitForTCP("wait for clickhouse port", clusterIP, config.Port, 30),
+		commandOK("clickhouse SELECT 1",
+			"clickhouse-client", "--host", clusterIP, "--port", fmt.Sprintf("%d", config.Port),
+			"--user", "default", "--query", "SELECT 1"),
 	}
-
-	return nil
+	return runValidatePlaybook(ctx, c.executor, c.sshPool.DefaultKeyPath(), host, "clickhouse", tasks)
 }
 
-// Initialize creates databases and tables.
-// Connects as "default" with no password because this runs before Configure
-// sets up authenticated users. Callers must ensure Initialize runs before
-// Configure to avoid an unauthenticated-access window after auth is applied.
+// chExecFor returns the CHExecutor for ClickHouse operations on host. Tests
+// inject a mock via WithCHExecutor; production pipes SQL through
+// clickhouse-client on the host over SSH.
+func (c *ClickHouseProvisioner) chExecFor(host inventory.Host) (CHExecutor, error) {
+	if c.ch != nil {
+		return c.ch, nil
+	}
+	runner, err := c.GetRunner(host)
+	if err != nil {
+		return nil, fmt.Errorf("get ssh runner: %w", err)
+	}
+	return &SSHCHExecutor{Runner: runner}, nil
+}
+
+// Initialize creates databases and tables. Connects as "default" with no
+// password because this runs before Configure sets up authenticated users.
+// Callers must ensure Initialize runs before Configure to avoid an
+// unauthenticated-access window after auth is applied.
 func (c *ClickHouseProvisioner) Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	exec, err := c.chExecFor(host)
+	if err != nil {
+		return err
+	}
 	databases, ok := config.Metadata["databases"].([]string)
 	if !ok {
 		databases = []string{"periscope"}
@@ -195,18 +271,18 @@ func (c *ClickHouseProvisioner) Initialize(ctx context.Context, host inventory.H
 
 	for _, dbName := range databases {
 		query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName)
-		if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, "default", "", "default", query); err != nil {
+		if err := exec.Exec(ctx, host.ExternalIP, config.Port, "default", "", "default", query); err != nil {
 			return fmt.Errorf("failed to create database %s: %w", dbName, err)
 		}
 
 		fmt.Printf("✓ Database %s ready\n", dbName)
 
 		if dbName == "periscope" {
-			sqlContent, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
-			if err != nil {
-				return fmt.Errorf("failed to read embedded ClickHouse schema: %w", err)
+			sqlContent, readErr := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+			if readErr != nil {
+				return fmt.Errorf("failed to read embedded ClickHouse schema: %w", readErr)
 			}
-			if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, "default", "", "periscope", string(sqlContent)); err != nil {
+			if err := exec.Exec(ctx, host.ExternalIP, config.Port, "default", "", "periscope", string(sqlContent)); err != nil {
 				return fmt.Errorf("failed to initialize periscope database: %w", err)
 			}
 			fmt.Println("✓ ClickHouse periscope schema initialized")
@@ -307,6 +383,37 @@ func BuildClickHouseUsersXML() []byte {
 `)
 }
 
+func clickhouseSystemdUnitSpec() ansible.SystemdUnitSpec {
+	return ansible.SystemdUnitSpec{
+		Description: "ClickHouse Server",
+		After:       []string{"network-online.target"},
+		Wants:       []string{"network-online.target"},
+		Type:        "simple",
+		User:        "clickhouse",
+		Group:       "clickhouse",
+		WorkingDir:  "/var/lib/clickhouse",
+		ExecStart:   "/usr/bin/clickhouse-server --config-file=/etc/clickhouse-server/config.xml --pid-file=/var/run/clickhouse-server/clickhouse-server.pid",
+		Restart:     "on-failure",
+		RestartSec:  5,
+		LimitNOFILE: "262144",
+	}
+}
+
+// BuildClickHouseSystemdUnit returns the clickhouse-server.service bytes.
+func BuildClickHouseSystemdUnit() []byte {
+	return []byte(ansible.RenderSystemdUnit(clickhouseSystemdUnitSpec()))
+}
+
+// BuildClickHouseListenHostConfig returns the config.d override that exposes
+// ClickHouse on all interfaces instead of the vendor default loopback-only
+// binding from config.xml.
+func BuildClickHouseListenHostConfig() []byte {
+	return []byte(`<clickhouse>
+    <listen_host>0.0.0.0</listen_host>
+</clickhouse>
+`)
+}
+
 // BuildClickHousePasswordsDropIn returns the systemd drop-in that exposes
 // the CLICKHOUSE_PASSWORD and CLICKHOUSE_READONLY_PASSWORD env vars to the
 // clickhouse-server service.
@@ -332,6 +439,9 @@ func (c *ClickHouseProvisioner) Configure(ctx context.Context, host inventory.Ho
 	passwordsDropIn := string(BuildClickHousePasswordsDropIn(password, readonlyPassword))
 
 	tasks := []ansible.Task{
+		ansible.TaskCopy("/etc/clickhouse-server/config.d/listen-host.xml", string(BuildClickHouseListenHostConfig()), ansible.CopyOpts{
+			Owner: "clickhouse", Group: "clickhouse", Mode: "0644",
+		}),
 		ansible.TaskCopy("/etc/clickhouse-server/users.xml", usersXML, ansible.CopyOpts{
 			Owner: "clickhouse", Group: "clickhouse", Mode: "0640",
 		}),
@@ -387,6 +497,10 @@ func (c *ClickHouseProvisioner) Configure(ctx context.Context, host inventory.Ho
 // Uses the "frameworks" user when a password is provided in config.Metadata["clickhouse_password"],
 // falling back to "default" (unauthenticated) for local/unconfigured clusters.
 func (c *ClickHouseProvisioner) ApplyDemoSeeds(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	exec, err := c.chExecFor(host)
+	if err != nil {
+		return err
+	}
 	sqlContent, err := dbsql.Content.ReadFile("seeds/demo/clickhouse_demo_data.sql")
 	if err != nil {
 		return fmt.Errorf("read clickhouse demo seed: %w", err)
@@ -399,7 +513,7 @@ func (c *ClickHouseProvisioner) ApplyDemoSeeds(ctx context.Context, host invento
 		password = pw
 	}
 
-	if err := c.ch.Exec(ctx, host.ExternalIP, config.Port, username, password, "periscope", string(sqlContent)); err != nil {
+	if err := exec.Exec(ctx, host.ExternalIP, config.Port, username, password, "periscope", string(sqlContent)); err != nil {
 		return fmt.Errorf("apply clickhouse demo seed: %w", err)
 	}
 	return nil

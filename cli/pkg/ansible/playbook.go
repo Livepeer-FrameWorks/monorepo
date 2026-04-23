@@ -649,9 +649,8 @@ func kafkaCommonInstallTasks(artifactURL, artifactChecksum, configDir, logsDir s
 	// Sentinel path rotates with the pinned artifact identity, so both the
 	// unarchive skip and the touch-marker shell trigger on a version bump.
 	sentinel := ArtifactSentinel("/opt/kafka", artifactChecksum+artifactURL)
-	return []Task{
+	tasks := []Task{
 		TaskPackage("curl", PackagePresent),
-		TaskPackage(javaSpec.PackageName, PackagePresent),
 		{
 			Name:   "ensure kafka group",
 			Module: "ansible.builtin.group",
@@ -692,6 +691,8 @@ func kafkaCommonInstallTasks(artifactURL, artifactChecksum, configDir, logsDir s
 		TaskShell("touch "+sentinel+" && chown kafka:kafka "+sentinel,
 			ShellOpts{Creates: sentinel}),
 	}
+	tasks = append(tasks[:1], append(JavaRuntimeTasks(javaSpec), tasks[1:]...)...)
+	return tasks
 }
 
 // GenerateKafkaKRaftPlaybook creates an Ansible playbook for Kafka in KRaft mode (no ZooKeeper).
@@ -737,8 +738,20 @@ func GenerateKafkaKRaftPlaybook(version string, nodeID int, host string, port in
 			fmt.Sprintf(`/opt/kafka/bin/kafka-storage.sh format -t %q -c /etc/kafka/server.properties`, clusterID),
 			ShellOpts{Creates: "/var/lib/kafka/logs/meta.properties"},
 		),
+		Task{
+			Name:   "ensure kafka log dir ownership",
+			Module: "ansible.builtin.file",
+			Args: map[string]any{
+				"path":    "/var/lib/kafka/logs",
+				"state":   "directory",
+				"owner":   "kafka",
+				"group":   "kafka",
+				"recurse": true,
+			},
+		},
 		TaskCopy("/etc/systemd/system/frameworks-kafka.service", brokerUnit, CopyOpts{Mode: "0644"}),
 		TaskSystemdService("frameworks-kafka", SystemdOpts{State: "started", Enabled: BoolPtr(true), DaemonReload: true}),
+		TaskWaitForPort(port, WaitForOpts{Host: "127.0.0.1", Timeout: 60, Sleep: 1}),
 	)
 
 	playbook.AddPlay(Play{
@@ -773,8 +786,20 @@ func GenerateKafkaControllerPlaybook(version string, nodeID int, host string, co
 			fmt.Sprintf(`/opt/kafka/bin/kafka-storage.sh format --cluster-id %q --initial-controllers %q --config /etc/kafka-controller/server.properties`, clusterID, initialControllers),
 			ShellOpts{Creates: "/var/lib/kafka-controller/logs/meta.properties"},
 		),
+		Task{
+			Name:   "ensure kafka controller log dir ownership",
+			Module: "ansible.builtin.file",
+			Args: map[string]any{
+				"path":    "/var/lib/kafka-controller/logs",
+				"state":   "directory",
+				"owner":   "kafka",
+				"group":   "kafka",
+				"recurse": true,
+			},
+		},
 		TaskCopy("/etc/systemd/system/frameworks-kafka-controller.service", ctrlUnit, CopyOpts{Mode: "0644"}),
 		TaskSystemdService("frameworks-kafka-controller", SystemdOpts{State: "started", Enabled: BoolPtr(true), DaemonReload: true}),
+		TaskWaitForPort(controllerPort, WaitForOpts{Host: "127.0.0.1", Timeout: 60, Sleep: 1}),
 	)
 
 	playbook.AddPlay(Play{
@@ -823,8 +848,20 @@ func GenerateKafkaBrokerPlaybook(version string, nodeID int, host string, port i
 			fmt.Sprintf(`/opt/kafka/bin/kafka-storage.sh format --cluster-id %q --no-initial-controllers --config /etc/kafka/server.properties`, clusterID),
 			ShellOpts{Creates: "/var/lib/kafka/logs/meta.properties"},
 		),
+		Task{
+			Name:   "ensure kafka log dir ownership",
+			Module: "ansible.builtin.file",
+			Args: map[string]any{
+				"path":    "/var/lib/kafka/logs",
+				"state":   "directory",
+				"owner":   "kafka",
+				"group":   "kafka",
+				"recurse": true,
+			},
+		},
 		TaskCopy("/etc/systemd/system/frameworks-kafka.service", brokerUnit, CopyOpts{Mode: "0644"}),
 		TaskSystemdService("frameworks-kafka", SystemdOpts{State: "started", Enabled: BoolPtr(true), DaemonReload: true}),
+		TaskWaitForPort(port, WaitForOpts{Host: "127.0.0.1", Timeout: 60, Sleep: 1}),
 	)
 
 	playbook.AddPlay(Play{

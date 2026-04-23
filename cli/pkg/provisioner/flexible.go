@@ -11,7 +11,6 @@ import (
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -265,6 +264,9 @@ func (f *FlexibleProvisioner) provisionNative(ctx context.Context, host inventor
 			fmt.Sprintf("frameworks-%s", f.serviceName),
 			ansible.SystemdOpts{State: "started", Enabled: ansible.BoolPtr(true), DaemonReload: true},
 		))
+		if f.port > 0 {
+			tasks = append(tasks, ansible.TaskWaitForPort(f.port, ansible.WaitForOpts{Timeout: 60, Sleep: 1}))
+		}
 	} else {
 		// DeferStart still needs daemon-reload so the unit file is live; leave
 		// start/enable to the operator (or a later apply with DeferStart=false).
@@ -330,9 +332,8 @@ func (f *FlexibleProvisioner) writeServiceEnvFile(ctx context.Context, host inve
 	return nil
 }
 
-// Validate runs goss structural checks (native mode only — docker-mode state
-// lives inside the container and doesn't map cleanly to host-level goss
-// assertions) then the HTTP health probe.
+// Validate runs goss structural checks in native mode, then the HTTP health
+// probe.
 func (f *FlexibleProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	if config.Mode == "native" {
 		if _, remoteArch, err := f.DetectRemoteArch(ctx, host); err == nil {
@@ -343,11 +344,6 @@ func (f *FlexibleProvisioner) Validate(ctx context.Context, host inventory.Host,
 				Files: map[string]ansible.GossFile{
 					fmt.Sprintf("/opt/frameworks/%s/%s", f.serviceName, f.serviceName): {Exists: true},
 				},
-			}
-			if f.port > 0 {
-				gossSpec.Ports = map[string]ansible.GossPort{
-					fmt.Sprintf("tcp:%d", f.port): {Listening: true},
-				}
 			}
 			if gossErr := runGossValidate(ctx, f.executor, f.sshPool.DefaultKeyPath(), host,
 				f.serviceName, platformChannelFromMetadata(config.Metadata), config.Metadata, remoteArch,
@@ -360,11 +356,12 @@ func (f *FlexibleProvisioner) Validate(ctx context.Context, host inventory.Host,
 	if f.port == 0 {
 		return nil
 	}
-	checker := &health.HTTPChecker{Path: f.healthPath, Timeout: 5}
-	if result := checker.Check(host.ExternalIP, f.port); !result.OK {
-		return fmt.Errorf("%s health check failed: %s", f.serviceName, result.Error)
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", f.port, f.healthPath)
+	tasks := []ansible.Task{
+		waitForTCP("wait for "+f.serviceName+" listener", "127.0.0.1", f.port, 10),
+		uriOK(f.serviceName+" /health", url, 200),
 	}
-	return nil
+	return runValidatePlaybook(ctx, f.executor, f.sshPool.DefaultKeyPath(), host, f.serviceName, tasks)
 }
 
 // Initialize is a no-op for most application services

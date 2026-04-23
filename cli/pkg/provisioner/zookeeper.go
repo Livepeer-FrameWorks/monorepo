@@ -9,7 +9,6 @@ import (
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
-	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 )
@@ -204,7 +203,7 @@ func (z *ZookeeperProvisioner) provisionNative(ctx context.Context, host invento
 		return fmt.Errorf("zookeeper: unsupported distro family %q for Java install", family)
 	}
 
-	tasks := zookeeperProvisionTasks(port, serverID, serverLines, artifact.URL, artifact.Checksum, javaSpec)
+	tasks := zookeeperProvisionTasks("127.0.0.1", port, serverID, serverLines, artifact.URL, artifact.Checksum, javaSpec)
 
 	playbook := &ansible.Playbook{
 		Name:  "Provision ZooKeeper",
@@ -245,19 +244,14 @@ func (z *ZookeeperProvisioner) provisionNative(ctx context.Context, host invento
 // node. Archive contract: the vendor tarball wraps a single
 // `apache-zookeeper-<version>-bin/` top directory; --strip-components=1 drops
 // it and lands bin/, lib/, conf/ directly under /opt/zookeeper.
-func zookeeperProvisionTasks(port, serverID int, serverLines, artifactURL, artifactChecksum string, javaSpec ansible.DistroPackageSpec) []ansible.Task {
+func zookeeperProvisionTasks(listenHost string, port, serverID int, serverLines, artifactURL, artifactChecksum string, javaSpec ansible.DistroPackageSpec) []ansible.Task {
 	zooCfg := string(BuildZookeeperConfig(port, serverLines))
 	unit := ansible.RenderSystemdUnit(zookeeperSystemdUnitSpec())
 	installSentinel := ansible.ArtifactSentinel("/opt/zookeeper", artifactChecksum+artifactURL)
 
 	tasks := []ansible.Task{
-		// curl + Java runtime prerequisites, both idempotent via the package
-		// module. Distro-aware Java name comes from JavaRuntimePackages; a
-		// pre-existing Java >= 11 already satisfies the runtime requirement so
-		// installing the pinned OpenJDK only introduces a dormant provider
-		// on Arch (archlinux-java can switch between them).
+		// curl is a direct prerequisite for the native install path.
 		ansible.TaskPackage("curl", ansible.PackagePresent),
-		ansible.TaskPackage(javaSpec.PackageName, ansible.PackagePresent),
 
 		// zookeeper user + group.
 		{
@@ -313,6 +307,7 @@ func zookeeperProvisionTasks(port, serverID int, serverLines, artifactURL, artif
 		ansible.TaskCopy("/etc/zookeeper/zoo.cfg", zooCfg, ansible.CopyOpts{Owner: "zookeeper", Group: "zookeeper", Mode: "0644"}),
 		ansible.TaskCopy("/etc/systemd/system/frameworks-zookeeper.service", unit, ansible.CopyOpts{Mode: "0644"}),
 	}
+	tasks = append(tasks[:1], append(ansible.JavaRuntimeTasks(javaSpec), tasks[1:]...)...)
 
 	// myid only when an explicit non-zero server_id is configured.
 	if serverID > 0 {
@@ -329,6 +324,7 @@ func zookeeperProvisionTasks(port, serverID int, serverLines, artifactURL, artif
 			Enabled:      ansible.BoolPtr(true),
 			DaemonReload: true,
 		}),
+		ansible.TaskWaitForPort(port, ansible.WaitForOpts{Host: listenHost, Timeout: 60, Sleep: 1}),
 	)
 
 	return tasks
@@ -341,9 +337,6 @@ func (z *ZookeeperProvisioner) Validate(ctx context.Context, host inventory.Host
 			Services: map[string]ansible.GossService{
 				"frameworks-zookeeper": {Running: true, Enabled: true},
 			},
-			Ports: map[string]ansible.GossPort{
-				fmt.Sprintf("tcp:%d", config.Port): {Listening: true},
-			},
 			Files: map[string]ansible.GossFile{
 				"/opt/zookeeper/bin/zkServer.sh": {Exists: true},
 			},
@@ -354,12 +347,20 @@ func (z *ZookeeperProvisioner) Validate(ctx context.Context, host inventory.Host
 		}
 	}
 
-	checker := &health.TCPChecker{}
-	result := checker.Check(host.ExternalIP, config.Port)
-	if !result.OK {
-		return fmt.Errorf("zookeeper health check failed: %s", result.Error)
+	// ZK responds to "ruok" with "imok" when healthy. wait_for gates the
+	// listener; the FLW check exercises the actual client protocol. bash
+	// /dev/tcp avoids a dependency on nc/ncat.
+	clusterIP := host.ExternalIP
+	if clusterIP == "" {
+		clusterIP = "127.0.0.1"
 	}
-	return nil
+	tasks := []ansible.Task{
+		waitForTCP("wait for zookeeper listener", clusterIP, config.Port, 30),
+		shellValidate("zookeeper ruok",
+			fmt.Sprintf(`bash -c 'exec 3<>/dev/tcp/%s/%d; printf ruok >&3; IFS= read -r -n 4 -t 3 reply <&3; [ "$reply" = imok ]'`,
+				clusterIP, config.Port)),
+	}
+	return runValidatePlaybook(ctx, z.executor, z.sshPool.DefaultKeyPath(), host, "zookeeper", tasks)
 }
 
 // Initialize is a no-op for Zookeeper.
