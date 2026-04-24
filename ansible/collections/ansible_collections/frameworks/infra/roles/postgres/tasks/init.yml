@@ -1,13 +1,5 @@
 ---
 # Create per-owner roles and databases. Owner defaults to the database name.
-- name: Compute unique owners
-  ansible.builtin.set_fact:
-    postgres_owner_set: >-
-      {{ postgres_databases
-         | map('combine', {'owner': (postgres_databases | map(attribute='owner') | list)})
-         | map(attribute='owner') | reject('equalto', '') | unique | list
-         | default([], true) }}
-
 - name: Create application owner roles
   become: true
   become_user: postgres

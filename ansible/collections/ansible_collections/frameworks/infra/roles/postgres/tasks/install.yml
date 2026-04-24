@@ -15,6 +15,10 @@
     postgresql_port: "{{ postgres_port }}"
     postgresql_restarted_state: "restarted"
     postgresql_global_config_options:
+      - option: unix_socket_directories
+        value: "{{ postgresql_unix_socket_directories | join(',') }}"
+      - option: log_directory
+        value: log
       - option: listen_addresses
         value: "{{ postgres_listen_addresses }}"
       - option: port

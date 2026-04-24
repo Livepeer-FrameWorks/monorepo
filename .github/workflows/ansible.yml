@@ -77,9 +77,7 @@ jobs:
           - compose_stack
           - prometheus_stack
           - privateer
-          - chatwoot
           - listmonk
-          - go_service
           - mistserver
           - helmsman
           - edge
@@ -109,13 +107,11 @@ jobs:
       - name: Run molecule default scenario
         working-directory: ansible/collections/ansible_collections/frameworks/infra/roles/${{ matrix.role }}
         env:
+          ANSIBLE_HOME: ${{ github.workspace }}/ansible/.cache/ansible-home
+          ANSIBLE_LOCAL_TEMP: ${{ github.workspace }}/ansible/.cache/tmp
           ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/ansible/collections:${{ github.workspace }}/ansible/.cache/collections
           ANSIBLE_ROLES_PATH: ${{ github.workspace }}/ansible/.cache/roles
           MOLECULE_NO_LOG: "false"
           MOLECULE_DOCKER_IMAGE: ${{ matrix.image }}
         run: |
-          if [ -d molecule/default ]; then
-            molecule test -s default
-          else
-            echo "::notice::no molecule/default scenario for role ${{ matrix.role }} — skipping"
-          fi
+          molecule test -s default

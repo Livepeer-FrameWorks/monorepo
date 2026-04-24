@@ -4,14 +4,25 @@
   become: true
   gather_facts: true
   tasks:
-    - name: Refresh service facts
-      ansible.builtin.service_facts:
+    - name: Check postgresql service state
+      ansible.builtin.systemd_service:
+        name: postgresql
+        state: started
+      register: postgresql_unit_state_check
 
-    - name: Assert postgresql running and enabled
+    - name: Check postgresql service enabled state
+      ansible.builtin.systemd_service:
+        name: postgresql
+        enabled: true
+      register: postgresql_unit_enabled_check
+
+    - name: Assert postgresql active and enabled
       ansible.builtin.assert:
         that:
-          - ansible_facts.services['postgresql.service'].state == 'running'
-          - ansible_facts.services['postgresql.service'].status == 'enabled'
+          - not postgresql_unit_state_check.changed
+          - postgresql_unit_state_check.status.ActiveState == "active"
+          - not postgresql_unit_enabled_check.changed
+          - postgresql_unit_enabled_check.status.UnitFileState == "enabled"
 
     - name: Wait for TCP listener
       ansible.builtin.wait_for:
@@ -22,8 +33,7 @@
     - name: Run init tag to seed databases
       ansible.builtin.include_role:
         name: frameworks.infra.postgres
-        apply:
-          tags: [init]
+        tasks_from: init
       vars:
         postgres_databases:
           - { name: periscope }

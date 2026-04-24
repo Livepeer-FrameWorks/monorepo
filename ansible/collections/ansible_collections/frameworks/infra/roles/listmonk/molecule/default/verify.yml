@@ -3,6 +3,8 @@
   hosts: all
   become: true
   gather_facts: true
+  vars:
+    listmonk_project_dir: /opt/frameworks/listmonk
   tasks:
     - name: Assert listmonk compose file rendered
       ansible.builtin.stat:

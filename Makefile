@@ -3,7 +3,7 @@
 		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
-		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check provision-hello
+		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
 # Prefer annotated git tags like v1.2.3; fallback to describe or dev
 VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exact-match 2>/dev/null || git describe --tags --match "v[0-9]*" --dirty --always 2>/dev/null || echo "0.0.0-dev")
@@ -654,18 +654,28 @@ dead-code: dead-code-go dead-code-ts dead-code-report
 # ansible-galaxy-install   resolve collections into a local cache.
 # ansible-lint             lint the frameworks.infra collection.
 # ansible-check            syntax-check every playbook under ansible/playbooks.
+# ansible-molecule         run one role's Molecule default scenario.
 # provision-hello          end-to-end wiring smoke against localhost.
 
 ANSIBLE_DIR := ansible
 ANSIBLE_REQUIREMENTS_REL := requirements.yml
 ANSIBLE_CACHE_REL := .cache/collections
 ANSIBLE_LOCAL_TEMP := $(CURDIR)/$(ANSIBLE_DIR)/.cache/tmp
-ANSIBLE_ENV := ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP)
+ANSIBLE_HOME := $(CURDIR)/$(ANSIBLE_DIR)/.cache/ansible-home
+ANSIBLE_ENV := ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ANSIBLE_HOME=$(ANSIBLE_HOME)
 ANSIBLE_PLAYBOOKS := $(wildcard $(ANSIBLE_DIR)/playbooks/*.yml)
+ANSIBLE_COLLECTION_ROOT := $(ANSIBLE_DIR)/collections/ansible_collections/frameworks/infra
+ANSIBLE_MOLECULE_IMAGE ?= geerlingguy/docker-ubuntu2404-ansible:latest
+ANSIBLE_MOLECULE_ROLES := yugabyte postgres redis clickhouse zookeeper kafka caddy compose_stack prometheus_stack privateer listmonk mistserver helmsman edge
+ANSIBLE_MOLECULE_ENV := $(ANSIBLE_ENV) \
+	ANSIBLE_COLLECTIONS_PATH=$(CURDIR)/$(ANSIBLE_DIR)/collections:$(CURDIR)/$(ANSIBLE_DIR)/.cache/collections \
+	ANSIBLE_ROLES_PATH=$(CURDIR)/$(ANSIBLE_DIR)/.cache/roles \
+	MOLECULE_NO_LOG=false \
+	MOLECULE_DOCKER_IMAGE=$(ANSIBLE_MOLECULE_IMAGE)
 
 ansible-galaxy-install:
 	@echo "=== Installing Ansible collections ==="
-	@mkdir -p $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL) $(ANSIBLE_DIR)/.cache/roles $(ANSIBLE_LOCAL_TEMP)
+	@mkdir -p $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL) $(ANSIBLE_DIR)/.cache/roles $(ANSIBLE_LOCAL_TEMP) $(ANSIBLE_HOME)
 	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy collection install -r $(ANSIBLE_REQUIREMENTS_REL) -p $(ANSIBLE_CACHE_REL)
 	@echo "=== Installing Ansible roles ==="
 	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy role install -r $(ANSIBLE_REQUIREMENTS_REL) --roles-path .cache/roles
@@ -695,6 +705,22 @@ ansible-check: ansible-galaxy-install
 		  $(ANSIBLE_ENV) ansible-playbook --syntax-check "$$relpb" \
 			-i localhost, -c local \
 		) || exit 1; \
+	done
+
+ansible-molecule: ansible-galaxy-install ansible-molecule-run
+
+ansible-molecule-run:
+ifndef ROLE
+	$(error ROLE is required, e.g. make ansible-molecule ROLE=postgres)
+endif
+	@test -d "$(ANSIBLE_COLLECTION_ROOT)/roles/$(ROLE)/molecule/default" || \
+		(echo "No molecule/default scenario for ROLE=$(ROLE)" >&2; exit 1)
+	cd $(ANSIBLE_COLLECTION_ROOT)/roles/$(ROLE) && $(ANSIBLE_MOLECULE_ENV) molecule test -s default
+
+ansible-molecule-all: ansible-galaxy-install
+	@for role in $(ANSIBLE_MOLECULE_ROLES); do \
+		echo "=== Molecule $$role ==="; \
+		$(MAKE) ansible-molecule-run ROLE=$$role || exit 1; \
 	done
 
 provision-hello: ansible-galaxy-install

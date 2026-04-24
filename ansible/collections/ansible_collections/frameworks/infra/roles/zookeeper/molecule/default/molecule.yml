@@ -1,5 +1,6 @@
 ---
 role_name_check: 1
+prerun: false
 dependency:
   name: galaxy
 driver:
@@ -18,16 +19,21 @@ platforms:
       - /tmp
 provisioner:
   name: ansible
+  playbooks:
+    prepare: ../../../../molecule/prepare-apt.yml
   inventory:
     group_vars:
       all:
-        zookeeper_version: "3.9.2"
+        zookeeper_version: "3.9.5"
         zookeeper_artifact_url: >-
           {{ lookup('env', 'ZOOKEEPER_ARTIFACT_URL') |
-             default('https://dlcdn.apache.org/zookeeper/zookeeper-3.9.2/apache-zookeeper-3.9.2-bin.tar.gz', true) }}
+             default('https://downloads.apache.org/zookeeper/zookeeper-3.9.5/apache-zookeeper-3.9.5-bin.tar.gz', true) }}
         zookeeper_artifact_checksum: >-
           {{ lookup('env', 'ZOOKEEPER_ARTIFACT_CHECKSUM') |
-             default('sha512:https://dlcdn.apache.org/zookeeper/zookeeper-3.9.2/apache-zookeeper-3.9.2-bin.tar.gz.sha512', true) }}
+             default(
+               'sha512:baa1c21dda4d57238fca751e4fa2bbf1daff9a28612b125e497' ~
+               'dccd5c188ee6449e2f79947e474c2dd4d19992789d4d36b27b1ba2feb80c2b0c45e7df0e22aa8',
+               true) }}
         zookeeper_node_id: 1
         zookeeper_ensemble: []
 verifier:

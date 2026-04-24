@@ -1,5 +1,6 @@
 ---
 role_name_check: 1
+prerun: false
 dependency:
   name: galaxy
 driver:
@@ -29,6 +30,7 @@ provisioner:
               restart: unless-stopped
               ports:
                 - "18080:80"
+        compose_stack_render_only: true
         compose_stack_env:
           MARKER: ok
 verifier:

@@ -1,5 +1,6 @@
 ---
 role_name_check: 1
+prerun: false
 
 dependency:
   name: galaxy
@@ -22,6 +23,8 @@ platforms:
 
 provisioner:
   name: ansible
+  playbooks:
+    prepare: ../../../../molecule/prepare-apt.yml
   inventory:
     group_vars:
       all:

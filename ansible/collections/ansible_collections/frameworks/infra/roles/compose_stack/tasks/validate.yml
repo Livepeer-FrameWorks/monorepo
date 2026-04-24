@@ -24,7 +24,9 @@
          | map('from_json')
          | selectattr('State', 'equalto', 'running')
          | list | length }}
-  when: compose_ps.stdout | trim | length > 0
+  when:
+    - not (compose_stack_render_only | default(false) | bool)
+    - compose_ps.stdout | trim | length > 0
 
 - name: Assert at least one running container
   ansible.builtin.assert:

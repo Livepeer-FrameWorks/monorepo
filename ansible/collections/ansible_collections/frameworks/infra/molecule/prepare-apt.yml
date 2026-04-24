@@ -1,0 +1,13 @@
+---
+- name: Prepare apt cache
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh apt cache on Debian-family Molecule targets
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        update_cache_retries: 5
+        update_cache_retry_max_delay: 12
+      when: ansible_os_family == "Debian"

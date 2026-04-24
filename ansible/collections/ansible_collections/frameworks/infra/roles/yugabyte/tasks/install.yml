@@ -22,6 +22,12 @@
     enabled: true
   when: not yugabyte_timesync_running
 
+- name: Ensure python command is available for YugabyteDB post-install
+  ansible.builtin.package:
+    name: python-is-python3
+    state: present
+  when: ansible_os_family == "Debian"
+
 # curl is required by yugabyte's post_install.sh; the package name is 'curl'
 # across all supported distro families so a single package task is correct.
 - name: Ensure curl is installed

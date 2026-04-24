@@ -1,12 +1,16 @@
 ---
-- name: Refresh service facts
-  ansible.builtin.service_facts:
+- name: Check postgresql service state
+  ansible.builtin.systemd_service:
+    name: "{{ postgres_service_name }}"
+    state: started
+  register: postgres_service_state
 
-- name: Assert postgresql service running
+- name: Assert postgresql service active
   ansible.builtin.assert:
     that:
-      - ansible_facts.services[postgres_service_name ~ '.service'].state == 'running'
-    fail_msg: "postgresql not running"
+      - not postgres_service_state.changed
+      - postgres_service_state.status.ActiveState == "active"
+    fail_msg: "postgresql service is not active"
 
 - name: Wait for TCP listener
   ansible.builtin.wait_for:

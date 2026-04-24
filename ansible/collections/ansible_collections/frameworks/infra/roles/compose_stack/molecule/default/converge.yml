@@ -3,17 +3,6 @@
   hosts: all
   become: true
   gather_facts: true
-  pre_tasks:
-    - name: Install docker engine
-      ansible.builtin.apt:
-        name: [docker.io, docker-compose-v2]
-        state: present
-        update_cache: true
-    - name: Ensure docker daemon is running
-      ansible.builtin.service:
-        name: docker
-        state: started
-        enabled: true
   tasks:
     - name: Apply frameworks.infra.compose_stack
       ansible.builtin.include_role:

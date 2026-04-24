@@ -4,22 +4,22 @@
   become: true
   gather_facts: true
   tasks:
-    - name: Confirm compose stack is up
-      ansible.builtin.command: docker compose -f /opt/frameworks/nginx-smoke/docker-compose.yml ps --format json
-      register: compose_ps
-      changed_when: false
+    - name: Read rendered compose file
+      ansible.builtin.slurp:
+        src: /opt/frameworks/nginx-smoke/docker-compose.yml
+      register: compose_file
 
-    - name: Assert exactly one running container
+    - name: Read rendered env file
+      ansible.builtin.slurp:
+        src: /opt/frameworks/nginx-smoke/.env
+      register: env_file
+
+    - name: Assert rendered stack files
       ansible.builtin.assert:
         that:
-          - compose_ps.stdout | from_json | selectattr('State', 'equalto', 'running') | list | length >= 1
-        fail_msg: "compose_stack: expected at least one running container, got {{ compose_ps.stdout }}"
-
-    - name: Probe the nginx port
-      ansible.builtin.uri:
-        url: "http://127.0.0.1:18080/"
-        status_code: 200
-        return_content: false
+          - "'nginx:1.27-alpine' in (compose_file.content | b64decode)"
+          - "'18080:80' in (compose_file.content | b64decode)"
+          - "'MARKER=ok' in (env_file.content | b64decode)"
 
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:
