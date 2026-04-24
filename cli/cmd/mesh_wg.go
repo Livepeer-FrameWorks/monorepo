@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,6 +34,8 @@ this state but never writes it.`,
 	wg.AddCommand(newMeshWgGenerateCmd())
 	wg.AddCommand(newMeshWgCheckCmd())
 	wg.AddCommand(newMeshWgRotateCmd())
+	wg.AddCommand(newMeshWgAuditCmd())
+	wg.AddCommand(newMeshWgPromoteCmd())
 	return wg
 }
 
@@ -41,6 +44,7 @@ func newMeshWgGenerateCmd() *cobra.Command {
 		hostsPath  string
 		meshCIDR   string
 		listenPort int
+		dryRun     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "generate",
@@ -52,12 +56,13 @@ func newMeshWgGenerateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runMeshWgGenerate(cmd, target.manifestPath, target.hostsPath, target.ageKey, meshCIDR, listenPort, "", false)
+			return runMeshWgGenerate(cmd, target.manifestPath, target.hostsPath, target.ageKey, meshCIDR, listenPort, "", false, dryRun)
 		},
 	}
 	cmd.Flags().StringVar(&hostsPath, "hosts-file", "", "path to SOPS-encrypted hosts inventory (default: manifest hosts_file or sibling hosts.enc.yaml)")
 	cmd.Flags().StringVar(&meshCIDR, "mesh-cidr", "10.88.0.0/16", "IPv4 CIDR for the WireGuard mesh")
 	cmd.Flags().IntVar(&listenPort, "listen-port", 51820, "UDP listen port for the WireGuard mesh")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the planned changes without writing any files")
 	return cmd
 }
 
@@ -67,6 +72,7 @@ func newMeshWgRotateCmd() *cobra.Command {
 		meshCIDR   string
 		listenPort int
 		readdress  bool
+		dryRun     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "rotate <host>",
@@ -78,13 +84,14 @@ func newMeshWgRotateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runMeshWgGenerate(cmd, target.manifestPath, target.hostsPath, target.ageKey, meshCIDR, listenPort, args[0], readdress)
+			return runMeshWgGenerate(cmd, target.manifestPath, target.hostsPath, target.ageKey, meshCIDR, listenPort, args[0], readdress, dryRun)
 		},
 	}
 	cmd.Flags().StringVar(&hostsPath, "hosts-file", "", "path to SOPS-encrypted hosts inventory (default: manifest hosts_file or sibling hosts.enc.yaml)")
 	cmd.Flags().StringVar(&meshCIDR, "mesh-cidr", "10.88.0.0/16", "IPv4 CIDR for the WireGuard mesh")
 	cmd.Flags().IntVar(&listenPort, "listen-port", 51820, "UDP listen port for the WireGuard mesh")
 	cmd.Flags().BoolVar(&readdress, "readdress", false, "also allocate a new wireguard_ip for the host")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the planned changes without writing any files")
 	return cmd
 }
 
@@ -110,7 +117,7 @@ func newMeshWgCheckCmd() *cobra.Command {
 	}
 }
 
-func runMeshWgGenerate(cmd *cobra.Command, manifestPath, hostsPath, ageKey, cidrStr string, listenPort int, rotateHost string, readdress bool) error {
+func runMeshWgGenerate(cmd *cobra.Command, manifestPath, hostsPath, ageKey, cidrStr string, listenPort int, rotateHost string, readdress, dryRun bool) error {
 	_, cidr, err := net.ParseCIDR(cidrStr)
 	if err != nil {
 		return fmt.Errorf("--mesh-cidr: %w", err)
@@ -149,6 +156,11 @@ func runMeshWgGenerate(cmd *cobra.Command, manifestPath, hostsPath, ageKey, cidr
 		manifest.WireGuard.MeshCIDR != cidrStr ||
 		manifest.WireGuard.ListenPort != listenPort
 
+	// adoptedLocalHosts are rotate targets currently holding their private
+	// key on-disk (enrollment_origin=adopted_local). After rotate writes a
+	// fresh SOPS-managed key, we also strip the preserve-key markers from
+	// hosts.enc.yaml so the Ansible role stops treating them as opt-out.
+	adoptedLocalHosts := []string{}
 	for _, name := range hostNames {
 		h := manifest.Hosts[name]
 		needKey := h.WireguardPublicKey == "" || h.WireguardPrivateKey == ""
@@ -161,6 +173,9 @@ func runMeshWgGenerate(cmd *cobra.Command, manifestPath, hostsPath, ageKey, cidr
 			needKey = true
 			needIP = readdress || h.WireguardIP == ""
 			needPort = h.WireguardPort == 0
+			if h.WireguardPrivateKeyManaged != nil && !*h.WireguardPrivateKeyManaged {
+				adoptedLocalHosts = append(adoptedLocalHosts, name)
+			}
 		}
 
 		updated := mesh.HostWG{
@@ -198,6 +213,11 @@ func runMeshWgGenerate(cmd *cobra.Command, manifestPath, hostsPath, ageKey, cidr
 		hostUpdates[name] = updated
 	}
 
+	if dryRun {
+		printWgDryRun(cmd.OutOrStdout(), manifest, hostUpdates, privateKeys, cidrStr, listenPort, wireGuardChanged, hostNames)
+		return nil
+	}
+
 	if changed == 0 && !wireGuardChanged {
 		if err = mesh.ValidateIdentity(manifest, hostNames); err != nil {
 			return err
@@ -219,27 +239,65 @@ func runMeshWgGenerate(cmd *cobra.Command, manifestPath, hostsPath, ageKey, cidr
 		return err
 	}
 
+	// Stage the SOPS hosts file (if private keys changed) and the manifest
+	// tempfile together, validate the combined post-state, then commit both.
+	// POSIX doesn't give us true atomicity across two paths; on second-commit
+	// failure we restore the first file from an in-memory backup and report.
+	var stagedHosts *mesh.StagedFile
 	if len(privateKeys) > 0 {
 		if _, statErr := os.Stat(hostsPath); statErr != nil {
 			return fmt.Errorf("hosts-file %s: %w", hostsPath, statErr)
 		}
-		if err = mesh.EditEncryptedYAML(cmd.Context(), hostsPath, ageKey, func(plaintext []byte) ([]byte, error) {
-			return mesh.UpdateHostInventoryYAML(plaintext, privateKeys)
-		}); err != nil {
-			return fmt.Errorf("update %s: %w", hostsPath, err)
+		stagedHosts, err = mesh.StageEncryptedYAML(cmd.Context(), hostsPath, ageKey, func(plaintext []byte) ([]byte, error) {
+			updated, updErr := mesh.UpdateHostInventoryYAML(plaintext, privateKeys)
+			if updErr != nil {
+				return nil, updErr
+			}
+			// Adopted-local hosts being rotated back into SOPS need their
+			// preserve-key markers stripped at the same time — otherwise
+			// the next provision would still assert the on-disk key and
+			// skip rendering the fresh SOPS one.
+			return mesh.ClearAdoptedLocalMarkers(updated, adoptedLocalHosts)
+		})
+		if err != nil {
+			return fmt.Errorf("stage %s: %w", hostsPath, err)
 		}
+		defer stagedHosts.Discard()
 	}
 
-	if err = os.WriteFile(manifestPath, updatedManifest, 0o644); err != nil {
-		return fmt.Errorf("write manifest: %w", err)
-	}
-
-	verified, err := inventory.LoadWithHostsFileNoValidate(manifestPath, hostsPath, ageKey)
+	manifestTmp, err := os.CreateTemp(filepath.Dir(manifestPath), ".cluster-*.yaml.tmp")
 	if err != nil {
-		return fmt.Errorf("verify updated manifest: %w", err)
+		return fmt.Errorf("stage manifest: %w", err)
 	}
-	if err := mesh.ValidateIdentity(verified, hostNames); err != nil {
-		return fmt.Errorf("verify updated mesh identity: %w", err)
+	manifestTmpPath := manifestTmp.Name()
+	defer os.Remove(manifestTmpPath) //nolint:errcheck
+	if _, writeErr := manifestTmp.Write(updatedManifest); writeErr != nil {
+		manifestTmp.Close()
+		return fmt.Errorf("write staged manifest: %w", writeErr)
+	}
+	if closeErr := manifestTmp.Close(); closeErr != nil {
+		return fmt.Errorf("close staged manifest: %w", closeErr)
+	}
+
+	verifyHostsPath := hostsPath
+	if stagedHosts != nil && stagedHosts.TempPath != "" {
+		verifyHostsPath = stagedHosts.TempPath
+	}
+	verified, err := inventory.LoadWithHostsFileNoValidate(manifestTmpPath, verifyHostsPath, ageKey)
+	if err != nil {
+		return fmt.Errorf("validate staged mesh identity: %w", err)
+	}
+	if validateErr := mesh.ValidateIdentity(verified, hostNames); validateErr != nil {
+		return fmt.Errorf("validate staged mesh identity: %w", validateErr)
+	}
+
+	manifestBackup, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read original manifest for rollback: %w", err)
+	}
+
+	if err := mesh.CommitManifestAndHosts(manifestPath, manifestTmpPath, manifestBackup, stagedHosts); err != nil {
+		return err
 	}
 
 	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("mesh wg: updated %d host(s)", changed))
@@ -250,7 +308,72 @@ func runMeshWgGenerate(cmd *cobra.Command, manifestPath, hostsPath, ageKey, cidr
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "  %s -> %s (port %d)\n", name, u.WireguardIP, u.WireguardPort)
 	}
+	if len(adoptedLocalHosts) > 0 {
+		fmt.Fprintln(cmd.OutOrStdout())
+		fmt.Fprintln(cmd.OutOrStdout(), "Rotated adopted-local host(s) into SOPS-managed keys. To finish the promotion to gitops_seed:")
+		fmt.Fprintln(cmd.OutOrStdout(), "  1. commit cluster.yaml + hosts.enc.yaml")
+		fmt.Fprintln(cmd.OutOrStdout(), "  2. run `frameworks cluster provision` — Ansible renders the new private key on each host")
+		fmt.Fprintln(cmd.OutOrStdout(), "  3. run `frameworks mesh wg promote <host>` once the node has SyncMesh'd the new public key")
+	}
 	return nil
+}
+
+func printWgDryRun(w io.Writer, manifest *inventory.Manifest, updates map[string]mesh.HostWG, privateKeys map[string]string, cidrStr string, listenPort int, wireGuardChanged bool, hostNames []string) {
+	fmt.Fprintln(w, "mesh wg (dry-run): no files would be touched")
+
+	if wireGuardChanged {
+		curEnabled, curCIDR, curPort := false, "<unset>", 0
+		if manifest.WireGuard != nil {
+			curEnabled = manifest.WireGuard.Enabled
+			if manifest.WireGuard.MeshCIDR != "" {
+				curCIDR = manifest.WireGuard.MeshCIDR
+			}
+			curPort = manifest.WireGuard.ListenPort
+		}
+		fmt.Fprintf(w, "  wireguard block: enabled %v→true  mesh_cidr %s→%s  listen_port %d→%d\n",
+			curEnabled, curCIDR, cidrStr, curPort, listenPort)
+	} else {
+		fmt.Fprintln(w, "  wireguard block: no change")
+	}
+
+	if len(privateKeys) > 0 {
+		fmt.Fprintf(w, "  SOPS hosts file: would decrypt + re-encrypt (%d private key(s) to write)\n", len(privateKeys))
+	} else {
+		fmt.Fprintln(w, "  SOPS hosts file: no change")
+	}
+
+	hostChanges := 0
+	for _, name := range hostNames {
+		updated, ok := updates[name]
+		if !ok {
+			continue
+		}
+		current := manifest.Hosts[name]
+		keyChange := privateKeys[name] != ""
+		ipChange := current.WireguardIP != updated.WireguardIP
+		portChange := current.WireguardPort != updated.WireguardPort
+		if !keyChange && !ipChange && !portChange {
+			continue
+		}
+		hostChanges++
+		fmt.Fprintf(w, "  %s:\n", name)
+		if keyChange {
+			fmt.Fprintln(w, "    key:  generate new")
+		}
+		if ipChange {
+			old := current.WireguardIP
+			if old == "" {
+				old = "<unset>"
+			}
+			fmt.Fprintf(w, "    ip:   %s → %s\n", old, updated.WireguardIP)
+		}
+		if portChange {
+			fmt.Fprintf(w, "    port: %d → %d\n", current.WireguardPort, updated.WireguardPort)
+		}
+	}
+	if hostChanges == 0 {
+		fmt.Fprintln(w, "  hosts: no change")
+	}
 }
 
 type meshMutationTarget struct {

@@ -26,6 +26,7 @@ import (
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
+	pkgmesh "frameworks/pkg/mesh"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 	"frameworks/pkg/pagination"
@@ -62,6 +63,19 @@ type QuartermasterServer struct {
 	purserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC, not DB)
 	geoipReader     *geoip.Reader
 	metrics         *ServerMetrics
+
+	// quartermasterGRPCAddr is the address enrolling nodes should use to
+	// reach this Quartermaster once they have mesh connectivity. Returned in
+	// BootstrapInfrastructureNodeResponse so enrolling nodes can persist it
+	// alongside their private key.
+	quartermasterGRPCAddr string
+}
+
+// SetQuartermasterGRPCAddr configures the gRPC address this Quartermaster
+// advertises to freshly-enrolled nodes via BootstrapInfrastructureNodeResponse.
+// Called during startup once the listener address is known.
+func (s *QuartermasterServer) SetQuartermasterGRPCAddr(addr string) {
+	s.quartermasterGRPCAddr = addr
 }
 
 // NewQuartermasterServer creates a new Quartermaster gRPC server
@@ -2855,6 +2869,50 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 	return &pb.ClusterResponse{Cluster: cluster}, nil
 }
 
+// UpdateClusterMeshConfig stores the WireGuard mesh parameters for a cluster
+// so BootstrapInfrastructureNode can allocate mesh IPs for enrolling nodes.
+// Sourced from the manifest's wireguard.* block during cluster provision.
+func (s *QuartermasterServer) UpdateClusterMeshConfig(ctx context.Context, req *pb.UpdateClusterMeshConfigRequest) (*pb.UpdateClusterMeshConfigResponse, error) {
+	clusterID := req.GetClusterId()
+	meshCIDR := strings.TrimSpace(req.GetMeshCidr())
+	port := req.GetWgListenPort()
+
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+	if meshCIDR == "" {
+		return nil, status.Error(codes.InvalidArgument, "mesh_cidr required")
+	}
+	if _, _, err := net.ParseCIDR(meshCIDR); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid mesh_cidr: %v", err)
+	}
+	if port <= 0 || port > 65535 {
+		return nil, status.Error(codes.InvalidArgument, "wg_listen_port must be 1-65535")
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE quartermaster.infrastructure_clusters
+		SET wg_mesh_cidr = $1, wg_listen_port = $2, updated_at = NOW()
+		WHERE cluster_id = $3
+	`, meshCIDR, port, clusterID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update mesh config: %v", err)
+	}
+	rows, rowsErr := result.RowsAffected()
+	if rowsErr != nil {
+		return nil, status.Errorf(codes.Internal, "check rows affected: %v", rowsErr)
+	}
+	if rows == 0 {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+
+	return &pb.UpdateClusterMeshConfigResponse{
+		ClusterId:    clusterID,
+		MeshCidr:     meshCIDR,
+		WgListenPort: port,
+	}, nil
+}
+
 // ListClustersForTenant returns clusters accessible to a tenant
 func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *pb.ListClustersForTenantRequest) (*pb.ClustersAccessResponse, error) {
 	tenantID := req.GetTenantId()
@@ -3466,10 +3524,10 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 
 	query := fmt.Sprintf(`
 		SELECT id, node_id, cluster_id, node_name, node_type, internal_ip, external_ip,
-		       wireguard_ip, wireguard_public_key, region, availability_zone,
+		       wireguard_ip, wireguard_public_key, wireguard_listen_port, region, availability_zone,
 		       latitude, longitude,
 		       cpu_cores, memory_gb, disk_gb,
-		       last_heartbeat, created_at, updated_at
+		       last_heartbeat, enrollment_origin, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes n
 		%s
 		%s
@@ -3634,10 +3692,10 @@ func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWher
 
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
-		       n.wireguard_ip, n.wireguard_public_key, n.region, n.availability_zone,
+		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
 		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.created_at, n.updated_at
+		       n.last_heartbeat, n.enrollment_origin, n.created_at, n.updated_at
 		FROM quartermaster.infrastructure_nodes n
 		%s
 	`, healthWhere), healthArgs...)
@@ -3706,10 +3764,10 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
-		       n.wireguard_ip, n.wireguard_public_key, n.region, n.availability_zone,
+		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
 		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.created_at, n.updated_at
+		       n.last_heartbeat, n.enrollment_origin, n.created_at, n.updated_at
 		FROM quartermaster.infrastructure_nodes n
 		%s
 		%s
@@ -4184,6 +4242,27 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
 
+	// Replay short-circuit: if the caller supplies node_id + public_key and
+	// a matching row already exists for this token, this is a retry after a
+	// previous RPC committed server-side but the client failed to persist
+	// the response. Return the same assignment without re-checking the
+	// token's usage budget. Possession of the original token (by hash
+	// match, even if spent), the client-chosen node_id, and the locally-
+	// generated public_key together prove identity — none of which an
+	// attacker can forge without access to the original node.
+	if idRaw := strings.TrimSpace(req.GetNodeId()); idRaw != "" && req.WireguardPublicKey != nil {
+		pubRaw := strings.TrimSpace(*req.WireguardPublicKey)
+		if pubRaw != "" {
+			replayResp, replayErr := s.bootstrapReplay(ctx, tx, token, idRaw, pubRaw)
+			if replayErr != nil {
+				return nil, replayErr
+			}
+			if replayResp != nil {
+				return replayResp, nil
+			}
+		}
+	}
+
 	// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
 	var tokenID string
 	var tenantID, clusterID sql.NullString
@@ -4251,27 +4330,112 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		hostname = nodeID
 	}
 
-	// Idempotent: if node already exists, return existing cluster binding
+	// Idempotent: if the node already exists we return its full assigned
+	// identity — not just the IDs — so a client recovering from a mid-flight
+	// failure can resume without needing to delete anything server-side.
 	var existingClusterID string
+	var existingWGIP sql.NullString
+	var existingWGPort sql.NullInt32
 	err = tx.QueryRowContext(ctx, `
-		SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1
-	`, nodeID).Scan(&existingClusterID)
+		SELECT cluster_id, wireguard_ip::text, wireguard_listen_port
+		FROM quartermaster.infrastructure_nodes
+		WHERE node_id = $1
+	`, nodeID).Scan(&existingClusterID, &existingWGIP, &existingWGPort)
 	if err == nil {
 		if existingClusterID != resolvedClusterID {
 			return nil, status.Errorf(codes.FailedPrecondition, "node already exists in cluster %s", existingClusterID)
 		}
-		var tenantResp *string
-		if tenantID.Valid && tenantID.String != "" {
-			tenantResp = &tenantID.String
+		// Commit the tx so subsequent reads see a consistent view even
+		// though we didn't mutate anything.
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "commit: %v", commitErr)
 		}
-		return &pb.BootstrapInfrastructureNodeResponse{
-			NodeId:    nodeID,
-			TenantId:  tenantResp,
-			ClusterId: resolvedClusterID,
-		}, nil
+
+		existingMeshCIDR, existingMeshPort := loadClusterMeshConfig(ctx, s.db, resolvedClusterID)
+		if existingWGPort.Valid && existingWGPort.Int32 > 0 {
+			existingMeshPort = existingWGPort.Int32
+		}
+		seedPeers, seedSvc := s.collectBootstrapSeed(ctx, resolvedClusterID, nodeID)
+		wgIP := ""
+		if existingWGIP.Valid {
+			wgIP = existingWGIP.String
+		}
+
+		resp := &pb.BootstrapInfrastructureNodeResponse{
+			NodeId:                nodeID,
+			ClusterId:             resolvedClusterID,
+			WireguardIp:           wgIP,
+			WireguardPort:         existingMeshPort,
+			MeshCidr:              existingMeshCIDR,
+			QuartermasterGrpcAddr: s.quartermasterGRPCAddr,
+			SeedPeers:             seedPeers,
+			SeedServiceEndpoints:  seedSvc,
+		}
+		if tenantID.Valid && tenantID.String != "" {
+			t := tenantID.String
+			resp.TenantId = &t
+		}
+		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Server never generates private keys. A new mesh enrollment must carry
+	// its own public key; the private half stays on the node.
+	wgPubStr := ""
+	if req.WireguardPublicKey != nil {
+		wgPubStr = strings.TrimSpace(*req.WireguardPublicKey)
+	}
+	if wgPubStr == "" {
+		return nil, status.Error(codes.InvalidArgument, "wireguard_public_key required: the node must generate its keypair locally and send only the public half")
+	}
+
+	// Resolve cluster mesh config so we can assign an IP/port when the
+	// request omits them.
+	var clusterMeshCIDR sql.NullString
+	var clusterWGPort sql.NullInt32
+	if cfgErr := tx.QueryRowContext(ctx, `
+		SELECT wg_mesh_cidr, wg_listen_port
+		FROM quartermaster.infrastructure_clusters
+		WHERE cluster_id = $1
+	`, resolvedClusterID).Scan(&clusterMeshCIDR, &clusterWGPort); cfgErr != nil {
+		return nil, status.Errorf(codes.Internal, "load cluster mesh config: %v", cfgErr)
+	}
+
+	// Determine the node's mesh IP. A client-supplied value is trusted (the
+	// GitOps-rendered seed path). Empty means allocate from the cluster CIDR.
+	assignedIP := ""
+	if req.WireguardIp != nil {
+		assignedIP = strings.TrimSpace(*req.WireguardIp)
+	}
+	if assignedIP == "" {
+		if !clusterMeshCIDR.Valid || clusterMeshCIDR.String == "" {
+			return nil, status.Errorf(codes.FailedPrecondition, "cluster %q has no wg_mesh_cidr configured; run `frameworks cluster provision` to sync it from the manifest", resolvedClusterID)
+		}
+		_, cidr, parseErr := net.ParseCIDR(clusterMeshCIDR.String)
+		if parseErr != nil {
+			return nil, status.Errorf(codes.Internal, "cluster has invalid wg_mesh_cidr %q: %v", clusterMeshCIDR.String, parseErr)
+		}
+		taken, takenErr := loadTakenMeshIPs(ctx, tx, resolvedClusterID)
+		if takenErr != nil {
+			return nil, status.Errorf(codes.Internal, "load taken mesh IPs: %v", takenErr)
+		}
+		allocated, allocErr := pkgmesh.AllocateMeshIP(resolvedClusterID, hostname, cidr, taken)
+		if allocErr != nil {
+			return nil, status.Errorf(codes.ResourceExhausted, "allocate mesh IP: %v", allocErr)
+		}
+		assignedIP = allocated.String()
+	}
+
+	// Listen port: client-supplied > cluster default > 51820.
+	assignedPort := int32(0)
+	if req.WireguardPort != nil && *req.WireguardPort > 0 {
+		assignedPort = *req.WireguardPort
+	} else if clusterWGPort.Valid && clusterWGPort.Int32 > 0 {
+		assignedPort = clusterWGPort.Int32
+	} else {
+		assignedPort = 51820
 	}
 
 	// Create node with 'active' status
@@ -4283,14 +4447,6 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	if req.InternalIp != nil && *req.InternalIp != "" {
 		intIP = *req.InternalIp
 	}
-	var wgIP any = nil
-	if req.WireguardIp != nil && *req.WireguardIp != "" {
-		wgIP = *req.WireguardIp
-	}
-	var wgPub any = nil
-	if req.WireguardPublicKey != nil && *req.WireguardPublicKey != "" {
-		wgPub = *req.WireguardPublicKey
-	}
 
 	var lat, lng any
 	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
@@ -4301,15 +4457,12 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		}
 	}
 
-	var wgPort any
-	if req.WireguardPort != nil && *req.WireguardPort > 0 {
-		wgPort = *req.WireguardPort
-	}
-
+	// New row via the token/enrollment path → enrollment_origin=runtime_enrolled.
+	// The idempotent early return above preserves existing origins.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, wireguard_ip, wireguard_public_key, wireguard_listen_port, latitude, longitude, tags, metadata, last_heartbeat, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8::inet, $9, $10, $11, $12, '{}', '{}', NOW(), NOW(), NOW())
-	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, nodeType, extIP, intIP, wgIP, wgPub, wgPort, lat, lng)
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, wireguard_ip, wireguard_public_key, wireguard_listen_port, enrollment_origin, latitude, longitude, tags, metadata, last_heartbeat, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8::inet, $9, $10, 'runtime_enrolled', $11, $12, '{}', '{}', NOW(), NOW(), NOW())
+	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, nodeType, extIP, intIP, assignedIP, wgPubStr, assignedPort, lat, lng)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
 	}
@@ -4337,11 +4490,313 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	// would be premature: no services are deployed on a freshly-created node,
 	// and node_type (e.g. "core") is not a valid service type for DNS lookup.
 
+	// Gather seed state the new node needs to bring up wg0 and start talking
+	// to Quartermaster over the mesh. Errors here degrade gracefully — the
+	// node can re-fetch via SyncMesh once its interface is up.
+	seedPeers, seedSvc := s.collectBootstrapSeed(ctx, resolvedClusterID, nodeID)
+
+	meshCIDR := ""
+	if clusterMeshCIDR.Valid {
+		meshCIDR = clusterMeshCIDR.String
+	}
+
 	return &pb.BootstrapInfrastructureNodeResponse{
-		NodeId:    nodeID,
-		TenantId:  tenantResp,
-		ClusterId: resolvedClusterID,
+		NodeId:                nodeID,
+		TenantId:              tenantResp,
+		ClusterId:             resolvedClusterID,
+		WireguardIp:           assignedIP,
+		WireguardPort:         assignedPort,
+		MeshCidr:              meshCIDR,
+		QuartermasterGrpcAddr: s.quartermasterGRPCAddr,
+		SeedPeers:             seedPeers,
+		SeedServiceEndpoints:  seedSvc,
+		// CaBundle left empty: enrolled nodes fetch the internal CA via
+		// Navigator after their first successful SyncMesh, matching the
+		// existing Privateer cert-sync loop. SERVICE_TOKEN is not returned
+		// here — operators deliver it to enrolling nodes via `mesh join`.
 	}, nil
+}
+
+// SetNodeEnrollmentOrigin flips a node's enrollment_origin column. Used by
+// `frameworks mesh reconcile --write-gitops` to promote runtime_enrolled
+// nodes to adopted_local, and by the rotate-on-promotion flow to finalize
+// adopted_local → gitops_seed.
+func (s *QuartermasterServer) SetNodeEnrollmentOrigin(ctx context.Context, req *pb.SetNodeEnrollmentOriginRequest) (*pb.SetNodeEnrollmentOriginResponse, error) {
+	nodeID := strings.TrimSpace(req.GetNodeId())
+	newOrigin := strings.TrimSpace(req.GetEnrollmentOrigin())
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id required")
+	}
+	switch newOrigin {
+	case "gitops_seed", "runtime_enrolled", "adopted_local":
+		// valid
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "enrollment_origin must be one of gitops_seed|runtime_enrolled|adopted_local, got %q", newOrigin)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var current string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT enrollment_origin
+		FROM quartermaster.infrastructure_nodes
+		WHERE node_id = $1
+	`, nodeID).Scan(&current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "node %q not found", nodeID)
+		}
+		return nil, status.Errorf(codes.Internal, "read current origin: %v", err)
+	}
+
+	if exp := strings.TrimSpace(req.GetExpectedCurrent()); exp != "" && exp != current {
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q enrollment_origin is %q, not the expected %q", nodeID, current, exp)
+	}
+
+	if current == newOrigin {
+		// Already at desired state; return success without writing.
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "commit: %v", commitErr)
+		}
+		return &pb.SetNodeEnrollmentOriginResponse{NodeId: nodeID, EnrollmentOrigin: current}, nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE quartermaster.infrastructure_nodes
+		SET enrollment_origin = $1, updated_at = NOW()
+		WHERE node_id = $2
+	`, newOrigin, nodeID); err != nil {
+		return nil, status.Errorf(codes.Internal, "update origin: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"node_id":           nodeID,
+		"previous_origin":   current,
+		"enrollment_origin": newOrigin,
+	}).Info("Node enrollment_origin updated")
+
+	return &pb.SetNodeEnrollmentOriginResponse{NodeId: nodeID, EnrollmentOrigin: newOrigin}, nil
+}
+
+// bootstrapReplay resolves a retry of a previously-committed infrastructure
+// enrollment. Returns (response, nil) if the (token, node_id, public_key)
+// tuple matches an already-persisted row — in that case the caller returns
+// immediately without consuming a fresh token. Returns (nil, nil) if no
+// replay match; the caller falls through to the normal token-validation +
+// create-or-update path. Non-nil error is propagated.
+//
+// Replay requires:
+//   - token_hash exists in bootstrap_tokens (even if spent)
+//   - token not expired, and client IP passes expected_ip gate
+//   - infrastructure_node row with node_id exists, wireguard_public_key
+//     matches the request
+//   - if the token carries a cluster binding, the stored row's cluster_id
+//     must match
+func (s *QuartermasterServer) bootstrapReplay(ctx context.Context, tx *sql.Tx, token, nodeID, wgPub string) (*pb.BootstrapInfrastructureNodeResponse, error) {
+	var tokenClusterID sql.NullString
+	var expectedIP sql.NullString
+	var expiresAt time.Time
+	err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(cluster_id, ''), expires_at, expected_ip::text
+		FROM quartermaster.bootstrap_tokens
+		WHERE token_hash = $1 AND kind = 'infrastructure_node'
+	`, hashBootstrapToken(token)).Scan(&tokenClusterID, &expiresAt, &expectedIP)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "replay: token lookup: %v", err)
+	}
+	if time.Now().After(expiresAt) {
+		return nil, status.Error(codes.Unauthenticated, "token expired")
+	}
+	if !validateExpectedIP(expectedIP, extractClientIP(ctx)) {
+		return nil, status.Error(codes.PermissionDenied, "client IP does not match token expected_ip")
+	}
+
+	var existingClusterID, existingPubKey sql.NullString
+	var existingWGIP sql.NullString
+	var existingWGPort sql.NullInt32
+	var existingTenantID sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT
+			n.cluster_id,
+			n.wireguard_public_key,
+			n.wireguard_ip::text,
+			n.wireguard_listen_port,
+			c.owner_tenant_id::text
+		FROM quartermaster.infrastructure_nodes n
+		JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = n.cluster_id
+		WHERE n.node_id = $1
+	`, nodeID).Scan(&existingClusterID, &existingPubKey, &existingWGIP, &existingWGPort, &existingTenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// No existing row — this is not a replay. Fall through to the
+		// normal create path.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "replay: node lookup: %v", err)
+	}
+
+	if !existingPubKey.Valid || existingPubKey.String != wgPub {
+		// Node exists but with a different public key. This is either a
+		// conflict or an attacker guessing. Refuse — the non-replay path
+		// would also refuse because node_id is already taken.
+		return nil, status.Error(codes.FailedPrecondition, "node_id already registered with a different wireguard_public_key")
+	}
+
+	// Enforce the token's cluster binding against the stored row too: a
+	// token scoped to cluster A must not retrieve an assignment in B.
+	if tokenClusterID.Valid && tokenClusterID.String != "" && existingClusterID.Valid && tokenClusterID.String != existingClusterID.String {
+		return nil, status.Errorf(codes.PermissionDenied, "token is bound to cluster %s, node is in %s", tokenClusterID.String, existingClusterID.String)
+	}
+
+	clusterIDStr := ""
+	if existingClusterID.Valid {
+		clusterIDStr = existingClusterID.String
+	}
+	wgIP := ""
+	if existingWGIP.Valid {
+		wgIP = existingWGIP.String
+	}
+	wgPort := int32(0)
+	if existingWGPort.Valid {
+		wgPort = existingWGPort.Int32
+	}
+
+	// Rebuild the full response the same way the first-successful call did,
+	// so the client receives identical seed state.
+	meshCIDR, meshPort := loadClusterMeshConfig(ctx, s.db, clusterIDStr)
+	if wgPort > 0 {
+		meshPort = wgPort
+	}
+	seedPeers, seedSvc := s.collectBootstrapSeed(ctx, clusterIDStr, nodeID)
+
+	resp := &pb.BootstrapInfrastructureNodeResponse{
+		NodeId:                nodeID,
+		ClusterId:             clusterIDStr,
+		WireguardIp:           wgIP,
+		WireguardPort:         meshPort,
+		MeshCidr:              meshCIDR,
+		QuartermasterGrpcAddr: s.quartermasterGRPCAddr,
+		SeedPeers:             seedPeers,
+		SeedServiceEndpoints:  seedSvc,
+	}
+	if existingTenantID.Valid && existingTenantID.String != "" {
+		t := existingTenantID.String
+		resp.TenantId = &t
+	}
+	return resp, nil
+}
+
+// loadClusterMeshConfig returns the cluster's wg_mesh_cidr and default
+// wg_listen_port. Failures degrade to zero values so the caller surfaces a
+// sensible error rather than stalling the bootstrap flow.
+func loadClusterMeshConfig(ctx context.Context, db *sql.DB, clusterID string) (string, int32) {
+	var cidr sql.NullString
+	var port sql.NullInt32
+	row := db.QueryRowContext(ctx, `
+		SELECT wg_mesh_cidr, wg_listen_port
+		FROM quartermaster.infrastructure_clusters
+		WHERE cluster_id = $1
+	`, clusterID)
+	// Scan errors surface as empty return values, which the caller treats as
+	// "cluster mesh config missing" — FailedPrecondition with a remediation
+	// hint. Logging the raw error here would be noisy on cold caches.
+	_ = row.Scan(&cidr, &port) //nolint:errcheck
+	cidrStr := ""
+	if cidr.Valid {
+		cidrStr = cidr.String
+	}
+	portVal := int32(0)
+	if port.Valid {
+		portVal = port.Int32
+	}
+	return cidrStr, portVal
+}
+
+// collectBootstrapSeed returns the seed peer set and service endpoints a
+// freshly-enrolled node should apply before its first SyncMesh. Excludes the
+// enrolling node itself. Errors are logged and produce empty results so
+// bootstrap never fails on auxiliary data — the node will rediscover via
+// SyncMesh once connected.
+func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterID, excludeNodeID string) ([]*pb.InfrastructurePeer, map[string]*pb.ServiceEndpoints) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT n.node_name, n.wireguard_public_key, n.external_ip::text, n.internal_ip::text, n.wireguard_ip::text, n.wireguard_listen_port
+		FROM quartermaster.infrastructure_nodes n
+		WHERE n.node_id != $1
+		  AND n.wireguard_public_key IS NOT NULL
+		  AND n.wireguard_ip IS NOT NULL
+		  AND n.cluster_id = $2
+		  AND n.status = 'active'
+	`, excludeNodeID, clusterID)
+	if err != nil {
+		s.logger.WithError(err).Warn("collectBootstrapSeed: peer query failed")
+		return nil, nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var peers []*pb.InfrastructurePeer
+	for rows.Next() {
+		var p pb.InfrastructurePeer
+		var extIP, intIP, wgIP sql.NullString
+		var listenPort sql.NullInt32
+		if scanErr := rows.Scan(&p.NodeName, &p.PublicKey, &extIP, &intIP, &wgIP, &listenPort); scanErr != nil {
+			continue
+		}
+		endpoint := ""
+		if extIP.Valid && extIP.String != "" {
+			endpoint = extIP.String
+		} else if intIP.Valid && intIP.String != "" {
+			endpoint = intIP.String
+		}
+		if endpoint == "" || !wgIP.Valid {
+			continue
+		}
+		port := int32(51820)
+		if listenPort.Valid && listenPort.Int32 > 0 {
+			port = listenPort.Int32
+		}
+		p.Endpoint = fmt.Sprintf("%s:%d", endpoint, port)
+		p.AllowedIps = []string{wgIP.String + "/32"}
+		p.KeepAlive = 25
+		peers = append(peers, &p)
+	}
+
+	endpoints := make(map[string]*pb.ServiceEndpoints)
+	svcRows, svcErr := s.db.QueryContext(ctx, `
+		SELECT s.type, n.wireguard_ip::text
+		FROM quartermaster.services s
+		JOIN quartermaster.service_instances si ON si.service_id = s.service_id
+		JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
+		WHERE si.status IN ('running', 'active')
+		  AND n.wireguard_ip IS NOT NULL
+		  AND n.status = 'active'
+		  AND n.cluster_id = $1
+		  AND s.type IS NOT NULL AND s.type <> ''
+	`, clusterID)
+	if svcErr != nil {
+		s.logger.WithError(svcErr).Warn("collectBootstrapSeed: service endpoint query failed")
+		return peers, endpoints
+	}
+	defer func() { _ = svcRows.Close() }()
+	for svcRows.Next() {
+		var svcType, svcIP string
+		if scanErr := svcRows.Scan(&svcType, &svcIP); scanErr != nil || svcIP == "" {
+			continue
+		}
+		if endpoints[svcType] == nil {
+			endpoints[svcType] = &pb.ServiceEndpoints{Ips: []string{}}
+		}
+		endpoints[svcType].Ips = append(endpoints[svcType].Ips, svcIP)
+	}
+	return peers, endpoints
 }
 
 // CreateBootstrapToken creates a new bootstrap token
@@ -4716,28 +5171,29 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	}
 
 	if !currentWgIP.Valid || strings.TrimSpace(currentWgIP.String) == "" {
-		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no GitOps wireguard_ip; run frameworks mesh wg generate and seed the node before SyncMesh", nodeID)
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no recorded wireguard_ip; gitops_seed nodes need `frameworks mesh wg generate` + provision, runtime_enrolled nodes need `frameworks mesh join`", nodeID)
 	}
 	wireguardIP := currentWgIP.String
 	if !storedPublicKey.Valid || strings.TrimSpace(storedPublicKey.String) == "" {
-		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no GitOps wireguard_public_key; run frameworks mesh wg generate and seed the node before SyncMesh", nodeID)
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no recorded wireguard_public_key; gitops_seed nodes need `frameworks mesh wg generate` + provision, runtime_enrolled nodes need `frameworks mesh join`", nodeID)
 	}
 	if publicKey == "" {
 		return nil, status.Error(codes.InvalidArgument, "public_key required")
 	}
 	if storedPublicKey.String != publicKey {
-		return nil, status.Errorf(codes.FailedPrecondition, "node %q public key does not match stored GitOps identity", nodeID)
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q public key does not match the recorded value", nodeID)
 	}
 	if !storedListenPort.Valid || storedListenPort.Int32 <= 0 {
-		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no GitOps wireguard_listen_port; run frameworks mesh wg generate and seed the node before SyncMesh", nodeID)
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q has no recorded wireguard_listen_port", nodeID)
 	}
 	if req.GetListenPort() > 0 && req.GetListenPort() != storedListenPort.Int32 {
-		return nil, status.Errorf(codes.FailedPrecondition, "node %q listen port %d does not match stored GitOps identity %d", nodeID, req.GetListenPort(), storedListenPort.Int32)
+		return nil, status.Errorf(codes.FailedPrecondition, "node %q listen port %d does not match the recorded value %d", nodeID, req.GetListenPort(), storedListenPort.Int32)
 	}
 	wireguardPort := storedListenPort.Int32
 
-	// 2. Update heartbeat every sync. WireGuard identity is reconciled through
-	// CreateNode from GitOps, never invented or rewritten by SyncMesh.
+	// 2. Update heartbeat every sync. WireGuard identity is set by either
+	// CreateNode (gitops_seed) or BootstrapInfrastructureNode
+	// (runtime_enrolled); SyncMesh only reads it.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE quartermaster.infrastructure_nodes
 		SET last_heartbeat = NOW(),
@@ -5770,20 +6226,25 @@ func scanCluster(rows *sql.Rows) (*pb.InfrastructureCluster, error) {
 func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 	var node pb.InfrastructureNode
 	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az sql.NullString
-	var cpuCores, memoryGB, diskGB sql.NullInt32
+	var wgPort, cpuCores, memoryGB, diskGB sql.NullInt32
 	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
+	var enrollmentOrigin string
 
 	err := rows.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
-		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &region, &az,
+		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &wgPort, &region, &az,
 		&lat, &lon,
 		&cpuCores, &memoryGB, &diskGB,
-		&lastHeartbeat, &createdAt, &updatedAt,
+		&lastHeartbeat, &enrollmentOrigin, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+	node.EnrollmentOrigin = enrollmentOrigin
+	if wgPort.Valid {
+		node.WireguardPort = &wgPort.Int32
 	}
 
 	if internalIP.Valid {
@@ -5940,7 +6401,7 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 		       wireguard_ip, wireguard_public_key, wireguard_listen_port, region, availability_zone,
 		       latitude, longitude,
 		       cpu_cores, memory_gb, disk_gb,
-		       last_heartbeat, created_at, updated_at
+		       last_heartbeat, enrollment_origin, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1 OR id::text = $1
 	`, nodeID)
@@ -5951,13 +6412,14 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
+	var enrollmentOrigin string
 
 	err := row.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
 		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &wgPort, &region, &az,
 		&lat, &lon,
 		&cpuCores, &memoryGB, &diskGB,
-		&lastHeartbeat, &createdAt, &updatedAt,
+		&lastHeartbeat, &enrollmentOrigin, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found")
@@ -6005,10 +6467,36 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 	if lastHeartbeat.Valid {
 		node.LastHeartbeat = timestamppb.New(lastHeartbeat.Time)
 	}
+	node.EnrollmentOrigin = enrollmentOrigin
 	node.CreatedAt = timestamppb.New(createdAt)
 	node.UpdatedAt = timestamppb.New(updatedAt)
 
 	return &node, nil
+}
+
+// loadTakenMeshIPs returns the set of wireguard_ip values currently allocated
+// within a cluster, keyed by dotted-quad string. Used by BootstrapInfrastructureNode
+// to avoid colliding with already-assigned mesh addresses when allocating
+// a new one for an enrolling node.
+func loadTakenMeshIPs(ctx context.Context, tx *sql.Tx, clusterID string) (map[string]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT wireguard_ip::text
+		FROM quartermaster.infrastructure_nodes
+		WHERE cluster_id = $1 AND wireguard_ip IS NOT NULL
+	`, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	taken := map[string]struct{}{}
+	for rows.Next() {
+		var ip string
+		if scanErr := rows.Scan(&ip); scanErr != nil {
+			return nil, scanErr
+		}
+		taken[ip] = struct{}{}
+	}
+	return taken, rows.Err()
 }
 
 func generateSecureToken(n int) (string, error) {
@@ -7609,6 +8097,10 @@ type GRPCServerConfig struct {
 	CertFile        string
 	KeyFile         string
 	AllowInsecure   bool
+	// AdvertiseGRPCAddr is the "how nodes reach me" address that gets returned
+	// to freshly-enrolled nodes via BootstrapInfrastructureNodeResponse. Empty
+	// means enrollment will tell the node to rediscover via DNS aliases.
+	AdvertiseGRPCAddr string
 }
 
 // ServerMetrics holds Prometheus metrics for the gRPC server
@@ -7660,6 +8152,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	server := grpc.NewServer(opts...)
 	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
+	qmServer.SetQuartermasterGRPCAddr(cfg.AdvertiseGRPCAddr)
 
 	// Register all services
 	pb.RegisterTenantServiceServer(server, qmServer)

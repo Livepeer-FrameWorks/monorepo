@@ -144,6 +144,15 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     s3_endpoint VARCHAR(500),
     s3_region VARCHAR(50),
 
+    -- ===== WIREGUARD MESH CONFIGURATION =====
+    -- IPv4 CIDR for the cluster's WireGuard mesh. Used by
+    -- BootstrapInfrastructureNode to allocate mesh IPs for enrolling nodes.
+    -- Sourced from the manifest's wireguard.mesh_cidr during cluster provision.
+    wg_mesh_cidr VARCHAR(43),
+    -- Default WireGuard UDP listen port assigned to enrolling nodes when the
+    -- bootstrap request omits it. Sourced from wireguard.listen_port.
+    wg_listen_port INTEGER,
+
     -- ===== MARKETPLACE CONFIGURATION =====
     visibility VARCHAR(20) DEFAULT 'private',
     pricing_model VARCHAR(20) DEFAULT 'free_unmetered',
@@ -177,7 +186,19 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     wireguard_ip INET,
     wireguard_public_key TEXT,
     wireguard_listen_port INTEGER DEFAULT 51820,
-    
+
+    -- ===== ENROLLMENT PROVENANCE =====
+    -- How this row came to be. Governs audit/reconcile semantics and who
+    -- owns the node's WireGuard private key:
+    --   gitops_seed      — declared in cluster.yaml, private key in SOPS,
+    --                      cold-boot capable.
+    --   runtime_enrolled — joined via a bootstrap token after the cluster
+    --                      was alive; private key lives on the node.
+    --   adopted_local    — runtime-enrolled node whose public identity is
+    --                      now in GitOps; Ansible preserves the on-disk key.
+    enrollment_origin VARCHAR(32) NOT NULL DEFAULT 'gitops_seed'
+        CHECK (enrollment_origin IN ('gitops_seed', 'runtime_enrolled', 'adopted_local')),
+
     region VARCHAR(50),
     availability_zone VARCHAR(50),
     latitude DOUBLE PRECISION,

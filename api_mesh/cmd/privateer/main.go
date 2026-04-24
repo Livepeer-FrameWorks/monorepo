@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"net"
 	"os"
@@ -26,22 +27,54 @@ func main() {
 	config.LoadEnv(logger)
 
 	// Validate required config
+	privateKeyFile := os.Getenv("MESH_PRIVATE_KEY_FILE")
+	if privateKeyFile == "" {
+		logger.Fatal("MESH_PRIVATE_KEY_FILE is required")
+	}
+	dataDir := os.Getenv("PRIVATEER_DATA_DIR")
+
+	// Enrollment: if no key on disk and a join token is present, generate
+	// locally, register with the control plane, and persist the assigned
+	// identity to disk. On subsequent starts the key already exists; the
+	// persisted enrollment state below fills in what env would otherwise
+	// need to provide.
+	enrollCtx, enrollCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	enrolled, enrollErr := tryEnrollIfNeeded(enrollCtx, logger, privateKeyFile, dataDir)
+	enrollCancel()
+	if enrollErr != nil {
+		logger.WithError(enrollErr).Fatal("Enrollment failed")
+	}
+
+	// Load any previously-persisted enrollment state; it tells us everything
+	// we need without env vars once a node has successfully joined once.
+	persisted, err := loadEnrollmentState(enrollmentStatePath(dataDir))
+	if err != nil {
+		logger.WithError(err).Warn("Failed to load persisted enrollment state")
+	}
+	if enrolled != nil {
+		persisted = enrolled
+	}
+
 	qmGRPCAddr := os.Getenv("QUARTERMASTER_GRPC_ADDR")
+	if qmGRPCAddr == "" && persisted != nil {
+		qmGRPCAddr = persisted.QuartermasterGRPCAddr
+	}
 	if qmGRPCAddr == "" {
-		logger.Fatal("QUARTERMASTER_GRPC_ADDR is required")
+		logger.Fatal("QUARTERMASTER_GRPC_ADDR is required (set env or enroll via `frameworks mesh join`)")
 	}
 
 	serviceToken := os.Getenv("SERVICE_TOKEN")
 	if serviceToken == "" {
-		logger.Fatal("SERVICE_TOKEN is required")
+		logger.Fatal("SERVICE_TOKEN is required — on seed nodes it's rendered by Ansible; on enrolled nodes `frameworks mesh join` writes it into /etc/privateer/privateer.env")
 	}
 
 	staticPeersFile := os.Getenv("PRIVATEER_STATIC_PEERS_FILE")
-	privateKeyFile := os.Getenv("MESH_PRIVATE_KEY_FILE")
+	if staticPeersFile == "" && persisted != nil {
+		staticPeersFile = persisted.StaticPeersFile
+	}
 	meshWireguardIP := os.Getenv("MESH_WIREGUARD_IP")
-	dataDir := os.Getenv("PRIVATEER_DATA_DIR")
-	if privateKeyFile == "" {
-		logger.Fatal("MESH_PRIVATE_KEY_FILE is required")
+	if meshWireguardIP == "" && persisted != nil {
+		meshWireguardIP = persisted.WireguardIP
 	}
 	if meshWireguardIP == "" {
 		logger.Fatal("MESH_WIREGUARD_IP is required")
@@ -56,9 +89,11 @@ func main() {
 
 	listenPort := 51820
 	if p := os.Getenv("MESH_LISTEN_PORT"); p != "" {
-		if port, err := strconv.Atoi(p); err == nil {
+		if port, parseErr := strconv.Atoi(p); parseErr == nil {
 			listenPort = port
 		}
+	} else if persisted != nil && persisted.WireguardPort > 0 {
+		listenPort = persisted.WireguardPort
 	}
 
 	syncInterval := 30 * time.Second
@@ -78,7 +113,13 @@ func main() {
 	nodeType := os.Getenv("MESH_NODE_TYPE")
 	nodeName := os.Getenv("MESH_NODE_NAME")
 	nodeID := os.Getenv("NODE_ID")
+	if nodeID == "" && persisted != nil {
+		nodeID = persisted.NodeID
+	}
 	clusterID := os.Getenv("CLUSTER_ID")
+	if clusterID == "" && persisted != nil {
+		clusterID = persisted.ClusterID
+	}
 	if clusterID == "" {
 		logger.Fatal("CLUSTER_ID is required")
 	}
@@ -92,8 +133,8 @@ func main() {
 			if s == "" {
 				continue
 			}
-			_, _, err := net.SplitHostPort(s)
-			if err != nil {
+			_, _, splitErr := net.SplitHostPort(s)
+			if splitErr != nil {
 				// No port: could be IPv4 (1.1.1.1) or IPv6 (2001:db8::1).
 				if net.ParseIP(s) != nil && strings.Contains(s, ":") {
 					s = "[" + s + "]:53"

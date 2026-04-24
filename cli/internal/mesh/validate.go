@@ -71,6 +71,17 @@ func ValidateIdentity(manifest *inventory.Manifest, hostNames []string) error {
 		if err := validateBase64Key(host.WireguardPublicKey); err != nil {
 			issues = append(issues, fmt.Sprintf("host %q: wireguard_public_key: %v", name, err))
 		}
+		// Adopted-local nodes keep the private key on their own disk and set
+		// wireguard_private_key_managed=false. For those we only assert the
+		// marker is present; otherwise the SOPS-managed private key must
+		// exist and match the public key.
+		keyManaged := host.WireguardPrivateKeyManaged == nil || *host.WireguardPrivateKeyManaged
+		if !keyManaged {
+			if strings.TrimSpace(host.WireguardPrivateKeyFile) == "" {
+				issues = append(issues, fmt.Sprintf("host %q: wireguard_private_key_managed is false but wireguard_private_key_file is empty", name))
+			}
+			continue
+		}
 		if err := validateBase64Key(host.WireguardPrivateKey); err != nil {
 			issues = append(issues, fmt.Sprintf("host %q: wireguard_private_key: %v", name, err))
 		} else if host.WireguardPublicKey != "" {

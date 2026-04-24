@@ -60,8 +60,17 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	if env["PRIVATEER_STATIC_PEERS_FILE"] == "" {
 		env["PRIVATEER_STATIC_PEERS_FILE"] = "/etc/privateer/static-peers.json"
 	}
-	if priv, ok := config.Metadata["wireguard_private_key"].(string); ok && priv != "" && env["MESH_PRIVATE_KEY_FILE"] == "" {
-		env["MESH_PRIVATE_KEY_FILE"] = "/etc/privateer/wg.key"
+	if env["MESH_PRIVATE_KEY_FILE"] == "" {
+		if priv, ok := config.Metadata["wireguard_private_key"].(string); ok && priv != "" {
+			// SOPS-managed seed path: Ansible will render the key into the
+			// default location.
+			env["MESH_PRIVATE_KEY_FILE"] = "/etc/privateer/wg.key"
+		} else if keyFile, ok := config.Metadata["wireguard_private_key_file"].(string); ok && keyFile != "" {
+			// Adopted-local path: no SOPS key, inventory names the on-disk
+			// file. Ansible's preserve-key branch asserts it exists and
+			// leaves it untouched.
+			env["MESH_PRIVATE_KEY_FILE"] = keyFile
+		}
 	}
 	if services, ok := config.Metadata["expected_internal_grpc_services"].([]string); ok && len(services) > 0 && env["EXPECTED_INTERNAL_GRPC_SERVICES"] == "" {
 		env["EXPECTED_INTERNAL_GRPC_SERVICES"] = strings.Join(services, ",")
@@ -88,6 +97,12 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	}
 	if port, ok := config.Metadata["wireguard_port"].(int); ok && port > 0 {
 		vars["privateer_wireguard_port"] = port
+	}
+	// Adopted-local nodes surface a boolean that gates the preserve-key
+	// branch in the Ansible role. Only emit it when explicitly set in the
+	// inventory, so older (SOPS-managed-only) clusters render identically.
+	if managed, ok := config.Metadata["wireguard_private_key_managed"].(bool); ok {
+		vars["privateer_wireguard_private_key_managed"] = managed
 	}
 	return vars, nil
 }

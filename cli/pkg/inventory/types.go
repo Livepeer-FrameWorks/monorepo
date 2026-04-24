@@ -105,6 +105,13 @@ type Host struct {
 	WireguardPublicKey  string `yaml:"wireguard_public_key,omitempty"`
 	WireguardPort       int    `yaml:"wireguard_port,omitempty"`
 	WireguardPrivateKey string `yaml:"-"`
+
+	// Adopted-local nodes carry the private key on their own disk rather
+	// than in SOPS. `mesh reconcile --write-gitops` sets Managed=false and
+	// records the on-disk path; the Ansible role uses this to preserve the
+	// existing key instead of rendering a new one.
+	WireguardPrivateKeyFile    string `yaml:"wireguard_private_key_file,omitempty"`
+	WireguardPrivateKeyManaged *bool  `yaml:"wireguard_private_key_managed,omitempty"`
 }
 
 // WireGuardConfig represents WireGuard mesh configuration
@@ -377,6 +384,13 @@ type HostConnection struct {
 	ExternalIP          string `yaml:"external_ip"`
 	User                string `yaml:"user,omitempty"`
 	WireguardPrivateKey string `yaml:"wireguard_private_key,omitempty"`
+
+	// Adopted-local hosts keep their WireGuard private key on-disk rather
+	// than in SOPS. `mesh reconcile --write-gitops` sets Managed=false and
+	// records the on-disk path; the Privateer Ansible role uses this to
+	// preserve the key file instead of rendering a new one.
+	WireguardPrivateKeyFile    string `yaml:"wireguard_private_key_file,omitempty"`
+	WireguardPrivateKeyManaged *bool  `yaml:"wireguard_private_key_managed,omitempty"`
 }
 
 // EdgeConnection holds the sensitive SSH target for an edge node.

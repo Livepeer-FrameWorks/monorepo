@@ -29,6 +29,8 @@ func newMeshCmd() *cobra.Command {
 
 	mesh.AddCommand(newMeshStatusCmd())
 	mesh.AddCommand(newMeshWgCmd())
+	mesh.AddCommand(newMeshJoinCmd())
+	mesh.AddCommand(newMeshReconcileCmd())
 
 	mesh.PersistentFlags().String("manifest", "", "path to a single cluster.yaml (overrides gitops sources)")
 	mesh.PersistentFlags().String("gitops-dir", "", "path to a local gitops repo (uses <dir>/clusters/<cluster>/cluster.yaml)")

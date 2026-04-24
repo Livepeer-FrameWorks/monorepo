@@ -1881,6 +1881,14 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			if selfHost.WireguardPort != 0 {
 				config.Metadata["wireguard_port"] = selfHost.WireguardPort
 			}
+			// Adopted-local hosts opt out of SOPS key rendering so the
+			// Ansible role preserves the on-disk private key.
+			if selfHost.WireguardPrivateKeyManaged != nil {
+				config.Metadata["wireguard_private_key_managed"] = *selfHost.WireguardPrivateKeyManaged
+			}
+			if selfHost.WireguardPrivateKeyFile != "" {
+				config.Metadata["wireguard_private_key_file"] = selfHost.WireguardPrivateKeyFile
+			}
 		}
 	}
 
@@ -2968,6 +2976,24 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 				ux.Success(out, fmt.Sprintf("Cluster %q already registered; updated metadata", clusterID))
 			} else {
 				ux.Success(out, fmt.Sprintf("Cluster %q already registered", clusterID))
+			}
+		}
+
+		// Upload WireGuard mesh CIDR + listen port so Quartermaster can
+		// allocate mesh IPs for enrolling nodes. Always sync from the
+		// manifest — it's the GitOps source of truth. The RPC is a simple
+		// upsert, cheap enough to call unconditionally.
+		if manifest.WireGuard != nil && manifest.WireGuard.Enabled && strings.TrimSpace(manifest.WireGuard.MeshCIDR) != "" {
+			port := int32(manifest.WireGuard.ListenPort)
+			if port == 0 {
+				port = 51820
+			}
+			if _, err := client.UpdateClusterMeshConfig(ctx, &pb.UpdateClusterMeshConfigRequest{
+				ClusterId:    clusterID,
+				MeshCidr:     manifest.WireGuard.MeshCIDR,
+				WgListenPort: port,
+			}); err != nil {
+				return nil, fmt.Errorf("failed to sync WireGuard mesh config for cluster '%s': %w", clusterID, err)
 			}
 		}
 	}

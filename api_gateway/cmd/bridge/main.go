@@ -495,6 +495,17 @@ func main() {
 		authProtected.POST("/me/newsletter", authHandlers.UpdateNewsletter())
 	}
 
+	// Public infrastructure-node enrollment endpoint. Takes a bootstrap token
+	// (validated server-side by Quartermaster) and a locally-generated
+	// WireGuard public key; returns the assigned mesh identity and seed peer
+	// set. Keeping this on Bridge means Quartermaster's gRPC listener stays
+	// mesh-only — freshly-enrolled nodes reach the control plane through the
+	// one externally-reachable Bridge surface.
+	{
+		infraBootstrap := handlers.NewInfrastructureBootstrapHandler(serviceClients.Quartermaster, logger)
+		app.POST("/v1/bootstrap/infrastructure-node", infraBootstrap.Handle)
+	}
+
 	// Webhook routing - external payment provider webhooks forwarded to internal services via gRPC.
 	// No auth middleware - signature verification happens in the target service.
 	// Route pattern: /webhooks/{service}/{provider}

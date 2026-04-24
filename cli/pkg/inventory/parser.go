@@ -148,8 +148,10 @@ func LoadHostInventory(path, ageKeyFile string) (*HostInventory, error) {
 	return &inv, nil
 }
 
-// MergeHostInventory populates Name, ExternalIP, User, and WireguardPrivateKey
-// on manifest hosts from the given host inventory.
+// MergeHostInventory populates connection and WireGuard identity fields on
+// manifest hosts from the given host inventory. Covers both the SOPS-managed
+// key path (`wireguard_private_key`) and the adopted-local preserve-key
+// path (`wireguard_private_key_file` + `wireguard_private_key_managed`).
 func (m *Manifest) MergeHostInventory(inv *HostInventory) error {
 	for name, host := range m.Hosts {
 		conn, ok := inv.Hosts[name]
@@ -163,6 +165,13 @@ func (m *Manifest) MergeHostInventory(inv *HostInventory) error {
 		}
 		if conn.WireguardPrivateKey != "" {
 			host.WireguardPrivateKey = conn.WireguardPrivateKey
+		}
+		if conn.WireguardPrivateKeyFile != "" {
+			host.WireguardPrivateKeyFile = conn.WireguardPrivateKeyFile
+		}
+		if conn.WireguardPrivateKeyManaged != nil {
+			managed := *conn.WireguardPrivateKeyManaged
+			host.WireguardPrivateKeyManaged = &managed
 		}
 		m.Hosts[name] = host
 	}

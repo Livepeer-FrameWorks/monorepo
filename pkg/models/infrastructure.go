@@ -114,6 +114,7 @@ type InfrastructureNode struct {
 	WireguardIP        *string        `json:"wireguard_ip,omitempty" db:"wireguard_ip"`
 	WireguardPublicKey *string        `json:"wireguard_public_key,omitempty" db:"wireguard_public_key"`
 	WireguardPort      *int           `json:"wireguard_port,omitempty"`
+	EnrollmentOrigin   string         `json:"enrollment_origin" db:"enrollment_origin"`
 	Region             *string        `json:"region,omitempty" db:"region"`
 	AvailabilityZone   *string        `json:"availability_zone,omitempty" db:"availability_zone"`
 	Latitude           *float64       `json:"latitude,omitempty" db:"latitude"`

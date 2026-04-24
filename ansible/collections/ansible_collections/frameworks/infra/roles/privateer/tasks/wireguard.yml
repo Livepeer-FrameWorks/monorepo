@@ -3,14 +3,17 @@
   ansible.builtin.assert:
     that:
       - privateer_wireguard_ip | length > 0
-      - privateer_wireguard_private_key | length > 0
       - privateer_wireguard_port | int > 0
+      - (privateer_wireguard_private_key | length > 0) or (privateer_wireguard_private_key_managed is defined and not privateer_wireguard_private_key_managed)
       - privateer_env.SERVICE_TOKEN is defined
       - privateer_env.QUARTERMASTER_GRPC_ADDR is defined
       - privateer_env.MESH_PRIVATE_KEY_FILE is defined
       - privateer_env.MESH_WIREGUARD_IP is defined
       - privateer_env.PRIVATEER_STATIC_PEERS_FILE is defined
-    fail_msg: "privateer requires complete GitOps WireGuard identity and control-plane env"
+    fail_msg: >-
+      privateer requires complete WireGuard identity
+      (SOPS-managed private key OR wireguard_private_key_managed=false
+      with on-disk key) and control-plane env
   no_log: true
 
 - name: Privateer | render static-peers.json
@@ -22,7 +25,7 @@
     mode: "0640"
   notify: privateer restart
 
-- name: Privateer | render wg.key
+- name: Privateer | render wg.key (SOPS-managed)
   ansible.builtin.copy:
     dest: "{{ privateer_conf_dir }}/wg.key"
     content: "{{ privateer_wireguard_private_key }}"
@@ -32,3 +35,29 @@
   when: privateer_wireguard_private_key | length > 0
   no_log: true
   notify: privateer restart
+
+# Adopted-local branch: the node's private key lives on its own disk from a
+# prior `mesh join`. GitOps recorded the public identity via `mesh reconcile`
+# but intentionally does not hold the private key. Assert it still exists so
+# the node can come up, but never overwrite it.
+- name: Privateer | assert adopted-local key present on target
+  ansible.builtin.stat:
+    path: "{{ privateer_env.MESH_PRIVATE_KEY_FILE }}"
+  register: privateer_adopted_key_stat
+  when:
+    - privateer_wireguard_private_key | length == 0
+    - privateer_wireguard_private_key_managed is defined
+    - not privateer_wireguard_private_key_managed
+
+- name: Privateer | fail if adopted-local key is missing
+  ansible.builtin.fail:
+    msg: |
+      {{ inventory_hostname }} is declared wireguard_private_key_managed: false
+      in hosts.enc.yaml, but {{ privateer_env.MESH_PRIVATE_KEY_FILE }} is absent.
+      Either rotate via `frameworks mesh wg rotate {{ inventory_hostname }}` to
+      regenerate a SOPS-managed key, or restore the on-disk file from backup.
+  when:
+    - privateer_wireguard_private_key | length == 0
+    - privateer_wireguard_private_key_managed is defined
+    - not privateer_wireguard_private_key_managed
+    - not (privateer_adopted_key_stat.stat.exists | default(false))

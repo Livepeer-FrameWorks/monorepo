@@ -15,10 +15,10 @@ import (
 // nodeColumns matches the SELECT column order in scanNode.
 var nodeColumns = []string{
 	"id", "node_id", "cluster_id", "node_name", "node_type",
-	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key",
+	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key", "wireguard_listen_port",
 	"region", "availability_zone", "latitude", "longitude",
 	"cpu_cores", "memory_gb", "disk_gb",
-	"last_heartbeat", "created_at", "updated_at",
+	"last_heartbeat", "enrollment_origin", "created_at", "updated_at",
 }
 
 // queryNodeColumns matches the SELECT column order in queryNode, which also
@@ -28,27 +28,29 @@ var queryNodeColumns = []string{
 	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key", "wireguard_listen_port",
 	"region", "availability_zone", "latitude", "longitude",
 	"cpu_cores", "memory_gb", "disk_gb",
-	"last_heartbeat", "created_at", "updated_at",
+	"last_heartbeat", "enrollment_origin", "created_at", "updated_at",
 }
 
 func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []driver.Value {
 	now := time.Now()
 	return []driver.Value{
 		id, nodeID, clusterID, nodeName, nodeType,
-		"10.0.0.1", // internal_ip
-		externalIP, // external_ip
-		nil,        // wireguard_ip
-		nil,        // wireguard_public_key
-		nil,        // region
-		nil,        // availability_zone
-		nil,        // latitude
-		nil,        // longitude
-		nil,        // cpu_cores
-		nil,        // memory_gb
-		nil,        // disk_gb
-		nil,        // last_heartbeat
-		now,        // created_at
-		now,        // updated_at
+		"10.0.0.1",    // internal_ip
+		externalIP,    // external_ip
+		nil,           // wireguard_ip
+		nil,           // wireguard_public_key
+		nil,           // wireguard_listen_port
+		nil,           // region
+		nil,           // availability_zone
+		nil,           // latitude
+		nil,           // longitude
+		nil,           // cpu_cores
+		nil,           // memory_gb
+		nil,           // disk_gb
+		nil,           // last_heartbeat
+		"gitops_seed", // enrollment_origin
+		now,           // created_at
+		now,           // updated_at
 	}
 }
 

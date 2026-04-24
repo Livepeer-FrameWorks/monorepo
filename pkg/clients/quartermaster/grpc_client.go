@@ -231,6 +231,19 @@ func (c *GRPCClient) UpdateCluster(ctx context.Context, req *pb.UpdateClusterReq
 	return c.cluster.UpdateCluster(ctx, req)
 }
 
+// UpdateClusterMeshConfig stores the cluster's WireGuard mesh CIDR and
+// default listen port in Quartermaster. Sourced from the manifest during
+// cluster provision; used later by BootstrapInfrastructureNode.
+func (c *GRPCClient) UpdateClusterMeshConfig(ctx context.Context, req *pb.UpdateClusterMeshConfigRequest) (*pb.UpdateClusterMeshConfigResponse, error) {
+	return c.cluster.UpdateClusterMeshConfig(ctx, req)
+}
+
+// SetNodeEnrollmentOrigin flips a node's enrollment_origin. Used by
+// `frameworks mesh reconcile` to promote enrolled nodes into GitOps.
+func (c *GRPCClient) SetNodeEnrollmentOrigin(ctx context.Context, req *pb.SetNodeEnrollmentOriginRequest) (*pb.SetNodeEnrollmentOriginResponse, error) {
+	return c.node.SetNodeEnrollmentOrigin(ctx, req)
+}
+
 // ListClustersForTenant lists clusters accessible to a tenant
 func (c *GRPCClient) ListClustersForTenant(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ClustersAccessResponse, error) {
 	return c.cluster.ListClustersForTenant(ctx, &pb.ListClustersForTenantRequest{

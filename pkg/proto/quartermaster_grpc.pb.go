@@ -622,6 +622,7 @@ const (
 	ClusterService_ListClusters_FullMethodName               = "/quartermaster.ClusterService/ListClusters"
 	ClusterService_CreateCluster_FullMethodName              = "/quartermaster.ClusterService/CreateCluster"
 	ClusterService_UpdateCluster_FullMethodName              = "/quartermaster.ClusterService/UpdateCluster"
+	ClusterService_UpdateClusterMeshConfig_FullMethodName    = "/quartermaster.ClusterService/UpdateClusterMeshConfig"
 	ClusterService_ListClustersForTenant_FullMethodName      = "/quartermaster.ClusterService/ListClustersForTenant"
 	ClusterService_ListClustersAvailable_FullMethodName      = "/quartermaster.ClusterService/ListClustersAvailable"
 	ClusterService_GrantClusterAccess_FullMethodName         = "/quartermaster.ClusterService/GrantClusterAccess"
@@ -659,6 +660,7 @@ type ClusterServiceClient interface {
 	ListClusters(ctx context.Context, in *ListClustersRequest, opts ...grpc.CallOption) (*ListClustersResponse, error)
 	CreateCluster(ctx context.Context, in *CreateClusterRequest, opts ...grpc.CallOption) (*ClusterResponse, error)
 	UpdateCluster(ctx context.Context, in *UpdateClusterRequest, opts ...grpc.CallOption) (*ClusterResponse, error)
+	UpdateClusterMeshConfig(ctx context.Context, in *UpdateClusterMeshConfigRequest, opts ...grpc.CallOption) (*UpdateClusterMeshConfigResponse, error)
 	// Get clusters accessible to a tenant
 	ListClustersForTenant(ctx context.Context, in *ListClustersForTenantRequest, opts ...grpc.CallOption) (*ClustersAccessResponse, error)
 	// Get clusters available for tenant onboarding
@@ -752,6 +754,16 @@ func (c *clusterServiceClient) UpdateCluster(ctx context.Context, in *UpdateClus
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ClusterResponse)
 	err := c.cc.Invoke(ctx, ClusterService_UpdateCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) UpdateClusterMeshConfig(ctx context.Context, in *UpdateClusterMeshConfigRequest, opts ...grpc.CallOption) (*UpdateClusterMeshConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateClusterMeshConfigResponse)
+	err := c.cc.Invoke(ctx, ClusterService_UpdateClusterMeshConfig_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1018,6 +1030,7 @@ type ClusterServiceServer interface {
 	ListClusters(context.Context, *ListClustersRequest) (*ListClustersResponse, error)
 	CreateCluster(context.Context, *CreateClusterRequest) (*ClusterResponse, error)
 	UpdateCluster(context.Context, *UpdateClusterRequest) (*ClusterResponse, error)
+	UpdateClusterMeshConfig(context.Context, *UpdateClusterMeshConfigRequest) (*UpdateClusterMeshConfigResponse, error)
 	// Get clusters accessible to a tenant
 	ListClustersForTenant(context.Context, *ListClustersForTenantRequest) (*ClustersAccessResponse, error)
 	// Get clusters available for tenant onboarding
@@ -1088,6 +1101,9 @@ func (UnimplementedClusterServiceServer) CreateCluster(context.Context, *CreateC
 }
 func (UnimplementedClusterServiceServer) UpdateCluster(context.Context, *UpdateClusterRequest) (*ClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateCluster not implemented")
+}
+func (UnimplementedClusterServiceServer) UpdateClusterMeshConfig(context.Context, *UpdateClusterMeshConfigRequest) (*UpdateClusterMeshConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateClusterMeshConfig not implemented")
 }
 func (UnimplementedClusterServiceServer) ListClustersForTenant(context.Context, *ListClustersForTenantRequest) (*ClustersAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListClustersForTenant not implemented")
@@ -1253,6 +1269,24 @@ func _ClusterService_UpdateCluster_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClusterServiceServer).UpdateCluster(ctx, req.(*UpdateClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_UpdateClusterMeshConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateClusterMeshConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).UpdateClusterMeshConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_UpdateClusterMeshConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).UpdateClusterMeshConfig(ctx, req.(*UpdateClusterMeshConfigRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1731,6 +1765,10 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClusterService_UpdateCluster_Handler,
 		},
 		{
+			MethodName: "UpdateClusterMeshConfig",
+			Handler:    _ClusterService_UpdateClusterMeshConfig_Handler,
+		},
+		{
 			MethodName: "ListClustersForTenant",
 			Handler:    _ClusterService_ListClustersForTenant_Handler,
 		},
@@ -1836,15 +1874,16 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	NodeService_GetNode_FullMethodName                = "/quartermaster.NodeService/GetNode"
-	NodeService_ListNodes_FullMethodName              = "/quartermaster.NodeService/ListNodes"
-	NodeService_ListHealthyNodesForDNS_FullMethodName = "/quartermaster.NodeService/ListHealthyNodesForDNS"
-	NodeService_CreateNode_FullMethodName             = "/quartermaster.NodeService/CreateNode"
-	NodeService_ResolveNodeFingerprint_FullMethodName = "/quartermaster.NodeService/ResolveNodeFingerprint"
-	NodeService_GetNodeOwner_FullMethodName           = "/quartermaster.NodeService/GetNodeOwner"
-	NodeService_GetNodeByLogicalName_FullMethodName   = "/quartermaster.NodeService/GetNodeByLogicalName"
-	NodeService_UpdateNodeHardware_FullMethodName     = "/quartermaster.NodeService/UpdateNodeHardware"
-	NodeService_ReportAliveNodes_FullMethodName       = "/quartermaster.NodeService/ReportAliveNodes"
+	NodeService_GetNode_FullMethodName                 = "/quartermaster.NodeService/GetNode"
+	NodeService_ListNodes_FullMethodName               = "/quartermaster.NodeService/ListNodes"
+	NodeService_ListHealthyNodesForDNS_FullMethodName  = "/quartermaster.NodeService/ListHealthyNodesForDNS"
+	NodeService_CreateNode_FullMethodName              = "/quartermaster.NodeService/CreateNode"
+	NodeService_SetNodeEnrollmentOrigin_FullMethodName = "/quartermaster.NodeService/SetNodeEnrollmentOrigin"
+	NodeService_ResolveNodeFingerprint_FullMethodName  = "/quartermaster.NodeService/ResolveNodeFingerprint"
+	NodeService_GetNodeOwner_FullMethodName            = "/quartermaster.NodeService/GetNodeOwner"
+	NodeService_GetNodeByLogicalName_FullMethodName    = "/quartermaster.NodeService/GetNodeByLogicalName"
+	NodeService_UpdateNodeHardware_FullMethodName      = "/quartermaster.NodeService/UpdateNodeHardware"
+	NodeService_ReportAliveNodes_FullMethodName        = "/quartermaster.NodeService/ReportAliveNodes"
 )
 
 // NodeServiceClient is the client API for NodeService service.
@@ -1857,6 +1896,7 @@ type NodeServiceClient interface {
 	ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
 	ListHealthyNodesForDNS(ctx context.Context, in *ListHealthyNodesForDNSRequest, opts ...grpc.CallOption) (*ListHealthyNodesForDNSResponse, error)
 	CreateNode(ctx context.Context, in *CreateNodeRequest, opts ...grpc.CallOption) (*NodeResponse, error)
+	SetNodeEnrollmentOrigin(ctx context.Context, in *SetNodeEnrollmentOriginRequest, opts ...grpc.CallOption) (*SetNodeEnrollmentOriginResponse, error)
 	// Resolve node fingerprint for identity binding
 	// Source: pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest
 	ResolveNodeFingerprint(ctx context.Context, in *ResolveNodeFingerprintRequest, opts ...grpc.CallOption) (*ResolveNodeFingerprintResponse, error)
@@ -1916,6 +1956,16 @@ func (c *nodeServiceClient) CreateNode(ctx context.Context, in *CreateNodeReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NodeResponse)
 	err := c.cc.Invoke(ctx, NodeService_CreateNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeServiceClient) SetNodeEnrollmentOrigin(ctx context.Context, in *SetNodeEnrollmentOriginRequest, opts ...grpc.CallOption) (*SetNodeEnrollmentOriginResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetNodeEnrollmentOriginResponse)
+	err := c.cc.Invoke(ctx, NodeService_SetNodeEnrollmentOrigin_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1982,6 +2032,7 @@ type NodeServiceServer interface {
 	ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error)
 	ListHealthyNodesForDNS(context.Context, *ListHealthyNodesForDNSRequest) (*ListHealthyNodesForDNSResponse, error)
 	CreateNode(context.Context, *CreateNodeRequest) (*NodeResponse, error)
+	SetNodeEnrollmentOrigin(context.Context, *SetNodeEnrollmentOriginRequest) (*SetNodeEnrollmentOriginResponse, error)
 	// Resolve node fingerprint for identity binding
 	// Source: pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest
 	ResolveNodeFingerprint(context.Context, *ResolveNodeFingerprintRequest) (*ResolveNodeFingerprintResponse, error)
@@ -2018,6 +2069,9 @@ func (UnimplementedNodeServiceServer) ListHealthyNodesForDNS(context.Context, *L
 }
 func (UnimplementedNodeServiceServer) CreateNode(context.Context, *CreateNodeRequest) (*NodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateNode not implemented")
+}
+func (UnimplementedNodeServiceServer) SetNodeEnrollmentOrigin(context.Context, *SetNodeEnrollmentOriginRequest) (*SetNodeEnrollmentOriginResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetNodeEnrollmentOrigin not implemented")
 }
 func (UnimplementedNodeServiceServer) ResolveNodeFingerprint(context.Context, *ResolveNodeFingerprintRequest) (*ResolveNodeFingerprintResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveNodeFingerprint not implemented")
@@ -2123,6 +2177,24 @@ func _NodeService_CreateNode_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(NodeServiceServer).CreateNode(ctx, req.(*CreateNodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeService_SetNodeEnrollmentOrigin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetNodeEnrollmentOriginRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).SetNodeEnrollmentOrigin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_SetNodeEnrollmentOrigin_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).SetNodeEnrollmentOrigin(ctx, req.(*SetNodeEnrollmentOriginRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2239,6 +2311,10 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateNode",
 			Handler:    _NodeService_CreateNode_Handler,
+		},
+		{
+			MethodName: "SetNodeEnrollmentOrigin",
+			Handler:    _NodeService_SetNodeEnrollmentOrigin_Handler,
 		},
 		{
 			MethodName: "ResolveNodeFingerprint",

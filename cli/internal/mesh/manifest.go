@@ -138,6 +138,57 @@ func setScalarField(m *yaml.Node, key, value string) {
 	)
 }
 
+// ClearAdoptedLocalMarkers removes the preserve-key markers
+// (`wireguard_private_key_file` + `wireguard_private_key_managed`) from the
+// named hosts in a decrypted SOPS inventory. Called during rotate when an
+// `adopted_local` host is being re-keyed into SOPS — once this returns, the
+// inventory represents the host as fully SOPS-managed again.
+func ClearAdoptedLocalMarkers(raw []byte, hosts []string) ([]byte, error) {
+	if len(hosts) == 0 {
+		return raw, nil
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return nil, fmt.Errorf("parse hosts.yaml: %w", err)
+	}
+	if root.Kind != yaml.DocumentNode || len(root.Content) != 1 {
+		return nil, fmt.Errorf("hosts.yaml: expected single document")
+	}
+	doc := root.Content[0]
+	hostsMap := findMappingChild(doc, "hosts")
+	if hostsMap == nil {
+		return raw, nil
+	}
+	target := map[string]bool{}
+	for _, h := range hosts {
+		target[h] = true
+	}
+	for i := 0; i+1 < len(hostsMap.Content); i += 2 {
+		name := hostsMap.Content[i].Value
+		if !target[name] {
+			continue
+		}
+		hostNode := hostsMap.Content[i+1]
+		if hostNode.Kind != yaml.MappingNode {
+			continue
+		}
+		deleteMappingKey(hostNode, "wireguard_private_key_file")
+		deleteMappingKey(hostNode, "wireguard_private_key_managed")
+	}
+	return yaml.Marshal(&root)
+}
+
+// deleteMappingKey removes the key/value pair with the given key from a
+// mapping node in-place. No-op if the key isn't present.
+func deleteMappingKey(m *yaml.Node, key string) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			return
+		}
+	}
+}
+
 // UpdateHostInventoryYAML upserts hosts.<name>.wireguard_private_key values
 // in the decrypted SOPS inventory YAML, preserving the rest of the document.
 func UpdateHostInventoryYAML(raw []byte, privateKeys map[string]string) ([]byte, error) {
@@ -173,4 +224,138 @@ func boolString(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// AdoptedHost describes a runtime-enrolled node being written into GitOps by
+// `frameworks mesh reconcile --write-gitops`. The public identity goes into
+// cluster.yaml; the inventory placeholder tells Ansible to preserve the
+// on-disk private key instead of rendering a SOPS-managed one.
+type AdoptedHost struct {
+	Name               string
+	ClusterID          string // cluster key in manifest.clusters
+	Roles              []string
+	ExternalIP         string
+	WireguardIP        string
+	WireguardPublicKey string
+	WireguardPort      int
+	NodeType           string // "core", "edge", etc. — written as tag/role metadata
+	PrivateKeyFile     string // typically /etc/privateer/wg.key
+}
+
+// InsertAdoptedHostsIntoClusterYAML appends new host entries under `hosts:`
+// for each AdoptedHost that isn't already present. Existing hosts are left
+// untouched — use UpdateClusterYAML for per-host WG field upserts.
+func InsertAdoptedHostsIntoClusterYAML(raw []byte, hosts []AdoptedHost) ([]byte, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return nil, fmt.Errorf("parse cluster.yaml: %w", err)
+	}
+	if root.Kind != yaml.DocumentNode || len(root.Content) != 1 {
+		return nil, fmt.Errorf("cluster.yaml: expected single document")
+	}
+	doc := root.Content[0]
+	hostsMap := findMappingChild(doc, "hosts")
+	if hostsMap == nil {
+		// No `hosts:` mapping — create an empty one.
+		key := &yaml.Node{Kind: yaml.ScalarNode, Value: "hosts", Tag: "!!str"}
+		value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		doc.Content = append(doc.Content, key, value)
+		hostsMap = value
+	}
+	existing := map[string]bool{}
+	for i := 0; i+1 < len(hostsMap.Content); i += 2 {
+		existing[hostsMap.Content[i].Value] = true
+	}
+	for _, h := range hosts {
+		if existing[h.Name] {
+			continue
+		}
+		hostNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		if h.ExternalIP != "" {
+			setScalarField(hostNode, "external_ip", h.ExternalIP)
+		}
+		if h.ClusterID != "" {
+			setScalarField(hostNode, "cluster", h.ClusterID)
+		}
+		if h.WireguardIP != "" {
+			setScalarField(hostNode, "wireguard_ip", h.WireguardIP)
+		}
+		if h.WireguardPublicKey != "" {
+			setScalarField(hostNode, "wireguard_public_key", h.WireguardPublicKey)
+		}
+		if h.WireguardPort > 0 {
+			setScalarField(hostNode, "wireguard_port", fmt.Sprintf("%d", h.WireguardPort))
+		}
+		if len(h.Roles) > 0 {
+			rolesNode := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle}
+			for _, r := range h.Roles {
+				rolesNode.Content = append(rolesNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: r})
+			}
+			hostNode.Content = append(hostNode.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "roles"},
+				rolesNode,
+			)
+		}
+		hostsMap.Content = append(hostsMap.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: h.Name},
+			hostNode,
+		)
+	}
+	return yaml.Marshal(&root)
+}
+
+// InsertAdoptedHostsIntoInventoryYAML appends host entries under `hosts:` in
+// the decrypted SOPS inventory, marking each as externally-managed so the
+// Ansible role preserves the on-disk private key. Existing hosts with a
+// `wireguard_private_key` are left untouched.
+func InsertAdoptedHostsIntoInventoryYAML(raw []byte, hosts []AdoptedHost) ([]byte, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return nil, fmt.Errorf("parse hosts.yaml: %w", err)
+	}
+	if root.Kind != yaml.DocumentNode || len(root.Content) != 1 {
+		return nil, fmt.Errorf("hosts.yaml: expected single document")
+	}
+	doc := root.Content[0]
+	hostsMap := findMappingChild(doc, "hosts")
+	if hostsMap == nil {
+		key := &yaml.Node{Kind: yaml.ScalarNode, Value: "hosts", Tag: "!!str"}
+		value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		doc.Content = append(doc.Content, key, value)
+		hostsMap = value
+	}
+	existing := map[string]*yaml.Node{}
+	for i := 0; i+1 < len(hostsMap.Content); i += 2 {
+		existing[hostsMap.Content[i].Value] = hostsMap.Content[i+1]
+	}
+	for _, h := range hosts {
+		hostNode, ok := existing[h.Name]
+		if ok && hostNode.Kind == yaml.MappingNode {
+			if findMappingChild(hostNode, "wireguard_private_key") != nil {
+				// Already has a SOPS-managed key — leave it alone.
+				continue
+			}
+			setScalarField(hostNode, "wireguard_private_key_file", defaultKeyFile(h.PrivateKeyFile))
+			setScalarField(hostNode, "wireguard_private_key_managed", "false")
+			continue
+		}
+		hostNode = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		if h.ExternalIP != "" {
+			setScalarField(hostNode, "external_ip", h.ExternalIP)
+		}
+		setScalarField(hostNode, "wireguard_private_key_file", defaultKeyFile(h.PrivateKeyFile))
+		setScalarField(hostNode, "wireguard_private_key_managed", "false")
+		hostsMap.Content = append(hostsMap.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: h.Name},
+			hostNode,
+		)
+	}
+	return yaml.Marshal(&root)
+}
+
+func defaultKeyFile(s string) string {
+	if s != "" {
+		return s
+	}
+	return "/etc/privateer/wg.key"
 }

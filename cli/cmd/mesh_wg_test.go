@@ -39,7 +39,7 @@ services:
 `)
 
 	cmd := testCobraCommand()
-	if err := runMeshWgGenerate(cmd, manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "", false); err != nil {
+	if err := runMeshWgGenerate(cmd, manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "", false, false); err != nil {
 		t.Fatalf("runMeshWgGenerate: %v", err)
 	}
 
@@ -80,14 +80,14 @@ services:
 `)
 
 	cmd := testCobraCommand()
-	if err := runMeshWgGenerate(cmd, manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "", false); err != nil {
+	if err := runMeshWgGenerate(cmd, manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "", false, false); err != nil {
 		t.Fatalf("initial runMeshWgGenerate: %v", err)
 	}
 
 	raw := readFile(t, manifestPath)
 	writeFile(t, manifestPath, strings.Replace(raw, "enabled: true", "enabled: false", 1))
 
-	if err := runMeshWgGenerate(cmd, manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "", false); err != nil {
+	if err := runMeshWgGenerate(cmd, manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "", false, false); err != nil {
 		t.Fatalf("repair runMeshWgGenerate: %v", err)
 	}
 	got, err := inventory.LoadWithHostsFileNoValidate(manifestPath, hostsPath, "")
@@ -99,6 +99,107 @@ services:
 	}
 	if err := mesh.ValidateIdentity(got, []string{"core-1"}); err != nil {
 		t.Fatalf("repaired identity did not validate: %v", err)
+	}
+}
+
+// TestMeshWgRotateAdoptedLocal_StripsPreserveKeyMarkers verifies that when
+// a rotate target currently carries `wireguard_private_key_managed: false`
+// (adopted_local state), rotate regenerates a SOPS-managed key AND removes
+// the preserve-key markers from the committed hosts.enc.yaml. Privateer
+// must NOT be called from rotate — the origin flip belongs to `mesh wg
+// promote` after convergence.
+func TestMeshWgRotateAdoptedLocal_StripsPreserveKeyMarkers(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "cluster.yaml")
+	hostsPath := filepath.Join(dir, "hosts.enc.yaml")
+	writeFile(t, manifestPath, `version: "1"
+type: cluster
+profile: production
+hosts_file: hosts.enc.yaml
+wireguard:
+  enabled: true
+  mesh_cidr: 10.88.0.0/16
+  listen_port: 51820
+hosts:
+  core-1:
+    wireguard_ip: 10.88.0.2
+    wireguard_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    wireguard_port: 51820
+services:
+  privateer:
+    enabled: true
+    hosts: [core-1]
+`)
+	// hosts.enc.yaml carries the preserve-key markers (adopted_local state).
+	writeFile(t, hostsPath, `hosts:
+  core-1:
+    external_ip: 203.0.113.10
+    user: ubuntu
+    wireguard_private_key_file: /etc/privateer/wg.key
+    wireguard_private_key_managed: false
+`)
+
+	cmd := testCobraCommand()
+	if err := runMeshWgGenerate(cmd, manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "core-1", false, false); err != nil {
+		t.Fatalf("rotate on adopted_local host: %v", err)
+	}
+
+	// Preserve-key markers must be gone from the committed inventory.
+	committedHosts := readFile(t, hostsPath)
+	if strings.Contains(committedHosts, "wireguard_private_key_managed") {
+		t.Errorf("wireguard_private_key_managed was not stripped:\n%s", committedHosts)
+	}
+	if strings.Contains(committedHosts, "wireguard_private_key_file") {
+		t.Errorf("wireguard_private_key_file was not stripped:\n%s", committedHosts)
+	}
+	if !strings.Contains(committedHosts, "wireguard_private_key:") {
+		t.Errorf("a SOPS-managed wireguard_private_key should now be present:\n%s", committedHosts)
+	}
+}
+
+func TestMeshWgGenerateDryRunTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "cluster.yaml")
+	hostsPath := filepath.Join(dir, "hosts.enc.yaml")
+	writeFile(t, manifestPath, `version: "1"
+type: cluster
+profile: production
+hosts_file: hosts.enc.yaml
+hosts:
+  core-1: {}
+services:
+  privateer:
+    enabled: true
+    hosts: [core-1]
+`)
+	writeFile(t, hostsPath, `hosts:
+  core-1:
+    external_ip: 203.0.113.10
+    user: ubuntu
+`)
+	beforeManifest := readFile(t, manifestPath)
+	beforeHosts := readFile(t, hostsPath)
+
+	out := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	if err := runMeshWgGenerate(cmd, manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "", false, true); err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+
+	if got := readFile(t, manifestPath); got != beforeManifest {
+		t.Fatal("manifest changed during dry-run")
+	}
+	if got := readFile(t, hostsPath); got != beforeHosts {
+		t.Fatal("hosts file changed during dry-run")
+	}
+
+	summary := out.String()
+	for _, want := range []string{"dry-run", "core-1", "key:  generate new", "SOPS hosts file: would decrypt"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("dry-run summary missing %q:\n%s", want, summary)
+		}
 	}
 }
 
@@ -121,7 +222,7 @@ hosts:
 	beforeManifest := readFile(t, manifestPath)
 	beforeHosts := readFile(t, hostsPath)
 
-	err := runMeshWgGenerate(testCobraCommand(), manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "missing-host", false)
+	err := runMeshWgGenerate(testCobraCommand(), manifestPath, hostsPath, "", "10.88.0.0/16", 51820, "missing-host", false, false)
 	if err == nil || !strings.Contains(err.Error(), `host "missing-host" not found`) {
 		t.Fatalf("expected unknown host error, got %v", err)
 	}

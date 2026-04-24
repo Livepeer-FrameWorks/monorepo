@@ -73,6 +73,7 @@ service ClusterService {
   rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
   rpc CreateCluster(CreateClusterRequest) returns (ClusterResponse);
   rpc UpdateCluster(UpdateClusterRequest) returns (ClusterResponse);
+  rpc UpdateClusterMeshConfig(UpdateClusterMeshConfigRequest) returns (UpdateClusterMeshConfigResponse);
 
   // Get clusters accessible to a tenant
   rpc ListClustersForTenant(ListClustersForTenantRequest) returns (ClustersAccessResponse);
@@ -160,12 +161,29 @@ service ClusterService {
   rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateBootstrapTokenResponse);
 }
 
+// SetNodeEnrollmentOriginRequest flips a node's enrollment_origin. Used by
+// `frameworks mesh reconcile` (runtime_enrolled → adopted_local) and after
+// a successful `mesh wg rotate` on an adopted node (adopted_local →
+// gitops_seed).
+message SetNodeEnrollmentOriginRequest {
+  string node_id = 1;
+  string enrollment_origin = 2;  // one of: gitops_seed, runtime_enrolled, adopted_local
+  // Expected current origin, for safety. Empty = no check.
+  string expected_current = 3;
+}
+
+message SetNodeEnrollmentOriginResponse {
+  string node_id = 1;
+  string enrollment_origin = 2;
+}
+
 // NodeService handles infrastructure node management
 service NodeService {
   rpc GetNode(GetNodeRequest) returns (NodeResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc ListHealthyNodesForDNS(ListHealthyNodesForDNSRequest) returns (ListHealthyNodesForDNSResponse);
   rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
+  rpc SetNodeEnrollmentOrigin(SetNodeEnrollmentOriginRequest) returns (SetNodeEnrollmentOriginResponse);
 
   // Resolve node fingerprint for identity binding
   // Source: pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest
@@ -568,6 +586,22 @@ message UpdateClusterRequest {
   optional bool is_default_cluster = 15;   // json:"is_default_cluster,omitempty" - Set/clear default cluster flag
 }
 
+// Updates the cluster's WireGuard mesh parameters (CIDR + default listen
+// port). Sourced from the manifest's wireguard.* block during cluster
+// provision; BootstrapInfrastructureNode uses these to assign mesh IPs to
+// runtime-enrolled nodes.
+message UpdateClusterMeshConfigRequest {
+  string cluster_id = 1;
+  string mesh_cidr = 2;      // IPv4 CIDR, e.g. "10.88.0.0/16"
+  int32 wg_listen_port = 3;  // default UDP listen port
+}
+
+message UpdateClusterMeshConfigResponse {
+  string cluster_id = 1;
+  string mesh_cidr = 2;
+  int32 wg_listen_port = 3;
+}
+
 message ListClustersForTenantRequest {
   string tenant_id = 1;
   common.CursorPaginationRequest pagination = 2;
@@ -842,6 +876,8 @@ message InfrastructureNode {
   optional double latitude = 20;        // json:"latitude,omitempty"
   optional double longitude = 21;       // json:"longitude,omitempty"
   optional int32 wireguard_port = 22;   // json:"wireguard_port,omitempty"
+  // How this row came to be. One of: gitops_seed, runtime_enrolled, adopted_local.
+  string enrollment_origin = 23;        // json:"enrollment_origin"
 }
 
 message NodeResponse {
@@ -990,6 +1026,33 @@ message BootstrapInfrastructureNodeResponse {
   string node_id = 1;                   // json:"node_id"
   optional string tenant_id = 2;        // json:"tenant_id,omitempty"
   string cluster_id = 3;                // json:"cluster_id"
+
+  // Mesh identity assigned to this node. If the client sent wireguard_ip in
+  // the request, these fields echo it back. If the client omitted it,
+  // Quartermaster allocated from the cluster's wg_mesh_cidr.
+  string wireguard_ip = 4;              // json:"wireguard_ip"
+  int32 wireguard_port = 5;             // json:"wireguard_port"
+  string mesh_cidr = 6;                 // json:"mesh_cidr" (cluster-level CIDR)
+
+  // How the node should reach the control plane after boot. Over the mesh
+  // once the wg0 interface is up; host resolution uses the seed DNS aliases
+  // below.
+  string quartermaster_grpc_addr = 7;   // json:"quartermaster_grpc_addr"
+
+  // Initial seed state: peers and DNS aliases, enough to bring up wg0 and
+  // resolve quartermaster.internal so SyncMesh can take over on first tick.
+  repeated InfrastructurePeer seed_peers = 8;                // json:"seed_peers"
+  map<string, ServiceEndpoints> seed_service_endpoints = 9;  // json:"seed_service_endpoints"
+
+  // Internal-TLS trust root. PEM-encoded bundle of the CA(s) Privateer will
+  // trust for service-to-service TLS. Node-side cert issuance still happens
+  // separately via Navigator once the mesh is up.
+  bytes ca_bundle = 10;                 // json:"ca_bundle,omitempty"
+
+  // SERVICE_TOKEN (cluster-wide service-to-service credential) is
+  // deliberately not returned here. Operators deliver it to enrolling nodes
+  // via `frameworks mesh join`, using the same cluster-secret resolution
+  // path the CLI already uses for seed-node provisioning.
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapServiceRequest (lines 254-265)

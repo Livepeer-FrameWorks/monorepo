@@ -215,18 +215,19 @@ func main() {
 		}
 
 		grpcServer := qmgrpc.NewGRPCServer(qmgrpc.GRPCServerConfig{
-			DB:              db,
-			Logger:          logger,
-			ServiceToken:    serviceToken,
-			JWTSecret:       []byte(jwtSecret),
-			NavigatorClient: navigatorClient,
-			DecklogClient:   decklogClient,
-			PurserClient:    purserClient,
-			GeoIPReader:     geoipReader,
-			Metrics:         serverMetrics,
-			CertFile:        config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:         config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure:   config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			DB:                db,
+			Logger:            logger,
+			ServiceToken:      serviceToken,
+			JWTSecret:         []byte(jwtSecret),
+			NavigatorClient:   navigatorClient,
+			DecklogClient:     decklogClient,
+			PurserClient:      purserClient,
+			GeoIPReader:       geoipReader,
+			Metrics:           serverMetrics,
+			CertFile:          config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:           config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure:     config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			AdvertiseGRPCAddr: quartermasterGRPCAddr,
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 

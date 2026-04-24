@@ -33,7 +33,7 @@ func TestGetNode_Success(t *testing.T) {
 			"us-east-1", "us-east-1a",
 			nil, nil,
 			int32(4), int32(16), int32(100),
-			nil, now, now,
+			nil, "gitops_seed", now, now,
 		}...))
 
 	resp, err := server.GetNode(context.Background(), &pb.GetNodeRequest{NodeId: "node-1"})
@@ -184,7 +184,7 @@ func TestGetNodeByLogicalName_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 			"uuid-1", "edge-node-1", "cluster-1", "edge-1", "edge",
 			nil, "5.6.7.8", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-			nil, now, now,
+			nil, "gitops_seed", now, now,
 		}...))
 
 	resp, err := server.GetNodeByLogicalName(context.Background(), &pb.GetNodeByLogicalNameRequest{NodeId: "edge-node-1"})

@@ -352,3 +352,68 @@ hosts:
 		t.Error("expected empty ExternalIP before merge")
 	}
 }
+
+// TestLoadHostInventory_AcceptsAdoptedLocalFields confirms the encrypted
+// inventory parser (strictUnmarshal with KnownFields(true)) accepts the
+// adopted_local markers that `mesh reconcile` writes. Previously the
+// parser rejected any file containing these fields.
+func TestLoadHostInventory_AcceptsAdoptedLocalFields(t *testing.T) {
+	data := []byte(`hosts:
+  core-4:
+    external_ip: 203.0.113.10
+    user: deploy
+    wireguard_private_key_file: /etc/privateer/wg.key
+    wireguard_private_key_managed: false
+`)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hosts.enc.yaml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := LoadHostInventory(path, "")
+	if err != nil {
+		t.Fatalf("LoadHostInventory rejected adopted_local fields: %v", err)
+	}
+	h, ok := inv.Hosts["core-4"]
+	if !ok {
+		t.Fatal("core-4 missing from inventory")
+	}
+	if h.WireguardPrivateKeyFile != "/etc/privateer/wg.key" {
+		t.Errorf("WireguardPrivateKeyFile = %q", h.WireguardPrivateKeyFile)
+	}
+	if h.WireguardPrivateKeyManaged == nil || *h.WireguardPrivateKeyManaged {
+		t.Errorf("WireguardPrivateKeyManaged should be non-nil false, got %+v", h.WireguardPrivateKeyManaged)
+	}
+}
+
+// TestMergeHostInventory_CopiesAdoptedLocalFields confirms the adopted_local
+// fields propagate from HostConnection onto the manifest's Host so the
+// Ansible provisioner metadata picks them up.
+func TestMergeHostInventory_CopiesAdoptedLocalFields(t *testing.T) {
+	m := &Manifest{
+		Hosts: map[string]Host{
+			"core-4": {},
+		},
+	}
+	managedFalse := false
+	inv := &HostInventory{
+		Hosts: map[string]HostConnection{
+			"core-4": {
+				ExternalIP:                 "203.0.113.10",
+				User:                       "deploy",
+				WireguardPrivateKeyFile:    "/etc/privateer/wg.key",
+				WireguardPrivateKeyManaged: &managedFalse,
+			},
+		},
+	}
+	if err := m.MergeHostInventory(inv); err != nil {
+		t.Fatalf("MergeHostInventory: %v", err)
+	}
+	h := m.Hosts["core-4"]
+	if h.WireguardPrivateKeyFile != "/etc/privateer/wg.key" {
+		t.Errorf("WireguardPrivateKeyFile not merged: %+v", h)
+	}
+	if h.WireguardPrivateKeyManaged == nil || *h.WireguardPrivateKeyManaged {
+		t.Errorf("WireguardPrivateKeyManaged not merged: %+v", h.WireguardPrivateKeyManaged)
+	}
+}
