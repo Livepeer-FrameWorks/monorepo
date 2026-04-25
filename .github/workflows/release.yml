@@ -1637,6 +1637,7 @@ jobs:
 
       - name: Generate Homebrew tap token
         id: homebrew-token
+        if: ${{ !contains(github.ref_name, '-rc') }}
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.GITOPS_APP_ID }}
@@ -1645,7 +1646,7 @@ jobs:
         continue-on-error: true
 
       - name: Bump Homebrew tap
-        if: steps.homebrew-token.outcome == 'success'
+        if: ${{ !contains(github.ref_name, '-rc') && steps.homebrew-token.outcome == 'success' }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           git clone "https://x-access-token:${{ steps.homebrew-token.outputs.token }}@github.com/Livepeer-FrameWorks/homebrew-tap.git" /tmp/homebrew-tap
