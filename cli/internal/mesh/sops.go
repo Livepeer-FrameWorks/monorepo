@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	fwsops "frameworks/cli/pkg/sops"
@@ -97,7 +96,10 @@ func StageEncryptedYAML(ctx context.Context, path string, ageKeyFile string, edi
 	}
 
 	if encrypted {
-		if err := sopsEncryptInPlace(ctx, tmpPath, ageKeyFile); err != nil {
+		if err := fwsops.EncryptFileInPlace(ctx, tmpPath, fwsops.EncryptOptions{
+			FilenameOverride: path,
+			AgeKeyFile:       ageKeyFile,
+		}); err != nil {
 			_ = os.Remove(tmpPath)
 			return nil, fmt.Errorf("sops encrypt: %w", err)
 		}
@@ -138,31 +140,6 @@ func CommitManifestAndHosts(manifestPath, manifestTmpPath string, manifestBackup
 			return fmt.Errorf("commit hosts failed (%w); ALSO failed to restore manifest at %s: %w — manual recovery required", err, manifestPath, restoreErr)
 		}
 		return fmt.Errorf("commit hosts failed, manifest rolled back to previous state: %w", err)
-	}
-	return nil
-}
-
-// sopsEncryptInPlace shells out to `sops --encrypt --in-place`. The sops
-// library exposes encrypt APIs but not the rule-matching path, so using the
-// same binary the operator already has avoids a creator config mismatch.
-func sopsEncryptInPlace(ctx context.Context, path, ageKeyFile string) error {
-	if _, err := exec.LookPath("sops"); err != nil {
-		return fmt.Errorf("sops binary not found in PATH (install from https://github.com/getsops/sops): %w", err)
-	}
-	if ageKeyFile != "" {
-		abs, err := filepath.Abs(ageKeyFile)
-		if err != nil {
-			return fmt.Errorf("resolve age key: %w", err)
-		}
-		prev := os.Getenv("SOPS_AGE_KEY_FILE")
-		os.Setenv("SOPS_AGE_KEY_FILE", abs)
-		defer os.Setenv("SOPS_AGE_KEY_FILE", prev)
-	}
-	cmd := exec.CommandContext(ctx, "sops", "--encrypt", "--in-place", path)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("sops --encrypt: %w", err)
 	}
 	return nil
 }

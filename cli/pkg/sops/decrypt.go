@@ -41,12 +41,9 @@ func Decrypt(data []byte, ageKeyFile string) ([]byte, error) {
 // picks it up. The original env value is restored after decryption.
 func DecryptData(data []byte, format string, ageKeyFile string) ([]byte, error) {
 	if ageKeyFile != "" {
-		abs, err := filepath.Abs(ageKeyFile)
+		abs, err := resolveAgeKeyFile(ageKeyFile)
 		if err != nil {
-			return nil, fmt.Errorf("resolve age key path: %w", err)
-		}
-		if _, err := os.Stat(abs); err != nil {
-			return nil, fmt.Errorf("age key file not found: %s", abs)
+			return nil, err
 		}
 		prev := os.Getenv("SOPS_AGE_KEY_FILE")
 		os.Setenv("SOPS_AGE_KEY_FILE", abs)
