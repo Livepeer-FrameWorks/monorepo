@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.23.2
+	github.com/vishvananda/netlink v1.3.1
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
@@ -62,6 +63,7 @@ require (
 	github.com/twmb/franz-go v1.20.7 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
+	github.com/vishvananda/netns v0.0.5 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1 // indirect
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.43.0 // indirect

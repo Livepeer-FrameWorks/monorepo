@@ -114,6 +114,15 @@ func TestValidateForApply_NegativeKeepAlive(t *testing.T) {
 	}
 }
 
+func TestValidateForApply_SelfAddressMustBeSlash32(t *testing.T) {
+	cfg := validBase(t)
+	cfg.Address = mustParsePrefix(t, "10.88.0.5/24")
+	err := ValidateForApply(cfg)
+	if err == nil || !strings.Contains(err.Error(), "/32") {
+		t.Fatalf("expected /32 self-address rejection, got: %v", err)
+	}
+}
+
 func TestValidateForApply_ZeroPrivateKey(t *testing.T) {
 	cfg := validBase(t)
 	cfg.PrivateKey = [32]byte{}

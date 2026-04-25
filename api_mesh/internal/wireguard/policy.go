@@ -27,6 +27,9 @@ func ValidateForApply(cfg Config) error {
 	if !cfg.Address.Addr().Is4() {
 		return fmt.Errorf("self address %s must be IPv4", cfg.Address)
 	}
+	if cfg.Address.Bits() != 32 {
+		return fmt.Errorf("self address %s must be /32", cfg.Address)
+	}
 
 	seen := make(map[wgtypes.Key]struct{}, len(cfg.Peers))
 	for i, p := range cfg.Peers {
