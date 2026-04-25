@@ -878,6 +878,14 @@ message InfrastructureNode {
   optional int32 wireguard_port = 22;   // json:"wireguard_port,omitempty"
   // How this row came to be. One of: gitops_seed, runtime_enrolled, adopted_local.
   string enrollment_origin = 23;        // json:"enrollment_origin"
+  // Last mesh revision the agent reported it had applied via SyncMesh.
+  // Empty when the agent has never reported a revision (older client) or
+  // when the row was just created.
+  optional string applied_mesh_revision = 24; // json:"applied_mesh_revision,omitempty"
+  // Operational status. SyncMesh filters peers to status='active'; tooling
+  // that simulates apply (mesh doctor) needs the same filter to match
+  // what Privateer would actually receive.
+  string status = 25;                   // json:"status"
 }
 
 message NodeResponse {
@@ -1205,6 +1213,10 @@ message InfrastructureSyncRequest {
   string node_id = 1;                   // json:"node_id" required
   string public_key = 2;                // json:"public_key" required (WireGuard)
   int32 listen_port = 3;                // json:"listen_port"
+  // Mesh revision the agent currently has applied (from a prior SyncMesh
+  // response's mesh_revision). Empty on first sync after restart, before
+  // any managed apply succeeds, or for older clients.
+  string applied_mesh_revision = 4;     // json:"applied_mesh_revision,omitempty"
 }
 
 // Matches pkg/api/quartermaster/types.go:InfrastructurePeer (lines 447-453)

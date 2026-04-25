@@ -212,6 +212,14 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     -- ===== HEARTBEAT =====
     last_heartbeat TIMESTAMP,
 
+    -- ===== APPLIED MESH REVISION =====
+    -- Last mesh_revision the Privateer agent reported it had applied via
+    -- SyncMesh. Used by 'mesh wg audit' / 'mesh status' to detect agents
+    -- running stale managed configs. NULL for nodes that have never
+    -- reported a revision (older clients, fresh rows, or agents stuck
+    -- before their first managed apply).
+    applied_mesh_revision TEXT,
+
     -- ===== METADATA & CONFIGURATION =====
     tags JSONB DEFAULT '{}',
     metadata JSONB DEFAULT '{}',
@@ -315,6 +323,9 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
 
 ALTER TABLE IF EXISTS quartermaster.service_instances
     ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
+
+ALTER TABLE IF EXISTS quartermaster.infrastructure_nodes
+    ADD COLUMN IF NOT EXISTS applied_mesh_revision TEXT;
 
 -- ============================================================================
 -- FOGHORN-CLUSTER ASSIGNMENTS (many-to-many)

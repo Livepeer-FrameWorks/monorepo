@@ -46,7 +46,7 @@ func TestCreateNode_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 			"uuid-1", "node-1", "cluster-1", "my-node", "core",
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-			nil, "gitops_seed", now, now,
+			nil, "gitops_seed", nil, "active", now, now,
 		}...))
 
 	resp, err := server.CreateNode(context.Background(), &pb.CreateNodeRequest{
@@ -148,7 +148,7 @@ func TestCreateNode_Idempotent(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow([]driver.Value{
 				"uuid-1", "node-1", "cluster-1", "my-node", "core",
 				nil, "1.2.3.4", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-				nil, "gitops_seed", now, now,
+				nil, "gitops_seed", nil, "active", now, now,
 			}...))
 
 		resp, callErr := server.CreateNode(context.Background(), req)

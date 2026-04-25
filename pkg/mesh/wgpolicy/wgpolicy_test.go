@@ -1,10 +1,49 @@
-package wireguard
+package wgpolicy
 
 import (
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
+
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
+
+func mustGenKey(t *testing.T) wgtypes.Key {
+	t.Helper()
+	k, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey: %v", err)
+	}
+	return k
+}
+
+func mustParsePrefix(t *testing.T, s string) netip.Prefix {
+	t.Helper()
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		t.Fatalf("ParsePrefix(%q): %v", s, err)
+	}
+	return p
+}
+
+func mustResolveUDP(t *testing.T, s string) *net.UDPAddr {
+	t.Helper()
+	ap, err := netip.ParseAddrPort(s)
+	if err != nil {
+		t.Fatalf("ParseAddrPort(%q): %v", s, err)
+	}
+	return net.UDPAddrFromAddrPort(ap)
+}
+
+func mustParseCIDR(t *testing.T, s string) net.IPNet {
+	t.Helper()
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		t.Fatalf("ParseCIDR(%q): %v", s, err)
+	}
+	return *n
+}
 
 func validBase(t *testing.T) Config {
 	t.Helper()
@@ -125,9 +164,30 @@ func TestValidateForApply_SelfAddressMustBeSlash32(t *testing.T) {
 
 func TestValidateForApply_ZeroPrivateKey(t *testing.T) {
 	cfg := validBase(t)
-	cfg.PrivateKey = [32]byte{}
+	cfg.PrivateKey = wgtypes.Key{}
 	err := ValidateForApply(cfg)
 	if err == nil || !strings.Contains(err.Error(), "private key is unset") {
 		t.Fatalf("expected zero-private-key rejection, got: %v", err)
+	}
+}
+
+// ValidatePeers must work without a private key (the doctor case).
+func TestValidatePeers_StandaloneCallSucceeds(t *testing.T) {
+	cfg := validBase(t)
+	if err := ValidatePeers(cfg.Peers, cfg.PrivateKey.PublicKey()); err != nil {
+		t.Fatalf("ValidatePeers should accept a valid peer set: %v", err)
+	}
+}
+
+func TestValidatePeers_SelfPeerWhenCallerSuppliesSelfPub(t *testing.T) {
+	// Caller has only the public key — typical for tooling validating a
+	// hypothetical config from the manifest. Self-peer detection must
+	// still work.
+	cfg := validBase(t)
+	selfPub := cfg.PrivateKey.PublicKey()
+	cfg.Peers[0].PublicKey = selfPub
+	err := ValidatePeers(cfg.Peers, selfPub)
+	if err == nil || !strings.Contains(err.Error(), "matches self") {
+		t.Fatalf("expected self-peer rejection from caller-supplied selfPub, got: %v", err)
 	}
 }

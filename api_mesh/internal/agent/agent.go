@@ -42,6 +42,17 @@ type Metrics struct {
 	//       | "last_known" (disk cache from prior managed sync)
 	//       | "seed"       (Ansible-rendered GitOps substrate).
 	LayerApplied *prometheus.GaugeVec
+	// MeshApplyDuration measures the time spent in wgManager.Apply per
+	// layer. Histogram so latency outliers are visible.
+	MeshApplyDuration *prometheus.HistogramVec
+	// MeshApplyFailures counts apply attempts that did not reach a clean
+	// device configuration, labelled by layer and reason. Reasons are the
+	// stable enum documented on Agent.recordApplyFailure.
+	MeshApplyFailures *prometheus.CounterVec
+	// MeshPeerCount reports the peer count that was applied in the last
+	// successful Apply, per layer. Updated only on success — failure paths
+	// leave the previous value in place.
+	MeshPeerCount *prometheus.GaugeVec
 }
 
 type meshClient interface {
@@ -87,6 +98,11 @@ type Agent struct {
 	consecutiveFails atomic.Int32
 	lastConfigMu     sync.Mutex
 	lastAppliedCfg   *wireguard.Config
+	// appliedRevision is the mesh_revision that came back with the most
+	// recent successful managed apply (post-DNS). Reported back to
+	// Quartermaster on subsequent SyncMesh requests so 'mesh wg audit'
+	// can spot agents stuck on stale revisions.
+	appliedRevision  atomic.Pointer[string]
 	registryClient   serviceRegistryClient
 	navigatorClient  certificateClient
 	certIssueToken   string
@@ -381,30 +397,39 @@ func (a *Agent) applyStartupMesh() {
 // applyStatic configures wg0 from the Ansible-rendered static peers and
 // writes a fresh last_known_mesh.json tagged source=seed.
 func (a *Agent) applyStatic(sp *staticPeersFile) {
+	const layer = "seed"
 	priv, err := readPrivateKey(a.privateKeyFile)
 	if err != nil {
 		a.logger.WithError(err).Warn("Seed layer: private key unavailable")
+		a.recordApplyFailure(layer, "private_key")
 		return
 	}
 	cfg, err := selfConfig(priv, a.wireguardIP, a.listenPort)
 	if err != nil {
 		a.logger.WithError(err).Error("Seed layer: invalid self identity")
+		a.recordApplyFailure(layer, "invalid_identity")
 		return
 	}
 	peers, err := staticPeersToWireGuard(sp.Peers)
 	if err != nil {
 		a.logger.WithError(err).Error("Seed layer: invalid peer in static-peers.json")
+		a.recordApplyFailure(layer, "invalid_peer")
 		return
 	}
 	cfg.Peers = peers
 	if err := wireguard.ValidateForApply(cfg); err != nil {
 		a.logger.WithError(err).Error("Seed layer: policy validation failed")
+		a.recordApplyFailure(layer, "policy")
 		return
 	}
+	applyStart := time.Now()
 	if err := a.wgManager.Apply(cfg); err != nil {
 		a.logger.WithError(err).Error("Seed layer: failed to apply wireguard config")
+		a.recordApplyFailure(layer, "configure")
 		return
 	}
+	a.observeApplyDuration(layer, applyStart)
+	a.setPeerCountMetric(layer, len(peers))
 
 	dns := map[string][]string{}
 	for i, p := range sp.Peers {
@@ -447,27 +472,42 @@ func (a *Agent) applyPersistedMesh(lk *lastKnownMesh, layer string) {
 	priv, err := readPrivateKey(a.privateKeyFile)
 	if err != nil {
 		a.logger.WithError(err).Warn("Persisted mesh: private key unavailable")
+		a.recordApplyFailure(layer, "private_key")
 		return
 	}
 	cfg, err := lastKnownToWireGuard(lk, priv, a.wireguardIP, a.listenPort)
 	if err != nil {
 		a.logger.WithError(err).Error("Persisted mesh: invalid snapshot")
+		a.recordApplyFailure(layer, "invalid_peer")
 		return
 	}
 	if err := wireguard.ValidateForApply(cfg); err != nil {
 		a.logger.WithError(err).Error("Persisted mesh: policy validation failed")
+		a.recordApplyFailure(layer, "policy")
 		return
 	}
+	applyStart := time.Now()
 	if err := a.wgManager.Apply(cfg); err != nil {
 		a.logger.WithError(err).Error("Persisted mesh: apply failed")
+		a.recordApplyFailure(layer, "configure")
 		return
 	}
+	a.observeApplyDuration(layer, applyStart)
+	a.setPeerCountMetric(layer, len(cfg.Peers))
 	if len(lk.DNS) > 0 {
 		if err := a.dnsServer.UpdateRecords(lk.DNS); err != nil {
 			a.logger.WithError(err).Warn("Persisted mesh: DNS update failed")
 		}
 	}
 	a.setLastAppliedConfig(cfg)
+	// Reload the applied revision from disk so a post-restart agent can
+	// report the revision it currently has on wg0 to Quartermaster on its
+	// next SyncMesh — without this, the first sync after restart would
+	// report empty even though the runtime came up on a known revision.
+	if lk.Source == "dynamic" && lk.Version != "" {
+		v := lk.Version
+		a.appliedRevision.Store(&v)
+	}
 	a.setLayerMetric(layer)
 	a.logger.Infof("Applied %s mesh layer from %s", layer, a.lastKnownPath)
 }
@@ -483,6 +523,45 @@ func (a *Agent) setLayerMetric(layer string) {
 		}
 		a.metrics.LayerApplied.WithLabelValues(known).Set(v)
 	}
+}
+
+// observeApplyDuration records the time spent in a wgManager.Apply call.
+// Called only when Apply was actually invoked — pre-Apply parse/policy
+// failures don't have a meaningful duration to report.
+func (a *Agent) observeApplyDuration(layer string, start time.Time) {
+	if a.metrics == nil || a.metrics.MeshApplyDuration == nil {
+		return
+	}
+	a.metrics.MeshApplyDuration.WithLabelValues(layer).Observe(time.Since(start).Seconds())
+}
+
+// recordApplyFailure increments the per-(layer, reason) failure counter.
+// Reason values are stable enums:
+//
+//	private_key       — readPrivateKey / parse failed
+//	invalid_identity  — selfConfig rejected the parsed identity
+//	invalid_peer      — parsePeerStrings rejected an upstream peer record
+//	policy            — wireguard.ValidateForApply rejected the assembled config
+//	configure         — wgManager.Apply returned an error
+//	dns               — DNS update failed after a successful Apply (rolled back)
+func (a *Agent) recordApplyFailure(layer, reason string) {
+	if a.metrics == nil || a.metrics.MeshApplyFailures == nil {
+		return
+	}
+	a.metrics.MeshApplyFailures.WithLabelValues(layer, reason).Inc()
+}
+
+// setPeerCountMetric records the number of peers in the last fully
+// successful apply for the given layer. "Fully successful" means
+// wgManager.Apply ran and any subsequent steps that can force a rollback
+// (DNS update on the managed path) also ran. Failure paths leave the
+// previous value in place rather than overwriting it with a count that no
+// longer reflects what is on the device.
+func (a *Agent) setPeerCountMetric(layer string, count int) {
+	if a.metrics == nil || a.metrics.MeshPeerCount == nil {
+		return
+	}
+	a.metrics.MeshPeerCount.WithLabelValues(layer).Set(float64(count))
 }
 
 func staticToLastKnownPeers(in []staticPeer) []lastKnownPeer {
@@ -528,12 +607,14 @@ func (a *Agent) sync() {
 	privKey, err := readPrivateKey(a.privateKeyFile)
 	if err != nil {
 		a.logger.WithError(err).Error("Failed to read mesh private key")
+		a.recordApplyFailure("managed", "private_key")
 		a.syncFailed()
 		return
 	}
 	pubKey, err := pkgmesh.DerivePublicKey(privKey)
 	if err != nil {
 		a.logger.WithError(err).Error("Failed to derive mesh public key")
+		a.recordApplyFailure("managed", "private_key")
 		a.syncFailed()
 		return
 	}
@@ -542,6 +623,9 @@ func (a *Agent) sync() {
 		NodeId:     a.nodeID,
 		PublicKey:  pubKey,
 		ListenPort: safeInt32(a.listenPort),
+	}
+	if rev := a.appliedRevision.Load(); rev != nil {
+		req.AppliedMeshRevision = *rev
 	}
 
 	syncCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
@@ -584,6 +668,7 @@ func (a *Agent) sync() {
 		return
 	}
 
+	const layer = "managed"
 	peers := make([]wireguard.Peer, 0, len(resp.Peers))
 	dnsRecords := make(map[string][]string)
 
@@ -595,6 +680,7 @@ func (a *Agent) sync() {
 		peer, err := parsePeerStrings(label, p.PublicKey, p.Endpoint, p.AllowedIps, int(p.KeepAlive))
 		if err != nil {
 			a.logger.WithError(err).WithField("peer", label).Error("Quartermaster returned a malformed peer; failing sync")
+			a.recordApplyFailure(layer, "invalid_peer")
 			a.syncFailed()
 			return
 		}
@@ -613,6 +699,7 @@ func (a *Agent) sync() {
 	cfg, cfgErr := selfConfig(privKey, a.wireguardIP, a.listenPort)
 	if cfgErr != nil {
 		a.logger.WithError(cfgErr).Error("Invalid self identity for managed apply")
+		a.recordApplyFailure(layer, "invalid_identity")
 		a.syncFailed()
 		return
 	}
@@ -620,26 +707,41 @@ func (a *Agent) sync() {
 
 	if err := wireguard.ValidateForApply(cfg); err != nil {
 		a.logger.WithError(err).Error("Managed apply: policy validation failed")
+		a.recordApplyFailure(layer, "policy")
 		a.syncFailed()
 		return
 	}
 
 	// 4. Apply WireGuard Config
+	applyStart := time.Now()
 	if err := a.wgManager.Apply(cfg); err != nil {
 		a.logger.WithError(err).Error("Failed to apply wireguard config")
+		a.recordApplyFailure(layer, "configure")
 		a.syncFailed()
 		return
 	}
+	// observeApplyDuration measures the wgManager.Apply syscall, which did
+	// run; record it even if the broader sync rolls back later. Peer count,
+	// in contrast, reflects the device's settled state and is set only
+	// after DNS succeeds (see below) so a rollback does not leave it
+	// reporting peers that are no longer on the device.
+	a.observeApplyDuration(layer, applyStart)
 
 	// 5. Update DNS Records
 	if err := a.dnsServer.UpdateRecords(dnsRecords); err != nil {
 		a.logger.WithError(err).Error("Failed to update DNS records")
+		a.recordApplyFailure(layer, "dns")
 		a.rollbackWireGuardConfig()
 		a.syncFailed()
 		return
 	}
+	a.setPeerCountMetric(layer, len(peers))
 
 	a.setLastAppliedConfig(cfg)
+	if rev := resp.GetMeshRevision(); rev != "" {
+		revCopy := rev
+		a.appliedRevision.Store(&revCopy)
+	}
 
 	// Update metrics
 	if a.metrics != nil && a.metrics.PeersConnected != nil {

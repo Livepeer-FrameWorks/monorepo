@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 	"text/tabwriter"
+	"time"
 
 	"frameworks/cli/internal/mesh"
 	"frameworks/cli/internal/ux"
@@ -14,6 +16,11 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+// defaultLivenessWindow is 3× Privateer's default sync interval (30s). A
+// node that has missed three SyncMesh round-trips in a row has not been
+// recently accepted by Quartermaster.
+const defaultLivenessWindow = 90 * time.Second
 
 // Node-origin vocabulary, mirrored from pkg/database/sql/schema/quartermaster.sql
 // and api_tenants/internal/grpc/server.go. A row's enrollment_origin governs
@@ -25,7 +32,13 @@ const (
 )
 
 func newMeshWgAuditCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		livenessWindow time.Duration
+		format         string
+		clusterFilter  string
+		hostFilter     string
+	)
+	cmd := &cobra.Command{
 		Use:   "audit",
 		Short: "Compare GitOps WireGuard identity against Quartermaster's recorded peer state",
 		Long: `Reads the GitOps cluster manifest and cross-references it with the
@@ -34,7 +47,21 @@ infrastructure_nodes rows Quartermaster has stored for the same cluster.
 Mismatches on gitops_seed or adopted_local rows are reported as errors
 (those origins mean GitOps is authoritative). runtime_enrolled rows are
 printed as informational — they are expected to not appear in GitOps
-until promoted via 'mesh reconcile --write-gitops'.`,
+until promoted via 'mesh reconcile --write-gitops'.
+
+The LIVE column reflects last_heartbeat freshness. Quartermaster's
+SyncMesh validates the agent's reported public key against the stored
+value before accepting the heartbeat, so a fresh heartbeat is a strong
+signal that the runtime key matches Quartermaster. A stale or missing
+heartbeat means the agent has not been recently accepted by
+Quartermaster — common causes include the agent being down, the agent
+unable to reach Quartermaster (network or auth), and the agent running
+with a key Quartermaster's stored value rejects.
+
+--format=json emits one JSON document per audit run; the exit code is the
+same as table format (non-zero on authoritative divergence). --cluster
+and --host filter the printed rows after the audit runs; filtering does
+not affect the divergence count or exit code.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rc, err := resolveClusterManifest(cmd)
@@ -70,16 +97,57 @@ until promoted via 'mesh reconcile --write-gitops'.`,
 				return fmt.Errorf("list infrastructure_nodes: %w", err)
 			}
 
-			findings := auditMeshIdentity(rc.Manifest, hostNames, resp.GetNodes(), manifestClusters)
-			printAuditReport(cmd.OutOrStdout(), findings, rc.Manifest.AllClusterIDs())
+			findings := auditMeshIdentity(rc.Manifest, hostNames, resp.GetNodes(), manifestClusters, time.Now(), livenessWindow)
+			displayed := filterAuditFindings(findings, clusterFilter, hostFilter)
 
+			switch format {
+			case "json":
+				if err := printAuditJSON(cmd.OutOrStdout(), displayed, rc.Manifest.AllClusterIDs()); err != nil {
+					return err
+				}
+			case "", "table":
+				printAuditReport(cmd.OutOrStdout(), displayed, rc.Manifest.AllClusterIDs())
+			default:
+				return fmt.Errorf("unknown --format %q (valid: table, json)", format)
+			}
+
+			// Exit code reflects the full audit, not the filtered view —
+			// otherwise --host=core-1 could hide a divergence elsewhere.
 			if findings.hasErrors() {
 				return fmt.Errorf("mesh wg audit: %d authoritative host(s) diverge from Quartermaster", findings.errorCount())
 			}
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("mesh wg audit: %d host(s) match Quartermaster", len(findings.rows)))
+			if format != "json" {
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("mesh wg audit: %d host(s) match Quartermaster", len(findings.rows)))
+			}
 			return nil
 		},
 	}
+	cmd.Flags().DurationVar(&livenessWindow, "liveness-window", defaultLivenessWindow, "Heartbeat freshness window for the LIVE column")
+	cmd.Flags().StringVar(&format, "format", "table", "Output format: table or json")
+	cmd.Flags().StringVar(&clusterFilter, "cluster-filter", "", "Show only rows in this cluster ID (does not affect exit code)")
+	cmd.Flags().StringVar(&hostFilter, "host", "", "Show only rows for this host name (does not affect exit code)")
+	return cmd
+}
+
+// filterAuditFindings returns a copy of f with rows narrowed to those
+// matching clusterID (when non-empty) and host (when non-empty). Filtering
+// is purely cosmetic — callers should still inspect the unfiltered
+// findings for severity-driven exit codes.
+func filterAuditFindings(f auditFindings, clusterID, host string) auditFindings {
+	if clusterID == "" && host == "" {
+		return f
+	}
+	filtered := auditFindings{}
+	for _, r := range f.rows {
+		if clusterID != "" && r.clusterID != clusterID {
+			continue
+		}
+		if host != "" && r.host != host {
+			continue
+		}
+		filtered.rows = append(filtered.rows, r)
+	}
+	return filtered
 }
 
 type auditSeverity int
@@ -91,6 +159,14 @@ const (
 	auditError
 )
 
+type auditLiveness int
+
+const (
+	livenessUnknown auditLiveness = iota // no QM row, or QM has no last_heartbeat
+	livenessStale                        // last_heartbeat older than the window
+	livenessFresh                        // last_heartbeat within the window
+)
+
 type auditRow struct {
 	host      string
 	clusterID string
@@ -99,6 +175,12 @@ type auditRow struct {
 	message   string
 	gitopsIP  string
 	qmIP      string
+	live      auditLiveness
+	// revision is the mesh_revision the Privateer agent reported on its
+	// most recent SyncMesh. Empty if the agent has never reported a
+	// revision (older client, fresh row, or stuck before first managed
+	// apply). Surfaces stale agents to operators.
+	revision string
 }
 
 type auditFindings struct {
@@ -127,11 +209,28 @@ type qmKey struct {
 	clusterID string
 }
 
+// classifyLiveness reports whether a QM row's last_heartbeat is fresh
+// relative to (now - window). nil last_heartbeat is treated as unknown,
+// not stale, since "never seen" and "haven't seen recently" are
+// operationally distinct.
+func classifyLiveness(node *pb.InfrastructureNode, now time.Time, window time.Duration) auditLiveness {
+	if node == nil || node.LastHeartbeat == nil {
+		return livenessUnknown
+	}
+	hb := node.LastHeartbeat.AsTime()
+	if now.Sub(hb) > window {
+		return livenessStale
+	}
+	return livenessFresh
+}
+
 // auditMeshIdentity compares the manifest's per-host WireGuard identity against
 // Quartermaster's recorded infrastructure_nodes rows. manifestClusters is the
 // set of cluster IDs this manifest owns (from Manifest.AllClusterIDs); QM rows
-// in other clusters are ignored entirely.
-func auditMeshIdentity(manifest *inventory.Manifest, hostNames []string, qmNodes []*pb.InfrastructureNode, manifestClusters map[string]bool) auditFindings {
+// in other clusters are ignored entirely. now and livenessWindow drive the
+// per-row LIVE column without touching identity-comparison severity — a
+// stale heartbeat does not turn an otherwise clean row into an error.
+func auditMeshIdentity(manifest *inventory.Manifest, hostNames []string, qmNodes []*pb.InfrastructureNode, manifestClusters map[string]bool, now time.Time, livenessWindow time.Duration) auditFindings {
 	qmByKey := make(map[qmKey]*pb.InfrastructureNode, len(qmNodes))
 	for _, n := range qmNodes {
 		qmByKey[qmKey{nodeName: n.GetNodeName(), clusterID: n.GetClusterId()}] = n
@@ -198,12 +297,18 @@ func auditMeshIdentity(manifest *inventory.Manifest, hostNames []string, qmNodes
 			mismatches = append(mismatches, fmt.Sprintf("wireguard_port GitOps=%d QM=%d", host.WireguardPort, qmPort))
 		}
 
+		revision := ""
+		if qm.AppliedMeshRevision != nil {
+			revision = *qm.AppliedMeshRevision
+		}
 		row := auditRow{
 			host:      name,
 			clusterID: clusterID,
 			origin:    origin,
 			gitopsIP:  host.WireguardIP,
 			qmIP:      qmIP,
+			live:      classifyLiveness(qm, now, livenessWindow),
+			revision:  revision,
 		}
 		if len(mismatches) == 0 {
 			row.severity = auditOK
@@ -237,10 +342,16 @@ func auditMeshIdentity(manifest *inventory.Manifest, hostNames []string, qmNodes
 			continue
 		}
 		origin := n.GetEnrollmentOrigin()
+		revision := ""
+		if n.AppliedMeshRevision != nil {
+			revision = *n.AppliedMeshRevision
+		}
 		row := auditRow{
 			host:      n.GetNodeName(),
 			clusterID: cid,
 			origin:    origin,
+			live:      classifyLiveness(n, now, livenessWindow),
+			revision:  revision,
 		}
 		if n.WireguardIp != nil {
 			row.qmIP = *n.WireguardIp
@@ -288,15 +399,28 @@ func printAuditReport(w io.Writer, f auditFindings, clusterIDs []string) {
 	}
 	fmt.Fprintf(w, "mesh wg audit (clusters=%s)\n", label)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "CLUSTER\tHOST\tORIGIN\tSEVERITY\tDETAIL")
+	fmt.Fprintln(tw, "CLUSTER\tHOST\tORIGIN\tSEVERITY\tLIVE\tREVISION\tDETAIL")
 	for _, r := range f.rows {
 		cluster := r.clusterID
 		if cluster == "" {
 			cluster = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", cluster, r.host, r.origin, severityLabel(r.severity), r.message)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cluster, r.host, r.origin, severityLabel(r.severity), livenessLabel(r.live), revisionLabel(r.revision), r.message)
 	}
 	tw.Flush()
+}
+
+// revisionLabel renders the agent-reported mesh revision in the audit
+// table. Long hex hashes are truncated to the first 12 chars (same
+// convention git uses) so the column stays readable.
+func revisionLabel(rev string) string {
+	if rev == "" {
+		return "-"
+	}
+	if len(rev) > 12 {
+		return rev[:12]
+	}
+	return rev
 }
 
 func severityLabel(s auditSeverity) string {
@@ -311,4 +435,59 @@ func severityLabel(s auditSeverity) string {
 		return "ERROR"
 	}
 	return "?"
+}
+
+func livenessLabel(l auditLiveness) string {
+	switch l {
+	case livenessFresh:
+		return "live"
+	case livenessStale:
+		return "stale"
+	default:
+		return "-"
+	}
+}
+
+// auditJSONRow is the export shape for --format=json. It uses string
+// labels rather than the internal enum ints so consumers don't need to
+// track the iota ordering across CLI versions.
+type auditJSONRow struct {
+	Cluster  string `json:"cluster"`
+	Host     string `json:"host"`
+	Origin   string `json:"origin"`
+	Severity string `json:"severity"`
+	Live     string `json:"live"`
+	Revision string `json:"revision,omitempty"`
+	Message  string `json:"message"`
+	GitopsIP string `json:"gitops_ip,omitempty"`
+	QMIP     string `json:"qm_ip,omitempty"`
+}
+
+type auditJSONReport struct {
+	Clusters []string       `json:"clusters"`
+	Rows     []auditJSONRow `json:"rows"`
+}
+
+func printAuditJSON(w io.Writer, f auditFindings, clusterIDs []string) error {
+	rows := make([]auditJSONRow, 0, len(f.rows))
+	for _, r := range f.rows {
+		cluster := r.clusterID
+		if cluster == "" {
+			cluster = "-"
+		}
+		rows = append(rows, auditJSONRow{
+			Cluster:  cluster,
+			Host:     r.host,
+			Origin:   r.origin,
+			Severity: severityLabel(r.severity),
+			Live:     livenessLabel(r.live),
+			Revision: r.revision,
+			Message:  r.message,
+			GitopsIP: r.gitopsIP,
+			QMIP:     r.qmIP,
+		})
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(auditJSONReport{Clusters: clusterIDs, Rows: rows})
 }

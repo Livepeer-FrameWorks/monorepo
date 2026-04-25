@@ -152,11 +152,14 @@ func main() {
 
 	// Create agent metrics
 	agentMetrics := &agent.Metrics{
-		SyncOperations:   metricsCollector.NewCounter("sync_operations_total", "Mesh sync operations", []string{"status"}),
-		PeersConnected:   metricsCollector.NewGauge("peers_connected", "Number of connected WireGuard peers", []string{}),
-		DNSQueries:       metricsCollector.NewCounter("dns_queries_total", "DNS queries processed", []string{"type", "status"}),
-		WireGuardResyncs: metricsCollector.NewCounter("wireguard_resyncs_total", "WireGuard interface resyncs", []string{"status"}),
-		LayerApplied:     metricsCollector.NewGauge("layer_applied", "Currently-applied mesh layer (1 = active). Labels: managed (Quartermaster-fresh), last_known (disk cache), seed (GitOps substrate).", []string{"layer"}),
+		SyncOperations:    metricsCollector.NewCounter("sync_operations_total", "Mesh sync operations", []string{"status"}),
+		PeersConnected:    metricsCollector.NewGauge("peers_connected", "Number of connected WireGuard peers", []string{}),
+		DNSQueries:        metricsCollector.NewCounter("dns_queries_total", "DNS queries processed", []string{"type", "status"}),
+		WireGuardResyncs:  metricsCollector.NewCounter("wireguard_resyncs_total", "WireGuard interface resyncs", []string{"status"}),
+		LayerApplied:      metricsCollector.NewGauge("layer_applied", "Currently-applied mesh layer (1 = active). Labels: managed (Quartermaster-fresh), last_known (disk cache), seed (GitOps substrate).", []string{"layer"}),
+		MeshApplyDuration: metricsCollector.NewHistogram("mesh_apply_duration_seconds", "Time spent applying a mesh config to wg0, by layer.", []string{"layer"}, nil),
+		MeshApplyFailures: metricsCollector.NewCounter("mesh_apply_failures_total", "Mesh apply attempts that did not reach a configured device, by layer and reason.", []string{"layer", "reason"}),
+		MeshPeerCount:     metricsCollector.NewGauge("mesh_peer_count", "Peers in the last successful mesh apply, by layer.", []string{"layer"}),
 	}
 
 	// Config

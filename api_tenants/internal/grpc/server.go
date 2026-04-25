@@ -3527,7 +3527,7 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 		       wireguard_ip, wireguard_public_key, wireguard_listen_port, region, availability_zone,
 		       latitude, longitude,
 		       cpu_cores, memory_gb, disk_gb,
-		       last_heartbeat, enrollment_origin, created_at, updated_at
+		       last_heartbeat, enrollment_origin, applied_mesh_revision, status, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes n
 		%s
 		%s
@@ -3695,7 +3695,7 @@ func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWher
 		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
 		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.enrollment_origin, n.created_at, n.updated_at
+		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at
 		FROM quartermaster.infrastructure_nodes n
 		%s
 	`, healthWhere), healthArgs...)
@@ -3767,7 +3767,7 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
 		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.enrollment_origin, n.created_at, n.updated_at
+		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at
 		FROM quartermaster.infrastructure_nodes n
 		%s
 		%s
@@ -5193,13 +5193,21 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 
 	// 2. Update heartbeat every sync. WireGuard identity is set by either
 	// CreateNode (gitops_seed) or BootstrapInfrastructureNode
-	// (runtime_enrolled); SyncMesh only reads it.
+	// (runtime_enrolled); SyncMesh only reads it. The applied revision is
+	// persisted as the agent reports it — empty string is stored as NULL
+	// so 'mesh wg audit' can distinguish "never reported" from "reported
+	// nothing yet".
+	var appliedRev sql.NullString
+	if rev := strings.TrimSpace(req.GetAppliedMeshRevision()); rev != "" {
+		appliedRev = sql.NullString{String: rev, Valid: true}
+	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE quartermaster.infrastructure_nodes
 		SET last_heartbeat = NOW(),
+		    applied_mesh_revision = $2,
 		    updated_at = NOW()
 		WHERE node_id = $1
-	`, nodeID)
+	`, nodeID, appliedRev)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to update node heartbeat")
 	}
@@ -5219,31 +5227,56 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	}
 	defer func() { _ = rows.Close() }()
 
+	excludePeer := func(peerName, reason string, cause error) {
+		entry := s.logger.WithFields(logging.Fields{
+			"requesting_node_id": nodeID,
+			"cluster_id":         clusterID,
+			"node_name":          peerName,
+			"reason":             reason,
+		})
+		if cause != nil {
+			entry = entry.WithError(cause)
+		}
+		entry.Warn("Excluding peer from mesh sync")
+	}
+
 	var peers []*pb.InfrastructurePeer
 	for rows.Next() {
 		var peer pb.InfrastructurePeer
 		var peerExtIP, peerIntIP, peerWgIP sql.NullString
 		var peerListenPort sql.NullInt32
 		if scanErr := rows.Scan(&peer.NodeName, &peer.PublicKey, &peerExtIP, &peerIntIP, &peerWgIP, &peerListenPort); scanErr != nil {
+			// peer.NodeName is unset because Scan failed; log it as empty so
+			// the field is still present and queryable.
+			excludePeer(peer.NodeName, "scan_error", scanErr)
 			continue
 		}
-		// Prefer external IP, fall back to internal IP
+		// Prefer external IP, fall back to internal IP.
 		endpoint := ""
 		if peerExtIP.Valid && peerExtIP.String != "" {
 			endpoint = peerExtIP.String
 		} else if peerIntIP.Valid && peerIntIP.String != "" {
 			endpoint = peerIntIP.String
 		}
-		if endpoint != "" && peerWgIP.Valid {
-			port := int32(51820)
-			if peerListenPort.Valid && peerListenPort.Int32 > 0 {
-				port = peerListenPort.Int32
-			}
-			peer.Endpoint = fmt.Sprintf("%s:%d", endpoint, port)
-			peer.AllowedIps = []string{peerWgIP.String + "/32"}
-			peer.KeepAlive = 25
-			peers = append(peers, &peer)
+		if endpoint == "" {
+			excludePeer(peer.NodeName, "missing_endpoint", nil)
+			continue
 		}
+		if !peerWgIP.Valid {
+			// Defense-in-depth: the SQL filter guarantees wireguard_ip IS NOT
+			// NULL. Reaching this branch means the schema or filter changed
+			// without updating the read path.
+			excludePeer(peer.NodeName, "missing_wireguard_ip", nil)
+			continue
+		}
+		port := int32(51820)
+		if peerListenPort.Valid && peerListenPort.Int32 > 0 {
+			port = peerListenPort.Int32
+		}
+		peer.Endpoint = fmt.Sprintf("%s:%d", endpoint, port)
+		peer.AllowedIps = []string{peerWgIP.String + "/32"}
+		peer.KeepAlive = 25
+		peers = append(peers, &peer)
 	}
 
 	// 4. Fetch service endpoints for mesh DNS aliases (keyed by canonical service type)
@@ -6225,24 +6258,28 @@ func scanCluster(rows *sql.Rows) (*pb.InfrastructureCluster, error) {
 
 func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 	var node pb.InfrastructureNode
-	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az sql.NullString
+	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az, appliedRev sql.NullString
 	var wgPort, cpuCores, memoryGB, diskGB sql.NullInt32
 	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
-	var enrollmentOrigin string
+	var enrollmentOrigin, nodeStatus string
 
 	err := rows.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
 		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &wgPort, &region, &az,
 		&lat, &lon,
 		&cpuCores, &memoryGB, &diskGB,
-		&lastHeartbeat, &enrollmentOrigin, &createdAt, &updatedAt,
+		&lastHeartbeat, &enrollmentOrigin, &appliedRev, &nodeStatus, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	node.EnrollmentOrigin = enrollmentOrigin
+	node.Status = nodeStatus
+	if appliedRev.Valid {
+		node.AppliedMeshRevision = &appliedRev.String
+	}
 	if wgPort.Valid {
 		node.WireguardPort = &wgPort.Int32
 	}
@@ -6401,25 +6438,25 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 		       wireguard_ip, wireguard_public_key, wireguard_listen_port, region, availability_zone,
 		       latitude, longitude,
 		       cpu_cores, memory_gb, disk_gb,
-		       last_heartbeat, enrollment_origin, created_at, updated_at
+		       last_heartbeat, enrollment_origin, applied_mesh_revision, status, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1 OR id::text = $1
 	`, nodeID)
 
 	var node pb.InfrastructureNode
-	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az sql.NullString
+	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az, appliedRev sql.NullString
 	var wgPort, cpuCores, memoryGB, diskGB sql.NullInt32
 	var lat, lon sql.NullFloat64
 	var lastHeartbeat sql.NullTime
 	var createdAt, updatedAt time.Time
-	var enrollmentOrigin string
+	var enrollmentOrigin, nodeStatus string
 
 	err := row.Scan(
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
 		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &wgPort, &region, &az,
 		&lat, &lon,
 		&cpuCores, &memoryGB, &diskGB,
-		&lastHeartbeat, &enrollmentOrigin, &createdAt, &updatedAt,
+		&lastHeartbeat, &enrollmentOrigin, &appliedRev, &nodeStatus, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found")
@@ -6468,6 +6505,10 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 		node.LastHeartbeat = timestamppb.New(lastHeartbeat.Time)
 	}
 	node.EnrollmentOrigin = enrollmentOrigin
+	node.Status = nodeStatus
+	if appliedRev.Valid {
+		node.AppliedMeshRevision = &appliedRev.String
+	}
 	node.CreatedAt = timestamppb.New(createdAt)
 	node.UpdatedAt = timestamppb.New(updatedAt)
 

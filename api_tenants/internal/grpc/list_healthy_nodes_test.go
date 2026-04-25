@@ -18,7 +18,7 @@ var nodeColumns = []string{
 	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key", "wireguard_listen_port",
 	"region", "availability_zone", "latitude", "longitude",
 	"cpu_cores", "memory_gb", "disk_gb",
-	"last_heartbeat", "enrollment_origin", "created_at", "updated_at",
+	"last_heartbeat", "enrollment_origin", "applied_mesh_revision", "status", "created_at", "updated_at",
 }
 
 // queryNodeColumns matches the SELECT column order in queryNode, which also
@@ -28,7 +28,7 @@ var queryNodeColumns = []string{
 	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key", "wireguard_listen_port",
 	"region", "availability_zone", "latitude", "longitude",
 	"cpu_cores", "memory_gb", "disk_gb",
-	"last_heartbeat", "enrollment_origin", "created_at", "updated_at",
+	"last_heartbeat", "enrollment_origin", "applied_mesh_revision", "status", "created_at", "updated_at",
 }
 
 func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []driver.Value {
@@ -49,6 +49,8 @@ func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []
 		nil,           // disk_gb
 		nil,           // last_heartbeat
 		"gitops_seed", // enrollment_origin
+		nil,           // applied_mesh_revision
+		"active",      // status (matches the healthWhere SQL filter applied by tests)
 		now,           // created_at
 		now,           // updated_at
 	}

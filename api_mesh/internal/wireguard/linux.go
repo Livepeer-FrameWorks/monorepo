@@ -173,7 +173,7 @@ func (m *linuxManager) Apply(cfg Config) error {
 	if err := ValidateForApply(cfg); err != nil {
 		return fmt.Errorf("wireguard policy: %w", err)
 	}
-	if err := m.client.ConfigureDevice(m.interfaceName, cfg.toWGTypes()); err != nil {
+	if err := m.client.ConfigureDevice(m.interfaceName, toWGTypes(cfg)); err != nil {
 		return fmt.Errorf("configure %s: %w", m.interfaceName, err)
 	}
 	if err := m.link.EnsureAddress(m.interfaceName, cfg.Address); err != nil {

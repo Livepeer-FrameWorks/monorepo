@@ -5023,8 +5023,16 @@ type InfrastructureNode struct {
 	WireguardPort      *int32                 `protobuf:"varint,22,opt,name=wireguard_port,json=wireguardPort,proto3,oneof" json:"wireguard_port,omitempty"`                // json:"wireguard_port,omitempty"
 	// How this row came to be. One of: gitops_seed, runtime_enrolled, adopted_local.
 	EnrollmentOrigin string `protobuf:"bytes,23,opt,name=enrollment_origin,json=enrollmentOrigin,proto3" json:"enrollment_origin,omitempty"` // json:"enrollment_origin"
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Last mesh revision the agent reported it had applied via SyncMesh.
+	// Empty when the agent has never reported a revision (older client) or
+	// when the row was just created.
+	AppliedMeshRevision *string `protobuf:"bytes,24,opt,name=applied_mesh_revision,json=appliedMeshRevision,proto3,oneof" json:"applied_mesh_revision,omitempty"` // json:"applied_mesh_revision,omitempty"
+	// Operational status. SyncMesh filters peers to status='active'; tooling
+	// that simulates apply (mesh doctor) needs the same filter to match
+	// what Privateer would actually receive.
+	Status        string `protobuf:"bytes,25,opt,name=status,proto3" json:"status,omitempty"` // json:"status"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InfrastructureNode) Reset() {
@@ -5214,6 +5222,20 @@ func (x *InfrastructureNode) GetWireguardPort() int32 {
 func (x *InfrastructureNode) GetEnrollmentOrigin() string {
 	if x != nil {
 		return x.EnrollmentOrigin
+	}
+	return ""
+}
+
+func (x *InfrastructureNode) GetAppliedMeshRevision() string {
+	if x != nil && x.AppliedMeshRevision != nil {
+		return *x.AppliedMeshRevision
+	}
+	return ""
+}
+
+func (x *InfrastructureNode) GetStatus() string {
+	if x != nil {
+		return x.Status
 	}
 	return ""
 }
@@ -7699,12 +7721,16 @@ func (x *ValidateBootstrapTokenResponse) GetFoghornGrpcAddr() string {
 
 // Matches pkg/api/quartermaster/types.go:InfrastructureSyncRequest (lines 440-444)
 type InfrastructureSyncRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`              // json:"node_id" required
-	PublicKey     string                 `protobuf:"bytes,2,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`     // json:"public_key" required (WireGuard)
-	ListenPort    int32                  `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"` // json:"listen_port"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	NodeId     string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`              // json:"node_id" required
+	PublicKey  string                 `protobuf:"bytes,2,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`     // json:"public_key" required (WireGuard)
+	ListenPort int32                  `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"` // json:"listen_port"
+	// Mesh revision the agent currently has applied (from a prior SyncMesh
+	// response's mesh_revision). Empty on first sync after restart, before
+	// any managed apply succeeds, or for older clients.
+	AppliedMeshRevision string `protobuf:"bytes,4,opt,name=applied_mesh_revision,json=appliedMeshRevision,proto3" json:"applied_mesh_revision,omitempty"` // json:"applied_mesh_revision,omitempty"
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *InfrastructureSyncRequest) Reset() {
@@ -7756,6 +7782,13 @@ func (x *InfrastructureSyncRequest) GetListenPort() int32 {
 		return x.ListenPort
 	}
 	return 0
+}
+
+func (x *InfrastructureSyncRequest) GetAppliedMeshRevision() string {
+	if x != nil {
+		return x.AppliedMeshRevision
+	}
+	return ""
 }
 
 // Matches pkg/api/quartermaster/types.go:InfrastructurePeer (lines 447-453)
@@ -11451,7 +11484,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x06reason\x18\x03 \x01(\tH\x00R\x06reason\x88\x01\x01B\t\n" +
 	"\a_reason\")\n" +
 	"\x0eGetNodeRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x83\t\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xee\t\n" +
 	"\x12InfrastructureNode\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x1d\n" +
@@ -11482,7 +11515,9 @@ const file_quartermaster_proto_rawDesc = "" +
 	"R\blatitude\x88\x01\x01\x12!\n" +
 	"\tlongitude\x18\x15 \x01(\x01H\vR\tlongitude\x88\x01\x01\x12*\n" +
 	"\x0ewireguard_port\x18\x16 \x01(\x05H\fR\rwireguardPort\x88\x01\x01\x12+\n" +
-	"\x11enrollment_origin\x18\x17 \x01(\tR\x10enrollmentOriginB\x0e\n" +
+	"\x11enrollment_origin\x18\x17 \x01(\tR\x10enrollmentOrigin\x127\n" +
+	"\x15applied_mesh_revision\x18\x18 \x01(\tH\rR\x13appliedMeshRevision\x88\x01\x01\x12\x16\n" +
+	"\x06status\x18\x19 \x01(\tR\x06statusB\x0e\n" +
 	"\f_internal_ipB\x0e\n" +
 	"\f_external_ipB\x0f\n" +
 	"\r_wireguard_ipB\x17\n" +
@@ -11499,7 +11534,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\t_latitudeB\f\n" +
 	"\n" +
 	"_longitudeB\x11\n" +
-	"\x0f_wireguard_port\"E\n" +
+	"\x0f_wireguard_portB\x18\n" +
+	"\x16_applied_mesh_revision\"E\n" +
 	"\fNodeResponse\x125\n" +
 	"\x04node\x18\x01 \x01(\v2!.quartermaster.InfrastructureNodeR\x04node\"\xa7\x01\n" +
 	"\x10ListNodesRequest\x12\x1d\n" +
@@ -11846,13 +11882,14 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06reason\x18\x05 \x01(\tR\x06reason\x123\n" +
 	"\bmetadata\x18\x06 \x01(\v2\x17.google.protobuf.StructR\bmetadata\x12*\n" +
-	"\x11foghorn_grpc_addr\x18\a \x01(\tR\x0ffoghornGrpcAddr\"t\n" +
+	"\x11foghorn_grpc_addr\x18\a \x01(\tR\x0ffoghornGrpcAddr\"\xa8\x01\n" +
 	"\x19InfrastructureSyncRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x02 \x01(\tR\tpublicKey\x12\x1f\n" +
 	"\vlisten_port\x18\x03 \x01(\x05R\n" +
-	"listenPort\"\xac\x01\n" +
+	"listenPort\x122\n" +
+	"\x15applied_mesh_revision\x18\x04 \x01(\tR\x13appliedMeshRevision\"\xac\x01\n" +
 	"\x12InfrastructurePeer\x12\x1b\n" +
 	"\tnode_name\x18\x01 \x01(\tR\bnodeName\x12\x1d\n" +
 	"\n" +

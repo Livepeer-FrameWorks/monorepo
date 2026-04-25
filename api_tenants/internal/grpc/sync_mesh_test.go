@@ -1,12 +1,15 @@
 package grpc
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -74,7 +77,7 @@ func TestSyncMeshServiceEndpointsKeyedByType(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub-key-1", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1").
+		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
@@ -127,7 +130,7 @@ func TestSyncMeshReturnsStoredPortOverRequestEcho(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51900), "cluster-1"))
 
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1").
+		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
@@ -174,5 +177,122 @@ func TestComputeMeshRevisionStableAndChanges(t *testing.T) {
 	revServiceChanged := computeMeshRevision([]*pb.InfrastructurePeer{p1, p2}, map[string]*pb.ServiceEndpoints{"quartermaster": {Ips: []string{"10.88.0.9"}}}, "10.88.0.1", 51820)
 	if rev1 == revServiceChanged {
 		t.Fatalf("revision should change when service endpoints change: both %s", rev1)
+	}
+}
+
+// captureLogger returns a logrus logger that writes to an in-memory buffer.
+// Tests inspect the buffer to assert that exclusion warnings were emitted.
+func captureLogger() (*logrus.Logger, *bytes.Buffer) {
+	buf := &bytes.Buffer{}
+	logger := logrus.New()
+	logger.SetOutput(buf)
+	logger.SetLevel(logrus.WarnLevel)
+	logger.SetFormatter(&logrus.JSONFormatter{})
+	return logger, buf
+}
+
+func TestSyncMeshExcludesPeerWithMissingEndpoint(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	logger, logBuf := captureLogger()
+	server := NewQuartermasterServer(db, logger, nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
+	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
+		WithArgs("node-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Peer row has both external_ip and internal_ip NULL — must be excluded
+	// with a "missing_endpoint" warning, not silently skipped.
+	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}).
+			AddRow("peer-orphan", "peer-pub", nil, nil, "10.200.0.6", int32(51820)))
+	mock.ExpectQuery(`SELECT s\.type, n\.wireguard_ip::text`).
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
+
+	resp, err := server.SyncMesh(t.Context(), &pb.InfrastructureSyncRequest{
+		NodeId:     "node-1",
+		PublicKey:  "pub",
+		ListenPort: 51820,
+	})
+	if err != nil {
+		t.Fatalf("sync mesh: %v", err)
+	}
+	if len(resp.GetPeers()) != 0 {
+		t.Errorf("expected zero peers (orphan excluded), got %d", len(resp.GetPeers()))
+	}
+
+	out := logBuf.String()
+	for _, want := range []string{
+		`"reason":"missing_endpoint"`,
+		`"node_name":"peer-orphan"`,
+		`"requesting_node_id":"node-1"`,
+		`"cluster_id":"cluster-1"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("exclusion warning missing %s\nlog: %s", want, out)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestSyncMeshExcludesPeerWithScanError(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	logger, logBuf := captureLogger()
+	server := NewQuartermasterServer(db, logger, nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT wireguard_ip::text, wireguard_public_key, external_ip::text, internal_ip::text, wireguard_listen_port, cluster_id`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
+	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
+		WithArgs("node-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Wrong column count triggers a Scan error — sqlmock reports too few
+	// destinations vs source rows.
+	mock.ExpectQuery(`SELECT n\.node_name, n\.wireguard_public_key`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"node_name"}).AddRow("peer-broken"))
+	mock.ExpectQuery(`SELECT s\.type, n\.wireguard_ip::text`).
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
+
+	resp, err := server.SyncMesh(t.Context(), &pb.InfrastructureSyncRequest{
+		NodeId:     "node-1",
+		PublicKey:  "pub",
+		ListenPort: 51820,
+	})
+	if err != nil {
+		t.Fatalf("sync mesh: %v", err)
+	}
+	if len(resp.GetPeers()) != 0 {
+		t.Errorf("expected zero peers after scan error, got %d", len(resp.GetPeers()))
+	}
+
+	out := logBuf.String()
+	for _, want := range []string{
+		`"reason":"scan_error"`,
+		`"requesting_node_id":"node-1"`,
+		`"cluster_id":"cluster-1"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("scan-error warning missing %s\nlog: %s", want, out)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }

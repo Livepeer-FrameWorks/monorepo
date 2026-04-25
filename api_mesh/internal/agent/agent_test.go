@@ -263,6 +263,28 @@ func newTestMetrics() *Metrics {
 			},
 			[]string{},
 		),
+		MeshApplyDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "test_mesh_apply_duration_seconds",
+				Help:    "apply duration",
+				Buckets: prometheus.DefBuckets,
+			},
+			[]string{"layer"},
+		),
+		MeshApplyFailures: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "test_mesh_apply_failures_total",
+				Help: "apply failures by reason",
+			},
+			[]string{"layer", "reason"},
+		),
+		MeshPeerCount: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "test_mesh_peer_count",
+				Help: "peer count by layer",
+			},
+			[]string{"layer"},
+		),
 	}
 }
 
@@ -1181,6 +1203,114 @@ func TestAgentSyncApplyFailurePropagates(t *testing.T) {
 
 	if got := testutil.ToFloat64(metrics.SyncOperations.WithLabelValues("failed")); got != 1 {
 		t.Fatalf("expected failed sync counter to be 1, got %v", got)
+	}
+	if got := testutil.ToFloat64(metrics.MeshApplyFailures.WithLabelValues("managed", "configure")); got != 1 {
+		t.Fatalf("expected mesh_apply_failures{managed,configure} = 1, got %v", got)
+	}
+}
+
+func TestAgentSyncSuccessRecordsApplyMetrics(t *testing.T) {
+	peerKey := mustGenPubB64(t)
+	client := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+				Peers: []*pb.InfrastructurePeer{{
+					PublicKey:  peerKey,
+					Endpoint:   "1.2.3.4:51820",
+					AllowedIps: []string{"10.0.0.3/32"},
+					KeepAlive:  25,
+					NodeName:   "peer-one",
+				}},
+			}},
+		},
+	}
+	wg := &fakeWireguard{}
+	dns := &fakeDNS{}
+	metrics := newTestMetrics()
+	agent := newTestAgent(t, client, wg, dns)
+	agent.metrics = metrics
+
+	agent.sync()
+
+	if got := testutil.CollectAndCount(metrics.MeshApplyDuration); got != 1 {
+		t.Fatalf("expected one MeshApplyDuration sample, got %d", got)
+	}
+	if got := testutil.ToFloat64(metrics.MeshPeerCount.WithLabelValues("managed")); got != 1 {
+		t.Fatalf("expected mesh_peer_count{managed} = 1, got %v", got)
+	}
+	if got := testutil.CollectAndCount(metrics.MeshApplyFailures); got != 0 {
+		t.Fatalf("expected no apply failures on success path, got %d", got)
+	}
+}
+
+func TestAgentSyncDNSFailureRecordsDNSReasonAndDoesNotUpdatePeerCount(t *testing.T) {
+	peerKey := mustGenPubB64(t)
+	client := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+				Peers: []*pb.InfrastructurePeer{{
+					PublicKey:  peerKey,
+					Endpoint:   "1.2.3.4:51820",
+					AllowedIps: []string{"10.0.0.3/32"},
+					KeepAlive:  25,
+					NodeName:   "peer-one",
+				}},
+			}},
+		},
+	}
+	wg := &fakeWireguard{}
+	dns := &fakeDNS{updateErr: errors.New("dns down")}
+	metrics := newTestMetrics()
+	agent := newTestAgent(t, client, wg, dns)
+	agent.metrics = metrics
+
+	agent.sync()
+
+	// Apply itself ran and rolled back; duration is real, peer count is not.
+	if got := testutil.CollectAndCount(metrics.MeshApplyDuration); got != 1 {
+		t.Errorf("expected one MeshApplyDuration sample (Apply did run), got %d", got)
+	}
+	if got := testutil.ToFloat64(metrics.MeshPeerCount.WithLabelValues("managed")); got != 0 {
+		t.Errorf("mesh_peer_count{managed} must remain 0 when DNS fails and config is rolled back; got %v", got)
+	}
+	if got := testutil.ToFloat64(metrics.MeshApplyFailures.WithLabelValues("managed", "dns")); got != 1 {
+		t.Errorf("expected mesh_apply_failures{managed,dns} = 1, got %v", got)
+	}
+}
+
+func TestAgentSyncMalformedPeerRecordsInvalidPeerReason(t *testing.T) {
+	client := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+				Peers: []*pb.InfrastructurePeer{{
+					PublicKey:  "not-a-valid-key", // forces parsePeerStrings failure
+					Endpoint:   "1.2.3.4:51820",
+					AllowedIps: []string{"10.0.0.3/32"},
+					KeepAlive:  25,
+					NodeName:   "peer-broken",
+				}},
+			}},
+		},
+	}
+	wg := &fakeWireguard{}
+	dns := &fakeDNS{}
+	metrics := newTestMetrics()
+	agent := newTestAgent(t, client, wg, dns)
+	agent.metrics = metrics
+
+	agent.sync()
+
+	if got := testutil.ToFloat64(metrics.MeshApplyFailures.WithLabelValues("managed", "invalid_peer")); got != 1 {
+		t.Fatalf("expected mesh_apply_failures{managed,invalid_peer} = 1, got %v", got)
+	}
+	if len(wg.applied) != 0 {
+		t.Errorf("malformed peer must not reach Apply, got %d applies", len(wg.applied))
 	}
 }
 
