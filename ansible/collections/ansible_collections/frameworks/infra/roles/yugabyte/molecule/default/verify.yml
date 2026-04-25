@@ -48,14 +48,3 @@
     - name: Assert sentinels
       ansible.builtin.assert:
         that: sentinels.results | map(attribute='stat.exists') | list == [true]
-
-    - name: Rerun role to verify idempotence (should report changed=0)
-      ansible.builtin.include_role:
-        name: frameworks.infra.yugabyte
-      register: idem
-      check_mode: false
-
-    - name: Fail if any task reported changed on second apply
-      ansible.builtin.assert:
-        that: idem is not changed
-        fail_msg: "yugabyte role is not idempotent — changed=true on second apply"

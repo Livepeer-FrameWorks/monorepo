@@ -9,7 +9,9 @@
   ansible.builtin.shell:
     cmd: |
       set -o pipefail
-      echo ruok | nc -w 5 127.0.0.1 {{ zookeeper_client_port }}
+      exec 3<>/dev/tcp/127.0.0.1/{{ zookeeper_client_port }}
+      printf 'ruok\n' >&3
+      timeout 5 cat <&3
     executable: /bin/bash
   register: zookeeper_ruok
   changed_when: false

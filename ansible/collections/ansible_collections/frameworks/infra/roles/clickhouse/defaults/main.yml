@@ -1,7 +1,7 @@
 ---
 # Version supplied by the CLI from the release manifest. idealista.clickhouse
 # installs from Altinity's apt/yum repos, so this is the repo package version.
-clickhouse_version: "24.8"
+clickhouse_version: "24.8.9.95"
 
 # Listen on all interfaces by default so the cluster-facing probe works. In
 # production the firewall layer restricts access; the role does not open

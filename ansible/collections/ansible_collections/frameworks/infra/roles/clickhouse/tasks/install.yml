@@ -31,7 +31,6 @@
     state: absent
   loop:
     - /etc/clickhouse-server/config.d/99-listen_host.xml
-    - /etc/clickhouse-server/config.d/listen-host.xml
 
 - name: Write managed ClickHouse listen-host override
   ansible.builtin.copy:

@@ -11,6 +11,8 @@ driver:
 platforms:
   - name: yugabyte-instance
     image: geerlingguy/docker-ubuntu2404-ansible:latest
+    platform: linux/amd64
+    pull: always
     pre_build_image: true
     privileged: true
     command: /usr/sbin/init
@@ -40,6 +42,7 @@ provisioner:
         yugabyte_artifact_checksum: >-
           {{ lookup('env', 'YUGABYTE_ARTIFACT_CHECKSUM') |
              default('sha256:31d8b3a65f75d96a3ffe9fe61f8398018576afe8439c0b43115075296cee3a20', true) }}
+        yugabyte_manage_timesync: false
         yugabyte_replication_factor: 1
         yugabyte_node_address: "127.0.0.1"
 

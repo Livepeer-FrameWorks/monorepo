@@ -35,6 +35,7 @@ yugabyte_placement_zone: "eu-{{ yugabyte_node_id | default(1) }}"
 # Resource limits (applied via /etc/security/limits.d and systemd unit).
 yugabyte_limit_nofile: "1048576"
 yugabyte_limit_nproc: "12000"
+yugabyte_manage_timesync: true
 
 # Service names on the target.
 yugabyte_master_service: yb-master

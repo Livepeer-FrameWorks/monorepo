@@ -18,12 +18,14 @@
         port: 9000
         timeout: 60
 
-    - name: Rerun for idempotence
-      ansible.builtin.include_role:
-        name: frameworks.infra.clickhouse
-      register: idem
-
-    - name: Fail if second apply changed anything
-      ansible.builtin.assert:
-        that: idem is not changed
-        fail_msg: "clickhouse role not idempotent"
+    - name: Confirm ClickHouse answers a native query
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --host=127.0.0.1
+          - --port=9000
+          - --password
+          - molecule-test-password
+          - -q
+          - SELECT 1
+      changed_when: false

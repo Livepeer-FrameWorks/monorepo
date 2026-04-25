@@ -13,14 +13,18 @@
   ansible.builtin.package:
     name: "{{ yugabyte_timesync.package }}"
     state: present
-  when: not yugabyte_timesync_running
+  when:
+    - yugabyte_manage_timesync
+    - not yugabyte_timesync_running
 
 - name: Enable and start time-sync service
   ansible.builtin.systemd:
     name: "{{ yugabyte_timesync.service }}"
     state: started
     enabled: true
-  when: not yugabyte_timesync_running
+  when:
+    - yugabyte_manage_timesync
+    - not yugabyte_timesync_running
 
 - name: Ensure python command is available for YugabyteDB post-install
   ansible.builtin.package:

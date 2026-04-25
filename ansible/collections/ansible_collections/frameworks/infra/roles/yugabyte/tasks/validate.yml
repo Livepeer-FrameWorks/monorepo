@@ -72,6 +72,11 @@
           journalctl:
           {{ yugabyte_tserver_journal.stdout | default('(no output)') }}
 
+- name: Check successful Yugabyte bootstrap marker
+  ansible.builtin.stat:
+    path: "{{ yugabyte_bootstrap_sentinel }}"
+  register: yugabyte_bootstrap_sentinel_stat
+
 - name: Record successful Yugabyte bootstrap
   ansible.builtin.file:
     path: "{{ yugabyte_bootstrap_sentinel }}"
@@ -79,3 +84,4 @@
     owner: "{{ yugabyte_user }}"
     group: "{{ yugabyte_group }}"
     mode: "0644"
+  when: not yugabyte_bootstrap_sentinel_stat.stat.exists

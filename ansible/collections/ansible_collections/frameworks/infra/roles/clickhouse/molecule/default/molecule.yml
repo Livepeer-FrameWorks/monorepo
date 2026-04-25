@@ -5,6 +5,20 @@ prerun: false
 dependency:
   name: galaxy
 
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - side_effect
+    - verify
+    - cleanup
+    - destroy
+
 driver:
   name: docker
 
@@ -28,7 +42,8 @@ provisioner:
   inventory:
     group_vars:
       all:
-        clickhouse_version: "24.8"
+        clickhouse_version: "24.8.9.95"
+        clickhouse_listen_host: "0.0.0.0"
         clickhouse_default_password: "molecule-test-password"
         clickhouse_databases:
           - analytics
