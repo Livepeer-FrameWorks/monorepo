@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -385,12 +386,20 @@ func (a *Agent) applyStatic(sp *staticPeersFile) {
 		a.logger.WithError(err).Warn("Seed layer: private key unavailable")
 		return
 	}
-	peers := staticPeersToWireGuard(sp.Peers)
-	cfg := wireguard.Config{
-		PrivateKey: priv,
-		Address:    fmt.Sprintf("%s/32", a.wireguardIP),
-		ListenPort: a.listenPort,
-		Peers:      peers,
+	cfg, err := selfConfig(priv, a.wireguardIP, a.listenPort)
+	if err != nil {
+		a.logger.WithError(err).Error("Seed layer: invalid self identity")
+		return
+	}
+	peers, err := staticPeersToWireGuard(sp.Peers)
+	if err != nil {
+		a.logger.WithError(err).Error("Seed layer: invalid peer in static-peers.json")
+		return
+	}
+	cfg.Peers = peers
+	if err := wireguard.ValidateForApply(cfg); err != nil {
+		a.logger.WithError(err).Error("Seed layer: policy validation failed")
+		return
 	}
 	if err := a.wgManager.Apply(cfg); err != nil {
 		a.logger.WithError(err).Error("Seed layer: failed to apply wireguard config")
@@ -398,10 +407,9 @@ func (a *Agent) applyStatic(sp *staticPeersFile) {
 	}
 
 	dns := map[string][]string{}
-	for _, p := range sp.Peers {
-		if p.Name != "" && len(p.AllowedIPs) > 0 {
-			ip := strings.Split(p.AllowedIPs[0], "/")[0]
-			dns[p.Name] = []string{ip}
+	for i, p := range sp.Peers {
+		if p.Name != "" && len(peers[i].AllowedIPs) > 0 {
+			dns[p.Name] = []string{peers[i].AllowedIPs[0].IP.String()}
 		}
 	}
 	for name, ips := range sp.DNS {
@@ -441,7 +449,15 @@ func (a *Agent) applyPersistedMesh(lk *lastKnownMesh, layer string) {
 		a.logger.WithError(err).Warn("Persisted mesh: private key unavailable")
 		return
 	}
-	cfg := lastKnownToWireGuard(lk, priv, a.wireguardIP, a.listenPort)
+	cfg, err := lastKnownToWireGuard(lk, priv, a.wireguardIP, a.listenPort)
+	if err != nil {
+		a.logger.WithError(err).Error("Persisted mesh: invalid snapshot")
+		return
+	}
+	if err := wireguard.ValidateForApply(cfg); err != nil {
+		a.logger.WithError(err).Error("Persisted mesh: policy validation failed")
+		return
+	}
 	if err := a.wgManager.Apply(cfg); err != nil {
 		a.logger.WithError(err).Error("Persisted mesh: apply failed")
 		return
@@ -568,22 +584,24 @@ func (a *Agent) sync() {
 		return
 	}
 
-	peers := make([]wireguard.Peer, len(resp.Peers))
+	peers := make([]wireguard.Peer, 0, len(resp.Peers))
 	dnsRecords := make(map[string][]string)
 
-	for i, p := range resp.Peers {
-		peers[i] = wireguard.Peer{
-			PublicKey:  p.PublicKey,
-			Endpoint:   p.Endpoint,
-			AllowedIPs: p.AllowedIps,
-			KeepAlive:  int(p.KeepAlive),
+	for _, p := range resp.Peers {
+		label := p.NodeName
+		if label == "" {
+			label = p.PublicKey
 		}
+		peer, err := parsePeerStrings(label, p.PublicKey, p.Endpoint, p.AllowedIps, int(p.KeepAlive))
+		if err != nil {
+			a.logger.WithError(err).WithField("peer", label).Error("Quartermaster returned a malformed peer; failing sync")
+			a.syncFailed()
+			return
+		}
+		peers = append(peers, peer)
 
-		// Assuming AllowedIPs contains the /32 IP at index 0
-		if p.NodeName != "" && len(p.AllowedIps) > 0 {
-			// Strip CIDR mask if present
-			ip := strings.Split(p.AllowedIps[0], "/")[0]
-			dnsRecords[p.NodeName] = []string{ip}
+		if p.NodeName != "" && len(peer.AllowedIPs) > 0 {
+			dnsRecords[p.NodeName] = []string{peer.AllowedIPs[0].IP.String()}
 		}
 	}
 
@@ -592,11 +610,18 @@ func (a *Agent) sync() {
 		dnsRecords[sName] = append(dnsRecords[sName], sEndpoints.Ips...)
 	}
 
-	cfg := wireguard.Config{
-		PrivateKey: privKey,
-		Address:    fmt.Sprintf("%s/32", a.wireguardIP),
-		ListenPort: a.listenPort,
-		Peers:      peers,
+	cfg, cfgErr := selfConfig(privKey, a.wireguardIP, a.listenPort)
+	if cfgErr != nil {
+		a.logger.WithError(cfgErr).Error("Invalid self identity for managed apply")
+		a.syncFailed()
+		return
+	}
+	cfg.Peers = peers
+
+	if err := wireguard.ValidateForApply(cfg); err != nil {
+		a.logger.WithError(err).Error("Managed apply: policy validation failed")
+		a.syncFailed()
+		return
 	}
 
 	// 4. Apply WireGuard Config
@@ -944,11 +969,27 @@ func (a *Agent) setLastAppliedConfig(cfg wireguard.Config) {
 func cloneConfig(cfg wireguard.Config) wireguard.Config {
 	peersCopy := make([]wireguard.Peer, len(cfg.Peers))
 	for i, peer := range cfg.Peers {
-		allowedCopy := make([]string, len(peer.AllowedIPs))
-		copy(allowedCopy, peer.AllowedIPs)
+		allowedCopy := make([]net.IPNet, len(peer.AllowedIPs))
+		for j, ipnet := range peer.AllowedIPs {
+			ipCopy := make(net.IP, len(ipnet.IP))
+			copy(ipCopy, ipnet.IP)
+			maskCopy := make(net.IPMask, len(ipnet.Mask))
+			copy(maskCopy, ipnet.Mask)
+			allowedCopy[j] = net.IPNet{IP: ipCopy, Mask: maskCopy}
+		}
+		var endpointCopy *net.UDPAddr
+		if peer.Endpoint != nil {
+			ec := *peer.Endpoint
+			if peer.Endpoint.IP != nil {
+				ipCopy := make(net.IP, len(peer.Endpoint.IP))
+				copy(ipCopy, peer.Endpoint.IP)
+				ec.IP = ipCopy
+			}
+			endpointCopy = &ec
+		}
 		peersCopy[i] = wireguard.Peer{
 			PublicKey:  peer.PublicKey,
-			Endpoint:   peer.Endpoint,
+			Endpoint:   endpointCopy,
 			AllowedIPs: allowedCopy,
 			KeepAlive:  peer.KeepAlive,
 		}

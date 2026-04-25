@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +14,8 @@ import (
 	"time"
 
 	"frameworks/api_mesh/internal/wireguard"
+
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 // staticPeersFile is the JSON shape produced by Ansible's privateer role.
@@ -166,23 +170,86 @@ func readPrivateKey(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// parsePeerStrings parses the wire-format strings carried by GitOps JSON,
+// the persisted last-known snapshot, and the Quartermaster proto into a
+// typed wireguard.Peer. This is the boundary parse — internal code reads
+// typed values only.
+func parsePeerStrings(label, publicKey, endpoint string, allowedIPs []string, keepAlive int) (wireguard.Peer, error) {
+	pub, err := wgtypes.ParseKey(strings.TrimSpace(publicKey))
+	if err != nil {
+		return wireguard.Peer{}, fmt.Errorf("peer %s: parse public key: %w", label, err)
+	}
+
+	var ep *net.UDPAddr
+	if e := strings.TrimSpace(endpoint); e != "" {
+		ap, parseErr := netip.ParseAddrPort(e)
+		if parseErr != nil {
+			return wireguard.Peer{}, fmt.Errorf("peer %s: parse endpoint %q: %w", label, e, parseErr)
+		}
+		ep = net.UDPAddrFromAddrPort(ap)
+	}
+
+	nets := make([]net.IPNet, 0, len(allowedIPs))
+	for _, s := range allowedIPs {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		_, n, parseErr := net.ParseCIDR(s)
+		if parseErr != nil {
+			return wireguard.Peer{}, fmt.Errorf("peer %s: parse allowed_ip %q: %w", label, s, parseErr)
+		}
+		nets = append(nets, *n)
+	}
+
+	return wireguard.Peer{
+		PublicKey:  pub,
+		Endpoint:   ep,
+		AllowedIPs: nets,
+		KeepAlive:  keepAlive,
+	}, nil
+}
+
 // staticPeersToWireGuard converts the GitOps peer schema into the runtime
-// wireguard.Peer shape the manager expects.
-func staticPeersToWireGuard(peers []staticPeer) []wireguard.Peer {
-	out := make([]wireguard.Peer, len(peers))
-	for i, p := range peers {
+// wireguard.Peer shape, parsing each string into typed values. KeepAlive
+// defaults to 25s when unset upstream.
+func staticPeersToWireGuard(peers []staticPeer) ([]wireguard.Peer, error) {
+	out := make([]wireguard.Peer, 0, len(peers))
+	for _, p := range peers {
 		ka := p.KeepAlive
 		if ka == 0 {
 			ka = 25
 		}
-		out[i] = wireguard.Peer{
-			PublicKey:  p.PublicKey,
-			Endpoint:   p.Endpoint,
-			AllowedIPs: p.AllowedIPs,
-			KeepAlive:  ka,
+		label := p.Name
+		if label == "" {
+			label = p.PublicKey
 		}
+		peer, err := parsePeerStrings(label, p.PublicKey, p.Endpoint, p.AllowedIPs, ka)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, peer)
 	}
-	return out
+	return out, nil
+}
+
+// selfConfig builds the typed Config for the agent's own identity (private
+// key + mesh address + listen port). Used by both the seed and last-known
+// paths. The caller adds peers separately.
+func selfConfig(privateKey, selfIP string, selfPort int) (wireguard.Config, error) {
+	priv, err := wgtypes.ParseKey(strings.TrimSpace(privateKey))
+	if err != nil {
+		return wireguard.Config{}, fmt.Errorf("parse private key: %w", err)
+	}
+	addr, err := netip.ParsePrefix(fmt.Sprintf("%s/32", selfIP))
+	if err != nil {
+		return wireguard.Config{}, fmt.Errorf("parse self address %s/32: %w", selfIP, err)
+	}
+	return wireguard.Config{
+		PrivateKey: priv,
+		Address:    addr,
+		ListenPort: selfPort,
+	}, nil
 }
 
 // lastKnownToWireGuard reconstructs a wireguard.Config from a persisted peer
@@ -191,20 +258,23 @@ func staticPeersToWireGuard(peers []staticPeer) []wireguard.Peer {
 // — they are kept in the snapshot for diagnostics only. This is the
 // invariant that lets GitOps key rotation propagate on reboot: a stale
 // snapshot cannot resurrect the old self-address.
-func lastKnownToWireGuard(lk *lastKnownMesh, privateKey, selfIP string, selfPort int) wireguard.Config {
-	peers := make([]wireguard.Peer, len(lk.Peers))
-	for i, p := range lk.Peers {
-		peers[i] = wireguard.Peer{
-			PublicKey:  p.PublicKey,
-			Endpoint:   p.Endpoint,
-			AllowedIPs: p.AllowedIPs,
-			KeepAlive:  p.KeepAlive,
+func lastKnownToWireGuard(lk *lastKnownMesh, privateKey, selfIP string, selfPort int) (wireguard.Config, error) {
+	cfg, err := selfConfig(privateKey, selfIP, selfPort)
+	if err != nil {
+		return wireguard.Config{}, err
+	}
+	peers := make([]wireguard.Peer, 0, len(lk.Peers))
+	for _, p := range lk.Peers {
+		label := p.Name
+		if label == "" {
+			label = p.PublicKey
 		}
+		peer, err := parsePeerStrings(label, p.PublicKey, p.Endpoint, p.AllowedIPs, p.KeepAlive)
+		if err != nil {
+			return wireguard.Config{}, err
+		}
+		peers = append(peers, peer)
 	}
-	return wireguard.Config{
-		PrivateKey: privateKey,
-		Address:    fmt.Sprintf("%s/32", selfIP),
-		ListenPort: selfPort,
-		Peers:      peers,
-	}
+	cfg.Peers = peers
+	return cfg, nil
 }

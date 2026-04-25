@@ -70,13 +70,14 @@ func (m *linuxManager) Apply(cfg Config) error {
 	// 3. Set IP Address
 	// Check current IP
 	// This is a bit naive (assumes single IP), but sufficient for mesh
+	addrText := cfg.Address.String()
 	currentIPs, err := exec.CommandContext(ctx, "ip", "-o", "-4", "addr", "show", m.interfaceName).Output()
 	if err == nil {
-		if !strings.Contains(string(currentIPs), cfg.Address) {
+		if !strings.Contains(string(currentIPs), addrText) {
 			// Flush old IPs (best-effort, continue even if fails)
 			_ = exec.CommandContext(ctx, "ip", "addr", "flush", "dev", m.interfaceName).Run() //nolint:errcheck // best-effort flush before adding new IP
 			// Add new IP
-			if out, addErr := exec.CommandContext(ctx, "ip", "addr", "add", cfg.Address, "dev", m.interfaceName).CombinedOutput(); addErr != nil {
+			if out, addErr := exec.CommandContext(ctx, "ip", "addr", "add", addrText, "dev", m.interfaceName).CombinedOutput(); addErr != nil {
 				return fmt.Errorf("failed to set ip address: %w: %s", addErr, string(out))
 			}
 		}

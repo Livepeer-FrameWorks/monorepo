@@ -18,6 +18,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -284,6 +285,29 @@ func newTestAgent(t *testing.T, client *fakeMeshClient, wg *fakeWireguard, dns *
 	}
 }
 
+// mustGenPubB64 returns a freshly generated wireguard public key in
+// base64 form, suitable for use as a proto/JSON peer public_key field.
+func mustGenPubB64(t *testing.T) string {
+	t.Helper()
+	priv, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey: %v", err)
+	}
+	return priv.PublicKey().String()
+}
+
+// genPrivateKeyB64 returns a freshly generated wireguard private key as
+// base64 plus its derived public key. Used for tests that need to write
+// a key file to disk and assert what comes back through the agent.
+func genPrivateKeyB64(t *testing.T) (priv string, pub string) {
+	t.Helper()
+	k, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey: %v", err)
+	}
+	return k.String(), k.PublicKey().String()
+}
+
 func writeTestPrivateKey(t *testing.T) (string, string) {
 	t.Helper()
 	raw := make([]byte, 32)
@@ -524,6 +548,7 @@ func TestAgentSyncRegistersNodeOnNotFound(t *testing.T) {
 		t.Fatalf("write node id: %v", err)
 	}
 
+	peerKey := mustGenPubB64(t)
 	mesh := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{err: status.Error(codes.NotFound, "missing")},
@@ -533,7 +558,7 @@ func TestAgentSyncRegistersNodeOnNotFound(t *testing.T) {
 				Peers: []*pb.InfrastructurePeer{
 					{
 						NodeName:   "node-a",
-						PublicKey:  "pub-a",
+						PublicKey:  peerKey,
 						Endpoint:   "1.2.3.4:51820",
 						AllowedIps: []string{"10.0.0.3/32"},
 						KeepAlive:  25,
@@ -593,8 +618,8 @@ func TestAgentSyncRegistersNodeOnNotFound(t *testing.T) {
 	if len(wg.applied) != 1 {
 		t.Fatalf("expected wireguard apply once, got %d", len(wg.applied))
 	}
-	if wg.applied[0].Address != "10.0.0.8/32" {
-		t.Fatalf("unexpected wireguard address %s", wg.applied[0].Address)
+	if got := wg.applied[0].Address.String(); got != "10.0.0.8/32" {
+		t.Fatalf("unexpected wireguard address %s", got)
 	}
 	if len(dnsService.updates) != 1 {
 		t.Fatalf("expected dns update once, got %d", len(dnsService.updates))
@@ -758,13 +783,14 @@ func TestAgentSyncRevokedWithoutToken(t *testing.T) {
 }
 
 func TestAgentSyncNotFoundKeepsExistingMeshWhenRegistrationCannotRun(t *testing.T) {
+	peerKey := mustGenPubB64(t)
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{resp: &pb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
 				Peers: []*pb.InfrastructurePeer{{
-					PublicKey:  "peer-key",
+					PublicKey:  peerKey,
 					Endpoint:   "1.2.3.4:51820",
 					AllowedIps: []string{"10.0.0.2/32"},
 					KeepAlive:  25,
@@ -881,12 +907,13 @@ func TestAgentSyncRetryDoesNotApplyOnFailure(t *testing.T) {
 }
 
 func TestSyncAppliesConfigBeforeDNSUpdate(t *testing.T) {
+	peerKey := mustGenPubB64(t)
 	resp := &pb.InfrastructureSyncResponse{
 		WireguardIp:   "10.0.0.10",
 		WireguardPort: 51820,
 		Peers: []*pb.InfrastructurePeer{
 			{
-				PublicKey:  "peer-1",
+				PublicKey:  peerKey,
 				Endpoint:   "10.0.0.1:51820",
 				AllowedIps: []string{"10.0.0.2/32"},
 				KeepAlive:  25,
@@ -952,12 +979,14 @@ func TestSyncRejectsManagedSelfIdentityMismatch(t *testing.T) {
 }
 
 func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
+	peer1Key := mustGenPubB64(t)
+	peer2Key := mustGenPubB64(t)
 	initialResp := &pb.InfrastructureSyncResponse{
 		WireguardIp:   "10.0.0.10",
 		WireguardPort: 51820,
 		Peers: []*pb.InfrastructurePeer{
 			{
-				PublicKey:  "peer-1",
+				PublicKey:  peer1Key,
 				Endpoint:   "10.0.0.1:51820",
 				AllowedIps: []string{"10.0.0.2/32"},
 				KeepAlive:  25,
@@ -970,7 +999,7 @@ func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
 		WireguardPort: 51820,
 		Peers: []*pb.InfrastructurePeer{
 			{
-				PublicKey:  "peer-2",
+				PublicKey:  peer2Key,
 				Endpoint:   "10.0.0.2:51820",
 				AllowedIps: []string{"10.0.0.3/32"},
 				KeepAlive:  25,
@@ -1029,11 +1058,12 @@ func TestApplyStaticIncludesSeedDNS(t *testing.T) {
 		lastKnownPath:  filepath.Join(t.TempDir(), "last_known.json"),
 	}
 
+	peerKey := mustGenPubB64(t)
 	agent.applyStatic(&staticPeersFile{
 		Version: "seed-v1",
 		Peers: []staticPeer{{
 			Name:       "core-2",
-			PublicKey:  "peer-key",
+			PublicKey:  peerKey,
 			AllowedIPs: []string{"10.88.0.3/32"},
 			Endpoint:   "203.0.113.3:51820",
 			KeepAlive:  25,
@@ -1081,6 +1111,7 @@ func TestAgentSyncTimeoutRecordsFailure(t *testing.T) {
 }
 
 func TestAgentSyncReconcilesStaleState(t *testing.T) {
+	peerKey := mustGenPubB64(t)
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{resp: &pb.InfrastructureSyncResponse{
@@ -1088,7 +1119,7 @@ func TestAgentSyncReconcilesStaleState(t *testing.T) {
 				WireguardPort: 51820,
 				Peers: []*pb.InfrastructurePeer{
 					{
-						PublicKey:  "peer-key",
+						PublicKey:  peerKey,
 						Endpoint:   "1.2.3.4:51820",
 						AllowedIps: []string{"10.0.0.2/32"},
 						KeepAlive:  25,
@@ -1245,13 +1276,14 @@ func TestAgentSyncRegistrationRetryFailureKeepsMeshState(t *testing.T) {
 		t.Fatalf("write node id: %v", err)
 	}
 
+	peerKey := mustGenPubB64(t)
 	mesh := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{resp: &pb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
 				Peers: []*pb.InfrastructurePeer{{
-					PublicKey:  "peer-key",
+					PublicKey:  peerKey,
 					Endpoint:   "1.2.3.4:51820",
 					AllowedIps: []string{"10.0.0.2/32"},
 					KeepAlive:  25,
@@ -1307,16 +1339,18 @@ func TestApplyPersistedMeshIdentityWins(t *testing.T) {
 	// it: the agent's own configured identity is authoritative.
 	tmp := t.TempDir()
 	keyPath := filepath.Join(tmp, "wg.key")
-	if err := os.WriteFile(keyPath, []byte("privkey-on-disk\n"), 0o600); err != nil {
+	privB64, _ := genPrivateKeyB64(t)
+	if err := os.WriteFile(keyPath, []byte(privB64+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	peerKey := mustGenPubB64(t)
 	lastKnownPath := filepath.Join(tmp, "last_known.json")
 	if err := writeLastKnown(lastKnownPath, &lastKnownMesh{
 		Source:      "dynamic",
 		Version:     "v1",
 		WireguardIP: "10.88.0.99", // stale / rotated away
 		ListenPort:  99999,
-		Peers:       []lastKnownPeer{{PublicKey: "peer-a", Endpoint: "1.1.1.1:51820", AllowedIPs: []string{"10.88.0.3/32"}, KeepAlive: 25}},
+		Peers:       []lastKnownPeer{{PublicKey: peerKey, Endpoint: "1.1.1.1:51820", AllowedIPs: []string{"10.88.0.3/32"}, KeepAlive: 25}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1339,16 +1373,16 @@ func TestApplyPersistedMeshIdentityWins(t *testing.T) {
 		t.Fatalf("expected exactly one wgManager.Apply call, got %d", len(wg.applied))
 	}
 	got := wg.applied[0]
-	if got.Address != "10.88.0.2/32" {
-		t.Errorf("wg0 address = %q, want 10.88.0.2/32 (identity layer wins over stale last_known 10.88.0.99)", got.Address)
+	if addr := got.Address.String(); addr != "10.88.0.2/32" {
+		t.Errorf("wg0 address = %q, want 10.88.0.2/32 (identity layer wins over stale last_known 10.88.0.99)", addr)
 	}
 	if got.ListenPort != 51820 {
 		t.Errorf("wg0 listen port = %d, want 51820 (not stale 99999)", got.ListenPort)
 	}
-	if got.PrivateKey != "privkey-on-disk" {
-		t.Errorf("private key = %q, want from wg.key file", got.PrivateKey)
+	if got.PrivateKey.String() != privB64 {
+		t.Errorf("private key = %q, want from wg.key file", got.PrivateKey.String())
 	}
-	if len(got.Peers) != 1 || got.Peers[0].PublicKey != "peer-a" {
+	if len(got.Peers) != 1 || got.Peers[0].PublicKey.String() != peerKey {
 		t.Errorf("peers should come from last_known snapshot, got %+v", got.Peers)
 	}
 }
@@ -1356,7 +1390,8 @@ func TestApplyPersistedMeshIdentityWins(t *testing.T) {
 func TestApplyStartupMeshWithEmptySeedStillConfiguresSelfAddress(t *testing.T) {
 	tmp := t.TempDir()
 	keyPath := filepath.Join(tmp, "wg.key")
-	if err := os.WriteFile(keyPath, []byte("privkey-on-disk\n"), 0o600); err != nil {
+	privB64, _ := genPrivateKeyB64(t)
+	if err := os.WriteFile(keyPath, []byte(privB64+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	staticPeersPath := filepath.Join(tmp, "static-peers.json")
@@ -1383,8 +1418,8 @@ func TestApplyStartupMeshWithEmptySeedStillConfiguresSelfAddress(t *testing.T) {
 		t.Fatalf("expected exactly one wgManager.Apply call, got %d", len(wg.applied))
 	}
 	got := wg.applied[0]
-	if got.Address != "10.88.0.2/32" {
-		t.Fatalf("wg0 address = %q, want 10.88.0.2/32", got.Address)
+	if addr := got.Address.String(); addr != "10.88.0.2/32" {
+		t.Fatalf("wg0 address = %q, want 10.88.0.2/32", addr)
 	}
 	if got.ListenPort != 51820 {
 		t.Fatalf("wg0 listen port = %d, want 51820", got.ListenPort)

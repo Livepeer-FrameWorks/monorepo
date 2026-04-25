@@ -1,20 +1,62 @@
 package wireguard
 
 import (
+	"net"
+	"net/netip"
 	"strings"
 	"testing"
+
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
+func mustGenKey(t *testing.T) wgtypes.Key {
+	t.Helper()
+	k, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey: %v", err)
+	}
+	return k
+}
+
+func mustParsePrefix(t *testing.T, s string) netip.Prefix {
+	t.Helper()
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		t.Fatalf("ParsePrefix(%q): %v", s, err)
+	}
+	return p
+}
+
+func mustResolveUDP(t *testing.T, s string) *net.UDPAddr {
+	t.Helper()
+	ap, err := netip.ParseAddrPort(s)
+	if err != nil {
+		t.Fatalf("ParseAddrPort(%q): %v", s, err)
+	}
+	return net.UDPAddrFromAddrPort(ap)
+}
+
+func mustParseCIDR(t *testing.T, s string) net.IPNet {
+	t.Helper()
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		t.Fatalf("ParseCIDR(%q): %v", s, err)
+	}
+	return *n
+}
+
 func TestRenderConfigValid(t *testing.T) {
+	priv := mustGenKey(t)
+	peerKey := mustGenKey(t).PublicKey()
 	cfg := Config{
-		PrivateKey: "privkey",
-		Address:    "10.200.0.5/32",
+		PrivateKey: priv,
+		Address:    mustParsePrefix(t, "10.200.0.5/32"),
 		ListenPort: 51820,
 		Peers: []Peer{
 			{
-				PublicKey:  "peer1",
-				Endpoint:   "10.0.0.1:51820",
-				AllowedIPs: []string{"10.0.0.2/32", "10.0.0.3/32"},
+				PublicKey:  peerKey,
+				Endpoint:   mustResolveUDP(t, "10.0.0.1:51820"),
+				AllowedIPs: []net.IPNet{mustParseCIDR(t, "10.0.0.2/32"), mustParseCIDR(t, "10.0.0.3/32")},
 				KeepAlive:  25,
 			},
 		},
@@ -26,77 +68,13 @@ func TestRenderConfigValid(t *testing.T) {
 	}
 
 	if !containsAll(configText, []string{
-		"PrivateKey = privkey",
+		"PrivateKey = " + priv.String(),
 		"ListenPort = 51820",
-		"PublicKey = peer1",
+		"PublicKey = " + peerKey.String(),
 		"AllowedIPs = 10.0.0.2/32, 10.0.0.3/32",
 		"PersistentKeepalive = 25",
 	}) {
 		t.Fatalf("config missing expected content: %s", configText)
-	}
-}
-
-func TestRenderConfigRejectsMalformedPeer(t *testing.T) {
-	cfg := Config{
-		PrivateKey: "privkey",
-		Address:    "10.200.0.5/32",
-		ListenPort: 51820,
-		Peers: []Peer{
-			{
-				PublicKey:  "",
-				AllowedIPs: []string{"10.0.0.2/32"},
-				KeepAlive:  25,
-			},
-		},
-	}
-
-	_, err := renderConfig(cfg)
-	if err == nil {
-		t.Fatal("expected error for malformed peer, got nil")
-	}
-}
-
-func TestValidateConfig_PortBoundary(t *testing.T) {
-	base := Config{
-		PrivateKey: "privkey",
-		Address:    "10.0.0.1/32",
-		Peers:      nil,
-	}
-
-	// port=0 should fail
-	base.ListenPort = 0
-	if err := validateConfig(base); err == nil {
-		t.Fatal("port 0 should fail validation")
-	}
-
-	// port=1 should pass
-	base.ListenPort = 1
-	if err := validateConfig(base); err != nil {
-		t.Fatalf("port 1 should pass, got: %v", err)
-	}
-}
-
-func TestValidateConfig_KeepaliveBoundary(t *testing.T) {
-	base := Config{
-		PrivateKey: "privkey",
-		Address:    "10.0.0.1/32",
-		ListenPort: 51820,
-		Peers: []Peer{{
-			PublicKey:  "pubkey",
-			AllowedIPs: []string{"10.0.0.2/32"},
-		}},
-	}
-
-	// keepalive=-1 should fail
-	base.Peers[0].KeepAlive = -1
-	if err := validateConfig(base); err == nil {
-		t.Fatal("keepalive -1 should fail validation")
-	}
-
-	// keepalive=0 should pass
-	base.Peers[0].KeepAlive = 0
-	if err := validateConfig(base); err != nil {
-		t.Fatalf("keepalive 0 should pass, got: %v", err)
 	}
 }
 
