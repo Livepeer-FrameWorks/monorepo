@@ -3,6 +3,7 @@ package wireguard
 import (
 	"net"
 	"net/netip"
+	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
@@ -37,4 +38,32 @@ type Manager interface {
 	Apply(cfg Config) error
 	// Close tears down the interface (if applicable).
 	Close() error
+}
+
+// toWGTypes maps the typed Config onto wgctrl's wgtypes.Config. ReplacePeers
+// and ReplaceAllowedIPs are both set so each apply is a full sync — the
+// device ends up exactly matching cfg, with no leftover peers or AllowedIPs
+// from a previous apply.
+func (c Config) toWGTypes() wgtypes.Config {
+	priv := c.PrivateKey
+	listenPort := c.ListenPort
+
+	peers := make([]wgtypes.PeerConfig, len(c.Peers))
+	for i, p := range c.Peers {
+		ka := time.Duration(p.KeepAlive) * time.Second
+		peers[i] = wgtypes.PeerConfig{
+			PublicKey:                   p.PublicKey,
+			Endpoint:                    p.Endpoint,
+			PersistentKeepaliveInterval: &ka,
+			ReplaceAllowedIPs:           true,
+			AllowedIPs:                  p.AllowedIPs,
+		}
+	}
+
+	return wgtypes.Config{
+		PrivateKey:   &priv,
+		ListenPort:   &listenPort,
+		ReplacePeers: true,
+		Peers:        peers,
+	}
 }
