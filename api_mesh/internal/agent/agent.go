@@ -19,6 +19,7 @@ import (
 	navclient "frameworks/pkg/clients/navigator"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
+	pkgmesh "frameworks/pkg/mesh"
 	infra "frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
 
@@ -514,7 +515,7 @@ func (a *Agent) sync() {
 		a.syncFailed()
 		return
 	}
-	pubKey, err := derivePublicKey(privKey)
+	pubKey, err := pkgmesh.DerivePublicKey(privKey)
 	if err != nil {
 		a.logger.WithError(err).Error("Failed to derive mesh public key")
 		a.syncFailed()
@@ -723,7 +724,7 @@ func (a *Agent) ensureCertIssueToken(ctx context.Context) error {
 	if strings.TrimSpace(a.clusterID) == "" {
 		return fmt.Errorf("cluster_id is required for cert token minting")
 	}
-	metadata, err := structpb.NewStruct(map[string]interface{}{
+	metadata, err := structpb.NewStruct(map[string]any{
 		"node_id": a.nodeID,
 		"purpose": "cert_sync",
 	})

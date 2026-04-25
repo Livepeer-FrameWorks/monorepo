@@ -2,7 +2,6 @@ package agent
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,8 +12,6 @@ import (
 	"time"
 
 	"frameworks/api_mesh/internal/wireguard"
-
-	"golang.org/x/crypto/curve25519"
 )
 
 // staticPeersFile is the JSON shape produced by Ansible's privateer role.
@@ -167,22 +164,6 @@ func readPrivateKey(path string) (string, error) {
 		return "", fmt.Errorf("read private key %s: %w", path, err)
 	}
 	return strings.TrimSpace(string(data)), nil
-}
-
-func derivePublicKey(privateKey string) (string, error) {
-	privateKey = strings.TrimSpace(privateKey)
-	priv, err := base64.StdEncoding.DecodeString(privateKey)
-	if err != nil {
-		return "", fmt.Errorf("decode private key: %w", err)
-	}
-	if len(priv) != 32 {
-		return "", fmt.Errorf("private key must decode to 32 bytes, got %d", len(priv))
-	}
-	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
-	if err != nil {
-		return "", fmt.Errorf("derive public key: %w", err)
-	}
-	return base64.StdEncoding.EncodeToString(pub), nil
 }
 
 // staticPeersToWireGuard converts the GitOps peer schema into the runtime

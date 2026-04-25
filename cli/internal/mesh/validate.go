@@ -1,13 +1,14 @@
 package mesh
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net"
 	"sort"
 	"strings"
 
 	"frameworks/cli/pkg/inventory"
+
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 // ValidateIdentity checks the GitOps-owned WireGuard identity for the given
@@ -105,12 +106,8 @@ func validateBase64Key(key string) error {
 	if key == "" {
 		return fmt.Errorf("is required")
 	}
-	raw, err := base64.StdEncoding.DecodeString(key)
-	if err != nil {
-		return fmt.Errorf("must be base64: %w", err)
-	}
-	if len(raw) != 32 {
-		return fmt.Errorf("must decode to 32 bytes, got %d", len(raw))
+	if _, err := wgtypes.ParseKey(key); err != nil {
+		return fmt.Errorf("invalid wireguard key: %w", err)
 	}
 	return nil
 }

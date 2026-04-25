@@ -13,6 +13,7 @@ import (
 
 	"frameworks/api_mesh/internal/wireguard"
 	"frameworks/pkg/logging"
+	pkgmesh "frameworks/pkg/mesh"
 	pb "frameworks/pkg/proto"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -293,7 +294,7 @@ func writeTestPrivateKey(t *testing.T) (string, string) {
 	raw[31] &= 127
 	raw[31] |= 64
 	privateKey := base64.StdEncoding.EncodeToString(raw)
-	publicKey, err := derivePublicKey(privateKey)
+	publicKey, err := pkgmesh.DerivePublicKey(privateKey)
 	if err != nil {
 		t.Fatalf("derive test public key: %v", err)
 	}
