@@ -16,8 +16,8 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    owner: "{{ go_service_user }}"
-    group: "{{ go_service_group }}"
+    owner: "{{ omit if ansible_check_mode else go_service_user }}"
+    group: "{{ omit if ansible_check_mode else go_service_group }}"
     mode: "0755"
   loop:
     - /etc/frameworks
@@ -36,6 +36,7 @@
     checksum: "{{ go_service_artifact_checksum }}"
     mode: "0644"
     timeout: 300
+  when: not ansible_check_mode
 
 - name: Extract artifact
   ansible.builtin.unarchive:
@@ -46,6 +47,7 @@
     group: "{{ go_service_group }}"
     creates: "{{ go_service_install_sentinel }}"
   notify: go_service restart
+  when: not ansible_check_mode
 
 # Vendor releases use one of three filename conventions inside the archive;
 # pick whichever shipped, then mark the sentinel.
@@ -58,8 +60,12 @@
     if [ -f "{{ go_service_install_dir }}/frameworks" ]; then
       cp "{{ go_service_install_dir }}/frameworks" "{{ go_service_install_dir }}/{{ go_service_name }}"
     fi
+    if [ -f "{{ go_service_install_dir }}/{{ go_service_binary_name }}" ]; then
+      cp "{{ go_service_install_dir }}/{{ go_service_binary_name }}" "{{ go_service_install_dir }}/{{ go_service_name }}"
+    fi
     chmod +x "{{ go_service_install_dir }}/{{ go_service_name }}"
     touch "{{ go_service_install_sentinel }}"
     chown {{ go_service_user }}:{{ go_service_group }} "{{ go_service_install_sentinel }}" "{{ go_service_install_dir }}/{{ go_service_name }}"
   args:
     creates: "{{ go_service_install_sentinel }}"
+  when: not ansible_check_mode

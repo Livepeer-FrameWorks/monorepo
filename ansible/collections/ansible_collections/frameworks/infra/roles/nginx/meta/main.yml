@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  role_name: nginx
+  author: FrameWorks
+  description: Install and configure Nginx as a FrameWorks reverse proxy.
+  license: MIT
+  min_ansible_version: "2.15"

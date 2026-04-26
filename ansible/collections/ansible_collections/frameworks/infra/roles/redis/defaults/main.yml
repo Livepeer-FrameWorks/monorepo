@@ -5,6 +5,8 @@ redis_bind_interface: 127.0.0.1
 redis_password: ""
 redis_maxmemory: "0" # 0 = unlimited; override from manifest tuning
 redis_appendonly: "yes"
+redis_conf_dir_mode: "0755"
+redis_conf_mode: "0644"
 
 # Named-instance suffix. Empty = default "redis" service; setting e.g.
 # "foghorn" yields frameworks-redis-foghorn on the target.

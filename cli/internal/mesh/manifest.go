@@ -2,6 +2,8 @@ package mesh
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,10 +22,10 @@ type WireGuardBlock struct {
 	ListenPort int
 }
 
-// UpdateClusterYAML reads raw cluster.yaml bytes, updates per-host WG fields
-// under hosts.<name>.{wireguard_ip,wireguard_public_key,wireguard_port}, and
-// rewrites the top-level `wireguard:` block with enabled/mesh_cidr/listen_port.
-// Other fields, comments, and key order are preserved via yaml.v3 Node edits.
+// UpdateClusterYAML reads raw cluster.yaml bytes and patches only the
+// WireGuard-owned lines. yaml.v3 is used to validate structure and locate
+// fields, but the final write is line-based so comments, blank lines, ordering,
+// and existing indentation are preserved.
 func UpdateClusterYAML(raw []byte, hosts map[string]HostWG, wg WireGuardBlock) ([]byte, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(raw, &root); err != nil {
@@ -37,18 +39,220 @@ func UpdateClusterYAML(raw []byte, hosts map[string]HostWG, wg WireGuardBlock) (
 		return nil, fmt.Errorf("cluster.yaml: top-level is not a mapping")
 	}
 
-	if err := updateHostsMapping(doc, hosts); err != nil {
+	patcher := newYAMLPatcher(raw)
+	if err := patcher.patchHostWireGuardFields(doc, hosts); err != nil {
 		return nil, err
 	}
-	if err := upsertWireGuardBlock(doc, wg); err != nil {
+	if err := patcher.patchWireGuardBlock(doc, wg); err != nil {
 		return nil, err
 	}
+	return patcher.bytes(), nil
+}
 
-	out, err := yaml.Marshal(&root)
-	if err != nil {
-		return nil, fmt.Errorf("marshal cluster.yaml: %w", err)
+type yamlLinePatcher struct {
+	lines   []string
+	finalNL bool
+	replace map[int]string
+	insert  []yamlInsertion
+	append  []string
+}
+
+type yamlInsertion struct {
+	before int
+	lines  []string
+}
+
+func newYAMLPatcher(raw []byte) *yamlLinePatcher {
+	s := string(raw)
+	finalNL := strings.HasSuffix(s, "\n")
+	s = strings.TrimSuffix(s, "\n")
+	lines := []string{}
+	if s != "" {
+		lines = strings.Split(s, "\n")
 	}
-	return out, nil
+	return &yamlLinePatcher{
+		lines:   lines,
+		finalNL: finalNL,
+		replace: map[int]string{},
+	}
+}
+
+func (p *yamlLinePatcher) bytes() []byte {
+	lines := append([]string{}, p.lines...)
+	for idx, line := range p.replace {
+		if idx >= 0 && idx < len(lines) {
+			lines[idx] = line
+		}
+	}
+	sort.SliceStable(p.insert, func(i, j int) bool {
+		return p.insert[i].before > p.insert[j].before
+	})
+	for _, ins := range p.insert {
+		if ins.before < 0 {
+			ins.before = 0
+		}
+		if ins.before > len(lines) {
+			ins.before = len(lines)
+		}
+		lines = append(lines[:ins.before], append(ins.lines, lines[ins.before:]...)...)
+	}
+	if len(p.append) > 0 {
+		lines = append(lines, p.append...)
+	}
+	out := strings.Join(lines, "\n")
+	if p.finalNL || len(p.append) > 0 {
+		out += "\n"
+	}
+	return []byte(out)
+}
+
+func (p *yamlLinePatcher) patchHostWireGuardFields(doc *yaml.Node, hosts map[string]HostWG) error {
+	hostsMap := findMappingChild(doc, "hosts")
+	if hostsMap == nil {
+		return fmt.Errorf("cluster.yaml: 'hosts' mapping not found")
+	}
+	for i := 0; i+1 < len(hostsMap.Content); i += 2 {
+		nameNode := hostsMap.Content[i]
+		hostNode := hostsMap.Content[i+1]
+		wg, ok := hosts[nameNode.Value]
+		if !ok {
+			continue
+		}
+		if hostNode.Kind != yaml.MappingNode {
+			return fmt.Errorf("host %q: value is not a mapping", nameNode.Value)
+		}
+		fields := []yamlScalarField{
+			{key: "wireguard_ip", value: wg.WireguardIP},
+			{key: "wireguard_public_key", value: wg.WireguardPublicKey},
+			{key: "wireguard_port", value: fmt.Sprintf("%d", wg.WireguardPort)},
+		}
+		p.patchMappingFields(hostNode, fields)
+	}
+	return nil
+}
+
+func (p *yamlLinePatcher) patchWireGuardBlock(doc *yaml.Node, wg WireGuardBlock) error {
+	fields := []yamlScalarField{{key: "enabled", value: boolString(wg.Enabled)}}
+	if wg.MeshCIDR != "" {
+		fields = append(fields, yamlScalarField{key: "mesh_cidr", value: wg.MeshCIDR})
+	}
+	if wg.ListenPort != 0 {
+		fields = append(fields, yamlScalarField{key: "listen_port", value: fmt.Sprintf("%d", wg.ListenPort)})
+	}
+	block := findMappingChild(doc, "wireguard")
+	if block != nil {
+		if block.Kind != yaml.MappingNode {
+			return fmt.Errorf("cluster.yaml: 'wireguard' value is not a mapping")
+		}
+		p.patchMappingFields(block, fields)
+		return nil
+	}
+	if len(p.lines) > 0 && strings.TrimSpace(p.lines[len(p.lines)-1]) != "" {
+		p.append = append(p.append, "")
+	}
+	p.append = append(p.append, "wireguard:")
+	for _, f := range fields {
+		p.append = append(p.append, "  "+formatYAMLScalarLine(f.key, f.value))
+	}
+	return nil
+}
+
+type yamlScalarField struct {
+	key   string
+	value string
+}
+
+func (p *yamlLinePatcher) patchMappingFields(m *yaml.Node, fields []yamlScalarField) {
+	existing := map[string]*yaml.Node{}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		existing[m.Content[i].Value] = m.Content[i]
+	}
+	missing := []yamlScalarField{}
+	for _, f := range fields {
+		if keyNode, ok := existing[f.key]; ok && keyNode.Line > 0 {
+			lineIdx := keyNode.Line - 1
+			indent := lineIndent(p.lines[lineIdx])
+			p.replace[lineIdx] = strings.Repeat(" ", indent) + formatYAMLScalarLine(f.key, f.value)
+			continue
+		}
+		missing = append(missing, f)
+	}
+	if len(missing) == 0 || m.Line == 0 {
+		return
+	}
+	p.expandInlineEmptyMapping(m)
+	indent := p.mappingChildIndent(m)
+	lines := make([]string, 0, len(missing))
+	for _, f := range missing {
+		lines = append(lines, strings.Repeat(" ", indent)+formatYAMLScalarLine(f.key, f.value))
+	}
+	p.insert = append(p.insert, yamlInsertion{
+		before: p.mappingInsertLine(m),
+		lines:  lines,
+	})
+}
+
+func (p *yamlLinePatcher) expandInlineEmptyMapping(m *yaml.Node) {
+	if len(m.Content) != 0 || m.Line == 0 {
+		return
+	}
+	lineIdx := m.Line - 1
+	if lineIdx < 0 || lineIdx >= len(p.lines) {
+		return
+	}
+	line := p.lines[lineIdx]
+	colon := strings.Index(line, ":")
+	if colon < 0 {
+		return
+	}
+	if strings.TrimSpace(line[colon+1:]) == "{}" {
+		p.replace[lineIdx] = strings.TrimRight(line[:colon], " ") + ":"
+	}
+}
+
+func (p *yamlLinePatcher) mappingChildIndent(m *yaml.Node) int {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Line > 0 {
+			return lineIndent(p.lines[m.Content[i].Line-1])
+		}
+	}
+	if m.Line > 0 {
+		return lineIndent(p.lines[m.Line-1]) + 2
+	}
+	return 2
+}
+
+func (p *yamlLinePatcher) mappingInsertLine(m *yaml.Node) int {
+	if m.Line == 0 {
+		return len(p.lines)
+	}
+	start := m.Line - 1
+	childIndent := p.mappingChildIndent(m)
+	for i := start + 1; i < len(p.lines); i++ {
+		if strings.TrimSpace(p.lines[i]) == "" {
+			continue
+		}
+		if lineIndent(p.lines[i]) < childIndent {
+			insertAt := i
+			for insertAt > start+1 && strings.TrimSpace(p.lines[insertAt-1]) == "" {
+				insertAt--
+			}
+			return insertAt
+		}
+	}
+	insertAt := len(p.lines)
+	for insertAt > start+1 && strings.TrimSpace(p.lines[insertAt-1]) == "" {
+		insertAt--
+	}
+	return insertAt
+}
+
+func lineIndent(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " "))
+}
+
+func formatYAMLScalarLine(key, value string) string {
+	return key + ": " + value
 }
 
 // updateHostsMapping finds the `hosts:` mapping and upserts wireguard_ip,

@@ -50,3 +50,81 @@ func resolveInfraArtifactFromChannel(name, arch, platformChannel string, metadat
 	}
 	return artifactForArch(infra, arch, channel, resolved)
 }
+
+func resolveReleaseArtifactFromChannel(name, arch, platformChannel string, metadata map[string]any) (ResolvedArtifact, error) {
+	if platformChannel == "" {
+		return ResolvedArtifact{}, fmt.Errorf("%s provisioner requires a platform channel", name)
+	}
+	channel, resolved := gitops.ResolveVersion(platformChannel)
+	manifest, err := fetchGitopsManifest(channel, resolved, metadata)
+	if err != nil {
+		return ResolvedArtifact{}, fmt.Errorf("fetch gitops manifest for %s artifact: %w", name, err)
+	}
+
+	if infra := manifest.GetInfrastructure(name); infra != nil {
+		artifact, err := artifactForArch(infra, arch, channel, resolved)
+		if err != nil {
+			return ResolvedArtifact{}, err
+		}
+		return ResolvedArtifact{URL: artifact.URL, Checksum: artifact.Checksum, Version: infra.Version, Arch: arch}, nil
+	}
+
+	svc, err := manifest.GetServiceInfo(name)
+	if err == nil {
+		artifact := svc.Binaries[arch]
+		if artifact.URL == "" {
+			return ResolvedArtifact{}, fmt.Errorf("release manifest %s/%s %s entry has no artifact URL for arch %q", channel, resolved, name, arch)
+		}
+		return ResolvedArtifact{URL: artifact.URL, Checksum: artifact.Checksum, Version: svc.Version, Arch: arch}, nil
+	}
+
+	return ResolvedArtifact{}, fmt.Errorf("release manifest (%s/%s) has no infrastructure, service, interface, or native binary entry named %q", channel, resolved, name)
+}
+
+func imageFromReleaseManifest(name, platformChannel string, metadata map[string]any) (string, error) {
+	channel, version := gitops.ResolveVersion(platformChannel)
+	manifest, err := fetchGitopsManifest(channel, version, metadata)
+	if err != nil {
+		return "", err
+	}
+	if svc, err := manifest.GetServiceInfo(name); err == nil && svc.FullImage != "" {
+		return svc.FullImage, nil
+	}
+	if infra := manifest.GetInfrastructure(name); infra != nil && infra.Image != "" {
+		return infra.Image, nil
+	}
+	if depName := externalDependencyForService(name); depName != "" {
+		if dep := manifest.GetExternalDependency(depName); dep != nil && dep.Image != "" {
+			return dep.Image, nil
+		}
+	}
+	return "", fmt.Errorf("service %s not found in release manifest", name)
+}
+
+func binaryFromExternalDependency(name, osName, arch string, manifest *gitops.Manifest) (*gitops.ExternalBinary, string) {
+	depName := externalDependencyForService(name)
+	if depName == "" {
+		return nil, ""
+	}
+	dep := manifest.GetExternalDependency(depName)
+	if dep == nil {
+		return nil, depName
+	}
+	key := osName + "-" + arch
+	for i := range dep.Binaries {
+		bin := &dep.Binaries[i]
+		if strings.Contains(bin.Name, key) && !strings.Contains(bin.Name, "-gpu-") {
+			return bin, depName
+		}
+	}
+	return nil, depName
+}
+
+func externalDependencyForService(serviceName string) string {
+	switch serviceName {
+	case "livepeer-gateway", "livepeer-signer":
+		return "go-livepeer"
+	default:
+		return ""
+	}
+}

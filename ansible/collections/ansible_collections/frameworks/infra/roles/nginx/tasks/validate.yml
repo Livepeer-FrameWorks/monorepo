@@ -1,0 +1,10 @@
+---
+- name: Validate Nginx service state
+  ansible.builtin.service_facts:
+  when: not ansible_check_mode
+
+- name: Assert Nginx running
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services[nginx_service_name ~ '.service'].state == 'running'
+  when: not ansible_check_mode

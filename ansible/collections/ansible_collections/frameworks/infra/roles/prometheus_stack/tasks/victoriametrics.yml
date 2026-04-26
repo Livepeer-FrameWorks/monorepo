@@ -24,14 +24,16 @@
     remote_src: true
     mode: "0755"
     creates: "{{ victoriametrics_bin }}"
-  when: victoriametrics_artifact_url | length > 0
+  when:
+    - victoriametrics_artifact_url | length > 0
+    - not ansible_check_mode
 
 - name: Ensure VictoriaMetrics storage dir
   ansible.builtin.file:
     path: "{{ victoriametrics_storage_path }}"
     state: directory
-    owner: "{{ prometheus_stack_user }}"
-    group: "{{ prometheus_stack_group }}"
+    owner: "{{ omit if ansible_check_mode else prometheus_stack_user }}"
+    group: "{{ omit if ansible_check_mode else prometheus_stack_group }}"
     mode: "0755"
 
 - name: Render VictoriaMetrics systemd unit
@@ -49,3 +51,4 @@
     state: started
     enabled: true
     daemon_reload: true
+  when: not ansible_check_mode

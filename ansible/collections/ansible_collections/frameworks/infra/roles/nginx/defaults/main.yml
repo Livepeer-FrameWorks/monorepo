@@ -1,0 +1,11 @@
+---
+nginx_http_port: 18090
+nginx_sites: []
+nginx_package_by_family:
+  Debian: nginx
+  Archlinux: nginx
+  RedHat: nginx
+nginx_service_name: nginx
+nginx_config_dir: /etc/nginx/conf.d
+nginx_config_path: /etc/nginx/conf.d/frameworks.conf
+nginx_https_port: 443

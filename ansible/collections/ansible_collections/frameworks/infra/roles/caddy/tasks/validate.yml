@@ -1,20 +1,24 @@
 ---
 - name: Refresh service facts
   ansible.builtin.service_facts:
+  when: not ansible_check_mode
 
 - name: Assert caddy running
   ansible.builtin.assert:
     that:
       - ansible_facts.services['caddy.service'].state == 'running'
+  when: not ansible_check_mode
 
 - name: Wait for admin API listener
   ansible.builtin.wait_for:
     host: 127.0.0.1
     port: 2019
     timeout: 10
+  when: not ansible_check_mode
 
 - name: Probe admin API /config
   ansible.builtin.uri:
     url: "http://{{ caddy_admin_listen }}/config/"
     status_code: 200
     return_content: false
+  when: not ansible_check_mode

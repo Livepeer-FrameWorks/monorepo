@@ -6,3 +6,4 @@
       tags: [install, configure, service]
   vars:
     redis_requirepass: "{{ redis_password }}"
+  when: not ansible_check_mode

@@ -6,8 +6,8 @@
       {% for k, v in (go_service_env | dictsort) %}
       {{ k }}={{ v }}
       {% endfor %}
-    owner: "{{ go_service_user }}"
-    group: "{{ go_service_group }}"
+    owner: "{{ omit if ansible_check_mode else go_service_user }}"
+    group: "{{ omit if ansible_check_mode else go_service_group }}"
     mode: "0600"
   no_log: true
   notify: go_service restart

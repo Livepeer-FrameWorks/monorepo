@@ -6,10 +6,13 @@
     state: restarted
     daemon_reload: true
   register: go_service_restarted
+  when: not ansible_check_mode
 
 - name: Reload go_service
   listen: go_service reload
   ansible.builtin.systemd:
     name: "{{ go_service_systemd_name }}"
     state: reloaded
-  when: go_service_restarted is not defined
+  when:
+    - not ansible_check_mode
+    - go_service_restarted is not defined

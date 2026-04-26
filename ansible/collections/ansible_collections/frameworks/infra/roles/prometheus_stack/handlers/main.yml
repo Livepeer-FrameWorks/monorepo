@@ -6,6 +6,7 @@
     state: restarted
     daemon_reload: true
   register: victoriametrics_restarted
+  when: not ansible_check_mode
 
 - name: Restart vmagent
   listen: vmagent restart
@@ -14,6 +15,7 @@
     state: restarted
     daemon_reload: true
   register: vmagent_restarted
+  when: not ansible_check_mode
 
 - name: Restart vmauth
   listen: vmauth restart
@@ -22,3 +24,4 @@
     state: restarted
     daemon_reload: true
   register: vmauth_restarted
+  when: not ansible_check_mode

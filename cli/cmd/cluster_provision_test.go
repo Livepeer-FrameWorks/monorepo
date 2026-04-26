@@ -792,6 +792,215 @@ func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *t
 	}
 }
 
+func TestBuildTaskConfigSetsObservabilityComponent(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "10.0.0.10"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmagent": {
+				Enabled: true,
+				Mode:    "native",
+				Host:    "core-1",
+			},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:      "vmagent",
+		Type:      "vmagent",
+		ServiceID: "vmagent",
+		Host:      "core-1",
+		Phase:     orchestrator.PhaseInterfaces,
+	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+	if got := cfg.Metadata["component"]; got != "vmagent" {
+		t.Fatalf("component = %v, want vmagent", got)
+	}
+	if got := cfg.Metadata["service_name"]; got != "vmagent" {
+		t.Fatalf("service_name = %v, want vmagent", got)
+	}
+}
+
+func TestBuildTaskConfigBuildsProxySitesForReverseProxy(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"edge-1": {ExternalIP: "10.0.0.10", Cluster: "media-a"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"chartroom": {Enabled: true, Host: "edge-1", Port: 18030},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"caddy": {Enabled: true, Host: "edge-1", Mode: "native"},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:      "caddy",
+		Type:      "caddy",
+		ServiceID: "caddy",
+		Host:      "edge-1",
+		ClusterID: "media-a",
+		Phase:     orchestrator.PhaseInterfaces,
+	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+	sites, ok := cfg.Metadata["proxy_sites"].([]map[string]any)
+	if !ok || len(sites) == 0 {
+		t.Fatalf("sites missing or wrong type: %#v", cfg.Metadata["sites"])
+	}
+	if got := sites[0]["upstream"]; got != "127.0.0.1:18030" {
+		t.Fatalf("upstream = %v", got)
+	}
+	domains, ok := sites[0]["domains"].([]string)
+	if !ok || len(domains) == 0 {
+		t.Fatalf("domains missing or wrong type: %#v", sites[0]["domains"])
+	}
+}
+
+func TestBuildTaskConfigAllowsNativeNginxProxySites(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"edge-1": {ExternalIP: "10.0.0.10", Cluster: "media-a"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"bridge": {Enabled: true, Host: "edge-1", Port: 18000},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"nginx": {Enabled: true, Host: "edge-1", Mode: "native"},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:      "nginx",
+		Type:      "nginx",
+		ServiceID: "nginx",
+		Host:      "edge-1",
+		ClusterID: "media-a",
+		Phase:     orchestrator.PhaseInterfaces,
+	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+	if cfg.Mode != "native" {
+		t.Fatalf("mode = %q, want native", cfg.Mode)
+	}
+	sites, ok := cfg.Metadata["proxy_sites"].([]map[string]any)
+	if !ok || len(sites) == 0 {
+		t.Fatalf("proxy_sites missing or wrong type: %#v", cfg.Metadata["proxy_sites"])
+	}
+	if got := sites[0]["upstream"]; got != "127.0.0.1:18000" {
+		t.Fatalf("upstream = %v", got)
+	}
+}
+
+func TestBuildTaskConfigIncludesExplicitIngressSitesAndTLSMetadata(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"edge-1": {ExternalIP: "10.0.0.10", Cluster: "media-a"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"nginx": {Enabled: true, Host: "edge-1", Mode: "native"},
+		},
+		TLSBundles: map[string]inventory.TLSBundleConfig{
+			"bridge-cert": {Metadata: map[string]string{
+				"tls_cert_path": "/etc/frameworks/certs/bridge.crt",
+				"tls_key_path":  "/etc/frameworks/certs/bridge.key",
+			}},
+		},
+		IngressSites: map[string]inventory.IngressSiteConfig{
+			"bridge-graphql": {
+				Node:        "edge-1",
+				Domains:     []string{"bridge.frameworks.network"},
+				TLSBundleID: "bridge-cert",
+				Kind:        "reverse_proxy_http",
+				Upstream:    "127.0.0.1:18000",
+				Metadata: map[string]string{
+					"path_prefix": "/graphql",
+				},
+			},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:      "nginx",
+		Type:      "nginx",
+		ServiceID: "nginx",
+		Host:      "edge-1",
+		ClusterID: "media-a",
+		Phase:     orchestrator.PhaseInterfaces,
+	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+	sites, ok := cfg.Metadata["proxy_sites"].([]map[string]any)
+	if !ok || len(sites) != 1 {
+		t.Fatalf("proxy_sites missing or wrong type: %#v", cfg.Metadata["proxy_sites"])
+	}
+	site := sites[0]
+	if got := site["tls_cert_path"]; got != "/etc/frameworks/certs/bridge.crt" {
+		t.Fatalf("tls_cert_path = %v", got)
+	}
+	if got := site["tls_key_path"]; got != "/etc/frameworks/certs/bridge.key" {
+		t.Fatalf("tls_key_path = %v", got)
+	}
+	if got := site["path_prefix"]; got != "/graphql" {
+		t.Fatalf("path_prefix = %v", got)
+	}
+}
+
+func TestBuildTaskConfigDedupesProxySites(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"edge-1": {ExternalIP: "10.0.0.10", Cluster: "media-a"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {Name: "Media A"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "edge-1", Port: 8427},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"nginx": {Enabled: true, Host: "edge-1", Mode: "native"},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:      "nginx",
+		Type:      "nginx",
+		ServiceID: "nginx",
+		Host:      "edge-1",
+		ClusterID: "media-a",
+		Phase:     orchestrator.PhaseInterfaces,
+	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+	sites, ok := cfg.Metadata["proxy_sites"].([]map[string]any)
+	if !ok {
+		t.Fatalf("proxy_sites missing or wrong type: %#v", cfg.Metadata["proxy_sites"])
+	}
+	if len(sites) != 1 {
+		t.Fatalf("proxy_sites len = %d, want 1: %#v", len(sites), sites)
+	}
+}
+
 func TestValidateGatewayMeshCoverageRejectsGatewayOutsidePrivateerHosts(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",

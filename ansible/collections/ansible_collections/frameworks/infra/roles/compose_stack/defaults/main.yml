@@ -19,11 +19,21 @@
 compose_stack_name: ""
 compose_stack_project_dir: "/opt/frameworks/{{ compose_stack_name }}"
 compose_stack_compose_content: ""
+compose_stack_files: {}
 compose_stack_service: {}
 compose_stack_env: {}
 compose_stack_pull: "policy" # policy | always | missing | never
 compose_stack_wait: true
 compose_stack_recreate: auto # auto | always | never
+compose_stack_manage_docker: true
+compose_stack_docker_service: docker
+compose_stack_docker_packages:
+  - docker.io
+  - docker-compose-plugin
+compose_stack_docker_packages_by_family:
+  Debian: [docker.io, docker-compose-plugin]
+  Archlinux: [docker, docker-compose]
+  RedHat: [docker, docker-compose-plugin]
 # compose_stack_render_only writes compose + .env but skips docker compose
 # up (and the validate-tag `docker compose ps` probe). Used by molecule
 # scenarios that want to exercise rendering without a docker daemon.

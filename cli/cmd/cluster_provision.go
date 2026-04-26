@@ -1574,6 +1574,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 
 	// Use base service name for manifest lookups (handles "bridge@host" → "bridge")
 	baseName := task.ServiceID
+	config.Metadata["service_name"] = baseName
 
 	if manifest != nil {
 		// Service overrides
@@ -1626,6 +1627,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		}
 		// Observability overrides
 		if obs, ok := manifest.Observability[baseName]; ok {
+			config.Metadata["component"] = baseName
 			if obs.Mode != "" {
 				config.Mode = obs.Mode
 			}
@@ -1918,6 +1920,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		}
 		if routes := buildExtraProxyRoutesForHost(manifest, task.Host, clusterID); len(routes) > 0 {
 			config.Metadata["extra_proxy_routes"] = routes
+		}
+		if sites := buildProxySitesForHost(manifest, task.Host, clusterID, localSvcs, config.Metadata["extra_proxy_routes"]); len(sites) > 0 {
+			config.Metadata["proxy_sites"] = sites
 		}
 		hasPKI := manifest.Services["navigator"].Enabled
 		if grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string); ok && grpcAddr != "" {
@@ -2344,6 +2349,212 @@ func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, cluste
 			"server_names": []string{fqdn},
 			"upstream":     fmt.Sprintf("127.0.0.1:%d", port),
 		},
+	}
+}
+
+func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID string, localSvcs map[string]interface{}, extraRoutes any) []map[string]any {
+	if manifest == nil || hostName == "" || clusterID == "" {
+		return nil
+	}
+	var sites []map[string]any
+	seen := map[string]struct{}{}
+	appendSite := func(site map[string]any) {
+		key := proxySiteDedupeKey(site)
+		if key != "" {
+			if _, ok := seen[key]; ok {
+				return
+			}
+			seen[key] = struct{}{}
+		}
+		sites = append(sites, site)
+	}
+	serviceNames := make([]string, 0, len(localSvcs))
+	for name := range localSvcs {
+		serviceNames = append(serviceNames, name)
+	}
+	sort.Strings(serviceNames)
+	for _, name := range serviceNames {
+		rawPort := localSvcs[name]
+		port, ok := rawPort.(int)
+		if !ok || port == 0 {
+			continue
+		}
+		domains, bundleID := autoIngressDomains(name, manifest, clusterID)
+		if len(domains) == 0 {
+			continue
+		}
+		site := map[string]any{
+			"name":     name,
+			"domains":  domains,
+			"upstream": fmt.Sprintf("127.0.0.1:%d", port),
+		}
+		if bundleID != "" {
+			site["tls_bundle_id"] = bundleID
+			applyProxySiteTLSBundleMetadata(site, manifest, bundleID)
+		}
+		appendSite(site)
+	}
+	for _, route := range proxyRouteSliceFromAny(extraRoutes) {
+		domains := stringSliceFromAny(route["server_names"])
+		if len(domains) == 0 {
+			continue
+		}
+		upstream, _ := route["upstream"].(string)
+		if upstream == "" {
+			continue
+		}
+		site := map[string]any{
+			"domains":  domains,
+			"upstream": upstream,
+		}
+		if name, _ := route["name"].(string); name != "" {
+			site["name"] = name
+		}
+		copyProxySiteMetadata(site, stringMapFromAny(route["metadata"]))
+		appendSite(site)
+	}
+	siteIDs := make([]string, 0, len(manifest.IngressSites))
+	for siteID := range manifest.IngressSites {
+		siteIDs = append(siteIDs, siteID)
+	}
+	sort.Strings(siteIDs)
+	for _, siteID := range siteIDs {
+		cfg := manifest.IngressSites[siteID]
+		if cfg.Node != hostName {
+			continue
+		}
+		siteClusterID := clusterID
+		if cfg.Cluster != "" {
+			siteClusterID = cfg.Cluster
+		}
+		if siteClusterID != clusterID {
+			continue
+		}
+		if len(cfg.Domains) == 0 || cfg.Upstream == "" {
+			continue
+		}
+		site := map[string]any{
+			"name":     siteID,
+			"domains":  append([]string{}, cfg.Domains...),
+			"upstream": cfg.Upstream,
+		}
+		if cfg.Kind != "" {
+			site["kind"] = cfg.Kind
+		}
+		if cfg.TLSBundleID != "" {
+			site["tls_bundle_id"] = cfg.TLSBundleID
+			applyProxySiteTLSBundleMetadata(site, manifest, cfg.TLSBundleID)
+		}
+		copyProxySiteMetadata(site, cfg.Metadata)
+		appendSite(site)
+	}
+	return sites
+}
+
+func proxySiteDedupeKey(site map[string]any) string {
+	domains := stringSliceFromAny(site["domains"])
+	if len(domains) == 0 {
+		return ""
+	}
+	domains = append([]string{}, domains...)
+	sort.Strings(domains)
+	upstream, _ := site["upstream"].(string)
+	paths := stringSliceFromAny(site["path_prefixes"])
+	if path, _ := site["path_prefix"].(string); path != "" {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return strings.Join(domains, ",") + "|" + strings.TrimSpace(upstream) + "|" + strings.Join(paths, ",")
+}
+
+func applyProxySiteTLSBundleMetadata(site map[string]any, manifest *inventory.Manifest, bundleID string) {
+	if manifest == nil || bundleID == "" {
+		return
+	}
+	bundle, ok := manifest.TLSBundles[bundleID]
+	if !ok {
+		return
+	}
+	copyProxySiteMetadata(site, bundle.Metadata)
+}
+
+func copyProxySiteMetadata(site map[string]any, metadata map[string]string) {
+	if len(metadata) == 0 {
+		return
+	}
+	for _, key := range []string{"path_prefix", "tls_mode", "tls_cert_path", "tls_key_path"} {
+		if value := strings.TrimSpace(metadata[key]); value != "" {
+			site[key] = value
+		}
+	}
+	if raw := strings.TrimSpace(metadata["path_prefixes"]); raw != "" {
+		site["path_prefixes"] = splitCSVStrings(raw)
+	}
+	if raw := strings.TrimSpace(metadata["extra_directives"]); raw != "" {
+		site["extra_directives"] = splitCSVStrings(raw)
+	}
+}
+
+func splitCSVStrings(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func proxyRouteSliceFromAny(v any) []map[string]interface{} {
+	switch typed := v.(type) {
+	case []map[string]interface{}:
+		return typed
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			if route, ok := item.(map[string]interface{}); ok {
+				out = append(out, route)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func stringMapFromAny(v any) map[string]string {
+	switch typed := v.(type) {
+	case map[string]string:
+		return typed
+	case map[string]interface{}:
+		out := make(map[string]string, len(typed))
+		for key, value := range typed {
+			if s, ok := value.(string); ok {
+				out[key] = s
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func stringSliceFromAny(v any) []string {
+	switch typed := v.(type) {
+	case []string:
+		return typed
+	case []interface{}:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

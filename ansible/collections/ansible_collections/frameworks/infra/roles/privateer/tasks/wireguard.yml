@@ -20,19 +20,22 @@
   ansible.builtin.copy:
     dest: "{{ privateer_conf_dir }}/static-peers.json"
     content: "{{ {'version': ({'peers': privateer_static_peers, 'dns': privateer_static_dns} | to_json | hash('sha256')), 'peers': privateer_static_peers, 'dns': privateer_static_dns} | to_nice_json }}" # yamllint disable-line rule:line-length
-    owner: "{{ privateer_user }}"
-    group: "{{ privateer_group }}"
+    owner: "{{ omit if ansible_check_mode else privateer_user }}"
+    group: "{{ omit if ansible_check_mode else privateer_group }}"
     mode: "0640"
   notify: privateer restart
+  when: not ansible_check_mode
 
 - name: Privateer | render wg.key (SOPS-managed)
   ansible.builtin.copy:
     dest: "{{ privateer_conf_dir }}/wg.key"
     content: "{{ privateer_wireguard_private_key }}"
-    owner: "{{ privateer_user }}"
-    group: "{{ privateer_group }}"
+    owner: "{{ omit if ansible_check_mode else privateer_user }}"
+    group: "{{ omit if ansible_check_mode else privateer_group }}"
     mode: "0600"
-  when: privateer_wireguard_private_key | length > 0
+  when:
+    - privateer_wireguard_private_key | length > 0
+    - not ansible_check_mode
   no_log: true
   notify: privateer restart
 

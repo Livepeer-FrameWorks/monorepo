@@ -5,6 +5,7 @@
     name: caddy
     state: reloaded
   register: caddy_reloaded
+  when: not ansible_check_mode
 
 - name: Restart caddy
   listen: caddy restart
@@ -12,3 +13,4 @@
     name: caddy
     state: restarted
   register: caddy_restarted
+  when: not ansible_check_mode

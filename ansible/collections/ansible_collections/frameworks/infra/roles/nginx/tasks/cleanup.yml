@@ -1,0 +1,7 @@
+---
+- name: Stop and disable Nginx
+  ansible.builtin.systemd:
+    name: "{{ nginx_service_name }}"
+    state: stopped
+    enabled: false
+  when: not ansible_check_mode

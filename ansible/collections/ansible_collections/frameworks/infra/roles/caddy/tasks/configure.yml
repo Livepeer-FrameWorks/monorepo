@@ -3,8 +3,8 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    owner: "{{ caddy_user }}"
-    group: "{{ caddy_group }}"
+    owner: "{{ omit if ansible_check_mode else caddy_user }}"
+    group: "{{ omit if ansible_check_mode else caddy_group }}"
     mode: "0755"
   loop:
     - "{{ caddy_config_dir }}"
@@ -15,8 +15,8 @@
   ansible.builtin.template:
     src: Caddyfile.j2
     dest: "{{ caddy_config_dir }}/Caddyfile"
-    owner: "{{ caddy_user }}"
-    group: "{{ caddy_group }}"
+    owner: "{{ omit if ansible_check_mode else caddy_user }}"
+    group: "{{ omit if ansible_check_mode else caddy_group }}"
     mode: "0644"
-    validate: "caddy validate --config %s --adapter caddyfile"
+    validate: "{{ omit if ansible_check_mode else 'caddy validate --config %s --adapter caddyfile' }}"
   notify: caddy reload

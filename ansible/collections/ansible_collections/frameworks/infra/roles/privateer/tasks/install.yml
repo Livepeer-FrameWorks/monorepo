@@ -1,13 +1,9 @@
 ---
 - name: Privateer | install host networking tools
   ansible.builtin.package:
-    name: >-
-      {{
-        ['wireguard-tools', 'iproute2', 'dnsutils']
-        if ansible_facts.os_family == 'Debian'
-        else ['wireguard-tools', 'iproute', 'bind-utils']
-      }}
+    name: "{{ privateer_network_packages_by_family[ansible_facts.os_family] | default(privateer_network_packages_by_family.RedHat) }}"
     state: present
+  when: not ansible_check_mode
 
 - name: Ensure privateer group
   ansible.builtin.group:
@@ -26,8 +22,8 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    owner: "{{ privateer_user }}"
-    group: "{{ privateer_group }}"
+    owner: "{{ omit if ansible_check_mode else privateer_user }}"
+    group: "{{ omit if ansible_check_mode else privateer_group }}"
     mode: "0755"
   loop:
     - "{{ privateer_install_dir }}"
@@ -41,6 +37,7 @@
     checksum: "{{ privateer_artifact_checksum }}"
     mode: "0644"
     timeout: 300
+  when: not ansible_check_mode
 
 - name: Extract Privateer
   ansible.builtin.unarchive:
@@ -53,6 +50,7 @@
       - --strip-components=1
     creates: "{{ privateer_install_sentinel }}"
   notify: privateer restart
+  when: not ansible_check_mode
 
 - name: Record install sentinel
   ansible.builtin.file:
@@ -62,3 +60,4 @@
     group: "{{ privateer_group }}"
     mode: "0644"
   changed_when: false
+  when: not ansible_check_mode

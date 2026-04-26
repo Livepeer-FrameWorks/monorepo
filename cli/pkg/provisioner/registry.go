@@ -95,9 +95,9 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 			"frameworks.infra.privateer", "playbooks/privateer.yml",
 			privateerRoleVars, privateerRoleDetect)
 	case "caddy":
-		return NewRolePlaybookProvisioner("caddy", pool,
-			"frameworks.infra.caddy", "playbooks/caddy.yml",
-			caddyRoleVars, caddyRoleDetect)
+		return NewReverseProxyProvisioner("caddy", port, pool)
+	case "nginx":
+		return NewReverseProxyProvisioner("nginx", port, pool)
 
 	// Observability stack — all four components route through prometheus_stack.
 	case "prometheus", "victoriametrics", "vmagent", "vmauth":
@@ -119,7 +119,7 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 	case "quartermaster", "commodore", "bridge", "foghorn", "decklog", "helmsman",
 		"periscope-ingest", "periscope-query", "signalman", "purser", "steward",
 		"navigator", "chartroom", "foredeck", "logbook", "skipper", "chandler",
-		"deckhand", "metabase", "grafana", "nginx",
+		"deckhand", "metabase", "grafana",
 		"livepeer-gateway", "livepeer-signer":
 		return NewServiceRoleProvisioner(ServiceRoleConfig{
 			ServiceName: serviceName,

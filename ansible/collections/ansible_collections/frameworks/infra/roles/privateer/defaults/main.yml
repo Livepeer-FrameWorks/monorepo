@@ -10,6 +10,10 @@ privateer_conf_dir: /etc/privateer
 privateer_data_dir: /var/lib/privateer
 privateer_port: 18012
 privateer_tarball_path: /tmp/privateer.tar.gz
+privateer_network_packages_by_family:
+  Debian: [wireguard-tools, iproute2, dnsutils]
+  Archlinux: [wireguard-tools, iproute2, bind]
+  RedHat: [wireguard-tools, iproute, bind-utils]
 
 privateer_env: {}
 privateer_dns_zones: []

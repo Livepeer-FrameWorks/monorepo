@@ -6,10 +6,13 @@
     state: restarted
     daemon_reload: true
   register: privateer_restarted
+  when: not ansible_check_mode
 
 - name: Reload privateer
   listen: privateer reload
   ansible.builtin.systemd:
     name: frameworks-privateer
     state: reloaded
-  when: privateer_restarted is not defined
+  when:
+    - not ansible_check_mode
+    - privateer_restarted is not defined

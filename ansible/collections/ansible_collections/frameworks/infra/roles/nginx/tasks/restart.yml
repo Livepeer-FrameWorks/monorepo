@@ -1,0 +1,6 @@
+---
+- name: Restart Nginx
+  ansible.builtin.systemd:
+    name: "{{ nginx_service_name }}"
+    state: restarted
+  when: not ansible_check_mode

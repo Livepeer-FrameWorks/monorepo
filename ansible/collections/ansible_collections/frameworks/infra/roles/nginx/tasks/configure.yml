@@ -1,0 +1,17 @@
+---
+- name: Ensure Nginx config directory
+  ansible.builtin.file:
+    path: "{{ nginx_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render FrameWorks Nginx config
+  ansible.builtin.template:
+    src: frameworks.conf.j2
+    dest: "{{ nginx_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: nginx reload

@@ -118,7 +118,7 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 }
 
 func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
-	url, checksum, err := resolveGenericBinary(ctx, cfg.ServiceName, host, config, helpers)
+	url, checksum, binaryName, err := resolveGenericBinary(ctx, cfg.ServiceName, host, config, helpers)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +139,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		"go_service_port":              port,
 		"go_service_env":               envAny,
 		"go_service_defer_start":       config.DeferStart,
+		"go_service_binary_name":       binaryName,
 	}, nil
 }
 
@@ -161,43 +162,40 @@ func resolveGenericImage(cfg ServiceRoleConfig, config ServiceConfig) (string, e
 	if cfg.DefaultImage != "" {
 		return cfg.DefaultImage, nil
 	}
-	channel, version := gitops.ResolveVersion(config.Version)
-	manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
+	image, err := imageFromReleaseManifest(cfg.ServiceName, config.Version, config.Metadata)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s image: %w", cfg.ServiceName, err)
 	}
-	svc, err := manifest.GetServiceInfo(cfg.ServiceName)
-	if err != nil {
-		return "", fmt.Errorf("service %s missing from manifest: %w", cfg.ServiceName, err)
-	}
-	if svc.FullImage == "" {
-		return "", fmt.Errorf("manifest has no image for %s", cfg.ServiceName)
-	}
-	return svc.FullImage, nil
+	return image, nil
 }
 
-func resolveGenericBinary(ctx context.Context, serviceName string, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (string, string, error) {
+func resolveGenericBinary(ctx context.Context, serviceName string, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (string, string, string, error) {
 	if config.BinaryURL != "" {
-		return config.BinaryURL, "", nil
+		return config.BinaryURL, "", serviceName, nil
 	}
 	channel, version := gitops.ResolveVersion(config.Version)
 	manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
 	if err != nil {
-		return "", "", err
-	}
-	svc, err := manifest.GetServiceInfo(serviceName)
-	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	remoteOS, remoteArch, err := helpers.DetectRemoteOS(ctx, host)
 	if err != nil {
-		return "", "", fmt.Errorf("detect arch: %w", err)
+		return "", "", "", fmt.Errorf("detect arch: %w", err)
 	}
-	bin, err := svc.GetBinary(remoteOS, remoteArch)
-	if err != nil {
-		return "", "", err
+	svc, err := manifest.GetServiceInfo(serviceName)
+	if err == nil {
+		bin, err := svc.GetBinary(remoteOS, remoteArch)
+		if err != nil {
+			return "", "", "", err
+		}
+		return bin.URL, bin.Checksum, serviceName, nil
 	}
-	return bin.URL, bin.Checksum, nil
+	if bin, depName := binaryFromExternalDependency(serviceName, remoteOS, remoteArch, manifest); bin != nil {
+		return bin.URL, bin.Checksum, "livepeer", nil
+	} else if depName != "" {
+		return "", "", "", fmt.Errorf("external dependency %s has no %s-%s binary for %s", depName, remoteOS, remoteArch, serviceName)
+	}
+	return "", "", "", err
 }
 
 func serviceRoleDetect(_ string) RoleDetector {

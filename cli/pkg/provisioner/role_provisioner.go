@@ -330,15 +330,7 @@ func (r *RolePlaybookProvisioner) helpers() RoleBuildHelpers {
 		DetectRemoteOS: r.DetectRemoteArch,
 		DetectDistro:   r.DetectDistroFamily,
 		ResolveArtifact: func(name, arch, channel string, metadata map[string]any) (ResolvedArtifact, error) {
-			artifact, err := resolveInfraArtifactFromChannel(name, arch, channel, metadata)
-			if err != nil {
-				return ResolvedArtifact{}, err
-			}
-			return ResolvedArtifact{
-				URL:      artifact.URL,
-				Checksum: artifact.Checksum,
-				Arch:     arch,
-			}, nil
+			return resolveReleaseArtifactFromChannel(name, arch, channel, metadata)
 		},
 	}
 }

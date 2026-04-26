@@ -7,8 +7,21 @@
 
 {% for site in caddy_sites %}
 {{ site.domains | join(', ') }} {
+{% if site.tls_mode | default('') == 'off' %}
+    tls off
+{% elif site.tls_mode | default('') == 'internal' %}
+    tls internal
+{% elif site.tls_mode | default('') == 'files' and site.tls_cert_path | default('') | length > 0 and site.tls_key_path | default('') | length > 0 %}
+    tls {{ site.tls_cert_path }} {{ site.tls_key_path }}
+{% endif %}
 {% if site.upstream is defined and site.upstream | length > 0 %}
+{% if site.path_prefixes | default([]) | length > 0 %}
+{% for path_prefix in site.path_prefixes %}
+    reverse_proxy {{ path_prefix }} {{ site.upstream }}
+{% endfor %}
+{% else %}
     reverse_proxy {{ site.upstream }}
+{% endif %}
 {% endif %}
 {% for directive in site.extra_directives | default([]) %}
     {{ directive }}

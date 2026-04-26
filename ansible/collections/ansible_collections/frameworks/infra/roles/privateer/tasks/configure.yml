@@ -36,6 +36,7 @@
   when:
     - privateer_resolved_status.rc == 0
     - privateer_resolved_dropin.changed
+    - not ansible_check_mode
 
 - name: Privateer | install systemd-resolved route unit
   ansible.builtin.copy:
@@ -67,6 +68,7 @@
     enabled: true
     state: "{{ (privateer_resolved_route_unit.changed or privateer_resolved_dropin.changed) | ternary('restarted', 'started') }}"
     daemon_reload: "{{ privateer_resolved_route_unit.changed }}"
+  when: not ansible_check_mode
 
 - name: Render Privateer environment file
   ansible.builtin.copy:
@@ -75,11 +77,12 @@
       {% for k, v in privateer_env.items() %}
       {{ k }}={{ v }}
       {% endfor %}
-    owner: "{{ privateer_user }}"
-    group: "{{ privateer_group }}"
+    owner: "{{ omit if ansible_check_mode else privateer_user }}"
+    group: "{{ omit if ansible_check_mode else privateer_group }}"
     mode: "0600"
   no_log: true
   notify: privateer restart
+  when: not ansible_check_mode
 
 - name: Render systemd unit
   ansible.builtin.template:

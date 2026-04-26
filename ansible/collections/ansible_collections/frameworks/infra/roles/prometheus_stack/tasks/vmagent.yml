@@ -14,6 +14,7 @@
     dest: /tmp/vmagent.tar.gz
     checksum: "{{ vmagent_artifact_checksum }}"
     mode: "0644"
+  when: not ansible_check_mode
 
 - name: Extract vmagent
   ansible.builtin.unarchive:
@@ -22,6 +23,7 @@
     remote_src: true
     mode: "0755"
     creates: "{{ vmagent_bin }}"
+  when: not ansible_check_mode
 
 - name: Render vmagent systemd unit
   ansible.builtin.template:
@@ -38,3 +40,4 @@
     state: started
     enabled: true
     daemon_reload: true
+  when: not ansible_check_mode

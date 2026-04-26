@@ -1,0 +1,6 @@
+---
+- name: Install Nginx
+  ansible.builtin.package:
+    name: "{{ nginx_package_by_family[ansible_facts.os_family] | default('nginx') }}"
+    state: present
+  when: not ansible_check_mode

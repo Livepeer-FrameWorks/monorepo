@@ -2,6 +2,7 @@ package ansiblerun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -27,8 +28,9 @@ type ExecuteOptions struct {
 	// InventoryRenderer (or supplied by the caller). Required.
 	Inventory string
 
-	// ExtraVars are merged in with `-e key=value`. Values are passed as-is
-	// to go-ansible, which JSON-encodes them for ansible-playbook.
+	// ExtraVars are written to a 0600 temp file and passed as
+	// `--extra-vars=@file` so secrets do not appear in process arguments or
+	// go-ansible's enriched failure output.
 	ExtraVars map[string]any
 
 	// Tags restricts the play to tasks tagged with any of these.
@@ -107,18 +109,24 @@ func (e *Executor) Execute(ctx context.Context, opts ExecuteOptions) error {
 		return errors.New("ansiblerun: Inventory is required")
 	}
 
+	extraVarsFile, cleanup, err := writeExtraVarsFile(opts.ExtraVars)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	playOpts := &goansible_playbook.AnsiblePlaybookOptions{
-		Inventory:  opts.Inventory,
-		ExtraVars:  opts.ExtraVars,
-		Tags:       strings.Join(opts.Tags, ","),
-		SkipTags:   strings.Join(opts.SkipTags, ","),
-		Limit:      opts.Limit,
-		Check:      opts.Check,
-		Diff:       opts.Diff,
-		PrivateKey: opts.PrivateKey,
-		User:       opts.User,
-		Become:     opts.Become,
-		BecomeUser: opts.BecomeUser,
+		Inventory:     opts.Inventory,
+		ExtraVarsFile: extraVarsFile,
+		Tags:          strings.Join(opts.Tags, ","),
+		SkipTags:      strings.Join(opts.SkipTags, ","),
+		Limit:         opts.Limit,
+		Check:         opts.Check,
+		Diff:          opts.Diff,
+		PrivateKey:    opts.PrivateKey,
+		User:          opts.User,
+		Become:        opts.Become,
+		BecomeUser:    opts.BecomeUser,
 	}
 	applyVerbosity(playOpts, opts.Verbose)
 
@@ -167,13 +175,41 @@ func applyVerbosity(opts *goansible_playbook.AnsiblePlaybookOptions, level int) 
 	}
 }
 
+func writeExtraVarsFile(vars map[string]any) ([]string, func(), error) {
+	if len(vars) == 0 {
+		return nil, func() {}, nil
+	}
+	f, err := os.CreateTemp("", "frameworks-ansible-vars-*.json")
+	if err != nil {
+		return nil, nil, fmt.Errorf("ansiblerun: create extra-vars file: %w", err)
+	}
+	path := f.Name()
+	cleanup := func() { _ = os.Remove(path) }
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = f.Close()
+		cleanup()
+		return nil, nil, fmt.Errorf("ansiblerun: secure extra-vars file: %w", err)
+	}
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(vars); err != nil {
+		_ = f.Close()
+		cleanup()
+		return nil, nil, fmt.Errorf("ansiblerun: write extra-vars file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("ansiblerun: close extra-vars file: %w", err)
+	}
+	return []string{"@" + path}, cleanup, nil
+}
+
 // Preview returns the argv that Execute would run without running it. Useful
 // for --dry-run-of-the-wrapper diagnostics and for surfacing the full command
 // line on failures (feedback_suspect_wrapper_before_env).
 func (e *Executor) Preview(opts ExecuteOptions) ([]string, error) {
 	playOpts := &goansible_playbook.AnsiblePlaybookOptions{
 		Inventory:  opts.Inventory,
-		ExtraVars:  opts.ExtraVars,
 		Tags:       strings.Join(opts.Tags, ","),
 		SkipTags:   strings.Join(opts.SkipTags, ","),
 		Limit:      opts.Limit,
@@ -183,6 +219,9 @@ func (e *Executor) Preview(opts ExecuteOptions) ([]string, error) {
 		User:       opts.User,
 		Become:     opts.Become,
 		BecomeUser: opts.BecomeUser,
+	}
+	if len(opts.ExtraVars) > 0 {
+		playOpts.ExtraVarsFile = []string{"@<extra-vars-file>"}
 	}
 	applyVerbosity(playOpts, opts.Verbose)
 
