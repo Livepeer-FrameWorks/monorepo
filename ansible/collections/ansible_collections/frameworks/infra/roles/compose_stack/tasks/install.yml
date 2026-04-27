@@ -23,6 +23,7 @@
     state: present
   when:
     - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
     - not ansible_check_mode
 
 - name: Ensure Docker service is running
@@ -32,6 +33,7 @@
     enabled: true
   when:
     - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
     - not ansible_check_mode
 
 # Two rendering paths:
