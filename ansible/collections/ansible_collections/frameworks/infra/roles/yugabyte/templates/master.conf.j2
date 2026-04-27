@@ -1,5 +1,6 @@
 --master_addresses={{ yugabyte_master_addresses }}
 --rpc_bind_addresses={{ yugabyte_node_address }}:{{ yugabyte_master_rpc_port }}
+--server_broadcast_addresses={{ yugabyte_node_address }}:{{ yugabyte_master_rpc_port }}
 --webserver_interface={{ yugabyte_node_address }}
 --webserver_port={{ yugabyte_master_web_port }}
 --enable_ysql=true

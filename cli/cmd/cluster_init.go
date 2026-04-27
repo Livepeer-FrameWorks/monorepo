@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"frameworks/cli/internal/ux"
@@ -21,14 +22,16 @@ func newClusterInitCmd() *cobra.Command {
 		Long: `Initialize data structures for infrastructure services:
 
 Available Services:
-  postgres    - Create databases and run SQL migrations
+  postgres    - Create databases/schemas for PostgreSQL
+  yugabyte    - Create databases/schemas for YugabyteDB
   kafka       - Create topics with correct partitions/replication
   clickhouse  - Create databases and tables
   all         - Initialize all services (default)
 
 Initialization is idempotent - safe to run multiple times.
 Existing databases/topics/tables will be skipped.`,
-		Example: `  frameworks cluster init postgres
+		Example: `  frameworks cluster init yugabyte
+  frameworks cluster init postgres
   frameworks cluster init kafka
   frameworks cluster init all`,
 		Args: cobra.MaximumNArgs(1),
@@ -64,9 +67,9 @@ func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
 	defer sshPool.Close()
 
 	switch service {
-	case "postgres", "all":
+	case "postgres", "yugabyte", "database", "all":
 		if err := initPostgres(ctx, cmd, rc, sshPool); err != nil {
-			return fmt.Errorf("failed to initialize postgres: %w", err)
+			return fmt.Errorf("failed to initialize database backend: %w", err)
 		}
 	}
 
@@ -128,9 +131,11 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 	}
 
 	config := provisioner.ServiceConfig{
-		Port: pg.EffectivePort(),
+		Version: pg.Version,
+		Port:    pg.EffectivePort(),
 		Metadata: map[string]interface{}{
-			"databases": databases,
+			"platform_channel": manifest.ResolvedChannel(),
+			"databases":        databases,
 		},
 	}
 
@@ -162,7 +167,88 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 	if provErr != nil {
 		return provErr
 	}
-	return prov.Initialize(ctx, host, config)
+	if err := prov.Initialize(ctx, host, config); err != nil {
+		return err
+	}
+
+	schemaDatabases := make([]provisioner.SchemaDatabase, 0, len(pg.Databases))
+	for _, db := range pg.Databases {
+		schemaDatabases = append(schemaDatabases, provisioner.SchemaDatabase{
+			Name:  db.Name,
+			Owner: db.Owner,
+		})
+	}
+	return applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), service, host, config, prov, schemaDatabases)
+}
+
+func applyPostgresSchemasAndMigrations(
+	ctx context.Context,
+	out io.Writer,
+	service string,
+	host inventory.Host,
+	config provisioner.ServiceConfig,
+	prov provisioner.Provisioner,
+	databases []provisioner.SchemaDatabase,
+) error {
+	schemaItems, schemaCleanup, err := provisioner.BuildSchemaItems(databases)
+	defer schemaCleanup()
+	if err != nil {
+		return fmt.Errorf("collect baseline schemas: %w", err)
+	}
+	if len(schemaItems) > 0 {
+		applier, ok := prov.(provisioner.SchemaApplier)
+		if !ok {
+			return fmt.Errorf("%s provisioner does not implement SchemaApplier", service)
+		}
+		cfg := configWithMetadata(config)
+		schemaKey := "postgres_schema_items"
+		if service == "yugabyte" {
+			schemaKey = "yugabyte_schema_items"
+		}
+		cfg.Metadata[schemaKey] = schemaItems
+		fmt.Fprintf(out, "Applying %s baseline schemas...\n", service)
+		if err := applier.ApplySchemas(ctx, host, cfg); err != nil {
+			return fmt.Errorf("apply %s baseline schemas: %w", service, err)
+		}
+		ux.Success(out, fmt.Sprintf("%s baseline schemas applied", service))
+	}
+
+	dbNames := make([]string, 0, len(databases))
+	for _, db := range databases {
+		dbNames = append(dbNames, db.Name)
+	}
+	migrationItems, err := provisioner.BuildMigrationItems(dbNames)
+	if err != nil {
+		return fmt.Errorf("collect migrations: %w", err)
+	}
+	if len(migrationItems) == 0 {
+		return nil
+	}
+	migrator, ok := prov.(provisioner.Migrator)
+	if !ok {
+		return fmt.Errorf("%s provisioner does not implement Migrator", service)
+	}
+	cfg := configWithMetadata(config)
+	migrateKey := "postgres_migrate_items"
+	if service == "yugabyte" {
+		migrateKey = "yugabyte_migrate_items"
+	}
+	cfg.Metadata[migrateKey] = migrationItems
+	fmt.Fprintf(out, "Applying %s migrations...\n", service)
+	if err := migrator.ApplyMigrations(ctx, host, cfg, false); err != nil {
+		return fmt.Errorf("apply %s migrations: %w", service, err)
+	}
+	ux.Success(out, fmt.Sprintf("%s migrations applied", service))
+	return nil
+}
+
+func configWithMetadata(config provisioner.ServiceConfig) provisioner.ServiceConfig {
+	metadata := make(map[string]any, len(config.Metadata)+1)
+	for k, v := range config.Metadata {
+		metadata[k] = v
+	}
+	config.Metadata = metadata
+	return config
 }
 
 // initKafka initializes Kafka topics

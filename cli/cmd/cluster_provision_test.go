@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -805,6 +806,51 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsEscapesDatabaseURLPassword(t *testing.T) {
+	envFile := writeTestEnvFile(t, testSharedSecrets+"DATABASE_PASSWORD=pa:ss@/word?#%\n")
+	manifest := &inventory.Manifest{
+		Profile:  "dev",
+		EnvFiles: []string{envFile},
+		Hosts: map[string]inventory.Host{
+			"yuga-eu-1": {WireguardIP: "10.88.112.204"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Port:    5433,
+				Nodes:   []inventory.PostgresNode{{Host: "yuga-eu-1", ID: 1}},
+			},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:      "quartermaster",
+		Type:      "quartermaster",
+		ServiceID: "quartermaster",
+		Host:      "central-eu-1",
+		Phase:     orchestrator.PhaseApplications,
+	}
+
+	env, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+	parsed, err := url.Parse(env["DATABASE_URL"])
+	if err != nil {
+		t.Fatalf("DATABASE_URL should parse: %v", err)
+	}
+	password, _ := parsed.User.Password()
+	if password != "pa:ss@/word?#%" {
+		t.Fatalf("DATABASE_URL password was not preserved after URL parsing: %q", password)
+	}
+	if parsed.User.Username() != "quartermaster" {
+		t.Fatalf("expected service database user, got %q", parsed.User.Username())
+	}
+	if parsed.Host != "yuga-eu-1.internal:5433" {
+		t.Fatalf("expected mesh host in DATABASE_URL, got %q", parsed.Host)
+	}
+}
+
 func TestBuildTaskConfigKafkaUsesMeshControllerQuorumAddresses(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
@@ -1304,5 +1350,49 @@ func TestQuartermasterMeshGRPCAddrMissingService(t *testing.T) {
 	}
 	if got := quartermasterMeshGRPCAddr(manifest); got != "" {
 		t.Fatalf("quartermasterMeshGRPCAddr = %q, want empty", got)
+	}
+}
+
+func TestResolveQuartermasterRuntimeDataPrefersMeshIP(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "core-1", GRPCPort: 19002},
+		},
+	}
+	token, addr, err := resolveQuartermasterRuntimeData(manifest, map[string]interface{}{
+		"service_token": "secret",
+	})
+	if err != nil {
+		t.Fatalf("resolveQuartermasterRuntimeData returned error: %v", err)
+	}
+	if token != "secret" {
+		t.Fatalf("token = %q, want secret", token)
+	}
+	if addr != "10.88.0.2:19002" {
+		t.Fatalf("addr = %q, want mesh address", addr)
+	}
+}
+
+func TestQuartermasterClientConfigUsesBootstrapCA(t *testing.T) {
+	cfg := quartermasterClientConfig(&inventory.Manifest{Profile: "prod"}, map[string]interface{}{
+		"internal_pki_bootstrap": &internalPKIBootstrap{CABundlePEM: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"},
+	}, "10.88.0.2:19002", "secret")
+	if cfg.CACertPEM == "" {
+		t.Fatal("expected inline CA PEM in Quartermaster client config")
+	}
+	if cfg.AllowInsecure {
+		t.Fatal("expected production client config to keep TLS enabled")
+	}
+}
+
+func TestBatchContainsServiceMatchesTaskType(t *testing.T) {
+	batch := []*orchestrator.Task{
+		{Name: "yugabyte-node-1", Type: "yugabyte", ServiceID: "postgres"},
+	}
+	if !batchContainsService(batch, "yugabyte") {
+		t.Fatal("expected batchContainsService to match task type for Yugabyte nodes")
 	}
 }

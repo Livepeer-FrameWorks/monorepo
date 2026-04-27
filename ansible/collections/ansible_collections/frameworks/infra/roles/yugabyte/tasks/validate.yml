@@ -72,6 +72,55 @@
           journalctl:
           {{ yugabyte_tserver_journal.stdout | default('(no output)') }}
 
+- name: Validate YSQL listener
+  block:
+    - name: Wait for YSQL port
+      ansible.builtin.wait_for:
+        host: "{{ yugabyte_node_address }}"
+        port: "{{ yugabyte_ysql_port }}"
+        timeout: 60
+
+  rescue:
+    - name: Capture yb-tserver systemctl status after YSQL failure
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - status
+          - "{{ yugabyte_tserver_service }}"
+          - "--no-pager"
+          - "--full"
+      register: yugabyte_ysql_tserver_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture latest Yugabyte YSQL logs
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for file in \
+          "$(ls -1t {{ yugabyte_tserver_log_dir }}/yb-tserver*.INFO* 2>/dev/null | head -n 1)" \
+          "$(ls -1t {{ yugabyte_tserver_log_dir }}/yb-tserver*.WARNING* 2>/dev/null | head -n 1)" \
+          "$(ls -1t {{ yugabyte_tserver_log_dir }}/postgresql* 2>/dev/null | head -n 1)"; do
+          if [ -n "$file" ] && [ -f "$file" ]; then
+            echo "===== $file ====="
+            tail -n 120 "$file"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: yugabyte_ysql_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with YSQL diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          YSQL is not listening on {{ yugabyte_node_address }}:{{ yugabyte_ysql_port }}
+          systemctl status:
+          {{ yugabyte_ysql_tserver_status.stdout | default('(no output)') }}
+
+          logs:
+          {{ yugabyte_ysql_logs.stdout | default('(no output)') }}
+
 - name: Check successful Yugabyte bootstrap marker
   ansible.builtin.stat:
     path: "{{ yugabyte_bootstrap_sentinel }}"

@@ -5,3 +5,20 @@
     state: stopped
     enabled: false
   failed_when: false
+
+- name: Remove named Redis systemd unit
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ redis_service_name }}.service"
+    state: absent
+  when: redis_named_instance | bool
+
+- name: Remove named Redis config
+  ansible.builtin.file:
+    path: "{{ redis_config_path }}"
+    state: absent
+  when: redis_named_instance | bool
+
+- name: Reload systemd after named Redis cleanup
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: redis_named_instance | bool

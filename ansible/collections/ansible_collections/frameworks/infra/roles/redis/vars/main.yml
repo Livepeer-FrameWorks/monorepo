@@ -1,3 +1,12 @@
 ---
 redis_service_name: >-
   {{ 'redis-server' if redis_instance == '' else 'frameworks-redis-' ~ redis_instance }}
+redis_named_instance: "{{ redis_instance | length > 0 }}"
+redis_config_path: >-
+  {{ '/etc/redis.conf' if redis_instance == '' else '/etc/frameworks/redis/' ~ redis_instance ~ '.conf' }}
+redis_data_dir: >-
+  {{ '/var/lib/redis' if redis_instance == '' else '/var/lib/frameworks/redis/' ~ redis_instance }}
+redis_log_dir: >-
+  {{ '/var/log/redis' if redis_instance == '' else '/var/log/frameworks/redis' }}
+redis_log_file: >-
+  {{ '/var/log/redis/redis-server.log' if redis_instance == '' else redis_log_dir ~ '/' ~ redis_instance ~ '.log' }}

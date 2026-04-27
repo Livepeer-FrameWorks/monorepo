@@ -34,9 +34,19 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_knowledge (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS skipper_knowledge_embedding_idx
-    ON skipper.skipper_knowledge USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 24, ef_construction = 256);
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_am WHERE amname = 'ybhnsw') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS skipper_knowledge_embedding_idx
+            ON skipper.skipper_knowledge USING ybhnsw (embedding vector_cosine_ops)
+            WITH (m = 24, ef_construction = 256)';
+    ELSE
+        EXECUTE 'CREATE INDEX IF NOT EXISTS skipper_knowledge_embedding_idx
+            ON skipper.skipper_knowledge USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 24, ef_construction = 256)';
+    END IF;
+END
+$$;
 
 CREATE INDEX IF NOT EXISTS skipper_knowledge_tenant_source_idx
     ON skipper.skipper_knowledge (tenant_id, source_url);

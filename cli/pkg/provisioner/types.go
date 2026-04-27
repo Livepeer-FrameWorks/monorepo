@@ -89,6 +89,13 @@ type Seeder interface {
 	ApplySeeds(ctx context.Context, host inventory.Host, config ServiceConfig) error
 }
 
+// SchemaApplier is the optional capability a Provisioner implements when it
+// can apply embedded baseline database schemas before services start using
+// those databases.
+type SchemaApplier interface {
+	ApplySchemas(ctx context.Context, host inventory.Host, config ServiceConfig) error
+}
+
 // Migrator is the optional capability a Provisioner implements when it can
 // apply versioned SQL migrations. The cluster migrate command type-asserts
 // to this. When dryRun is true, the underlying Ansible invocation runs in

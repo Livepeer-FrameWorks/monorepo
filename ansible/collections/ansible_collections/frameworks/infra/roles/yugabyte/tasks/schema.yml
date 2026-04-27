@@ -1,0 +1,119 @@
+---
+# Baseline schema SQL runs locally as the built-in Yugabyte admin role. The CLI
+# passes local temp file paths; Ansible copies those bytes and executes them via
+# community.postgresql.postgresql_script so SQL text is never Jinja-rendered.
+
+- name: Ensure YSQL Ansible module prerequisites
+  ansible.builtin.import_tasks: ysql_prereqs.yml
+
+- name: Validate baseline schema ownership identifiers
+  ansible.builtin.assert:
+    that:
+      - item.db is match('^[A-Za-z_][A-Za-z0-9_]*$')
+      - (item.schema | default(item.db, true)) is match('^[A-Za-z_][A-Za-z0-9_]*$')
+      - (item.owner | default(item.db, true)) is match('^[A-Za-z_][A-Za-z0-9_]*$')
+    fail_msg: "Baseline schema db/schema/owner identifiers must be simple SQL identifiers"
+  loop: "{{ yugabyte_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  when: yugabyte_schema_items | default([]) | length > 0
+
+- name: Copy baseline schema SQL files
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "/tmp/frameworks-schema-{{ item.db | regex_replace('[^A-Za-z0-9_.-]', '_') }}.sql"
+    mode: "0600"
+  loop: "{{ yugabyte_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  no_log: true
+  when: yugabyte_schema_items | default([]) | length > 0
+
+- name: Apply baseline schemas via YSQL
+  community.postgresql.postgresql_script:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    login_db: "{{ item.db }}"
+    path: "/tmp/frameworks-schema-{{ item.db | regex_replace('[^A-Za-z0-9_.-]', '_') }}.sql"
+  loop: "{{ yugabyte_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  no_log: true
+  when: yugabyte_schema_items | default([]) | length > 0
+
+- name: Grant baseline schema ownership to application role
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    login_db: "{{ item.db }}"
+    query: |
+      DO $frameworks_schema_ownership$
+      DECLARE
+        target_schema text := '{{ item.schema | default(item.db, true) }}';
+        target_owner text := '{{ item.owner | default(item.db, true) }}';
+        obj record;
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = target_schema) THEN
+          RETURN;
+        END IF;
+
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_owner) THEN
+          RAISE EXCEPTION 'role % does not exist', target_owner;
+        END IF;
+
+        EXECUTE format('ALTER SCHEMA %I OWNER TO %I', target_schema, target_owner);
+
+        FOR obj IN
+          SELECT n.nspname, c.relname, c.relkind
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = target_schema
+            AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+        LOOP
+          IF obj.relkind = 'S' THEN
+            EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
+          ELSIF obj.relkind = 'v' THEN
+            EXECUTE format('ALTER VIEW %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
+          ELSIF obj.relkind = 'm' THEN
+            EXECUTE format('ALTER MATERIALIZED VIEW %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
+          ELSE
+            EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
+          END IF;
+        END LOOP;
+
+        FOR obj IN
+          SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = target_schema
+        LOOP
+          EXECUTE format('ALTER FUNCTION %I.%I(%s) OWNER TO %I', obj.nspname, obj.proname, obj.args, target_owner);
+        END LOOP;
+
+        EXECUTE format('GRANT USAGE, CREATE ON SCHEMA %I TO %I', target_schema, target_owner);
+        EXECUTE format('GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I TO %I', target_schema, target_owner);
+        EXECUTE format('GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I TO %I', target_schema, target_owner);
+        EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', target_schema, target_owner);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL PRIVILEGES ON TABLES TO %I', target_schema, target_owner);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL PRIVILEGES ON SEQUENCES TO %I', target_schema, target_owner);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', target_schema, target_owner);
+      END
+      $frameworks_schema_ownership$;
+  loop: "{{ yugabyte_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  when: yugabyte_schema_items | default([]) | length > 0
+
+- name: Remove baseline schema SQL files
+  ansible.builtin.file:
+    path: "/tmp/frameworks-schema-{{ item.db | regex_replace('[^A-Za-z0-9_.-]', '_') }}.sql"
+    state: absent
+  loop: "{{ yugabyte_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  no_log: true
+  when: yugabyte_schema_items | default([]) | length > 0

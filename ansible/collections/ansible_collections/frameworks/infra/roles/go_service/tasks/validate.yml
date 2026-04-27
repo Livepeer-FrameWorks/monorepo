@@ -1,7 +1,45 @@
 ---
-- name: Wait for service port (when defined)
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: "{{ go_service_port }}"
-    timeout: 60
-  when: go_service_port | int > 0
+- name: Validate Go service listener
+  block:
+    - name: Wait for service port (when defined)
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ go_service_port }}"
+        timeout: 15
+      when: go_service_port | int > 0
+
+  rescue:
+    - name: Capture go_service systemctl status
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - status
+          - "frameworks-{{ go_service_name }}"
+          - "--no-pager"
+          - "--full"
+      register: go_service_validate_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture go_service journal
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - "-u"
+          - "frameworks-{{ go_service_name }}"
+          - "-n"
+          - "120"
+          - "--no-pager"
+      register: go_service_validate_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with go_service diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          frameworks-{{ go_service_name }} did not listen on 127.0.0.1:{{ go_service_port }}
+          systemctl status:
+          {{ go_service_validate_status.stdout | default('(no output)') }}
+
+          journalctl:
+          {{ go_service_validate_journal.stdout | default('(no output)') }}

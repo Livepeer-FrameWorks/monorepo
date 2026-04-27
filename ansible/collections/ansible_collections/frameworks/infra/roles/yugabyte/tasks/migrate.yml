@@ -1,6 +1,6 @@
 ---
-# Mirror of postgres/tasks/migrate.yml for Yugabyte: TCP + scram-sha-256 auth
-# via the superuser credentials the CLI forwards through the provision flow.
+# Mirror of postgres/tasks/migrate.yml for Yugabyte. Local admin traffic uses
+# the built-in yugabyte role, which the generated HBA trusts only from 127.0.0.1.
 
 - name: Ensure YSQL Ansible module prerequisites
   ansible.builtin.import_tasks: ysql_prereqs.yml

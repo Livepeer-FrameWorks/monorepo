@@ -60,6 +60,9 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	if items, ok := config.Metadata["postgres_seed_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["postgres_seed_items"] = items
 	}
+	if items, ok := config.Metadata["postgres_schema_items"].([]map[string]any); ok && len(items) > 0 {
+		vars["postgres_schema_items"] = items
+	}
 	if items, ok := config.Metadata["postgres_migrate_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["postgres_migrate_items"] = items
 	}

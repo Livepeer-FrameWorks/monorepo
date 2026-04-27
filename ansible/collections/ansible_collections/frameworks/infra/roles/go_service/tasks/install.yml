@@ -127,19 +127,37 @@
   notify: go_service restart
   when: not ansible_check_mode
 
-# Vendor releases use one of three filename conventions inside the archive;
+# Vendor releases use several filename conventions inside the archive;
 # pick whichever shipped, then mark the sentinel.
 - name: Normalize extracted binary name
   ansible.builtin.shell: |
     set -e
-    if [ -f "{{ go_service_install_dir }}/frameworks-{{ go_service_name }}" ]; then
-      cp "{{ go_service_install_dir }}/frameworks-{{ go_service_name }}" "{{ go_service_install_dir }}/{{ go_service_name }}"
+    candidate=""
+    for path in \
+      "{{ go_service_install_dir }}/{{ go_service_name }}" \
+      "{{ go_service_install_dir }}/frameworks-{{ go_service_name }}" \
+      "{{ go_service_install_dir }}/{{ go_service_binary_name }}" \
+      "{{ go_service_install_dir }}/frameworks"; do
+      if [ -f "$path" ]; then
+        candidate="$path"
+        break
+      fi
+    done
+    if [ -z "$candidate" ]; then
+      candidate="$(
+        find "{{ go_service_install_dir }}" -maxdepth 2 -type f \
+          \( -name "{{ go_service_name }}" \
+          -o -name "frameworks-{{ go_service_name }}" \
+          -o -name "frameworks-{{ go_service_name }}-*" \
+          -o -name "{{ go_service_binary_name }}" \
+          -o -name "{{ go_service_binary_name }}-*" \
+          -o -name frameworks \) \
+          -print -quit
+      )"
     fi
-    if [ -f "{{ go_service_install_dir }}/frameworks" ]; then
-      cp "{{ go_service_install_dir }}/frameworks" "{{ go_service_install_dir }}/{{ go_service_name }}"
-    fi
-    if [ -f "{{ go_service_install_dir }}/{{ go_service_binary_name }}" ]; then
-      cp "{{ go_service_install_dir }}/{{ go_service_binary_name }}" "{{ go_service_install_dir }}/{{ go_service_name }}"
+    test -n "$candidate"
+    if [ "$candidate" != "{{ go_service_install_dir }}/{{ go_service_name }}" ]; then
+      cp "$candidate" "{{ go_service_install_dir }}/{{ go_service_name }}"
     fi
     chmod +x "{{ go_service_install_dir }}/{{ go_service_name }}"
     touch "{{ go_service_install_sentinel }}"

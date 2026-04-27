@@ -14,6 +14,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -486,8 +487,6 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		runtimeData["internal_pki_bootstrap"] = pki
 	}
 
-	const perTaskTimeout = 10 * time.Minute
-
 	for batchNum, batch := range plan.Batches {
 		ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Executing Batch %d/%d (%d task(s))", batchNum+1, len(plan.Batches), len(batch)))
 
@@ -521,12 +520,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			}
 
 			g.Go(func() error {
-				taskCtx, taskCancel := context.WithTimeout(gCtx, perTaskTimeout)
-				defer taskCancel()
-
 				fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
-				stopProgress := startTaskProgressLogger(cmd, task, 30*time.Second)
-				outcome, err := provisionTask(taskCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, releaseRepos)
+				stopProgress := startTaskProgressLogger(cmd, task, 15*time.Second)
+				outcome, err := provisionTask(gCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, releaseRepos)
 				stopProgress()
 				if err != nil {
 					return fmt.Errorf("failed to provision %s: %w", task.Name, err)
@@ -539,7 +535,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				}
 				mu.Unlock()
 
-				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", task.Name))
+				if task.Type != "quartermaster" {
+					ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", task.Name))
+				}
 				return nil
 			})
 		}
@@ -572,9 +570,14 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		for _, r := range results {
 			if r.task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-				result, err := runBootstrap(ctx, cmd.OutOrStdout(), manifest, runtimeData)
+				bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
+				result, err := runBootstrap(bootstrapCtx, cmd.OutOrStdout(), manifest, runtimeData)
+				bootstrapCancel()
 				if err != nil {
 					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap failed: %v", err))
+					diagCtx, diagCancel := context.WithTimeout(ctx, 12*time.Second)
+					captureQuartermasterDiagnostics(diagCtx, cmd.OutOrStdout(), manifest, sshPool)
+					diagCancel()
 					fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 					return fmt.Errorf("bootstrap failed: %w", err)
@@ -586,14 +589,19 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				if result.QMGRPCAddr != "" {
 					runtimeData["quartermaster_grpc_addr"] = result.QMGRPCAddr
 				}
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", r.task.Name))
 			}
 
-			if err := maybeRegisterPublicServiceInstance(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, manifestDir, sharedEnv, releaseRepos); err != nil {
+			regCtx, regCancel := context.WithTimeout(ctx, 15*time.Second)
+			if err := maybeRegisterPublicServiceInstance(regCtx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, manifestDir, sharedEnv, releaseRepos); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", r.task.Name, err)
 			}
-			if err := maybeRegisterIngressDesiredState(ctx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData); err != nil {
+			regCancel()
+			ingressCtx, ingressCancel := context.WithTimeout(ctx, 15*time.Second)
+			if err := maybeRegisterIngressDesiredState(ingressCtx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: ingress desired state registration skipped for %s: %v\n", r.task.Name, err)
 			}
+			ingressCancel()
 		}
 
 		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData); err != nil {
@@ -875,8 +883,10 @@ func buildControlPlaneReport(ctx context.Context, manifest *inventory.Manifest, 
 	})
 }
 
-// resolveServiceGRPCAddr resolves a service's gRPC address from the manifest,
-// using the same host→ExternalIP pattern as resolveQuartermasterRuntimeData.
+// resolveServiceGRPCAddr resolves a service's gRPC address from the manifest.
+// Prefer the WireGuard address when present because internal gRPC traffic is
+// mesh-scoped during provisioning; fall back to the public address for hosts
+// that are not on the mesh.
 func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, defaultGRPCPort int) (string, error) {
 	svc, ok := manifest.Services[serviceName]
 	if !ok {
@@ -898,7 +908,11 @@ func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, de
 		grpcPort = svc.GRPCPort
 	}
 
-	return fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort), nil
+	addr := manifest.MeshAddress(hostKey)
+	if addr == "" || addr == hostKey {
+		addr = host.ExternalIP
+	}
+	return fmt.Sprintf("%s:%d", addr, grpcPort), nil
 }
 
 func maybeReconcileBatchFoghornAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
@@ -916,7 +930,7 @@ func batchContainsPrivateer(batch []*orchestrator.Task) bool {
 
 func batchContainsService(batch []*orchestrator.Task, serviceName string) bool {
 	for _, task := range batch {
-		if task.ServiceID == serviceName {
+		if task.ServiceID == serviceName || task.Type == serviceName {
 			return true
 		}
 	}
@@ -984,9 +998,9 @@ exit 0`)
 			logResult, logErr := base.RunCommand(ctx, hostInfo, `
 set -e
 for file in \
-  /var/lib/yugabyte/yb-data/tserver/logs/yb-tserver.INFO \
-  "$(ls -1t /var/lib/yugabyte/yb-data/tserver/logs/yb-tserver.INFO* 2>/dev/null | head -n 1)" \
-  "$(ls -1t /var/lib/yugabyte/yb-data/tserver/logs/postgresql* 2>/dev/null | head -n 1)"; do
+  /var/lib/yugabyte/data/yb-data/tserver/logs/yb-tserver.INFO \
+  "$(ls -1t /var/lib/yugabyte/data/yb-data/tserver/logs/yb-tserver*.INFO* 2>/dev/null | head -n 1)" \
+  "$(ls -1t /var/lib/yugabyte/data/yb-data/tserver/logs/postgresql* 2>/dev/null | head -n 1)"; do
   if [ -n "$file" ] && [ -f "$file" ]; then
     echo "===== $file ====="
     tail -n 80 "$file"
@@ -1023,10 +1037,15 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 	}
 
 	databases := make([]map[string]string, 0, len(pg.Databases))
+	schemaDatabases := make([]provisioner.SchemaDatabase, 0, len(pg.Databases))
 	for _, db := range pg.Databases {
 		databases = append(databases, map[string]string{
 			"name":  db.Name,
 			"owner": db.Owner,
+		})
+		schemaDatabases = append(schemaDatabases, provisioner.SchemaDatabase{
+			Name:  db.Name,
+			Owner: db.Owner,
 		})
 	}
 
@@ -1036,8 +1055,10 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 	}
 
 	config := provisioner.ServiceConfig{
-		Port: pg.EffectivePort(),
+		Version: pg.Version,
+		Port:    pg.EffectivePort(),
 		Metadata: map[string]any{
+			"platform_channel":  manifest.ResolvedChannel(),
 			"databases":         databases,
 			"postgres_password": password,
 		},
@@ -1050,6 +1071,9 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 
 	fmt.Fprintln(cmd.OutOrStdout(), "  Initializing YugabyteDB databases...")
 	if err := prov.Initialize(ctx, host, config); err != nil {
+		return err
+	}
+	if err := applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), "yugabyte", host, config, prov, schemaDatabases); err != nil {
 		return err
 	}
 	ux.Success(cmd.OutOrStdout(), "YugabyteDB initialized")
@@ -1141,6 +1165,19 @@ func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData m
 	}
 
 	return serviceToken, fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort), nil
+}
+
+func quartermasterClientConfig(manifest *inventory.Manifest, runtimeData map[string]interface{}, grpcAddr, serviceToken string) quartermaster.GRPCConfig {
+	cfg := quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: isDevProfile(manifest),
+	}
+	if pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap); ok && pki != nil {
+		cfg.CACertPEM = pki.CABundlePEM
+	}
+	return cfg
 }
 
 func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]interface{}) error {
@@ -1445,12 +1482,7 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 		return err
 	}
 
-	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: isDevProfile(manifest),
-	})
+	client, err := quartermaster.NewGRPCClient(quartermasterClientConfig(manifest, runtimeData, grpcAddr, serviceToken))
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for public service registration: %w", err)
 	}
@@ -1473,12 +1505,7 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 		return err
 	}
 
-	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: isDevProfile(manifest),
-	})
+	client, err := quartermaster.NewGRPCClient(quartermasterClientConfig(manifest, runtimeData, grpcAddr, serviceToken))
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for ingress desired state: %w", err)
 	}
@@ -1808,12 +1835,7 @@ func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command,
 		return fmt.Errorf("missing Quartermaster connection info for foghorn reconciliation")
 	}
 
-	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: isDevProfile(manifest),
-	})
+	client, err := quartermaster.NewGRPCClient(quartermasterClientConfig(manifest, runtimeData, grpcAddr, serviceToken))
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for foghorn reconciliation: %w", err)
 	}
@@ -2133,6 +2155,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					if inst.Port != 0 {
 						config.Port = inst.Port
 					}
+					config.Metadata["instance"] = inst.Name
 					config.Metadata["instance_name"] = inst.Name
 					if inst.Password != "" {
 						config.Metadata["password"] = inst.Password
@@ -3167,6 +3190,31 @@ func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interv
 	}
 }
 
+const (
+	provisionDetectTimeout     = 10 * time.Second
+	provisionApplyTimeout      = 2 * time.Minute
+	provisionValidateTimeout   = 75 * time.Second
+	provisionInitializeTimeout = 2 * time.Minute
+	quartermasterRPCTimeout    = 5 * time.Second
+	frameworksSystemTenantID   = "00000000-0000-0000-0000-000000000001"
+)
+
+func runProvisionPhase(parent context.Context, timeout time.Duration, phase string, fn func(context.Context) error) error {
+	phaseCtx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	if err := fn(phaseCtx); err != nil {
+		if phaseCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("%s timed out after %s: %w", phase, timeout.Round(time.Second), err)
+		}
+		return err
+	}
+	if phaseCtx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("%s timed out after %s", phase, timeout.Round(time.Second))
+	}
+	return parent.Err()
+}
+
 // rollbackProvisionedTasks stops previously provisioned services in reverse order.
 // Cleanup errors are collected and reported, not swallowed.
 func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh.Pool, tasks []provisionedTask) {
@@ -3229,6 +3277,57 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 	fmt.Fprintln(cmd.OutOrStdout(), "  Fix the issue and re-run provisioning.")
 }
 
+func captureQuartermasterDiagnostics(ctx context.Context, out io.Writer, manifest *inventory.Manifest, pool *ssh.Pool) {
+	if manifest == nil || pool == nil {
+		return
+	}
+	svc, ok := manifest.Services["quartermaster"]
+	if !ok {
+		return
+	}
+	hostName := svc.Host
+	if hostName == "" && len(svc.Hosts) > 0 {
+		hostName = svc.Hosts[0]
+	}
+	host, ok := manifest.GetHost(hostName)
+	if !ok {
+		fmt.Fprintf(out, "  Quartermaster diagnostics skipped: host %q not found in manifest\n", hostName)
+		return
+	}
+
+	fmt.Fprintln(out, "\n  Quartermaster diagnostics before rollback:")
+	base := provisioner.NewBaseProvisioner("quartermaster-diagnostics", pool)
+	result, err := base.RunCommand(ctx, host, `
+set +e
+echo "== systemctl status frameworks-quartermaster =="
+systemctl status frameworks-quartermaster --no-pager --full
+echo
+echo "== journalctl -u frameworks-quartermaster -n 200 =="
+journalctl -u frameworks-quartermaster -n 200 --no-pager -o short-iso
+echo
+echo "== listeners 18002/19002 =="
+ss -ltnp 2>/dev/null | awk '$4 ~ /:(18002|19002)$/ { print }'
+echo
+echo "== addresses =="
+ip -br addr show 2>/dev/null
+`)
+	if err != nil {
+		fmt.Fprintf(out, "    diagnostics failed: %v\n", err)
+		return
+	}
+	text := strings.TrimSpace(result.Stdout)
+	if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
+		if text != "" {
+			text += "\n"
+		}
+		text += "stderr:\n" + stderr
+	}
+	if text == "" {
+		text = "(no output)"
+	}
+	fmt.Fprintln(out, text)
+}
+
 // provisionTask provisions a single task
 func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (*taskProvisionOutcome, error) {
 	if err := ctx.Err(); err != nil {
@@ -3240,8 +3339,12 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		return nil, fmt.Errorf("failed to get provisioner: %w", err)
 	}
 
-	beforeState, err := prov.Detect(ctx, host)
-	if err != nil {
+	var beforeState *detect.ServiceState
+	if err := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
+		var detectErr error
+		beforeState, detectErr = prov.Detect(phaseCtx, host)
+		return detectErr
+	}); err != nil {
 		beforeState = nil
 	}
 
@@ -3285,8 +3388,9 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 	}
 
-	// Provision
-	if err := prov.Provision(ctx, host, config); err != nil {
+	if err := runProvisionPhase(ctx, provisionApplyTimeout, "provision", func(phaseCtx context.Context) error {
+		return prov.Provision(phaseCtx, host, config)
+	}); err != nil {
 		return nil, err
 	}
 
@@ -3300,12 +3404,9 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}, nil
 	}
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	// Validate
-	if err := prov.Validate(ctx, host, config); err != nil {
+	if err := runProvisionPhase(ctx, provisionValidateTimeout, "validate", func(phaseCtx context.Context) error {
+		return prov.Validate(phaseCtx, host, config)
+	}); err != nil {
 		if ignoreValidation {
 			fmt.Printf("    Warning: validation failed (ignored due to --ignore-validation): %v\n", err)
 		} else {
@@ -3316,25 +3417,21 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	// Infrastructure tasks: run Initialize after Provision/Validate.
 	if task.Phase == orchestrator.PhaseInfrastructure {
 		if task.Type != "yugabyte" {
-			if initErr := prov.Initialize(ctx, host, config); initErr != nil {
+			if initErr := runProvisionPhase(ctx, provisionInitializeTimeout, "initialize", func(phaseCtx context.Context) error {
+				return prov.Initialize(phaseCtx, host, config)
+			}); initErr != nil {
 				return nil, fmt.Errorf("initialization failed for %s: %w", task.Name, initErr)
 			}
 		}
 	}
 
-	afterState, err := prov.Detect(ctx, host)
-	if err != nil {
+	var afterState *detect.ServiceState
+	if err := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
+		var detectErr error
+		afterState, detectErr = prov.Detect(phaseCtx, host)
+		return detectErr
+	}); err != nil {
 		afterState = nil
-	}
-
-	// Convergent self-seed: after Quartermaster is up, push every WG-equipped
-	// manifest host into infrastructure_nodes before the next SyncMesh tick.
-	// Best-effort only: if this fails, the agent still self-registers from its
-	// local identity.
-	if task.Type == "quartermaster" {
-		if err := seedQuartermasterMeshNodes(ctx, manifest, runtimeData); err != nil {
-			fmt.Fprintf(os.Stderr, "    Warning: quartermaster mesh self-seed failed: %v\n", err)
-		}
 	}
 
 	return &taskProvisionOutcome{
@@ -3369,12 +3466,7 @@ func seedQuartermasterMeshNodes(ctx context.Context, manifest *inventory.Manifes
 	if token == "" || grpcAddr == "" {
 		return fmt.Errorf("missing service_token or quartermaster_grpc_addr in runtimeData")
 	}
-	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
-		ServiceToken:  token,
-		Logger:        logging.NewLogger(),
-		AllowInsecure: isDevProfile(manifest),
-	})
+	client, err := quartermaster.NewGRPCClient(quartermasterClientConfig(manifest, runtimeData, grpcAddr, token))
 	if err != nil {
 		return fmt.Errorf("connect to quartermaster: %w", err)
 	}
@@ -3434,12 +3526,9 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 	if err != nil {
 		return nil, err
 	}
-	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: isDevProfile(manifest),
-	})
+	clientConfig := quartermasterClientConfig(manifest, runtimeData, grpcAddr, serviceToken)
+	clientConfig.Timeout = quartermasterRPCTimeout
+	client, err := quartermaster.NewGRPCClient(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
@@ -3447,9 +3536,11 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 
 	// 1. Ensure "FrameWorks" System Tenant Exists
 	var systemTenantID string
-	tenantsResp, err := client.ListTenants(ctx, nil)
+	tenantsResp, err := callQuartermaster(ctx, "ListTenants", func(callCtx context.Context) (*pb.ListTenantsResponse, error) {
+		return client.ListTenants(callCtx, nil)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get tenants from Quartermaster: %w", err)
+		return nil, fmt.Errorf("failed to get tenants from Quartermaster at %s: %w", grpcAddr, err)
 	}
 
 	for _, t := range tenantsResp.Tenants {
@@ -3467,7 +3558,9 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 			PrimaryColor:   "#6366f1",
 			SecondaryColor: "#f59e0b",
 		}
-		createTenantResp, errCreate := client.CreateTenant(ctx, createTenantReq)
+		createTenantResp, errCreate := callQuartermaster(ctx, "CreateTenant", func(callCtx context.Context) (*pb.CreateTenantResponse, error) {
+			return client.CreateTenant(callCtx, createTenantReq)
+		})
 		if errCreate != nil {
 			return nil, fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", errCreate)
 		}
@@ -3527,7 +3620,9 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 			}
 		}
 
-		clusterResp, err := client.GetCluster(ctx, clusterID)
+		clusterResp, err := callQuartermaster(ctx, "GetCluster", func(callCtx context.Context) (*pb.ClusterResponse, error) {
+			return client.GetCluster(callCtx, clusterID)
+		})
 		if err != nil && status.Code(err) == codes.NotFound {
 			fmt.Printf("  Registering Cluster '%s'...\n", clusterID)
 			createReq := &pb.CreateClusterRequest{
@@ -3541,7 +3636,9 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 			if ownerTenantID != nil {
 				createReq.OwnerTenantId = ownerTenantID
 			}
-			_, err = client.CreateCluster(ctx, createReq)
+			_, err = callQuartermaster(ctx, "CreateCluster", func(callCtx context.Context) (*pb.ClusterResponse, error) {
+				return client.CreateCluster(callCtx, createReq)
+			})
 			if err != nil {
 				return nil, fmt.Errorf("failed to register cluster '%s': %w", clusterID, err)
 			}
@@ -3582,7 +3679,9 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 				}
 			}
 			if needsUpdate {
-				if _, err := client.UpdateCluster(ctx, updateReq); err != nil {
+				if _, err := callQuartermaster(ctx, "UpdateCluster", func(callCtx context.Context) (*pb.ClusterResponse, error) {
+					return client.UpdateCluster(callCtx, updateReq)
+				}); err != nil {
 					return nil, fmt.Errorf("failed to update cluster '%s': %w", clusterID, err)
 				}
 				ux.Success(out, fmt.Sprintf("Cluster %q already registered; updated metadata", clusterID))
@@ -3600,10 +3699,12 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 			if port == 0 {
 				port = 51820
 			}
-			if _, err := client.UpdateClusterMeshConfig(ctx, &pb.UpdateClusterMeshConfigRequest{
-				ClusterId:    clusterID,
-				MeshCidr:     manifest.WireGuard.MeshCIDR,
-				WgListenPort: port,
+			if _, err := callQuartermaster(ctx, "UpdateClusterMeshConfig", func(callCtx context.Context) (*pb.UpdateClusterMeshConfigResponse, error) {
+				return client.UpdateClusterMeshConfig(callCtx, &pb.UpdateClusterMeshConfigRequest{
+					ClusterId:    clusterID,
+					MeshCidr:     manifest.WireGuard.MeshCIDR,
+					WgListenPort: port,
+				})
 			}); err != nil {
 				return nil, fmt.Errorf("failed to sync WireGuard mesh config for cluster '%s': %w", clusterID, err)
 			}
@@ -3636,14 +3737,18 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 		nodeCluster := hostClusters[hostName]
 		externalIP := hostInfo.ExternalIP
 
-		nodeResp, err := client.GetNode(ctx, hostName)
+		nodeResp, err := callQuartermaster(ctx, "GetNode", func(callCtx context.Context) (*pb.NodeResponse, error) {
+			return client.GetNode(callCtx, hostName)
+		})
 		if err != nil && status.Code(err) == codes.NotFound {
-			_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
-				NodeId:     hostName,
-				ClusterId:  nodeCluster,
-				NodeName:   hostName,
-				NodeType:   nodeType,
-				ExternalIp: &externalIP,
+			_, errCreate := callQuartermaster(ctx, "CreateNode", func(callCtx context.Context) (*pb.NodeResponse, error) {
+				return client.CreateNode(callCtx, &pb.CreateNodeRequest{
+					NodeId:     hostName,
+					ClusterId:  nodeCluster,
+					NodeName:   hostName,
+					NodeType:   nodeType,
+					ExternalIp: &externalIP,
+				})
 			})
 			if errCreate != nil {
 				return nil, fmt.Errorf("failed to register node %s: %w", hostName, errCreate)
@@ -3676,6 +3781,20 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 		SystemTenantID: systemTenantID,
 		QMGRPCAddr:     grpcAddr,
 	}, nil
+}
+
+func callQuartermaster[T any](ctx context.Context, operation string, fn func(context.Context) (T, error)) (T, error) {
+	callCtx, cancel := context.WithTimeout(ctx, quartermasterRPCTimeout)
+	defer cancel()
+	resp, err := fn(callCtx)
+	if err != nil {
+		if callCtx.Err() == context.DeadlineExceeded {
+			var zero T
+			return zero, fmt.Errorf("%s timed out after %s: %w", operation, quartermasterRPCTimeout.Round(time.Second), err)
+		}
+		return resp, err
+	}
+	return resp, nil
 }
 
 func desiredClusterBaseURL(manifest *inventory.Manifest, quartermasterHost inventory.Host, quartermasterSvc inventory.ServiceConfig) string {
@@ -4110,13 +4229,15 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 		userInfo := dbUser
 		if dbPass != "" {
-			userInfo = dbUser + ":" + dbPass
+			userInfo = url.UserPassword(dbUser, dbPass).String()
+		} else {
+			userInfo = url.User(dbUser).String()
 		}
 		dbName := strings.ReplaceAll(task.ServiceID, "-", "_")
 		if env["DATABASE_NAME"] != "" {
 			dbName = env["DATABASE_NAME"]
 		}
-		env["DATABASE_URL"] = fmt.Sprintf("postgres://%s@%s:%s/%s?sslmode=disable", userInfo, dbHost, dbPort, dbName)
+		env["DATABASE_URL"] = fmt.Sprintf("postgres://%s@%s/%s?sslmode=disable", userInfo, net.JoinHostPort(dbHost, dbPort), dbName)
 	}
 
 	return env, nil

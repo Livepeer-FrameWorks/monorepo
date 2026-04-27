@@ -1,0 +1,23 @@
+bind {{ redis_bind_interface }}
+port {{ redis_port }}
+protected-mode yes
+supervised systemd
+daemonize no
+timeout 300
+
+dir {{ redis_data_dir }}
+dbfilename dump.rdb
+appendonly {{ redis_appendonly }}
+appendfsync everysec
+
+loglevel notice
+logfile {{ redis_log_file }}
+pidfile /run/{{ redis_service_name }}/redis.pid
+databases 16
+
+maxmemory {{ redis_maxmemory }}
+maxmemory-policy noeviction
+
+{% if redis_password | length > 0 %}
+requirepass {{ redis_password }}
+{% endif %}

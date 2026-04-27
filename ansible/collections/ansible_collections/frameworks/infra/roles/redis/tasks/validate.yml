@@ -2,11 +2,29 @@
 - name: Refresh service facts
   ansible.builtin.service_facts:
 
+- name: Set Redis service candidates
+  ansible.builtin.set_fact:
+    redis_service_candidates: >-
+      {{
+        [redis_service_name ~ '.service'] if redis_named_instance | bool else
+        [redis_service_name ~ '.service', 'redis.service', 'redis-server.service', 'valkey.service']
+      }}
+
+- name: Select running Redis service fact
+  ansible.builtin.set_fact:
+    redis_effective_service_name: "{{ item }}"
+  loop: "{{ redis_service_candidates }}"
+  when:
+    - redis_effective_service_name is not defined
+    - item in ansible_facts.services
+    - ansible_facts.services[item].state == 'running'
+
 - name: Assert redis service running
   ansible.builtin.assert:
     that:
-      - ansible_facts.services[redis_service_name ~ '.service'].state == 'running'
-    fail_msg: "{{ redis_service_name }} not running"
+      - redis_effective_service_name is defined
+    fail_msg: >-
+      Redis service not running; checked {{ redis_service_candidates | join(', ') }}.
 
 - name: Wait for TCP listener
   ansible.builtin.wait_for:
@@ -14,10 +32,19 @@
     port: "{{ redis_port }}"
     timeout: 30
 
+- name: Discover Redis CLI
+  ansible.builtin.shell: |
+    set -e
+    command -v redis-cli || command -v valkey-cli
+  args:
+    executable: /bin/sh
+  register: redis_cli_binary
+  changed_when: false
+
 - name: PING via redis-cli (authed when password set)
   ansible.builtin.command:
     argv: >-
-      {{ ['redis-cli', '-h', redis_bind_interface, '-p', redis_port | string]
+      {{ [redis_cli_binary.stdout, '-h', redis_bind_interface, '-p', redis_port | string]
          + (['-a', redis_password] if redis_password | length > 0 else [])
          + ['PING'] }}
   register: redis_ping

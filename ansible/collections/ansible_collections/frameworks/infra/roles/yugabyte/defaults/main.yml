@@ -46,8 +46,8 @@ yugabyte_tserver_service: yb-tserver
 yugabyte_databases: []
 yugabyte_application_password: ""
 
-# Superuser role that ysqlsh and community.postgresql use to reach the
-# cluster over scram-sha-256. The CLI supplies the password from SOPS-backed
-# shared env; empty means validate/init fail loud.
+# Superuser role used by local init/migrate/seed tasks. The generated YSQL HBA
+# trusts this role only from 127.0.0.1 so bootstrap does not need to know or set
+# the built-in admin password. Application roles still use password auth.
 yugabyte_superuser_role: yugabyte
 yugabyte_superuser_password: ""

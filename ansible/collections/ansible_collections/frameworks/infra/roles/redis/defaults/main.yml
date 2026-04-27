@@ -1,5 +1,6 @@
 ---
 redis_version: "7.2"
+redis_engine: valkey
 redis_port: 6379
 redis_bind_interface: 127.0.0.1
 redis_password: ""

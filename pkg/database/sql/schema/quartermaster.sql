@@ -583,5 +583,5 @@ CREATE INDEX IF NOT EXISTS idx_qm_services_type ON quartermaster.services(type);
 CREATE INDEX IF NOT EXISTS idx_qm_service_instances_service_status_created ON quartermaster.service_instances(service_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_qm_service_instances_status_last_check ON quartermaster.service_instances(status, last_health_check);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_wireguard_ip_unique
-    ON quartermaster.infrastructure_nodes(wireguard_ip)
+    ON quartermaster.infrastructure_nodes((wireguard_ip::text))
     WHERE wireguard_ip IS NOT NULL;

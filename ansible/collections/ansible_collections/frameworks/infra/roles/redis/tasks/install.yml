@@ -1,9 +1,180 @@
 ---
-- name: Install and configure Redis via geerlingguy.redis
+- name: Install and configure default Redis via geerlingguy.redis
   ansible.builtin.include_role:
     name: geerlingguy.redis
     apply:
       tags: [install, configure, service]
   vars:
     redis_requirepass: "{{ redis_password }}"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - not (redis_named_instance | bool)
+
+- name: Select Redis package for named instance
+  ansible.builtin.set_fact:
+    redis_package_name: redis
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Select Debian Redis package for named instance
+  ansible.builtin.set_fact:
+    redis_package_name: redis-server
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+    - ansible_facts.os_family == 'Debian'
+
+- name: Select Valkey package for named instance
+  ansible.builtin.set_fact:
+    redis_package_name: valkey
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+    - redis_engine == 'valkey'
+
+- name: Select Debian Valkey package for named instance
+  ansible.builtin.set_fact:
+    redis_package_name: valkey-server
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+    - redis_engine == 'valkey'
+    - ansible_facts.os_family == 'Debian'
+
+- name: Install Redis package for named instance
+  ansible.builtin.package:
+    name: "{{ redis_package_name }}"
+    state: present
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Discover Redis server binary for named instance
+  ansible.builtin.shell: |
+    set -e
+    command -v valkey-server || command -v redis-server
+  args:
+    executable: /bin/sh
+  register: redis_server_binary
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Discover Redis runtime user for named instance
+  ansible.builtin.shell: |
+    set -e
+    for user in valkey redis; do
+      if getent passwd "$user" >/dev/null; then
+        echo "$user"
+        exit 0
+      fi
+    done
+    echo root
+  args:
+    executable: /bin/sh
+  register: redis_runtime_user_result
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Set Redis runtime identity for named instance
+  ansible.builtin.set_fact:
+    redis_runtime_user: "{{ redis_runtime_user_result.stdout }}"
+    redis_runtime_group: "{{ redis_runtime_user_result.stdout }}"
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Ensure named Redis directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(redis_runtime_user) }}"
+    group: "{{ item.group | default(redis_runtime_group) }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: /etc/frameworks/redis
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ redis_data_dir }}"
+      mode: "0750"
+    - path: "{{ redis_log_dir }}"
+      mode: "0750"
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Render named Redis config
+  ansible.builtin.template:
+    src: instance.conf.j2
+    dest: "{{ redis_config_path }}"
+    owner: root
+    group: "{{ redis_runtime_group }}"
+    mode: "0640"
+  register: redis_named_config
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Render named Redis systemd unit
+  ansible.builtin.template:
+    src: instance.service.j2
+    dest: "/etc/systemd/system/{{ redis_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: redis_named_unit
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Check named Redis port owner
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if systemctl is-active --quiet "{{ redis_service_name }}"; then
+      exit 0
+    fi
+    if ss -ltn "sport = :{{ redis_port }}" | grep -q LISTEN; then
+      ss -ltnp "sport = :{{ redis_port }}" || true
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  register: redis_named_port_check
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Fail when named Redis port is already owned
+  ansible.builtin.fail:
+    msg: >-
+      Redis instance {{ redis_instance }} cannot bind {{ redis_bind_interface }}:{{ redis_port }};
+      another service is already listening. Existing listener:
+      {{ redis_named_port_check.stdout | default('unknown') }}
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+    - redis_named_port_check.rc != 0
+
+- name: Reload systemd for named Redis unit
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+    - redis_named_unit.changed
+
+- name: Ensure named Redis is enabled and running
+  ansible.builtin.systemd:
+    name: "{{ redis_service_name }}"
+    enabled: true
+    state: "{{ 'restarted' if redis_named_config.changed or redis_named_unit.changed else 'started' }}"
+  when:
+    - not ansible_check_mode
+    - redis_named_instance | bool

@@ -71,6 +71,6 @@ argument_specs:
         description: Password for the per-database owner role.
       yugabyte_superuser_password:
         type: str
-        required: true
+        required: false
         no_log: true
-        description: Password for the yugabyte superuser (scram-sha-256). Required by validate + init.
+        description: Optional password for the yugabyte superuser. Init uses local admin trust.

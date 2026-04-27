@@ -11,6 +11,7 @@ yugabyte_master_tablet_id: "00000000000000000000000000000000"
 yugabyte_bootstrap_sentinel: "{{ yugabyte_data_dir }}/.frameworks-bootstrap-complete"
 yugabyte_pg_data_dir: "{{ yugabyte_data_dir }}/pg_data"
 yugabyte_master_root_dir: "{{ yugabyte_data_dir }}/yb-data/master"
+yugabyte_tserver_log_dir: "{{ yugabyte_data_dir }}/yb-data/tserver/logs"
 yugabyte_master_consensus_meta_path: "{{ yugabyte_master_root_dir }}/consensus-meta/{{ yugabyte_master_tablet_id }}"
 yugabyte_master_tablet_meta_path: "{{ yugabyte_master_root_dir }}/tablet-meta/{{ yugabyte_master_tablet_id }}"
 

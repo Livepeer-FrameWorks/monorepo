@@ -1,7 +1,6 @@
 ---
-# YSQL is scram-sha-256 over TCP; peer auth is not available. The CLI passes
-# the superuser password (yugabyte_superuser_password) plus a list of
-# {db, sql} items via extra-vars.
+# Seed runs locally as the built-in Yugabyte admin role. The generated HBA
+# trusts this role only from 127.0.0.1.
 
 - name: Ensure YSQL Ansible module prerequisites
   ansible.builtin.import_tasks: ysql_prereqs.yml

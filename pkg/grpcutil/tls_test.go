@@ -106,6 +106,32 @@ func TestBuildClientTLSConfigWithCAFile(t *testing.T) {
 	}
 }
 
+func TestBuildClientTLSConfigWithInlineCAPEM(t *testing.T) {
+	dir := t.TempDir()
+	certFile, _ := writeSelfSignedPair(t, dir, "server.local")
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	cfg, insecureAllowed, err := buildClientTLSConfig(ClientTLSConfig{
+		CACertPEM:  string(certPEM),
+		ServerName: "server.local",
+	})
+	if err != nil {
+		t.Fatalf("buildClientTLSConfig returned error: %v", err)
+	}
+	if insecureAllowed {
+		t.Fatal("expected TLS mode, got insecure")
+	}
+	if cfg == nil || cfg.RootCAs == nil {
+		t.Fatal("expected tls config with root CAs")
+	}
+	if cfg.ServerName != "server.local" {
+		t.Fatalf("expected ServerName %q, got %q", "server.local", cfg.ServerName)
+	}
+}
+
 func TestBuildClientTLSConfigRejectsMissingCAFile(t *testing.T) {
 	_, _, err := buildClientTLSConfig(ClientTLSConfig{CACertFile: filepath.Join(t.TempDir(), "missing.pem")})
 	if err == nil {

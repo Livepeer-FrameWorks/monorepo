@@ -3,8 +3,8 @@ galaxy_info:
   role_name: redis
   author: FrameWorks Infra
   description: >-
-    Install and manage Redis. Thin wrapper over geerlingguy.redis that pins
-    our version, binds, and password from the FrameWorks release manifest.
+    Install and manage Redis. The default instance delegates to
+    geerlingguy.redis; named instances use isolated FrameWorks units.
   license: AGPL-3.0-or-later
   min_ansible_version: "2.15"
   platforms:
@@ -20,6 +20,11 @@ argument_specs:
       redis_version:
         type: str
         required: true
+      redis_engine:
+        type: str
+        required: false
+        default: valkey
+        choices: [valkey, redis]
       redis_port:
         type: int
         required: false

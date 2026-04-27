@@ -27,10 +27,15 @@ func redisRoleVars(ctx context.Context, host inventory.Host, config ServiceConfi
 		bind = "127.0.0.1"
 	}
 	pwd := metaString(config.Metadata, "password")
-	instance := metaString(config.Metadata, "instance")
+	instance := firstNonEmpty(metaString(config.Metadata, "instance"), metaString(config.Metadata, "instance_name"))
+	engine := metaString(config.Metadata, "engine")
+	if engine == "" {
+		engine = "valkey"
+	}
 
 	vars := map[string]any{
 		"redis_version":        version,
+		"redis_engine":         engine,
 		"redis_port":           port,
 		"redis_bind_interface": bind,
 		"redis_password":       pwd,

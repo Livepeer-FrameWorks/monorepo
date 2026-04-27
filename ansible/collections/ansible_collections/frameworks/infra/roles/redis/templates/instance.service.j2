@@ -1,0 +1,19 @@
+[Unit]
+Description=FrameWorks Redis instance {{ redis_instance }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User={{ redis_runtime_user }}
+Group={{ redis_runtime_group }}
+ExecStart={{ redis_server_binary.stdout }} {{ redis_config_path }} --supervised systemd --daemonize no
+ExecStop=/bin/kill -s TERM $MAINPID
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+RuntimeDirectory={{ redis_service_name }}
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

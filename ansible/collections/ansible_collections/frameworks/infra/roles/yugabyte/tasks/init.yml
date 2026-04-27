@@ -1,16 +1,15 @@
 ---
-# YSQL is PostgreSQL-wire-compatible; community.postgresql reaches the cluster
-# through 127.0.0.1 with the configured scram-sha-256 superuser auth. The
-# yugabyte superuser password is expected to be present (SOPS-backed); init
-# fails loud if it isn't.
+# YSQL is PostgreSQL-wire-compatible. Init runs locally as the built-in
+# yugabyte admin role, which the generated HBA trusts only from 127.0.0.1.
+# Application owners get the SOPS-backed password and connect over SCRAM.
 
 - name: Ensure YSQL Ansible module prerequisites
   ansible.builtin.import_tasks: ysql_prereqs.yml
 
-- name: Assert superuser password is present
+- name: Assert application password is present
   ansible.builtin.assert:
-    that: yugabyte_superuser_password | length > 0
-    fail_msg: "yugabyte_superuser_password required for init; supply via SOPS-backed metadata.postgres_password"
+    that: yugabyte_application_password | length > 0
+    fail_msg: "yugabyte_application_password required for init; supply via SOPS-backed metadata.postgres_password"
 
 - name: Derive application owner roles
   ansible.builtin.set_fact:

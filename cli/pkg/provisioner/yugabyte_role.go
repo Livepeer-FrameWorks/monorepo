@@ -63,14 +63,17 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		}
 		vars["yugabyte_databases"] = list
 	}
-	// Superuser credentials. The `postgres_password` metadata key is the
-	// historical name cluster_init + cluster_seed already populate.
+	// Application credentials. The `postgres_password` metadata key is the
+	// historical name cluster_init + cluster_seed already populate. Local
+	// Yugabyte admin access uses HBA trust for the built-in yugabyte role.
 	if pwd := metaString(config.Metadata, "postgres_password"); pwd != "" {
-		vars["yugabyte_superuser_password"] = pwd
 		vars["yugabyte_application_password"] = pwd
 	}
 	if items, ok := config.Metadata["yugabyte_seed_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["yugabyte_seed_items"] = items
+	}
+	if items, ok := config.Metadata["yugabyte_schema_items"].([]map[string]any); ok && len(items) > 0 {
+		vars["yugabyte_schema_items"] = items
 	}
 	if items, ok := config.Metadata["yugabyte_migrate_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["yugabyte_migrate_items"] = items

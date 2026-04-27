@@ -206,6 +206,13 @@ func (r *RolePlaybookProvisioner) ApplySeeds(ctx context.Context, host inventory
 	return r.runWithTags(ctx, host, config, []string{"seed"})
 }
 
+// ApplySchemas runs the role with the schema tag. Schema items (database +
+// SQL content) are supplied via config.Metadata and applied before service
+// bootstrap or seed data depends on the tables existing.
+func (r *RolePlaybookProvisioner) ApplySchemas(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	return r.runWithTags(ctx, host, config, []string{"schema"})
+}
+
 // ApplyMigrations runs the role with the migrate tag. When dryRun is true
 // the ansible-playbook subprocess is invoked with --check --diff so the
 // role's community.postgresql modules report the queries they would run

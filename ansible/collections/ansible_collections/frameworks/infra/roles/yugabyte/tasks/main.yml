@@ -33,9 +33,17 @@
   ansible.builtin.import_tasks: init.yml
   tags: [init, never]
 
+- name: Yugabyte | schema
+  ansible.builtin.import_tasks: schema.yml
+  tags: [schema, never]
+
 - name: Yugabyte | seed
   ansible.builtin.import_tasks: seed.yml
   tags: [seed, never]
+
+- name: Yugabyte | migrate
+  ansible.builtin.import_tasks: migrate.yml
+  tags: [migrate, never]
 
 - name: Yugabyte | restart
   ansible.builtin.import_tasks: restart.yml

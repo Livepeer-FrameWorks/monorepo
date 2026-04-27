@@ -22,6 +22,7 @@ type ServerTLSConfig struct {
 
 type ClientTLSConfig struct {
 	CACertFile    string
+	CACertPEM     string
 	ServerName    string
 	AllowInsecure bool
 }
@@ -98,7 +99,7 @@ func buildClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, bool, error) {
 		return nil, false, fmt.Errorf("client TLS cannot use AllowInsecure in production")
 	}
 
-	if cfg.AllowInsecure && cfg.CACertFile == "" && cfg.ServerName == "" {
+	if cfg.AllowInsecure && cfg.CACertFile == "" && cfg.CACertPEM == "" && cfg.ServerName == "" {
 		return nil, true, nil
 	}
 
@@ -106,12 +107,24 @@ func buildClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, bool, error) {
 		rootCAs *x509.CertPool
 		err     error
 	)
+	if cfg.CACertFile != "" || cfg.CACertPEM != "" {
+		rootCAs = x509.NewCertPool()
+	}
 	if cfg.CACertFile != "" {
-		rootCAs, err = loadCertPool(cfg.CACertFile)
-		if err != nil {
-			return nil, false, err
+		pem, readErr := os.ReadFile(cfg.CACertFile)
+		if readErr != nil {
+			return nil, false, fmt.Errorf("read CA cert %q: %w", cfg.CACertFile, readErr)
 		}
-	} else {
+		if !rootCAs.AppendCertsFromPEM(pem) {
+			return nil, false, fmt.Errorf("append CA cert %q: invalid PEM", cfg.CACertFile)
+		}
+	}
+	if cfg.CACertPEM != "" {
+		if !rootCAs.AppendCertsFromPEM([]byte(cfg.CACertPEM)) {
+			return nil, false, fmt.Errorf("append inline CA cert: invalid PEM")
+		}
+	}
+	if rootCAs == nil {
 		rootCAs, err = x509.SystemCertPool()
 		if err != nil {
 			return nil, false, fmt.Errorf("load system cert pool: %w", err)
