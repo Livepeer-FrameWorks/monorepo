@@ -184,9 +184,9 @@ func resolveGenericBinary(ctx context.Context, serviceName string, host inventor
 	}
 	svc, err := manifest.GetServiceInfo(serviceName)
 	if err == nil {
-		bin, err := svc.GetBinary(remoteOS, remoteArch)
-		if err != nil {
-			return "", "", "", err
+		bin, binErr := svc.GetBinary(remoteOS, remoteArch)
+		if binErr != nil {
+			return "", "", "", binErr
 		}
 		return bin.URL, bin.Checksum, serviceName, nil
 	}

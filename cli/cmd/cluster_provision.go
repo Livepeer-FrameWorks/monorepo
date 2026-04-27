@@ -39,6 +39,7 @@ import (
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 	pkgdns "frameworks/pkg/dns"
+	"frameworks/pkg/ingress"
 	"frameworks/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
@@ -152,6 +153,10 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		return fmt.Errorf("invalid manifest: %w", err)
 	}
 
+	if err := validateIngressBundleIDs(manifest); err != nil {
+		return fmt.Errorf("invalid manifest: %w", err)
+	}
+
 	if phaseRequiresGatewayMeshValidation(phase) {
 		if err := validateGatewayMeshCoverage(manifest); err != nil {
 			return fmt.Errorf("invalid manifest: %w", err)
@@ -242,6 +247,29 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 	}
 
 	renderProvisionSummary(ctx, cmd, manifest, only, ready, initRan, seedsRan)
+	return nil
+}
+
+// validateIngressBundleIDs rejects manifests with unsafe TLS bundle ids.
+// Must run before tasks: the post-task ingress registration hook downgrades
+// errors to warnings, which would silently half-apply a poisoned id.
+func validateIngressBundleIDs(manifest *inventory.Manifest) error {
+	if manifest == nil {
+		return nil
+	}
+	for bundleID := range manifest.TLSBundles {
+		if !ingress.IsValidBundleID(bundleID) {
+			return fmt.Errorf("tls_bundles[%q]: bundle id must match lowercase alphanumeric+hyphen (max 128, no leading hyphen)", bundleID)
+		}
+	}
+	for siteID, cfg := range manifest.IngressSites {
+		if cfg.TLSBundleID == "" {
+			continue
+		}
+		if !ingress.IsValidBundleID(cfg.TLSBundleID) {
+			return fmt.Errorf("ingress_sites[%q].tls_bundle_id %q is not a valid bundle id", siteID, cfg.TLSBundleID)
+		}
+	}
 	return nil
 }
 
@@ -1335,6 +1363,9 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 		if cfg.Cluster != "" && cfg.Cluster != clusterID {
 			continue
 		}
+		if !ingress.IsValidBundleID(bundleID) {
+			return fmt.Errorf("invalid TLS bundle id %q in manifest: must match %s", bundleID, "lowercase alphanumeric and hyphens, max 128 chars, no leading hyphen")
+		}
 		email := strings.TrimSpace(cfg.Email)
 		if email == "" {
 			email = defaultEmail
@@ -1366,6 +1397,9 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 	for siteID, cfg := range manifest.IngressSites {
 		if cfg.Node != task.Host {
 			continue
+		}
+		if cfg.TLSBundleID != "" && !ingress.IsValidBundleID(cfg.TLSBundleID) {
+			return fmt.Errorf("ingress site %q references invalid tls_bundle_id %q in manifest", siteID, cfg.TLSBundleID)
 		}
 		siteClusterID := clusterID
 		if cfg.Cluster != "" {
@@ -1408,9 +1442,16 @@ func stringMapToInterfaceMap(values map[string]string) map[string]interface{} {
 	return result
 }
 
+// tlsBundleID derives a deterministic, filesystem-safe bundle id from the
+// root domain. The result must always satisfy ingress.IsValidBundleID
+// because Privateer uses the id directly as a path component beneath
+// ingress.TLSRoot. Dots become hyphens, leading wildcard markers expand to
+// the literal "wildcard-", and the result is lowercased so a manifest with
+// "Frameworks.Network" (a valid DNS root) doesn't produce an id Privateer
+// rejects later.
 func tlsBundleID(kind, rootDomain string) string {
 	replacer := strings.NewReplacer(".", "-", "*", "wildcard-", " ", "-")
-	return kind + "-" + replacer.Replace(rootDomain)
+	return strings.ToLower(kind + "-" + replacer.Replace(rootDomain))
 }
 
 func clusterScopedRootDomain(manifest *inventory.Manifest, clusterID string) string {
@@ -2390,6 +2431,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		}
 		if bundleID != "" {
 			site["tls_bundle_id"] = bundleID
+			applyProxySiteIngressTLSDefaults(site, bundleID)
 			applyProxySiteTLSBundleMetadata(site, manifest, bundleID)
 		}
 		appendSite(site)
@@ -2399,7 +2441,10 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		if len(domains) == 0 {
 			continue
 		}
-		upstream, _ := route["upstream"].(string)
+		upstream, ok := route["upstream"].(string)
+		if !ok {
+			continue
+		}
 		if upstream == "" {
 			continue
 		}
@@ -2407,7 +2452,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 			"domains":  domains,
 			"upstream": upstream,
 		}
-		if name, _ := route["name"].(string); name != "" {
+		if name, ok := route["name"].(string); ok && name != "" {
 			site["name"] = name
 		}
 		copyProxySiteMetadata(site, stringMapFromAny(route["metadata"]))
@@ -2443,6 +2488,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		}
 		if cfg.TLSBundleID != "" {
 			site["tls_bundle_id"] = cfg.TLSBundleID
+			applyProxySiteIngressTLSDefaults(site, cfg.TLSBundleID)
 			applyProxySiteTLSBundleMetadata(site, manifest, cfg.TLSBundleID)
 		}
 		copyProxySiteMetadata(site, cfg.Metadata)
@@ -2458,13 +2504,40 @@ func proxySiteDedupeKey(site map[string]any) string {
 	}
 	domains = append([]string{}, domains...)
 	sort.Strings(domains)
-	upstream, _ := site["upstream"].(string)
+	upstream, _ := stringFromAny(site["upstream"])
 	paths := stringSliceFromAny(site["path_prefixes"])
-	if path, _ := site["path_prefix"].(string); path != "" {
+	if path, ok := stringFromAny(site["path_prefix"]); ok && path != "" {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 	return strings.Join(domains, ",") + "|" + strings.TrimSpace(upstream) + "|" + strings.Join(paths, ",")
+}
+
+// applyProxySiteIngressTLSDefaults sets the canonical cert paths and
+// tls_mode=files on a proxy site keyed by bundle id. For Privateer-managed
+// (bundle-id) sites these three keys are NOT overridable from manifest
+// metadata — copyProxySiteMetadata enforces that — so nginx and Privateer
+// cannot disagree on where a bundle's cert and key live. Manual TLS sites
+// (no tls_bundle_id) keep full metadata override.
+//
+// Bundle ids that fail ingress.IsValidBundleID are not safe to use as path
+// components; this helper silently skips them so a poisoned manifest cannot
+// drive a path that escapes ingress.TLSRoot. Registration in
+// registerIngressDesiredStateWithClient also rejects them up front so they
+// never reach Quartermaster.
+func applyProxySiteIngressTLSDefaults(site map[string]any, bundleID string) {
+	if !ingress.IsValidBundleID(bundleID) {
+		return
+	}
+	if _, ok := site["tls_mode"]; !ok {
+		site["tls_mode"] = "files"
+	}
+	if _, ok := site["tls_cert_path"]; !ok {
+		site["tls_cert_path"] = ingress.TLSCertPath(bundleID)
+	}
+	if _, ok := site["tls_key_path"]; !ok {
+		site["tls_key_path"] = ingress.TLSKeyPath(bundleID)
+	}
 }
 
 func applyProxySiteTLSBundleMetadata(site map[string]any, manifest *inventory.Manifest, bundleID string) {
@@ -2482,7 +2555,21 @@ func copyProxySiteMetadata(site map[string]any, metadata map[string]string) {
 	if len(metadata) == 0 {
 		return
 	}
-	for _, key := range []string{"path_prefix", "tls_mode", "tls_cert_path", "tls_key_path"} {
+	// When a site is keyed by a Navigator-managed tls_bundle_id, the on-disk
+	// paths and tls_mode are canonical (set by applyProxySiteIngressTLSDefaults)
+	// and must NOT be overridable from manifest metadata. Privateer always
+	// writes to ingress.TLSCertPath(bundleID) / TLSKeyPath(bundleID); letting
+	// metadata steer nginx to a different path would silently desync the two
+	// — nginx serving placeholders/operator-supplied certs while Privateer
+	// rotates real material somewhere else. Operators wanting fully-manual
+	// TLS leave tls_bundle_id empty and supply their own paths.
+	bundleID, _ := stringFromAny(site["tls_bundle_id"])
+	managed := strings.TrimSpace(bundleID) != ""
+	overridable := []string{"path_prefix"}
+	if !managed {
+		overridable = append(overridable, "tls_mode", "tls_cert_path", "tls_key_path")
+	}
+	for _, key := range overridable {
 		if value := strings.TrimSpace(metadata[key]); value != "" {
 			site[key] = value
 		}
@@ -2505,6 +2592,11 @@ func splitCSVStrings(raw string) []string {
 		}
 	}
 	return out
+}
+
+func stringFromAny(v any) (string, bool) {
+	s, ok := v.(string)
+	return s, ok
 }
 
 func proxyRouteSliceFromAny(v any) []map[string]interface{} {
@@ -3493,6 +3585,19 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if baseName == "navigator" {
 		env["NAVIGATOR_PORT"] = "18010"
 		env["NAVIGATOR_GRPC_PORT"] = "18011"
+	}
+
+	// Privateer reaches Navigator over the mesh for both internal mTLS and
+	// public ingress TLS bundle sync. Default the address to navigator's mesh
+	// hostname so the agent can run cert sync without operators having to
+	// hand-set NAVIGATOR_GRPC_ADDR in env files. An explicit override still
+	// wins because shared/per-service env files merge in later.
+	if baseName == "privateer" {
+		if navSvc, ok := manifest.Services["navigator"]; ok && navSvc.Enabled {
+			if navHost := manifestMeshHostname(manifest, navSvc.Host); navHost != "" && env["NAVIGATOR_GRPC_ADDR"] == "" {
+				env["NAVIGATOR_GRPC_ADDR"] = fmt.Sprintf("%s:18011", navHost)
+			}
+		}
 	}
 
 	// Listmonk URL — self-hosted, address from manifest

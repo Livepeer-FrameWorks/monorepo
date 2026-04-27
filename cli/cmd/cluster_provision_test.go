@@ -9,6 +9,7 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
+	"frameworks/pkg/ingress"
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/servicedefs"
 
@@ -270,6 +271,131 @@ func TestRegisterIngressDesiredStateWithClientRegistersClusterScopedChandler(t *
 	}
 	if registrar.sites[0].GetTlsBundleId() != "wildcard-media-central-primary-frameworks-network" {
 		t.Fatalf("expected Chandler ingress to use cluster wildcard bundle, got %q", registrar.sites[0].GetTlsBundleId())
+	}
+}
+
+func TestValidateIngressBundleIDsRejectsUnsafeBundle(t *testing.T) {
+	manifest := &inventory.Manifest{
+		TLSBundles: map[string]inventory.TLSBundleConfig{
+			"../../../etc/passwd": {Domains: []string{"x"}},
+		},
+	}
+	err := validateIngressBundleIDs(manifest)
+	if err == nil {
+		t.Fatal("expected error on unsafe TLSBundle id")
+	}
+	if !strings.Contains(err.Error(), "tls_bundles") {
+		t.Fatalf("error should name the offending key, got %v", err)
+	}
+}
+
+func TestValidateIngressBundleIDsRejectsUnsafeIngressSiteRef(t *testing.T) {
+	manifest := &inventory.Manifest{
+		IngressSites: map[string]inventory.IngressSiteConfig{
+			"bad": {TLSBundleID: "Has Space"},
+		},
+	}
+	err := validateIngressBundleIDs(manifest)
+	if err == nil {
+		t.Fatal("expected error on unsafe IngressSite tls_bundle_id")
+	}
+	if !strings.Contains(err.Error(), "ingress_sites") {
+		t.Fatalf("error should name the offending key, got %v", err)
+	}
+}
+
+func TestValidateIngressBundleIDsAcceptsCanonical(t *testing.T) {
+	manifest := &inventory.Manifest{
+		TLSBundles: map[string]inventory.TLSBundleConfig{
+			"wildcard-frameworks-network": {Domains: []string{"*.frameworks.network"}},
+		},
+		IngressSites: map[string]inventory.IngressSiteConfig{
+			"bridge-graphql": {TLSBundleID: "wildcard-frameworks-network"},
+			"http-only":      {}, // no bundle id is fine
+		},
+	}
+	if err := validateIngressBundleIDs(manifest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRegisterIngressDesiredStateRejectsUnsafeManifestBundleID(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"central-eu-1": {ExternalIP: "10.0.0.10", Cluster: "media-central-primary"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-central-primary": {Name: "Media Central Primary"},
+		},
+		TLSBundles: map[string]inventory.TLSBundleConfig{
+			"../../../etc/passwd": {Domains: []string{"evil.example"}},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:      "nginx",
+		Type:      "nginx",
+		ServiceID: "nginx",
+		Host:      "central-eu-1",
+		ClusterID: "media-central-primary",
+	}
+	registrar := &fakeIngressDesiredStateRegistrar{}
+
+	err := registerIngressDesiredStateWithClient(context.Background(), &bytes.Buffer{}, manifest, task, registrar)
+	if err == nil {
+		t.Fatal("expected error on unsafe bundle id, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid TLS bundle id") {
+		t.Fatalf("error should name the validation failure, got %v", err)
+	}
+}
+
+func TestTLSBundleIDIsAlwaysSafe(t *testing.T) {
+	// All root_domain inputs that the inventory layer accepts must produce
+	// bundle ids ingress.IsValidBundleID accepts, otherwise an uppercase or
+	// dotted-only domain would generate ids Privateer later rejects.
+	cases := []struct {
+		kind, root string
+		want       string
+	}{
+		{"wildcard", "frameworks.network", "wildcard-frameworks-network"},
+		{"wildcard", "Frameworks.Network", "wildcard-frameworks-network"},
+		{"apex", "EXAMPLE.COM", "apex-example-com"},
+		{"wildcard", "core-central-primary.frameworks.network", "wildcard-core-central-primary-frameworks-network"},
+	}
+	for _, tc := range cases {
+		got := tlsBundleID(tc.kind, tc.root)
+		if got != tc.want {
+			t.Errorf("tlsBundleID(%q,%q) = %q, want %q", tc.kind, tc.root, got, tc.want)
+		}
+		if !ingress.IsValidBundleID(got) {
+			t.Errorf("tlsBundleID(%q,%q) = %q is not a valid bundle id", tc.kind, tc.root, got)
+		}
+	}
+}
+
+func TestApplyProxySiteIngressTLSDefaultsSafeID(t *testing.T) {
+	site := map[string]any{}
+	applyProxySiteIngressTLSDefaults(site, "wildcard-frameworks-network")
+	if site["tls_mode"] != "files" {
+		t.Errorf("tls_mode = %v, want files", site["tls_mode"])
+	}
+	if site["tls_cert_path"] != "/etc/frameworks/ingress/tls/wildcard-frameworks-network/tls.crt" {
+		t.Errorf("tls_cert_path = %v", site["tls_cert_path"])
+	}
+	if site["tls_key_path"] != "/etc/frameworks/ingress/tls/wildcard-frameworks-network/tls.key" {
+		t.Errorf("tls_key_path = %v", site["tls_key_path"])
+	}
+}
+
+func TestApplyProxySiteIngressTLSDefaultsRejectsUnsafeID(t *testing.T) {
+	for _, bad := range []string{"", "../../../etc/passwd", "has/slash", "has space", "Wildcard"} {
+		site := map[string]any{}
+		applyProxySiteIngressTLSDefaults(site, bad)
+		if len(site) != 0 {
+			t.Errorf("unsafe id %q populated site %+v; expected no defaults", bad, site)
+		}
 	}
 }
 
@@ -905,7 +1031,12 @@ func TestBuildTaskConfigAllowsNativeNginxProxySites(t *testing.T) {
 	}
 }
 
-func TestBuildTaskConfigIncludesExplicitIngressSitesAndTLSMetadata(t *testing.T) {
+func TestBuildTaskConfigManagedBundleIDHasCanonicalTLSPaths(t *testing.T) {
+	// Privateer-managed bundles must use the canonical on-disk paths under
+	// ingress.TLSRoot regardless of any tls_cert_path / tls_key_path /
+	// tls_mode in TLSBundle or IngressSite metadata. Letting metadata win
+	// would let nginx be aimed at a different file than the one Privateer
+	// rotates.
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
@@ -920,8 +1051,10 @@ func TestBuildTaskConfigIncludesExplicitIngressSitesAndTLSMetadata(t *testing.T)
 		},
 		TLSBundles: map[string]inventory.TLSBundleConfig{
 			"bridge-cert": {Metadata: map[string]string{
-				"tls_cert_path": "/etc/frameworks/certs/bridge.crt",
-				"tls_key_path":  "/etc/frameworks/certs/bridge.key",
+				// These should be ignored — the site is bundle-managed.
+				"tls_cert_path": "/operator/legacy/bridge.crt",
+				"tls_key_path":  "/operator/legacy/bridge.key",
+				"tls_mode":      "internal",
 			}},
 		},
 		IngressSites: map[string]inventory.IngressSiteConfig{
@@ -932,7 +1065,10 @@ func TestBuildTaskConfigIncludesExplicitIngressSitesAndTLSMetadata(t *testing.T)
 				Kind:        "reverse_proxy_http",
 				Upstream:    "127.0.0.1:18000",
 				Metadata: map[string]string{
+					// path_prefix is non-TLS metadata and remains overridable.
 					"path_prefix": "/graphql",
+					// Re-asserted at the IngressSite level too: still ignored.
+					"tls_cert_path": "/site/level/bridge.crt",
 				},
 			},
 		},
@@ -953,14 +1089,74 @@ func TestBuildTaskConfigIncludesExplicitIngressSitesAndTLSMetadata(t *testing.T)
 		t.Fatalf("proxy_sites missing or wrong type: %#v", cfg.Metadata["proxy_sites"])
 	}
 	site := sites[0]
-	if got := site["tls_cert_path"]; got != "/etc/frameworks/certs/bridge.crt" {
-		t.Fatalf("tls_cert_path = %v", got)
+	if got := site["tls_cert_path"]; got != "/etc/frameworks/ingress/tls/bridge-cert/tls.crt" {
+		t.Fatalf("tls_cert_path = %v; managed bundles must use canonical path", got)
 	}
-	if got := site["tls_key_path"]; got != "/etc/frameworks/certs/bridge.key" {
-		t.Fatalf("tls_key_path = %v", got)
+	if got := site["tls_key_path"]; got != "/etc/frameworks/ingress/tls/bridge-cert/tls.key" {
+		t.Fatalf("tls_key_path = %v; managed bundles must use canonical path", got)
+	}
+	if got := site["tls_mode"]; got != "files" {
+		t.Fatalf("tls_mode = %v; managed bundles must be files", got)
 	}
 	if got := site["path_prefix"]; got != "/graphql" {
-		t.Fatalf("path_prefix = %v", got)
+		t.Fatalf("path_prefix = %v; non-TLS metadata is still overridable", got)
+	}
+}
+
+func TestBuildTaskConfigUnmanagedSiteRetainsManualTLSPaths(t *testing.T) {
+	// A site without tls_bundle_id is operator-managed end-to-end: paths
+	// from metadata still flow through unchanged so existing manual-TLS
+	// deployments keep working.
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"edge-1": {ExternalIP: "10.0.0.10", Cluster: "media-a"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"nginx": {Enabled: true, Host: "edge-1", Mode: "native"},
+		},
+		IngressSites: map[string]inventory.IngressSiteConfig{
+			"manual": {
+				Node:     "edge-1",
+				Domains:  []string{"legacy.frameworks.network"},
+				Kind:     "reverse_proxy_http",
+				Upstream: "127.0.0.1:18099",
+				Metadata: map[string]string{
+					"tls_mode":      "files",
+					"tls_cert_path": "/operator/legacy/legacy.crt",
+					"tls_key_path":  "/operator/legacy/legacy.key",
+				},
+			},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:      "nginx",
+		Type:      "nginx",
+		ServiceID: "nginx",
+		Host:      "edge-1",
+		ClusterID: "media-a",
+		Phase:     orchestrator.PhaseInterfaces,
+	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+	sites, ok := cfg.Metadata["proxy_sites"].([]map[string]any)
+	if !ok || len(sites) != 1 {
+		t.Fatalf("proxy_sites missing or wrong type: %#v", cfg.Metadata["proxy_sites"])
+	}
+	site := sites[0]
+	if got := site["tls_cert_path"]; got != "/operator/legacy/legacy.crt" {
+		t.Fatalf("tls_cert_path = %v; manual TLS paths must flow through for non-managed sites", got)
+	}
+	if got := site["tls_key_path"]; got != "/operator/legacy/legacy.key" {
+		t.Fatalf("tls_key_path = %v", got)
+	}
+	if got := site["tls_mode"]; got != "files" {
+		t.Fatalf("tls_mode = %v", got)
 	}
 }
 

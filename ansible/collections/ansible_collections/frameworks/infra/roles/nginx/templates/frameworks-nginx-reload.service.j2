@@ -1,0 +1,9 @@
+[Unit]
+Description=Reload nginx after Privateer rotates ingress TLS material
+After={{ nginx_service_name }}.service
+Requires={{ nginx_service_name }}.service
+
+[Service]
+Type=oneshot
+ExecStartPre={{ nginx_binary_path }} -t
+ExecStart=/bin/systemctl reload {{ nginx_service_name }}.service

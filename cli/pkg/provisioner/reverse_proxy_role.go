@@ -417,7 +417,10 @@ func proxySiteVolumeMounts(sites []proxySite) []string {
 }
 
 func stringValue(v any) string {
-	s, _ := v.(string)
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
 	return strings.TrimSpace(s)
 }
 

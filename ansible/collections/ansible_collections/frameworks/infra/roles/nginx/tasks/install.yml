@@ -4,3 +4,9 @@
     name: "{{ nginx_package_by_family[ansible_facts.os_family] | default('nginx') }}"
     state: present
   when: not ansible_check_mode
+
+- name: Install openssl (placeholder cert generation)
+  ansible.builtin.package:
+    name: "{{ nginx_openssl_package_by_family[ansible_facts.os_family] | default('openssl') }}"
+    state: present
+  when: not ansible_check_mode

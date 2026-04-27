@@ -1,0 +1,168 @@
+---
+# Plant placeholder self-signed cert/key files for every IngressSite that
+# references a stable Navigator-managed TLS path. Privateer atomically
+# overwrites the same paths with real material on its sync loop; this task
+# only ensures nginx can load on first provision before that has happened.
+#
+# Pair semantics: cert and key are regenerated together when EITHER is
+# missing. Keying solely on cert.exists would let a half-deleted state
+# (cert present, key gone) survive provisioning and break `nginx -t`.
+
+- name: Collect Privateer-managed ingress TLS bundles from sites
+  ansible.builtin.set_fact:
+    # Only sites that carry a tls_bundle_id are Privateer-managed; their
+    # tls_cert_path / tls_key_path are canonical (rooted under
+    # nginx_ingress_tls_root) and we plant placeholders for them so nginx
+    # can load before Navigator-issued material has been synced. Manual
+    # TLS deployments (no tls_bundle_id, operator-supplied cert paths) are
+    # left alone — they are not Privateer's concern.
+    nginx_ingress_tls_bundles: >-
+      {{
+        nginx_sites
+        | default([])
+        | selectattr('tls_bundle_id', 'defined')
+        | selectattr('tls_mode', 'defined')
+        | selectattr('tls_mode', 'equalto', 'files')
+        | selectattr('tls_cert_path', 'defined')
+        | selectattr('tls_key_path', 'defined')
+        | list
+      }}
+
+- name: Ensure ingress TLS root directory
+  ansible.builtin.file:
+    path: "{{ nginx_ingress_tls_root }}"
+    state: directory
+    owner: privateer
+    group: privateer
+    mode: "0750"
+  when:
+    - not ansible_check_mode
+    - nginx_ingress_tls_bundles | length > 0
+
+- name: Ensure per-bundle ingress TLS directories
+  ansible.builtin.file:
+    path: "{{ item.tls_cert_path | dirname }}"
+    state: directory
+    owner: privateer
+    group: privateer
+    mode: "0750"
+  loop: "{{ nginx_ingress_tls_bundles }}"
+  loop_control:
+    label: "{{ item.tls_cert_path | dirname }}"
+  when:
+    - not ansible_check_mode
+    - nginx_ingress_tls_bundles | length > 0
+
+- name: Stat existing ingress TLS cert files
+  ansible.builtin.stat:
+    path: "{{ item.tls_cert_path }}"
+  loop: "{{ nginx_ingress_tls_bundles }}"
+  loop_control:
+    label: "{{ item.tls_cert_path }}"
+  register: nginx_ingress_tls_cert_stats
+  when: nginx_ingress_tls_bundles | length > 0
+
+- name: Stat existing ingress TLS key files
+  ansible.builtin.stat:
+    path: "{{ item.tls_key_path }}"
+  loop: "{{ nginx_ingress_tls_bundles }}"
+  loop_control:
+    label: "{{ item.tls_key_path }}"
+  register: nginx_ingress_tls_key_stats
+  when: nginx_ingress_tls_bundles | length > 0
+
+- name: Generate placeholder cert and key as a pair when either is missing
+  # Both stat tasks looped over nginx_ingress_tls_bundles, so the .results
+  # arrays are index-aligned with this loop. Skip generation only when both
+  # cert and key are already present; openssl writes both files in one
+  # invocation. Note: no `creates:` guard — that would key skipping on cert
+  # alone and let an orphaned cert without a key survive into `nginx -t`.
+  # Idempotency comes from the `when:` clause; `changed_when: true` is
+  # explicit so ansible-lint's no-changed-when rule sees we considered it.
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -nodes
+      - -newkey
+      - rsa:2048
+      - -days
+      - "1"
+      - -subj
+      - "/CN=placeholder-{{ item.name | default('site') }}"
+      - -keyout
+      - "{{ item.tls_key_path }}"
+      - -out
+      - "{{ item.tls_cert_path }}"
+  changed_when: true
+  loop: "{{ nginx_ingress_tls_bundles }}"
+  loop_control:
+    label: "{{ item.tls_cert_path }}"
+    index_var: idx
+  when:
+    - not ansible_check_mode
+    - >-
+      not (
+        (nginx_ingress_tls_cert_stats.results[idx].stat.exists | default(false))
+        and (nginx_ingress_tls_key_stats.results[idx].stat.exists | default(false))
+      )
+
+- name: Set placeholder cert ownership and mode
+  ansible.builtin.file:
+    path: "{{ item.tls_cert_path }}"
+    owner: privateer
+    group: privateer
+    mode: "0644"
+  loop: "{{ nginx_ingress_tls_bundles }}"
+  loop_control:
+    label: "{{ item.tls_cert_path }}"
+    index_var: idx
+  when:
+    - not ansible_check_mode
+    - >-
+      not (
+        (nginx_ingress_tls_cert_stats.results[idx].stat.exists | default(false))
+        and (nginx_ingress_tls_key_stats.results[idx].stat.exists | default(false))
+      )
+
+- name: Set placeholder key ownership and mode
+  ansible.builtin.file:
+    path: "{{ item.tls_key_path }}"
+    owner: privateer
+    group: privateer
+    mode: "0640"
+  loop: "{{ nginx_ingress_tls_bundles }}"
+  loop_control:
+    label: "{{ item.tls_key_path }}"
+    index_var: idx
+  when:
+    - not ansible_check_mode
+    - >-
+      not (
+        (nginx_ingress_tls_cert_stats.results[idx].stat.exists | default(false))
+        and (nginx_ingress_tls_key_stats.results[idx].stat.exists | default(false))
+      )
+
+- name: Mark placeholders with sentinel
+  ansible.builtin.copy:
+    dest: "{{ (item.tls_cert_path | dirname) ~ '/tls.placeholder' }}"
+    content: |
+      Placeholder self-signed cert generated at provision time.
+      Privateer will atomically overwrite tls.crt and tls.key with
+      Navigator-issued material on its next cert sync, then remove
+      this sentinel.
+    owner: privateer
+    group: privateer
+    mode: "0644"
+  loop: "{{ nginx_ingress_tls_bundles }}"
+  loop_control:
+    label: "{{ item.tls_cert_path }}"
+    index_var: idx
+  when:
+    - not ansible_check_mode
+    - >-
+      not (
+        (nginx_ingress_tls_cert_stats.results[idx].stat.exists | default(false))
+        and (nginx_ingress_tls_key_stats.results[idx].stat.exists | default(false))
+      )

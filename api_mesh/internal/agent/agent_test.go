@@ -52,12 +52,15 @@ func (f *fakeServiceRegistryClient) ListServiceInstances(_ context.Context, _, _
 }
 
 type fakeCertificateClient struct {
-	caResponse     *pb.GetCABundleResponse
-	caErr          error
-	issueResponse  *pb.IssueInternalCertResponse
-	issueErr       error
-	issueRequests  []*pb.IssueInternalCertRequest
-	caRequestCount int
+	caResponse        *pb.GetCABundleResponse
+	caErr             error
+	issueResponse     *pb.IssueInternalCertResponse
+	issueErr          error
+	issueRequests     []*pb.IssueInternalCertRequest
+	caRequestCount    int
+	tlsBundles        map[string]*pb.GetTLSBundleResponse
+	tlsBundleErr      error
+	tlsBundleRequests []*pb.GetTLSBundleRequest
 }
 
 func (f *fakeCertificateClient) GetCABundle(_ context.Context, _ *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
@@ -80,6 +83,40 @@ func (f *fakeCertificateClient) IssueInternalCert(_ context.Context, req *pb.Iss
 		return &pb.IssueInternalCertResponse{}, nil
 	}
 	return f.issueResponse, nil
+}
+
+func (f *fakeCertificateClient) GetTLSBundle(_ context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error) {
+	f.tlsBundleRequests = append(f.tlsBundleRequests, req)
+	if f.tlsBundleErr != nil {
+		return nil, f.tlsBundleErr
+	}
+	if resp, ok := f.tlsBundles[req.GetBundleId()]; ok {
+		return resp, nil
+	}
+	return &pb.GetTLSBundleResponse{Found: false, BundleId: req.GetBundleId()}, nil
+}
+
+type fakeIngressClient struct {
+	pages    []*pb.ListIngressSitesResponse
+	err      error
+	requests []*pb.ListIngressSitesRequest
+}
+
+func (f *fakeIngressClient) ListIngressSites(_ context.Context, clusterID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListIngressSitesResponse, error) {
+	f.requests = append(f.requests, &pb.ListIngressSitesRequest{
+		ClusterId:  clusterID,
+		NodeId:     nodeID,
+		Pagination: pagination,
+	})
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.pages) == 0 {
+		return &pb.ListIngressSitesResponse{}, nil
+	}
+	resp := f.pages[0]
+	f.pages = f.pages[1:]
+	return resp, nil
 }
 
 type meshSyncResult struct {
@@ -1569,5 +1606,267 @@ func TestApplyStartupMeshWithEmptySeedStillConfiguresSelfAddress(t *testing.T) {
 	}
 	if lk.WireguardIP != "10.88.0.2" {
 		t.Fatalf("last-known wireguard_ip = %q, want 10.88.0.2", lk.WireguardIP)
+	}
+}
+
+func TestSyncIngressCertificatesWritesAndTouchesTrigger(t *testing.T) {
+	dir := t.TempDir()
+	tlsRoot := filepath.Join(dir, "ingress", "tls")
+	trigger := filepath.Join(dir, "ingress", "reload.trigger")
+
+	// Pre-plant a placeholder marker; the real bundle write should remove it.
+	bundleID := "wildcard-frameworks-network"
+	bundleDir := filepath.Join(tlsRoot, bundleID)
+	if err := os.MkdirAll(bundleDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "tls.placeholder"), []byte("placeholder\n"), 0o644); err != nil {
+		t.Fatalf("write placeholder sentinel: %v", err)
+	}
+
+	navigator := &fakeCertificateClient{
+		tlsBundles: map[string]*pb.GetTLSBundleResponse{
+			bundleID: {
+				Found:    true,
+				BundleId: bundleID,
+				CertPem:  "cert-pem-v1",
+				KeyPem:   "key-pem-v1",
+				Version:  "v1",
+			},
+		},
+	}
+	ingress := &fakeIngressClient{
+		pages: []*pb.ListIngressSitesResponse{{
+			Sites: []*pb.IngressSite{
+				{SiteId: "bridge-regional-eu-1", NodeId: "regional-eu-1", TlsBundleId: bundleID},
+				{SiteId: "no-bundle", NodeId: "regional-eu-1"},
+			},
+		}},
+	}
+
+	agent := &Agent{
+		logger:          logging.NewLogger(),
+		nodeID:          "regional-eu-1",
+		clusterID:       "core-central-primary",
+		ingressClient:   ingress,
+		navigatorClient: navigator,
+		ingressTLSRoot:  tlsRoot,
+		ingressTrigger:  trigger,
+		ingressVersions: make(map[string]string),
+		syncTimeout:     time.Second,
+	}
+
+	if err := agent.syncIngressCertificates(); err != nil {
+		t.Fatalf("syncIngressCertificates: %v", err)
+	}
+
+	if got, err := os.ReadFile(filepath.Join(bundleDir, "tls.crt")); err != nil || string(got) != "cert-pem-v1" {
+		t.Fatalf("tls.crt = %q err=%v, want %q", string(got), err, "cert-pem-v1")
+	}
+	if got, err := os.ReadFile(filepath.Join(bundleDir, "tls.key")); err != nil || string(got) != "key-pem-v1" {
+		t.Fatalf("tls.key = %q err=%v, want %q", string(got), err, "key-pem-v1")
+	}
+	if _, err := os.Stat(filepath.Join(bundleDir, "tls.placeholder")); !os.IsNotExist(err) {
+		t.Fatalf("tls.placeholder should have been removed; stat err=%v", err)
+	}
+	info, err := os.Stat(trigger)
+	if err != nil {
+		t.Fatalf("expected reload trigger to be touched: %v", err)
+	}
+	firstMtime := info.ModTime()
+
+	if len(navigator.tlsBundleRequests) != 1 {
+		t.Fatalf("GetTLSBundle calls = %d, want 1", len(navigator.tlsBundleRequests))
+	}
+
+	// Second sync: same version, no IngressSite changes — must skip writes
+	// and not re-touch the trigger.
+	ingress.pages = []*pb.ListIngressSitesResponse{{
+		Sites: []*pb.IngressSite{{SiteId: "bridge-regional-eu-1", NodeId: "regional-eu-1", TlsBundleId: bundleID}},
+	}}
+	time.Sleep(10 * time.Millisecond) // ensure mtime granularity would notice a touch
+	if syncErr := agent.syncIngressCertificates(); syncErr != nil {
+		t.Fatalf("second syncIngressCertificates: %v", syncErr)
+	}
+	info2, err := os.Stat(trigger)
+	if err != nil {
+		t.Fatalf("stat trigger after second sync: %v", err)
+	}
+	if !info2.ModTime().Equal(firstMtime) {
+		t.Fatalf("trigger mtime changed (%v -> %v); expected no-op when version unchanged", firstMtime, info2.ModTime())
+	}
+
+	// Third sync: rotated version — must rewrite + retouch trigger.
+	navigator.tlsBundles[bundleID] = &pb.GetTLSBundleResponse{
+		Found:    true,
+		BundleId: bundleID,
+		CertPem:  "cert-pem-v2",
+		KeyPem:   "key-pem-v2",
+		Version:  "v2",
+	}
+	ingress.pages = []*pb.ListIngressSitesResponse{{
+		Sites: []*pb.IngressSite{{SiteId: "bridge-regional-eu-1", NodeId: "regional-eu-1", TlsBundleId: bundleID}},
+	}}
+	if syncErr := agent.syncIngressCertificates(); syncErr != nil {
+		t.Fatalf("third syncIngressCertificates: %v", syncErr)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(bundleDir, "tls.crt")); readErr != nil || string(got) != "cert-pem-v2" {
+		t.Fatalf("post-rotation tls.crt = %q, want cert-pem-v2", string(got))
+	}
+	info3, err := os.Stat(trigger)
+	if err != nil {
+		t.Fatalf("stat trigger after rotation: %v", err)
+	}
+	if !info3.ModTime().After(firstMtime) {
+		t.Fatalf("trigger mtime did not advance after rotation (%v -> %v)", firstMtime, info3.ModTime())
+	}
+}
+
+func TestSyncIngressCertificatesHonorsCadenceUntilFilesMissing(t *testing.T) {
+	dir := t.TempDir()
+	tlsRoot := filepath.Join(dir, "tls")
+	trigger := filepath.Join(dir, "reload.trigger")
+	bundleID := "wildcard-frameworks-network"
+
+	navigator := &fakeCertificateClient{
+		tlsBundles: map[string]*pb.GetTLSBundleResponse{
+			bundleID: {Found: true, BundleId: bundleID, CertPem: "cert", KeyPem: "key", Version: "v1"},
+		},
+	}
+	ingress := &fakeIngressClient{}
+	queueIngressPage := func() {
+		ingress.pages = append(ingress.pages, &pb.ListIngressSitesResponse{
+			Sites: []*pb.IngressSite{{SiteId: "x", NodeId: "n", TlsBundleId: bundleID}},
+		})
+	}
+	queueIngressPage()
+
+	agent := &Agent{
+		logger:           logging.NewLogger(),
+		nodeID:           "n",
+		clusterID:        "c",
+		ingressClient:    ingress,
+		navigatorClient:  navigator,
+		ingressTLSRoot:   tlsRoot,
+		ingressTrigger:   trigger,
+		ingressVersions:  make(map[string]string),
+		syncTimeout:      time.Second,
+		certSyncInterval: time.Hour,
+	}
+
+	if err := agent.syncIngressCertificates(); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	if got := len(ingress.requests); got != 1 {
+		t.Fatalf("ingress list calls = %d, want 1", got)
+	}
+	if got := len(navigator.tlsBundleRequests); got != 1 {
+		t.Fatalf("navigator GetTLSBundle calls = %d, want 1", got)
+	}
+
+	// Within the cadence window, repeat syncs must not reach Quartermaster
+	// or Navigator while material is still on disk.
+	for i := 0; i < 3; i++ {
+		if err := agent.syncIngressCertificates(); err != nil {
+			t.Fatalf("repeat sync %d: %v", i, err)
+		}
+	}
+	if got := len(ingress.requests); got != 1 {
+		t.Fatalf("cadence broken: ingress list calls = %d after warm syncs, want 1", got)
+	}
+	if got := len(navigator.tlsBundleRequests); got != 1 {
+		t.Fatalf("cadence broken: GetTLSBundle calls = %d after warm syncs, want 1", got)
+	}
+
+	// Removing the on-disk cert must force a fetch even within cadence —
+	// otherwise an operator-deleted file or fresh-disk replay would never
+	// recover.
+	if err := os.Remove(filepath.Join(tlsRoot, bundleID, "tls.crt")); err != nil {
+		t.Fatalf("remove cert to simulate loss: %v", err)
+	}
+	queueIngressPage()
+	if err := agent.syncIngressCertificates(); err != nil {
+		t.Fatalf("recovery sync: %v", err)
+	}
+	if got := len(ingress.requests); got != 2 {
+		t.Fatalf("missing-files override: ingress list calls = %d, want 2", got)
+	}
+	if got := len(navigator.tlsBundleRequests); got != 2 {
+		t.Fatalf("missing-files override: GetTLSBundle calls = %d, want 2", got)
+	}
+}
+
+func TestSyncIngressCertificatesRejectsUnsafeBundleID(t *testing.T) {
+	dir := t.TempDir()
+	tlsRoot := filepath.Join(dir, "tls")
+	trigger := filepath.Join(dir, "reload.trigger")
+
+	navigator := &fakeCertificateClient{
+		// If the unsafe id ever reaches GetTLSBundle the test will fail
+		// because we record any request the fake sees.
+		tlsBundles: map[string]*pb.GetTLSBundleResponse{},
+	}
+	ingress := &fakeIngressClient{
+		pages: []*pb.ListIngressSitesResponse{{
+			Sites: []*pb.IngressSite{
+				{SiteId: "evil", NodeId: "regional-eu-1", TlsBundleId: "../../../etc/passwd"},
+				{SiteId: "also-evil", NodeId: "regional-eu-1", TlsBundleId: "has space"},
+				{SiteId: "uppercase", NodeId: "regional-eu-1", TlsBundleId: "Wildcard"},
+				{SiteId: "trailing-slash", NodeId: "regional-eu-1", TlsBundleId: "good-but/slash"},
+			},
+		}},
+	}
+
+	agent := &Agent{
+		logger:          logging.NewLogger(),
+		nodeID:          "regional-eu-1",
+		clusterID:       "core-central-primary",
+		ingressClient:   ingress,
+		navigatorClient: navigator,
+		ingressTLSRoot:  tlsRoot,
+		ingressTrigger:  trigger,
+		ingressVersions: make(map[string]string),
+		syncTimeout:     time.Second,
+	}
+
+	if err := agent.syncIngressCertificates(); err != nil {
+		t.Fatalf("syncIngressCertificates: %v", err)
+	}
+
+	if len(navigator.tlsBundleRequests) != 0 {
+		t.Fatalf("unsafe bundle ids reached Navigator: %+v", navigator.tlsBundleRequests)
+	}
+	if entries, _ := os.ReadDir(tlsRoot); len(entries) != 0 {
+		t.Fatalf("unsafe bundle ids created directories under tlsRoot: %+v", entries)
+	}
+	if _, err := os.Stat(trigger); !os.IsNotExist(err) {
+		t.Fatalf("trigger should not have been touched on all-unsafe input; stat err=%v", err)
+	}
+}
+
+func TestSyncIngressCertificatesNoBundleIDsIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	trigger := filepath.Join(dir, "reload.trigger")
+	ingress := &fakeIngressClient{pages: []*pb.ListIngressSitesResponse{{}}}
+	navigator := &fakeCertificateClient{}
+	agent := &Agent{
+		logger:          logging.NewLogger(),
+		nodeID:          "regional-eu-1",
+		clusterID:       "core-central-primary",
+		ingressClient:   ingress,
+		navigatorClient: navigator,
+		ingressTLSRoot:  filepath.Join(dir, "tls"),
+		ingressTrigger:  trigger,
+		ingressVersions: make(map[string]string),
+		syncTimeout:     time.Second,
+	}
+	if err := agent.syncIngressCertificates(); err != nil {
+		t.Fatalf("syncIngressCertificates: %v", err)
+	}
+	if _, err := os.Stat(trigger); !os.IsNotExist(err) {
+		t.Fatalf("expected no trigger touch when no bundles; stat err=%v", err)
+	}
+	if len(navigator.tlsBundleRequests) != 0 {
+		t.Fatalf("expected no GetTLSBundle calls; got %d", len(navigator.tlsBundleRequests))
 	}
 }

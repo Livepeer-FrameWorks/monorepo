@@ -15,6 +15,10 @@
   ansible.builtin.import_tasks: service.yml
   tags: [service]
 
+- name: Nginx | install ingress reload path/service units
+  ansible.builtin.import_tasks: reload_unit.yml
+  tags: [configure, service]
+
 - name: Nginx | flush handlers before validate
   ansible.builtin.meta: flush_handlers
   tags: [service, validate]

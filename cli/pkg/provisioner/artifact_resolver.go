@@ -62,9 +62,9 @@ func resolveReleaseArtifactFromChannel(name, arch, platformChannel string, metad
 	}
 
 	if infra := manifest.GetInfrastructure(name); infra != nil {
-		artifact, err := artifactForArch(infra, arch, channel, resolved)
-		if err != nil {
-			return ResolvedArtifact{}, err
+		artifact, artifactErr := artifactForArch(infra, arch, channel, resolved)
+		if artifactErr != nil {
+			return ResolvedArtifact{}, artifactErr
 		}
 		return ResolvedArtifact{URL: artifact.URL, Checksum: artifact.Checksum, Version: infra.Version, Arch: arch}, nil
 	}

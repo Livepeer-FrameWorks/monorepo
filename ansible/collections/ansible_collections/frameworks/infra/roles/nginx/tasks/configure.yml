@@ -7,11 +7,65 @@
     group: root
     mode: "0755"
 
-- name: Render FrameWorks Nginx config
-  ansible.builtin.template:
-    src: frameworks.conf.j2
-    dest: "{{ nginx_config_path }}"
-    owner: root
-    group: root
+- name: Ensure ingress TLS placeholders before validation
+  ansible.builtin.import_tasks: tls_placeholders.yml
+
+- name: Stat current FrameWorks Nginx config
+  ansible.builtin.stat:
+    path: "{{ nginx_config_path }}"
+  register: nginx_config_stat
+
+- name: Backup current FrameWorks Nginx config
+  ansible.builtin.copy:
+    src: "{{ nginx_config_path }}"
+    dest: "{{ nginx_config_path }}.bak"
+    remote_src: true
     mode: "0644"
-  notify: nginx reload
+  when:
+    - not ansible_check_mode
+    - nginx_config_stat.stat.exists
+
+- name: Render and validate FrameWorks Nginx config
+  block:
+    - name: Render FrameWorks Nginx config
+      ansible.builtin.template:
+        src: frameworks.conf.j2
+        dest: "{{ nginx_config_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: nginx_config_render
+      notify: nginx reload
+
+    - name: Validate full Nginx config
+      ansible.builtin.command: "{{ nginx_binary_path }} -t"
+      changed_when: false
+      register: nginx_config_validate
+      when:
+        - not ansible_check_mode
+        - nginx_config_render is changed
+  rescue:
+    - name: Restore previous Nginx config after validation failure
+      ansible.builtin.copy:
+        src: "{{ nginx_config_path }}.bak"
+        dest: "{{ nginx_config_path }}"
+        remote_src: true
+        mode: "0644"
+      when:
+        - not ansible_check_mode
+        - nginx_config_stat.stat.exists
+
+    - name: Remove broken first-run Nginx config
+      ansible.builtin.file:
+        path: "{{ nginx_config_path }}"
+        state: absent
+      when:
+        - not ansible_check_mode
+        - not nginx_config_stat.stat.exists
+
+    - name: Fail with Nginx validator output
+      ansible.builtin.fail:
+        msg: |
+          Nginx config validation failed; previous config restored if it existed.
+          stdout: {{ nginx_config_validate.stdout | default('') }}
+          stderr: {{ nginx_config_validate.stderr | default('') }}

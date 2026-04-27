@@ -19,6 +19,7 @@ import (
 	"frameworks/api_mesh/internal/wireguard"
 	navclient "frameworks/pkg/clients/navigator"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	pkgingress "frameworks/pkg/ingress"
 	"frameworks/pkg/logging"
 	pkgmesh "frameworks/pkg/mesh"
 	infra "frameworks/pkg/models"
@@ -68,6 +69,13 @@ type serviceRegistryClient interface {
 type certificateClient interface {
 	GetCABundle(ctx context.Context, req *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error)
 	IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error)
+	GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error)
+}
+
+// ingressClient lists ingress sites scoped to this Privateer's node so the
+// agent can discover which Navigator-issued TLS bundles to sync onto disk.
+type ingressClient interface {
+	ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListIngressSitesResponse, error)
 }
 
 type dnsService interface {
@@ -104,12 +112,19 @@ type Agent struct {
 	// can spot agents stuck on stale revisions.
 	appliedRevision  atomic.Pointer[string]
 	registryClient   serviceRegistryClient
+	ingressClient    ingressClient
 	navigatorClient  certificateClient
 	certIssueToken   string
 	pkiBasePath      string
+	ingressTLSRoot   string
+	ingressTrigger   string
 	expectedServices []string
 	certSyncInterval time.Duration
 	lastCertSyncUnix atomic.Int64
+	lastIngressSync  atomic.Int64
+	ingressMu        sync.Mutex
+	ingressVersions  map[string]string
+	cachedIngressIDs []string
 	// Startup substrate inputs and persisted managed cache.
 	staticPeersFile string
 	privateKeyFile  string
@@ -152,6 +167,7 @@ type Config struct {
 	Metrics               *Metrics
 	MeshClient            meshClient
 	ServiceRegistryClient serviceRegistryClient
+	IngressClient         ingressClient
 	NavigatorClient       certificateClient
 	WireGuardManager      wireguard.Manager
 	DNSService            dnsService
@@ -210,6 +226,7 @@ func New(cfg Config) (*Agent, error) {
 	// Initialize the Quartermaster client when credentials are available.
 	client := cfg.MeshClient
 	registry := cfg.ServiceRegistryClient
+	ingress := cfg.IngressClient
 	if client == nil && cfg.ServiceToken != "" && cfg.QuartermasterGRPCAddr != "" {
 		qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 			GRPCAddr:      cfg.QuartermasterGRPCAddr,
@@ -227,10 +244,18 @@ func New(cfg Config) (*Agent, error) {
 		if registry == nil {
 			registry = qmGRPCClient
 		}
+		if ingress == nil {
+			ingress = qmGRPCClient
+		}
 	}
 	if registry == nil {
 		if qmRegistry, ok := client.(serviceRegistryClient); ok {
 			registry = qmRegistry
+		}
+	}
+	if ingress == nil {
+		if qmIngress, ok := client.(ingressClient); ok {
+			ingress = qmIngress
 		}
 	}
 
@@ -275,11 +300,15 @@ func New(cfg Config) (*Agent, error) {
 		nodeID:           resolveNodeID(cfg),
 		metrics:          cfg.Metrics,
 		registryClient:   registry,
+		ingressClient:    ingress,
 		navigatorClient:  navigatorClient,
 		certIssueToken:   cfg.CertIssueToken,
 		pkiBasePath:      cfg.PKIBasePath,
+		ingressTLSRoot:   pkgingress.TLSRoot,
+		ingressTrigger:   pkgingress.ReloadTrigger,
 		expectedServices: append([]string(nil), cfg.ExpectedServiceTypes...),
 		certSyncInterval: cfg.CertSyncInterval,
+		ingressVersions:  make(map[string]string),
 		staticPeersFile:  cfg.StaticPeersFile,
 		privateKeyFile:   cfg.PrivateKeyFile,
 		wireguardIP:      cfg.WireguardIP,
@@ -763,6 +792,9 @@ func (a *Agent) sync() {
 	if err := a.syncInternalCertificates(); err != nil {
 		a.logger.WithError(err).Warn("Failed to sync internal TLS materials")
 	}
+	if err := a.syncIngressCertificates(); err != nil {
+		a.logger.WithError(err).Warn("Failed to sync ingress TLS materials")
+	}
 	a.logger.Info("Successfully applied wireguard config")
 }
 
@@ -1008,6 +1040,215 @@ func (a *Agent) listNodeServiceTypes(ctx context.Context) ([]string, error) {
 	}
 
 	return services, nil
+}
+
+// syncIngressCertificates pulls Navigator-issued public TLS bundles for every
+// IngressSite scoped to this node and writes them atomically beneath
+// ingressTLSRoot. After any successful write it touches the reload trigger
+// file so the host's systemd path unit can pick up the change and reload
+// nginx — Privateer never invokes systemd directly.
+func (a *Agent) syncIngressCertificates() error {
+	if a.navigatorClient == nil || a.ingressClient == nil {
+		return nil
+	}
+	if strings.TrimSpace(a.clusterID) == "" || strings.TrimSpace(a.nodeID) == "" {
+		return nil
+	}
+
+	// Honor the configured cert sync cadence (default 5 min) so we don't
+	// hammer Quartermaster (ListIngressSites) and Navigator (GetTLSBundle)
+	// on every mesh-sync tick (default 30s). On a fresh start cachedIngressIDs
+	// is empty and lastIngressSync is zero, both of which force a sync;
+	// subsequent ticks within the cadence window short-circuit unless a
+	// previously-known bundle's on-disk material is missing.
+	now := time.Now().Unix()
+	last := a.lastIngressSync.Load()
+	if last > 0 && time.Duration(now-last)*time.Second < a.certSyncInterval {
+		a.ingressMu.Lock()
+		cached := append([]string(nil), a.cachedIngressIDs...)
+		a.ingressMu.Unlock()
+		if !a.missingIngressBundleMaterials(cached) {
+			return nil
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
+	defer cancel()
+
+	bundleIDs, err := a.collectIngressBundleIDs(ctx)
+	if err != nil {
+		return err
+	}
+	a.ingressMu.Lock()
+	a.cachedIngressIDs = append([]string(nil), bundleIDs...)
+	a.ingressMu.Unlock()
+	if len(bundleIDs) == 0 {
+		a.lastIngressSync.Store(now)
+		return nil
+	}
+
+	changed := false
+	for _, bundleID := range bundleIDs {
+		resp, err := a.navigatorClient.GetTLSBundle(ctx, &pb.GetTLSBundleRequest{BundleId: bundleID})
+		if err != nil {
+			a.logger.WithError(err).WithField("bundle_id", bundleID).Warn("Ingress sync: GetTLSBundle failed")
+			continue
+		}
+		if !resp.GetFound() || strings.TrimSpace(resp.GetCertPem()) == "" || strings.TrimSpace(resp.GetKeyPem()) == "" {
+			continue
+		}
+		marker := ingressBundleMarker(resp)
+		if marker != "" && a.ingressVersionUnchanged(bundleID, marker) {
+			continue
+		}
+		if err := a.writeIngressBundle(bundleID, resp.GetCertPem(), resp.GetKeyPem()); err != nil {
+			return fmt.Errorf("write ingress bundle %s: %w", bundleID, err)
+		}
+		a.recordIngressVersion(bundleID, marker)
+		changed = true
+	}
+
+	if changed {
+		if err := a.touchIngressReloadTrigger(); err != nil {
+			return fmt.Errorf("touch ingress reload trigger: %w", err)
+		}
+	}
+
+	a.lastIngressSync.Store(now)
+	return nil
+}
+
+func (a *Agent) collectIngressBundleIDs(ctx context.Context) ([]string, error) {
+	seen := make(map[string]struct{})
+	var pagination *pb.CursorPaginationRequest
+	for {
+		resp, err := a.ingressClient.ListIngressSites(ctx, a.clusterID, a.nodeID, pagination)
+		if err != nil {
+			return nil, fmt.Errorf("list ingress sites: %w", err)
+		}
+		for _, site := range resp.GetSites() {
+			bundleID := strings.TrimSpace(site.GetTlsBundleId())
+			if bundleID == "" {
+				continue
+			}
+			// Quartermaster could in principle return a poisoned id; reject
+			// anything that isn't safe as a path component before we touch
+			// disk. The CLI also validates at registration time but defense
+			// in depth here is cheap.
+			if !pkgingress.IsValidBundleID(bundleID) {
+				a.logger.WithField("bundle_id", bundleID).Warn("Ingress sync: ignoring bundle with unsafe id")
+				continue
+			}
+			seen[bundleID] = struct{}{}
+		}
+		page := resp.GetPagination()
+		if page == nil || !page.GetHasNextPage() || page.GetEndCursor() == "" {
+			break
+		}
+		endCursor := page.GetEndCursor()
+		pagination = &pb.CursorPaginationRequest{First: 200, After: &endCursor}
+	}
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// missingIngressBundleMaterials reports whether any of the bundles we expect
+// to keep in sync is missing its on-disk cert or key. It bypasses the cert
+// sync cadence so Privateer always fetches when a bundle's files have been
+// removed (e.g. fresh provision before the placeholder ran or post-rotation
+// repair).
+func (a *Agent) missingIngressBundleMaterials(bundleIDs []string) bool {
+	for _, bundleID := range bundleIDs {
+		dir := filepath.Join(a.ingressTLSRoot, bundleID)
+		if !fileExistsAndNonEmpty(filepath.Join(dir, "tls.crt")) {
+			return true
+		}
+		if !fileExistsAndNonEmpty(filepath.Join(dir, "tls.key")) {
+			return true
+		}
+	}
+	return false
+}
+
+// ingressBundleMarker returns a stable marker for change detection. Prefers
+// the Navigator-supplied version field; falls back to expires_at. Empty
+// marker means "always rewrite" (best-effort, no caching).
+func ingressBundleMarker(resp *pb.GetTLSBundleResponse) string {
+	if v := strings.TrimSpace(resp.GetVersion()); v != "" {
+		return "v:" + v
+	}
+	if exp := resp.GetExpiresAt(); exp != 0 {
+		return fmt.Sprintf("e:%d", exp)
+	}
+	return ""
+}
+
+func (a *Agent) ingressVersionUnchanged(bundleID, marker string) bool {
+	a.ingressMu.Lock()
+	defer a.ingressMu.Unlock()
+	prev, ok := a.ingressVersions[bundleID]
+	return ok && prev == marker
+}
+
+func (a *Agent) recordIngressVersion(bundleID, marker string) {
+	a.ingressMu.Lock()
+	defer a.ingressMu.Unlock()
+	if marker == "" {
+		delete(a.ingressVersions, bundleID)
+		return
+	}
+	a.ingressVersions[bundleID] = marker
+}
+
+func (a *Agent) writeIngressBundle(bundleID, certPEM, keyPEM string) error {
+	dir := filepath.Join(a.ingressTLSRoot, bundleID)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	if err := writeAtomicFile(filepath.Join(dir, "tls.crt"), []byte(certPEM), 0o644); err != nil {
+		return err
+	}
+	if err := writeAtomicFile(filepath.Join(dir, "tls.key"), []byte(keyPEM), 0o640); err != nil {
+		return err
+	}
+	// Ansible plants this sentinel next to placeholder material; remove it
+	// once Privateer has installed real Navigator-issued certs so an
+	// operator audit can tell genuine bundles apart from placeholders.
+	_ = os.Remove(filepath.Join(dir, "tls.placeholder"))
+	return nil
+}
+
+func (a *Agent) touchIngressReloadTrigger() error {
+	if strings.TrimSpace(a.ingressTrigger) == "" {
+		return nil
+	}
+	// systemd.path watches the trigger file via inotify on the parent
+	// directory and reacts to PathModified, which corresponds to IN_MODIFY
+	// / IN_CLOSE_WRITE on the watched path. Atomic rename (write-temp +
+	// rename) replaces the file with a fresh inode and is observed as a
+	// move/create on the parent — that pattern can be missed depending on
+	// when systemd resolves the watch. An in-place truncate-write is what
+	// the man page documents as reliable: open(O_WRONLY|O_TRUNC), write,
+	// close. The Ansible reload_unit role pre-creates the trigger file with
+	// privateer:privateer ownership so we always have a stable path to
+	// rewrite.
+	if err := os.MkdirAll(filepath.Dir(a.ingressTrigger), 0o750); err != nil {
+		return err
+	}
+	body := []byte(time.Now().UTC().Format(time.RFC3339Nano) + "\n")
+	f, err := os.OpenFile(a.ingressTrigger, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, writeErr := f.Write(body); writeErr != nil {
+		_ = f.Close()
+		return writeErr
+	}
+	return f.Close()
 }
 
 func (a *Agent) writeServiceCertificate(serviceType, certPEM, keyPEM string) error {

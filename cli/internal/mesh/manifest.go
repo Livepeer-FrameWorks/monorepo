@@ -255,49 +255,6 @@ func formatYAMLScalarLine(key, value string) string {
 	return key + ": " + value
 }
 
-// updateHostsMapping finds the `hosts:` mapping and upserts wireguard_ip,
-// wireguard_public_key, wireguard_port on each matching host.
-func updateHostsMapping(doc *yaml.Node, hosts map[string]HostWG) error {
-	hostsMap := findMappingChild(doc, "hosts")
-	if hostsMap == nil {
-		return fmt.Errorf("cluster.yaml: 'hosts' mapping not found")
-	}
-	for i := 0; i+1 < len(hostsMap.Content); i += 2 {
-		nameNode := hostsMap.Content[i]
-		hostNode := hostsMap.Content[i+1]
-		wg, ok := hosts[nameNode.Value]
-		if !ok {
-			continue
-		}
-		if hostNode.Kind != yaml.MappingNode {
-			return fmt.Errorf("host %q: value is not a mapping", nameNode.Value)
-		}
-		setScalarField(hostNode, "wireguard_ip", wg.WireguardIP)
-		setScalarField(hostNode, "wireguard_public_key", wg.WireguardPublicKey)
-		setScalarField(hostNode, "wireguard_port", fmt.Sprintf("%d", wg.WireguardPort))
-	}
-	return nil
-}
-
-func upsertWireGuardBlock(doc *yaml.Node, wg WireGuardBlock) error {
-	block := findMappingChild(doc, "wireguard")
-	if block == nil {
-		// Append a new top-level `wireguard:` mapping at the end of the doc.
-		key := &yaml.Node{Kind: yaml.ScalarNode, Value: "wireguard", Tag: "!!str"}
-		value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		doc.Content = append(doc.Content, key, value)
-		block = value
-	}
-	setScalarField(block, "enabled", boolString(wg.Enabled))
-	if wg.MeshCIDR != "" {
-		setScalarField(block, "mesh_cidr", wg.MeshCIDR)
-	}
-	if wg.ListenPort != 0 {
-		setScalarField(block, "listen_port", fmt.Sprintf("%d", wg.ListenPort))
-	}
-	return nil
-}
-
 // findMappingChild returns the value node for key in a mapping node, or nil.
 func findMappingChild(m *yaml.Node, key string) *yaml.Node {
 	if m.Kind != yaml.MappingNode {

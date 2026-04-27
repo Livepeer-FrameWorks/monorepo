@@ -1,0 +1,10 @@
+[Unit]
+Description=FrameWorks nginx reload watcher (ingress TLS rotation)
+After={{ nginx_service_name }}.service
+
+[Path]
+PathModified={{ nginx_ingress_reload_trigger }}
+Unit=frameworks-nginx-reload.service
+
+[Install]
+WantedBy=multi-user.target

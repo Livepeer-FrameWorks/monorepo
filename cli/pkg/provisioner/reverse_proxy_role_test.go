@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestReverseProxyComposeVarsRendersTLSMountsAndHTTPSPort(t *testing.T) {
 }
 
 func TestNginxRoleVarsUsesProxySites(t *testing.T) {
-	vars, err := nginxRoleVars(nil, nilHost(), ServiceConfig{
+	vars, err := nginxRoleVars(context.TODO(), nilHost(), ServiceConfig{
 		Port: 18090,
 		Metadata: map[string]any{"proxy_sites": []map[string]any{{
 			"domains":  []string{"bridge.example.com"},

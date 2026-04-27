@@ -9,3 +9,25 @@ nginx_service_name: nginx
 nginx_config_dir: /etc/nginx/conf.d
 nginx_config_path: /etc/nginx/conf.d/frameworks.conf
 nginx_https_port: 443
+# Distros put the nginx binary in different places (/usr/sbin on Debian,
+# /usr/bin on some Arch builds). The reload service unit's ExecStartPre
+# uses this so `nginx -t` is found regardless.
+nginx_binary_path: /usr/sbin/nginx
+nginx_openssl_package_by_family:
+  Debian: openssl
+  Archlinux: openssl
+  RedHat: openssl
+# Authoritative source: pkg/ingress.TLSRoot (Go). The CLI passes that
+# value into nginxRoleVars on every CLI-driven run, so this default is
+# only consulted by molecule / standalone role invocations and must be
+# kept in lockstep with the Go constant. Not operator-overridable — both
+# the nginx config and Privateer's writer derive from pkg/ingress.
+nginx_ingress_tls_root: /etc/frameworks/ingress/tls
+# Authoritative source: pkg/ingress.ReloadTrigger (Go). Same lockstep
+# rule as nginx_ingress_tls_root. The reload chain is:
+#   Privateer rewrites this file in-place ->
+#   frameworks-nginx-reload.path (root) sees PathModified ->
+#   frameworks-nginx-reload.service runs `nginx -t && systemctl reload`.
+# The nginx role pre-creates the file so the path watch latches onto a
+# stable inode; Privateer owns the file so it can rewrite it without sudo.
+nginx_ingress_reload_trigger: /etc/frameworks/ingress/reload.trigger

@@ -1,0 +1,63 @@
+---
+# Install the systemd path + oneshot service that watches Privateer's
+# ingress reload trigger file. Privateer runs as the `privateer` user and
+# cannot invoke `systemctl reload` directly; this root-owned pair bridges
+# the gap by reacting to file changes that Privateer is allowed to write.
+#
+# Pre-create the trigger file with privateer ownership so:
+#   - the systemd path unit can latch onto a stable inode at startup
+#   - Privateer can rewrite the file in-place (open O_TRUNC + write) on
+#     each rotation, which is what systemd.path's PathModified semantics
+#     are documented to react to. Atomic-rename swaps would change the
+#     inode under the watch.
+
+- name: Ensure ingress reload trigger parent directory
+  ansible.builtin.file:
+    path: "{{ nginx_ingress_reload_trigger | dirname }}"
+    state: directory
+    owner: privateer
+    group: privateer
+    mode: "0750"
+  when: not ansible_check_mode
+
+- name: Pre-create ingress reload trigger file
+  ansible.builtin.copy:
+    dest: "{{ nginx_ingress_reload_trigger }}"
+    content: ""
+    owner: privateer
+    group: privateer
+    mode: "0644"
+    force: false
+  when: not ansible_check_mode
+
+- name: Render frameworks-nginx-reload.service unit
+  ansible.builtin.template:
+    src: frameworks-nginx-reload.service.j2
+    dest: /etc/systemd/system/frameworks-nginx-reload.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: nginx_reload_service_unit
+
+- name: Render frameworks-nginx-reload.path unit
+  ansible.builtin.template:
+    src: frameworks-nginx-reload.path.j2
+    dest: /etc/systemd/system/frameworks-nginx-reload.path
+    owner: root
+    group: root
+    mode: "0644"
+  register: nginx_reload_path_unit
+
+- name: Reload systemd to pick up nginx reload units
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - nginx_reload_service_unit.changed or nginx_reload_path_unit.changed
+
+- name: Enable and start frameworks-nginx-reload.path
+  ansible.builtin.systemd:
+    name: frameworks-nginx-reload.path
+    enabled: true
+    state: started
+  when: not ansible_check_mode
