@@ -24,12 +24,12 @@
   },
   "devDependencies": {
     "concurrently": "^9.0.1",
-    "eslint": "^10.2.0",
-    "eslint-plugin-svelte": "^3.17.0",
+    "eslint": "^10.2.1",
+    "eslint-plugin-svelte": "^3.17.1",
     "globals": "^17.3.0",
     "svelte-eslint-parser": "^1.5.1",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.58.1"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.0"
   },
   "author": "Livepeer FrameWorks",
   "license": "Unlicense"
