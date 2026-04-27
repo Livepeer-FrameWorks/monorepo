@@ -141,18 +141,6 @@ func buildClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, bool, error) {
 	}, false, nil
 }
 
-func loadCertPool(path string) (*x509.CertPool, error) {
-	pem, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read CA cert %q: %w", path, err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("append CA cert %q: invalid PEM", path)
-	}
-	return pool, nil
-}
-
 func logInsecureAllowed(logger logging.Logger, component string) {
 	if logger == nil {
 		return

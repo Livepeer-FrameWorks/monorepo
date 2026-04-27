@@ -9,7 +9,6 @@ import (
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
-	"frameworks/cli/internal/readiness"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
@@ -198,8 +197,11 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 	return nil
 }
 
-// printStatusControlPlaneSection runs ControlPlaneReadiness without
-// SOPS and renders the report. No service token means Checked=false.
+// printStatusControlPlaneSection runs ControlPlaneReadiness without SOPS and
+// renders the report. Without a service token the readiness checks return
+// Checked=false unless endpoint resolution itself fails — in that case
+// buildControlPlaneReport surfaces the failure as a warning and forces
+// Checked=true so the policy gate cannot read silent failure as success.
 func printStatusControlPlaneSection(cmd *cobra.Command, manifest *inventory.Manifest) {
 	out := cmd.OutOrStdout()
 	cfg, err := fwcfg.Load()
@@ -211,24 +213,16 @@ func printStatusControlPlaneSection(cmd *cobra.Command, manifest *inventory.Mani
 		return
 	}
 
-	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002)    //nolint:errcheck // empty on miss is the intent
-	commodoreAddr, _ := resolveServiceGRPCAddr(manifest, "commodore", 19001) //nolint:errcheck // empty on miss is the intent
-	purserAddr, _ := resolveServiceGRPCAddr(manifest, "purser", 19003)       //nolint:errcheck // empty on miss is the intent
+	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002) //nolint:errcheck // empty on miss is the intent
 
-	var pricings []readiness.ClusterPricing
-	for clusterID, cc := range manifest.Clusters {
-		if cc.Pricing != nil {
-			pricings = append(pricings, readiness.ClusterPricing{ClusterID: clusterID})
-		}
-	}
-
-	report := readiness.ControlPlaneReadiness(cmd.Context(), readiness.ControlPlaneInputs{
-		SystemTenantID:    active.SystemTenantID,
-		QuartermasterAddr: qmAddr,
-		CommodoreAddr:     commodoreAddr,
-		PurserAddr:        purserAddr,
-		DeclaredPricings:  pricings,
-	})
+	// Route through buildControlPlaneReport so endpoint-resolution failures
+	// surface as warnings instead of degrading silently to Checked=false.
+	// Status has no service token, so ControlPlaneReadiness returns
+	// Checked=false unless resolution itself fails — and that case still
+	// produces a warning via endpointResolutionWarnings.
+	report := buildControlPlaneReport(cmd.Context(), manifest, map[string]any{
+		"system_tenant_id": active.SystemTenantID,
+	}, nil)
 
 	fmt.Fprintln(out, "")
 	ux.Subheading(out, "Control Plane:")

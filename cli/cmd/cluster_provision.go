@@ -31,8 +31,6 @@ import (
 	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
 	fwsops "frameworks/cli/pkg/sops"
-	commodoreCli "frameworks/pkg/clients/commodore"
-	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
 	infra "frameworks/pkg/models"
@@ -41,6 +39,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
+	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
 	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/ingress"
@@ -318,7 +317,7 @@ func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *i
 	// --ready's init+seed chain. The earlier validateControlPlane call
 	// inside postProvisionFinalize may have seen pre-init state.
 	adminBootstrapped, _ := cmd.Flags().GetString("bootstrap-admin-email") //nolint:errcheck // flag always exists
-	report := buildControlPlaneReport(ctx, manifest, collectRuntimeForReadinessOnly(cmd, manifest))
+	report := buildControlPlaneReport(ctx, manifest, collectRuntimeForReadinessOnly(cmd, manifest), nil)
 
 	// If the readiness check couldn't run (no service token), we don't know
 	// whether an admin account exists — report state honestly as "unknown"
@@ -394,11 +393,11 @@ func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *i
 	ux.PrintNextSteps(out, steps)
 }
 
-func collectRuntimeForReadinessOnly(_ *cobra.Command, manifest *inventory.Manifest) map[string]interface{} {
+func collectRuntimeForReadinessOnly(_ *cobra.Command, manifest *inventory.Manifest) map[string]any {
 	// Re-resolve what we need from manifest + shared env just for the final
 	// readiness recheck. Keep this separate from the provision runtimeData
 	// map so changes to one don't leak into the other.
-	data := map[string]interface{}{}
+	data := map[string]any{}
 	if qmAddr, err := resolveServiceGRPCAddr(manifest, "quartermaster", 19002); err == nil {
 		data["quartermaster_grpc_addr"] = qmAddr
 	}
@@ -462,13 +461,30 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	var completed []provisionedTask
 
 	// Execute each batch sequentially
-	runtimeData := make(map[string]interface{})
+	runtimeData := make(map[string]any)
 
 	// Seed service_token from the preloaded shared env. All downstream callers
 	// (bootstrap auth, service env builders, QM self-seed) read this key.
 	if token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]); token != "" {
 		runtimeData["service_token"] = token
 	}
+
+	// Bootstrap and finalization helpers dial Quartermaster / Purser /
+	// Commodore from the operator host. When the operator is off-mesh those
+	// gRPC endpoints are unreachable directly, so route every operator-
+	// originated call through SSH local-forwards. The session is closed when
+	// executeProvision returns, releasing all tunnels. It is passed
+	// explicitly to the helpers that need it — keeping it out of runtimeData
+	// avoids leaking a live control object into provisioner metadata.
+	raSession, raErr := remoteaccess.OpenSession(remoteaccess.Options{
+		Manifest:      manifest,
+		SSHKeyPath:    sshKey,
+		AllowInsecure: isDevProfile(manifest),
+	})
+	if raErr != nil {
+		return fmt.Errorf("open remote-access session: %w", raErr)
+	}
+	defer raSession.Close()
 
 	if err := ensureProvisionGeoIP(ctx, cmd.OutOrStdout(), manifest, manifestDir, sharedEnv, sshPool); err != nil {
 		return err
@@ -494,7 +510,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			task        *orchestrator.Task
 			host        inventory.Host
 			outcome     *taskProvisionOutcome
-			runtimeData map[string]interface{} // per-task copy; new keys merged back after batch
+			runtimeData map[string]any // per-task copy; new keys merged back after batch
 		}
 
 		var (
@@ -514,7 +530,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			// Snapshot runtimeData so each goroutine has its own copy.
 			// New keys written by provisioning helpers (enrollment tokens,
 			// telemetry keys) are collected per-task and merged back sequentially.
-			taskRD := make(map[string]interface{}, len(runtimeData))
+			taskRD := make(map[string]any, len(runtimeData))
 			for k, v := range runtimeData {
 				taskRD[k] = v
 			}
@@ -571,7 +587,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			if r.task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
 				bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-				result, err := runBootstrap(bootstrapCtx, cmd.OutOrStdout(), manifest, runtimeData)
+				result, err := runBootstrap(bootstrapCtx, cmd.OutOrStdout(), manifest, runtimeData, raSession)
 				bootstrapCancel()
 				if err != nil {
 					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap failed: %v", err))
@@ -593,18 +609,18 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			}
 
 			regCtx, regCancel := context.WithTimeout(ctx, 15*time.Second)
-			if err := maybeRegisterPublicServiceInstance(regCtx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, manifestDir, sharedEnv, releaseRepos); err != nil {
+			if err := maybeRegisterPublicServiceInstance(regCtx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, raSession, manifestDir, sharedEnv, releaseRepos); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", r.task.Name, err)
 			}
 			regCancel()
 			ingressCtx, ingressCancel := context.WithTimeout(ctx, 15*time.Second)
-			if err := maybeRegisterIngressDesiredState(ingressCtx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData); err != nil {
+			if err := maybeRegisterIngressDesiredState(ingressCtx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, raSession); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: ingress desired state registration skipped for %s: %v\n", r.task.Name, err)
 			}
 			ingressCancel()
 		}
 
-		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData); err != nil {
+		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData, raSession); err != nil {
 			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Foghorn reconciliation failed: %v", err))
 			fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
@@ -665,7 +681,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	}
 
 	// Post-provision: bootstrap Purser cluster pricing, admin user, control-plane validation
-	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData); err != nil {
+	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData, raSession); err != nil {
 		return err
 	}
 
@@ -674,7 +690,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 // postProvisionFinalize handles Purser pricing bootstrap, optional admin user creation,
 // and control-plane validation after all service batches are complete.
-func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
 	systemTenantID, ok := runtimeData["system_tenant_id"].(string)
 	serviceToken, stOK := runtimeData["service_token"].(string)
 
@@ -688,20 +704,20 @@ func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *in
 	fmt.Fprintln(cmd.OutOrStdout(), "  Control-plane finalization...")
 
 	// 1. Bootstrap Purser cluster pricing for clusters with manifest pricing config
-	if err := maybeBootstrapClusterPricing(ctx, cmd, manifest, serviceToken); err != nil {
+	if err := maybeBootstrapClusterPricing(ctx, cmd, manifest, runtimeData, sess, serviceToken); err != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: cluster pricing bootstrap failed: %v\n", err)
 	}
 
 	// 2. Optional bootstrap admin user
-	if err := maybeBootstrapAdminUser(ctx, cmd, manifest, systemTenantID, serviceToken); err != nil {
+	if err := maybeBootstrapAdminUser(ctx, cmd, manifest, runtimeData, sess, systemTenantID, serviceToken); err != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: bootstrap admin user creation failed: %v\n", err)
 	}
 
 	// 3. Control-plane validation
-	return validateControlPlane(ctx, cmd, manifest, runtimeData)
+	return validateControlPlane(ctx, cmd, manifest, runtimeData, sess)
 }
 
-func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, serviceToken string) error {
+func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session, serviceToken string) error {
 	hasPricingClusters := false
 	for _, cc := range manifest.Clusters {
 		if cc.Pricing != nil {
@@ -713,17 +729,7 @@ func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manif
 		return nil
 	}
 
-	purserAddr, err := resolveServiceGRPCAddr(manifest, "purser", 19003)
-	if err != nil {
-		return fmt.Errorf("cannot resolve Purser address: %w", err)
-	}
-
-	p, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:      purserAddr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: isDevProfile(manifest),
-	})
+	p, err := newPurserClient(ctx, manifest, runtimeData, sess, serviceToken)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Purser gRPC: %w", err)
 	}
@@ -745,7 +751,7 @@ func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manif
 			req.AllowFreeTier = cc.Pricing.AllowFreeTier
 		}
 		if len(cc.Pricing.DefaultQuotas) > 0 {
-			m := make(map[string]interface{}, len(cc.Pricing.DefaultQuotas))
+			m := make(map[string]any, len(cc.Pricing.DefaultQuotas))
 			for k, v := range cc.Pricing.DefaultQuotas {
 				m[k] = float64(v)
 			}
@@ -763,7 +769,7 @@ func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manif
 	return nil
 }
 
-func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, systemTenantID, serviceToken string) error {
+func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session, systemTenantID, serviceToken string) error {
 	email, err := cmd.Flags().GetString("bootstrap-admin-email")
 	if err != nil || email == "" {
 		// No bootstrap email provided. The readiness report at the end
@@ -798,17 +804,7 @@ func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *
 	firstName, _ := cmd.Flags().GetString("bootstrap-admin-first-name") //nolint:errcheck // flag always exists
 	lastName, _ := cmd.Flags().GetString("bootstrap-admin-last-name")   //nolint:errcheck // flag always exists
 
-	commodoreAddr, err := resolveServiceGRPCAddr(manifest, "commodore", 19001)
-	if err != nil {
-		return fmt.Errorf("cannot resolve Commodore address: %w", err)
-	}
-
-	cli, err := commodoreCli.NewGRPCClient(commodoreCli.GRPCConfig{
-		GRPCAddr:      commodoreAddr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: isDevProfile(manifest),
-	})
+	cli, err := newCommodoreClient(ctx, manifest, runtimeData, sess, serviceToken)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Commodore gRPC: %w", err)
 	}
@@ -830,8 +826,8 @@ func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *
 	return nil
 }
 
-func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
-	report := buildControlPlaneReport(ctx, manifest, runtimeData)
+func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
+	report := buildControlPlaneReport(ctx, manifest, runtimeData, sess)
 	runtimeData["control_plane_report"] = report
 
 	if len(report.Warnings) == 0 {
@@ -857,10 +853,9 @@ func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inv
 // runtime data and delegates to readiness.ControlPlaneReadiness. Callers
 // that only need the report (without printing / policy) can use this
 // directly — cluster doctor and status do.
-func buildControlPlaneReport(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}) readiness.Report {
+func buildControlPlaneReport(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) readiness.Report {
 	systemTenantID, _ := runtimeData["system_tenant_id"].(string) //nolint:errcheck // zero value on missing key is the intent
 	serviceToken, _ := runtimeData["service_token"].(string)      //nolint:errcheck // zero value on missing key is the intent
-	qmAddr, _ := runtimeData["quartermaster_grpc_addr"].(string)  //nolint:errcheck // zero value on missing key is the intent
 
 	var pricings []readiness.ClusterPricing
 	for clusterID, cc := range manifest.Clusters {
@@ -869,18 +864,77 @@ func buildControlPlaneReport(ctx context.Context, manifest *inventory.Manifest, 
 		}
 	}
 
-	commodoreAddr, _ := resolveServiceGRPCAddr(manifest, "commodore", 19001) //nolint:errcheck // missing address degrades readiness to no-op
-	purserAddr, _ := resolveServiceGRPCAddr(manifest, "purser", 19003)       //nolint:errcheck // missing address degrades readiness to no-op
+	caPEM := internalCAFromRuntime(runtimeData)
 
-	return readiness.ControlPlaneReadiness(ctx, readiness.ControlPlaneInputs{
-		SystemTenantID:    systemTenantID,
-		ServiceToken:      serviceToken,
-		QuartermasterAddr: qmAddr,
-		CommodoreAddr:     commodoreAddr,
-		PurserAddr:        purserAddr,
-		AllowInsecure:     isDevProfile(manifest),
-		DeclaredPricings:  pricings,
+	// Resolve every endpoint up front so a tunnel/dial-resolution failure
+	// surfaces as a warning rather than degrading silently to Checked=false.
+	// validateControlPlane treats len(Warnings)==0 as success, so silent
+	// resolution failures must not be possible during provisioning.
+	qm, qmErr := serviceEndpointFor(ctx, manifest, sess, "quartermaster", 19002, caPEM)
+	commodore, commodoreErr := serviceEndpointFor(ctx, manifest, sess, "commodore", 19001, caPEM)
+	purser, purserErr := serviceEndpointFor(ctx, manifest, sess, "purser", 19003, caPEM)
+
+	report := readiness.ControlPlaneReadiness(ctx, readiness.ControlPlaneInputs{
+		SystemTenantID:   systemTenantID,
+		ServiceToken:     serviceToken,
+		Quartermaster:    qm,
+		Commodore:        commodore,
+		Purser:           purser,
+		DeclaredPricings: pricings,
 	})
+
+	resolutionWarnings := endpointResolutionWarnings(sess, qmErr, commodoreErr, purserErr)
+	if len(resolutionWarnings) > 0 {
+		// Endpoint resolution failed but we attempted; surface as warnings
+		// and force Checked=true so the policy gate cannot read this as
+		// "everything is fine, no warnings".
+		report.Warnings = append(resolutionWarnings, report.Warnings...)
+		report.Checked = true
+	}
+	return report
+}
+
+// endpointResolutionWarnings turns endpoint resolution errors into readiness
+// warnings. When sess is non-nil (provisioning), every error is a warning —
+// it almost certainly indicates an SSH tunnel failure or a manifest gap that
+// will block real calls. When sess is nil (doctor / status), Quartermaster
+// is the only required endpoint; missing Commodore/Purser entries in the
+// manifest are normal and silenced.
+func endpointResolutionWarnings(sess *remoteaccess.Session, qmErr, commodoreErr, purserErr error) []readiness.Warning {
+	var ws []readiness.Warning
+	add := func(subject, name string, err error) {
+		if err == nil {
+			return
+		}
+		ws = append(ws, readiness.Warning{
+			Subject: subject,
+			Detail:  fmt.Sprintf("Could not resolve %s endpoint: %v", name, err),
+		})
+	}
+	add("control-plane.quartermaster", "Quartermaster", qmErr)
+	if sess != nil {
+		add("control-plane.commodore", "Commodore", commodoreErr)
+		add("control-plane.purser", "Purser", purserErr)
+	}
+	return ws
+}
+
+// serviceEndpointFor builds a readiness.ServiceEndpoint by routing through
+// resolveServiceDial and returns the underlying error so callers can decide
+// how to surface it. An empty endpoint accompanies the error so a caller
+// that chooses to ignore it (read-only commands skipping optional services)
+// gets a value the readiness check treats as "skip".
+func serviceEndpointFor(ctx context.Context, manifest *inventory.Manifest, sess *remoteaccess.Session, name string, defaultPort int, caPEM string) (readiness.ServiceEndpoint, error) {
+	addr, serverName, insecure, err := resolveServiceDial(ctx, manifest, sess, name, defaultPort)
+	if err != nil {
+		return readiness.ServiceEndpoint{}, err
+	}
+	return readiness.ServiceEndpoint{
+		GRPCAddr:      addr,
+		ServerName:    serverName,
+		AllowInsecure: insecure,
+		CACertPEM:     caPEM,
+	}, nil
 }
 
 // resolveServiceGRPCAddr resolves a service's gRPC address from the manifest.
@@ -915,12 +969,12 @@ func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, de
 	return fmt.Sprintf("%s:%d", addr, grpcPort), nil
 }
 
-func maybeReconcileBatchFoghornAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
+func maybeReconcileBatchFoghornAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
 	if !batchContainsService(batch, "foghorn") {
 		return nil
 	}
 
-	return reconcileFoghornClusterAssignments(ctx, cmd, manifest, runtimeData)
+	return reconcileFoghornClusterAssignments(ctx, cmd, manifest, runtimeData, sess)
 }
 
 // batchContainsPrivateer returns true if any task in the batch is a Privateer deployment.
@@ -1132,7 +1186,7 @@ type ingressDesiredStateRegistrar interface {
 	UpsertIngressSite(ctx context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error)
 }
 
-func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData map[string]interface{}) (string, string, error) {
+func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData map[string]any) (string, string, error) {
 	var serviceToken string
 	if v, ok := runtimeData["service_token"].(string); ok {
 		serviceToken = strings.TrimSpace(v)
@@ -1167,20 +1221,7 @@ func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData m
 	return serviceToken, fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort), nil
 }
 
-func quartermasterClientConfig(manifest *inventory.Manifest, runtimeData map[string]interface{}, grpcAddr, serviceToken string) quartermaster.GRPCConfig {
-	cfg := quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: isDevProfile(manifest),
-	}
-	if pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap); ok && pki != nil {
-		cfg.CACertPEM = pki.CABundlePEM
-	}
-	return cfg
-}
-
-func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]interface{}) error {
+func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]any) error {
 	if runtimeData == nil {
 		return fmt.Errorf("runtime data is nil")
 	}
@@ -1467,7 +1508,7 @@ func bootstrapInternalCertSANs(serviceName, clusterID, rootDomain string, host i
 	return dnsNames, ipAddresses
 }
 
-func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
+func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]any, sess *remoteaccess.Session, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
 	if outcome == nil || outcome.deferred || !outcome.running {
 		return nil
 	}
@@ -1477,22 +1518,22 @@ func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, mani
 		return nil
 	}
 
-	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
-	if err != nil {
-		return err
-	}
-
-	client, err := quartermaster.NewGRPCClient(quartermasterClientConfig(manifest, runtimeData, grpcAddr, serviceToken))
+	client, err := newQuartermasterClient(ctx, manifest, runtimeData, sess)
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for public service registration: %w", err)
 	}
 	defer client.Close()
 
-	runtimeData["quartermaster_grpc_addr"] = grpcAddr
+	// Stash the manifest-resolved Quartermaster address so downstream tasks
+	// see the cluster-side endpoint (mesh/external IP), never the operator-
+	// side loopback that an SSH tunnel would have produced.
+	if qmAddr, err := resolveServiceGRPCAddr(manifest, "quartermaster", 19002); err == nil {
+		runtimeData["quartermaster_grpc_addr"] = qmAddr
+	}
 	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, runtimeData, manifestDir, sharedEnv, releaseRepos, client)
 }
 
-func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}) error {
+func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]any, sess *remoteaccess.Session) error {
 	if outcome == nil || outcome.deferred || !outcome.running {
 		return nil
 	}
@@ -1500,12 +1541,7 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 		return nil
 	}
 
-	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
-	if err != nil {
-		return err
-	}
-
-	client, err := quartermaster.NewGRPCClient(quartermasterClientConfig(manifest, runtimeData, grpcAddr, serviceToken))
+	client, err := newQuartermasterClient(ctx, manifest, runtimeData, sess)
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for ingress desired state: %w", err)
 	}
@@ -1514,7 +1550,7 @@ func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manife
 	return registerIngressDesiredStateWithClient(ctx, out, manifest, task, client)
 }
 
-func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string, registrar publicServiceRegistrar) error {
+func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, releaseRepos []string, registrar publicServiceRegistrar) error {
 	serviceName := task.ServiceID
 	serviceType, ok := publicServiceType(serviceName)
 	if !ok || selfRegisters(serviceName) {
@@ -1607,7 +1643,7 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 		}
 	}
 
-	localSvcs := make(map[string]interface{})
+	localSvcs := make(map[string]any)
 	addLocalProxyRoutes(localSvcs, task.Host, manifest.Services, task.Type)
 	addLocalProxyRoutes(localSvcs, task.Host, manifest.Interfaces, task.Type)
 	addLocalProxyRoutes(localSvcs, task.Host, manifest.Observability, task.Type)
@@ -1635,7 +1671,7 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 			continue
 		}
 
-		metadata := map[string]interface{}{}
+		metadata := map[string]any{}
 		switch name {
 		case "bridge":
 			metadata["websocket_path"] = "/graphql/ws"
@@ -1738,11 +1774,11 @@ func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, m
 	return nil
 }
 
-func stringMapToInterfaceMap(values map[string]string) map[string]interface{} {
+func stringMapToInterfaceMap(values map[string]string) map[string]any {
 	if len(values) == 0 {
 		return nil
 	}
-	result := make(map[string]interface{}, len(values))
+	result := make(map[string]any, len(values))
 	for key, value := range values {
 		result[key] = value
 	}
@@ -1822,20 +1858,13 @@ func autoIngressDomains(serviceName string, manifest *inventory.Manifest, cluste
 	return []string{fqdn}, tlsBundleID("wildcard", rootDomain)
 }
 
-func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
-	grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string)
-	if !ok {
-		grpcAddr = ""
-	}
-	serviceToken, ok := runtimeData["service_token"].(string)
-	if !ok {
-		serviceToken = ""
-	}
-	if grpcAddr == "" || serviceToken == "" {
-		return fmt.Errorf("missing Quartermaster connection info for foghorn reconciliation")
+func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
+	token, ok := runtimeData["service_token"].(string)
+	if !ok || token == "" {
+		return fmt.Errorf("missing Quartermaster connection info for foghorn reconciliation: service_token not set")
 	}
 
-	client, err := quartermaster.NewGRPCClient(quartermasterClientConfig(manifest, runtimeData, grpcAddr, serviceToken))
+	client, err := newQuartermasterClient(ctx, manifest, runtimeData, sess)
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for foghorn reconciliation: %w", err)
 	}
@@ -1883,12 +1912,12 @@ func reconcileFoghornClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 }
 
 // buildTaskConfig creates a ServiceConfig for a task.
-func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, force bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
+func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, force bool, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
 	config := provisioner.ServiceConfig{
 		Mode:     "docker",
 		Version:  "stable",
 		Port:     provisioner.ServicePorts[task.Type],
-		Metadata: make(map[string]interface{}),
+		Metadata: make(map[string]any),
 		Force:    force,
 	}
 
@@ -2255,7 +2284,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		if clusterID == "" {
 			clusterID = manifest.ResolveCluster(task.Type)
 		}
-		localSvcs := make(map[string]interface{})
+		localSvcs := make(map[string]any)
 		addLocalProxyRoutes(localSvcs, task.Host, manifest.Services, task.Type)
 		addLocalProxyRoutes(localSvcs, task.Host, manifest.Interfaces, task.Type)
 		addLocalProxyRoutes(localSvcs, task.Host, manifest.Observability, task.Type)
@@ -2392,7 +2421,7 @@ func ensureProvisionGeoIP(ctx context.Context, out io.Writer, manifest *inventor
 	return nil
 }
 
-func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []map[string]interface{} {
+func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []map[string]any {
 	if manifest == nil || hostName == "" {
 		return nil
 	}
@@ -2481,9 +2510,9 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		return targets[i].name < targets[j].name
 	})
 
-	result := make([]map[string]interface{}, 0, len(targets))
+	result := make([]map[string]any, 0, len(targets))
 	for _, tgt := range targets {
-		result = append(result, map[string]interface{}{
+		result = append(result, map[string]any{
 			"job_name": tgt.name,
 			"targets":  []string{fmt.Sprintf("127.0.0.1:%d", tgt.port)},
 			"path":     tgt.path,
@@ -2676,7 +2705,7 @@ var proxyRouteServiceNames = map[string]struct{}{
 	"vmauth":    {},
 }
 
-func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, clusterID string) []map[string]interface{} {
+func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, clusterID string) []map[string]any {
 	if manifest == nil || hostName == "" || clusterID == "" {
 		return nil
 	}
@@ -2699,7 +2728,7 @@ func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, cluste
 	if err != nil || port == 0 {
 		port = provisioner.ServicePorts["vmauth"]
 	}
-	return []map[string]interface{}{
+	return []map[string]any{
 		{
 			"name":         "telemetry",
 			"server_names": []string{fqdn},
@@ -2708,7 +2737,7 @@ func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, cluste
 	}
 }
 
-func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID string, localSvcs map[string]interface{}, extraRoutes any) []map[string]any {
+func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID string, localSvcs map[string]any, extraRoutes any) []map[string]any {
 	if manifest == nil || hostName == "" || clusterID == "" {
 		return nil
 	}
@@ -2914,14 +2943,14 @@ func stringFromAny(v any) (string, bool) {
 	return s, ok
 }
 
-func proxyRouteSliceFromAny(v any) []map[string]interface{} {
+func proxyRouteSliceFromAny(v any) []map[string]any {
 	switch typed := v.(type) {
-	case []map[string]interface{}:
+	case []map[string]any:
 		return typed
-	case []interface{}:
-		out := make([]map[string]interface{}, 0, len(typed))
+	case []any:
+		out := make([]map[string]any, 0, len(typed))
 		for _, item := range typed {
-			if route, ok := item.(map[string]interface{}); ok {
+			if route, ok := item.(map[string]any); ok {
 				out = append(out, route)
 			}
 		}
@@ -2935,7 +2964,7 @@ func stringMapFromAny(v any) map[string]string {
 	switch typed := v.(type) {
 	case map[string]string:
 		return typed
-	case map[string]interface{}:
+	case map[string]any:
 		out := make(map[string]string, len(typed))
 		for key, value := range typed {
 			if s, ok := value.(string); ok {
@@ -2952,7 +2981,7 @@ func stringSliceFromAny(v any) []string {
 	switch typed := v.(type) {
 	case []string:
 		return typed
-	case []interface{}:
+	case []any:
 		out := make([]string, 0, len(typed))
 		for _, item := range typed {
 			if s, ok := item.(string); ok && s != "" {
@@ -2965,7 +2994,7 @@ func stringSliceFromAny(v any) []string {
 	}
 }
 
-func addLocalProxyRoutes(routes map[string]interface{}, hostName string, services map[string]inventory.ServiceConfig, skipName string) {
+func addLocalProxyRoutes(routes map[string]any, hostName string, services map[string]inventory.ServiceConfig, skipName string) {
 	for name, svc := range services {
 		if !svc.Enabled || name == skipName {
 			continue
@@ -3138,10 +3167,10 @@ func buildInitialControllers(manifest *inventory.Manifest) string {
 	return strings.Join(parts, ",")
 }
 
-func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface{} {
-	metadata := make([]map[string]interface{}, 0, len(topics))
+func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]any {
+	metadata := make([]map[string]any, 0, len(topics))
 	for _, topic := range topics {
-		metadata = append(metadata, map[string]interface{}{
+		metadata = append(metadata, map[string]any{
 			"name":               topic.Name,
 			"partitions":         topic.Partitions,
 			"replication_factor": topic.ReplicationFactor,
@@ -3153,8 +3182,8 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface
 
 // extractInfraCredentials picks database credentials out of the preloaded
 // shared env for infrastructure Initialize/Configure steps.
-func extractInfraCredentials(env map[string]string) map[string]interface{} {
-	result := make(map[string]interface{})
+func extractInfraCredentials(env map[string]string) map[string]any {
+	result := make(map[string]any)
 	if v := env["DATABASE_PASSWORD"]; v != "" {
 		result["postgres_password"] = v
 	}
@@ -3329,7 +3358,7 @@ ip -br addr show 2>/dev/null
 }
 
 // provisionTask provisions a single task
-func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (*taskProvisionOutcome, error) {
+func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (*taskProvisionOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -3340,11 +3369,11 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}
 
 	var beforeState *detect.ServiceState
-	if err := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
+	if phaseErr := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
 		var detectErr error
 		beforeState, detectErr = prov.Detect(phaseCtx, host)
 		return detectErr
-	}); err != nil {
+	}); phaseErr != nil {
 		beforeState = nil
 	}
 
@@ -3361,7 +3390,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		infraCreds := extractInfraCredentials(sharedEnv)
 		for k, v := range infraCreds {
 			if config.Metadata == nil {
-				config.Metadata = make(map[string]interface{})
+				config.Metadata = make(map[string]any)
 			}
 			config.Metadata[k] = v
 		}
@@ -3441,93 +3470,38 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}, nil
 }
 
-// seedQuartermasterMeshNodes upserts every WG-equipped manifest host into
-// QM's infrastructure_nodes. Runs right after the quartermaster task to prime
-// Quartermaster with the manifest view ahead of the next SyncMesh tick.
-func seedQuartermasterMeshNodes(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]interface{}) error {
-	if manifest == nil {
-		return nil
-	}
-	token, hasToken := runtimeData["service_token"].(string)
-	grpcAddr, hasAddr := runtimeData["quartermaster_grpc_addr"].(string)
-	if !hasToken {
-		token = ""
-	}
-	if !hasAddr {
-		grpcAddr = ""
-	}
-	if grpcAddr == "" {
-		_, addr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
-		if err != nil {
-			return fmt.Errorf("resolve quartermaster address: %w", err)
-		}
-		grpcAddr = addr
-	}
-	if token == "" || grpcAddr == "" {
-		return fmt.Errorf("missing service_token or quartermaster_grpc_addr in runtimeData")
-	}
-	client, err := quartermaster.NewGRPCClient(quartermasterClientConfig(manifest, runtimeData, grpcAddr, token))
-	if err != nil {
-		return fmt.Errorf("connect to quartermaster: %w", err)
-	}
-	defer client.Close()
-
-	for hostName, hostInfo := range manifest.Hosts {
-		if hostInfo.WireguardIP == "" && hostInfo.WireguardPublicKey == "" {
-			continue
-		}
-		clusterID := manifest.HostCluster(hostName)
-		nodeType := infra.NodeTypeCore
-		for _, role := range hostInfo.Roles {
-			if role == infra.NodeTypeEdge {
-				nodeType = infra.NodeTypeEdge
-				break
-			}
-		}
-		extIP := hostInfo.ExternalIP
-		wgIP := hostInfo.WireguardIP
-		wgPub := hostInfo.WireguardPublicKey
-		wgPort := int32(hostInfo.WireguardPort)
-
-		req := &pb.CreateNodeRequest{
-			NodeId:             hostName,
-			ClusterId:          clusterID,
-			NodeName:           hostName,
-			NodeType:           nodeType,
-			ExternalIp:         &extIP,
-			WireguardIp:        &wgIP,
-			WireguardPublicKey: &wgPub,
-		}
-		if wgPort > 0 {
-			req.WireguardPort = &wgPort
-		}
-
-		if _, err := client.CreateNode(ctx, req); err != nil {
-			if status.Code(err) != codes.AlreadyExists {
-				return fmt.Errorf("seed node %s: %w", hostName, err)
-			}
-		}
-	}
-	return nil
-}
-
 // bootstrapResult holds the output of the cluster bootstrap process.
 // ServiceToken is intentionally absent — the caller already holds the token
 // (it was passed in via runtimeData); copying it through the result struct
 // would duplicate a critical secret for no reason.
+//
+// QMGRPCAddr is the cluster-side Quartermaster address (mesh DNS / external
+// IP), not the address the operator dialed. The operator may have dialed
+// 127.0.0.1:<local> via an SSH tunnel; that endpoint is meaningful only on
+// the operator host, so it must never be propagated into runtime metadata
+// that ships to target hosts.
 type bootstrapResult struct {
 	SystemTenantID string
 	QMGRPCAddr     string
 }
 
 // runBootstrap connects to Quartermaster and generates infrastructure tokens
-func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manifest, runtimeData map[string]interface{}) (*bootstrapResult, error) {
-	serviceToken, grpcAddr, err := resolveQuartermasterRuntimeData(manifest, runtimeData)
+func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) (*bootstrapResult, error) {
+	serviceToken, grpcAddr, serverName, insecure, err := quartermasterDialEndpoint(ctx, manifest, runtimeData, sess)
 	if err != nil {
 		return nil, err
 	}
-	clientConfig := quartermasterClientConfig(manifest, runtimeData, grpcAddr, serviceToken)
-	clientConfig.Timeout = quartermasterRPCTimeout
+	clientConfig := quartermaster.GRPCConfig{
+		GRPCAddr:      grpcAddr,
+		Timeout:       quartermasterRPCTimeout,
+		Logger:        logging.NewLogger(),
+		ServiceToken:  serviceToken,
+		AllowInsecure: insecure,
+		ServerName:    serverName,
+	}
+	if pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap); ok && pki != nil {
+		clientConfig.CACertPEM = pki.CABundlePEM
+	}
 	client, err := quartermaster.NewGRPCClient(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
@@ -3777,9 +3751,16 @@ func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manife
 		}
 	}
 
+	clusterQMAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", 19002)
+	if addrErr != nil {
+		// Should not happen — bootstrap already proved Quartermaster is in
+		// the manifest — but degrade gracefully rather than crash. The dial
+		// address would be wrong here when tunneled.
+		clusterQMAddr = ""
+	}
 	return &bootstrapResult{
 		SystemTenantID: systemTenantID,
-		QMGRPCAddr:     grpcAddr,
+		QMGRPCAddr:     clusterQMAddr,
 	}, nil
 }
 
@@ -3864,7 +3845,7 @@ func publicServiceType(serviceName string) (string, bool) {
 	}
 }
 
-func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (map[string]string, error) {
+func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (map[string]string, error) {
 	if name != "livepeer-gateway" {
 		return nil, nil
 	}
@@ -3903,7 +3884,7 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 
 // buildServiceEnvVars generates merged environment variables for a service.
 // Merge order (later wins): auto-generated → shared env_files → per-service env_file → inline config.
-func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, perServiceEnvFile string, manifestDir string, sharedEnv map[string]string) (map[string]string, error) {
+func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, perServiceEnvFile string, manifestDir string, sharedEnv map[string]string) (map[string]string, error) {
 	env := make(map[string]string)
 
 	// 1. Auto-generated infrastructure env vars

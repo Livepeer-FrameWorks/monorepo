@@ -50,6 +50,7 @@ type GRPCConfig struct {
 	// TLS configuration for the gRPC connection.
 	AllowInsecure bool
 	CACertFile    string
+	CACertPEM     string
 	ServerName    string
 }
 
@@ -58,7 +59,7 @@ type GRPCConfig struct {
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		// Extract user context from Go context and add to gRPC metadata
 		md := metadata.MD{}
 
@@ -102,6 +103,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	tlsCfg := grpcutil.ClientTLSConfig{
 		CACertFile:    config.CACertFile,
+		CACertPEM:     config.CACertPEM,
 		ServerName:    config.ServerName,
 		AllowInsecure: config.AllowInsecure,
 	}

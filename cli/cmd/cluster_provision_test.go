@@ -7,9 +7,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
+	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/pkg/ingress"
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/servicedefs"
@@ -130,7 +132,7 @@ func TestMaybeReconcileBatchFoghornAssignmentsSkipsBatchWithoutFoghorn(t *testin
 		{Name: "bridge@core-1", Type: "bridge", ServiceID: "bridge", InstanceID: "core-1", Host: "core-1"},
 	}
 
-	if err := maybeReconcileBatchFoghornAssignments(context.Background(), cmd, batch, manifest, map[string]interface{}{}); err != nil {
+	if err := maybeReconcileBatchFoghornAssignments(context.Background(), cmd, batch, manifest, map[string]any{}, nil); err != nil {
 		t.Fatalf("expected no error for non-foghorn batch, got %v", err)
 	}
 	if out.Len() != 0 {
@@ -151,7 +153,7 @@ func TestMaybeReconcileBatchFoghornAssignmentsRequiresQuartermasterRuntimeData(t
 		{Name: "foghorn@core-1", Type: "foghorn", ServiceID: "foghorn", InstanceID: "core-1", Host: "core-1"},
 	}
 
-	err := maybeReconcileBatchFoghornAssignments(context.Background(), cmd, batch, manifest, map[string]interface{}{})
+	err := maybeReconcileBatchFoghornAssignments(context.Background(), cmd, batch, manifest, map[string]any{}, nil)
 	if err == nil {
 		t.Fatal("expected missing runtime data error")
 	}
@@ -421,7 +423,7 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 		},
 	}
 
-	metadata, err := serviceRegistrationMetadata("livepeer-gateway", "central-eu-1", "media-central-primary", manifest, map[string]interface{}{}, "", testLoadSharedEnv(t, manifest), nil)
+	metadata, err := serviceRegistrationMetadata("livepeer-gateway", "central-eu-1", "media-central-primary", manifest, map[string]any{}, "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("serviceRegistrationMetadata returned error: %v", err)
 	}
@@ -502,7 +504,7 @@ func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -537,7 +539,7 @@ func TestBuildServiceEnvVarsDerivesSharedRuntimeValues(t *testing.T) {
 		Name:      "foghorn",
 		Type:      "foghorn",
 		ServiceID: "foghorn",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -576,7 +578,7 @@ func TestBuildServiceEnvVarsDerivesRegionFromHostLabels(t *testing.T) {
 		Type:      "foghorn",
 		ServiceID: "foghorn",
 		Host:      "regional-us-1",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -637,7 +639,7 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -677,7 +679,7 @@ func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	_, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	_, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
 	if err == nil {
 		t.Fatal("expected managed CA env validation to fail")
 	}
@@ -713,7 +715,7 @@ func TestBuildServiceEnvVarsProductionAcceptsNavigatorManagedCABase64Env(t *test
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	if _, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest)); err != nil {
+	if _, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest)); err != nil {
 		t.Fatalf("expected base64 CA envs to satisfy prod validation, got %v", err)
 	}
 }
@@ -772,7 +774,7 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -831,7 +833,7 @@ func TestBuildServiceEnvVarsEscapesDatabaseURLPassword(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	env, err := buildServiceEnvVars(task, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -887,7 +889,7 @@ func TestBuildTaskConfigKafkaUsesMeshControllerQuorumAddresses(t *testing.T) {
 		Phase:      orchestrator.PhaseInfrastructure,
 	}
 
-	config, err := buildTaskConfig(task, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -938,7 +940,7 @@ func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *t
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseApplications,
 	}
-	runtimeData := map[string]interface{}{
+	runtimeData := map[string]any{
 		"service_token": "svc-token",
 	}
 	registrar := &fakePublicServiceRegistrar{}
@@ -984,7 +986,7 @@ func TestBuildTaskConfigSetsObservabilityComponent(t *testing.T) {
 		ServiceID: "vmagent",
 		Host:      "core-1",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1020,7 +1022,7 @@ func TestBuildTaskConfigBuildsProxySitesForReverseProxy(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1061,7 +1063,7 @@ func TestBuildTaskConfigAllowsNativeNginxProxySites(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1126,7 +1128,7 @@ func TestBuildTaskConfigManagedBundleIDHasCanonicalTLSPaths(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1186,7 +1188,7 @@ func TestBuildTaskConfigUnmanagedSiteRetainsManualTLSPaths(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1230,7 +1232,7 @@ func TestBuildTaskConfigDedupesProxySites(t *testing.T) {
 		Host:      "edge-1",
 		ClusterID: "media-a",
 		Phase:     orchestrator.PhaseInterfaces,
-	}, manifest, map[string]interface{}{}, false, "", map[string]string{}, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -1353,8 +1355,14 @@ func TestQuartermasterMeshGRPCAddrMissingService(t *testing.T) {
 	}
 }
 
-func TestResolveQuartermasterRuntimeDataPrefersMeshIP(t *testing.T) {
+// TestResolveServiceDialNoSessionPrefersMeshIP locks the no-session fallback:
+// when a Session is not in play (doctor / status callers, off-mesh provisioning
+// with --no-tunnel in the future), service-to-service addressing must still
+// prefer the mesh address over the public ExternalIP. The session path is
+// covered by remoteaccess.Session tests.
+func TestResolveServiceDialNoSessionPrefersMeshIP(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"core-1": {ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"},
 		},
@@ -1362,29 +1370,138 @@ func TestResolveQuartermasterRuntimeDataPrefersMeshIP(t *testing.T) {
 			"quartermaster": {Enabled: true, Host: "core-1", GRPCPort: 19002},
 		},
 	}
-	token, addr, err := resolveQuartermasterRuntimeData(manifest, map[string]interface{}{
-		"service_token": "secret",
-	})
+	addr, serverName, _, err := resolveServiceDial(context.Background(), manifest, nil, "quartermaster", 19002)
 	if err != nil {
-		t.Fatalf("resolveQuartermasterRuntimeData returned error: %v", err)
-	}
-	if token != "secret" {
-		t.Fatalf("token = %q, want secret", token)
+		t.Fatalf("resolveServiceDial returned error: %v", err)
 	}
 	if addr != "10.88.0.2:19002" {
 		t.Fatalf("addr = %q, want mesh address", addr)
 	}
+	if serverName != "" {
+		t.Fatalf("serverName = %q, want empty (no-session direct dial relies on dial-address default)", serverName)
+	}
 }
 
-func TestQuartermasterClientConfigUsesBootstrapCA(t *testing.T) {
-	cfg := quartermasterClientConfig(&inventory.Manifest{Profile: "prod"}, map[string]interface{}{
-		"internal_pki_bootstrap": &internalPKIBootstrap{CABundlePEM: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"},
-	}, "10.88.0.2:19002", "secret")
-	if cfg.CACertPEM == "" {
-		t.Fatal("expected inline CA PEM in Quartermaster client config")
+// TestInternalCAFromRuntimeReturnsBootstrapPEM pins the wiring that feeds the
+// inline internal CA into every operator-originated gRPC client (Quartermaster,
+// Purser, Commodore) during bootstrap. If this returns empty when the bundle
+// is staged, non-dev profiles fall back to the system trust store and TLS
+// verification fails before the trust store is distributed.
+func TestInternalCAFromRuntimeReturnsBootstrapPEM(t *testing.T) {
+	const samplePEM = "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+	got := internalCAFromRuntime(map[string]any{
+		"internal_pki_bootstrap": &internalPKIBootstrap{CABundlePEM: samplePEM},
+	})
+	if got != samplePEM {
+		t.Fatalf("internalCAFromRuntime = %q, want bootstrap PEM", got)
 	}
-	if cfg.AllowInsecure {
-		t.Fatal("expected production client config to keep TLS enabled")
+
+	if internalCAFromRuntime(nil) != "" {
+		t.Fatal("nil runtimeData should yield empty CA PEM")
+	}
+	if internalCAFromRuntime(map[string]any{}) != "" {
+		t.Fatal("missing internal_pki_bootstrap key should yield empty CA PEM")
+	}
+	if internalCAFromRuntime(map[string]any{"internal_pki_bootstrap": (*internalPKIBootstrap)(nil)}) != "" {
+		t.Fatal("nil bootstrap pointer should yield empty CA PEM")
+	}
+}
+
+// TestBuildControlPlaneReportSurfacesQMResolutionFailureAsWarning pins the
+// Phase 0 fix for the silent-validate-green bug: when Quartermaster cannot
+// be resolved from the manifest, the report must carry Checked=true and a
+// warning, not the empty Checked=false that validateControlPlane's policy
+// gate would read as success.
+func TestBuildControlPlaneReportSurfacesQMResolutionFailureAsWarning(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		// No Services map → resolveServiceGRPCAddr fails for every name.
+	}
+	runtimeData := map[string]any{
+		"system_tenant_id": "tenant-1",
+		"service_token":    "secret",
+	}
+
+	report := buildControlPlaneReport(context.Background(), manifest, runtimeData, nil)
+
+	if !report.Checked {
+		t.Fatal("report.Checked must be true when resolution warnings exist; otherwise validateControlPlane silently passes")
+	}
+	var sawQMWarning bool
+	for _, w := range report.Warnings {
+		if w.Subject == "control-plane.quartermaster" && strings.Contains(w.Detail, "Could not resolve Quartermaster") {
+			sawQMWarning = true
+			break
+		}
+	}
+	if !sawQMWarning {
+		t.Fatalf("expected a Quartermaster resolution warning; got %+v", report.Warnings)
+	}
+}
+
+// TestBuildControlPlaneReportSilencesOptionalResolutionFailuresWithoutSession
+// locks the read-only-command policy: doctor and status (sess=nil) tolerate
+// missing Commodore/Purser entries silently because those are optional for
+// non-provisioning use. Only Quartermaster is mandatory.
+//
+// The context carries a tight deadline because ControlPlaneReadiness will
+// build a Quartermaster gRPC client and invoke ListClusters; the unreachable
+// test address would otherwise block on WaitForReady. Surface warnings come
+// from the client connection failing inside the deadline, which is fine —
+// this test only asserts on subjects that should be absent.
+func TestBuildControlPlaneReportSilencesOptionalResolutionFailuresWithoutSession(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "10.0.0.1"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			// Quartermaster present; Commodore and Purser intentionally absent.
+			"quartermaster": {Enabled: true, Host: "core-1", GRPCPort: 19002},
+		},
+	}
+	runtimeData := map[string]any{
+		"system_tenant_id": "tenant-1",
+		"service_token":    "secret",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	report := buildControlPlaneReport(ctx, manifest, runtimeData, nil)
+
+	for _, w := range report.Warnings {
+		if w.Subject == "control-plane.commodore" || w.Subject == "control-plane.purser" {
+			t.Fatalf("read-only callers must not emit %s resolution warnings; got %+v", w.Subject, report.Warnings)
+		}
+	}
+}
+
+// TestEndpointResolutionWarningsPolicy pins the per-caller policy: read-only
+// commands (sess=nil) only flag the mandatory Quartermaster endpoint, while
+// provisioning (sess!=nil) flags every failure since each one will block a
+// real downstream call.
+func TestEndpointResolutionWarningsPolicy(t *testing.T) {
+	qmErr := errors.New("qm resolution failed")
+	commErr := errors.New("commodore resolution failed")
+	purserErr := errors.New("purser resolution failed")
+
+	noSession := endpointResolutionWarnings(nil, qmErr, commErr, purserErr)
+	if len(noSession) != 1 {
+		t.Fatalf("nil session should yield exactly 1 warning (QM only); got %d: %+v", len(noSession), noSession)
+	}
+	if noSession[0].Subject != "control-plane.quartermaster" {
+		t.Fatalf("nil-session warning should be Quartermaster; got subject %q", noSession[0].Subject)
+	}
+
+	sess := &remoteaccess.Session{}
+	withSession := endpointResolutionWarnings(sess, qmErr, commErr, purserErr)
+	if len(withSession) != 3 {
+		t.Fatalf("non-nil session should yield all 3 warnings; got %d: %+v", len(withSession), withSession)
+	}
+
+	// Nil errors must not produce warnings regardless of session.
+	if got := endpointResolutionWarnings(sess, nil, nil, nil); len(got) != 0 {
+		t.Fatalf("no errors should yield no warnings; got %+v", got)
 	}
 }
 

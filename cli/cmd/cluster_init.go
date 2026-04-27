@@ -207,8 +207,8 @@ func applyPostgresSchemasAndMigrations(
 		}
 		cfg.Metadata[schemaKey] = schemaItems
 		fmt.Fprintf(out, "Applying %s baseline schemas...\n", service)
-		if err := applier.ApplySchemas(ctx, host, cfg); err != nil {
-			return fmt.Errorf("apply %s baseline schemas: %w", service, err)
+		if applyErr := applier.ApplySchemas(ctx, host, cfg); applyErr != nil {
+			return fmt.Errorf("apply %s baseline schemas: %w", service, applyErr)
 		}
 		ux.Success(out, fmt.Sprintf("%s baseline schemas applied", service))
 	}

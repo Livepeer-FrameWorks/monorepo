@@ -773,26 +773,14 @@ func doctorControlPlane(cmd *cobra.Command, manifest *inventory.Manifest, servic
 		return readiness.Report{}, nil
 	}
 
-	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002)    //nolint:errcheck // empty on miss is the intent
-	commodoreAddr, _ := resolveServiceGRPCAddr(manifest, "commodore", 19001) //nolint:errcheck // empty on miss is the intent
-	purserAddr, _ := resolveServiceGRPCAddr(manifest, "purser", 19003)       //nolint:errcheck // empty on miss is the intent
+	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002) //nolint:errcheck // empty on miss is the intent
 
-	var pricings []readiness.ClusterPricing
-	for clusterID, cc := range manifest.Clusters {
-		if cc.Pricing != nil {
-			pricings = append(pricings, readiness.ClusterPricing{ClusterID: clusterID})
-		}
-	}
-
-	report := readiness.ControlPlaneReadiness(cmd.Context(), readiness.ControlPlaneInputs{
-		SystemTenantID:    active.SystemTenantID,
-		ServiceToken:      serviceToken,
-		QuartermasterAddr: qmAddr,
-		CommodoreAddr:     commodoreAddr,
-		PurserAddr:        purserAddr,
-		AllowInsecure:     isDevProfile(manifest),
-		DeclaredPricings:  pricings,
-	})
+	// Route through buildControlPlaneReport so endpoint-resolution failures
+	// surface as warnings instead of degrading silently to Checked=false.
+	report := buildControlPlaneReport(cmd.Context(), manifest, map[string]any{
+		"system_tenant_id": active.SystemTenantID,
+		"service_token":    serviceToken,
+	}, nil)
 
 	fmt.Fprintln(out, "")
 	ux.Subheading(out, "Control Plane:")
