@@ -39,6 +39,20 @@
     timeout: 300
   when: not ansible_check_mode
 
+- name: Stat Privateer binary
+  ansible.builtin.stat:
+    path: "{{ privateer_bin }}"
+  register: privateer_bin_stat
+  when: not ansible_check_mode
+
+- name: Remove stale Privateer install sentinel when binary is missing
+  ansible.builtin.file:
+    path: "{{ privateer_install_sentinel }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - not (privateer_bin_stat.stat.exists | default(false))
+
 - name: Extract Privateer
   ansible.builtin.unarchive:
     src: "{{ privateer_tarball_path }}"
@@ -46,18 +60,37 @@
     remote_src: true
     owner: "{{ privateer_user }}"
     group: "{{ privateer_group }}"
-    extra_opts:
-      - --strip-components=1
     creates: "{{ privateer_install_sentinel }}"
   notify: privateer restart
   when: not ansible_check_mode
 
-- name: Record install sentinel
-  ansible.builtin.file:
-    path: "{{ privateer_install_sentinel }}"
-    state: touch
-    owner: "{{ privateer_user }}"
-    group: "{{ privateer_group }}"
-    mode: "0644"
-  changed_when: false
+- name: Normalize Privateer binary name
+  ansible.builtin.shell: |
+    set -e
+    candidate=""
+    for path in "{{ privateer_bin }}" "{{ privateer_install_dir }}/frameworks-privateer" "{{ privateer_install_dir }}/frameworks"; do
+      if [ -f "$path" ]; then
+        candidate="$path"
+        break
+      fi
+    done
+    if [ -z "$candidate" ]; then
+      candidate="$(
+        find "{{ privateer_install_dir }}" -maxdepth 2 -type f \
+          \( -name privateer \
+          -o -name frameworks-privateer \
+          -o -name 'frameworks-privateer-*' \
+          -o -name frameworks \) \
+          -print -quit
+      )"
+    fi
+    test -n "$candidate"
+    if [ "$candidate" != "{{ privateer_bin }}" ]; then
+      cp "$candidate" "{{ privateer_bin }}"
+    fi
+    chmod +x "{{ privateer_bin }}"
+    touch "{{ privateer_install_sentinel }}"
+    chown {{ privateer_user }}:{{ privateer_group }} "{{ privateer_install_sentinel }}" "{{ privateer_bin }}"
+  args:
+    creates: "{{ privateer_install_sentinel }}"
   when: not ansible_check_mode

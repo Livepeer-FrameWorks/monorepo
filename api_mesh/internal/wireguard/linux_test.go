@@ -36,15 +36,23 @@ type fakeLinkOps struct {
 	ensureLinkCalls    []string
 	linkUpCalls        []string
 	ensureAddressCalls []ensureAddressCall
+	ensureRoutesCalls  []ensureRoutesCall
 
 	ensureLinkErr    error
 	linkUpErr        error
 	ensureAddressErr error
+	ensureRoutesErr  error
 }
 
 type ensureAddressCall struct {
 	name string
 	addr netip.Prefix
+}
+
+type ensureRoutesCall struct {
+	name  string
+	self  netip.Prefix
+	peers []Peer
 }
 
 func (f *fakeLinkOps) EnsureLink(name string) error {
@@ -60,6 +68,11 @@ func (f *fakeLinkOps) LinkUp(name string) error {
 func (f *fakeLinkOps) EnsureAddress(name string, addr netip.Prefix) error {
 	f.ensureAddressCalls = append(f.ensureAddressCalls, ensureAddressCall{name: name, addr: addr})
 	return f.ensureAddressErr
+}
+
+func (f *fakeLinkOps) EnsureRoutes(name string, self netip.Prefix, peers []Peer) error {
+	f.ensureRoutesCalls = append(f.ensureRoutesCalls, ensureRoutesCall{name: name, self: self, peers: peers})
+	return f.ensureRoutesErr
 }
 
 func validApplyConfig(t *testing.T) Config {
@@ -109,11 +122,14 @@ func TestLinuxManager_ApplyValidatesPolicy(t *testing.T) {
 	if len(link.ensureAddressCalls) != 0 {
 		t.Errorf("policy-invalid Apply must not touch addresses, got %d calls", len(link.ensureAddressCalls))
 	}
+	if len(link.ensureRoutesCalls) != 0 {
+		t.Errorf("policy-invalid Apply must not touch routes, got %d calls", len(link.ensureRoutesCalls))
+	}
 }
 
 // TestLinuxManager_ApplyConfiguresDevice asserts the wgtypes.Config sent to
-// wgctrl matches the typed Config and that EnsureAddress is called with the
-// configured self prefix.
+// wgctrl matches the typed Config and that link state is reconciled with the
+// configured self prefix and peer routes.
 func TestLinuxManager_ApplyConfiguresDevice(t *testing.T) {
 	priv := mustGenKey(t)
 	peer1 := mustGenKey(t).PublicKey()
@@ -190,6 +206,20 @@ func TestLinuxManager_ApplyConfiguresDevice(t *testing.T) {
 	if call := link.ensureAddressCalls[0]; call.name != "wg-test" || call.addr.String() != "10.88.0.5/32" {
 		t.Errorf("EnsureAddress call = %+v, want {wg-test, 10.88.0.5/32}", call)
 	}
+	if len(link.ensureRoutesCalls) != 1 {
+		t.Fatalf("expected 1 EnsureRoutes call, got %d", len(link.ensureRoutesCalls))
+	}
+	routeCall := link.ensureRoutesCalls[0]
+	if routeCall.name != "wg-test" || routeCall.self.String() != "10.88.0.5/32" {
+		t.Errorf("EnsureRoutes call = %+v, want name=wg-test self=10.88.0.5/32", routeCall)
+	}
+	if len(routeCall.peers) != 2 {
+		t.Fatalf("EnsureRoutes peers = %d, want 2", len(routeCall.peers))
+	}
+	if routeCall.peers[0].AllowedIPs[0].String() != "10.88.0.6/32" ||
+		routeCall.peers[1].AllowedIPs[0].String() != "10.88.0.7/32" {
+		t.Errorf("EnsureRoutes peers = %+v, want peer allowed IPs preserved", routeCall.peers)
+	}
 }
 
 func TestLinuxManager_ApplyPropagatesConfigureError(t *testing.T) {
@@ -204,6 +234,9 @@ func TestLinuxManager_ApplyPropagatesConfigureError(t *testing.T) {
 	if len(link.ensureAddressCalls) != 0 {
 		t.Error("EnsureAddress must not run after ConfigureDevice error")
 	}
+	if len(link.ensureRoutesCalls) != 0 {
+		t.Error("EnsureRoutes must not run after ConfigureDevice error")
+	}
 }
 
 func TestLinuxManager_ApplyPropagatesAddressError(t *testing.T) {
@@ -213,6 +246,19 @@ func TestLinuxManager_ApplyPropagatesAddressError(t *testing.T) {
 
 	if err := m.Apply(validApplyConfig(t)); err == nil {
 		t.Fatal("Apply should propagate EnsureAddress error, got nil")
+	}
+	if len(link.ensureRoutesCalls) != 0 {
+		t.Error("EnsureRoutes must not run after EnsureAddress error")
+	}
+}
+
+func TestLinuxManager_ApplyPropagatesRouteError(t *testing.T) {
+	fake := &fakeWgctrlClient{}
+	link := &fakeLinkOps{ensureRoutesErr: errors.New("boom")}
+	m := &linuxManager{interfaceName: "wg-test", client: fake, link: link}
+
+	if err := m.Apply(validApplyConfig(t)); err == nil {
+		t.Fatal("Apply should propagate EnsureRoutes error, got nil")
 	}
 }
 

@@ -1,0 +1,41 @@
+---
+- name: Privateer | ensure internal PKI directory
+  ansible.builtin.file:
+    path: "{{ (privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | render internal CA trust bundle
+  ansible.builtin.copy:
+    dest: "{{ privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path) }}"
+    content: "{{ privateer_internal_ca_bundle_pem }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | require internal CA trust bundle for TLS
+  ansible.builtin.stat:
+    path: "{{ privateer_env.GRPC_TLS_CA_PATH }}"
+  register: privateer_internal_ca_stat
+  when:
+    - not ansible_check_mode
+    - privateer_env.GRPC_TLS_CA_PATH is defined
+
+- name: Privateer | fail when internal CA trust bundle is missing
+  ansible.builtin.fail:
+    msg: >-
+      Privateer is configured with GRPC_TLS_CA_PATH={{ privateer_env.GRPC_TLS_CA_PATH }}
+      but no CA bundle was rendered or found there. Provide the Navigator
+      internal CA public bundle in GitOps/SOPS before starting Privateer.
+  when:
+    - not ansible_check_mode
+    - privateer_env.GRPC_TLS_CA_PATH is defined
+    - not (privateer_internal_ca_stat.stat.exists | default(false))

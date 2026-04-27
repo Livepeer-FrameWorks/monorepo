@@ -16,14 +16,14 @@
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ kafka_broker_port }}"
-        timeout: 30
+        timeout: "{{ kafka_listener_wait_timeout }}"
       when: kafka_role in ['broker', 'combined']
 
     - name: Wait for controller port
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ kafka_controller_port }}"
-        timeout: 30
+        timeout: "{{ kafka_listener_wait_timeout }}"
       when: kafka_role in ['controller', 'combined']
 
     - name: Probe broker API via kafka-broker-api-versions
@@ -33,6 +33,16 @@
       register: broker_probe
       changed_when: false
       failed_when: broker_probe.rc != 0
+      when: kafka_role in ['broker', 'combined']
+
+    - name: Probe KRaft controller quorum via broker API
+      ansible.builtin.command: >-
+        {{ kafka_bin_dir }}/kafka-metadata-quorum.sh
+        --bootstrap-server 127.0.0.1:{{ kafka_broker_port }}
+        describe --status
+      register: kafka_quorum_probe
+      changed_when: false
+      failed_when: kafka_quorum_probe.rc != 0
       when: kafka_role in ['broker', 'combined']
   rescue:
     - name: Capture kafka systemctl status after failed start

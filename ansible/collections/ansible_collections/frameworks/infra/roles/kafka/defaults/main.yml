@@ -21,6 +21,7 @@ kafka_bind_host: 0.0.0.0
 kafka_broker_port: 9092
 kafka_controller_port: 9093
 kafka_advertised_host: "{{ ansible_host | default(inventory_hostname) }}"
+kafka_listener_wait_timeout: 30
 
 # Topic list for init-tag. [{name, partitions, replication_factor, config}]
 kafka_topics: []

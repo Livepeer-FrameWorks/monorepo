@@ -25,3 +25,7 @@ argument_specs:
         type: int
         required: false
         default: 18012
+      privateer_internal_ca_bundle_pem:
+        type: str
+        required: false
+        default: ""

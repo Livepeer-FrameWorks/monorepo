@@ -1,0 +1,102 @@
+---
+- name: Ensure internal CA directory
+  ansible.builtin.file:
+    path: "{{ (go_service_env.GRPC_TLS_CA_PATH | default(go_service_internal_ca_default_path)) | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - not ansible_check_mode
+    - go_service_internal_ca_bundle_pem | length > 0
+
+- name: Render internal CA trust bundle
+  ansible.builtin.copy:
+    dest: "{{ go_service_env.GRPC_TLS_CA_PATH | default(go_service_internal_ca_default_path) }}"
+    content: "{{ go_service_internal_ca_bundle_pem }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - go_service_internal_ca_bundle_pem | length > 0
+
+- name: Ensure internal gRPC certificate directory
+  ansible.builtin.file:
+    path: "{{ (go_service_env.GRPC_TLS_CERT_PATH | default(go_service_internal_tls_cert_default_path)) | dirname }}"
+    state: directory
+    owner: root
+    group: "{{ go_service_group }}"
+    mode: "0750"
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_cert_pem | length > 0
+    - go_service_internal_tls_key_pem | length > 0
+
+- name: Render internal gRPC certificate
+  ansible.builtin.copy:
+    dest: "{{ go_service_env.GRPC_TLS_CERT_PATH | default(go_service_internal_tls_cert_default_path) }}"
+    content: "{{ go_service_internal_tls_cert_pem }}"
+    owner: root
+    group: "{{ go_service_group }}"
+    mode: "0644"
+  notify: go_service restart
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_cert_pem | length > 0
+    - go_service_internal_tls_key_pem | length > 0
+
+- name: Render internal gRPC key
+  ansible.builtin.copy:
+    dest: "{{ go_service_env.GRPC_TLS_KEY_PATH | default(go_service_internal_tls_key_default_path) }}"
+    content: "{{ go_service_internal_tls_key_pem }}"
+    owner: root
+    group: "{{ go_service_group }}"
+    mode: "0640"
+  no_log: true
+  notify: go_service restart
+  when:
+    - not ansible_check_mode
+    - go_service_internal_tls_cert_pem | length > 0
+    - go_service_internal_tls_key_pem | length > 0
+
+- name: Stat internal CA trust bundle
+  ansible.builtin.stat:
+    path: "{{ go_service_env.GRPC_TLS_CA_PATH }}"
+  register: go_service_internal_ca_stat
+  when:
+    - not ansible_check_mode
+    - go_service_env.GRPC_TLS_CA_PATH is defined
+
+- name: Stat internal gRPC certificate
+  ansible.builtin.stat:
+    path: "{{ go_service_env.GRPC_TLS_CERT_PATH }}"
+  register: go_service_internal_tls_cert_stat
+  when:
+    - not ansible_check_mode
+    - go_service_env.GRPC_TLS_CERT_PATH is defined
+
+- name: Stat internal gRPC key
+  ansible.builtin.stat:
+    path: "{{ go_service_env.GRPC_TLS_KEY_PATH }}"
+  register: go_service_internal_tls_key_stat
+  when:
+    - not ansible_check_mode
+    - go_service_env.GRPC_TLS_KEY_PATH is defined
+
+- name: Fail when internal PKI material is missing
+  ansible.builtin.fail:
+    msg: >-
+      {{ go_service_name }} is configured for internal gRPC TLS but required
+      PKI material is missing. Expected CA={{ go_service_env.GRPC_TLS_CA_PATH | default('') }},
+      cert={{ go_service_env.GRPC_TLS_CERT_PATH | default('') }},
+      key={{ go_service_env.GRPC_TLS_KEY_PATH | default('') }}.
+  when:
+    - not ansible_check_mode
+    - go_service_env.GRPC_TLS_CA_PATH is defined
+    - go_service_env.GRPC_TLS_CERT_PATH is defined
+    - go_service_env.GRPC_TLS_KEY_PATH is defined
+    - >-
+      not (go_service_internal_ca_stat.stat.exists | default(false))
+      or not (go_service_internal_tls_cert_stat.stat.exists | default(false))
+      or not (go_service_internal_tls_key_stat.stat.exists | default(false))

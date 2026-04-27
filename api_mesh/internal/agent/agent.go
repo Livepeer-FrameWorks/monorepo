@@ -138,39 +138,41 @@ type Config struct {
 	ClusterID             string
 	// Startup seed inputs let the agent bring wg0 up from GitOps-rendered
 	// state before the first successful Quartermaster sync.
-	StaticPeersFile       string
-	PrivateKeyFile        string
-	WireguardIP           string
-	LastKnownPath         string // defaults to {DataDir}/last_known_mesh.json
-	DataDir               string // defaults to /var/lib/privateer
-	AllowInsecure         bool
-	CACertFile            string
-	ServerName            string
-	NavigatorGRPCAddr     string
-	CertIssueToken        string
-	PKIBasePath           string
-	ExpectedServiceTypes  []string
-	CertSyncInterval      time.Duration
-	NodeIDPath            string
-	NodeID                string // Explicit identity from env; skips file-based generation when set
-	InterfaceName         string
-	NodeType              string
-	NodeName              string
-	ExternalIP            string
-	InternalIP            string
-	ListenPort            int
-	SyncInterval          time.Duration
-	SyncTimeout           time.Duration
-	DNSPort               int
-	DNSUpstreams          []string // Upstream resolver addresses for non-.internal queries
-	Logger                logging.Logger
-	Metrics               *Metrics
-	MeshClient            meshClient
-	ServiceRegistryClient serviceRegistryClient
-	IngressClient         ingressClient
-	NavigatorClient       certificateClient
-	WireGuardManager      wireguard.Manager
-	DNSService            dnsService
+	StaticPeersFile         string
+	PrivateKeyFile          string
+	WireguardIP             string
+	LastKnownPath           string // defaults to {DataDir}/last_known_mesh.json
+	DataDir                 string // defaults to /var/lib/privateer
+	AllowInsecure           bool
+	CACertFile              string
+	ServerName              string
+	QuartermasterServerName string
+	NavigatorServerName     string
+	NavigatorGRPCAddr       string
+	CertIssueToken          string
+	PKIBasePath             string
+	ExpectedServiceTypes    []string
+	CertSyncInterval        time.Duration
+	NodeIDPath              string
+	NodeID                  string // Explicit identity from env; skips file-based generation when set
+	InterfaceName           string
+	NodeType                string
+	NodeName                string
+	ExternalIP              string
+	InternalIP              string
+	ListenPort              int
+	SyncInterval            time.Duration
+	SyncTimeout             time.Duration
+	DNSPort                 int
+	DNSUpstreams            []string // Upstream resolver addresses for non-.internal queries
+	Logger                  logging.Logger
+	Metrics                 *Metrics
+	MeshClient              meshClient
+	ServiceRegistryClient   serviceRegistryClient
+	IngressClient           ingressClient
+	NavigatorClient         certificateClient
+	WireGuardManager        wireguard.Manager
+	DNSService              dnsService
 }
 
 func New(cfg Config) (*Agent, error) {
@@ -235,7 +237,7 @@ func New(cfg Config) (*Agent, error) {
 			Timeout:       10 * time.Second,
 			AllowInsecure: cfg.AllowInsecure,
 			CACertFile:    cfg.CACertFile,
-			ServerName:    cfg.ServerName,
+			ServerName:    firstNonEmpty(cfg.QuartermasterServerName, cfg.ServerName),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create quartermaster gRPC client: %w", err)
@@ -269,7 +271,7 @@ func New(cfg Config) (*Agent, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: cfg.AllowInsecure,
 			CACertFile:    cfg.CACertFile,
-			ServerName:    cfg.ServerName,
+			ServerName:    firstNonEmpty(cfg.NavigatorServerName, cfg.ServerName),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create navigator gRPC client: %w", err)
@@ -314,6 +316,15 @@ func New(cfg Config) (*Agent, error) {
 		wireguardIP:      cfg.WireguardIP,
 		lastKnownPath:    cfg.LastKnownPath,
 	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (a *Agent) Start() error {

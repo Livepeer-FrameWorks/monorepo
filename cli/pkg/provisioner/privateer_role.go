@@ -39,6 +39,7 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	if metaEnv, ok := config.Metadata["env"].(map[string]string); ok {
 		maps.Copy(env, metaEnv)
 	}
+	removeNavigatorInternalCAEnv(env)
 	if host.Name != "" && env["MESH_NODE_NAME"] == "" {
 		env["MESH_NODE_NAME"] = host.Name
 	}
@@ -59,6 +60,15 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	}
 	if env["PRIVATEER_STATIC_PEERS_FILE"] == "" {
 		env["PRIVATEER_STATIC_PEERS_FILE"] = "/etc/privateer/static-peers.json"
+	}
+	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" && env["GRPC_TLS_CA_PATH"] == "" {
+		env["GRPC_TLS_CA_PATH"] = "/etc/frameworks/pki/ca.crt"
+	}
+	if env["QUARTERMASTER_GRPC_TLS_SERVER_NAME"] == "" {
+		env["QUARTERMASTER_GRPC_TLS_SERVER_NAME"] = "quartermaster.internal"
+	}
+	if env["NAVIGATOR_GRPC_ADDR"] != "" && env["NAVIGATOR_GRPC_TLS_SERVER_NAME"] == "" {
+		env["NAVIGATOR_GRPC_TLS_SERVER_NAME"] = "navigator.internal"
 	}
 	if env["MESH_PRIVATE_KEY_FILE"] == "" {
 		if priv, ok := config.Metadata["wireguard_private_key"].(string); ok && priv != "" {
@@ -104,7 +114,18 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	if managed, ok := config.Metadata["wireguard_private_key_managed"].(bool); ok {
 		vars["privateer_wireguard_private_key_managed"] = managed
 	}
+	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
+		vars["privateer_internal_ca_bundle_pem"] = ca
+	}
 	return vars, nil
+}
+
+func removeNavigatorInternalCAEnv(env map[string]string) {
+	for key := range env {
+		if strings.HasPrefix(key, "NAVIGATOR_INTERNAL_CA_") {
+			delete(env, key)
+		}
+	}
 }
 
 func privateerNodeType(host inventory.Host) string {

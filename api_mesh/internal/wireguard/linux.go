@@ -29,6 +29,7 @@ type linkOps interface {
 	EnsureLink(name string) error
 	LinkUp(name string) error
 	EnsureAddress(name string, addr netip.Prefix) error
+	EnsureRoutes(name string, self netip.Prefix, peers []Peer) error
 }
 
 // netlinkLinkOps is the production linkOps backed by the kernel netlink
@@ -40,6 +41,8 @@ type netlinkLinkOps struct{}
 // WireGuard interfaces. Anything else under the same name is a foreign
 // interface we must not touch.
 const wireguardLinkType = "wireguard"
+
+const routeScopeLink netlink.Scope = 253
 
 func (netlinkLinkOps) EnsureLink(name string) error {
 	link, err := netlink.LinkByName(name)
@@ -96,6 +99,24 @@ func (netlinkLinkOps) EnsureAddress(name string, addr netip.Prefix) error {
 	return nil
 }
 
+func (netlinkLinkOps) EnsureRoutes(name string, self netip.Prefix, peers []Peer) error {
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("look up link %s: %w", name, err)
+	}
+	for _, dst := range peerRoutes(self, peers) {
+		route := netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Dst:       dst,
+			Scope:     routeScopeLink,
+		}
+		if err := netlink.RouteReplace(&route); err != nil {
+			return fmt.Errorf("install route %s via %s: %w", dst, name, err)
+		}
+	}
+	return nil
+}
+
 // reconcileAddresses computes the netlink mutations that converge the
 // link's IPv4 address set to exactly {desired}: any existing address that
 // doesn't match desired is returned in toDelete, and addDesired is true
@@ -134,6 +155,30 @@ func addrEqual(a netlink.Addr, b *netlink.Addr) bool {
 	aOnes, aBits := a.Mask.Size()
 	bOnes, bBits := b.Mask.Size()
 	return aOnes == bOnes && aBits == bBits
+}
+
+func peerRoutes(self netip.Prefix, peers []Peer) []*net.IPNet {
+	selfIP := self.Addr().AsSlice()
+	routes := make([]*net.IPNet, 0, len(peers))
+	seen := map[string]struct{}{}
+	for _, peer := range peers {
+		for _, allowed := range peer.AllowedIPs {
+			ip := allowed.IP.To4()
+			if ip == nil || ip.Equal(selfIP) {
+				continue
+			}
+			key := allowed.String()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			routes = append(routes, &net.IPNet{
+				IP:   append(net.IP(nil), ip...),
+				Mask: append(net.IPMask(nil), allowed.Mask...),
+			})
+		}
+	}
+	return routes
 }
 
 type linuxManager struct {
@@ -177,6 +222,9 @@ func (m *linuxManager) Apply(cfg Config) error {
 		return fmt.Errorf("configure %s: %w", m.interfaceName, err)
 	}
 	if err := m.link.EnsureAddress(m.interfaceName, cfg.Address); err != nil {
+		return err
+	}
+	if err := m.link.EnsureRoutes(m.interfaceName, cfg.Address, cfg.Peers); err != nil {
 		return err
 	}
 	return nil

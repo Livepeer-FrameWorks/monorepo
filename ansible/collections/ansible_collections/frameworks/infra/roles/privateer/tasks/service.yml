@@ -6,3 +6,26 @@
     enabled: true
     daemon_reload: true
   when: not ansible_check_mode
+
+- name: Wait for Privateer WireGuard interface
+  ansible.builtin.command: test -d /sys/class/net/wg0
+  register: privateer_wg0_interface
+  changed_when: false
+  retries: 30
+  delay: 1
+  until: privateer_wg0_interface.rc == 0
+  when: not ansible_check_mode
+
+- name: Ensure systemd-resolved .internal route is active
+  ansible.builtin.systemd:
+    name: frameworks-privateer-resolved
+    state: >-
+      {{
+        (
+          privateer_resolved_route_unit.changed | default(false)
+          or privateer_resolved_dropin.changed | default(false)
+        ) | ternary('restarted', 'started')
+      }}
+    enabled: true
+    daemon_reload: "{{ privateer_resolved_route_unit.changed | default(false) }}"
+  when: not ansible_check_mode

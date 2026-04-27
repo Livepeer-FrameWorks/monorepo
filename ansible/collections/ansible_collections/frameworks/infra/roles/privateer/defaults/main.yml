@@ -16,6 +16,8 @@ privateer_network_packages_by_family:
   RedHat: [wireguard-tools, iproute, bind-utils]
 
 privateer_env: {}
+privateer_internal_ca_bundle_pem: ""
+privateer_internal_ca_default_path: /etc/frameworks/pki/ca.crt
 privateer_dns_zones: []
 privateer_static_dns: {}
 

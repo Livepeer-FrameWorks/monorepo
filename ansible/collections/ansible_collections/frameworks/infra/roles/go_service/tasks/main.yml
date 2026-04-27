@@ -3,6 +3,10 @@
   ansible.builtin.import_tasks: install.yml
   tags: [install]
 
+- name: Go_service | pki bootstrap
+  ansible.builtin.import_tasks: pki.yml
+  tags: [configure, pki]
+
 - name: Go_service | configure
   ansible.builtin.import_tasks: configure.yml
   tags: [configure]

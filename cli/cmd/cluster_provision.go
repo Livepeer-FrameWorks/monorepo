@@ -6,10 +6,12 @@ import (
 	"crypto/elliptic"
 	crand "crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -475,6 +477,13 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	if err := ensureEdgeTelemetryJWTKeypair(runtimeData); err != nil {
 		return fmt.Errorf("pre-generate edge telemetry keypair: %w", err)
 	}
+	if pkiRequired := internalPKIBootstrapRequired(manifest); pkiRequired {
+		pki, err := loadInternalPKIBootstrap(sharedEnv, manifestDir)
+		if err != nil {
+			return fmt.Errorf("load internal PKI bootstrap material: %w", err)
+		}
+		runtimeData["internal_pki_bootstrap"] = pki
+	}
 
 	const perTaskTimeout = 10 * time.Minute
 
@@ -609,6 +618,19 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 				return fmt.Errorf("yugabyte initialization failed: %w", err)
+			}
+		}
+
+		if batchContainsService(batch, "kafka-controller") && !remainingBatchesContainService(plan.Batches[batchNum+1:], "kafka-controller") {
+			fmt.Fprintln(cmd.OutOrStdout(), "")
+			if err := verifyKafkaControllerMesh(ctx, cmd, manifest, sshPool); err != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Kafka controller mesh verification failed: %v", err))
+				if !ignoreValidation {
+					fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
+					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+					return fmt.Errorf("kafka controller mesh verification failed: %w", err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "  Warning: continuing despite Kafka controller mesh issues (--ignore-validation)")
 			}
 		}
 
@@ -1148,6 +1170,256 @@ func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]interface{}) error {
 	runtimeData["edge_telemetry_jwt_private_key_pem_b64"] = base64.StdEncoding.EncodeToString(privatePEM)
 	runtimeData["edge_telemetry_jwt_public_key_pem_b64"] = base64.StdEncoding.EncodeToString(publicPEM)
 	return nil
+}
+
+type internalPKIBootstrap struct {
+	CABundlePEM      string
+	intermediateCert *x509.Certificate
+	intermediateKey  *ecdsa.PrivateKey
+}
+
+func internalPKIBootstrapRequired(manifest *inventory.Manifest) bool {
+	if manifest == nil || isDevProfile(manifest) {
+		return false
+	}
+	if svc, ok := manifest.Services["navigator"]; ok && svc.Enabled {
+		return true
+	}
+	for name, svc := range manifest.Services {
+		if svc.Enabled && usesInternalGRPCLeaf(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func loadInternalPKIBootstrap(sharedEnv map[string]string, manifestDir string) (*internalPKIBootstrap, error) {
+	rootPEM, intermediatePEM, intermediateKeyPEM, err := loadInternalCAMaterial(sharedEnv, manifestDir)
+	if err != nil {
+		return nil, err
+	}
+	rootCert, err := parseCertificatePEM(rootPEM)
+	if err != nil {
+		return nil, fmt.Errorf("parse root ca cert: %w", err)
+	}
+	intermediateCert, err := parseCertificatePEM(intermediatePEM)
+	if err != nil {
+		return nil, fmt.Errorf("parse intermediate ca cert: %w", err)
+	}
+	intermediateKey, err := parseECPrivateKeyPEM(intermediateKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("parse intermediate ca key: %w", err)
+	}
+	if err := validateInternalCA(rootCert, intermediateCert, intermediateKey); err != nil {
+		return nil, err
+	}
+	return &internalPKIBootstrap{
+		CABundlePEM:      strings.TrimSpace(rootPEM) + "\n" + strings.TrimSpace(intermediatePEM) + "\n",
+		intermediateCert: intermediateCert,
+		intermediateKey:  intermediateKey,
+	}, nil
+}
+
+func loadInternalCAMaterial(env map[string]string, manifestDir string) (string, string, string, error) {
+	rootB64 := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64"])
+	intermediateB64 := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64"])
+	keyB64 := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64"])
+	if rootB64 != "" || intermediateB64 != "" || keyB64 != "" {
+		if rootB64 == "" || intermediateB64 == "" || keyB64 == "" {
+			return "", "", "", fmt.Errorf("internal CA base64 env requires root cert, intermediate cert, and intermediate key")
+		}
+		rootPEM, err := decodeB64PEM(rootB64, "root ca cert")
+		if err != nil {
+			return "", "", "", err
+		}
+		intermediatePEM, err := decodeB64PEM(intermediateB64, "intermediate ca cert")
+		if err != nil {
+			return "", "", "", err
+		}
+		keyPEM, err := decodeB64PEM(keyB64, "intermediate ca key")
+		if err != nil {
+			return "", "", "", err
+		}
+		return rootPEM, intermediatePEM, keyPEM, nil
+	}
+
+	rootFile := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE"])
+	intermediateFile := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE"])
+	keyFile := strings.TrimSpace(env["NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE"])
+	if rootFile == "" && intermediateFile == "" && keyFile == "" {
+		return "", "", "", fmt.Errorf("internal CA material is required for non-dev internal gRPC TLS")
+	}
+	if rootFile == "" || intermediateFile == "" || keyFile == "" {
+		return "", "", "", fmt.Errorf("internal CA file env requires root cert, intermediate cert, and intermediate key")
+	}
+	rootPEM, err := readPEMFile(resolveEnvFilePath(rootFile, manifestDir), "root ca cert")
+	if err != nil {
+		return "", "", "", err
+	}
+	intermediatePEM, err := readPEMFile(resolveEnvFilePath(intermediateFile, manifestDir), "intermediate ca cert")
+	if err != nil {
+		return "", "", "", err
+	}
+	keyPEM, err := readPEMFile(resolveEnvFilePath(keyFile, manifestDir), "intermediate ca key")
+	if err != nil {
+		return "", "", "", err
+	}
+	return rootPEM, intermediatePEM, keyPEM, nil
+}
+
+func decodeB64PEM(value, label string) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil {
+		return "", fmt.Errorf("decode %s base64 env: %w", label, err)
+	}
+	return string(decoded), nil
+}
+
+func resolveEnvFilePath(path, manifestDir string) string {
+	if filepath.IsAbs(path) || manifestDir == "" {
+		return path
+	}
+	return filepath.Join(manifestDir, path)
+}
+
+func readPEMFile(path, label string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s %q: %w", label, path, err)
+	}
+	return string(data), nil
+}
+
+func parseCertificatePEM(certPEM string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return nil, fmt.Errorf("missing pem block")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+func parseECPrivateKeyPEM(keyPEM string) (*ecdsa.PrivateKey, error) {
+	block, _ := pem.Decode([]byte(keyPEM))
+	if block == nil {
+		return nil, fmt.Errorf("missing pem block")
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err == nil {
+		return key, nil
+	}
+	raw, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	ecKey, ok := raw.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("private key is not ECDSA")
+	}
+	return ecKey, nil
+}
+
+func validateInternalCA(rootCert, intermediateCert *x509.Certificate, intermediateKey *ecdsa.PrivateKey) error {
+	now := time.Now()
+	if !rootCert.IsCA {
+		return fmt.Errorf("root ca cert must be a CA certificate")
+	}
+	if !intermediateCert.IsCA {
+		return fmt.Errorf("intermediate ca cert must be a CA certificate")
+	}
+	if now.Before(rootCert.NotBefore) || now.After(rootCert.NotAfter) {
+		return fmt.Errorf("root ca cert is not currently valid")
+	}
+	if now.Before(intermediateCert.NotBefore) || now.After(intermediateCert.NotAfter) {
+		return fmt.Errorf("intermediate ca cert is not currently valid")
+	}
+	if intermediateCert.PublicKeyAlgorithm != x509.ECDSA {
+		return fmt.Errorf("intermediate ca cert public key is not ECDSA")
+	}
+	pub, ok := intermediateCert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || pub.X.Cmp(intermediateKey.PublicKey.X) != 0 || pub.Y.Cmp(intermediateKey.PublicKey.Y) != 0 {
+		return fmt.Errorf("intermediate ca key does not match intermediate certificate")
+	}
+	if err := intermediateCert.CheckSignatureFrom(rootCert); err != nil {
+		return fmt.Errorf("intermediate ca cert is not signed by root ca cert: %w", err)
+	}
+	return nil
+}
+
+func (p *internalPKIBootstrap) issueLeaf(serviceName, clusterID, rootDomain string, host inventory.Host) (string, string, error) {
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		return "", "", fmt.Errorf("generate key: %w", err)
+	}
+	serial, err := crand.Int(crand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return "", "", fmt.Errorf("generate serial: %w", err)
+	}
+	dnsNames, ipAddresses := bootstrapInternalCertSANs(serviceName, clusterID, rootDomain, host)
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:   serviceName,
+			Organization: []string{"FrameWorks Internal"},
+		},
+		NotBefore:             time.Now().Add(-5 * time.Minute),
+		NotAfter:              time.Now().Add(72 * time.Hour),
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddresses,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(crand.Reader, template, p.intermediateCert, &leafKey.PublicKey, p.intermediateKey)
+	if err != nil {
+		return "", "", fmt.Errorf("sign certificate: %w", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(leafKey)
+	if err != nil {
+		return "", "", fmt.Errorf("marshal key: %w", err)
+	}
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	return certPEM, keyPEM, nil
+}
+
+func bootstrapInternalCertSANs(serviceName, clusterID, rootDomain string, host inventory.Host) ([]string, []net.IP) {
+	dnsSeen := map[string]struct{}{}
+	var dnsNames []string
+	addDNS := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := dnsSeen[value]; ok {
+			return
+		}
+		dnsSeen[value] = struct{}{}
+		dnsNames = append(dnsNames, value)
+	}
+	addDNS(serviceName)
+	addDNS(serviceName + ".internal")
+	addDNS("localhost")
+	if clusterID != "" && rootDomain != "" {
+		addDNS(fmt.Sprintf("%s.%s.%s", serviceName, clusterID, rootDomain))
+	}
+
+	ipSeen := map[string]struct{}{}
+	var ipAddresses []net.IP
+	addIP := func(value string) {
+		ip := net.ParseIP(strings.TrimSpace(value))
+		if ip == nil {
+			return
+		}
+		key := ip.String()
+		if _, ok := ipSeen[key]; ok {
+			return
+		}
+		ipSeen[key] = struct{}{}
+		ipAddresses = append(ipAddresses, ip)
+	}
+	addIP(host.WireguardIP)
+	addIP(host.ExternalIP)
+	return dnsNames, ipAddresses
 }
 
 func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]interface{}, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
@@ -1993,6 +2265,18 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			return config, fmt.Errorf("service %s: %w", task.Name, err)
 		}
 		config.EnvVars = envVars
+	}
+	if pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap); ok && pki != nil {
+		config.Metadata["internal_ca_bundle_pem"] = pki.CABundlePEM
+		if usesInternalGRPCLeaf(baseName) {
+			host, _ := manifest.GetHost(task.Host)
+			certPEM, keyPEM, certErr := pki.issueLeaf(baseName, task.ClusterID, manifest.RootDomain, host)
+			if certErr != nil {
+				return config, fmt.Errorf("service %s: issue bootstrap internal gRPC certificate: %w", task.Name, certErr)
+			}
+			config.Metadata["internal_tls_cert_pem"] = certPEM
+			config.Metadata["internal_tls_key_pem"] = keyPEM
+		}
 	}
 
 	// Privateer starts in PhaseMesh before Quartermaster service DNS resolves,
@@ -2882,13 +3166,30 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 		return
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  Stopping %d previously provisioned services...\n", len(tasks))
+	rollbackTasks := make([]provisionedTask, 0, len(tasks))
+	preservedMesh := 0
+	for _, task := range tasks {
+		if task.task.Phase == orchestrator.PhaseMesh {
+			preservedMesh++
+			continue
+		}
+		rollbackTasks = append(rollbackTasks, task)
+	}
+	if preservedMesh > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  Preserving %d mesh substrate service(s).\n", preservedMesh)
+	}
+	if len(rollbackTasks) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "  No non-mesh services to roll back.")
+		return
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "  Stopping %d previously provisioned services...\n", len(rollbackTasks))
 
 	var rollbackFailures []string
 
 	// Rollback in reverse order (most recent first)
-	for i := len(tasks) - 1; i >= 0; i-- {
-		t := tasks[i]
+	for i := len(rollbackTasks) - 1; i >= 0; i-- {
+		t := rollbackTasks[i]
 		fmt.Fprintf(cmd.OutOrStdout(), "    Stopping %s on %s...\n", t.task.Name, t.task.Host)
 
 		prov, err := provisioner.GetProvisioner(t.task.Type, pool)
@@ -3760,6 +4061,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			env["VICTORIAMETRICS_URL"] = url
 		}
 	}
+	if baseName != "navigator" {
+		removeNavigatorInternalCAEnv(env)
+	}
 
 	applyProductionRuntimeDefaults(manifest, env)
 	if err := validateProductionServiceEnv(manifest, baseName, env); err != nil {
@@ -3899,6 +4203,14 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 		}
 	case "livepeer-signer":
 		normalizeLivepeerEnvVars(env)
+	}
+}
+
+func removeNavigatorInternalCAEnv(env map[string]string) {
+	for key := range env {
+		if strings.HasPrefix(key, "NAVIGATOR_INTERNAL_CA_") {
+			delete(env, key)
+		}
 	}
 }
 
@@ -4173,6 +4485,12 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	base := provisioner.NewBaseProvisioner("mesh-verify", pool)
 	var failures []string
+	meshIPs := make(map[string]string, len(privateerHosts))
+	for _, hostName := range privateerHosts {
+		if ip := manifest.MeshAddress(hostName); net.ParseIP(ip) != nil {
+			meshIPs[hostName] = ip
+		}
+	}
 
 	for _, hostName := range privateerHosts {
 		hostInfo, ok := manifest.Hosts[hostName]
@@ -4210,6 +4528,21 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 			continue
 		}
 
+		for peerName, peerIP := range meshIPs {
+			if peerName == hostName {
+				continue
+			}
+			routeCmd := fmt.Sprintf("ip route get %s | grep -q ' dev wg0 ' && echo OK || { ip route get %s; exit 1; }", peerIP, peerIP)
+			routeResult, routeErr := base.RunCommand(ctx, hostInfo, routeCmd)
+			if routeErr != nil {
+				detail := strings.TrimSpace(routeResultOutput(routeResult))
+				if detail == "" {
+					detail = routeErr.Error()
+				}
+				failures = append(failures, fmt.Sprintf("%s: mesh route to %s (%s) is not via wg0: %s", hostName, peerName, peerIP, detail))
+			}
+		}
+
 		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("privateer active, system resolver maps quartermaster.internal to %s", resolved))
 	}
 
@@ -4219,4 +4552,53 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	ux.Success(cmd.OutOrStdout(), "Mesh healthy on all privateer hosts")
 	return nil
+}
+
+func verifyKafkaControllerMesh(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil || !manifest.Infrastructure.Kafka.Enabled || len(manifest.Infrastructure.Kafka.Controllers) == 0 {
+		return nil
+	}
+	controllers := manifest.Infrastructure.Kafka.Controllers
+	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying Kafka controller mesh on %d controller(s)...\n", len(controllers))
+
+	base := provisioner.NewBaseProvisioner("kafka-controller-mesh-verify", pool)
+	var failures []string
+	for _, source := range controllers {
+		sourceHost, ok := manifest.Hosts[source.Host]
+		if !ok {
+			failures = append(failures, fmt.Sprintf("%s: source host not found", source.Host))
+			continue
+		}
+		for _, target := range controllers {
+			if source.Host == target.Host {
+				continue
+			}
+			targetIP := manifest.MeshAddress(target.Host)
+			targetPort := target.Port
+			if targetPort == 0 {
+				targetPort = 9093
+			}
+			checkCmd := fmt.Sprintf("timeout 3 bash -lc ':</dev/tcp/%s/%d'", targetIP, targetPort)
+			result, err := base.RunCommand(ctx, sourceHost, checkCmd)
+			if err != nil {
+				detail := strings.TrimSpace(routeResultOutput(result))
+				if detail == "" {
+					detail = err.Error()
+				}
+				failures = append(failures, fmt.Sprintf("%s -> %s (%s:%d): %s", source.Host, target.Host, targetIP, targetPort, detail))
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("controller overlay TCP failed:\n  %s", strings.Join(failures, "\n  "))
+	}
+	ux.Success(cmd.OutOrStdout(), "Kafka controllers reachable over mesh")
+	return nil
+}
+
+func routeResultOutput(result *ssh.CommandResult) string {
+	if result == nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
 }

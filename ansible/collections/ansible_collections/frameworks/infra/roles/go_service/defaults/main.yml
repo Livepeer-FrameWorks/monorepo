@@ -10,6 +10,9 @@ go_service_artifact_checksum: ""
 go_service_version: ""
 go_service_port: 0
 go_service_env: {}
+go_service_internal_ca_bundle_pem: ""
+go_service_internal_tls_cert_pem: ""
+go_service_internal_tls_key_pem: ""
 
 go_service_user: frameworks
 go_service_group: frameworks
@@ -19,3 +22,6 @@ go_service_env_file: "/etc/frameworks/{{ go_service_name }}.env"
 go_service_unit_path: "/etc/systemd/system/frameworks-{{ go_service_name }}.service"
 go_service_defer_start: false
 go_service_asset_path: "/tmp/{{ go_service_name }}.asset"
+go_service_internal_ca_default_path: /etc/frameworks/pki/ca.crt
+go_service_internal_tls_cert_default_path: "/etc/frameworks/pki/services/{{ go_service_name }}/tls.crt"
+go_service_internal_tls_key_default_path: "/etc/frameworks/pki/services/{{ go_service_name }}/tls.key"

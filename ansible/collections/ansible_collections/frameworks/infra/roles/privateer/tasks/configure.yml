@@ -44,15 +44,14 @@
     content: |
       [Unit]
       Description=FrameWorks Privateer .internal DNS route
-      Requires=systemd-resolved.service
-      After=systemd-resolved.service network-online.target
-      Before=frameworks-privateer.service
+      Wants=systemd-resolved.service frameworks-privateer.service
+      After=systemd-resolved.service frameworks-privateer.service network-online.target
 
       [Service]
       Type=oneshot
-      ExecStart={{ privateer_resolvectl_path.stdout }} dns lo 127.0.0.1
-      ExecStart={{ privateer_resolvectl_path.stdout }} domain lo ~internal
-      ExecStart={{ privateer_resolvectl_path.stdout }} default-route lo no
+      ExecStart={{ privateer_resolvectl_path.stdout }} dns wg0 127.0.0.1
+      ExecStart={{ privateer_resolvectl_path.stdout }} domain wg0 ~internal
+      ExecStart={{ privateer_resolvectl_path.stdout }} default-route wg0 no
       RemainAfterExit=yes
 
       [Install]
@@ -66,7 +65,6 @@
   ansible.builtin.systemd:
     name: frameworks-privateer-resolved
     enabled: true
-    state: "{{ (privateer_resolved_route_unit.changed or privateer_resolved_dropin.changed) | ternary('restarted', 'started') }}"
     daemon_reload: "{{ privateer_resolved_route_unit.changed }}"
   when: not ansible_check_mode
 

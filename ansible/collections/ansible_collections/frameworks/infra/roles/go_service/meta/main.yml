@@ -37,3 +37,15 @@ argument_specs:
         type: bool
         required: false
         default: false
+      go_service_internal_ca_bundle_pem:
+        type: str
+        required: false
+        default: ""
+      go_service_internal_tls_cert_pem:
+        type: str
+        required: false
+        default: ""
+      go_service_internal_tls_key_pem:
+        type: str
+        required: false
+        default: ""

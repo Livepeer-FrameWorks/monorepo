@@ -131,7 +131,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 	for k, v := range envMap {
 		envAny[k] = v
 	}
-	return map[string]any{
+	vars := map[string]any{
 		"go_service_name":              cfg.ServiceName,
 		"go_service_artifact_url":      url,
 		"go_service_artifact_checksum": checksum,
@@ -140,7 +140,17 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		"go_service_env":               envAny,
 		"go_service_defer_start":       config.DeferStart,
 		"go_service_binary_name":       binaryName,
-	}, nil
+	}
+	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
+		vars["go_service_internal_ca_bundle_pem"] = ca
+	}
+	if cert := metaString(config.Metadata, "internal_tls_cert_pem"); cert != "" {
+		vars["go_service_internal_tls_cert_pem"] = cert
+	}
+	if key := metaString(config.Metadata, "internal_tls_key_pem"); key != "" {
+		vars["go_service_internal_tls_key_pem"] = key
+	}
+	return vars, nil
 }
 
 func buildServiceEnvMap(config ServiceConfig) map[string]string {

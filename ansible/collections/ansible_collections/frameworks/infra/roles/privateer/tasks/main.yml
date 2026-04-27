@@ -3,6 +3,10 @@
   ansible.builtin.import_tasks: install.yml
   tags: [install]
 
+- name: Privateer | pki bootstrap
+  ansible.builtin.import_tasks: pki.yml
+  tags: [configure, pki]
+
 - name: Privateer | wireguard seed files
   ansible.builtin.import_tasks: wireguard.yml
   tags: [configure, wireguard]

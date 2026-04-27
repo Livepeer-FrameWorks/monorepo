@@ -117,3 +117,25 @@ func TestAddrEqual(t *testing.T) {
 		t.Error("empty Addr.IPNet should not compare equal to populated Addr")
 	}
 }
+
+func TestPeerRoutes(t *testing.T) {
+	routes := peerRoutes(mustParsePrefix(t, "10.88.0.5/32"), []Peer{
+		{
+			AllowedIPs: []net.IPNet{mustParseCIDR(t, "10.88.0.6/32")},
+		},
+		{
+			AllowedIPs: []net.IPNet{
+				mustParseCIDR(t, "10.88.0.7/32"),
+				mustParseCIDR(t, "10.88.0.6/32"),
+				mustParseCIDR(t, "10.88.0.5/32"),
+			},
+		},
+	})
+
+	if len(routes) != 2 {
+		t.Fatalf("routes = %d, want 2", len(routes))
+	}
+	if routes[0].String() != "10.88.0.6/32" || routes[1].String() != "10.88.0.7/32" {
+		t.Errorf("routes = %v, want [10.88.0.6/32 10.88.0.7/32]", routes)
+	}
+}
