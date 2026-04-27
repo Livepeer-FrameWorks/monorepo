@@ -17,7 +17,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/sirupsen/logrus v1.9.4
-	github.com/twmb/franz-go v1.20.7
+	github.com/twmb/franz-go v1.21.0
 	golang.org/x/crypto v0.50.0
 	golang.org/x/sync v0.20.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
