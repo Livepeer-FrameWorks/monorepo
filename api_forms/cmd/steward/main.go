@@ -14,6 +14,10 @@ import (
 )
 
 func main() {
+	if version.HandleCLI() {
+		return
+	}
+
 	logger := logging.NewLoggerWithService("steward")
 	config.LoadEnv(logger)
 

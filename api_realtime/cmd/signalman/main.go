@@ -31,6 +31,10 @@ import (
 )
 
 func main() {
+	if version.HandleCLI() {
+		return
+	}
+
 	// Setup logger
 	logger := logging.NewLoggerWithService("signalman")
 

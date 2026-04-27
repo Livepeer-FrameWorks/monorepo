@@ -60,6 +60,10 @@ type NavigatorServer struct {
 }
 
 func main() {
+	if version.HandleCLI() {
+		return
+	}
+
 	// Setup logger
 	logger := logging.NewLoggerWithService("navigator")
 

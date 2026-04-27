@@ -48,6 +48,10 @@ func notifyFoghornShutdown() error {
 }
 
 func main() {
+	if version.HandleCLI() {
+		return
+	}
+
 	// Setup structured logger
 	logger := logging.NewLoggerWithService("helmsman")
 

@@ -38,6 +38,84 @@
     timeout: 300
   when: not ansible_check_mode
 
+- name: Stat installed binary
+  ansible.builtin.stat:
+    path: "{{ go_service_install_dir }}/{{ go_service_name }}"
+  register: go_service_bin_stat
+  when: not ansible_check_mode
+
+- name: Stat install sentinel
+  ansible.builtin.stat:
+    path: "{{ go_service_install_sentinel }}"
+  register: go_service_install_sentinel_stat
+  when: not ansible_check_mode
+
+- name: Read installed service version
+  ansible.builtin.shell: |
+    set -o pipefail
+    version="$(
+      "{{ go_service_install_dir }}/{{ go_service_name }}" version 2>/dev/null |
+        awk -F': ' '/platform version:/ {print $2; exit}'
+    )"
+    test -n "$version"
+    printf '%s\n' "$version"
+  args:
+    executable: /bin/bash
+  register: go_service_installed_version
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - go_service_bin_stat.stat.exists | default(false)
+
+- name: Decide whether service binary reinstall is required
+  ansible.builtin.set_fact:
+    go_service_reinstall_required: >-
+      {{
+        not (go_service_bin_stat.stat.exists | default(false)) or
+        not (go_service_install_sentinel_stat.stat.exists | default(false)) or
+        (go_service_installed_version.rc | default(1)) != 0 or
+        (
+          go_service_version | length > 0 and
+          go_service_installed_version.stdout | default('') != go_service_version
+        )
+      }}
+  when: not ansible_check_mode
+
+- name: Remove stale install sentinel before service binary reinstall
+  ansible.builtin.file:
+    path: "{{ go_service_install_sentinel }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - go_service_reinstall_required | default(false)
+
+- name: Find existing binary candidates before service binary reinstall
+  ansible.builtin.find:
+    paths: "{{ go_service_install_dir }}"
+    file_type: file
+    recurse: false
+    patterns:
+      - "{{ go_service_name }}"
+      - "frameworks-{{ go_service_name }}"
+      - "{{ go_service_binary_name }}"
+      - frameworks
+  register: go_service_existing_binary_candidates
+  when:
+    - not ansible_check_mode
+    - go_service_reinstall_required | default(false)
+
+- name: Remove existing binary candidates before service binary reinstall
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ go_service_existing_binary_candidates.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - not ansible_check_mode
+    - go_service_reinstall_required | default(false)
+
 - name: Extract artifact
   ansible.builtin.unarchive:
     src: "{{ go_service_asset_path }}"

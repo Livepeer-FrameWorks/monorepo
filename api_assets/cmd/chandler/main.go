@@ -19,6 +19,10 @@ import (
 )
 
 func main() {
+	if version.HandleCLI() {
+		return
+	}
+
 	logger := logging.NewLoggerWithService("chandler")
 	config.LoadEnv(logger)
 

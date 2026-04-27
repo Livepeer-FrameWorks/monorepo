@@ -45,6 +45,30 @@
   register: privateer_bin_stat
   when: not ansible_check_mode
 
+- name: Stat Privateer install sentinel
+  ansible.builtin.stat:
+    path: "{{ privateer_install_sentinel }}"
+  register: privateer_install_sentinel_stat
+  when: not ansible_check_mode
+
+- name: Read installed Privateer version
+  ansible.builtin.shell: |
+    set -o pipefail
+    version="$(
+      "{{ privateer_bin }}" version 2>/dev/null |
+        awk -F': ' '/platform version:/ {print $2; exit}'
+    )"
+    test -n "$version"
+    printf '%s\n' "$version"
+  args:
+    executable: /bin/bash
+  register: privateer_installed_version
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - privateer_bin_stat.stat.exists | default(false)
+
 - name: Remove stale Privateer install sentinel when binary is missing
   ansible.builtin.file:
     path: "{{ privateer_install_sentinel }}"
@@ -52,6 +76,52 @@
   when:
     - not ansible_check_mode
     - not (privateer_bin_stat.stat.exists | default(false))
+
+- name: Remove stale Privateer install sentinel when binary version differs
+  ansible.builtin.file:
+    path: "{{ privateer_install_sentinel }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - privateer_install_sentinel_stat.stat.exists | default(false)
+    - privateer_version | length > 0
+    - privateer_installed_version.stdout | default('') != privateer_version
+
+- name: Find existing Privateer binary candidates before changed artifact install
+  ansible.builtin.find:
+    paths: "{{ privateer_install_dir }}"
+    file_type: file
+    recurse: false
+    patterns:
+      - privateer
+      - frameworks-privateer
+      - frameworks-privateer-*
+      - frameworks
+  register: privateer_existing_binary_candidates
+  when:
+    - not ansible_check_mode
+    - >
+      not (privateer_install_sentinel_stat.stat.exists | default(false)) or
+      (
+        privateer_version | length > 0 and
+        privateer_installed_version.stdout | default('') != privateer_version
+      )
+
+- name: Remove existing Privateer binary candidates before changed artifact install
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ privateer_existing_binary_candidates.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - not ansible_check_mode
+    - >
+      not (privateer_install_sentinel_stat.stat.exists | default(false)) or
+      (
+        privateer_version | length > 0 and
+        privateer_installed_version.stdout | default('') != privateer_version
+      )
 
 - name: Extract Privateer
   ansible.builtin.unarchive:
@@ -68,7 +138,10 @@
   ansible.builtin.shell: |
     set -e
     candidate=""
-    for path in "{{ privateer_bin }}" "{{ privateer_install_dir }}/frameworks-privateer" "{{ privateer_install_dir }}/frameworks"; do
+    for path in \
+      "{{ privateer_install_dir }}/frameworks-privateer" \
+      "{{ privateer_install_dir }}/frameworks" \
+      "{{ privateer_bin }}"; do
       if [ -f "$path" ]; then
         candidate="$path"
         break

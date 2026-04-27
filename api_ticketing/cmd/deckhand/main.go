@@ -32,6 +32,10 @@ import (
 )
 
 func main() {
+	if version.HandleCLI() {
+		return
+	}
+
 	logger := logging.NewLoggerWithService("deckhand")
 	config.LoadEnv(logger)
 

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -1335,8 +1336,15 @@ func validateInternalCA(rootCert, intermediateCert *x509.Certificate, intermedia
 	if intermediateCert.PublicKeyAlgorithm != x509.ECDSA {
 		return fmt.Errorf("intermediate ca cert public key is not ECDSA")
 	}
-	pub, ok := intermediateCert.PublicKey.(*ecdsa.PublicKey)
-	if !ok || pub.X.Cmp(intermediateKey.PublicKey.X) != 0 || pub.Y.Cmp(intermediateKey.PublicKey.Y) != 0 {
+	certPubDER, err := x509.MarshalPKIXPublicKey(intermediateCert.PublicKey)
+	if err != nil {
+		return fmt.Errorf("marshal intermediate ca cert public key: %w", err)
+	}
+	keyPubDER, err := x509.MarshalPKIXPublicKey(&intermediateKey.PublicKey)
+	if err != nil {
+		return fmt.Errorf("marshal intermediate ca key public key: %w", err)
+	}
+	if !bytes.Equal(certPubDER, keyPubDER) {
 		return fmt.Errorf("intermediate ca key does not match intermediate certificate")
 	}
 	if err := intermediateCert.CheckSignatureFrom(rootCert); err != nil {

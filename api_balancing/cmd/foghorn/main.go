@@ -75,6 +75,10 @@ func (cs *clientState) commodoreStatus() (bool, error) {
 }
 
 func main() {
+	if version.HandleCLI() {
+		return
+	}
+
 	// Initialize logger
 	logger := logging.NewLoggerWithService("foghorn")
 	state.SetLogger(logger)
