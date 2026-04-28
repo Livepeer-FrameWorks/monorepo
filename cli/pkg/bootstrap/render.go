@@ -7,6 +7,7 @@ import (
 
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/servicedefs"
 )
 
@@ -15,6 +16,11 @@ import (
 // state.
 type DeriveOptions struct {
 	BootstrapAdmin *BootstrapAdminSpec
+	// SharedEnv is the operator's shared env file, propagated unmodified so
+	// service-specific derivation can reach values that aren't in cluster.yaml
+	// service env_vars (e.g. LIVEPEER_ETH_ACCT_ADDR for livepeer-gateway's
+	// wallet_address metadata).
+	SharedEnv map[string]string
 }
 
 // BootstrapAdminSpec is the operator-account inputs for a system_operator account.
@@ -122,7 +128,7 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 	}
 
 	// Service registry + ingress sites + TLS bundles, derived from manifest.Services.
-	deriveIngressAndRegistry(d, m)
+	deriveIngressAndRegistry(d, m, opts)
 
 	if opts.BootstrapAdmin != nil {
 		role := opts.BootstrapAdmin.Role
@@ -159,7 +165,7 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 //
 // Auto entries that collide with explicit manifest entries on the stable id key
 // defer to the explicit entry (operator wins over derivation).
-func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest) {
+func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOptions) {
 	type bundleKey struct{ clusterID, bundleID string }
 	autoBundles := map[bundleKey]TLSBundle{}
 	autoSites := map[string]IngressSite{}
@@ -196,7 +202,7 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest) {
 						entry.Protocol = defs.HealthProtocol
 						entry.HealthEndpoint = defs.HealthPath
 					}
-					if md := deriveServiceMetadata(serviceName, hostKey, port, m); len(md) > 0 {
+					if md := deriveServiceMetadata(serviceName, hostKey, clusterID, port, m, svc, opts); len(md) > 0 {
 						entry.Metadata = md
 					}
 					d.Quartermaster.ServiceRegistry = append(d.Quartermaster.ServiceRegistry, entry)
@@ -351,29 +357,32 @@ func serviceHostKeys(svc inventory.ServiceConfig) []string {
 	return nil
 }
 
-// deriveServiceMetadata returns service-specific service_registry metadata that the
-// manifest can produce on its own (no on-host runtime data).
+// deriveServiceMetadata returns service-specific service_registry metadata
+// that the manifest can produce on its own (no on-host runtime data).
 //
-// livepeer-gateway emits public_host + public_port — the manifest-derivable subset
-// api_balancing needs for media-routing discovery (processor.go's DiscoverServices
-// consumer). The keys match servicedefs constants so consumers stay in lockstep.
-//
-// What is intentionally NOT here:
-//
-//   - admin_host / admin_port: the gateway's CLI port (default :7935) is not
-//     published by the compose template, so externalIP:7935 is unreachable in
-//     Docker mode. Admin/status access uses operator transport (SSH tunnel,
-//     ansible-local exec, docker exec), not Quartermaster service discovery.
-//
+// livepeer-gateway emits:
+//   - public_host: the gateway's published hostname. Resolution order:
+//     service `config.gateway_host` (manifest authority), then
+//     `gateway_host` / `LIVEPEER_GATEWAY_HOST` from shared env, then the
+//     cluster-scoped FQDN (livepeer.<cluster-slug>.<root-domain>) when the
+//     manifest has a root domain, then the root-domain FQDN, then the
+//     host's external IP as a last resort. api_balancing uses this to
+//     build the gateway URL for media routing, so the IP fallback is
+//     correct only when no DNS is configured.
+//   - public_port: the manifest service port.
 //   - wallet_address: required by Purser's deposit monitor
-//     (api_billing/internal/handlers/livepeer_deposit.go's
-//     LivepeerDepositMonitor.discoverGatewayAddresses, which skips gateways
-//     whose registry metadata lacks it). The wallet address lives in the
-//     gateway's SOPS-encrypted env file; ServiceRegistryEntry.Metadata is a
-//     plain map[string]string today, so it cannot carry a SecretRef. Renderer
-//     output for livepeer-gateway therefore omits the entry; runtime
-//     self-registration carries the wallet_address from the live env.
-func deriveServiceMetadata(serviceName, hostKey string, port int, m *inventory.Manifest) map[string]string {
+//     (api_billing/internal/handlers/livepeer_deposit.go skips gateways
+//     whose registry metadata lacks it). Resolution order: service config
+//     `eth_acct_addr` / `LIVEPEER_ETH_ACCT_ADDR` first, then opts.SharedEnv
+//     (production gitops carries `LIVEPEER_ETH_ACCT_ADDR` in config/
+//     production.env). Validate() fails any livepeer-gateway entry without
+//     a resolvable wallet, so the gap shows up at render time.
+//
+// Admin endpoints (admin_host / admin_port) are intentionally NOT modeled —
+// the gateway's CLI port is container-local in docker mode, so admin access
+// uses operator transport (SSH tunnel, ansible-local exec, docker exec), not
+// service discovery.
+func deriveServiceMetadata(serviceName, hostKey, clusterID string, port int, m *inventory.Manifest, svc inventory.ServiceConfig, opts DeriveOptions) map[string]string {
 	if serviceName != "livepeer-gateway" {
 		return nil
 	}
@@ -381,10 +390,62 @@ func deriveServiceMetadata(serviceName, hostKey string, port int, m *inventory.M
 	if !ok || host.ExternalIP == "" || port == 0 {
 		return nil
 	}
-	return map[string]string{
-		servicedefs.LivepeerGatewayMetadataPublicHost: host.ExternalIP,
+	publicHost := resolveLivepeerPublicHost(serviceName, svc, opts, m, clusterID, host.ExternalIP)
+	md := map[string]string{
+		servicedefs.LivepeerGatewayMetadataPublicHost: publicHost,
 		servicedefs.LivepeerGatewayMetadataPublicPort: strconvI(port),
 	}
+	if wallet := resolveLivepeerWalletAddress(svc, opts); wallet != "" {
+		md[servicedefs.LivepeerGatewayMetadataWalletAddress] = wallet
+	}
+	return md
+}
+
+// resolveLivepeerPublicHost picks the gateway's published hostname. Service
+// config / shared-env override wins; otherwise the cluster-scoped FQDN, then
+// the root-domain FQDN, then the host's external IP.
+func resolveLivepeerPublicHost(serviceName string, svc inventory.ServiceConfig, opts DeriveOptions, m *inventory.Manifest, clusterID, externalIP string) string {
+	if v := strings.TrimSpace(svc.Config["gateway_host"]); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(opts.SharedEnv["gateway_host"]); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(opts.SharedEnv["LIVEPEER_GATEWAY_HOST"]); v != "" {
+		return v
+	}
+	if scope := clusterderive.ClusterScopedRootDomain(m, clusterID); scope != "" {
+		if fqdn, ok := pkgdns.ServiceFQDN(serviceName, scope); ok {
+			return fqdn
+		}
+	}
+	if m != nil && m.RootDomain != "" {
+		if fqdn, ok := pkgdns.ServiceFQDN(serviceName, m.RootDomain); ok {
+			return fqdn
+		}
+	}
+	return externalIP
+}
+
+// resolveLivepeerWalletAddress reads the gateway's Ethereum address. Lookup
+// order: the service's manifest config block first (`eth_acct_addr` /
+// `LIVEPEER_ETH_ACCT_ADDR`), then opts.SharedEnv. Returns the empty string
+// when neither carries a non-empty value; Validate() then fails the rendered
+// file when livepeer-gateway is enabled, so the missing wallet shows up at
+// render time rather than as a silent skip in Purser's deposit monitor.
+func resolveLivepeerWalletAddress(svc inventory.ServiceConfig, opts DeriveOptions) string {
+	keys := []string{"eth_acct_addr", "LIVEPEER_ETH_ACCT_ADDR"}
+	for _, key := range keys {
+		if v := strings.TrimSpace(svc.Config[key]); v != "" {
+			return v
+		}
+	}
+	for _, key := range keys {
+		if v := strings.TrimSpace(opts.SharedEnv[key]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // strconvI is a minimal int→string helper for the metadata map; avoids a strconv

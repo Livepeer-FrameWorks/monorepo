@@ -270,9 +270,21 @@ values that only exist at apply time, model them as SecretRef-backed fields in t
 schema, not as silent runtime reads.
 
 **livepeer-gateway** is the one service with derived metadata today. The renderer
-emits `public_host` (host external IP) + `public_port` (manifest port); these are
-what `api_balancing` reads through Quartermaster's `DiscoverServices` for media
-routing.
+emits `public_host`, `public_port`, and `wallet_address`; `api_balancing` reads
+them through Quartermaster's `DiscoverServices` for media routing and Purser's
+deposit monitor reads `wallet_address` to credit tenant deposits.
+
+`public_host` resolves in this order:
+
+1. The livepeer-gateway service's `config.gateway_host` (manifest authority).
+2. `gateway_host` / `LIVEPEER_GATEWAY_HOST` from the operator's shared env.
+3. The cluster-scoped FQDN `livepeer.<cluster-slug>.<root-domain>` when the
+   manifest carries a root domain.
+4. The manifest's root-domain FQDN `livepeer.<root-domain>` as a last
+   DNS-backed fallback.
+5. The host's external IP, used only when no DNS source is configured.
+
+`public_port` is the manifest service port.
 
 Admin / CLI port endpoints (default `:7935`, container-local in Docker mode) are
 intentionally **not** modeled here — operator transport (SSH tunnel, ansible-local
@@ -283,9 +295,17 @@ discovery.
 entry.** Purser's deposit monitor
 (`api_billing/internal/handlers/livepeer_deposit.go`'s
 `LivepeerDepositMonitor.discoverGatewayAddresses`) skips any gateway whose
-registry metadata lacks it. The renderer must source `wallet_address` from a
-SecretRef-backed manifest field; validation rejects livepeer-gateway entries
-without one.
+registry metadata lacks it. The renderer resolves `wallet_address` in this
+order:
+
+1. The livepeer-gateway service's `config.eth_acct_addr` /
+   `config.LIVEPEER_ETH_ACCT_ADDR` in `cluster.yaml`.
+2. The operator's shared env (typically `gitops/config/<profile>.env`),
+   keyed `LIVEPEER_ETH_ACCT_ADDR` or `eth_acct_addr`.
+
+Validation rejects any livepeer-gateway entry without a resolved
+`wallet_address`, so a misconfigured manifest fails at render time rather
+than silently dropping deposit monitoring at runtime.
 
 ### `system_tenant_cluster_access`
 

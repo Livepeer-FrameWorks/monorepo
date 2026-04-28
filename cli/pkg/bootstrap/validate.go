@@ -176,6 +176,18 @@ func (r *Rendered) validateQuartermaster(errs *ValidationErrors) {
 			}
 			seenRegistryKeys[key] = true
 		}
+		// livepeer-gateway entries must carry wallet_address. Without it
+		// Purser's deposit monitor silently skips the gateway and tenant
+		// deposits never get credited; failing here surfaces the gap at
+		// render time instead of as a runtime regression.
+		if e.ServiceName == "livepeer-gateway" {
+			if wallet := e.Metadata["wallet_address"]; wallet == "" {
+				*errs = append(*errs, &ValidationError{
+					Path: path + ".metadata.wallet_address",
+					Msg:  "required for livepeer-gateway (set eth_acct_addr in services.livepeer-gateway.config, or LIVEPEER_ETH_ACCT_ADDR in the operator's shared env)",
+				})
+			}
+		}
 	}
 
 	seenBundleIDs := map[string]bool{}

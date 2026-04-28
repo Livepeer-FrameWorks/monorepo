@@ -389,17 +389,22 @@ func TestDeriveEmitsRegistryEntryPerHost(t *testing.T) {
 	}
 }
 
-// TestDeriveLivepeerGatewayMetadata pins the manifest-derivable Livepeer
-// metadata: public_host (host external IP) + public_port (manifest service
-// port). Admin endpoints are intentionally not modeled — operator transport
-// handles that. wallet_address requires SecretRef-backed metadata, which the
-// schema doesn't carry today; see render.go's deriveServiceMetadata.
-func TestDeriveLivepeerGatewayMetadata(t *testing.T) {
+// TestDeriveLivepeerGatewayMetadataWithGatewayHost pins the production
+// resolution: when service config sets gateway_host, that wins over both the
+// cluster-scoped FQDN and the host external IP. Wallet address comes from
+// shared env. Admin endpoints are intentionally not modeled.
+func TestDeriveLivepeerGatewayMetadataWithGatewayHost(t *testing.T) {
 	m := minimalManifest()
 	m.Services = map[string]inventory.ServiceConfig{
-		"livepeer-gateway": {Enabled: true, Host: "core-eu-1", Port: 8935},
+		"livepeer-gateway": {
+			Enabled: true,
+			Host:    "core-eu-1",
+			Port:    8935,
+			Config:  map[string]string{"gateway_host": "livepeer.frameworks.network"},
+		},
 	}
-	d, err := Derive(m, DeriveOptions{})
+	opts := DeriveOptions{SharedEnv: map[string]string{"LIVEPEER_ETH_ACCT_ADDR": "0xabc123"}}
+	d, err := Derive(m, opts)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -407,16 +412,96 @@ func TestDeriveLivepeerGatewayMetadata(t *testing.T) {
 		t.Fatalf("expected 1 registry entry; got %d", got)
 	}
 	md := d.Quartermaster.ServiceRegistry[0].Metadata
-	if md["public_host"] != "203.0.113.10" {
-		t.Errorf("public_host = %q, want 203.0.113.10", md["public_host"])
+	if md["public_host"] != "livepeer.frameworks.network" {
+		t.Errorf("public_host = %q, want livepeer.frameworks.network", md["public_host"])
 	}
 	if md["public_port"] != "8935" {
 		t.Errorf("public_port = %q, want 8935", md["public_port"])
 	}
+	if md["wallet_address"] != "0xabc123" {
+		t.Errorf("wallet_address = %q, want 0xabc123", md["wallet_address"])
+	}
 	for k := range md {
-		if k != "public_host" && k != "public_port" {
-			t.Errorf("unexpected metadata key %q (admin endpoints must not appear; wallet_address needs SecretRef support)", k)
+		if k != "public_host" && k != "public_port" && k != "wallet_address" {
+			t.Errorf("unexpected metadata key %q (admin endpoints must not appear in derived metadata)", k)
 		}
+	}
+}
+
+// TestDeriveLivepeerGatewayMetadataClusterScopedFallback covers the case
+// where service config has no gateway_host but the manifest carries a root
+// domain — the renderer must build the cluster-scoped FQDN
+// (livepeer.<cluster-slug>.<root>) rather than fall back to the raw IP.
+func TestDeriveLivepeerGatewayMetadataClusterScopedFallback(t *testing.T) {
+	m := minimalManifest()
+	m.RootDomain = "frameworks.network"
+	m.Clusters = map[string]inventory.ClusterConfig{
+		"media-central-primary": {Name: "Media Central Primary"},
+	}
+	m.Hosts["core-eu-1"] = inventory.Host{ExternalIP: "203.0.113.10", Cluster: "media-central-primary"}
+	m.Services = map[string]inventory.ServiceConfig{
+		"livepeer-gateway": {Enabled: true, Host: "core-eu-1", Port: 8935, Cluster: "media-central-primary"},
+	}
+	d, err := Derive(m, DeriveOptions{SharedEnv: map[string]string{"LIVEPEER_ETH_ACCT_ADDR": "0xabc123"}})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	if got := len(d.Quartermaster.ServiceRegistry); got != 1 {
+		t.Fatalf("expected 1 registry entry; got %d", got)
+	}
+	md := d.Quartermaster.ServiceRegistry[0].Metadata
+	want := "livepeer.media-central-primary.frameworks.network"
+	if md["public_host"] != want {
+		t.Errorf("public_host = %q, want %q", md["public_host"], want)
+	}
+}
+
+// TestDeriveLivepeerGatewayWalletFromServiceConfig confirms the manifest
+// authority path: putting eth_acct_addr in services.livepeer-gateway.config
+// works even when shared env doesn't carry the value.
+func TestDeriveLivepeerGatewayWalletFromServiceConfig(t *testing.T) {
+	m := minimalManifest()
+	m.Services = map[string]inventory.ServiceConfig{
+		"livepeer-gateway": {
+			Enabled: true,
+			Host:    "core-eu-1",
+			Port:    8935,
+			Config:  map[string]string{"eth_acct_addr": "0xdef456"},
+		},
+	}
+	d, err := Derive(m, DeriveOptions{}) // no SharedEnv
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	md := d.Quartermaster.ServiceRegistry[0].Metadata
+	if md["wallet_address"] != "0xdef456" {
+		t.Errorf("wallet_address = %q, want 0xdef456 (sourced from service config)", md["wallet_address"])
+	}
+}
+
+// TestDeriveLivepeerGatewayWalletMissingFailsValidate confirms the fail-loud
+// path: a livepeer-gateway entry without a resolvable wallet_address must
+// fail Validate(), so render time catches a misconfigured operator instead
+// of Purser silently skipping the gateway at runtime.
+func TestDeriveLivepeerGatewayWalletMissingFailsValidate(t *testing.T) {
+	m := minimalManifest()
+	m.Services = map[string]inventory.ServiceConfig{
+		"livepeer-gateway": {Enabled: true, Host: "core-eu-1", Port: 8935},
+	}
+	d, err := Derive(m, DeriveOptions{}) // no SharedEnv
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	r, err := Render(d, nil, nil)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	verr := r.Validate()
+	if verr == nil {
+		t.Fatal("expected Validate error for livepeer-gateway without wallet_address")
+	}
+	if !strings.Contains(verr.Error(), "wallet_address") {
+		t.Errorf("expected wallet_address in error, got %v", verr)
 	}
 }
 

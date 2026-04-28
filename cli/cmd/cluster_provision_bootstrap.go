@@ -25,8 +25,10 @@ import (
 //
 // The returned bytes are the full multi-section document (quartermaster,
 // purser, accounts); each service decodes only its own section.
-func renderBootstrapYAML(cmd *cobra.Command, manifest *inventory.Manifest, manifestDir string) ([]byte, error) {
-	opts := bootstrap.DeriveOptions{}
+func renderBootstrapYAML(cmd *cobra.Command, manifest *inventory.Manifest, manifestDir string, sharedEnv map[string]string) ([]byte, error) {
+	opts := bootstrap.DeriveOptions{
+		SharedEnv: sharedEnv,
+	}
 
 	if email, _ := cmd.Flags().GetString("bootstrap-admin-email"); email != "" { //nolint:errcheck // flag always exists
 		ref, err := bootstrapAdminPasswordRef(cmd)

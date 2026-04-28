@@ -589,7 +589,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
 			bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
 
-			bootstrapYAML, renderErr := renderBootstrapYAML(cmd, manifest, manifestDir)
+			bootstrapYAML, renderErr := renderBootstrapYAML(cmd, manifest, manifestDir, sharedEnv)
 			if renderErr != nil {
 				bootstrapCancel()
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap render failed: %v", renderErr))
