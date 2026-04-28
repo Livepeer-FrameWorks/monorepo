@@ -15,6 +15,12 @@ type Manifest struct {
 	EnvFiles   []string `yaml:"env_files,omitempty"`   // shared env files for all services, merged in order
 	HostsFile  string   `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
 
+	// BootstrapOverlay is an optional path (relative to the manifest file) to a GitOps
+	// bootstrap overlay (`bootstrap.frameworks.dev/v1alpha1`). Empty = no overlay; the
+	// rendered desired-state file uses manifest-derived state only. See
+	// docs/architecture/bootstrap-desired-state.md.
+	BootstrapOverlay string `yaml:"bootstrap_overlay,omitempty"`
+
 	Hosts          map[string]Host              `yaml:"hosts,omitempty"`
 	Clusters       map[string]ClusterConfig     `yaml:"clusters,omitempty"`
 	WireGuard      *WireGuardConfig             `yaml:"wireguard,omitempty"`

@@ -36,6 +36,7 @@ import (
 	infra "frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
 
+	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
@@ -1785,78 +1786,15 @@ func stringMapToInterfaceMap(values map[string]string) map[string]any {
 	return result
 }
 
-// tlsBundleID derives a deterministic, filesystem-safe bundle id from the
-// root domain. The result must always satisfy ingress.IsValidBundleID
-// because Privateer uses the id directly as a path component beneath
-// ingress.TLSRoot. Dots become hyphens, leading wildcard markers expand to
-// the literal "wildcard-", and the result is lowercased so a manifest with
-// "Frameworks.Network" (a valid DNS root) doesn't produce an id Privateer
-// rejects later.
-func tlsBundleID(kind, rootDomain string) string {
-	replacer := strings.NewReplacer(".", "-", "*", "wildcard-", " ", "-")
-	return strings.ToLower(kind + "-" + replacer.Replace(rootDomain))
-}
-
-func clusterScopedRootDomain(manifest *inventory.Manifest, clusterID string) string {
-	if manifest == nil || manifest.RootDomain == "" || clusterID == "" {
-		return ""
-	}
-
-	clusterName := ""
-	if cfg, ok := manifest.Clusters[clusterID]; ok {
-		clusterName = cfg.Name
-	}
-	clusterSlug := pkgdns.ClusterSlug(clusterID, clusterName)
-	if clusterSlug == "" {
-		return ""
-	}
-	return clusterSlug + "." + manifest.RootDomain
-}
-
-func publicServiceRootDomain(serviceType string, manifest *inventory.Manifest, clusterID string) string {
-	if manifest == nil {
-		return ""
-	}
-	if pkgdns.IsClusterScopedServiceType(serviceType) {
-		return clusterScopedRootDomain(manifest, clusterID)
-	}
-	return strings.TrimSpace(manifest.RootDomain)
-}
-
-func ingressWildcardBundleDomains(manifest *inventory.Manifest, clusterID string) []string {
-	if manifest == nil || manifest.RootDomain == "" {
-		return nil
-	}
-
-	domains := []string{manifest.RootDomain}
-	if clusterRoot := clusterScopedRootDomain(manifest, clusterID); clusterRoot != "" {
-		domains = append(domains, clusterRoot)
-	}
-	return domains
-}
-
-func autoIngressDomains(serviceName string, manifest *inventory.Manifest, clusterID string) ([]string, string) {
-	if serviceName == "foredeck" {
-		if manifest == nil || manifest.RootDomain == "" {
-			return nil, ""
-		}
-		return []string{manifest.RootDomain, "www." + manifest.RootDomain}, tlsBundleID("apex", manifest.RootDomain)
-	}
-
-	serviceType, ok := publicServiceType(serviceName)
-	if !ok {
-		return nil, ""
-	}
-	rootDomain := publicServiceRootDomain(serviceType, manifest, clusterID)
-	if rootDomain == "" {
-		return nil, ""
-	}
-	fqdn, ok := pkgdns.ServiceFQDN(serviceType, rootDomain)
-	if !ok || fqdn == "" {
-		return nil, ""
-	}
-	return []string{fqdn}, tlsBundleID("wildcard", rootDomain)
-}
+// Ingress / public-service derivation helpers live in cli/pkg/clusterderive so
+// they are shared with the bootstrap-desired-state renderer. Aliases below keep
+// existing call sites readable.
+var (
+	tlsBundleID                  = clusterderive.TLSBundleID
+	publicServiceRootDomain      = clusterderive.PublicServiceRootDomain
+	ingressWildcardBundleDomains = clusterderive.IngressWildcardBundleDomains
+	autoIngressDomains           = clusterderive.AutoIngressDomains
+)
 
 func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
 	token, ok := runtimeData["service_token"].(string)
@@ -3804,46 +3742,13 @@ func desiredClusterBaseURL(manifest *inventory.Manifest, quartermasterHost inven
 	return baseURL
 }
 
-// selfRegisters returns true for services that create their own
-// service_instance via BootstrapService on startup. The CLI should
-// not register instances for these to avoid conflicts.
-func selfRegisters(serviceName string) bool {
-	switch serviceName {
-	case "bridge", "foghorn":
-		return true
-	}
-	return false
-}
-
-// publicServiceType maps public-facing services to DNS subdomain names.
-func publicServiceType(serviceName string) (string, bool) {
-	switch serviceName {
-	case "bridge":
-		return "bridge", true
-	case "chandler":
-		return "chandler", true
-	case "foghorn":
-		return "foghorn", true
-	case "chartroom":
-		return "chartroom", true
-	case "foredeck":
-		return "foredeck", true
-	case "logbook":
-		return "logbook", true
-	case "steward":
-		return "steward", true
-	case "listmonk":
-		return "listmonk", true
-	case "chatwoot":
-		return "chatwoot", true
-	case "livepeer-gateway":
-		return "livepeer-gateway", true
-	case "vmauth":
-		return "telemetry", true
-	default:
-		return "", false
-	}
-}
+// selfRegisters and publicServiceType are shared with cli/pkg/clusterderive so the
+// post-Ansible chain and the bootstrap-desired-state renderer agree on the public
+// service surface.
+var (
+	selfRegisters     = clusterderive.SelfRegisters
+	publicServiceType = clusterderive.PublicServiceType
+)
 
 func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (map[string]string, error) {
 	if name != "livepeer-gateway" {
