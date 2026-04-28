@@ -207,6 +207,9 @@ func (r *Rendered) validateQuartermaster(errs *ValidationErrors) {
 		if len(b.Domains) == 0 {
 			*errs = append(*errs, &ValidationError{Path: path + ".domains", Msg: "required (non-empty)"})
 		}
+		if b.Email == "" {
+			*errs = append(*errs, &ValidationError{Path: path + ".email", Msg: "required"})
+		}
 	}
 
 	seenSiteIDs := map[string]bool{}

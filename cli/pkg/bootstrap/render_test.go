@@ -547,14 +547,14 @@ func TestDeriveAutoTLSBundlesScopedPerRoot(t *testing.T) {
 		"chatwoot": {Enabled: true, Host: "core-eu-1", Port: 18092},
 		"chandler": {Enabled: true, Host: "core-eu-1", Port: 18020},
 	}
-	d, err := Derive(m, DeriveOptions{})
+	d, err := Derive(m, DeriveOptions{SharedEnv: map[string]string{"ACME_EMAIL": "ops@example.com"}})
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
 
-	bundles := map[string][]string{}
+	bundles := map[string]TLSBundle{}
 	for _, b := range d.Quartermaster.Ingress.TLSBundles {
-		bundles[b.ID] = b.Domains
+		bundles[b.ID] = b
 	}
 
 	wantApex := []string{"frameworks.network", "*.frameworks.network"}
@@ -562,8 +562,11 @@ func TestDeriveAutoTLSBundlesScopedPerRoot(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected bundle wildcard-frameworks-network; got %+v", bundles)
 	}
-	if !slices.Equal(gotApex, wantApex) {
-		t.Errorf("wildcard-frameworks-network domains = %v, want %v", gotApex, wantApex)
+	if !slices.Equal(gotApex.Domains, wantApex) {
+		t.Errorf("wildcard-frameworks-network domains = %v, want %v", gotApex.Domains, wantApex)
+	}
+	if gotApex.Email != "ops@example.com" || gotApex.Issuer != "navigator" {
+		t.Errorf("wildcard-frameworks-network issuer/email = %q/%q, want navigator/ops@example.com", gotApex.Issuer, gotApex.Email)
 	}
 
 	wantCluster := []string{
@@ -574,8 +577,8 @@ func TestDeriveAutoTLSBundlesScopedPerRoot(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected bundle wildcard-core-central-primary-frameworks-network; got %+v", bundles)
 	}
-	if !slices.Equal(gotCluster, wantCluster) {
-		t.Errorf("wildcard-core-central-primary-frameworks-network domains = %v, want %v", gotCluster, wantCluster)
+	if !slices.Equal(gotCluster.Domains, wantCluster) {
+		t.Errorf("wildcard-core-central-primary-frameworks-network domains = %v, want %v", gotCluster.Domains, wantCluster)
 	}
 }
 

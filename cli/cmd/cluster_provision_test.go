@@ -700,6 +700,189 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
+	envFile := writeTestEnvFile(t, testSharedSecrets+strings.Join([]string{
+		"DATABASE_PASSWORD=test-db-pass",
+		"CLICKHOUSE_PASSWORD=test-ch-pass",
+		"CHATWOOT_API_TOKEN=test-chatwoot-token",
+		"CLOUDFLARE_API_TOKEN=test-cf-token",
+		"CLOUDFLARE_ZONE_ID=test-zone",
+		"CLOUDFLARE_ACCOUNT_ID=test-account",
+		"ACME_EMAIL=ops@example.com",
+		"GATEWAY_PUBLIC_URL=https://api.frameworks.network",
+		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64=cm9vdA==",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64=aW50ZXJtZWRpYXRl",
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64=a2V5",
+	}, "\n")+"\n")
+
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		EnvFiles:   []string{envFile},
+		Hosts: map[string]inventory.Host{
+			"central-eu-1": {ExternalIP: "10.0.0.10", Roles: []string{"control"}},
+			"yuga-eu-1":    {ExternalIP: "10.0.0.11", Roles: []string{"infrastructure"}},
+			"kafka-eu-1":   {ExternalIP: "10.0.0.12", Roles: []string{"infrastructure"}},
+			"ch-eu-1":      {ExternalIP: "10.0.0.13", Roles: []string{"infrastructure"}},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"core-central-primary": {Name: "Core Central Primary"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Port:    5433,
+				Nodes:   []inventory.PostgresNode{{Host: "yuga-eu-1", ID: 1}},
+			},
+			ClickHouse: &inventory.ClickHouseConfig{
+				Enabled: true,
+				Host:    "ch-eu-1",
+				Port:    9000,
+			},
+			Kafka: &inventory.KafkaConfig{
+				Enabled:   true,
+				ClusterID: "core-central-primary",
+				Brokers:   []inventory.KafkaBroker{{Host: "kafka-eu-1", ID: 1, Port: 9092}},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"bridge":           {Enabled: true, Host: "central-eu-1"},
+			"commodore":        {Enabled: true, Host: "central-eu-1"},
+			"quartermaster":    {Enabled: true, Host: "central-eu-1"},
+			"purser":           {Enabled: true, Host: "central-eu-1"},
+			"periscope-query":  {Enabled: true, Host: "central-eu-1"},
+			"periscope-ingest": {Enabled: true, Host: "central-eu-1"},
+			"decklog":          {Enabled: true, Host: "central-eu-1"},
+			"signalman":        {Enabled: true, Host: "central-eu-1"},
+			"navigator":        {Enabled: true, Host: "central-eu-1"},
+			"foghorn":          {Enabled: true, Host: "central-eu-1"},
+			"deckhand":         {Enabled: true, Host: "central-eu-1"},
+			"skipper":          {Enabled: true, Host: "central-eu-1"},
+			"chatwoot":         {Enabled: true, Host: "central-eu-1", Port: 18092},
+		},
+	}
+
+	sharedEnv := testLoadSharedEnv(t, manifest)
+	runtimeData := map[string]any{"service_token": "runtime-service-token"}
+	cases := []struct {
+		serviceID string
+		want      map[string]string
+		keys      []string
+	}{
+		{
+			serviceID: "bridge",
+			want: map[string]string{
+				"COMMODORE_GRPC_ADDR":     "commodore.internal:19001",
+				"PERISCOPE_GRPC_ADDR":     "periscope-query.internal:19004",
+				"PURSER_GRPC_ADDR":        "purser.internal:19003",
+				"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002",
+				"SIGNALMAN_GRPC_ADDR":     "signalman.internal:19005",
+				"DECKLOG_GRPC_ADDR":       "decklog.internal:18006",
+				"SKIPPER_SPOKE_URL":       "http://skipper.internal:18018/mcp/spoke",
+			},
+			keys: []string{"SERVICE_TOKEN", "JWT_SECRET", "USAGE_HASH_SECRET", "GRPC_TLS_CA_PATH"},
+		},
+		{
+			serviceID: "quartermaster",
+			want: map[string]string{
+				"NAVIGATOR_GRPC_ADDR": "navigator.internal:18011",
+				"DECKLOG_GRPC_ADDR":   "decklog.internal:18006",
+				"PURSER_GRPC_ADDR":    "purser.internal:19003",
+			},
+			keys: []string{"DATABASE_URL", "SERVICE_TOKEN", "JWT_SECRET", "GRPC_TLS_CA_PATH", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "commodore",
+			want: map[string]string{
+				"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002",
+				"PURSER_GRPC_ADDR":        "purser.internal:19003",
+				"DECKLOG_GRPC_ADDR":       "decklog.internal:18006",
+			},
+			keys: []string{"DATABASE_URL", "SERVICE_TOKEN", "JWT_SECRET", "PASSWORD_RESET_SECRET", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "purser",
+			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002"},
+			keys:      []string{"DATABASE_URL", "SERVICE_TOKEN", "JWT_SECRET", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "navigator",
+			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002", "NAVIGATOR_GRPC_PORT": "18011", "NAVIGATOR_PORT": "18010"},
+			keys:      []string{"DATABASE_URL", "SERVICE_TOKEN", "FIELD_ENCRYPTION_KEY", "BRAND_DOMAIN", "ACME_EMAIL", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ZONE_ID", "CLOUDFLARE_ACCOUNT_ID"},
+		},
+		{
+			serviceID: "periscope-query",
+			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002"},
+			keys:      []string{"DATABASE_URL", "CLICKHOUSE_ADDR", "CLICKHOUSE_DB", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "JWT_SECRET", "SERVICE_TOKEN", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "periscope-ingest",
+			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002"},
+			keys:      []string{"CLICKHOUSE_ADDR", "CLICKHOUSE_DB", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "SERVICE_TOKEN"},
+		},
+		{
+			serviceID: "decklog",
+			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002", "DECKLOG_GRPC_ADDR": "decklog.internal:18006"},
+			keys:      []string{"KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "SERVICE_TOKEN", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "signalman",
+			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002", "DECKLOG_GRPC_ADDR": "decklog.internal:18006"},
+			keys:      []string{"KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "SERVICE_TOKEN", "JWT_SECRET"},
+		},
+		{
+			serviceID: "foghorn",
+			want: map[string]string{
+				"FOGHORN_CONTROL_BIND_ADDR": ":18019",
+				"COMMODORE_GRPC_ADDR":       "commodore.internal:19001",
+				"QUARTERMASTER_GRPC_ADDR":   "quartermaster.internal:19002",
+				"NAVIGATOR_GRPC_ADDR":       "navigator.internal:18011",
+			},
+			keys: []string{"DATABASE_URL", "SERVICE_TOKEN", "DECKLOG_GRPC_ADDR", "PURSER_GRPC_ADDR", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "deckhand",
+			want:      map[string]string{"CHATWOOT_HOST": "central-eu-1.internal", "CHATWOOT_PORT": "18092", "DECKLOG_GRPC_ADDR": "decklog.internal:18006"},
+			keys:      []string{"SERVICE_TOKEN", "CHATWOOT_API_TOKEN", "QUARTERMASTER_GRPC_ADDR", "PURSER_GRPC_ADDR", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "skipper",
+			want:      nil,
+			keys:      []string{"DATABASE_URL", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "GATEWAY_PUBLIC_URL", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.serviceID, func(t *testing.T) {
+			env, err := buildServiceEnvVars(&orchestrator.Task{
+				Name:      tc.serviceID,
+				Type:      tc.serviceID,
+				ServiceID: tc.serviceID,
+				Host:      "central-eu-1",
+				ClusterID: "core-central-primary",
+				Phase:     orchestrator.PhaseApplications,
+			}, manifest, runtimeData, "", "", sharedEnv)
+			if err != nil {
+				t.Fatalf("buildServiceEnvVars returned error: %v", err)
+			}
+			for key, want := range tc.want {
+				if want == "" {
+					continue
+				}
+				if got := env[key]; got != want {
+					t.Fatalf("%s = %q, want %q", key, got, want)
+				}
+			}
+			for _, key := range tc.keys {
+				if strings.TrimSpace(env[key]) == "" {
+					t.Fatalf("expected %s to be populated", key)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildServiceEnvVarsEscapesDatabaseURLPassword(t *testing.T) {
 	envFile := writeTestEnvFile(t, testSharedSecrets+"DATABASE_PASSWORD=pa:ss@/word?#%\n")
 	manifest := &inventory.Manifest{

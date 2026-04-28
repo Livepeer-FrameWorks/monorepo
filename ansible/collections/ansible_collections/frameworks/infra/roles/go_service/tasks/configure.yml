@@ -4,7 +4,7 @@
     dest: "{{ go_service_env_file }}"
     content: |
       {% for k, v in (go_service_env | dictsort) %}
-      {{ k }}={{ v }}
+      {{ k }}={{ (v | string | replace('\r', '') | replace('\n', '\\n')) | quote }}
       {% endfor %}
     owner: "{{ omit if ansible_check_mode else go_service_user }}"
     group: "{{ omit if ansible_check_mode else go_service_group }}"

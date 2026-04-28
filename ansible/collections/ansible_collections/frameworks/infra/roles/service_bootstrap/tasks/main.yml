@@ -12,6 +12,14 @@
 - name: Service_bootstrap | apply
   when: service_bootstrap_mode == "apply"
   block:
+    - name: Service_bootstrap | apply | ensure state root is traversable
+      ansible.builtin.file:
+        path: "{{ service_bootstrap_state_dir | dirname }}"
+        state: directory
+        owner: root
+        group: "{{ service_bootstrap_group }}"
+        mode: "0755"
+
     - name: Service_bootstrap | apply | ensure state dir exists
       ansible.builtin.file:
         path: "{{ service_bootstrap_state_dir }}"
@@ -19,6 +27,14 @@
         owner: "{{ service_bootstrap_user }}"
         group: "{{ service_bootstrap_group }}"
         mode: "0750"
+
+    - name: Service_bootstrap | apply | ensure Ansible temp dir exists
+      ansible.builtin.file:
+        path: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
+        state: directory
+        owner: "{{ service_bootstrap_user }}"
+        group: "{{ service_bootstrap_group }}"
+        mode: "0700"
 
     - name: Service_bootstrap | apply | write rendered desired-state file
       ansible.builtin.copy:
@@ -33,6 +49,8 @@
       # --check is parse + intra-file reference validation only; it returns
       # before the binary calls config.LoadEnv / RequireEnv, so it does not
       # need DATABASE_URL or SERVICE_TOKEN sourced.
+      vars:
+        ansible_remote_tmp: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
       ansible.builtin.command:
         argv:
           - "{{ service_bootstrap_install_dir }}/{{ service_bootstrap_service }}"
@@ -46,14 +64,15 @@
 
     - name: Service_bootstrap | apply | run subcommand
       # Apply needs DATABASE_URL / SERVICE_TOKEN / QUARTERMASTER_GRPC_ADDR.
-      # The systemd unit reads these from EnvironmentFile; the wrapper script
-      # sources the same file with `set -a` so apply runs under the same env
-      # contract as the service would when it boots.
+      # The env file is rendered as shell-safe KEY=value assignments, so the
+      # bootstrap process can source it before execing the service binary.
       #
       # We use `argv` (no shell parsing of the args list) and a tiny bash -c
       # wrapper that takes the env file as $1 and the binary argv as $@, so
       # service_bootstrap_extra_args entries can contain spaces / quotes
       # without being re-tokenized by the shell. Each entry is one argv slot.
+      vars:
+        ansible_remote_tmp: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
       ansible.builtin.command:
         argv: >-
           {{
@@ -90,7 +109,9 @@
   when: service_bootstrap_mode == "validate"
   # Validate is a post-state cross-service invariant check (no rendered file
   # input). It needs the service's runtime env (DB + sibling-service gRPC),
-  # so the env file is sourced just like apply.
+  # so the bootstrap process sources the rendered service env file.
+  vars:
+    ansible_remote_tmp: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
   ansible.builtin.command:
     argv:
       - /bin/bash

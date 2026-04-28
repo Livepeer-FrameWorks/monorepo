@@ -3197,6 +3197,15 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		env["NAVIGATOR_PORT"] = "18010"
 		env["NAVIGATOR_GRPC_PORT"] = "18011"
 	}
+	if baseName == "bridge" {
+		if skipper, ok := manifest.Services["skipper"]; ok && skipper.Enabled {
+			port := skipper.Port
+			if port == 0 {
+				port = 18018
+			}
+			env["SKIPPER_SPOKE_URL"] = fmt.Sprintf("http://skipper.internal:%d/mcp/spoke", port)
+		}
+	}
 
 	// Privateer reaches Navigator over the mesh for both internal mTLS and
 	// public ingress TLS bundle sync. Default the address to navigator's mesh

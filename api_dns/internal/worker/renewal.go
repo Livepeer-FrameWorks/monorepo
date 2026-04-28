@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"os"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ type RenewalWorker struct {
 	logger      logging.Logger
 	interval    time.Duration
 	sleep       sleepFunc
+	acmeEmail   string
 }
 
 type renewalStore interface {
@@ -43,13 +43,14 @@ func defaultSleep(ctx context.Context, duration time.Duration) error {
 }
 
 // NewRenewalWorker creates a new renewal worker
-func NewRenewalWorker(s renewalStore, cm certIssuer, l logging.Logger) *RenewalWorker {
+func NewRenewalWorker(s renewalStore, cm certIssuer, l logging.Logger, acmeEmail string) *RenewalWorker {
 	return &RenewalWorker{
 		store:       s,
 		certManager: cm,
 		logger:      l,
 		interval:    24 * time.Hour, // Check daily
 		sleep:       defaultSleep,
+		acmeEmail:   strings.TrimSpace(acmeEmail),
 	}
 }
 
@@ -102,13 +103,7 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 		}
 		log.Info("Renewing certificate")
 
-		// Use contact email for ACME registration
-		// For tenant-specific certificates, we could look up tenant contact email from Quartermaster
-		// For now, use the platform default
-		email := os.Getenv("FROM_EMAIL")
-		if email == "" {
-			email = "info@frameworks.network"
-		}
+		email := w.acmeEmail
 
 		// Attempt renewal with tenant context
 		var lastErr error
@@ -151,10 +146,7 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 	w.logger.WithField("count", len(bundles)).Info("Found tls bundles expiring soon")
 	for _, bundle := range bundles {
 		log := w.logger.WithField("bundle_id", bundle.BundleID).WithField("domains", bundle.Domains)
-		email := os.Getenv("FROM_EMAIL")
-		if email == "" {
-			email = "info@frameworks.network"
-		}
+		email := w.acmeEmail
 
 		var lastErr error
 		for attempt := 1; attempt <= 3; attempt++ {

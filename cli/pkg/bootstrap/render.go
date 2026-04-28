@@ -159,7 +159,9 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 //   - service_registry rows for non-self-registering public services, keyed off
 //     servicedefs for default port / health path / protocol.
 //   - ingress.tls_bundles: auto-generated bundles for cluster scopes that need
-//     them, plus every entry from manifest.TLSBundles.
+//     them, plus every entry from manifest.TLSBundles. Auto bundles use the
+//     shared env ACME contact email because Quartermaster requires it before
+//     reconciling the bundle.
 //   - ingress.sites: auto-generated sites for public services, plus every entry
 //     from manifest.IngressSites.
 //
@@ -224,6 +226,8 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 						ID:        bundleID,
 						ClusterID: clusterID,
 						Domains:   bundleDomains,
+						Issuer:    "navigator",
+						Email:     resolveTLSBundleEmail(opts),
 					}
 				}
 
@@ -354,6 +358,15 @@ func serviceHostKeys(svc inventory.ServiceConfig) []string {
 		return []string{svc.Host}
 	}
 	return nil
+}
+
+func resolveTLSBundleEmail(opts DeriveOptions) string {
+	for _, key := range []string{"TLS_BUNDLE_EMAIL", "ACME_EMAIL"} {
+		if v := strings.TrimSpace(opts.SharedEnv[key]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // deriveServiceMetadata returns service-specific service_registry metadata

@@ -228,6 +228,11 @@ ingress:
 
 Stable: `id`. All other fields update-on-drift.
 
+Auto-derived bundles are rendered with `issuer: navigator` and a required
+contact email resolved from shared env in this order: `TLS_BUNDLE_EMAIL`,
+`ACME_EMAIL`. Explicit `tls_bundles` entries carry their own `email`; a missing
+email is invalid.
+
 ### `ingress.sites`
 
 ```yaml

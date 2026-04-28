@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/netip"
 )
 
 // ReconcileNodes reconciles every Node row into
@@ -121,10 +122,10 @@ func upsertNode(ctx context.Context, exec DBTX, n Node) (string, error) {
 	if curCluster != n.ClusterID {
 		return "", fmt.Errorf("cluster_id drift: db=%q desired=%q (stable; refusing rewrite)", curCluster, n.ClusterID)
 	}
-	if curExternal != n.ExternalIP {
+	if !sameHostIP(curExternal, n.ExternalIP) {
 		return "", fmt.Errorf("external_ip drift: db=%q desired=%q (stable; refusing rewrite)", curExternal, n.ExternalIP)
 	}
-	if curWGIP != n.WireGuard.IP {
+	if !sameHostIP(curWGIP, n.WireGuard.IP) {
 		return "", fmt.Errorf("wireguard.ip drift: db=%q desired=%q (stable; refusing rewrite)", curWGIP, n.WireGuard.IP)
 	}
 	if curPubKey != n.WireGuard.PublicKey {
@@ -147,4 +148,27 @@ func upsertNode(ctx context.Context, exec DBTX, n Node) (string, error) {
 		return "", fmt.Errorf("update: %w", err)
 	}
 	return "updated", nil
+}
+
+func sameHostIP(a, b string) bool {
+	na, okA := normalizeHostIP(a)
+	nb, okB := normalizeHostIP(b)
+	if !okA || !okB {
+		return a == b
+	}
+	return na == nb
+}
+
+func normalizeHostIP(s string) (string, bool) {
+	if addr, err := netip.ParseAddr(s); err == nil {
+		return addr.String(), true
+	}
+	prefix, err := netip.ParsePrefix(s)
+	if err != nil {
+		return "", false
+	}
+	if prefix.Bits() != prefix.Addr().BitLen() {
+		return prefix.String(), true
+	}
+	return prefix.Addr().String(), true
 }

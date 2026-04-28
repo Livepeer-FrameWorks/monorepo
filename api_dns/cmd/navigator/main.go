@@ -118,6 +118,7 @@ func main() {
 
 	// === Logic Initialization ===
 	rootDomain := config.RequireEnv("BRAND_DOMAIN")
+	acmeEmail := config.RequireEnv("ACME_EMAIL")
 
 	recordTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_A_RECORD", 60)
 	lbTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_LB", 60)
@@ -136,10 +137,9 @@ func main() {
 	}
 
 	// === Background Workers ===
-	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger)
+	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger, acmeEmail)
 	go renewalWorker.Start(context.Background())
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
-	acmeEmail := config.GetEnv("FROM_EMAIL", "info@frameworks.network")
 	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes())
 	go reconciler.Start(context.Background())
 

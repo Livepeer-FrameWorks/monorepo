@@ -4,10 +4,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"frameworks/cli/pkg/inventory"
 )
 
 func validRendered() *Rendered {
-	d, _ := Derive(minimalManifest(), DeriveOptions{})
+	d, _ := Derive(minimalManifest(), DeriveOptions{SharedEnv: map[string]string{"ACME_EMAIL": "ops@example.com"}})
 	r, _ := Render(d, nil, nil)
 	return r
 }
@@ -15,6 +17,19 @@ func validRendered() *Rendered {
 func TestValidateAcceptsManifestDerivedRender(t *testing.T) {
 	if err := validRendered().Validate(); err != nil {
 		t.Fatalf("expected manifest-derived render to validate clean; got %v", err)
+	}
+}
+
+func TestValidateRejectsTLSBundleWithoutEmail(t *testing.T) {
+	m := minimalManifest()
+	m.Services = map[string]inventory.ServiceConfig{
+		"chatwoot": {Enabled: true, Host: "core-eu-1", Port: 18092},
+	}
+	d, _ := Derive(m, DeriveOptions{})
+	r, _ := Render(d, nil, nil)
+	err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), "tls_bundles") || !strings.Contains(err.Error(), "email") {
+		t.Fatalf("expected tls bundle email error; got %v", err)
 	}
 }
 

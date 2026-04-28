@@ -72,6 +72,7 @@ func TestRenewalWorkerRetriesWithBackoff(t *testing.T) {
 		store:       store,
 		certManager: issuer,
 		logger:      logging.NewLogger(),
+		acmeEmail:   "ops@example.com",
 		sleep: func(ctx context.Context, duration time.Duration) error {
 			sleeps = append(sleeps, duration)
 			return nil
@@ -100,6 +101,7 @@ func TestRenewalWorkerSkipsRetriesOnNonRetryableErrorAndContinues(t *testing.T) 
 		store:       store,
 		certManager: issuer,
 		logger:      logging.NewLogger(),
+		acmeEmail:   "ops@example.com",
 		sleep: func(ctx context.Context, duration time.Duration) error {
 			return nil
 		},

@@ -108,6 +108,7 @@ var grpcServices = []GRPCService{
 	{ServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Port: 19003},
 	{ServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Port: 19004},
 	{ServiceID: "signalman", EnvKey: "SIGNALMAN_GRPC_ADDR", Port: 19005},
+	{ServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Port: 18006},
 	{ServiceID: "deckhand", EnvKey: "DECKHAND_GRPC_ADDR", Port: 19006},
 	{ServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Port: 19007},
 	{ServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Port: 18011},
@@ -151,6 +152,7 @@ var requiredExternalEnv = map[string][]RequiredEnvVar{
 		{Key: "CHATWOOT_API_TOKEN", SetupGuide: "Chatwoot admin > Settings > Application > Access Token"},
 	},
 	"navigator": {
+		{Key: "ACME_EMAIL", SetupGuide: "Set the certificate contact email in shared env files"},
 		{Key: "CLOUDFLARE_API_TOKEN", SetupGuide: "https://dash.cloudflare.com/profile/api-tokens"},
 		{Key: "CLOUDFLARE_ZONE_ID", SetupGuide: "Cloudflare dashboard > domain > Zone ID"},
 		{Key: "CLOUDFLARE_ACCOUNT_ID", SetupGuide: "Cloudflare dashboard > Account Home"},
