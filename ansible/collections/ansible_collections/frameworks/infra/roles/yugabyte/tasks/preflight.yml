@@ -1,6 +1,8 @@
 ---
 - name: Populate service facts (used by time-sync probe and validate)
   ansible.builtin.service_facts:
+  check_mode: false
+  changed_when: false
 
 - name: Resolve time-sync package/service for this distro family
   ansible.builtin.set_fact:

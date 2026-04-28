@@ -3,16 +3,22 @@
   ansible.builtin.stat:
     path: "{{ yugabyte_bootstrap_sentinel }}"
   register: yugabyte_bootstrap_sentinel_stat
+  check_mode: false
+  changed_when: false
 
 - name: Check for master consensus metadata
   ansible.builtin.stat:
     path: "{{ yugabyte_master_consensus_meta_path }}"
   register: yugabyte_master_consensus_meta_stat
+  check_mode: false
+  changed_when: false
 
 - name: Check for master tablet metadata
   ansible.builtin.stat:
     path: "{{ yugabyte_master_tablet_meta_path }}"
   register: yugabyte_master_tablet_meta_stat
+  check_mode: false
+  changed_when: false
 
 - name: Recover from stale partial yb-master bootstrap
   when:
@@ -58,6 +64,8 @@
 
     - name: Refresh service facts after starting yb-master
       ansible.builtin.service_facts:
+      check_mode: false
+      changed_when: false
 
     - name: Assert yb-master is running before starting tserver
       ansible.builtin.assert:

@@ -3,6 +3,8 @@
   block:
     - name: Refresh service facts
       ansible.builtin.service_facts:
+      check_mode: false
+      changed_when: false
 
     - name: Assert clickhouse-server running
       ansible.builtin.assert:
@@ -22,6 +24,7 @@
              + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
       register: ch_version
       changed_when: false
+      check_mode: false
       no_log: "{{ clickhouse_default_password | length > 0 }}"
       failed_when: ch_version.rc != 0 or ch_version.stdout | length == 0
 
@@ -31,18 +34,21 @@
       register: clickhouse_systemctl_status
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Capture clickhouse-server journal after failed validation
       ansible.builtin.command: journalctl -u {{ clickhouse_service_name }} -n 100 --no-pager
       register: clickhouse_journal
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Capture clickhouse-server error log after failed validation
       ansible.builtin.command: tail -n 100 /var/log/clickhouse-server/clickhouse-server.err.log
       register: clickhouse_err_log
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Fail with ClickHouse validation diagnostics
       ansible.builtin.fail:

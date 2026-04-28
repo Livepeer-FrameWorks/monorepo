@@ -3,5 +3,9 @@
   hosts: all
   become: true
   gather_facts: true
+  gather_subset:
+    - "!all"
+    - min
+    - service_mgr
   roles:
     - role: frameworks.infra.yugabyte

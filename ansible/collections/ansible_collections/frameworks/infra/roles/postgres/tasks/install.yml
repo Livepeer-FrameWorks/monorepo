@@ -13,7 +13,7 @@
     postgresql_config_path: "{{ postgres_config_dir }}"
     postgresql_bin_path: "/usr/lib/postgresql/{{ postgres_version }}/bin"
     postgresql_port: "{{ postgres_port }}"
-    postgresql_restarted_state: "restarted"
+    postgresql_restarted_state: "reloaded"
     postgresql_global_config_options:
       - option: unix_socket_directories
         value: "{{ postgresql_unix_socket_directories | join(',') }}"

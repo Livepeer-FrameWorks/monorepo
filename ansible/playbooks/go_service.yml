@@ -3,5 +3,8 @@
   hosts: all
   become: true
   gather_facts: true
+  gather_subset:
+    - "!all"
+    - min
   roles:
     - role: frameworks.infra.go_service

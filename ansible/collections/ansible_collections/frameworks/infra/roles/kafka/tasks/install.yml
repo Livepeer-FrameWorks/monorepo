@@ -23,6 +23,7 @@
   register: kafka_java_runtime_probe
   changed_when: false
   failed_when: false
+  check_mode: false
 
 - name: Install Java runtime
   ansible.builtin.package:
@@ -62,6 +63,7 @@
     checksum: "{{ kafka_artifact_checksum }}"
     mode: "0644"
     timeout: 300
+  when: not ansible_check_mode
 
 - name: Extract Kafka
   ansible.builtin.unarchive:

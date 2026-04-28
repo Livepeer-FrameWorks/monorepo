@@ -11,6 +11,7 @@ Desktop.ini
 .Trash*
 .cache
 .directory
+ansible/.ansible/
 
 # IDE & Editor
 .vscode/*

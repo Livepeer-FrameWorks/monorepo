@@ -15,6 +15,7 @@
       - json
   register: compose_ps
   changed_when: false
+  check_mode: false
   when: not (compose_stack_render_only | default(false) | bool)
 
 - name: Parse compose ps output

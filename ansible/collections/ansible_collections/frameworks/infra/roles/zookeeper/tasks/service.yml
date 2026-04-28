@@ -4,4 +4,4 @@
     name: zookeeper
     state: started
     enabled: true
-    daemon_reload: true
+    daemon_reload: "{{ (zookeeper_unit_changed is defined and zookeeper_unit_changed is changed) | bool }}"

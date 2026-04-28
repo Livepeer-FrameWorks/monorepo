@@ -1,17 +1,35 @@
 ---
 - name: Resolve a reachable local ClickHouse client host
   ansible.builtin.include_tasks: _probe_client.yml
+  when: clickhouse_databases | length > 0
 
-- name: Create databases
+- name: List existing ClickHouse databases
   ansible.builtin.command:
     argv: >-
-      {{ ['clickhouse-client', '--host=' ~ frameworks_clickhouse_client_host, '--port=' ~ (clickhouse_port_tcp | string),
-          '-q', 'CREATE DATABASE IF NOT EXISTS ' ~ item]
+      {{ ['clickhouse-client',
+          '--host=' ~ frameworks_clickhouse_client_host,
+          '--port=' ~ (clickhouse_port_tcp | string),
+          '-q', 'SHOW DATABASES']
+         + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
+  no_log: "{{ clickhouse_default_password | length > 0 }}"
+  register: ch_db_list
+  changed_when: false
+  check_mode: false
+  when: clickhouse_databases | length > 0
+
+- name: Create missing databases
+  ansible.builtin.command:
+    argv: >-
+      {{ ['clickhouse-client',
+          '--host=' ~ frameworks_clickhouse_client_host,
+          '--port=' ~ (clickhouse_port_tcp | string),
+          '-q', 'CREATE DATABASE ' ~ item]
          + (['--password', clickhouse_default_password] if clickhouse_default_password | length > 0 else []) }}
   loop: "{{ clickhouse_databases }}"
   loop_control:
     label: "{{ item }}"
   no_log: "{{ clickhouse_default_password | length > 0 }}"
-  register: ch_db_create
-  changed_when: ch_db_create.rc == 0
-  when: clickhouse_databases | length > 0
+  changed_when: true
+  when:
+    - clickhouse_databases | length > 0
+    - item not in (ch_db_list.stdout_lines | default([]))

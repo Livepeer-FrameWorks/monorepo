@@ -3,6 +3,8 @@
   block:
     - name: Refresh service facts
       ansible.builtin.service_facts:
+      check_mode: false
+      changed_when: false
 
     - name: Assert kafka service is running
       ansible.builtin.assert:
@@ -33,6 +35,7 @@
       register: broker_probe
       changed_when: false
       failed_when: broker_probe.rc != 0
+      check_mode: false
       when: kafka_role in ['broker', 'combined']
 
     - name: Probe KRaft controller quorum via broker API
@@ -43,6 +46,7 @@
       register: kafka_quorum_probe
       changed_when: false
       failed_when: kafka_quorum_probe.rc != 0
+      check_mode: false
       when: kafka_role in ['broker', 'combined']
   rescue:
     - name: Capture kafka systemctl status after failed start
@@ -50,18 +54,21 @@
       register: kafka_systemctl_status
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Capture kafka journal after failed start
       ansible.builtin.command: "journalctl -u {{ kafka_service_name }} --no-pager -n 200"
       register: kafka_journal
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Capture kafka server log after failed start
       ansible.builtin.command: "tail -n 200 {{ kafka_role_log_dir }}/server.log"
       register: kafka_server_log
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Fail with Kafka startup diagnostics
       ansible.builtin.fail:

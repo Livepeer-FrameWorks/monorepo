@@ -46,26 +46,19 @@
     state: present
   when: go_service_is_zip | bool
 
-- name: Download pinned artifact
-  ansible.builtin.get_url:
-    url: "{{ go_service_artifact_url }}"
-    dest: "{{ go_service_asset_path }}"
-    checksum: "{{ go_service_artifact_checksum }}"
-    mode: "0644"
-    timeout: 300
-  when: not ansible_check_mode
-
 - name: Stat installed binary
   ansible.builtin.stat:
     path: "{{ go_service_install_dir }}/{{ go_service_name }}"
   register: go_service_bin_stat
-  when: not ansible_check_mode
+  check_mode: false
+  changed_when: false
 
 - name: Stat install sentinel
   ansible.builtin.stat:
     path: "{{ go_service_install_sentinel }}"
   register: go_service_install_sentinel_stat
-  when: not ansible_check_mode
+  check_mode: false
+  changed_when: false
 
 - name: Read installed service version
   ansible.builtin.shell: |
@@ -81,9 +74,8 @@
   register: go_service_installed_version
   changed_when: false
   failed_when: false
-  when:
-    - not ansible_check_mode
-    - go_service_bin_stat.stat.exists | default(false)
+  check_mode: false
+  when: go_service_bin_stat.stat.exists | default(false)
 
 - name: Decide whether service binary reinstall is required
   ansible.builtin.set_fact:
@@ -97,7 +89,26 @@
           go_service_installed_version.stdout | default('') != go_service_version
         )
       }}
-  when: not ansible_check_mode
+
+- name: Report pending reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      {{ go_service_name }} would reinstall:
+      installed={{ go_service_installed_version.stdout | default('(missing)') }},
+      desired={{ go_service_version | default('(unset)') }}
+  changed_when: go_service_reinstall_required | bool
+  when: ansible_check_mode
+
+- name: Download pinned artifact
+  ansible.builtin.get_url:
+    url: "{{ go_service_artifact_url }}"
+    dest: "{{ go_service_asset_path }}"
+    checksum: "{{ go_service_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
+  when:
+    - not ansible_check_mode
+    - go_service_reinstall_required | default(true)
 
 - name: Remove stale install sentinel before service binary reinstall
   ansible.builtin.file:
@@ -185,6 +196,7 @@
 
 - name: Check native binary shared libraries
   ansible.builtin.shell: |
+    set -o pipefail
     if ! command -v ldd >/dev/null 2>&1; then
       exit 0
     fi

@@ -1,17 +1,4 @@
 ---
-- name: Check postgresql service state
-  ansible.builtin.systemd_service:
-    name: "{{ postgres_service_name }}"
-    state: started
-  register: postgres_service_state
-
-- name: Assert postgresql service active
-  ansible.builtin.assert:
-    that:
-      - not postgres_service_state.changed
-      - postgres_service_state.status.ActiveState == "active"
-    fail_msg: "postgresql service is not active"
-
 - name: Wait for TCP listener
   ansible.builtin.wait_for:
     host: 127.0.0.1
@@ -27,4 +14,5 @@
     query: "SELECT version()"
   register: postgres_version_probe
   changed_when: false
+  check_mode: false
   failed_when: "'PostgreSQL' not in (postgres_version_probe.query_result[0].version | default(''))"

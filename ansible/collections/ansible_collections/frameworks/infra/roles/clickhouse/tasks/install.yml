@@ -71,7 +71,7 @@
         name: "{{ clickhouse_service_name }}"
         state: started
         enabled: true
-        daemon_reload: true
+        daemon_reload: false
 
     - name: Probe ClickHouse locally after start
       ansible.builtin.include_tasks: _probe_client.yml

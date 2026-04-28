@@ -4,5 +4,5 @@
     name: "{{ go_service_systemd_name }}"
     state: started
     enabled: true
-    daemon_reload: true
+    daemon_reload: "{{ (go_service_unit_changed is defined and go_service_unit_changed is changed) | bool }}"
   when: not ansible_check_mode

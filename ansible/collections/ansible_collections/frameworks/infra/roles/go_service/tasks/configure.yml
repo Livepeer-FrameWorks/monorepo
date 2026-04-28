@@ -19,5 +19,6 @@
     owner: root
     group: root
     mode: "0644"
+  register: go_service_unit_changed
   notify:
     - go_service restart

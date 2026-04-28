@@ -3,6 +3,8 @@
   ansible.builtin.stat:
     path: "{{ yugabyte_bin_dir }}/yb-master"
   register: yugabyte_master_bin
+  check_mode: false
+  changed_when: false
 
 - name: Assert yb-master binary exists
   ansible.builtin.assert:
@@ -15,6 +17,8 @@
   ansible.builtin.stat:
     path: "{{ yugabyte_post_install_sentinel }}"
   register: yugabyte_post_install_stat
+  check_mode: false
+  changed_when: false
 
 - name: Assert post_install completion marker
   ansible.builtin.assert:
@@ -25,6 +29,8 @@
   block:
     - name: Refresh service facts
       ansible.builtin.service_facts:
+      check_mode: false
+      changed_when: false
 
     - name: Assert yb-master and yb-tserver are running
       ansible.builtin.assert:
@@ -125,6 +131,8 @@
   ansible.builtin.stat:
     path: "{{ yugabyte_bootstrap_sentinel }}"
   register: yugabyte_bootstrap_sentinel_stat
+  check_mode: false
+  changed_when: false
 
 - name: Record successful Yugabyte bootstrap
   ansible.builtin.file:

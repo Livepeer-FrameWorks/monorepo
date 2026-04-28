@@ -73,6 +73,7 @@
     checksum: "{{ yugabyte_artifact_checksum }}"
     mode: "0644"
     timeout: 300
+  when: not ansible_check_mode
 
 # Version-keyed sentinel: the archive is re-extracted on a URL/checksum change.
 # On unchanged inputs, `creates:` short-circuits on the sentinel file and the
