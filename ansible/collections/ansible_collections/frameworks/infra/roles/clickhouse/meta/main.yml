@@ -38,6 +38,10 @@ argument_specs:
         type: str
         required: false
         no_log: true
+      clickhouse_readonly_password:
+        type: str
+        required: false
+        no_log: true
       clickhouse_databases:
         type: list
         elements: str

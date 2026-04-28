@@ -31,6 +31,9 @@ func clickhouseRoleVars(ctx context.Context, host inventory.Host, config Service
 		"clickhouse_port_tcp":         port,
 		"clickhouse_default_password": pwd,
 	}
+	if readonlyPwd := metaString(config.Metadata, "clickhouse_readonly_password"); readonlyPwd != "" {
+		vars["clickhouse_readonly_password"] = readonlyPwd
+	}
 	if listen, ok := config.Metadata["listen_host"].(string); ok && listen != "" {
 		vars["clickhouse_listen_host"] = listen
 	}

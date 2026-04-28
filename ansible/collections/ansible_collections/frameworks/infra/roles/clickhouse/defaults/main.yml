@@ -18,6 +18,7 @@ clickhouse_log_path: /var/log/clickhouse-server
 
 # SOPS-backed passwords. Never commit real values.
 clickhouse_default_password: ""
+clickhouse_readonly_password: ""
 clickhouse_databases: []
 clickhouse_users: []
 clickhouse_enable_ssl: false
@@ -50,12 +51,23 @@ frameworks_clickhouse_default_users: >-
         if clickhouse_default_password | length > 0 else {}
       ),
       {
+        'name': 'frameworks',
+        'networks': ['::/0', '0.0.0.0/0'],
+        'profile': 'default',
+        'quota': 'default',
+      } | combine(
+        {'password_sha256_hex': (clickhouse_default_password | hash('sha256'))}
+        if clickhouse_default_password | length > 0 else {}
+      ),
+      {
         'name': 'readonly',
-        'password': 'readonly',
         'networks': ['::1', '127.0.0.1'],
         'profile': 'readonly',
         'quota': 'default',
-      },
+      } | combine(
+        {'password_sha256_hex': (clickhouse_readonly_password | hash('sha256'))}
+        if clickhouse_readonly_password | length > 0 else {'password': 'readonly'}
+      ),
     ]
   }}
 
