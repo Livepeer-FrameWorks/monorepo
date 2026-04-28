@@ -14,9 +14,30 @@ type NetworkConfig struct {
 	ExplorerAPIEnv string // Environment variable name for explorer API key
 	USDCContract   string // USDC contract address on this network
 	LPTContract    string // LPT contract address (empty if not available)
-	Confirmations  int    // Required confirmations for deposits
-	X402Enabled    bool   // Whether x402 settlement is supported on this network
-	IsTestnet      bool   // Whether this is a testnet
+	// PriceFeeds maps an asset symbol ("ETH", "LPT") to its Chainlink
+	// aggregator address on this network. USDC is always 1:1 USD and has
+	// no entry. Empty/missing entries mean the asset has no on-chain price
+	// feed on this network and prepaid top-ups for it must be gated.
+	PriceFeeds    map[string]string
+	Confirmations int  // Required confirmations for deposits
+	X402Enabled   bool // Whether x402 settlement is supported on this network
+	IsTestnet     bool // Whether this is a testnet
+}
+
+// TokenDecimals returns the number of decimals for an asset's smallest unit
+// (i.e. base units → whole tokens divisor exponent).
+//
+// USDC is 6-decimal on every supported chain; ETH (native) and LPT are
+// 18-decimal.
+func TokenDecimals(asset string) (int32, bool) {
+	switch asset {
+	case "ETH", "LPT":
+		return 18, true
+	case "USDC":
+		return 6, true
+	default:
+		return 0, false
+	}
 }
 
 // GetRPCEndpoint returns the RPC endpoint from environment
@@ -30,6 +51,13 @@ func (n NetworkConfig) GetExplorerAPIKey() string {
 }
 
 // Networks is the registry of all supported networks
+//
+// Chainlink ETH/USD aggregator addresses are the standard EACAggregatorProxy
+// addresses verified against https://data.chain.link/feeds and the relevant
+// chain's block explorer (Etherscan/Arbiscan/Basescan label them as
+// "Chainlink: ETH/USD Price Feed" or equivalent). LPT/USD is intentionally
+// absent: Chainlink does not publish an official LPT/USD aggregator, so LPT
+// prepaid top-ups stay gated.
 var Networks = map[string]NetworkConfig{
 	// Mainnets
 	"ethereum": {
@@ -41,9 +69,12 @@ var Networks = map[string]NetworkConfig{
 		ExplorerAPIEnv: "ETHERSCAN_API_KEY",
 		USDCContract:   "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
 		LPTContract:    "0x58b6A8A3302369DAEc383334672404Ee733aB239",
-		Confirmations:  12,
-		X402Enabled:    false, // Too expensive for x402
-		IsTestnet:      false,
+		PriceFeeds: map[string]string{
+			"ETH": "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
+		},
+		Confirmations: 12,
+		X402Enabled:   false, // Too expensive for x402
+		IsTestnet:     false,
 	},
 	"base": {
 		ChainID:        8453,
@@ -54,9 +85,12 @@ var Networks = map[string]NetworkConfig{
 		ExplorerAPIEnv: "BASESCAN_API_KEY",
 		USDCContract:   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 		LPTContract:    "", // No LPT on Base
-		Confirmations:  10,
-		X402Enabled:    true,
-		IsTestnet:      false,
+		PriceFeeds: map[string]string{
+			"ETH": "0x71041dDDad3595F9CEd3DcCFBe3D1F4b0a16Bb70",
+		},
+		Confirmations: 10,
+		X402Enabled:   true,
+		IsTestnet:     false,
 	},
 	"arbitrum": {
 		ChainID:        42161,
@@ -67,9 +101,12 @@ var Networks = map[string]NetworkConfig{
 		ExplorerAPIEnv: "ARBISCAN_API_KEY",
 		USDCContract:   "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
 		LPTContract:    "0x289ba1701C2F088cf0faf8B3705246331cB8A839", // Livepeer migrated to Arbitrum
-		Confirmations:  10,
-		X402Enabled:    true,
-		IsTestnet:      false,
+		PriceFeeds: map[string]string{
+			"ETH": "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612",
+		},
+		Confirmations: 10,
+		X402Enabled:   true,
+		IsTestnet:     false,
 	},
 
 	// Testnets

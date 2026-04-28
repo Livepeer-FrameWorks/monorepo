@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -176,29 +178,69 @@ func (hw *HDWallet) EnsureState(ctx context.Context, xpub string) (bool, error) 
 	return false, nil
 }
 
-// GenerateDepositAddress creates a new deposit address for invoice or prepaid.
-// For invoices: purpose='invoice', invoiceID required
-// For prepaid: purpose='prepaid', expectedAmountCents required
-func (hw *HDWallet) GenerateDepositAddress(
-	tenantID string,
-	purpose string,
-	invoiceID *string,
-	expectedAmountCents *int64,
-	asset string,
-	expiresAt time.Time,
-) (walletID string, address string, err error) {
-	// Validate
-	if purpose != "invoice" && purpose != "prepaid" {
-		return "", "", fmt.Errorf("invalid purpose: %s", purpose)
+// DepositAddressParams describes a request to allocate an HD-derived deposit
+// address. Purpose drives which optional fields are required:
+//   - "invoice"  → InvoiceID required, ExpectedAmountCents/Quote unused.
+//   - "prepaid"  → ExpectedAmountCents and Quote required.
+type DepositAddressParams struct {
+	TenantID  string
+	Purpose   string // "invoice" | "prepaid"
+	Asset     string // "ETH" | "USDC" | "LPT"
+	Network   string // "ethereum" | "arbitrum" | "base" | "*-sepolia"
+	ExpiresAt time.Time
+
+	InvoiceID           *string
+	ExpectedAmountCents *int64
+
+	Quote *DepositQuote // nil for invoice purpose
+}
+
+// DepositQuote is the locked quote persisted on a prepaid wallet row at
+// CreateCryptoTopup time so the monitor can credit deterministically when
+// the deposit confirms.
+type DepositQuote struct {
+	ExpectedAmountBaseUnits *big.Int         // Token base units the user must send (NOT NULL)
+	QuotedPriceUSD          decimal.Decimal  // USD per 1 whole token
+	QuotedUSDToEURRate      *decimal.Decimal // Populated when CreditedAmountCurrency == "EUR"
+	QuotedAt                time.Time
+	QuoteSource             string // "chainlink" | "one_to_one"
+	CreditedAmountCurrency  string // "USD" | "EUR" — what the prepaid balance is denominated in
+}
+
+// GenerateDepositAddress allocates an HD-derived deposit address and inserts
+// a crypto_wallets row. See DepositAddressParams for the shape.
+func (hw *HDWallet) GenerateDepositAddress(p DepositAddressParams) (walletID string, address string, err error) {
+	if p.Purpose != "invoice" && p.Purpose != "prepaid" {
+		return "", "", fmt.Errorf("invalid purpose: %s", p.Purpose)
 	}
-	if asset != "ETH" && asset != "USDC" && asset != "LPT" {
-		return "", "", fmt.Errorf("invalid asset: %s (ETH, USDC, or LPT only)", asset)
+	if p.Asset != "ETH" && p.Asset != "USDC" && p.Asset != "LPT" {
+		return "", "", fmt.Errorf("invalid asset: %s (ETH, USDC, or LPT only)", p.Asset)
 	}
-	if purpose == "invoice" && (invoiceID == nil || *invoiceID == "") {
+	if p.Network == "" {
+		return "", "", fmt.Errorf("network is required")
+	}
+	if p.Purpose == "invoice" && (p.InvoiceID == nil || *p.InvoiceID == "") {
 		return "", "", fmt.Errorf("invoice_id required for invoice purpose")
 	}
-	if purpose == "prepaid" && (expectedAmountCents == nil || *expectedAmountCents <= 0) {
-		return "", "", fmt.Errorf("expected_amount_cents required for prepaid purpose")
+	if p.Purpose == "prepaid" {
+		if p.ExpectedAmountCents == nil || *p.ExpectedAmountCents <= 0 {
+			return "", "", fmt.Errorf("expected_amount_cents required for prepaid purpose")
+		}
+		if p.Quote == nil {
+			return "", "", fmt.Errorf("quote required for prepaid purpose")
+		}
+		if p.Quote.ExpectedAmountBaseUnits == nil || p.Quote.ExpectedAmountBaseUnits.Sign() <= 0 {
+			return "", "", fmt.Errorf("quote.ExpectedAmountBaseUnits must be positive")
+		}
+		if p.Quote.QuoteSource == "" {
+			return "", "", fmt.Errorf("quote.QuoteSource required")
+		}
+		if p.Quote.CreditedAmountCurrency == "" {
+			return "", "", fmt.Errorf("quote.CreditedAmountCurrency required")
+		}
+		if p.Quote.CreditedAmountCurrency == "EUR" && p.Quote.QuotedUSDToEURRate == nil {
+			return "", "", fmt.Errorf("quote.QuotedUSDToEURRate required when CreditedAmountCurrency is EUR")
+		}
 	}
 
 	ctx := context.Background()
@@ -208,40 +250,57 @@ func (hw *HDWallet) GenerateDepositAddress(
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	// Get next index and xpub
 	derivationIndex, xpub, err := hw.GetNextNonZeroDerivationIndexTx(ctx, tx)
 	if err != nil {
 		return "", "", err
 	}
 
-	// Derive address
 	address, err = DeriveAddressFromXpub(xpub, derivationIndex)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to derive address: %w", err)
 	}
-
-	// Normalize to lowercase (Ethereum addresses are case-insensitive)
 	address = strings.ToLower(address)
-
 	walletID = uuid.New().String()
 
-	var invoiceIDValue interface{}
-	if invoiceID != nil {
-		invoiceIDValue = *invoiceID
+	var (
+		invoiceIDValue          any
+		expectedAmountValue     any
+		expectedAmountBaseUnits any
+		quotedPriceUSD          any
+		quotedUSDToEURRate      any
+		quotedAt                any
+		quoteSource             any
+		creditedAmountCurrency  any
+	)
+	if p.InvoiceID != nil {
+		invoiceIDValue = *p.InvoiceID
 	}
-	var expectedAmountValue interface{}
-	if expectedAmountCents != nil {
-		expectedAmountValue = *expectedAmountCents
+	if p.ExpectedAmountCents != nil {
+		expectedAmountValue = *p.ExpectedAmountCents
+	}
+	if p.Quote != nil {
+		expectedAmountBaseUnits = p.Quote.ExpectedAmountBaseUnits.String()
+		quotedPriceUSD = p.Quote.QuotedPriceUSD.String()
+		if p.Quote.QuotedUSDToEURRate != nil {
+			quotedUSDToEURRate = p.Quote.QuotedUSDToEURRate.String()
+		}
+		quotedAt = p.Quote.QuotedAt
+		quoteSource = p.Quote.QuoteSource
+		creditedAmountCurrency = p.Quote.CreditedAmountCurrency
 	}
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.crypto_wallets (
 			id, tenant_id, purpose, invoice_id, expected_amount_cents,
-			asset, wallet_address, derivation_index, status, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9)
+			asset, network, wallet_address, derivation_index, expires_at,
+			expected_amount_base_units, quoted_price_usd, quoted_usd_to_eur_rate,
+			quoted_at, quote_source, credited_amount_currency
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`,
-		walletID, tenantID, purpose, invoiceIDValue, expectedAmountValue,
-		asset, address, derivationIndex, expiresAt,
+		walletID, p.TenantID, p.Purpose, invoiceIDValue, expectedAmountValue,
+		p.Asset, p.Network, address, derivationIndex, p.ExpiresAt,
+		expectedAmountBaseUnits, quotedPriceUSD, quotedUSDToEURRate,
+		quotedAt, quoteSource, creditedAmountCurrency,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to insert crypto wallet: %w", err)
@@ -253,9 +312,10 @@ func (hw *HDWallet) GenerateDepositAddress(
 
 	hw.logger.WithFields(logging.Fields{
 		"wallet_id":        walletID,
-		"tenant_id":        tenantID,
-		"purpose":          purpose,
-		"asset":            asset,
+		"tenant_id":        p.TenantID,
+		"purpose":          p.Purpose,
+		"asset":            p.Asset,
+		"network":          p.Network,
 		"address":          address,
 		"derivation_index": derivationIndex,
 	}).Info("Generated deposit address")

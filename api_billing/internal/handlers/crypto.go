@@ -20,6 +20,8 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/google/uuid"
 )
 
@@ -56,6 +58,17 @@ type PendingWallet struct {
 	WalletAddress       string
 	InvoiceAmount       *float64 // invoice amount in currency (for invoice purpose)
 	InvoiceCurrency     *string  // invoice currency (for invoice purpose)
+
+	// Locked quote (prepaid path only) — see DepositQuote.
+	ExpectedAmountBaseUnits *big.Int
+	QuotedPriceUSD          decimal.Decimal
+	QuotedUSDToEURRate      *decimal.Decimal
+	QuoteSource             string
+	CreditedAmountCurrency  string
+
+	// Detected-but-not-yet-confirmed state.
+	Status string // 'pending' or 'confirming'
+	TxHash string // populated once a matching tx has been seen
 }
 
 // NewCryptoMonitor creates a new crypto payment monitor
@@ -126,20 +139,24 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 			cw.invoice_id,
 			cw.expected_amount_cents,
 			cw.asset,
-			COALESCE(cw.network, 'ethereum') as network,
+			cw.network,
 			cw.wallet_address,
+			cw.status,
+			cw.tx_hash,
+			cw.expected_amount_base_units,
+			cw.quoted_price_usd,
+			cw.quoted_usd_to_eur_rate,
+			cw.quote_source,
+			cw.credited_amount_currency,
 			bi.amount as invoice_amount,
 			bi.currency as invoice_currency
 		FROM purser.crypto_wallets cw
 		LEFT JOIN purser.billing_invoices bi ON cw.invoice_id = bi.id
-		WHERE cw.status = 'active'
+		WHERE cw.status IN ('pending', 'confirming')
 		  AND cw.expires_at > NOW()
 		  AND (
-			  -- Invoice wallets: invoice must be pending
 			  (cw.purpose = 'invoice' AND bi.status = 'pending')
-			  OR
-			  -- Prepaid wallets: just need to be active
-			  (cw.purpose = 'prepaid')
+			  OR cw.purpose = 'prepaid'
 		  )
 	`)
 
@@ -154,9 +171,9 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 	for rows.Next() {
 		var wallet PendingWallet
 		var invoiceAmount sql.NullFloat64
-		var invoiceCurrency sql.NullString
-		var invoiceID sql.NullString
+		var invoiceCurrency, invoiceID sql.NullString
 		var expectedAmountCents sql.NullInt64
+		var txHash, expectedBaseUnitsStr, quotedPriceUSDStr, quotedUSDToEURStr, quoteSource, creditedCurrency sql.NullString
 
 		err := rows.Scan(
 			&wallet.ID,
@@ -167,6 +184,13 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 			&wallet.Asset,
 			&wallet.Network,
 			&wallet.WalletAddress,
+			&wallet.Status,
+			&txHash,
+			&expectedBaseUnitsStr,
+			&quotedPriceUSDStr,
+			&quotedUSDToEURStr,
+			&quoteSource,
+			&creditedCurrency,
 			&invoiceAmount,
 			&invoiceCurrency,
 		)
@@ -188,6 +212,28 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 		}
 		if invoiceCurrency.Valid {
 			wallet.InvoiceCurrency = &invoiceCurrency.String
+		}
+		if txHash.Valid {
+			wallet.TxHash = txHash.String
+		}
+		if expectedBaseUnitsStr.Valid && expectedBaseUnitsStr.String != "" {
+			wallet.ExpectedAmountBaseUnits, _ = new(big.Int).SetString(expectedBaseUnitsStr.String, 10)
+		}
+		if quotedPriceUSDStr.Valid && quotedPriceUSDStr.String != "" {
+			if d, decErr := decimal.NewFromString(quotedPriceUSDStr.String); decErr == nil {
+				wallet.QuotedPriceUSD = d
+			}
+		}
+		if quotedUSDToEURStr.Valid && quotedUSDToEURStr.String != "" {
+			if d, decErr := decimal.NewFromString(quotedUSDToEURStr.String); decErr == nil {
+				wallet.QuotedUSDToEURRate = &d
+			}
+		}
+		if quoteSource.Valid {
+			wallet.QuoteSource = quoteSource.String
+		}
+		if creditedCurrency.Valid {
+			wallet.CreditedAmountCurrency = creditedCurrency.String
 		}
 
 		cm.checkWalletForPayments(ctx, wallet)
@@ -211,14 +257,24 @@ func (cm *CryptoMonitor) checkWalletForPayments(ctx context.Context, wallet Pend
 		return // Skip testnet wallets when testnets disabled
 	}
 
-	// Calculate expected amount based on purpose
+	// Compute the on-chain amount we expect to see in the asset's whole-token
+	// units (not USD). For invoice and USDC-prepaid the legacy path equates
+	// 1 token = 1 USD; for ETH-prepaid we read the locked
+	// expected_amount_base_units quote.
 	var expectedAmount float64
-	if wallet.Purpose == "invoice" && wallet.InvoiceAmount != nil {
+	switch {
+	case wallet.Purpose == "invoice" && wallet.InvoiceAmount != nil:
 		expectedAmount = *wallet.InvoiceAmount
-	} else if wallet.Purpose == "prepaid" && wallet.ExpectedAmountCents != nil {
-		// Convert cents to dollars for comparison
+	case wallet.Purpose == "prepaid" && wallet.Asset == "USDC" && wallet.ExpectedAmountCents != nil:
 		expectedAmount = float64(*wallet.ExpectedAmountCents) / 100.0
-	} else {
+	case wallet.Purpose == "prepaid" && wallet.ExpectedAmountBaseUnits != nil:
+		td, ok := TokenDecimals(wallet.Asset)
+		if !ok {
+			cm.logger.WithFields(logging.Fields{"wallet_id": wallet.ID, "asset": wallet.Asset}).Error("Unknown token decimals")
+			return
+		}
+		expectedAmount, _ = decimal.NewFromBigInt(wallet.ExpectedAmountBaseUnits, -td).Float64()
+	default:
 		cm.logger.WithFields(logging.Fields{
 			"wallet_id": wallet.ID,
 			"purpose":   wallet.Purpose,
@@ -246,11 +302,9 @@ func (cm *CryptoMonitor) checkWalletForPayments(ctx context.Context, wallet Pend
 		}
 	}
 
-	if wallet.Purpose == "prepaid" && wallet.Asset != "USDC" {
-		cm.logger.WithFields(logging.Fields{
-			"wallet_id": wallet.ID,
-			"asset":     wallet.Asset,
-		}).Error("Unsupported prepaid asset without conversion")
+	if wallet.Purpose == "prepaid" && wallet.Asset == "LPT" {
+		// LPT prepaid stays gated until a non-Chainlink price source is wired
+		// (no LPT/USD aggregator exists). Skip silently to avoid log spam.
 		return
 	}
 
@@ -299,58 +353,160 @@ func (cm *CryptoMonitor) checkWalletForPayments(ctx context.Context, wallet Pend
 		return
 	}
 
-	// Check if any transaction matches expected payment
+	// Walk the transactions newest-first; first match wins.
+	//
+	// Three states per match:
+	//   - amountSeen=true, confirmed=true  → credit the wallet now
+	//   - amountSeen=true, confirmed=false → record `confirming` state so the
+	//     UI/agent can show "detected, waiting for N confirmations"
+	//   - amountSeen=false                 → keep looking
 	for _, tx := range transactions {
-		isValid, txAmount := cm.isValidPaymentForNetwork(tx, expectedAmount, wallet.Asset, network, wallet.Purpose)
-		if isValid {
-			cm.confirmPayment(wallet, tx, txAmount)
-			return
+		match := cm.evaluatePayment(tx, wallet, expectedAmount, network)
+		if !match.amountSeen {
+			continue
 		}
+		if match.confirmed {
+			cm.confirmPayment(wallet, tx, match.txBaseUnits, match.txAmount)
+		} else {
+			cm.markConfirming(wallet, tx)
+		}
+		return
 	}
 }
 
-// isValidPaymentForNetwork checks if a transaction is a valid payment for a specific network
-func (cm *CryptoMonitor) isValidPaymentForNetwork(tx CryptoTransaction, expectedAmount float64, asset string, network NetworkConfig, purpose string) (bool, float64) {
-	txAmount, err := cm.parseTransactionAmount(tx.Value, asset)
+// paymentMatch carries everything the caller needs to act on a tx without
+// re-parsing the same value.
+type paymentMatch struct {
+	amountSeen  bool     // tx amount within tolerance of the wallet's expected amount
+	confirmed   bool     // also has the network's required confirmation count
+	txBaseUnits *big.Int // exact on-chain amount in token base units
+	txAmount    float64  // legacy float (whole tokens) — used by the invoice display path only
+}
+
+// evaluatePayment checks whether `tx` is a valid receipt for `wallet` and
+// returns whether it's also confirmed enough to credit. Money math operates
+// on `*big.Int` base units to avoid 18-decimal float truncation; the float
+// `txAmount` is a convenience for the invoice path which historically
+// reasoned in whole-token floats.
+func (cm *CryptoMonitor) evaluatePayment(tx CryptoTransaction, wallet PendingWallet, expectedAmount float64, network NetworkConfig) paymentMatch {
+	baseUnits, err := parseTransactionBaseUnits(tx.Value)
 	if err != nil {
 		cm.logger.WithFields(logging.Fields{
 			"error":    err,
 			"tx_value": tx.Value,
-			"asset":    asset,
-		}).Error("Failed to parse transaction amount")
-		return false, 0
+			"asset":    wallet.Asset,
+		}).Error("Failed to parse transaction base units")
+		return paymentMatch{}
 	}
 
-	var isAmountValid bool
-	if purpose == "invoice" {
-		minAmount := expectedAmount * 0.999
-		isAmountValid = txAmount >= minAmount
-	} else {
-		// Prepaid topups should also match the requested amount to avoid dust/underpayment
-		// permanently consuming a wallet address.
-		minAmount := expectedAmount * 0.999
-		isAmountValid = txAmount >= minAmount
+	td, ok := TokenDecimals(wallet.Asset)
+	if !ok {
+		cm.logger.WithFields(logging.Fields{"asset": wallet.Asset}).Error("Unknown token decimals")
+		return paymentMatch{}
 	}
 
-	// Use network-specific confirmations requirement
-	hasEnoughConfirmations := tx.Confirmations >= network.Confirmations
+	// txAmount: whole-token float; lossy at the 18-decimal end but only used
+	// for invoice-path display, never for credit math.
+	txAmountFloat, _ := decimal.NewFromBigInt(baseUnits, -td).Float64()
 
-	return isAmountValid && hasEnoughConfirmations, txAmount
+	amountSeen := false
+	switch {
+	case wallet.Purpose == "prepaid" && wallet.ExpectedAmountBaseUnits != nil:
+		// Prepaid (any asset): compare on-chain base units against the quoted
+		// expected_amount_base_units. The quote already accounts for tenant
+		// currency (EUR top-ups are anchored to USD via the locked ECB rate),
+		// so the float `expected_amount_cents/100` would be wrong for EUR
+		// even when asset == USDC. Asset-specific tolerance: USDC has only 6
+		// decimals so 0.1% covers wallet-rounding noise; 18-decimal assets
+		// truncate more aggressively in user-wallet UIs, so 0.5%.
+		toleranceBP := int64(995) // 0.5%
+		if wallet.Asset == "USDC" {
+			toleranceBP = 999 // 0.1%
+		}
+		minBaseUnits := new(big.Int).Mul(wallet.ExpectedAmountBaseUnits, big.NewInt(toleranceBP))
+		minBaseUnits.Div(minBaseUnits, big.NewInt(1000))
+		amountSeen = baseUnits.Cmp(minBaseUnits) >= 0
+	default:
+		// Invoice path: legacy 1:1 USD float comparison (USDC invoices only).
+		amountSeen = txAmountFloat >= expectedAmount*0.999
+	}
+
+	confirmed := tx.Confirmations >= network.Confirmations
+	return paymentMatch{
+		amountSeen:  amountSeen,
+		confirmed:   confirmed,
+		txBaseUnits: baseUnits,
+		txAmount:    txAmountFloat,
+	}
+}
+
+// markConfirming records that a matching deposit was seen but doesn't yet
+// have enough confirmations. Subsequent monitor ticks update `confirmations`
+// and eventually transition the row to `completed` via confirmPayment.
+func (cm *CryptoMonitor) markConfirming(wallet PendingWallet, tx CryptoTransaction) {
+	ctx := context.Background()
+
+	// Same dedup guard as confirmPayment — a tx already credited against
+	// another wallet should not re-mark this one. The unique index on
+	// (network, tx_hash) would catch it but a clean error log is friendlier.
+	if tx.Hash != "" {
+		var exists bool
+		err := cm.db.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM purser.crypto_wallets
+				WHERE network = $1 AND tx_hash = $2 AND id != $3
+			)
+		`, wallet.Network, tx.Hash, wallet.ID).Scan(&exists)
+		if err != nil {
+			cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to check tx dedup in markConfirming")
+			return
+		}
+		if exists {
+			return
+		}
+	}
+
+	now := time.Now()
+	_, err := cm.db.ExecContext(ctx, `
+		UPDATE purser.crypto_wallets
+		SET status = 'confirming',
+		    tx_hash = $2,
+		    confirmations = $3,
+		    detected_at = COALESCE(detected_at, $4),
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND status IN ('pending', 'confirming')
+	`, wallet.ID, tx.Hash, tx.Confirmations, now)
+	if err != nil {
+		cm.logger.WithFields(logging.Fields{
+			"error":     err,
+			"wallet_id": wallet.ID,
+			"tx_hash":   tx.Hash,
+		}).Error("Failed to mark wallet confirming")
+		return
+	}
+
+	cm.logger.WithFields(logging.Fields{
+		"wallet_id":     wallet.ID,
+		"tx_hash":       tx.Hash,
+		"confirmations": tx.Confirmations,
+	}).Debug("Wallet marked confirming")
 }
 
 // confirmPayment processes a confirmed crypto payment.
-// For invoice: marks invoice as paid
-// For prepaid: credits tenant's prepaid balance
-func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransaction, txAmount float64) {
+// For invoice: marks invoice as paid (legacy float-USD path; USDC only).
+// For prepaid: credits tenant's prepaid balance using the locked quote and
+// the on-chain receipt in base units.
+func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransaction, txBaseUnits *big.Int, txAmount float64) {
 	ctx := context.Background()
 	if tx.Hash != "" {
 		var exists bool
 		err := cm.db.QueryRowContext(ctx, `
 			SELECT EXISTS(
 				SELECT 1 FROM purser.crypto_wallets
-				WHERE network = $1 AND confirmed_tx_hash = $2
+				WHERE network = $1 AND tx_hash = $2 AND id != $3
 			)
-		`, wallet.Network, tx.Hash).Scan(&exists)
+		`, wallet.Network, tx.Hash, wallet.ID).Scan(&exists)
 		if err != nil {
 			cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to check crypto transaction deduplication")
 			return
@@ -380,11 +536,14 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 
 	now := time.Now()
 
+	var creditedCents int64
+	var creditedCurrency string
+
 	switch wallet.Purpose {
 	case "invoice":
 		err = cm.confirmInvoicePayment(ctx, dbTx, wallet, tx, txAmount, now)
 	case "prepaid":
-		err = cm.confirmPrepaidTopup(ctx, dbTx, wallet, tx, txAmount, now)
+		creditedCents, creditedCurrency, err = cm.confirmPrepaidTopup(ctx, dbTx, wallet, tx, txBaseUnits, now)
 	default:
 		err = fmt.Errorf("unknown wallet purpose: %s", wallet.Purpose)
 	}
@@ -398,17 +557,19 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 		return
 	}
 
-	// Mark wallet as used
+	// Persist the exact on-chain receipt in base units; no float round-trip.
 	_, err = dbTx.ExecContext(ctx, `
 		UPDATE purser.crypto_wallets
-		SET status = 'used',
-			confirmed_tx_hash = $2,
-			actual_amount_received = $3,
+		SET status = 'completed',
+			tx_hash = $2,
+			received_amount_base_units = $3,
 			block_number = $4,
-			confirmed_at = $5,
+			confirmations = $5,
+			detected_at = COALESCE(detected_at, $6),
+			completed_at = $6,
 			updated_at = NOW()
 		WHERE id = $1
-	`, wallet.ID, tx.Hash, txAmount, tx.BlockNumber, now)
+	`, wallet.ID, tx.Hash, txBaseUnits.String(), tx.BlockNumber, tx.Confirmations, now)
 	if err != nil {
 		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to update wallet status")
 		return
@@ -443,6 +604,9 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 				Currency:  currency,
 				Provider:  "crypto",
 				Status:    "confirmed",
+				Asset:     wallet.Asset,
+				TxHash:    tx.Hash,
+				Network:   wallet.Network,
 			})
 			emitBillingEvent(eventInvoicePaid, wallet.TenantID, "invoice", *wallet.InvoiceID, &pb.BillingEvent{
 				InvoiceId: *wallet.InvoiceID,
@@ -450,16 +614,21 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 				Currency:  currency,
 				Provider:  "crypto",
 				Status:    "paid",
+				Asset:     wallet.Asset,
+				TxHash:    tx.Hash,
+				Network:   wallet.Network,
 			})
 		}
 	} else if wallet.Purpose == "prepaid" {
-		amount := float64(int64(math.Round(txAmount*100))) / 100
 		emitBillingEvent(eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &pb.BillingEvent{
 			TopupId:  wallet.ID,
-			Amount:   amount,
-			Currency: billing.DefaultCurrency(),
+			Amount:   float64(creditedCents) / 100.0,
+			Currency: creditedCurrency,
 			Provider: "crypto",
 			Status:   "credited",
+			Asset:    wallet.Asset,
+			TxHash:   tx.Hash,
+			Network:  wallet.Network,
 		})
 	}
 }
@@ -508,21 +677,59 @@ func (cm *CryptoMonitor) confirmInvoicePayment(ctx context.Context, dbTx *sql.Tx
 	return nil
 }
 
-// confirmPrepaidTopup credits a tenant's prepaid balance
-func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) error {
+// confirmPrepaidTopup credits a tenant's prepaid balance and returns the
+// amount/currency actually credited so the calling event emitter doesn't
+// have to recompute (and can't drift out of sync with this function's math).
+//
+// All money math operates on `*big.Int` base units and `decimal.Decimal`;
+// no float conversions on the credit path.
+func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txBaseUnits *big.Int, now time.Time) (int64, string, error) {
 	if wallet.ExpectedAmountCents == nil {
-		return fmt.Errorf("expected_amount_cents is nil for prepaid wallet")
+		return 0, "", fmt.Errorf("expected_amount_cents is nil for prepaid wallet")
+	}
+	if txBaseUnits == nil || txBaseUnits.Sign() <= 0 {
+		return 0, "", fmt.Errorf("invalid tx base units")
 	}
 
-	if wallet.Asset != "USDC" {
-		return fmt.Errorf("unsupported prepaid asset without conversion: %s", wallet.Asset)
+	currency := wallet.CreditedAmountCurrency
+	if currency == "" {
+		currency = billing.DefaultCurrency()
 	}
 
-	amountCents := int64(math.Round(txAmount * 100))
+	td, ok := TokenDecimals(wallet.Asset)
+	if !ok {
+		return 0, "", fmt.Errorf("unknown token decimals for %s", wallet.Asset)
+	}
+
+	// usdCents = (received_base_units / 10^decimals) × priceUSD × 100
+	// USDC short-circuits with priceUSD=1 (no precision loss either way).
+	priceUSD := wallet.QuotedPriceUSD
+	if wallet.Asset == "USDC" && priceUSD.IsZero() {
+		priceUSD = decimal.NewFromInt(1)
+	}
+	if priceUSD.IsZero() {
+		return 0, "", fmt.Errorf("missing quoted_price_usd for %s prepaid wallet", wallet.Asset)
+	}
+	usdCentsDec := decimal.NewFromBigInt(txBaseUnits, -int32(td)).
+		Mul(priceUSD).
+		Mul(decimal.NewFromInt(100))
+	usdCents := usdCentsDec.Round(0).IntPart()
+	if usdCents <= 0 {
+		return 0, "", fmt.Errorf("computed credit cents non-positive: base_units=%s price=%s", txBaseUnits, priceUSD)
+	}
+
+	var amountCents int64
+	if currency == "EUR" {
+		if wallet.QuotedUSDToEURRate == nil {
+			return 0, "", fmt.Errorf("EUR-denominated %s top-up missing quoted_usd_to_eur_rate", wallet.Asset)
+		}
+		amountCents = decimal.NewFromInt(usdCents).Mul(*wallet.QuotedUSDToEURRate).Round(0).IntPart()
+	} else {
+		amountCents = usdCents
+	}
 	if amountCents <= 0 {
-		return fmt.Errorf("invalid prepaid amount from transaction: %f", txAmount)
+		return 0, "", fmt.Errorf("invalid credit amount: %d cents", amountCents)
 	}
-	currency := billing.DefaultCurrency()
 
 	// Get current balance (or 0 if not exists)
 	var currentBalance int64
@@ -534,7 +741,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 	if errors.Is(err, sql.ErrNoRows) {
 		currentBalance = 0
 	} else if err != nil {
-		return fmt.Errorf("failed to get current balance: %w", err)
+		return 0, "", fmt.Errorf("failed to get current balance: %w", err)
 	}
 
 	newBalance := currentBalance + amountCents
@@ -548,7 +755,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 	`, wallet.TenantID, newBalance, currency)
 
 	if err != nil {
-		return fmt.Errorf("failed to update prepaid balance: %w", err)
+		return 0, "", fmt.Errorf("failed to update prepaid balance: %w", err)
 	}
 
 	// Record transaction in audit trail
@@ -569,18 +776,32 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to record balance transaction: %w", err)
+		return 0, "", fmt.Errorf("failed to record balance transaction: %w", err)
+	}
+
+	// Persist the credited amount + currency on the wallet so GetCryptoTopup
+	// can render it without recomputing from the on-chain receipt.
+	_, err = dbTx.ExecContext(ctx, `
+		UPDATE purser.crypto_wallets
+		SET credited_amount_cents = $2,
+		    credited_amount_currency = $3,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, wallet.ID, amountCents, currency)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to update credited amount on wallet: %w", err)
 	}
 
 	cm.logger.WithFields(logging.Fields{
 		"tenant_id":    wallet.TenantID,
 		"amount_cents": amountCents,
+		"currency":     currency,
 		"new_balance":  newBalance,
 		"asset":        wallet.Asset,
 		"tx_hash":      tx.Hash,
 	}).Info("Prepaid balance credited")
 
-	return nil
+	return amountCents, currency, nil
 }
 
 // Block explorer API transaction fetching (multi-chain support)
@@ -745,6 +966,18 @@ func (cm *CryptoMonitor) parseTransactionAmount(value string, asset string) (flo
 	default:
 		return 0, fmt.Errorf("unknown asset: %s", asset)
 	}
+}
+
+// parseTransactionBaseUnits decodes the on-chain `value` field (always base
+// units encoded as a decimal string from Etherscan/Arbiscan) into an exact
+// *big.Int. Use this for any monetary comparison or persistence; the float
+// helpers above are reserved for legacy invoice display.
+func parseTransactionBaseUnits(value string) (*big.Int, error) {
+	n := new(big.Int)
+	if _, ok := n.SetString(value, 10); !ok {
+		return nil, fmt.Errorf("invalid base-units value: %s", value)
+	}
+	return n, nil
 }
 
 func (cm *CryptoMonitor) parseEthereumAmount(value string) (float64, error) {

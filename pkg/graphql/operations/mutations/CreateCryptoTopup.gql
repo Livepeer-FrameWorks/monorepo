@@ -6,5 +6,11 @@ mutation CreateCryptoTopup($input: CreateCryptoTopupInput!) {
     assetSymbol
     expectedAmountCents
     expiresAt
+    expectedAmountBaseUnits
+    expectedAmountToken
+    quotedPriceUsd
+    quoteSource
+    quotedAt
+    network
   }
 }

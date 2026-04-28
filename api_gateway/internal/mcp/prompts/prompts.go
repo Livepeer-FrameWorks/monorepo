@@ -357,7 +357,7 @@ func handleCapabilitiesPrompt() (*mcp.GetPromptResult, error) {
 	parts = append(parts, "- **Webhooks**: Real-time event notifications\n")
 
 	parts = append(parts, "## Billing")
-	parts = append(parts, "- **Prepaid Model**: Top up balance with crypto (ETH, USDC, LPT)")
+	parts = append(parts, "- **Prepaid Model**: Top up balance with crypto (ETH or USDC; LPT reserved)")
 	parts = append(parts, "- **Usage-based Pricing**: Pay only for what you use")
 	parts = append(parts, "- **Transparent Pricing**: Clear rates for bandwidth, storage, compute\n")
 

@@ -2583,7 +2583,7 @@ enum CryptoAsset {
   ETH
   "USDC stablecoin (ERC-20)"
   USDC
-  "Livepeer Token (ERC-20)"
+  "Livepeer Token (ERC-20). Currently reserved — prepaid top-ups gated until a non-Chainlink price source is wired."
   LPT
 }
 
@@ -2591,35 +2591,52 @@ enum CryptoAsset {
 Input for creating a crypto top-up deposit address.
 """
 input CreateCryptoTopupInput {
-  "Expected top-up amount in cents. Must be positive. Actual credit based on received amount."
+  "Target credit amount in `currency` cents. Must be positive."
   amountCents: Int!
-  "Crypto asset to receive."
+  "Crypto asset to receive (ETH or USDC; LPT not yet supported)."
   asset: CryptoAsset!
-  "Target currency for balance (default: USD)."
+  "Currency the prepaid balance is denominated in. USD or EUR; defaults to USD."
   currency: String
 }
 
 """
 Result from creating a crypto top-up.
-Contains the deposit address for the agent to send funds.
+
+The price is locked at this response. Send exactly `expectedAmountToken` of
+`asset` to `depositAddress`; on confirmation, the balance is credited at
+`quotedPriceUsd` regardless of price drift inside the address TTL.
 """
 type CryptoTopupResult {
   "Internal top-up ID for tracking/polling."
   topupId: ID!
   "HD-derived Ethereum address to send funds to."
   depositAddress: String!
-  "Asset to send (ETH, USDC, or LPT)."
+  "Asset to send (ETH or USDC)."
   asset: CryptoAsset!
-  "Human-readable asset symbol."
+  "Human-readable asset symbol (\"ETH\" | \"USDC\")."
   assetSymbol: String!
-  "Expected amount in cents (echoed from input)."
+  "Echo of input amountCents (USD or EUR cents per the request)."
   expectedAmountCents: Int!
   "When this deposit address expires (24 hours from creation)."
   expiresAt: Time!
+  "Token base units to send (decimal string; wei for 18-decimal assets)."
+  expectedAmountBaseUnits: String!
+  "Human-friendly decimal of expectedAmountBaseUnits, e.g. \"0.01515\"."
+  expectedAmountToken: String!
+  "Locked USD price per 1 whole token, e.g. \"3300.45\"."
+  quotedPriceUsd: String!
+  "Source of the price quote (\"chainlink\" | \"one_to_one\")."
+  quoteSource: String!
+  "When the price was locked."
+  quotedAt: Time!
+  "Network the deposit address lives on (\"ethereum\" | \"arbitrum\" | \"base\")."
+  network: String!
 }
 
 """
 Status of a crypto top-up (for polling).
+
+`status` cycles: pending → confirming → completed (or expired).
 """
 type CryptoTopupStatus {
   "Top-up ID."
@@ -2634,10 +2651,18 @@ type CryptoTopupStatus {
   txHash: String
   "Number of block confirmations."
   confirmations: Int!
-  "Amount received in smallest unit (wei for ETH)."
-  receivedAmountWei: String
-  "Amount credited to balance in cents (after conversion)."
+  "Amount received in token base units (decimal string)."
+  receivedAmountBaseUnits: String
+  "Human-friendly decimal of receivedAmountBaseUnits."
+  receivedAmountToken: String
+  "Amount credited to balance in `creditedAmountCurrency` cents."
   creditedAmountCents: Int
+  "ISO-4217 currency the credit landed in (\"USD\" | \"EUR\")."
+  creditedAmountCurrency: String
+  "Source of the locked price quote (\"chainlink\" | \"one_to_one\")."
+  quoteSource: String
+  "Network the deposit address lives on."
+  network: String
   "When the deposit address expires."
   expiresAt: Time!
   "When payment was first detected on-chain."

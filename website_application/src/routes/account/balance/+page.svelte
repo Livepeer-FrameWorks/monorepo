@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { resolve } from "$app/paths";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
@@ -11,6 +11,7 @@
     GetBalanceTransactionsStore,
     CreateCardTopupStore,
     CreateCryptoTopupStore,
+    GetCryptoTopupStatusStore,
   } from "$houdini";
 
   // Icons
@@ -28,6 +29,7 @@
   const transactionsQuery = new GetBalanceTransactionsStore();
   const cardTopupMutation = new CreateCardTopupStore();
   const cryptoTopupMutation = new CreateCryptoTopupStore();
+  const cryptoStatusMutation = new GetCryptoTopupStatusStore();
   const docsSiteUrl = getDocsSiteUrl().replace(/\/$/, "");
 
   // State
@@ -49,23 +51,80 @@
   >([]);
   let totalTransactions = $state(0);
 
-  // Top-up form state
+  // Top-up form state. LPT is hidden until a non-Chainlink price source ships.
   let topupAmount = $state(10); // Default $10
   let topupMethod = $state<"card" | "crypto">("card");
-  let cryptoAsset = $state<"ETH" | "USDC" | "LPT">("USDC");
+  let cryptoAsset = $state<"ETH" | "USDC">("USDC");
   let topupLoading = $state(false);
 
-  // Crypto deposit state
+  // Crypto deposit state — populated post-quote.
   let cryptoDeposit = $state<{
     topupId: string;
     depositAddress: string;
     asset: string;
     expiresAt: string;
+    expectedAmountToken: string;
+    quotedPriceUsd: string;
+    quoteSource: string;
+    network: string;
   } | null>(null);
+
+  // Polling status — set from GetCryptoTopupStatus on a 15s interval.
+  let cryptoStatus = $state<{
+    status: string;
+    txHash: string | null;
+    confirmations: number;
+    creditedAmountCents: number | null;
+    creditedAmountCurrency: string | null;
+  } | null>(null);
+
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  const POLL_INTERVAL_MS = 15_000;
 
   onMount(() => {
     loadData();
   });
+
+  onDestroy(() => {
+    stopPolling();
+  });
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  async function pollOnce(topupId: string) {
+    try {
+      const result = await cryptoStatusMutation.mutate({ topupId });
+      const data = result.data?.cryptoTopupStatus;
+      if (!data) return;
+      cryptoStatus = {
+        status: data.status,
+        txHash: data.txHash ?? null,
+        confirmations: data.confirmations,
+        creditedAmountCents: data.creditedAmountCents ?? null,
+        creditedAmountCurrency: data.creditedAmountCurrency ?? null,
+      };
+      if (data.status === "completed") {
+        stopPolling();
+        toast.success("Top-up credited!");
+        await loadData();
+      } else if (data.status === "expired") {
+        stopPolling();
+      }
+    } catch {
+      // Silent — next tick will try again. Don't spam the user with toasts.
+    }
+  }
+
+  function startPolling(topupId: string) {
+    stopPolling();
+    pollOnce(topupId);
+    pollTimer = setInterval(() => pollOnce(topupId), POLL_INTERVAL_MS);
+  }
 
   async function loadData() {
     loading = true;
@@ -146,12 +205,19 @@
       });
 
       if (result.data?.createCryptoTopup) {
+        const r = result.data.createCryptoTopup;
         cryptoDeposit = {
-          topupId: result.data.createCryptoTopup.topupId,
-          depositAddress: result.data.createCryptoTopup.depositAddress,
-          asset: result.data.createCryptoTopup.assetSymbol,
-          expiresAt: result.data.createCryptoTopup.expiresAt,
+          topupId: r.topupId,
+          depositAddress: r.depositAddress,
+          asset: r.assetSymbol,
+          expiresAt: r.expiresAt,
+          expectedAmountToken: r.expectedAmountToken,
+          quotedPriceUsd: r.quotedPriceUsd,
+          quoteSource: r.quoteSource,
+          network: r.network,
         };
+        cryptoStatus = null;
+        startPolling(r.topupId);
         toast.success("Deposit address created");
       }
     } catch {
@@ -332,13 +398,15 @@
 
             {#if topupMethod === "crypto"}
               <div>
-                <span class="block text-sm font-medium text-muted-foreground mb-2">Asset</span>
+                <span class="block text-sm font-medium text-muted-foreground mb-2"
+                  >Asset (ETH or USDC)</span
+                >
                 <div class="flex gap-2">
-                  {#each ["ETH", "USDC", "LPT"] as asset (asset)}
+                  {#each ["ETH", "USDC"] as asset (asset)}
                     <Button
                       variant={cryptoAsset === asset ? "default" : "outline"}
                       size="sm"
-                      onclick={() => (cryptoAsset = asset as "ETH" | "USDC" | "LPT")}
+                      onclick={() => (cryptoAsset = asset as "ETH" | "USDC")}
                     >
                       {asset}
                     </Button>
@@ -378,9 +446,17 @@
               </div>
             </div>
             <div class="slab-body--padded">
-              <p class="text-sm text-muted-foreground mb-3">
-                Send {cryptoDeposit.asset} to this address. Your balance will be credited automatically
-                after confirmation.
+              <p class="text-sm text-foreground mb-1">
+                Send <span class="font-semibold tabular-nums"
+                  >{cryptoDeposit.expectedAmountToken}
+                  {cryptoDeposit.asset}</span
+                >
+                to the address below on
+                <span class="font-mono text-xs">{cryptoDeposit.network}</span>.
+              </p>
+              <p class="text-xs text-muted-foreground mb-3">
+                Locked at ${cryptoDeposit.quotedPriceUsd}/{cryptoDeposit.asset} ({cryptoDeposit.quoteSource}).
+                Quote valid until {formatDate(cryptoDeposit.expiresAt)}.
               </p>
               <div
                 class="flex items-center gap-2 p-3 bg-muted/30 rounded-md font-mono text-sm break-all"
@@ -390,9 +466,35 @@
                   <CopyIcon class="w-4 h-4" />
                 </Button>
               </div>
-              <p class="text-xs text-muted-foreground mt-2">
-                Expires: {formatDate(cryptoDeposit.expiresAt)}
-              </p>
+
+              {#if cryptoStatus}
+                <div class="mt-4 p-3 rounded-md bg-muted/20 text-sm">
+                  {#if cryptoStatus.status === "pending"}
+                    <p class="text-muted-foreground">Waiting for your transaction…</p>
+                  {:else if cryptoStatus.status === "confirming"}
+                    <p>
+                      Detected{#if cryptoStatus.txHash}
+                        (<span class="font-mono text-xs break-all">{cryptoStatus.txHash}</span
+                        >){/if}.
+                      {cryptoStatus.confirmations} confirmation{cryptoStatus.confirmations === 1
+                        ? ""
+                        : "s"} so far — crediting once confirmed.
+                    </p>
+                  {:else if cryptoStatus.status === "completed"}
+                    <p class="text-success">
+                      Credited {#if cryptoStatus.creditedAmountCents !== null && cryptoStatus.creditedAmountCurrency}{formatCurrency(
+                          cryptoStatus.creditedAmountCents,
+                          cryptoStatus.creditedAmountCurrency
+                        )}{/if}.
+                      {#if cryptoStatus.txHash}
+                        <span class="font-mono text-xs break-all">tx: {cryptoStatus.txHash}</span>
+                      {/if}
+                    </p>
+                  {:else if cryptoStatus.status === "expired"}
+                    <p class="text-warning">Address expired. Generate a new one to continue.</p>
+                  {/if}
+                </div>
+              {/if}
             </div>
           </div>
         {/if}

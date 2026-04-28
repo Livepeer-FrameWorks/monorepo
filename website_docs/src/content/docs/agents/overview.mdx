@@ -25,7 +25,7 @@ FrameWorks is an MCP-native live streaming platform. AI agents can discover the 
 1. **Create or load an EVM wallet.**
 2. **Sign a wallet login message** (EIP-191) and call `POST /auth/wallet-login` to auto-provision a prepaid tenant.
 3. **Check `account://status`** to confirm readiness and resolve any blockers.
-4. **Fund the tenant** via x402 (`submit_payment`) or USDC crypto top-up (`topup_balance`, then `check_topup`).
+4. **Fund the tenant** via x402 (`submit_payment`) or crypto top-up — ETH or USDC — with a 24h price-locked quote (`topup_balance`, then `check_topup`).
 5. **Create a stream** via MCP `create_stream`, then push RTMP with the returned stream key.
 
 <Aside type="tip">
@@ -96,17 +96,17 @@ Three methods, all stateless, no registration required:
 
 What agents can do via MCP:
 
-| Category            | Operations                                                               |
-| ------------------- | ------------------------------------------------------------------------ |
-| **Streams**         | Create, update, delete, refresh keys, monitor health                     |
-| **Clips**           | Create from live or recorded streams, delete                             |
-| **DVR**             | Start/stop catch-up recording                                            |
-| **VOD**             | Upload, complete, abort, delete video assets                             |
-| **Playback**        | Resolve viewer endpoints with geo-routing                                |
-| **Billing**         | Top up with x402 or USDC deposit, check deposits, update billing details |
-| **Analytics**       | Usage aggregates, viewer metrics, geographic distribution                |
-| **QoE Diagnostics** | Rebuffering, buffer health, packet loss, routing, anomalies              |
-| **Support**         | Search past conversations                                                |
-| **API Exploration** | Introspect GraphQL schema, generate queries from templates               |
+| Category            | Operations                                                                               |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| **Streams**         | Create, update, delete, refresh keys, monitor health                                     |
+| **Clips**           | Create from live or recorded streams, delete                                             |
+| **DVR**             | Start/stop catch-up recording                                                            |
+| **VOD**             | Upload, complete, abort, delete video assets                                             |
+| **Playback**        | Resolve viewer endpoints with geo-routing                                                |
+| **Billing**         | Top up with x402 or crypto deposit (ETH or USDC), check deposits, update billing details |
+| **Analytics**       | Usage aggregates, viewer metrics, geographic distribution                                |
+| **QoE Diagnostics** | Rebuffering, buffer health, packet loss, routing, anomalies                              |
+| **Support**         | Search past conversations                                                                |
+| **API Exploration** | Introspect GraphQL schema, generate queries from templates                               |
 
 See the full [MCP Reference](/agents/mcp) for the current tools, resources, and prompts catalog.

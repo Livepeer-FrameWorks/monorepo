@@ -710,11 +710,11 @@ type CreateConversationInput struct {
 
 // Input for creating a crypto top-up deposit address.
 type CreateCryptoTopupInput struct {
-	// Expected top-up amount in cents. Must be positive. Actual credit based on received amount.
+	// Target credit amount in `currency` cents. Must be positive.
 	AmountCents int `json:"amountCents"`
-	// Crypto asset to receive.
+	// Crypto asset to receive (ETH or USDC; LPT not yet supported).
 	Asset proto.CryptoAsset `json:"asset"`
-	// Target currency for balance (default: USD).
+	// Currency the prepaid balance is denominated in. USD or EUR; defaults to USD.
 	Currency *string `json:"currency,omitempty"`
 }
 
@@ -808,23 +808,40 @@ type CreateVodUploadInput struct {
 }
 
 // Result from creating a crypto top-up.
-// Contains the deposit address for the agent to send funds.
+//
+// The price is locked at this response. Send exactly `expectedAmountToken` of
+// `asset` to `depositAddress`; on confirmation, the balance is credited at
+// `quotedPriceUsd` regardless of price drift inside the address TTL.
 type CryptoTopupResult struct {
 	// Internal top-up ID for tracking/polling.
 	TopupID string `json:"topupId"`
 	// HD-derived Ethereum address to send funds to.
 	DepositAddress string `json:"depositAddress"`
-	// Asset to send (ETH, USDC, or LPT).
+	// Asset to send (ETH or USDC).
 	Asset proto.CryptoAsset `json:"asset"`
-	// Human-readable asset symbol.
+	// Human-readable asset symbol ("ETH" | "USDC").
 	AssetSymbol string `json:"assetSymbol"`
-	// Expected amount in cents (echoed from input).
+	// Echo of input amountCents (USD or EUR cents per the request).
 	ExpectedAmountCents int `json:"expectedAmountCents"`
 	// When this deposit address expires (24 hours from creation).
 	ExpiresAt time.Time `json:"expiresAt"`
+	// Token base units to send (decimal string; wei for 18-decimal assets).
+	ExpectedAmountBaseUnits string `json:"expectedAmountBaseUnits"`
+	// Human-friendly decimal of expectedAmountBaseUnits, e.g. "0.01515".
+	ExpectedAmountToken string `json:"expectedAmountToken"`
+	// Locked USD price per 1 whole token, e.g. "3300.45".
+	QuotedPriceUsd string `json:"quotedPriceUsd"`
+	// Source of the price quote ("chainlink" | "one_to_one").
+	QuoteSource string `json:"quoteSource"`
+	// When the price was locked.
+	QuotedAt time.Time `json:"quotedAt"`
+	// Network the deposit address lives on ("ethereum" | "arbitrum" | "base").
+	Network string `json:"network"`
 }
 
 // Status of a crypto top-up (for polling).
+//
+// `status` cycles: pending → confirming → completed (or expired).
 type CryptoTopupStatus struct {
 	// Top-up ID.
 	ID string `json:"id"`
@@ -838,10 +855,18 @@ type CryptoTopupStatus struct {
 	TxHash *string `json:"txHash,omitempty"`
 	// Number of block confirmations.
 	Confirmations int `json:"confirmations"`
-	// Amount received in smallest unit (wei for ETH).
-	ReceivedAmountWei *string `json:"receivedAmountWei,omitempty"`
-	// Amount credited to balance in cents (after conversion).
+	// Amount received in token base units (decimal string).
+	ReceivedAmountBaseUnits *string `json:"receivedAmountBaseUnits,omitempty"`
+	// Human-friendly decimal of receivedAmountBaseUnits.
+	ReceivedAmountToken *string `json:"receivedAmountToken,omitempty"`
+	// Amount credited to balance in `creditedAmountCurrency` cents.
 	CreditedAmountCents *int `json:"creditedAmountCents,omitempty"`
+	// ISO-4217 currency the credit landed in ("USD" | "EUR").
+	CreditedAmountCurrency *string `json:"creditedAmountCurrency,omitempty"`
+	// Source of the locked price quote ("chainlink" | "one_to_one").
+	QuoteSource *string `json:"quoteSource,omitempty"`
+	// Network the deposit address lives on.
+	Network *string `json:"network,omitempty"`
 	// When the deposit address expires.
 	ExpiresAt time.Time `json:"expiresAt"`
 	// When payment was first detected on-chain.
@@ -1569,7 +1594,7 @@ type UpdateBillingDetailsInput struct {
 
 // Input for updating cluster marketplace settings.
 type UpdateClusterMarketplaceInput struct {
-	// Marketplace visibility (PUBLIC, PRIVATE, INVITE_ONLY).
+	// Marketplace visibility (PUBLIC, UNLISTED, PRIVATE).
 	Visibility *proto.ClusterVisibility `json:"visibility,omitempty"`
 	// Pricing model for subscriptions.
 	PricingModel *proto.ClusterPricingModel `json:"pricingModel,omitempty"`

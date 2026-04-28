@@ -213,6 +213,48 @@ export function formatCurrency(amount: number, currency: string = "USD"): string
   }).format(amount);
 }
 
+const TOKEN_DECIMALS: Record<string, number> = {
+  ETH: 18,
+  USDC: 6,
+  LPT: 18,
+};
+
+const TOKEN_DISPLAY_PRECISION: Record<string, number> = {
+  ETH: 6,
+  USDC: 2,
+  LPT: 4,
+};
+
+/**
+ * Format a token amount given as a base-units decimal string (e.g. wei) into
+ * a human-readable whole-token decimal trimmed to the asset's display precision.
+ * Returns the input unchanged for unknown assets so callers don't crash on new symbols.
+ */
+export function formatTokenAmount(baseUnits: string | null | undefined, asset: string): string {
+  if (!baseUnits) return "N/A";
+  const decimals = TOKEN_DECIMALS[asset];
+  if (decimals === undefined) return baseUnits;
+
+  const negative = baseUnits.startsWith("-");
+  const digits = (negative ? baseUnits.slice(1) : baseUnits).replace(/^0+/, "") || "0";
+
+  let whole: string;
+  let frac: string;
+  if (digits.length <= decimals) {
+    whole = "0";
+    frac = digits.padStart(decimals, "0");
+  } else {
+    whole = digits.slice(0, digits.length - decimals);
+    frac = digits.slice(digits.length - decimals);
+  }
+
+  const precision = TOKEN_DISPLAY_PRECISION[asset] ?? Math.min(6, decimals);
+  frac = frac.slice(0, precision).replace(/0+$/, "");
+
+  const out = frac ? `${whole}.${frac}` : whole;
+  return negative ? `-${out}` : out;
+}
+
 export function formatUptime(uptimeMs: number): string {
   if (!uptimeMs || uptimeMs === 0) return "0s";
 

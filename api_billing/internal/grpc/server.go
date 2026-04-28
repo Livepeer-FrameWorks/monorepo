@@ -36,6 +36,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/shopspring/decimal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -228,6 +229,8 @@ type PurserServer struct {
 	quartermasterClient *qmclient.GRPCClient
 	commodoreClient     handlers.CommodoreClient
 	hdwallet            *handlers.HDWallet
+	rpcClient           *handlers.RPCClient
+	priceFeed           *handlers.PriceFeed
 	x402handler         *handlers.X402Handler
 	decklogClient       *decklogclient.BatchedClient
 	thresholdEnforcer   *handlers.ThresholdEnforcer
@@ -245,6 +248,8 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 	} else if created {
 		logger.Info("Initialized HD wallet state from HD_WALLET_XPUB")
 	}
+	rpcClient := handlers.NewRPCClient()
+	priceFeed := handlers.NewPriceFeed(rpcClient, logger)
 	return &PurserServer{
 		db:                  db,
 		logger:              logger,
@@ -254,7 +259,9 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 		quartermasterClient: qmClient,
 		commodoreClient:     commodoreClient,
 		hdwallet:            hdwallet,
-		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, commodoreClient),
+		rpcClient:           rpcClient,
+		priceFeed:           priceFeed,
+		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, rpcClient, commodoreClient),
 		decklogClient:       decklogClient,
 		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil),
 	}
@@ -1554,7 +1561,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 			if scanErr := s.db.QueryRowContext(ctx, `
 					SELECT expires_at
 					FROM purser.crypto_wallets
-					WHERE invoice_id = $1 AND asset = $2 AND status = 'active'
+					WHERE invoice_id = $1 AND asset = $2 AND status IN ('pending', 'confirming')
 					ORDER BY created_at DESC
 					LIMIT 1
 				`, invoiceID, strings.ToUpper(asset)).Scan(&expiresAt); scanErr == nil {
@@ -1850,16 +1857,15 @@ func (s *PurserServer) createCryptoPayment(invoiceID, tenantID, asset string, am
 		return "", fmt.Errorf("unsupported crypto asset for fiat invoice: %s", asset)
 	}
 
-	// Use HD wallet to generate deposit address for this invoice
-	// This derives a unique address from the xpub and stores the mapping in crypto_wallets
-	walletID, walletAddress, err := s.hdwallet.GenerateDepositAddress(
-		tenantID,
-		"invoice",  // purpose
-		&invoiceID, // invoice_id (required for invoice purpose)
-		nil,        // expected_amount_cents (not used for invoices)
-		asset,
-		expiresAt,
-	)
+	// Invoice path: USDC-only, settled on Arbitrum (consistent with x402).
+	walletID, walletAddress, err := s.hdwallet.GenerateDepositAddress(handlers.DepositAddressParams{
+		TenantID:  tenantID,
+		Purpose:   "invoice",
+		Asset:     asset,
+		Network:   "arbitrum",
+		ExpiresAt: expiresAt,
+		InvoiceID: &invoiceID,
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to generate deposit address: %w", err)
 	}
@@ -4454,15 +4460,31 @@ func (s *PurserServer) ListPendingTopups(ctx context.Context, req *pb.ListPendin
 // CRYPTO TOP-UP
 // ============================================================================
 
+// defaultNetworkForAsset returns the network on which a prepaid top-up of the
+// given asset is settled when the request doesn't override it. Arbitrum
+// across the board: cheap, fast, has the Chainlink ETH/USD feed and USDC.
+func defaultNetworkForAsset(asset string) string {
+	switch asset {
+	case "ETH", "USDC":
+		return "arbitrum"
+	default:
+		return ""
+	}
+}
+
 // CreateCryptoTopup generates an HD-derived deposit address for prepaid balance top-up.
 // This is the agent-friendly payment method - no human-in-the-loop required.
+//
+// The price quote is locked at this call: we read the Chainlink USD price for
+// non-USDC assets, persist it on the wallet row, and credit
+// `received_amount × locked_price` when the deposit confirms. The user is
+// quoted an exact token amount to send.
 func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryptoTopupRequest) (*pb.CreateCryptoTopupResponse, error) {
 	tenantID := req.GetTenantId()
 	expectedAmountCents := req.GetExpectedAmountCents()
 	asset := req.GetAsset()
 	currency := req.GetCurrency()
 
-	// Validation
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -4472,72 +4494,139 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 	if currency == "" {
 		currency = billing.DefaultCurrency()
 	}
+	normalizedCurrency := strings.ToUpper(currency)
+	if normalizedCurrency != "USD" && normalizedCurrency != "EUR" {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported prepaid currency for crypto top-up: %s (USD or EUR only)", normalizedCurrency)
+	}
 
 	userID := middleware.GetUserID(ctx)
-	// Map proto enum to asset string
-	var assetStr string
-	var assetSymbol string
+
+	var assetStr, assetSymbol string
 	switch asset {
 	case pb.CryptoAsset_CRYPTO_ASSET_ETH:
-		assetStr = "ETH"
-		assetSymbol = "ETH"
+		assetStr, assetSymbol = "ETH", "ETH"
 	case pb.CryptoAsset_CRYPTO_ASSET_USDC:
-		assetStr = "USDC"
-		assetSymbol = "USDC"
+		assetStr, assetSymbol = "USDC", "USDC"
 	case pb.CryptoAsset_CRYPTO_ASSET_LPT:
-		assetStr = "LPT"
-		assetSymbol = "LPT"
+		return nil, status.Error(codes.InvalidArgument, "LPT prepaid top-ups are not yet supported")
 	default:
-		return nil, status.Error(codes.InvalidArgument, "asset must be ETH, USDC, or LPT")
+		return nil, status.Error(codes.InvalidArgument, "asset must be ETH or USDC")
 	}
 
-	normalizedCurrency := strings.ToUpper(currency)
-	if normalizedCurrency != "USD" {
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported prepaid currency for crypto top-up: %s", normalizedCurrency)
+	networkName := defaultNetworkForAsset(assetStr)
+	if networkName == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "no default network for asset %s", assetStr)
 	}
-	if assetStr != "USDC" {
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported asset for prepaid top-up without conversion: %s", assetStr)
+	network, ok := handlers.Networks[networkName]
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "unknown network %q", networkName)
 	}
 
-	// Generate deposit address using HD wallet
-	expiresAt := time.Now().Add(24 * time.Hour)
-	walletID, address, err := s.hdwallet.GenerateDepositAddress(
-		tenantID,
-		"prepaid", // purpose
-		nil,       // invoiceID (not applicable for prepaid)
-		&expectedAmountCents,
-		assetStr,
-		expiresAt,
-	)
+	tokenDecimals, ok := handlers.TokenDecimals(assetStr)
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "unknown token decimals for %s", assetStr)
+	}
+
+	// Lock the USD price + (if EUR) ECB rate at quote time.
+	priceQuote, err := s.priceFeed.GetAssetUSDPrice(ctx, network, assetStr)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"asset":   assetStr,
+			"network": networkName,
+		}).Error("Failed to read asset USD price")
+		return nil, status.Errorf(codes.Unavailable, "price feed unavailable for %s: %v", assetStr, err)
+	}
+
+	// Compute USD value the user wants credited. EUR top-ups convert input
+	// cents to USD via the locked ECB rate so the on-chain quote (Chainlink
+	// is USD-denominated) is anchored at the same rate that's used at credit.
+	var quotedUSDToEURRate *decimal.Decimal
+	usdCents := decimal.NewFromInt(expectedAmountCents)
+	if normalizedCurrency == "EUR" {
+		rate, rateErr := handlers.GetEurUsdRate(s.logger)
+		if rateErr != nil {
+			return nil, status.Errorf(codes.Unavailable, "EUR rate unavailable: %v", rateErr)
+		}
+		rateDec := decimal.NewFromFloat(rate)
+		quotedUSDToEURRate = &rateDec
+		// rate is EUR per USD; usdCents = eurCents / rate
+		usdCents = decimal.NewFromInt(expectedAmountCents).Div(rateDec)
+	}
+
+	// Token base units = (usdCents / 100) / priceUSD * 10^tokenDecimals
+	// Ceiling so we never quote less than the user asked for; small overpay
+	// (sub-base-unit) is fine.
+	amountUSD := usdCents.Div(decimal.NewFromInt(100))
+	amountToken := amountUSD.Div(priceQuote.PriceUSD)
+	expectedBaseUnitsDec := amountToken.Mul(decimal.New(1, tokenDecimals))
+	expectedBaseUnits := expectedBaseUnitsDec.Ceil().BigInt()
+	if expectedBaseUnits.Sign() <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "computed deposit amount is zero (raise expected_amount_cents)")
+	}
+
+	now := time.Now()
+	expiresAt := now.Add(24 * time.Hour)
+
+	walletID, address, err := s.hdwallet.GenerateDepositAddress(handlers.DepositAddressParams{
+		TenantID:            tenantID,
+		Purpose:             "prepaid",
+		Asset:               assetStr,
+		Network:             networkName,
+		ExpiresAt:           expiresAt,
+		ExpectedAmountCents: &expectedAmountCents,
+		Quote: &handlers.DepositQuote{
+			ExpectedAmountBaseUnits: expectedBaseUnits,
+			QuotedPriceUSD:          priceQuote.PriceUSD,
+			QuotedUSDToEURRate:      quotedUSDToEURRate,
+			QuotedAt:                now,
+			QuoteSource:             priceQuote.Source,
+			CreditedAmountCurrency:  normalizedCurrency,
+		},
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to generate deposit address")
 		return nil, status.Errorf(codes.Internal, "failed to generate deposit address: %v", err)
 	}
 
+	// Re-derive token amount from the ceiled base units so the displayed
+	// "send exactly X" matches what the monitor compares against.
+	expectedAmountToken := decimal.NewFromBigInt(expectedBaseUnits, -tokenDecimals).StringFixedBank(tokenDecimals)
+
 	s.logger.WithFields(logging.Fields{
-		"tenant_id":      tenantID,
-		"wallet_id":      walletID,
-		"asset":          assetStr,
-		"address":        address,
-		"expected_cents": expectedAmountCents,
+		"tenant_id":             tenantID,
+		"wallet_id":             walletID,
+		"asset":                 assetStr,
+		"network":               networkName,
+		"address":               address,
+		"expected_cents":        expectedAmountCents,
+		"expected_amount_token": expectedAmountToken,
+		"quoted_price_usd":      priceQuote.PriceUSD.String(),
+		"quote_source":          priceQuote.Source,
 	}).Info("Created crypto top-up deposit address")
 
 	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", walletID, &pb.BillingEvent{
 		TopupId:  walletID,
 		Amount:   float64(expectedAmountCents) / 100.0,
-		Currency: currency,
+		Currency: normalizedCurrency,
 		Provider: "crypto",
 		Status:   "pending",
+		Asset:    assetStr,
+		Network:  networkName,
 	})
 
 	return &pb.CreateCryptoTopupResponse{
-		TopupId:             walletID,
-		DepositAddress:      address,
-		Asset:               asset,
-		AssetSymbol:         assetSymbol,
-		ExpectedAmountCents: expectedAmountCents,
-		ExpiresAt:           timestamppb.New(expiresAt),
-		// QrCodeData left empty - can be generated client-side
+		TopupId:                 walletID,
+		DepositAddress:          address,
+		Asset:                   asset,
+		AssetSymbol:             assetSymbol,
+		ExpectedAmountCents:     expectedAmountCents,
+		ExpiresAt:               timestamppb.New(expiresAt),
+		ExpectedAmountBaseUnits: expectedBaseUnits.String(),
+		ExpectedAmountToken:     expectedAmountToken,
+		QuotedPriceUsd:          priceQuote.PriceUSD.String(),
+		QuoteSource:             priceQuote.Source,
+		QuotedAt:                timestamppb.New(now),
+		Network:                 networkName,
 	}, nil
 }
 
@@ -4556,34 +4645,27 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 	var topup pb.CryptoTopup
 	var expiresAt, createdAt time.Time
 	var detectedAt, completedAt sql.NullTime
-	var txHash sql.NullString
-	var receivedAmountWei, creditedAmountCents sql.NullInt64
+	var txHash, receivedAmountBaseUnits, creditedAmountCurrency, quoteSource, network sql.NullString
+	var creditedAmountCents sql.NullInt64
 	var confirmations sql.NullInt32
 
-	query := `
-		SELECT id, tenant_id, wallet_address, asset, expected_amount_cents,
-		       status, tx_hash, confirmations, received_amount_wei, credited_amount_cents,
-		       expires_at, detected_at, completed_at, created_at
-		FROM purser.crypto_wallets
-		WHERE id = $1 AND purpose = 'prepaid'
-	`
-	args := []interface{}{topupID}
+	const cols = `id, tenant_id, wallet_address, asset, expected_amount_cents,
+		status, tx_hash, confirmations, received_amount_base_units, credited_amount_cents,
+		expires_at, detected_at, completed_at, created_at,
+		credited_amount_currency, quote_source, network`
+
+	query := `SELECT ` + cols + ` FROM purser.crypto_wallets WHERE id = $1 AND purpose = 'prepaid'`
+	args := []any{topupID}
 	if ctxTenantID != "" {
-		query = `
-			SELECT id, tenant_id, wallet_address, asset, expected_amount_cents,
-			       status, tx_hash, confirmations, received_amount_wei, credited_amount_cents,
-			       expires_at, detected_at, completed_at, created_at
-			FROM purser.crypto_wallets
-			WHERE id = $1 AND tenant_id = $2 AND purpose = 'prepaid'
-		`
+		query = `SELECT ` + cols + ` FROM purser.crypto_wallets WHERE id = $1 AND tenant_id = $2 AND purpose = 'prepaid'`
 		args = append(args, ctxTenantID)
 	}
 
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&topup.Id, &topup.TenantId, &topup.DepositAddress, &topup.AssetSymbol,
 		&topup.ExpectedAmountCents, &topup.Status, &txHash, &confirmations,
-		&receivedAmountWei, &creditedAmountCents, &expiresAt, &detectedAt,
-		&completedAt, &createdAt,
+		&receivedAmountBaseUnits, &creditedAmountCents, &expiresAt, &detectedAt,
+		&completedAt, &createdAt, &creditedAmountCurrency, &quoteSource, &network,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "crypto topup not found")
@@ -4593,7 +4675,12 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 		return nil, status.Error(codes.Internal, "failed to get crypto topup")
 	}
 
-	// Map asset string to enum
+	// API-facing expired state for rows that the expiry sweep hasn't yet
+	// reached: pending|confirming past expires_at look 'expired' to clients.
+	if (topup.Status == "pending" || topup.Status == "confirming") && expiresAt.Before(time.Now()) {
+		topup.Status = "expired"
+	}
+
 	switch topup.AssetSymbol {
 	case "ETH":
 		topup.Asset = pb.CryptoAsset_CRYPTO_ASSET_ETH
@@ -4604,6 +4691,10 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 	}
 
 	topup.Currency = billing.DefaultCurrency()
+	if creditedAmountCurrency.Valid && creditedAmountCurrency.String != "" {
+		topup.Currency = creditedAmountCurrency.String
+		topup.CreditedAmountCurrency = creditedAmountCurrency.String
+	}
 	topup.ExpiresAt = timestamppb.New(expiresAt)
 	topup.CreatedAt = timestamppb.New(createdAt)
 
@@ -4613,11 +4704,22 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 	if confirmations.Valid {
 		topup.Confirmations = confirmations.Int32
 	}
-	if receivedAmountWei.Valid {
-		topup.ReceivedAmountWei = receivedAmountWei.Int64
+	if receivedAmountBaseUnits.Valid && receivedAmountBaseUnits.String != "" {
+		topup.ReceivedAmountBaseUnits = receivedAmountBaseUnits.String
+		if dec, decErr := decimal.NewFromString(receivedAmountBaseUnits.String); decErr == nil {
+			if td, ok := handlers.TokenDecimals(topup.AssetSymbol); ok {
+				topup.ReceivedAmountToken = dec.Shift(-td).String()
+			}
+		}
 	}
 	if creditedAmountCents.Valid {
 		topup.CreditedAmountCents = creditedAmountCents.Int64
+	}
+	if quoteSource.Valid {
+		topup.QuoteSource = quoteSource.String
+	}
+	if network.Valid {
+		topup.Network = network.String
 	}
 	if detectedAt.Valid {
 		topup.DetectedAt = timestamppb.New(detectedAt.Time)

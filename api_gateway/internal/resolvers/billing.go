@@ -1437,18 +1437,50 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 // CRYPTO TOP-UP OPERATIONS (PREPAID - Agent Payment Method)
 // ============================================================================
 
+// demoCryptoTopup builds a per-asset synthetic crypto top-up for demo mode so
+// the webapp/MCP path renders end-to-end without backend RPC.
+func demoCryptoTopup(input model.CreateCryptoTopupInput) *model.CryptoTopupResult {
+	now := time.Now()
+	asset := input.Asset
+	if asset == pb.CryptoAsset_CRYPTO_ASSET_UNSPECIFIED {
+		asset = pb.CryptoAsset_CRYPTO_ASSET_ETH
+	}
+	var symbol, priceUSD, baseUnits, tokenAmt string
+	switch asset {
+	case pb.CryptoAsset_CRYPTO_ASSET_ETH:
+		symbol, priceUSD = "ETH", "3300.00"
+		// $cents/100 / 3300 ETH × 1e18 wei
+		token := float64(input.AmountCents) / 100.0 / 3300.0
+		tokenAmt = fmt.Sprintf("%.18f", token)
+		baseUnits = fmt.Sprintf("%.0f", token*1e18)
+	default:
+		symbol, priceUSD = "USDC", "1.00"
+		// USDC has 6 decimals; cents × 1e4 = base units
+		token := float64(input.AmountCents) / 100.0
+		tokenAmt = fmt.Sprintf("%.6f", token)
+		baseUnits = fmt.Sprintf("%d", int64(input.AmountCents)*10_000)
+	}
+	return &model.CryptoTopupResult{
+		TopupID:                 "topup_demo_" + now.Format("20060102150405"),
+		DepositAddress:          "0x742d35cc6634c0532925a3b844bc9e7595f8ab00",
+		Asset:                   asset,
+		AssetSymbol:             symbol,
+		ExpectedAmountCents:     input.AmountCents,
+		ExpiresAt:               now.Add(24 * time.Hour),
+		ExpectedAmountBaseUnits: baseUnits,
+		ExpectedAmountToken:     tokenAmt,
+		QuotedPriceUsd:          priceUSD,
+		QuoteSource:             "chainlink",
+		QuotedAt:                now,
+		Network:                 "arbitrum",
+	}
+}
+
 // DoCreateCryptoTopup creates a crypto deposit address for prepaid balance top-up
 func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCryptoTopupInput) (*model.CryptoTopupResult, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic crypto top-up")
-		return &model.CryptoTopupResult{
-			TopupID:             "topup_demo_" + time.Now().Format("20060102150405"),
-			DepositAddress:      "0x742d35cc6634c0532925a3b844bc9e7595f8ab00",
-			Asset:               pb.CryptoAsset_CRYPTO_ASSET_ETH,
-			AssetSymbol:         "ETH",
-			ExpectedAmountCents: input.AmountCents,
-			ExpiresAt:           time.Now().Add(24 * time.Hour),
-		}, nil
+		return demoCryptoTopup(input), nil
 	}
 
 	tenantID := ctxkeys.GetTenantID(ctx)
@@ -1503,19 +1535,30 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 				Currency: currency,
 				Provider: provider,
 				Status:   "pending",
+				Asset:    resp.AssetSymbol,
+				Network:  resp.Network,
 			},
 		},
 		UserId: userID,
 	})
 
-	return &model.CryptoTopupResult{
-		TopupID:             resp.TopupId,
-		DepositAddress:      resp.DepositAddress,
-		Asset:               resp.Asset, // proto enum is used directly by gqlgen
-		AssetSymbol:         resp.AssetSymbol,
-		ExpectedAmountCents: int(resp.ExpectedAmountCents),
-		ExpiresAt:           resp.ExpiresAt.AsTime(),
-	}, nil
+	result := &model.CryptoTopupResult{
+		TopupID:                 resp.TopupId,
+		DepositAddress:          resp.DepositAddress,
+		Asset:                   resp.Asset, // proto enum is used directly by gqlgen
+		AssetSymbol:             resp.AssetSymbol,
+		ExpectedAmountCents:     int(resp.ExpectedAmountCents),
+		ExpiresAt:               resp.ExpiresAt.AsTime(),
+		ExpectedAmountBaseUnits: resp.ExpectedAmountBaseUnits,
+		ExpectedAmountToken:     resp.ExpectedAmountToken,
+		QuotedPriceUsd:          resp.QuotedPriceUsd,
+		QuoteSource:             resp.QuoteSource,
+		Network:                 resp.Network,
+	}
+	if resp.QuotedAt != nil {
+		result.QuotedAt = resp.QuotedAt.AsTime()
+	}
+	return result, nil
 }
 
 // DoGetCryptoTopupStatus returns the status of a crypto top-up for polling
@@ -1551,13 +1594,29 @@ func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (
 	if resp.TxHash != "" {
 		result.TxHash = &resp.TxHash
 	}
-	if resp.ReceivedAmountWei > 0 {
-		weiStr := fmt.Sprintf("%d", resp.ReceivedAmountWei)
-		result.ReceivedAmountWei = &weiStr
+	if resp.ReceivedAmountBaseUnits != "" {
+		base := resp.ReceivedAmountBaseUnits
+		result.ReceivedAmountBaseUnits = &base
+	}
+	if resp.ReceivedAmountToken != "" {
+		token := resp.ReceivedAmountToken
+		result.ReceivedAmountToken = &token
 	}
 	if resp.CreditedAmountCents > 0 {
 		cents := int(resp.CreditedAmountCents)
 		result.CreditedAmountCents = &cents
+	}
+	if resp.CreditedAmountCurrency != "" {
+		cc := resp.CreditedAmountCurrency
+		result.CreditedAmountCurrency = &cc
+	}
+	if resp.QuoteSource != "" {
+		qs := resp.QuoteSource
+		result.QuoteSource = &qs
+	}
+	if resp.Network != "" {
+		nw := resp.Network
+		result.Network = &nw
 	}
 	if resp.DetectedAt != nil {
 		t := resp.DetectedAt.AsTime()

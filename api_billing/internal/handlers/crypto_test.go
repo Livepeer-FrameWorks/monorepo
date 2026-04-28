@@ -3,14 +3,14 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"math/big"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"frameworks/pkg/billing"
-
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 )
 
@@ -28,14 +28,15 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 	}
 
 	wallet := PendingWallet{
-		ID:                  "wallet-1",
-		TenantID:            "tenant-1",
-		Purpose:             "prepaid",
-		ExpectedAmountCents: int64Ptr(2500),
-		Asset:               "USDC",
+		ID:                     "wallet-1",
+		TenantID:               "tenant-1",
+		Purpose:                "prepaid",
+		ExpectedAmountCents:    int64Ptr(2500),
+		Asset:                  "USDC",
+		CreditedAmountCurrency: "USD",
 	}
 
-	currency := billing.DefaultCurrency()
+	currency := "USD"
 
 	mock.ExpectQuery("SELECT balance_cents FROM purser.prepaid_balances").
 		WithArgs("tenant-1", currency).
@@ -49,14 +50,26 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(2500), sqlmock.AnyArg(), "wallet-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
+	mock.ExpectExec("UPDATE purser.crypto_wallets").
+		WithArgs("wallet-1", int64(2500), "USD").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
 	mock.ExpectRollback()
 
 	cm := &CryptoMonitor{db: mockDB, logger: logrus.New()}
-	err = cm.confirmPrepaidTopup(context.Background(), tx, wallet, CryptoTransaction{
+	// USDC at 6 decimals: 25.00 USDC = 25_000_000 base units, credits 2500 cents.
+	txBaseUnits := new(big.Int).SetInt64(25_000_000)
+	creditedCents, creditedCurrency, err := cm.confirmPrepaidTopup(context.Background(), tx, wallet, CryptoTransaction{
 		Hash: "0xabc",
-	}, 25.0, time.Now())
+	}, txBaseUnits, time.Now())
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
+	}
+	if creditedCents != 2500 {
+		t.Fatalf("creditedCents = %d, want 2500", creditedCents)
+	}
+	if creditedCurrency != "USD" {
+		t.Fatalf("creditedCurrency = %q, want USD", creditedCurrency)
 	}
 
 	if err := tx.Rollback(); err != nil {
@@ -68,20 +81,52 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 	}
 }
 
-func TestIsValidPaymentForNetworkHonorsConfirmations(t *testing.T) {
+func TestEvaluatePayment_DetectsAndConfirms(t *testing.T) {
 	cm := &CryptoMonitor{logger: logrus.New()}
 	network := NetworkConfig{Confirmations: 2}
-	tx := CryptoTransaction{
-		Value:         "1000000",
-		Confirmations: 1,
+	wallet := PendingWallet{Asset: "USDC", Purpose: "prepaid"}
+
+	// 1.0 USDC = 1_000_000 base units; expected 1.0 USDC equivalent.
+	tx := CryptoTransaction{Value: "1000000", Confirmations: 1}
+	match := cm.evaluatePayment(tx, wallet, 1.0, network)
+	if !match.amountSeen {
+		t.Fatalf("expected amount to match")
+	}
+	if match.confirmed {
+		t.Fatalf("expected NOT confirmed at 1/2 confirmations")
 	}
 
-	isValid, amount := cm.isValidPaymentForNetwork(tx, 1.0, "USDC", network, "prepaid")
-	if isValid {
-		t.Fatalf("expected invalid payment due to confirmations")
+	tx.Confirmations = 2
+	match = cm.evaluatePayment(tx, wallet, 1.0, network)
+	if !match.amountSeen || !match.confirmed {
+		t.Fatalf("expected amount seen + confirmed, got %+v", match)
 	}
-	if amount != 1.0 {
-		t.Fatalf("expected amount 1.0, got %f", amount)
+}
+
+func TestEvaluatePayment_PrepaidETHComparesBaseUnits(t *testing.T) {
+	cm := &CryptoMonitor{logger: logrus.New()}
+	network := NetworkConfig{Confirmations: 1}
+	// Quote: 0.015 ETH = 15_000_000_000_000_000 wei. Locked at $3300/ETH.
+	expectedBaseUnits, _ := new(big.Int).SetString("15000000000000000", 10)
+	wallet := PendingWallet{
+		Asset:                   "ETH",
+		Purpose:                 "prepaid",
+		ExpectedAmountBaseUnits: expectedBaseUnits,
+		QuotedPriceUSD:          decimal.NewFromInt(3300),
+	}
+
+	// Exactly the quoted amount → seen.
+	tx := CryptoTransaction{Value: "15000000000000000", Confirmations: 1}
+	match := cm.evaluatePayment(tx, wallet, 0, network)
+	if !match.amountSeen {
+		t.Fatalf("expected amountSeen for exact match")
+	}
+
+	// 1% under (below 0.5% tolerance) → not seen.
+	tx.Value = "14850000000000000"
+	match = cm.evaluatePayment(tx, wallet, 0, network)
+	if match.amountSeen {
+		t.Fatalf("expected amountSeen=false for 1%% underpay")
 	}
 }
 

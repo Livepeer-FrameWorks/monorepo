@@ -89,20 +89,25 @@ Call `submit_payment` with an auth-only x402 payload (authorization `value = "0"
 | Arbitrum | 42161    | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
 
 <Aside type="note">
-  x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups currently accept USDC only.
+  x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups support **ETH and USDC**;
+  LPT is reserved but currently rejected.
 </Aside>
 
 ## Crypto Deposits
 
-For non-x402 USDC top-ups, use the deposit flow:
+For non-x402 prepaid top-ups, use the deposit flow:
 
-1. Call `topup_balance` with `amount_cents` and `asset: "USDC"`.
-2. Receive a unique deposit address and expiration time.
-3. Send the payment to that address on-chain.
-4. Call `check_topup` to monitor confirmation status.
-5. Balance updates automatically once confirmed.
+1. Call `topup_balance` with `amount_cents` and `asset: "ETH"` or `"USDC"`.
+2. The response is a **locked-rate quote**: a deposit address plus the exact
+   `expected_amount_token` to send (e.g. `0.01515` ETH), the `quoted_price_usd`
+   it was locked at (Chainlink for ETH; 1:1 for USDC), and a 24h `expires_at`.
+3. Send exactly the quoted amount on-chain.
+4. Call `check_topup` to follow the lifecycle: `pending → confirming → completed`.
+5. Once confirmed, the balance is credited at the locked rate
+   (`received_token × quoted_price_usd`), so you get exactly what was quoted
+   regardless of price drift inside the 24h TTL.
 
-ETH and LPT prepaid top-ups are not currently accepted by the prepaid top-up backend.
+LPT is not yet supported — Chainlink doesn't publish an official LPT/USD aggregator. `topup_balance` returns an error if `asset: "LPT"` is requested.
 
 ## Preflight Errors
 

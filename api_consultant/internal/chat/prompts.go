@@ -114,7 +114,7 @@ FrameWorks platform context
 - Stream keys are secret (ingest only). Playback IDs are public (viewer-facing).
 - Dashboard sections: Content → Streams, Developer → API, Account → Billing & Plans, Support → Messages.
 - Infrastructure: Docker services, WireGuard mesh networking, Caddy reverse proxy, Cloudflare DNS/CDN, PostgreSQL + pgvector, ClickHouse analytics, Kafka event bus.
-- Auth: JWT sessions, API tokens, wallet signatures (EIP-191), x402 gasless USDC payments.
+- Auth: JWT sessions, API tokens, wallet signatures (EIP-191), x402 gasless USDC payments, prepaid crypto top-ups (ETH or USDC, locked-rate at quote time).
 - Agent access: MCP server with 30+ tools, discoverable via .well-known/mcp.json, SKILL.md, and DID documents.
 
 Multi-cluster and self-hosting

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"net/http"
 	"os"
@@ -44,6 +43,7 @@ type X402Handler struct {
 	db               *sql.DB
 	logger           logging.Logger
 	hdwallet         *HDWallet
+	rpc              *RPCClient
 	gasWalletPrivKey string // Single privkey = same address on all EVM chains
 	gasWalletAddress string // Derived from privkey
 	includeTestnets  bool   // Whether to accept testnet payments
@@ -58,7 +58,7 @@ type X402Handler struct {
 }
 
 // NewX402Handler creates a new x402 payment handler
-func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, commodoreClient CommodoreClient) *X402Handler {
+func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, rpc *RPCClient, commodoreClient CommodoreClient) *X402Handler {
 	privKey := os.Getenv("X402_GAS_WALLET_PRIVKEY")
 	gasAddr := os.Getenv("X402_GAS_WALLET_ADDRESS")
 	includeTestnets := config.X402IncludeTestnetsEnabled()
@@ -83,6 +83,7 @@ func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, co
 		db:               database,
 		logger:           log,
 		hdwallet:         hdwallet,
+		rpc:              rpc,
 		gasWalletPrivKey: privKey,
 		gasWalletAddress: gasAddr,
 		includeTestnets:  includeTestnets,
@@ -783,7 +784,7 @@ func (h *X402Handler) sendRawTransaction(ctx context.Context, network NetworkCon
 
 	// Submit via eth_sendRawTransaction
 	var txHash string
-	err = h.rpcCall(ctx, network, "eth_sendRawTransaction", []interface{}{"0x" + hex.EncodeToString(signedTx)}, &txHash)
+	err = h.rpc.Call(ctx, network, "eth_sendRawTransaction", []any{"0x" + hex.EncodeToString(signedTx)}, &txHash)
 	if err != nil {
 		return "", fmt.Errorf("eth_sendRawTransaction failed: %w", err)
 	}
@@ -932,7 +933,7 @@ func (h *X402Handler) checkNonceUsed(ctx context.Context, network NetworkConfig,
 	callData = append(callData, padBytes32(nonce)...)
 
 	var result string
-	err := h.rpcCall(ctx, network, "eth_call", []interface{}{
+	err := h.rpc.Call(ctx, network, "eth_call", []any{
 		map[string]string{
 			"to":   network.USDCContract,
 			"data": "0x" + hex.EncodeToString(callData),
@@ -953,7 +954,7 @@ func (h *X402Handler) getUSDCBalance(ctx context.Context, network NetworkConfig,
 	callData := append(methodID, padAddress(address)...)
 
 	var result string
-	err := h.rpcCall(ctx, network, "eth_call", []interface{}{
+	err := h.rpc.Call(ctx, network, "eth_call", []any{
 		map[string]string{
 			"to":   network.USDCContract,
 			"data": "0x" + hex.EncodeToString(callData),
@@ -971,7 +972,7 @@ func (h *X402Handler) getUSDCBalance(ctx context.Context, network NetworkConfig,
 
 func (h *X402Handler) getNonce(ctx context.Context, network NetworkConfig, address string) (uint64, error) {
 	var result string
-	err := h.rpcCall(ctx, network, "eth_getTransactionCount", []interface{}{address, "pending"}, &result)
+	err := h.rpc.Call(ctx, network, "eth_getTransactionCount", []any{address, "pending"}, &result)
 	if err != nil {
 		return 0, err
 	}
@@ -981,7 +982,7 @@ func (h *X402Handler) getNonce(ctx context.Context, network NetworkConfig, addre
 
 func (h *X402Handler) getGasPrice(ctx context.Context, network NetworkConfig) (*big.Int, error) {
 	var result string
-	err := h.rpcCall(ctx, network, "eth_gasPrice", []interface{}{}, &result)
+	err := h.rpc.Call(ctx, network, "eth_gasPrice", []any{}, &result)
 	if err != nil {
 		return nil, err
 	}
@@ -989,65 +990,10 @@ func (h *X402Handler) getGasPrice(ctx context.Context, network NetworkConfig) (*
 	return gasPrice, nil
 }
 
-func (h *X402Handler) rpcCall(ctx context.Context, network NetworkConfig, method string, params interface{}, result interface{}) error {
-	rpcEndpoint := network.GetRPCEndpointWithDefault()
-	if rpcEndpoint == "" {
-		return fmt.Errorf("no RPC endpoint configured for network %s", network.Name)
-	}
-
-	reqBody := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"method":  method,
-		"params":  params,
-		"id":      1,
-	}
-
-	reqJSON, err := json.Marshal(reqBody)
-	if err != nil {
-		return err
-	}
-
-	req, reqErr := http.NewRequestWithContext(ctx, "POST", rpcEndpoint, strings.NewReader(string(reqJSON)))
-	if reqErr != nil {
-		return reqErr
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var rpcResp struct {
-		Result interface{}      `json:"result"`
-		Error  *json.RawMessage `json:"error"`
-	}
-	if unmarshalErr := json.Unmarshal(body, &rpcResp); unmarshalErr != nil {
-		return unmarshalErr
-	}
-
-	if rpcResp.Error != nil {
-		return fmt.Errorf("RPC error: %s", string(*rpcResp.Error))
-	}
-
-	// Marshal and unmarshal to get result in correct type
-	resultJSON, err := json.Marshal(rpcResp.Result)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(resultJSON, result)
-}
-
 // simulateTransfer runs eth_call to verify the transfer will succeed before submitting
 func (h *X402Handler) simulateTransfer(ctx context.Context, network NetworkConfig, callData []byte) error {
 	var result string
-	err := h.rpcCall(ctx, network, "eth_call", []interface{}{
+	err := h.rpc.Call(ctx, network, "eth_call", []any{
 		map[string]string{
 			"to":   network.USDCContract,
 			"data": "0x" + hex.EncodeToString(callData),
@@ -1071,26 +1017,30 @@ func (h *X402Handler) convertToEurCents(usdCents int64) (int64, error) {
 	return eurCents, nil
 }
 
-// getEurUsdRate returns the EUR/USD exchange rate, fetching from ECB if cache expired
+// getEurUsdRate is the X402Handler-bound wrapper that preserves the existing
+// invocation site signature; new callers should use GetEurUsdRate.
 func (h *X402Handler) getEurUsdRate() (float64, error) {
-	// Check cache first
+	return GetEurUsdRate(h.logger)
+}
+
+// GetEurUsdRate returns the EUR/USD exchange rate (EUR per USD), fetching
+// from frankfurter.app (ECB-sourced) when the cache is stale. Falls back to
+// stale cache if a fresh fetch fails.
+func GetEurUsdRate(logger logging.Logger) (float64, error) {
 	ecbRateCache.RLock()
 	cachedRate := ecbRateCache.rate
 	fetchedAt := ecbRateCache.fetchedAt
 	ecbRateCache.RUnlock()
 
-	// Return cached if still valid
 	if time.Since(fetchedAt) < ecbRateCacheTTL && cachedRate > 0 {
 		return cachedRate, nil
 	}
 
-	// Try to fetch fresh rate (using frankfurter.app - free ECB rate API)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.frankfurter.app/latest?from=USD&to=EUR", nil)
 	if err != nil {
-		// Return stale cache if available
 		if cachedRate > 0 {
 			return cachedRate, nil
 		}
@@ -1099,7 +1049,6 @@ func (h *X402Handler) getEurUsdRate() (float64, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		// Return stale cache if available
 		if cachedRate > 0 {
 			return cachedRate, nil
 		}
@@ -1132,13 +1081,14 @@ func (h *X402Handler) getEurUsdRate() (float64, error) {
 		return 0, fmt.Errorf("EUR rate not found in response")
 	}
 
-	// Update cache
 	ecbRateCache.Lock()
 	ecbRateCache.rate = rate
 	ecbRateCache.fetchedAt = time.Now()
 	ecbRateCache.Unlock()
 
-	h.logger.WithFields(logging.Fields{"rate": rate}).Debug("Fetched fresh EUR/USD rate from ECB")
+	if logger != nil {
+		logger.WithFields(logging.Fields{"rate": rate}).Debug("Fetched fresh EUR/USD rate from ECB")
+	}
 	return rate, nil
 }
 

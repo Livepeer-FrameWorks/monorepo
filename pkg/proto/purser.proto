@@ -1094,19 +1094,24 @@ message ListPendingTopupsResponse {
 // CRYPTO TOP-UP MESSAGES
 // ============================================================================
 
-// Supported crypto assets for top-up (ETH network only)
+// Supported crypto assets for top-up. End-to-end support today: ETH and USDC.
+// LPT is reserved (no Chainlink LPT/USD aggregator available); CreateCryptoTopup
+// rejects LPT until a pricing source is decided.
 enum CryptoAsset {
   CRYPTO_ASSET_UNSPECIFIED = 0;
   CRYPTO_ASSET_ETH = 1;      // Native ETH
-  CRYPTO_ASSET_USDC = 2;     // USDC on Ethereum
-  CRYPTO_ASSET_LPT = 3;      // Livepeer Token
+  CRYPTO_ASSET_USDC = 2;     // USDC ERC-20
+  CRYPTO_ASSET_LPT = 3;      // Livepeer Token (gated)
 }
 
 message CreateCryptoTopupRequest {
   string tenant_id = 1;
-  int64 expected_amount_cents = 2;     // Expected amount (for display, actual credited based on received)
+  int64 expected_amount_cents = 2;     // Target credit amount in `currency` cents
   CryptoAsset asset = 3;               // ETH, USDC, or LPT
   string currency = 4;                 // Target currency for balance (USD, EUR) - defaults to USD
+  // Field 5 reserved for future per-call network override.
+  reserved 5;
+  reserved "network";
 }
 
 message CreateCryptoTopupResponse {
@@ -1114,9 +1119,17 @@ message CreateCryptoTopupResponse {
   string deposit_address = 2;          // HD-derived Ethereum address
   CryptoAsset asset = 3;
   string asset_symbol = 4;             // Human-readable: "ETH", "USDC", "LPT"
-  int64 expected_amount_cents = 5;     // Echo back expected amount
+  int64 expected_amount_cents = 5;     // Echo back of request's expected_amount_cents
   google.protobuf.Timestamp expires_at = 6;  // Address valid for 24h
   string qr_code_data = 7;             // QR code as data URI (optional)
+  // Quote, locked at this response. Decimal strings (token base units don't
+  // fit in int64 for 18-decimal assets at meaningful USD amounts).
+  string expected_amount_base_units = 8;  // Token base units to send (e.g. wei)
+  string expected_amount_token       = 9;  // Human-friendly decimal, e.g. "0.01515"
+  string quoted_price_usd            = 10; // USD per 1 whole token, e.g. "3300.45"
+  string quote_source                = 11; // "chainlink" | "one_to_one"
+  google.protobuf.Timestamp quoted_at = 12;
+  string network                      = 13; // "ethereum" | "arbitrum" | "base"
 }
 
 message GetCryptoTopupRequest {
@@ -1132,15 +1145,19 @@ message CryptoTopup {
   string asset_symbol = 5;
   int64 expected_amount_cents = 6;
   string currency = 7;
-  string status = 8;                   // pending, confirming, completed, expired
-  int64 received_amount_wei = 9;       // Actual amount received (in wei/smallest unit)
-  int64 credited_amount_cents = 10;    // Amount credited to balance (after conversion)
-  string tx_hash = 11;                 // Blockchain transaction hash (when detected)
-  int32 confirmations = 12;            // Number of block confirmations
+  string status = 8;                            // pending, confirming, completed, expired
+  string received_amount_base_units = 9;        // On-chain amount in base units (decimal string)
+  int64 credited_amount_cents = 10;             // Amount credited (in credited_amount_currency cents)
+  string tx_hash = 11;
+  int32 confirmations = 12;
   google.protobuf.Timestamp expires_at = 13;
-  google.protobuf.Timestamp detected_at = 14;   // When payment was first detected
-  google.protobuf.Timestamp completed_at = 15;  // When balance was credited
+  google.protobuf.Timestamp detected_at = 14;
+  google.protobuf.Timestamp completed_at = 15;
   google.protobuf.Timestamp created_at = 16;
+  string received_amount_token = 17;            // Human-friendly decimal of received_amount_base_units
+  string credited_amount_currency = 18;         // ISO-4217 of the credit ("USD" | "EUR")
+  string quote_source = 19;                     // "chainlink" | "one_to_one"
+  string network = 20;
 }
 
 // ============================================================================

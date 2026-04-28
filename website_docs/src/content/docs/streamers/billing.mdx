@@ -112,7 +112,10 @@ Pay via Stripe or Mollie. Funds credit immediately after checkout.
 
 ### Crypto
 
-Create a USDC prepaid top-up deposit. ETH and LPT prepaid top-ups are not currently accepted by the prepaid top-up backend.
+Create a prepaid top-up deposit in **ETH or USDC**. The deposit address comes
+with a 24h price-locked quote (Chainlink ETH/USD; USDC is 1:1) — send exactly
+the quoted amount and the balance is credited at the locked rate when the
+deposit confirms. LPT is reserved but currently rejected.
 
 **Confirmations:**
 
@@ -126,7 +129,7 @@ For programmatic clients, FrameWorks supports the [x402 protocol](https://www.x4
 
 When balance is insufficient, the API returns HTTP 402 with payment requirements. Clients sign an EIP-3009 authorization and retry with the `X-PAYMENT` (or `PAYMENT-SIGNATURE`) header to top up automatically.
 
-x402 supports USDC on Base and Arbitrum. Prepaid crypto top-ups currently accept USDC only.
+x402 supports USDC on Base and Arbitrum (EIP-3009 is a USDC primitive). Prepaid crypto top-ups support ETH and USDC.
 
 ## Invoicing
 

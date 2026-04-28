@@ -23,7 +23,7 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "topup_balance",
-			Description: "Request a crypto payment address to top up your prepaid balance.",
+			Description: "Request a crypto deposit address to top up your prepaid balance. Returns a locked-rate quote: send exactly the quoted token amount within 24h to be credited at the locked USD price. Supports ETH and USDC. LPT is not yet supported.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args TopupBalanceInput) (*mcp.CallToolResult, any, error) {
 			return handleTopupBalance(ctx, args, clients, checker, logger)
@@ -44,8 +44,8 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 
 // TopupBalanceInput represents input for topup_balance tool.
 type TopupBalanceInput struct {
-	AmountCents int64  `json:"amount_cents" jsonschema:"required" jsonschema_description:"Amount to top up in cents (must be positive)"`
-	Asset       string `json:"asset,omitempty" jsonschema_description:"Crypto asset (USDC ETH LPT). Default: USDC"`
+	AmountCents int64  `json:"amount_cents" jsonschema:"required" jsonschema_description:"Amount to credit, in tenant currency cents (USD or EUR per the account). Must be positive."`
+	Asset       string `json:"asset,omitempty" jsonschema_description:"Crypto asset to send: USDC or ETH. Default: USDC. (LPT is reserved and currently rejected.)"`
 }
 
 func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -72,9 +72,9 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 	case "USDC":
 		assetEnum = pb.CryptoAsset_CRYPTO_ASSET_USDC
 	case "LPT":
-		assetEnum = pb.CryptoAsset_CRYPTO_ASSET_LPT
+		return toolError("LPT prepaid top-ups are not yet supported. Use ETH or USDC.")
 	default:
-		return toolError(fmt.Sprintf("Invalid asset: %s. Valid options: USDC, ETH, LPT", args.Asset))
+		return toolError(fmt.Sprintf("Invalid asset: %s. Valid options: USDC, ETH", args.Asset))
 	}
 
 	// Call Purser to create crypto top-up
@@ -89,13 +89,27 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 		return toolError(fmt.Sprintf("Failed to create top-up: %v", err))
 	}
 
+	message := fmt.Sprintf("Send %s to %s. Use check_topup to verify payment received.", resp.AssetSymbol, resp.DepositAddress)
+	if resp.ExpectedAmountToken != "" && resp.QuotedPriceUsd != "" {
+		message = fmt.Sprintf(
+			"Send exactly %s %s to %s on %s (locked at $%s/%s, valid until %s). Use check_topup to verify.",
+			resp.ExpectedAmountToken, resp.AssetSymbol, resp.DepositAddress, resp.Network,
+			resp.QuotedPriceUsd, resp.AssetSymbol,
+			resp.ExpiresAt.AsTime().Format("2006-01-02T15:04:05Z"),
+		)
+	}
+
 	result := TopupResult{
 		TopupID:        resp.TopupId,
 		DepositAddress: resp.DepositAddress,
 		Asset:          resp.AssetSymbol,
 		AmountCents:    resp.ExpectedAmountCents,
 		ExpiresAt:      resp.ExpiresAt.AsTime().Format("2006-01-02T15:04:05Z"),
-		Message:        fmt.Sprintf("Send %s to %s. Use check_topup to verify payment received.", resp.AssetSymbol, resp.DepositAddress),
+		Message:        message,
+		TokenAmount:    resp.ExpectedAmountToken,
+		PriceUSD:       resp.QuotedPriceUsd,
+		QuoteSource:    resp.QuoteSource,
+		Network:        resp.Network,
 	}
 
 	return toolSuccess(result)
@@ -108,12 +122,15 @@ type CheckTopupInput struct {
 
 // CheckTopupResult represents the result of checking a top-up.
 type CheckTopupResult struct {
-	TopupID       string `json:"topup_id"`
-	Status        string `json:"status"` // pending, completed, expired
-	Confirmed     bool   `json:"confirmed"`
-	CreditedCents int64  `json:"credited_cents,omitempty"`
-	BalanceCents  int64  `json:"balance_cents,omitempty"`
-	Message       string `json:"message"`
+	TopupID          string `json:"topup_id"`
+	Status           string `json:"status"` // pending, confirming, completed, expired
+	Confirmed        bool   `json:"confirmed"`
+	CreditedCents    int64  `json:"credited_cents,omitempty"`
+	CreditedCurrency string `json:"credited_currency,omitempty"`
+	BalanceCents     int64  `json:"balance_cents,omitempty"`
+	TxHash           string `json:"tx_hash,omitempty"`
+	Confirmations    int32  `json:"confirmations,omitempty"`
+	Message          string `json:"message"`
 }
 
 func handleCheckTopup(ctx context.Context, args CheckTopupInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -133,17 +150,24 @@ func handleCheckTopup(ctx context.Context, args CheckTopupInput, clients *client
 	}
 
 	result := CheckTopupResult{
-		TopupID:   resp.Id,
-		Status:    resp.Status,
-		Confirmed: resp.Status == "completed",
+		TopupID:          resp.Id,
+		Status:           resp.Status,
+		Confirmed:        resp.Status == "completed",
+		TxHash:           resp.TxHash,
+		Confirmations:    resp.Confirmations,
+		CreditedCurrency: resp.CreditedAmountCurrency,
 	}
 
 	switch resp.Status {
 	case "completed":
 		result.CreditedCents = resp.CreditedAmountCents
-		result.Message = fmt.Sprintf("Payment confirmed! %d cents credited to your balance.", resp.CreditedAmountCents)
+		ccy := resp.CreditedAmountCurrency
+		if ccy == "" {
+			ccy = "USD"
+		}
+		result.Message = fmt.Sprintf("Payment confirmed! %d %s cents credited to your balance (tx: %s).", resp.CreditedAmountCents, ccy, resp.TxHash)
 	case "confirming":
-		result.Message = fmt.Sprintf("Payment detected (tx: %s). Waiting for %d confirmations.", resp.TxHash, resp.Confirmations)
+		result.Message = fmt.Sprintf("Payment detected (tx: %s). Waiting for confirmations (%d so far).", resp.TxHash, resp.Confirmations)
 	case "pending":
 		result.Message = "Payment not yet received. Please complete the transfer and check again."
 	case "expired":

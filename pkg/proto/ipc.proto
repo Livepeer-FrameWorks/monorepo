@@ -114,6 +114,9 @@ message BillingEvent {
   string currency = 7;
   string provider = 8;
   string status = 9;
+  string asset = 10;     // "ETH" | "USDC" for crypto top-ups; empty otherwise
+  string tx_hash = 11;   // On-chain tx hash for crypto credits
+  string network = 12;   // "ethereum" | "arbitrum" | "base"
 }
 
 // ArtifactEvent represents audit/lifecycle events for clip/DVR/VOD artifacts.

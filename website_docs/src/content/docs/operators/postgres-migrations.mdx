@@ -27,8 +27,9 @@ Migrations are organized by release version:
 
 ```
 pkg/database/sql/migrations/
-└── v0.3.0/
-    └── 001_bootstrap_tenant_aliases.sql
+└── v0.2.11/
+    ├── 001_bootstrap_tenant_aliases.sql
+    └── 002_crypto_wallet_status_and_quote.sql
 ```
 
 The CLI embeds these files, expands them for each PostgreSQL/Yugabyte database
@@ -69,8 +70,8 @@ Guidelines for contributors:
 Example migration file:
 
 ```sql
--- Migration: v0.3.0/001_bootstrap_tenant_aliases.sql
--- Required before: quartermaster v0.3.0
+-- Migration: v0.2.11/001_bootstrap_tenant_aliases.sql
+-- Required before: quartermaster v0.2.11
 
 DO $$
 BEGIN

@@ -6,9 +6,14 @@ mutation GetCryptoTopupStatus($topupId: ID!) {
     status
     txHash
     confirmations
-    receivedAmountWei
+    receivedAmountBaseUnits
+    receivedAmountToken
     creditedAmountCents
+    creditedAmountCurrency
+    quoteSource
+    network
     expiresAt
     detectedAt
+    completedAt
   }
 }

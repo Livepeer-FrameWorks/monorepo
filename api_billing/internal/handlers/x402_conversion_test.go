@@ -54,7 +54,7 @@ func setECBCache(rate float64, fetchedAt time.Time) {
 func TestRPCCall_DecodeAndErrorHandling(t *testing.T) {
 	t.Setenv("TEST_RPC_ENDPOINT", "https://rpc.test")
 
-	handler := &X402Handler{logger: logging.NewLogger()}
+	handler := &X402Handler{rpc: NewRPCClient()}
 	network := NetworkConfig{
 		Name:           "testnet",
 		RPCEndpointEnv: "TEST_RPC_ENDPOINT",
@@ -68,7 +68,7 @@ func TestRPCCall_DecodeAndErrorHandling(t *testing.T) {
 		})
 
 		var result string
-		err := handler.rpcCall(context.Background(), network, "eth_chainId", []interface{}{}, &result)
+		err := handler.rpc.Call(context.Background(), network, "eth_chainId", []any{}, &result)
 		if err == nil {
 			t.Fatal("expected unmarshal error")
 		}
@@ -82,7 +82,7 @@ func TestRPCCall_DecodeAndErrorHandling(t *testing.T) {
 		})
 
 		var result string
-		err := handler.rpcCall(context.Background(), network, "eth_chainId", []interface{}{}, &result)
+		err := handler.rpc.Call(context.Background(), network, "eth_chainId", []any{}, &result)
 		if err == nil || !strings.Contains(err.Error(), "RPC error:") || !strings.Contains(err.Error(), "boom") {
 			t.Fatalf("expected rpc error message, got %v", err)
 		}
@@ -96,7 +96,7 @@ func TestRPCCall_DecodeAndErrorHandling(t *testing.T) {
 		})
 
 		var result string
-		err := handler.rpcCall(context.Background(), network, "eth_chainId", []interface{}{}, &result)
+		err := handler.rpc.Call(context.Background(), network, "eth_chainId", []any{}, &result)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -256,10 +256,32 @@ func TestIsBillingDetailsComplete_AddressDecode(t *testing.T) {
 	}
 }
 
+func TestRPCCall_NonOKStatus(t *testing.T) {
+	t.Setenv("TEST_RPC_ENDPOINT", "https://rpc.test")
+
+	handler := &X402Handler{rpc: NewRPCClient()}
+	network := NetworkConfig{
+		Name:           "testnet",
+		RPCEndpointEnv: "TEST_RPC_ENDPOINT",
+	}
+
+	withDefaultHTTPClient(t, &http.Client{
+		Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return newJSONResponse(http.StatusBadGateway, "upstream"), nil
+		}),
+	})
+
+	var result string
+	err := handler.rpc.Call(context.Background(), network, "eth_chainId", []any{}, &result)
+	if err == nil || !strings.Contains(err.Error(), "RPC HTTP 502") {
+		t.Fatalf("expected HTTP 502 error, got %v", err)
+	}
+}
+
 func TestRPCCall_ErrorFieldRoundTripShape(t *testing.T) {
 	t.Setenv("TEST_RPC_ENDPOINT", "https://rpc.test")
 
-	handler := &X402Handler{logger: logging.NewLogger()}
+	handler := &X402Handler{rpc: NewRPCClient()}
 	network := NetworkConfig{
 		Name:           "testnet",
 		RPCEndpointEnv: "TEST_RPC_ENDPOINT",
@@ -281,7 +303,7 @@ func TestRPCCall_ErrorFieldRoundTripShape(t *testing.T) {
 	})
 
 	var result string
-	err = handler.rpcCall(context.Background(), network, "eth_chainId", []interface{}{}, &result)
+	err = handler.rpc.Call(context.Background(), network, "eth_chainId", []any{}, &result)
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("expected propagated rpc error payload, got %v", err)
 	}

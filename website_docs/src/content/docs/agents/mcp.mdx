@@ -120,46 +120,46 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 Actions the agent can perform.
 
-| Tool                        | Description                                    | Requires       |
-| --------------------------- | ---------------------------------------------- | -------------- |
-| `update_billing_details`    | Set billing address                            | Auth           |
-| `get_payment_options`       | Get x402 payment options                       | None           |
-| `submit_payment`            | Submit x402 payment (auth-only or top-up)      | None           |
-| `topup_balance`             | Request USDC deposit address                   | Auth           |
-| `check_topup`               | Check crypto payment status                    | Auth           |
-| `create_stream`             | Create a new stream                            | Auth + Balance |
-| `update_stream`             | Update stream settings                         | Auth + Balance |
-| `delete_stream`             | Delete a stream                                | Auth + Balance |
-| `refresh_stream_key`        | Generate new stream key                        | Auth           |
-| `create_clip`               | Create clip from stream                        | Auth + Balance |
-| `delete_clip`               | Delete a clip                                  | Auth           |
-| `start_dvr`                 | Start DVR recording                            | Auth + Balance |
-| `stop_dvr`                  | Stop DVR recording                             | Auth           |
-| `create_vod_upload`         | Start a VOD upload                             | Auth + Balance |
-| `complete_vod_upload`       | Finalize a VOD upload                          | Auth + Balance |
-| `abort_vod_upload`          | Cancel an upload                               | Auth           |
-| `delete_vod_asset`          | Delete a VOD asset                             | Auth + Balance |
-| `resolve_playback_endpoint` | Get viewer playback URLs                       | None           |
-| `diagnose_rebuffering`      | Analyze rebuffering events                     | Auth           |
-| `diagnose_buffer_health`    | Analyze buffer health and dry events           | Auth           |
-| `diagnose_packet_loss`      | Analyze packet loss (protocol-aware)           | Auth           |
-| `diagnose_routing`          | Analyze CDN routing decisions                  | Auth           |
-| `get_stream_health_summary` | Aggregated stream health metrics               | Auth           |
-| `get_anomaly_report`        | Detect anomalies vs baseline                   | Auth           |
-| `search_support_history`    | Search support conversations                   | Auth           |
-| `introspect_schema`         | Explore the GraphQL schema                     | Auth           |
-| `generate_query`            | Generate a GraphQL query from templates        | Auth           |
-| `execute_query`             | Execute a GraphQL query                        | Auth           |
-| `ask_consultant`            | Full Skipper pipeline with confidence tagging  | Auth           |
-| `browse_marketplace`        | Browse available infrastructure clusters       | None           |
-| `subscribe_to_cluster`      | Subscribe to a cluster                         | Auth           |
-| `set_preferred_cluster`     | Set preferred cluster for DNS steering         | Auth           |
-| `create_enrollment_token`   | Create an enrollment token for edge bootstrap  | Auth           |
-| `get_node_info`             | Fetch node details                             | Auth           |
-| `manage_node`               | Activate/deactivate/drain/restart a node       | Auth           |
-| `set_node_mode`             | Set node mode (production/standby/maintenance) | Auth           |
-| `get_node_health`           | Node health and metrics summary                | Auth           |
-| `create_private_cluster`    | Create private cluster (returns token)         | Auth           |
+| Tool                        | Description                                       | Requires       |
+| --------------------------- | ------------------------------------------------- | -------------- |
+| `update_billing_details`    | Set billing address                               | Auth           |
+| `get_payment_options`       | Get x402 payment options                          | None           |
+| `submit_payment`            | Submit x402 payment (auth-only or top-up)         | None           |
+| `topup_balance`             | Request ETH or USDC deposit address (locked rate) | Auth           |
+| `check_topup`               | Check crypto payment status                       | Auth           |
+| `create_stream`             | Create a new stream                               | Auth + Balance |
+| `update_stream`             | Update stream settings                            | Auth + Balance |
+| `delete_stream`             | Delete a stream                                   | Auth + Balance |
+| `refresh_stream_key`        | Generate new stream key                           | Auth           |
+| `create_clip`               | Create clip from stream                           | Auth + Balance |
+| `delete_clip`               | Delete a clip                                     | Auth           |
+| `start_dvr`                 | Start DVR recording                               | Auth + Balance |
+| `stop_dvr`                  | Stop DVR recording                                | Auth           |
+| `create_vod_upload`         | Start a VOD upload                                | Auth + Balance |
+| `complete_vod_upload`       | Finalize a VOD upload                             | Auth + Balance |
+| `abort_vod_upload`          | Cancel an upload                                  | Auth           |
+| `delete_vod_asset`          | Delete a VOD asset                                | Auth + Balance |
+| `resolve_playback_endpoint` | Get viewer playback URLs                          | None           |
+| `diagnose_rebuffering`      | Analyze rebuffering events                        | Auth           |
+| `diagnose_buffer_health`    | Analyze buffer health and dry events              | Auth           |
+| `diagnose_packet_loss`      | Analyze packet loss (protocol-aware)              | Auth           |
+| `diagnose_routing`          | Analyze CDN routing decisions                     | Auth           |
+| `get_stream_health_summary` | Aggregated stream health metrics                  | Auth           |
+| `get_anomaly_report`        | Detect anomalies vs baseline                      | Auth           |
+| `search_support_history`    | Search support conversations                      | Auth           |
+| `introspect_schema`         | Explore the GraphQL schema                        | Auth           |
+| `generate_query`            | Generate a GraphQL query from templates           | Auth           |
+| `execute_query`             | Execute a GraphQL query                           | Auth           |
+| `ask_consultant`            | Full Skipper pipeline with confidence tagging     | Auth           |
+| `browse_marketplace`        | Browse available infrastructure clusters          | None           |
+| `subscribe_to_cluster`      | Subscribe to a cluster                            | Auth           |
+| `set_preferred_cluster`     | Set preferred cluster for DNS steering            | Auth           |
+| `create_enrollment_token`   | Create an enrollment token for edge bootstrap     | Auth           |
+| `get_node_info`             | Fetch node details                                | Auth           |
+| `manage_node`               | Activate/deactivate/drain/restart a node          | Auth           |
+| `set_node_mode`             | Set node mode (production/standby/maintenance)    | Auth           |
+| `get_node_health`           | Node health and metrics summary                   | Auth           |
+| `create_private_cluster`    | Create private cluster (returns token)            | Auth           |
 
 <Aside type="tip" title="CLI Alternative">
   For operators who prefer the CLI over MCP, `frameworks edge deploy` combines
@@ -184,8 +184,18 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 
 **topup_balance**
 
-- `amount_cents` (required): Amount in cents
-- `asset`: USDC. The Gateway schema currently accepts ETH and LPT, but the prepaid top-up backend rejects them until conversion-backed top-ups are implemented.
+- `amount_cents` (required): Target credit amount in tenant currency cents (USD or EUR)
+- `asset`: `USDC` (default) or `ETH`. LPT is reserved but currently rejected (no Chainlink LPT/USD feed).
+
+Response is a locked-rate quote: `token_amount` (send exactly this much), `price_usd`
+(locked at issue time via Chainlink for ETH; 1:1 for USDC), `quote_source`
+(`chainlink` or `one_to_one`), `network` (defaults to Arbitrum), and an
+`expires_at` 24h out. The balance credit at confirmation is `received × locked_price`,
+so you get exactly the quoted amount regardless of price drift inside the TTL.
+
+`check_topup` returns `status` of `pending | confirming | completed | expired`,
+plus `tx_hash`, `confirmations`, and on completion `credited_cents` /
+`credited_currency` (USD or EUR per the account).
 
 **create_stream**
 

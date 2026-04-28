@@ -141,6 +141,12 @@ type TopupResult struct {
 	AmountCents    int64  `json:"amount_cents"`
 	ExpiresAt      string `json:"expires_at"`
 	Message        string `json:"message"`
+
+	// Locked quote — agents send exactly TokenAmount of Asset, get credited at PriceUSD per token.
+	TokenAmount string `json:"token_amount,omitempty"`
+	PriceUSD    string `json:"price_usd,omitempty"`
+	QuoteSource string `json:"quote_source,omitempty"`
+	Network     string `json:"network,omitempty"`
 }
 
 // strPtr returns a pointer to a string, or nil if empty.

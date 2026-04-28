@@ -114,7 +114,8 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     -- For invoice payments (NULL for prepaid)
     invoice_id UUID REFERENCES purser.billing_invoices(id) ON DELETE CASCADE,
 
-    -- For prepaid top-ups: expected amount in cents (NULL for invoice - amount comes from invoice)
+    -- For prepaid top-ups: expected amount in the tenant's prepaid currency
+    -- (USD or EUR cents). NULL for invoice — amount comes from the invoice.
     expected_amount_cents BIGINT,
 
     -- ===== WALLET DETAILS =====
@@ -122,8 +123,9 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     asset VARCHAR(10) NOT NULL,
     CONSTRAINT chk_wallet_asset CHECK (asset IN ('ETH', 'USDC', 'LPT')),
 
-    -- Network: ethereum, base, arbitrum (+ testnets)
-    network VARCHAR(20) NOT NULL DEFAULT 'ethereum',
+    -- Network: must be persisted explicitly by the writer (no default — the
+    -- caller picks per asset / request).
+    network VARCHAR(20) NOT NULL,
     CONSTRAINT chk_wallet_network CHECK (network IN ('ethereum', 'base', 'arbitrum', 'base-sepolia', 'arbitrum-sepolia')),
 
     wallet_address VARCHAR(255) NOT NULL,
@@ -132,18 +134,40 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     derivation_index INTEGER NOT NULL,
 
     -- ===== STATUS & LIFECYCLE =====
-    -- active: awaiting payment
-    -- used: payment received, pending sweep
-    -- swept: funds moved to cold storage
-    -- expired: no payment received before expiry
-    status VARCHAR(50) NOT NULL DEFAULT 'active',
-    CONSTRAINT chk_wallet_status CHECK (status IN ('active', 'used', 'swept', 'expired')),
+    -- pending:    address issued, no on-chain payment seen
+    -- confirming: payment detected, awaiting required confirmations
+    -- completed:  confirmations met, balance credited (sweepable)
+    -- swept:      funds moved to cold storage
+    -- expired:    no payment received before expires_at
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    CONSTRAINT chk_wallet_status CHECK (status IN ('pending', 'confirming', 'completed', 'swept', 'expired')),
 
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    confirmed_tx_hash VARCHAR(66),
-    actual_amount_received DECIMAL(30,18),
-    block_number BIGINT,
-    confirmed_at TIMESTAMP WITH TIME ZONE,
+
+    -- ===== QUOTE (locked at CreateCryptoTopup time) =====
+    -- For non-USDC assets: USD price per whole token, read from a Chainlink
+    -- aggregator and persisted so the credit at confirm time uses the same
+    -- price the user was quoted. For USDC: 1.0 with quote_source='one_to_one'.
+    expected_amount_base_units NUMERIC(78,0),  -- token base units (wei for 18-dec, 1e6 for USDC)
+    quoted_price_usd           NUMERIC(28,18), -- USD per 1 whole token
+    quoted_usd_to_eur_rate     NUMERIC(12,8),  -- usd_cents * rate = eur_cents (set when currency=EUR)
+    quoted_at                  TIMESTAMP WITH TIME ZONE,
+    quote_source               VARCHAR(20),    -- 'chainlink' | 'one_to_one'
+
+    -- ===== ON-CHAIN RESULT =====
+    tx_hash                    VARCHAR(66),
+    block_number               BIGINT,
+    confirmations              INTEGER NOT NULL DEFAULT 0,
+    received_amount_base_units NUMERIC(78,0),
+    detected_at                TIMESTAMP WITH TIME ZONE,
+    completed_at               TIMESTAMP WITH TIME ZONE,
+
+    -- ===== CREDIT =====
+    -- Amount credited to the tenant's prepaid balance, in that balance's
+    -- currency. For USD-denominated balances this is USD cents; for EUR,
+    -- the converted EUR cents using quoted_usd_to_eur_rate.
+    credited_amount_cents      BIGINT,
+    credited_amount_currency   VARCHAR(3),
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -157,6 +181,12 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     CONSTRAINT chk_prepaid_wallet CHECK (
         purpose != 'prepaid' OR expected_amount_cents IS NOT NULL
     ),
+    CONSTRAINT chk_wallet_quote_source CHECK (
+        quote_source IS NULL OR quote_source IN ('chainlink', 'one_to_one')
+    ),
+    CONSTRAINT chk_wallet_credited_currency CHECK (
+        credited_amount_currency IS NULL OR credited_amount_currency ~ '^[A-Z]{3}$'
+    ),
 
     -- Unique constraints:
     -- For invoices: one wallet per invoice+asset
@@ -168,9 +198,9 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_active ON purser.crypto_wallets(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_tenant ON purser.crypto_wallets(tenant_id, purpose);
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_address ON purser.crypto_wallets(wallet_address);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_crypto_wallets_confirmed_tx
-    ON purser.crypto_wallets(network, confirmed_tx_hash)
-    WHERE confirmed_tx_hash IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_crypto_wallets_tx
+    ON purser.crypto_wallets(network, tx_hash)
+    WHERE tx_hash IS NOT NULL;
 
 -- ============================================================================
 -- BILLING TIERS & SUBSCRIPTION PLANS

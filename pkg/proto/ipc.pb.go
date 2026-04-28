@@ -1349,6 +1349,9 @@ type BillingEvent struct {
 	Currency       string                 `protobuf:"bytes,7,opt,name=currency,proto3" json:"currency,omitempty"`
 	Provider       string                 `protobuf:"bytes,8,opt,name=provider,proto3" json:"provider,omitempty"`
 	Status         string                 `protobuf:"bytes,9,opt,name=status,proto3" json:"status,omitempty"`
+	Asset          string                 `protobuf:"bytes,10,opt,name=asset,proto3" json:"asset,omitempty"`                 // "ETH" | "USDC" for crypto top-ups; empty otherwise
+	TxHash         string                 `protobuf:"bytes,11,opt,name=tx_hash,json=txHash,proto3" json:"tx_hash,omitempty"` // On-chain tx hash for crypto credits
+	Network        string                 `protobuf:"bytes,12,opt,name=network,proto3" json:"network,omitempty"`             // "ethereum" | "arbitrum" | "base"
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1442,6 +1445,27 @@ func (x *BillingEvent) GetProvider() string {
 func (x *BillingEvent) GetStatus() string {
 	if x != nil {
 		return x.Status
+	}
+	return ""
+}
+
+func (x *BillingEvent) GetAsset() string {
+	if x != nil {
+		return x.Asset
+	}
+	return ""
+}
+
+func (x *BillingEvent) GetTxHash() string {
+	if x != nil {
+		return x.TxHash
+	}
+	return ""
+}
+
+func (x *BillingEvent) GetNetwork() string {
+	if x != nil {
+		return x.Network
 	}
 	return ""
 }
@@ -12861,7 +12885,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0echanged_fields\x18\x02 \x03(\tR\rchangedFields\"D\n" +
 	"\x0eStreamKeyEvent\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x15\n" +
-	"\x06key_id\x18\x02 \x01(\tR\x05keyId\"\x95\x02\n" +
+	"\x06key_id\x18\x02 \x01(\tR\x05keyId\"\xde\x02\n" +
 	"\fBillingEvent\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
@@ -12873,7 +12897,11 @@ const file_ipc_proto_rawDesc = "" +
 	"\x06amount\x18\x06 \x01(\x01R\x06amount\x12\x1a\n" +
 	"\bcurrency\x18\a \x01(\tR\bcurrency\x12\x1a\n" +
 	"\bprovider\x18\b \x01(\tR\bprovider\x12\x16\n" +
-	"\x06status\x18\t \x01(\tR\x06status\"\xcb\x03\n" +
+	"\x06status\x18\t \x01(\tR\x06status\x12\x14\n" +
+	"\x05asset\x18\n" +
+	" \x01(\tR\x05asset\x12\x17\n" +
+	"\atx_hash\x18\v \x01(\tR\x06txHash\x12\x18\n" +
+	"\anetwork\x18\f \x01(\tR\anetwork\"\xcb\x03\n" +
 	"\rArtifactEvent\x12P\n" +
 	"\rartifact_type\x18\x01 \x01(\x0e2+.helmsmancontrol.ArtifactEvent.ArtifactTypeR\fartifactType\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +

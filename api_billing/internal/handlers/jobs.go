@@ -1346,7 +1346,7 @@ func (jm *JobManager) cleanupExpiredWallets(ctx context.Context) {
 	result, err := jm.db.ExecContext(ctx, `
 		UPDATE purser.crypto_wallets
 		SET status = 'expired', updated_at = NOW()
-		WHERE status = 'active'
+		WHERE status IN ('pending', 'confirming')
 		  AND expires_at < NOW()
 	`)
 

@@ -256,7 +256,9 @@ Implementation of [x402](https://github.com/coinbase/x402) for gasless USDC paym
 
 ### Token Limitation
 
-x402 currently settles USDC on Base and Arbitrum. ETH and LPT use the deposit flow. The schema leaves room for other EIP-3009 tokens, but the current runtime network registry exposes USDC contracts only.
+x402 currently settles USDC only — EIP-3009 `transferWithAuthorization` is a USDC/EURC primitive. The schema leaves room for other EIP-3009 tokens, but the current runtime network registry exposes USDC contracts only.
+
+The non-x402 deposit flow (`CreateCryptoTopup` → HD-derived address → on-chain monitor) supports **ETH and USDC** end-to-end with a price-locked quote: `expected_amount_base_units` and `quoted_price_usd` are persisted at quote time (Chainlink ETH/USD; USDC is 1:1), and the credit at confirmation is `received_amount × locked_price`. **LPT** is reserved in the schema but rejected at the gate until a non-Chainlink price source is decided (no official LPT/USD aggregator).
 
 ### Testnet Support (Local Development Only)
 

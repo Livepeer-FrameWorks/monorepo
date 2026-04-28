@@ -3665,6 +3665,12 @@ enum GQL {
       assetSymbol
       expectedAmountCents
       expiresAt
+      expectedAmountBaseUnits
+      expectedAmountToken
+      quotedPriceUsd
+      quoteSource
+      quotedAt
+      network
     }
   }
   """
@@ -3916,10 +3922,15 @@ enum GQL {
       status
       txHash
       confirmations
-      receivedAmountWei
+      receivedAmountBaseUnits
+      receivedAmountToken
       creditedAmountCents
+      creditedAmountCurrency
+      quoteSource
+      network
       expiresAt
       detectedAt
+      completedAt
     }
   }
   """
