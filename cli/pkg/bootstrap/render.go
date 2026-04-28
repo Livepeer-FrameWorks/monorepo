@@ -217,9 +217,8 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 				if _, exists := autoBundles[key]; !exists {
 					bundleDomains := domains
 					if !strings.HasPrefix(bundleID, "apex-") {
-						// Wildcard bundle covers the cluster's domain set rather
-						// than the per-service FQDN.
-						bundleDomains = clusterderive.IngressWildcardBundleDomains(m, clusterID)
+						bundleRoot := clusterderive.PublicServiceRootDomain(serviceType, m, clusterID)
+						bundleDomains = clusterderive.WildcardBundleDomains(bundleRoot)
 					}
 					autoBundles[key] = TLSBundle{
 						ID:        bundleID,

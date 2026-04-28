@@ -94,18 +94,16 @@ func PublicServiceRootDomain(serviceType string, manifest *inventory.Manifest, c
 	return strings.TrimSpace(manifest.RootDomain)
 }
 
-// IngressWildcardBundleDomains returns the domains that belong on the cluster's
-// wildcard TLS bundle: the apex root domain plus the cluster-scoped subdomain when
-// distinct.
-func IngressWildcardBundleDomains(manifest *inventory.Manifest, clusterID string) []string {
-	if manifest == nil || manifest.RootDomain == "" {
+// WildcardBundleDomains returns the SANs for a wildcard bundle keyed off rootDomain:
+// the bare root and the wildcard. Used by bootstrap to populate TLSBundle.Domains so
+// the issued cert covers both the apex (e.g. frameworks.network) and any subdomain
+// served via this bundle (e.g. chatwoot.frameworks.network).
+func WildcardBundleDomains(rootDomain string) []string {
+	rootDomain = strings.TrimSpace(rootDomain)
+	if rootDomain == "" {
 		return nil
 	}
-	domains := []string{manifest.RootDomain}
-	if clusterRoot := ClusterScopedRootDomain(manifest, clusterID); clusterRoot != "" {
-		domains = append(domains, clusterRoot)
-	}
-	return domains
+	return []string{rootDomain, "*." + rootDomain}
 }
 
 // AutoIngressDomains returns the FQDN list and TLS bundle id for a public service in

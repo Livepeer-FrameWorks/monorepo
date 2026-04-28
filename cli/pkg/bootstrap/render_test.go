@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -532,6 +533,49 @@ func TestDeriveProducesIngressAndServiceRegistry(t *testing.T) {
 	}
 	if got := len(d.Quartermaster.Ingress.TLSBundles); got == 0 {
 		t.Fatal("expected at least one TLS bundle")
+	}
+}
+
+// TestDeriveAutoTLSBundlesScopedPerRoot pins the per-bundle SAN scoping: the apex
+// wildcard bundle covers only the apex root + apex wildcard, and the cluster-scoped
+// wildcard bundle covers only the cluster root + cluster wildcard. They must not
+// share SAN sets. This is what gives nginx a cert that validates for the public
+// FQDN it serves (e.g. chatwoot.frameworks.network or chandler.<cluster>.frameworks.network).
+func TestDeriveAutoTLSBundlesScopedPerRoot(t *testing.T) {
+	m := minimalManifest()
+	m.Services = map[string]inventory.ServiceConfig{
+		"chatwoot": {Enabled: true, Host: "core-eu-1", Port: 18092},
+		"chandler": {Enabled: true, Host: "core-eu-1", Port: 18020},
+	}
+	d, err := Derive(m, DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	bundles := map[string][]string{}
+	for _, b := range d.Quartermaster.Ingress.TLSBundles {
+		bundles[b.ID] = b.Domains
+	}
+
+	wantApex := []string{"frameworks.network", "*.frameworks.network"}
+	gotApex, ok := bundles["wildcard-frameworks-network"]
+	if !ok {
+		t.Fatalf("expected bundle wildcard-frameworks-network; got %+v", bundles)
+	}
+	if !slices.Equal(gotApex, wantApex) {
+		t.Errorf("wildcard-frameworks-network domains = %v, want %v", gotApex, wantApex)
+	}
+
+	wantCluster := []string{
+		"core-central-primary.frameworks.network",
+		"*.core-central-primary.frameworks.network",
+	}
+	gotCluster, ok := bundles["wildcard-core-central-primary-frameworks-network"]
+	if !ok {
+		t.Fatalf("expected bundle wildcard-core-central-primary-frameworks-network; got %+v", bundles)
+	}
+	if !slices.Equal(gotCluster, wantCluster) {
+		t.Errorf("wildcard-core-central-primary-frameworks-network domains = %v, want %v", gotCluster, wantCluster)
 	}
 }
 
