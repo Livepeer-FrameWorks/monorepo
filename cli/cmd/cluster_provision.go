@@ -31,9 +31,6 @@ import (
 	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
 	fwsops "frameworks/cli/pkg/sops"
-	"frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/logging"
-	infra "frameworks/pkg/models"
 	pb "frameworks/pkg/proto"
 
 	"frameworks/cli/pkg/clusterderive"
@@ -48,9 +45,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func newClusterProvisionCmd() *cobra.Command {
@@ -584,41 +578,56 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		}
 
 		// Post-batch side effects run sequentially after all tasks complete.
+		// QM bootstrap runs once after the QM batch and reconciles
+		// tenants/clusters/nodes/ingress/service_registry from the rendered
+		// desired-state file. Per-task service-registry / ingress registration
+		// no longer happens here — that work is in the rendered file too.
 		for _, r := range results {
-			if r.task.Type == "quartermaster" {
-				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-				bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-				result, err := runBootstrap(bootstrapCtx, cmd.OutOrStdout(), manifest, runtimeData, raSession)
+			if r.task.Type != "quartermaster" {
+				continue
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
+			bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
+
+			bootstrapYAML, renderErr := renderBootstrapYAML(cmd, manifest, manifestDir)
+			if renderErr != nil {
 				bootstrapCancel()
-				if err != nil {
-					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap failed: %v", err))
-					diagCtx, diagCancel := context.WithTimeout(ctx, 12*time.Second)
-					captureQuartermasterDiagnostics(diagCtx, cmd.OutOrStdout(), manifest, sshPool)
-					diagCancel()
-					fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
-					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
-					return fmt.Errorf("bootstrap failed: %w", err)
-				}
-				ux.Success(cmd.OutOrStdout(), "System Tenant bootstrapped")
-				if result.SystemTenantID != "" {
-					runtimeData["system_tenant_id"] = result.SystemTenantID
-				}
-				if result.QMGRPCAddr != "" {
-					runtimeData["quartermaster_grpc_addr"] = result.QMGRPCAddr
-				}
-				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", r.task.Name))
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap render failed: %v", renderErr))
+				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
+				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				return fmt.Errorf("bootstrap render failed: %w", renderErr)
+			}
+			runtimeData["bootstrap_desired_state"] = bootstrapYAML
+
+			if err := runServiceBootstrap(bootstrapCtx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil); err != nil {
+				bootstrapCancel()
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap failed: %v", err))
+				diagCtx, diagCancel := context.WithTimeout(ctx, 12*time.Second)
+				captureQuartermasterDiagnostics(diagCtx, cmd.OutOrStdout(), manifest, sshPool)
+				diagCancel()
+				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
+				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				return fmt.Errorf("bootstrap failed: %w", err)
 			}
 
-			regCtx, regCancel := context.WithTimeout(ctx, 15*time.Second)
-			if err := maybeRegisterPublicServiceInstance(regCtx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, raSession, manifestDir, sharedEnv, releaseRepos); err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: public service registration skipped for %s: %v\n", r.task.Name, err)
+			// Pull system_tenant_id from QM via gRPC; the readiness report and
+			// downstream bootstrap-admin user creation need it. Alias→UUID is
+			// QM-owned data and never read directly from the CLI.
+			systemTenantID, idErr := resolveSystemTenantIDViaQM(bootstrapCtx, manifest, runtimeData, raSession)
+			bootstrapCancel()
+			if idErr != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve system tenant: %v", idErr))
+				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
+				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				return fmt.Errorf("resolve system tenant: %w", idErr)
 			}
-			regCancel()
-			ingressCtx, ingressCancel := context.WithTimeout(ctx, 15*time.Second)
-			if err := maybeRegisterIngressDesiredState(ingressCtx, cmd.OutOrStdout(), manifest, r.task, r.host, r.outcome, runtimeData, raSession); err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "    Warning: ingress desired state registration skipped for %s: %v\n", r.task.Name, err)
+			runtimeData["system_tenant_id"] = systemTenantID
+			if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", 19002); addrErr == nil {
+				runtimeData["quartermaster_grpc_addr"] = qmAddr
 			}
-			ingressCancel()
+
+			ux.Success(cmd.OutOrStdout(), "System Tenant bootstrapped")
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", r.task.Name))
 		}
 
 		if err := maybeReconcileBatchFoghornAssignments(ctx, cmd, batch, manifest, runtimeData, raSession); err != nil {
@@ -702,129 +711,42 @@ func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *in
 
 	rememberSystemTenantID(cmd, systemTenantID)
 
+	bootstrapYAML, ok := runtimeData["bootstrap_desired_state"].([]byte)
+	if !ok || len(bootstrapYAML) == 0 {
+		// Should not happen — QM bootstrap stashes it. Defensive guard.
+		return validateControlPlane(ctx, cmd, manifest, runtimeData, sess)
+	}
+
 	fmt.Fprintln(cmd.OutOrStdout(), "  Control-plane finalization...")
 
-	// 1. Bootstrap Purser cluster pricing for clusters with manifest pricing config
-	if err := maybeBootstrapClusterPricing(ctx, cmd, manifest, runtimeData, sess, serviceToken); err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: cluster pricing bootstrap failed: %v\n", err)
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := ssh.NewPool(30*time.Second, sshKey)
+	defer sshPool.Close()
+
+	// Purser bootstrap reconciles the embedded tier catalog, cluster pricing,
+	// and customer billing. Idempotent — always safe to run; the no-pricing
+	// case is just an empty cluster_pricing reconcile. Failure is fatal: a
+	// successful provision must include a complete billing/entitlement state.
+	if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "purser", bootstrapYAML, nil); err != nil {
+		return fmt.Errorf("purser bootstrap: %w", err)
 	}
 
-	// 2. Optional bootstrap admin user
-	if err := maybeBootstrapAdminUser(ctx, cmd, manifest, runtimeData, sess, systemTenantID, serviceToken); err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "    Warning: bootstrap admin user creation failed: %v\n", err)
+	// Purser cross-service invariant check: every QM platform-official cluster
+	// has a matching purser.cluster_pricing row. Skipped clusters here mean the
+	// deposit monitor / tenant entitlement code goes blind, so this also fails
+	// the provision rather than warns.
+	if err := runServiceBootstrapValidate(ctx, cmd, manifest, sshPool, "purser"); err != nil {
+		return fmt.Errorf("purser bootstrap validate: %w", err)
 	}
 
-	// 3. Control-plane validation
+	// Commodore bootstrap creates user(s) under tenants in the rendered
+	// accounts: section. With no --bootstrap-admin-email the section is
+	// empty and the subcommand is a parse-and-exit no-op. Failure is fatal.
+	if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "commodore", bootstrapYAML, commodoreBootstrapExtraArgs(cmd)); err != nil {
+		return fmt.Errorf("commodore bootstrap: %w", err)
+	}
+
 	return validateControlPlane(ctx, cmd, manifest, runtimeData, sess)
-}
-
-func maybeBootstrapClusterPricing(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session, serviceToken string) error {
-	hasPricingClusters := false
-	for _, cc := range manifest.Clusters {
-		if cc.Pricing != nil {
-			hasPricingClusters = true
-			break
-		}
-	}
-	if !hasPricingClusters {
-		return nil
-	}
-
-	p, err := newPurserClient(ctx, manifest, runtimeData, sess, serviceToken)
-	if err != nil {
-		return fmt.Errorf("failed to connect to Purser gRPC: %w", err)
-	}
-	defer p.Close()
-
-	for clusterID, cc := range manifest.Clusters {
-		if cc.Pricing == nil {
-			continue
-		}
-		req := &pb.SetClusterPricingRequest{
-			ClusterId:    clusterID,
-			PricingModel: cc.Pricing.Model,
-		}
-		if cc.Pricing.RequiredTierLevel != nil {
-			v := int32(*cc.Pricing.RequiredTierLevel)
-			req.RequiredTierLevel = &v
-		}
-		if cc.Pricing.AllowFreeTier != nil {
-			req.AllowFreeTier = cc.Pricing.AllowFreeTier
-		}
-		if len(cc.Pricing.DefaultQuotas) > 0 {
-			m := make(map[string]any, len(cc.Pricing.DefaultQuotas))
-			for k, v := range cc.Pricing.DefaultQuotas {
-				m[k] = float64(v)
-			}
-			s, sErr := structpb.NewStruct(m)
-			if sErr == nil {
-				req.DefaultQuotas = s
-			}
-		}
-		if _, err := p.SetClusterPricing(ctx, req); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "    Warning: failed to set pricing for cluster %s: %v\n", clusterID, err)
-		} else {
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Cluster pricing set for %s (model=%s)", clusterID, cc.Pricing.Model))
-		}
-	}
-	return nil
-}
-
-func maybeBootstrapAdminUser(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session, systemTenantID, serviceToken string) error {
-	email, err := cmd.Flags().GetString("bootstrap-admin-email")
-	if err != nil || email == "" {
-		// No bootstrap email provided. The readiness report at the end
-		// of runProvision will surface a next-step with the exact
-		// `admin users create` command (tenant-id filled from context).
-		return nil
-	}
-
-	// Resolve password: file > env > plaintext
-	password := ""
-	if pwFile, fErr := cmd.Flags().GetString("bootstrap-admin-password-file"); fErr == nil && pwFile != "" {
-		data, readErr := os.ReadFile(pwFile)
-		if readErr != nil {
-			return fmt.Errorf("failed to read password file: %w", readErr)
-		}
-		password = strings.TrimSpace(string(data))
-	}
-	if password == "" {
-		if pwEnv, eErr := cmd.Flags().GetString("bootstrap-admin-password-env"); eErr == nil && pwEnv != "" {
-			password = os.Getenv(pwEnv)
-		}
-	}
-	if password == "" {
-		if pw, pErr := cmd.Flags().GetString("bootstrap-admin-password"); pErr == nil {
-			password = pw
-		}
-	}
-	if password == "" {
-		return fmt.Errorf("--bootstrap-admin-email requires a password (use --bootstrap-admin-password, --bootstrap-admin-password-env, or --bootstrap-admin-password-file)")
-	}
-
-	firstName, _ := cmd.Flags().GetString("bootstrap-admin-first-name") //nolint:errcheck // flag always exists
-	lastName, _ := cmd.Flags().GetString("bootstrap-admin-last-name")   //nolint:errcheck // flag always exists
-
-	cli, err := newCommodoreClient(ctx, manifest, runtimeData, sess, serviceToken)
-	if err != nil {
-		return fmt.Errorf("failed to connect to Commodore gRPC: %w", err)
-	}
-	defer cli.Close()
-
-	resp, err := cli.CreateUserInTenant(ctx, &pb.CreateUserInTenantRequest{
-		TenantId:  systemTenantID,
-		Email:     email,
-		Password:  password,
-		FirstName: firstName,
-		LastName:  lastName,
-		Role:      "owner",
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create bootstrap admin: %w", err)
-	}
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Created operator account: %s (user_id: %s) in tenant %s",
-		resp.User.GetEmail(), resp.User.GetId(), systemTenantID))
-	return nil
 }
 
 func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
@@ -1178,15 +1100,6 @@ type foghornClusterAssigner interface {
 	AssignFoghornToCluster(ctx context.Context, req *pb.AssignFoghornToClusterRequest) error
 }
 
-type publicServiceRegistrar interface {
-	BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error)
-}
-
-type ingressDesiredStateRegistrar interface {
-	UpsertTLSBundle(ctx context.Context, bundle *pb.TLSBundle) (*pb.TLSBundleResponse, error)
-	UpsertIngressSite(ctx context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error)
-}
-
 func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData map[string]any) (string, string, error) {
 	var serviceToken string
 	if v, ok := runtimeData["service_token"].(string); ok {
@@ -1509,291 +1422,12 @@ func bootstrapInternalCertSANs(serviceName, clusterID, rootDomain string, host i
 	return dnsNames, ipAddresses
 }
 
-func maybeRegisterPublicServiceInstance(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]any, sess *remoteaccess.Session, manifestDir string, sharedEnv map[string]string, releaseRepos []string) error {
-	if outcome == nil || outcome.deferred || !outcome.running {
-		return nil
-	}
-
-	serviceName := task.ServiceID
-	if _, ok := publicServiceType(serviceName); !ok || selfRegisters(serviceName) {
-		return nil
-	}
-
-	client, err := newQuartermasterClient(ctx, manifest, runtimeData, sess)
-	if err != nil {
-		return fmt.Errorf("connect Quartermaster for public service registration: %w", err)
-	}
-	defer client.Close()
-
-	// Stash the manifest-resolved Quartermaster address so downstream tasks
-	// see the cluster-side endpoint (mesh/external IP), never the operator-
-	// side loopback that an SSH tunnel would have produced.
-	if qmAddr, err := resolveServiceGRPCAddr(manifest, "quartermaster", 19002); err == nil {
-		runtimeData["quartermaster_grpc_addr"] = qmAddr
-	}
-	return registerPublicServiceInstanceWithClient(ctx, out, manifest, task, runtimeData, manifestDir, sharedEnv, releaseRepos, client)
-}
-
-func maybeRegisterIngressDesiredState(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, host inventory.Host, outcome *taskProvisionOutcome, runtimeData map[string]any, sess *remoteaccess.Session) error {
-	if outcome == nil || outcome.deferred || !outcome.running {
-		return nil
-	}
-	if task.Type != "nginx" && task.Type != "caddy" {
-		return nil
-	}
-
-	client, err := newQuartermasterClient(ctx, manifest, runtimeData, sess)
-	if err != nil {
-		return fmt.Errorf("connect Quartermaster for ingress desired state: %w", err)
-	}
-	defer client.Close()
-
-	return registerIngressDesiredStateWithClient(ctx, out, manifest, task, client)
-}
-
-func registerPublicServiceInstanceWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, releaseRepos []string, registrar publicServiceRegistrar) error {
-	serviceName := task.ServiceID
-	serviceType, ok := publicServiceType(serviceName)
-	if !ok || selfRegisters(serviceName) {
-		return nil
-	}
-
-	svcDef, hasDef := servicedefs.Lookup(serviceName)
-	if !hasDef {
-		return nil
-	}
-
-	hostCluster := manifest.HostCluster(task.Host)
-	if hostCluster == "" {
-		hostCluster = manifest.ResolveCluster(serviceName)
-	}
-	if hostCluster == "" {
-		return fmt.Errorf("service %s has no resolved cluster", task.Name)
-	}
-
-	serviceToken, ok := runtimeData["service_token"].(string)
-	if !ok || serviceToken == "" {
-		return fmt.Errorf("missing Quartermaster service token")
-	}
-	healthPath := svcDef.HealthPath
-	effectivePort := 0
-	if svc, ok := manifest.Services[serviceName]; ok {
-		if p, err := resolvePort(serviceName, svc); err == nil {
-			effectivePort = p
-		}
-	} else if iface, ok := manifest.Interfaces[serviceName]; ok {
-		if p, err := resolvePort(serviceName, iface); err == nil {
-			effectivePort = p
-		}
-	}
-	if effectivePort == 0 {
-		effectivePort = svcDef.DefaultPort
-	}
-	port := int32(effectivePort)
-	req := &pb.BootstrapServiceRequest{
-		ServiceToken:   &serviceToken,
-		Type:           serviceType,
-		Version:        "cli-provisioned",
-		Protocol:       "http",
-		HealthEndpoint: &healthPath,
-		Port:           port,
-		ClusterId:      &hostCluster,
-		NodeId:         &task.Host,
-	}
-	if metadata, err := serviceRegistrationMetadata(serviceName, task.Host, hostCluster, manifest, runtimeData, manifestDir, sharedEnv, releaseRepos); err != nil {
-		return fmt.Errorf("resolve metadata: %w", err)
-	} else if len(metadata) > 0 {
-		req.Metadata = metadata
-	}
-
-	if _, err := registrar.BootstrapService(ctx, req); err != nil {
-		return err
-	}
-	ux.Success(out, fmt.Sprintf("Registered service instance: %s/%s (node-derived mesh address, port %d)", task.Host, serviceType, port))
-	return nil
-}
-
-func registerIngressDesiredStateWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, task *orchestrator.Task, registrar ingressDesiredStateRegistrar) error {
-	if manifest.RootDomain == "" {
-		return nil
-	}
-
-	clusterID := manifest.HostCluster(task.Host)
-	if clusterID == "" {
-		clusterID = manifest.ResolveCluster(task.Type)
-	}
-	if clusterID == "" {
-		return fmt.Errorf("host %s has no resolved cluster", task.Host)
-	}
-
-	defaultEmail := strings.TrimSpace(os.Getenv("FROM_EMAIL"))
-	if defaultEmail == "" {
-		defaultEmail = "info@frameworks.network"
-	}
-
-	for _, bundleRootDomain := range ingressWildcardBundleDomains(manifest, clusterID) {
-		wildcardBundleID := tlsBundleID("wildcard", bundleRootDomain)
-		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
-			BundleId:  wildcardBundleID,
-			ClusterId: clusterID,
-			Domains:   []string{"*." + bundleRootDomain},
-			Issuer:    "navigator",
-			Email:     defaultEmail,
-		}); err != nil {
-			return fmt.Errorf("upsert wildcard bundle: %w", err)
-		}
-	}
-
-	localSvcs := make(map[string]any)
-	addLocalProxyRoutes(localSvcs, task.Host, manifest.Services, task.Type)
-	addLocalProxyRoutes(localSvcs, task.Host, manifest.Interfaces, task.Type)
-	addLocalProxyRoutes(localSvcs, task.Host, manifest.Observability, task.Type)
-
-	if _, ok := localSvcs["foredeck"]; ok {
-		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
-			BundleId:  tlsBundleID("apex", manifest.RootDomain),
-			ClusterId: clusterID,
-			Domains:   []string{manifest.RootDomain, "www." + manifest.RootDomain},
-			Issuer:    "navigator",
-			Email:     defaultEmail,
-		}); err != nil {
-			return fmt.Errorf("upsert apex bundle: %w", err)
-		}
-	}
-
-	for name, rawPort := range localSvcs {
-		port, ok := rawPort.(int)
-		if !ok || port == 0 {
-			continue
-		}
-
-		domains, bundleID := autoIngressDomains(name, manifest, clusterID)
-		if len(domains) == 0 || bundleID == "" {
-			continue
-		}
-
-		metadata := map[string]any{}
-		switch name {
-		case "bridge":
-			metadata["websocket_path"] = "/graphql/ws"
-		case "chartroom":
-			metadata["upgrade_all"] = true
-		case "chatwoot":
-			metadata["websocket_path"] = "/cable"
-		case "foghorn":
-			metadata["geo_proxy_headers"] = true
-			metadata["geoip_db_path"] = "/var/lib/GeoIP/GeoLite2-City.mmdb"
-		}
-		siteMetadata, err := structpb.NewStruct(metadata)
-		if err != nil {
-			return fmt.Errorf("encode ingress metadata: %w", err)
-		}
-
-		if _, err := registrar.UpsertIngressSite(ctx, &pb.IngressSite{
-			SiteId:      fmt.Sprintf("%s-%s", name, task.Host),
-			ClusterId:   clusterID,
-			NodeId:      task.Host,
-			Domains:     domains,
-			TlsBundleId: bundleID,
-			Kind:        "reverse_proxy_tcp",
-			Upstream:    fmt.Sprintf("localhost:%d", port),
-			Metadata:    siteMetadata,
-		}); err != nil {
-			return fmt.Errorf("upsert ingress site for %s: %w", name, err)
-		}
-	}
-
-	for bundleID, cfg := range manifest.TLSBundles {
-		if cfg.Cluster != "" && cfg.Cluster != clusterID {
-			continue
-		}
-		if !ingress.IsValidBundleID(bundleID) {
-			return fmt.Errorf("invalid TLS bundle id %q in manifest: must match %s", bundleID, "lowercase alphanumeric and hyphens, max 128 chars, no leading hyphen")
-		}
-		email := strings.TrimSpace(cfg.Email)
-		if email == "" {
-			email = defaultEmail
-		}
-		issuer := strings.TrimSpace(cfg.Issuer)
-		if issuer == "" {
-			issuer = "navigator"
-		}
-		var metadata *structpb.Struct
-		if len(cfg.Metadata) > 0 {
-			var err error
-			metadata, err = structpb.NewStruct(stringMapToInterfaceMap(cfg.Metadata))
-			if err != nil {
-				return fmt.Errorf("encode tls bundle metadata for %s: %w", bundleID, err)
-			}
-		}
-		if _, err := registrar.UpsertTLSBundle(ctx, &pb.TLSBundle{
-			BundleId:  bundleID,
-			ClusterId: clusterID,
-			Domains:   cfg.Domains,
-			Issuer:    issuer,
-			Email:     email,
-			Metadata:  metadata,
-		}); err != nil {
-			return fmt.Errorf("upsert explicit tls bundle %s: %w", bundleID, err)
-		}
-	}
-
-	for siteID, cfg := range manifest.IngressSites {
-		if cfg.Node != task.Host {
-			continue
-		}
-		if cfg.TLSBundleID != "" && !ingress.IsValidBundleID(cfg.TLSBundleID) {
-			return fmt.Errorf("ingress site %q references invalid tls_bundle_id %q in manifest", siteID, cfg.TLSBundleID)
-		}
-		siteClusterID := clusterID
-		if cfg.Cluster != "" {
-			siteClusterID = cfg.Cluster
-		}
-		var metadata *structpb.Struct
-		if len(cfg.Metadata) > 0 {
-			var err error
-			metadata, err = structpb.NewStruct(stringMapToInterfaceMap(cfg.Metadata))
-			if err != nil {
-				return fmt.Errorf("encode ingress site metadata for %s: %w", siteID, err)
-			}
-		}
-		if _, err := registrar.UpsertIngressSite(ctx, &pb.IngressSite{
-			SiteId:      siteID,
-			ClusterId:   siteClusterID,
-			NodeId:      cfg.Node,
-			Domains:     cfg.Domains,
-			TlsBundleId: cfg.TLSBundleID,
-			Kind:        cfg.Kind,
-			Upstream:    cfg.Upstream,
-			Metadata:    metadata,
-		}); err != nil {
-			return fmt.Errorf("upsert explicit ingress site %s: %w", siteID, err)
-		}
-	}
-
-	ux.Success(out, fmt.Sprintf("Registered ingress desired state for %s", task.Host))
-	return nil
-}
-
-func stringMapToInterfaceMap(values map[string]string) map[string]any {
-	if len(values) == 0 {
-		return nil
-	}
-	result := make(map[string]any, len(values))
-	for key, value := range values {
-		result[key] = value
-	}
-	return result
-}
-
 // Ingress / public-service derivation helpers live in cli/pkg/clusterderive so
 // they are shared with the bootstrap-desired-state renderer. Aliases below keep
 // existing call sites readable.
 var (
-	tlsBundleID                  = clusterderive.TLSBundleID
-	publicServiceRootDomain      = clusterderive.PublicServiceRootDomain
-	ingressWildcardBundleDomains = clusterderive.IngressWildcardBundleDomains
-	autoIngressDomains           = clusterderive.AutoIngressDomains
+	publicServiceRootDomain = clusterderive.PublicServiceRootDomain
+	autoIngressDomains      = clusterderive.AutoIngressDomains
 )
 
 func reconcileFoghornClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
@@ -3408,347 +3042,10 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}, nil
 }
 
-// bootstrapResult holds the output of the cluster bootstrap process.
-// ServiceToken is intentionally absent — the caller already holds the token
-// (it was passed in via runtimeData); copying it through the result struct
-// would duplicate a critical secret for no reason.
-//
-// QMGRPCAddr is the cluster-side Quartermaster address (mesh DNS / external
-// IP), not the address the operator dialed. The operator may have dialed
-// 127.0.0.1:<local> via an SSH tunnel; that endpoint is meaningful only on
-// the operator host, so it must never be propagated into runtime metadata
-// that ships to target hosts.
-type bootstrapResult struct {
-	SystemTenantID string
-	QMGRPCAddr     string
-}
-
-// runBootstrap connects to Quartermaster and generates infrastructure tokens
-func runBootstrap(ctx context.Context, out io.Writer, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) (*bootstrapResult, error) {
-	serviceToken, grpcAddr, serverName, insecure, err := quartermasterDialEndpoint(ctx, manifest, runtimeData, sess)
-	if err != nil {
-		return nil, err
-	}
-	clientConfig := quartermaster.GRPCConfig{
-		GRPCAddr:      grpcAddr,
-		Timeout:       quartermasterRPCTimeout,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: insecure,
-		ServerName:    serverName,
-	}
-	if pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap); ok && pki != nil {
-		clientConfig.CACertPEM = pki.CABundlePEM
-	}
-	client, err := quartermaster.NewGRPCClient(clientConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
-	}
-	defer client.Close()
-
-	// 1. Ensure "FrameWorks" System Tenant Exists
-	var systemTenantID string
-	tenantsResp, err := callQuartermaster(ctx, "ListTenants", func(callCtx context.Context) (*pb.ListTenantsResponse, error) {
-		return client.ListTenants(callCtx, nil)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tenants from Quartermaster at %s: %w", grpcAddr, err)
-	}
-
-	for _, t := range tenantsResp.Tenants {
-		if t.Name == "FrameWorks" {
-			systemTenantID = t.Id
-			break
-		}
-	}
-
-	if systemTenantID == "" {
-		fmt.Printf("  Creating 'FrameWorks' System Tenant...\n")
-		createTenantReq := &pb.CreateTenantRequest{
-			Name:           "FrameWorks",
-			DeploymentTier: "global",
-			PrimaryColor:   "#6366f1",
-			SecondaryColor: "#f59e0b",
-		}
-		createTenantResp, errCreate := callQuartermaster(ctx, "CreateTenant", func(callCtx context.Context) (*pb.CreateTenantResponse, error) {
-			return client.CreateTenant(callCtx, createTenantReq)
-		})
-		if errCreate != nil {
-			return nil, fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", errCreate)
-		}
-		systemTenantID = createTenantResp.Tenant.Id
-		ux.Success(out, fmt.Sprintf("Created System Tenant with ID: %s", systemTenantID))
-	} else {
-		ux.Success(out, fmt.Sprintf("'FrameWorks' System Tenant already exists: %s", systemTenantID))
-	}
-
-	// 2. Register all clusters
-	var qmHost string
-	var qmSvc inventory.ServiceConfig
-	for name, svc := range manifest.Services {
-		if name != "quartermaster" {
-			continue
-		}
-		qmHost = svc.Host
-		qmSvc = svc
-		if qmHost == "" && len(svc.Hosts) > 0 {
-			qmHost = svc.Hosts[0]
-		}
-		break
-	}
-	host, ok := manifest.GetHost(qmHost)
-	if !ok {
-		return nil, fmt.Errorf("quartermaster host not found in manifest")
-	}
-
-	clusterIDs := manifest.AllClusterIDs()
-	baseURL := desiredClusterBaseURL(manifest, host, qmSvc)
-
-	for _, clusterID := range clusterIDs {
-		clusterName := fmt.Sprintf("FrameWorks %s %s Cluster", manifest.Type, manifest.Profile)
-		clusterType := infra.ClusterTypeCentral
-		cc, hasClusterConfig := manifest.Clusters[clusterID]
-		if hasClusterConfig {
-			clusterName = cc.Name
-			clusterType = cc.Type
-		} else if manifest.Type == infra.ClusterTypeEdge {
-			clusterType = infra.ClusterTypeEdge
-		}
-		if !infra.IsValidClusterType(clusterType) {
-			return nil, fmt.Errorf("cluster %q has unsupported cluster type %q (allowed: %s)", clusterID, clusterType, strings.Join(infra.ClusterTypeValues(), ", "))
-		}
-
-		// Resolve manifest bootstrap metadata
-		var ownerTenantID *string
-		isPlatformOfficial := false
-		isDefaultCluster := false
-		if hasClusterConfig {
-			isPlatformOfficial = cc.PlatformOfficial
-			isDefaultCluster = cc.Default
-			if cc.OwnerTenant == "frameworks" {
-				ownerTenantID = &systemTenantID
-			} else if cc.OwnerTenant != "" {
-				ownerTenantID = &cc.OwnerTenant
-			}
-		}
-
-		clusterResp, err := callQuartermaster(ctx, "GetCluster", func(callCtx context.Context) (*pb.ClusterResponse, error) {
-			return client.GetCluster(callCtx, clusterID)
-		})
-		if err != nil && status.Code(err) == codes.NotFound {
-			fmt.Printf("  Registering Cluster '%s'...\n", clusterID)
-			createReq := &pb.CreateClusterRequest{
-				ClusterId:          clusterID,
-				ClusterName:        clusterName,
-				ClusterType:        clusterType,
-				BaseUrl:            baseURL,
-				IsPlatformOfficial: &isPlatformOfficial,
-				IsDefaultCluster:   &isDefaultCluster,
-			}
-			if ownerTenantID != nil {
-				createReq.OwnerTenantId = ownerTenantID
-			}
-			_, err = callQuartermaster(ctx, "CreateCluster", func(callCtx context.Context) (*pb.ClusterResponse, error) {
-				return client.CreateCluster(callCtx, createReq)
-			})
-			if err != nil {
-				return nil, fmt.Errorf("failed to register cluster '%s': %w", clusterID, err)
-			}
-			ux.Success(out, fmt.Sprintf("Registered Cluster: %s", clusterID))
-		} else if err != nil {
-			return nil, fmt.Errorf("failed to check cluster '%s': %w", clusterID, err)
-		} else {
-			updateReq := &pb.UpdateClusterRequest{ClusterId: clusterID}
-			needsUpdate := false
-			if cluster := clusterResp.GetCluster(); cluster != nil {
-				if strings.TrimSpace(cluster.GetClusterName()) != clusterName {
-					updateReq.ClusterName = &clusterName
-					needsUpdate = true
-				}
-				if strings.TrimSpace(cluster.GetBaseUrl()) != baseURL {
-					updateReq.BaseUrl = &baseURL
-					needsUpdate = true
-				}
-				if cluster.GetIsPlatformOfficial() != isPlatformOfficial {
-					updateReq.IsPlatformOfficial = &isPlatformOfficial
-					needsUpdate = true
-				}
-				if cluster.GetIsDefaultCluster() != isDefaultCluster {
-					updateReq.IsDefaultCluster = &isDefaultCluster
-					needsUpdate = true
-				}
-				currentOwner := ""
-				if cluster.OwnerTenantId != nil {
-					currentOwner = *cluster.OwnerTenantId
-				}
-				desiredOwner := ""
-				if ownerTenantID != nil {
-					desiredOwner = *ownerTenantID
-				}
-				if currentOwner != desiredOwner {
-					updateReq.OwnerTenantId = &desiredOwner
-					needsUpdate = true
-				}
-			}
-			if needsUpdate {
-				if _, err := callQuartermaster(ctx, "UpdateCluster", func(callCtx context.Context) (*pb.ClusterResponse, error) {
-					return client.UpdateCluster(callCtx, updateReq)
-				}); err != nil {
-					return nil, fmt.Errorf("failed to update cluster '%s': %w", clusterID, err)
-				}
-				ux.Success(out, fmt.Sprintf("Cluster %q already registered; updated metadata", clusterID))
-			} else {
-				ux.Success(out, fmt.Sprintf("Cluster %q already registered", clusterID))
-			}
-		}
-
-		// Upload WireGuard mesh CIDR + listen port so Quartermaster can
-		// allocate mesh IPs for enrolling nodes. Always sync from the
-		// manifest — it's the GitOps source of truth. The RPC is a simple
-		// upsert, cheap enough to call unconditionally.
-		if manifest.WireGuard != nil && manifest.WireGuard.Enabled && strings.TrimSpace(manifest.WireGuard.MeshCIDR) != "" {
-			port := int32(manifest.WireGuard.ListenPort)
-			if port == 0 {
-				port = 51820
-			}
-			if _, err := callQuartermaster(ctx, "UpdateClusterMeshConfig", func(callCtx context.Context) (*pb.UpdateClusterMeshConfigResponse, error) {
-				return client.UpdateClusterMeshConfig(callCtx, &pb.UpdateClusterMeshConfigRequest{
-					ClusterId:    clusterID,
-					MeshCidr:     manifest.WireGuard.MeshCIDR,
-					WgListenPort: port,
-				})
-			}); err != nil {
-				return nil, fmt.Errorf("failed to sync WireGuard mesh config for cluster '%s': %w", clusterID, err)
-			}
-		}
-	}
-
-	// 3. Register infrastructure nodes
-	// Resolve each host's cluster via explicit host.cluster or single-cluster shortcut.
-	fmt.Printf("  Registering infrastructure nodes...\n")
-	hostClusters := make(map[string]string, len(manifest.Hosts))
-	for hostName := range manifest.Hosts {
-		if cluster := manifest.HostCluster(hostName); cluster != "" {
-			hostClusters[hostName] = cluster
-		} else if len(clusterIDs) > 1 {
-			return nil, fmt.Errorf("host '%s' has no explicit cluster assignment in multi-cluster manifest — set 'cluster: <id>' on the host definition", hostName)
-		} else {
-			hostClusters[hostName] = clusterIDs[0]
-		}
-	}
-
-	for hostName, hostInfo := range manifest.Hosts {
-		nodeType := infra.NodeTypeCore
-		for _, role := range hostInfo.Roles {
-			if role == infra.NodeTypeEdge {
-				nodeType = infra.NodeTypeEdge
-				break
-			}
-		}
-
-		nodeCluster := hostClusters[hostName]
-		externalIP := hostInfo.ExternalIP
-
-		nodeResp, err := callQuartermaster(ctx, "GetNode", func(callCtx context.Context) (*pb.NodeResponse, error) {
-			return client.GetNode(callCtx, hostName)
-		})
-		if err != nil && status.Code(err) == codes.NotFound {
-			_, errCreate := callQuartermaster(ctx, "CreateNode", func(callCtx context.Context) (*pb.NodeResponse, error) {
-				return client.CreateNode(callCtx, &pb.CreateNodeRequest{
-					NodeId:     hostName,
-					ClusterId:  nodeCluster,
-					NodeName:   hostName,
-					NodeType:   nodeType,
-					ExternalIp: &externalIP,
-				})
-			})
-			if errCreate != nil {
-				return nil, fmt.Errorf("failed to register node %s: %w", hostName, errCreate)
-			}
-			ux.Success(out, fmt.Sprintf("Registered node: %s (%s) -> cluster %s", hostName, nodeType, nodeCluster))
-		} else if err != nil {
-			return nil, fmt.Errorf("failed to check node %s: %w", hostName, err)
-		} else {
-			existing := nodeResp.GetNode()
-			existingIP := existing.GetExternalIp()
-			var drifts []string
-			if existing.GetClusterId() != nodeCluster {
-				drifts = append(drifts, fmt.Sprintf("cluster: have %q, want %q", existing.GetClusterId(), nodeCluster))
-			}
-			if existing.GetNodeType() != nodeType {
-				drifts = append(drifts, fmt.Sprintf("type: have %q, want %q", existing.GetNodeType(), nodeType))
-			}
-			if existingIP != externalIP {
-				drifts = append(drifts, fmt.Sprintf("external_ip: have %q, want %q", existingIP, externalIP))
-			}
-			if len(drifts) > 0 {
-				return nil, fmt.Errorf("node %s already registered but has drifted from manifest (%s) — no UpdateNode RPC available; delete and re-register the node manually",
-					hostName, strings.Join(drifts, "; "))
-			}
-			ux.Success(out, fmt.Sprintf("Node %s already registered", hostName))
-		}
-	}
-
-	clusterQMAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", 19002)
-	if addrErr != nil {
-		// Should not happen — bootstrap already proved Quartermaster is in
-		// the manifest — but degrade gracefully rather than crash. The dial
-		// address would be wrong here when tunneled.
-		clusterQMAddr = ""
-	}
-	return &bootstrapResult{
-		SystemTenantID: systemTenantID,
-		QMGRPCAddr:     clusterQMAddr,
-	}, nil
-}
-
-func callQuartermaster[T any](ctx context.Context, operation string, fn func(context.Context) (T, error)) (T, error) {
-	callCtx, cancel := context.WithTimeout(ctx, quartermasterRPCTimeout)
-	defer cancel()
-	resp, err := fn(callCtx)
-	if err != nil {
-		if callCtx.Err() == context.DeadlineExceeded {
-			var zero T
-			return zero, fmt.Errorf("%s timed out after %s: %w", operation, quartermasterRPCTimeout.Round(time.Second), err)
-		}
-		return resp, err
-	}
-	return resp, nil
-}
-
-func desiredClusterBaseURL(manifest *inventory.Manifest, quartermasterHost inventory.Host, quartermasterSvc inventory.ServiceConfig) string {
-	if manifest == nil {
-		return ""
-	}
-
-	if rootDomain := strings.TrimSpace(manifest.RootDomain); rootDomain != "" {
-		return "https://" + rootDomain
-	}
-
-	basePort := 18002
-	if quartermasterSvc.Port != 0 {
-		basePort = quartermasterSvc.Port
-	}
-	baseURL := fmt.Sprintf("http://%s:%d", quartermasterHost.ExternalIP, basePort)
-
-	if bridgeSvc, ok := manifest.Services["bridge"]; ok && bridgeSvc.Enabled {
-		if bridgeSvc.Port != 0 {
-			if bridgeHost, ok := manifest.GetHost(bridgeSvc.Host); ok {
-				baseURL = fmt.Sprintf("http://%s:%d", bridgeHost.ExternalIP, bridgeSvc.Port)
-			}
-		}
-	}
-
-	return baseURL
-}
-
-// selfRegisters and publicServiceType are shared with cli/pkg/clusterderive so the
-// post-Ansible chain and the bootstrap-desired-state renderer agree on the public
-// service surface.
-var (
-	selfRegisters     = clusterderive.SelfRegisters
-	publicServiceType = clusterderive.PublicServiceType
-)
+// publicServiceType is shared with cli/pkg/clusterderive so the post-Ansible
+// chain and the bootstrap-desired-state renderer agree on the public service
+// surface.
+var publicServiceType = clusterderive.PublicServiceType
 
 func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inventory.Manifest, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, releaseRepos []string) (map[string]string, error) {
 	if name != "livepeer-gateway" {

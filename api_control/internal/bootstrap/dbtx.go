@@ -17,11 +17,9 @@ type DBTX interface {
 
 // TenantResolver resolves a tenant alias (the bootstrap stable key) into the
 // tenant UUID. The cobra dispatcher wires this to a Quartermaster gRPC client
-// (ResolveTenantAliases). Tests inject a static map.
-//
-// Pulling the abstraction out of the reconciler keeps cross-service IO at the
-// cobra boundary, where the dispatcher wires both the executor and the resolver
-// — and replaces the previous direct read of QM's bootstrap_tenant_aliases.
+// (ResolveTenantAliases); tests inject a static map. Keeping cross-service IO
+// at the cobra boundary — not inside the reconciler — is the reason this is
+// an interface and not an inline DB read.
 type TenantResolver interface {
 	Resolve(ctx context.Context, alias string) (string, error)
 }

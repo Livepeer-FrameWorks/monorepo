@@ -1,0 +1,103 @@
+---
+- name: Service_bootstrap | argument validation
+  ansible.builtin.assert:
+    that:
+      - service_bootstrap_service | length > 0
+      - service_bootstrap_mode in ["apply", "validate"]
+      - service_bootstrap_mode != "apply" or (service_bootstrap_yaml | length > 0)
+    fail_msg: >-
+      service_bootstrap_service is required, mode must be "apply" or
+      "validate", and apply mode requires service_bootstrap_yaml.
+
+- name: Service_bootstrap | apply
+  when: service_bootstrap_mode == "apply"
+  block:
+    - name: Service_bootstrap | apply | ensure state dir exists
+      ansible.builtin.file:
+        path: "{{ service_bootstrap_state_dir }}"
+        state: directory
+        owner: "{{ service_bootstrap_user }}"
+        group: "{{ service_bootstrap_group }}"
+        mode: "0750"
+
+    - name: Service_bootstrap | apply | write rendered desired-state file
+      ansible.builtin.copy:
+        content: "{{ service_bootstrap_yaml }}"
+        dest: "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
+        owner: "{{ service_bootstrap_user }}"
+        group: "{{ service_bootstrap_group }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Service_bootstrap | apply | --check
+      # --check is parse + intra-file reference validation only; it returns
+      # before the binary calls config.LoadEnv / RequireEnv, so it does not
+      # need DATABASE_URL or SERVICE_TOKEN sourced.
+      ansible.builtin.command:
+        argv:
+          - "{{ service_bootstrap_install_dir }}/{{ service_bootstrap_service }}"
+          - bootstrap
+          - --file
+          - "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
+          - --check
+      become_user: "{{ service_bootstrap_user }}"
+      changed_when: false
+
+    - name: Service_bootstrap | apply | run subcommand
+      # Apply needs DATABASE_URL / SERVICE_TOKEN / QUARTERMASTER_GRPC_ADDR.
+      # The systemd unit reads these from EnvironmentFile; the wrapper script
+      # sources the same file with `set -a` so apply runs under the same env
+      # contract as the service would when it boots.
+      #
+      # We use `argv` (no shell parsing of the args list) and a tiny bash -c
+      # wrapper that takes the env file as $1 and the binary argv as $@, so
+      # service_bootstrap_extra_args entries can contain spaces / quotes
+      # without being re-tokenized by the shell. Each entry is one argv slot.
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['/bin/bash', '-c',
+             'set -a; . "$1"; set +a; shift; exec "$@"',
+             '--',
+             service_bootstrap_env_file,
+             service_bootstrap_install_dir + '/' + service_bootstrap_service,
+             'bootstrap',
+             '--file', service_bootstrap_state_dir + '/bootstrap.yaml']
+            + (service_bootstrap_extra_args | default([]))
+          }}
+      become_user: "{{ service_bootstrap_user }}"
+      register: service_bootstrap_apply
+      changed_when: service_bootstrap_apply.rc == 0
+
+    - name: Service_bootstrap | apply | remove desired-state file on success
+      ansible.builtin.file:
+        path: "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
+        state: absent
+      when: service_bootstrap_apply is succeeded
+
+    - name: Service_bootstrap | apply | preserve desired-state file on failure for triage
+      ansible.builtin.command:
+        argv:
+          - mv
+          - "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
+          - "{{ service_bootstrap_state_dir }}/bootstrap-failed-{{ ansible_date_time.epoch }}.yaml"
+      when: service_bootstrap_apply is failed
+      changed_when: true
+
+- name: Service_bootstrap | validate
+  when: service_bootstrap_mode == "validate"
+  # Validate is a post-state cross-service invariant check (no rendered file
+  # input). It needs the service's runtime env (DB + sibling-service gRPC),
+  # so the env file is sourced just like apply.
+  ansible.builtin.command:
+    argv:
+      - /bin/bash
+      - -c
+      - 'set -a; . "$1"; set +a; shift; exec "$@"'
+      - --
+      - "{{ service_bootstrap_env_file }}"
+      - "{{ service_bootstrap_install_dir }}/{{ service_bootstrap_service }}"
+      - bootstrap
+      - validate
+  become_user: "{{ service_bootstrap_user }}"
+  changed_when: false

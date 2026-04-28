@@ -6,8 +6,6 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/remoteaccess"
-	commodoreCli "frameworks/pkg/clients/commodore"
-	"frameworks/pkg/clients/purser"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
 )
@@ -101,46 +99,4 @@ func newQuartermasterClient(
 		CACertPEM:     internalCAFromRuntime(runtimeData),
 	}
 	return quartermaster.NewGRPCClient(cfg)
-}
-
-func newPurserClient(
-	ctx context.Context,
-	manifest *inventory.Manifest,
-	runtimeData map[string]any,
-	sess *remoteaccess.Session,
-	serviceToken string,
-) (*purser.GRPCClient, error) {
-	addr, serverName, insecure, err := resolveServiceDial(ctx, manifest, sess, "purser", 19003)
-	if err != nil {
-		return nil, fmt.Errorf("cannot resolve Purser address: %w", err)
-	}
-	return purser.NewGRPCClient(purser.GRPCConfig{
-		GRPCAddr:      addr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: insecure,
-		ServerName:    serverName,
-		CACertPEM:     internalCAFromRuntime(runtimeData),
-	})
-}
-
-func newCommodoreClient(
-	ctx context.Context,
-	manifest *inventory.Manifest,
-	runtimeData map[string]any,
-	sess *remoteaccess.Session,
-	serviceToken string,
-) (*commodoreCli.GRPCClient, error) {
-	addr, serverName, insecure, err := resolveServiceDial(ctx, manifest, sess, "commodore", 19001)
-	if err != nil {
-		return nil, fmt.Errorf("cannot resolve Commodore address: %w", err)
-	}
-	return commodoreCli.NewGRPCClient(commodoreCli.GRPCConfig{
-		GRPCAddr:      addr,
-		Logger:        logging.NewLogger(),
-		ServiceToken:  serviceToken,
-		AllowInsecure: insecure,
-		ServerName:    serverName,
-		CACertPEM:     internalCAFromRuntime(runtimeData),
-	})
 }

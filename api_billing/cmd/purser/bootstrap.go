@@ -26,10 +26,10 @@ import (
 //
 // Subcommand surface (per docs/architecture/bootstrap-desired-state.md):
 //
-//	purser bootstrap          --file ...                 # apply
-//	purser bootstrap          --file ... --check         # parse + schema validate, no DB
-//	purser bootstrap          --file ... --dry-run       # full reconcile in a tx that rolls back
-//	purser bootstrap validate --file ...                 # cross-service invariant check
+//	purser bootstrap          --file ...           # apply
+//	purser bootstrap          --file ... --check   # parse + schema validate, no DB
+//	purser bootstrap          --file ... --dry-run # full reconcile in a tx that rolls back
+//	purser bootstrap validate                      # cross-service invariant check (no file)
 //
 // --dry-run runs the same code path as apply against an outer transaction the
 // dispatcher rolls back. Reconcilers themselves never call BeginTx/Commit.
@@ -141,10 +141,9 @@ func runBootstrapApply(args []string) int {
 	}
 	if len(out.PostCommit) > 0 {
 		// Cross-service entitlement runs after the local Purser tx is durable.
-		// We use BootstrapClusterAccess (service-token-gated) instead of
-		// SubscribeToCluster, which requires a user/tenant session. Per-op
-		// failures are reported and the command exits non-zero so the operator
-		// retries (both QM handlers are idempotent).
+		// Per-op failures are reported and the command exits non-zero so the
+		// operator can retry — every QM handler this dispatches to is
+		// idempotent.
 		if qm == nil {
 			return 0
 		}
@@ -184,14 +183,13 @@ func printPurserSection(name string, r bootstrap.Result) {
 		name, len(r.Created), len(r.Updated), len(r.Noop))
 }
 
+// runBootstrapValidate runs the cross-service invariant check: every QM
+// platform-official cluster has a matching purser.cluster_pricing row. It
+// queries Quartermaster (gRPC) and Purser's own DB; the rendered file is not
+// an input. Run after `purser bootstrap` apply has committed.
 func runBootstrapValidate(args []string) int {
 	fs := flag.NewFlagSet("purser bootstrap validate", flag.ContinueOnError)
-	file := fs.String("file", "", "path to the rendered bootstrap desired-state YAML")
 	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if *file == "" {
-		fmt.Fprintln(os.Stderr, "purser bootstrap validate: --file required")
 		return 2
 	}
 

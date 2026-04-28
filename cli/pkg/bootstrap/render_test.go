@@ -389,10 +389,11 @@ func TestDeriveEmitsRegistryEntryPerHost(t *testing.T) {
 	}
 }
 
-// TestDeriveLivepeerGatewayMetadata pins the manifest-derivable Livepeer metadata:
-// public_host (host external IP) + public_port (manifest service port). Admin
-// endpoints are intentionally not modeled — operator transport handles that.
-// wallet_address is deferred to a follow-up that adds SecretRef-backed metadata.
+// TestDeriveLivepeerGatewayMetadata pins the manifest-derivable Livepeer
+// metadata: public_host (host external IP) + public_port (manifest service
+// port). Admin endpoints are intentionally not modeled — operator transport
+// handles that. wallet_address requires SecretRef-backed metadata, which the
+// schema doesn't carry today; see render.go's deriveServiceMetadata.
 func TestDeriveLivepeerGatewayMetadata(t *testing.T) {
 	m := minimalManifest()
 	m.Services = map[string]inventory.ServiceConfig{
@@ -414,7 +415,7 @@ func TestDeriveLivepeerGatewayMetadata(t *testing.T) {
 	}
 	for k := range md {
 		if k != "public_host" && k != "public_port" {
-			t.Errorf("unexpected metadata key %q (admin endpoints must not appear; wallet_address is deferred)", k)
+			t.Errorf("unexpected metadata key %q (admin endpoints must not appear; wallet_address needs SecretRef support)", k)
 		}
 	}
 }

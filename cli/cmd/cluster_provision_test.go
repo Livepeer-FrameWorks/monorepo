@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/remoteaccess"
@@ -200,83 +201,6 @@ func TestAutoIngressDomainsUsesClusterScopedDomainForChandler(t *testing.T) {
 	}
 }
 
-func TestDesiredClusterBaseURLPrefersRootDomain(t *testing.T) {
-	manifest := &inventory.Manifest{
-		Profile:    "dev",
-		RootDomain: "frameworks.network",
-		Hosts: map[string]inventory.Host{
-			"central-eu-1":  {ExternalIP: "10.0.0.10"},
-			"regional-eu-1": {ExternalIP: "10.0.0.11"},
-		},
-		Services: map[string]inventory.ServiceConfig{
-			"bridge": {Enabled: true, Host: "regional-eu-1", Port: 18008},
-		},
-	}
-
-	got := desiredClusterBaseURL(manifest, manifest.Hosts["central-eu-1"], inventory.ServiceConfig{Port: 18002})
-	if got != "https://frameworks.network" {
-		t.Fatalf("expected root_domain-backed cluster base_url, got %q", got)
-	}
-}
-
-func TestRegisterIngressDesiredStateWithClientRegistersClusterScopedChandler(t *testing.T) {
-	manifest := &inventory.Manifest{
-		Profile:    "dev",
-		RootDomain: "frameworks.network",
-		Hosts: map[string]inventory.Host{
-			"central-eu-1": {ExternalIP: "10.0.0.10", Cluster: "media-central-primary"},
-		},
-		Clusters: map[string]inventory.ClusterConfig{
-			"media-central-primary": {Name: "Media Central Primary"},
-		},
-		Services: map[string]inventory.ServiceConfig{
-			"chandler": {Enabled: true, Host: "central-eu-1", Port: 18020},
-		},
-		Interfaces: map[string]inventory.ServiceConfig{
-			"nginx": {Enabled: true, Host: "central-eu-1"},
-		},
-	}
-	task := &orchestrator.Task{
-		Name:      "nginx",
-		Type:      "nginx",
-		ServiceID: "nginx",
-		Host:      "central-eu-1",
-		ClusterID: "media-central-primary",
-	}
-	registrar := &fakeIngressDesiredStateRegistrar{}
-
-	if err := registerIngressDesiredStateWithClient(context.Background(), &bytes.Buffer{}, manifest, task, registrar); err != nil {
-		t.Fatalf("registerIngressDesiredStateWithClient returned error: %v", err)
-	}
-
-	var sawRootWildcard bool
-	var sawClusterWildcard bool
-	for _, bundle := range registrar.tlsBundles {
-		switch bundle.GetBundleId() {
-		case "wildcard-frameworks-network":
-			sawRootWildcard = true
-		case "wildcard-media-central-primary-frameworks-network":
-			sawClusterWildcard = true
-		}
-	}
-	if !sawRootWildcard {
-		t.Fatal("expected root wildcard bundle to be registered")
-	}
-	if !sawClusterWildcard {
-		t.Fatal("expected cluster wildcard bundle to be registered")
-	}
-
-	if len(registrar.sites) != 1 {
-		t.Fatalf("expected 1 ingress site, got %d", len(registrar.sites))
-	}
-	if got := registrar.sites[0].GetDomains(); len(got) != 1 || got[0] != "chandler.media-central-primary.frameworks.network" {
-		t.Fatalf("expected cluster-scoped Chandler ingress domain, got %v", got)
-	}
-	if registrar.sites[0].GetTlsBundleId() != "wildcard-media-central-primary-frameworks-network" {
-		t.Fatalf("expected Chandler ingress to use cluster wildcard bundle, got %q", registrar.sites[0].GetTlsBundleId())
-	}
-}
-
 func TestValidateIngressBundleIDsRejectsUnsafeBundle(t *testing.T) {
 	manifest := &inventory.Manifest{
 		TLSBundles: map[string]inventory.TLSBundleConfig{
@@ -322,38 +246,6 @@ func TestValidateIngressBundleIDsAcceptsCanonical(t *testing.T) {
 	}
 }
 
-func TestRegisterIngressDesiredStateRejectsUnsafeManifestBundleID(t *testing.T) {
-	manifest := &inventory.Manifest{
-		Profile:    "dev",
-		RootDomain: "frameworks.network",
-		Hosts: map[string]inventory.Host{
-			"central-eu-1": {ExternalIP: "10.0.0.10", Cluster: "media-central-primary"},
-		},
-		Clusters: map[string]inventory.ClusterConfig{
-			"media-central-primary": {Name: "Media Central Primary"},
-		},
-		TLSBundles: map[string]inventory.TLSBundleConfig{
-			"../../../etc/passwd": {Domains: []string{"evil.example"}},
-		},
-	}
-	task := &orchestrator.Task{
-		Name:      "nginx",
-		Type:      "nginx",
-		ServiceID: "nginx",
-		Host:      "central-eu-1",
-		ClusterID: "media-central-primary",
-	}
-	registrar := &fakeIngressDesiredStateRegistrar{}
-
-	err := registerIngressDesiredStateWithClient(context.Background(), &bytes.Buffer{}, manifest, task, registrar)
-	if err == nil {
-		t.Fatal("expected error on unsafe bundle id, got nil")
-	}
-	if !strings.Contains(err.Error(), "invalid TLS bundle id") {
-		t.Fatalf("error should name the validation failure, got %v", err)
-	}
-}
-
 func TestTLSBundleIDIsAlwaysSafe(t *testing.T) {
 	// All root_domain inputs that the inventory layer accepts must produce
 	// bundle ids ingress.IsValidBundleID accepts, otherwise an uppercase or
@@ -368,12 +260,12 @@ func TestTLSBundleIDIsAlwaysSafe(t *testing.T) {
 		{"wildcard", "core-central-primary.frameworks.network", "wildcard-core-central-primary-frameworks-network"},
 	}
 	for _, tc := range cases {
-		got := tlsBundleID(tc.kind, tc.root)
+		got := clusterderive.TLSBundleID(tc.kind, tc.root)
 		if got != tc.want {
-			t.Errorf("tlsBundleID(%q,%q) = %q, want %q", tc.kind, tc.root, got, tc.want)
+			t.Errorf("clusterderive.TLSBundleID(%q,%q) = %q, want %q", tc.kind, tc.root, got, tc.want)
 		}
 		if !ingress.IsValidBundleID(got) {
-			t.Errorf("tlsBundleID(%q,%q) = %q is not a valid bundle id", tc.kind, tc.root, got)
+			t.Errorf("clusterderive.TLSBundleID(%q,%q) = %q is not a valid bundle id", tc.kind, tc.root, got)
 		}
 	}
 }
@@ -906,63 +798,6 @@ func TestBuildTaskConfigKafkaUsesMeshControllerQuorumAddresses(t *testing.T) {
 	}
 	if host, _ := controllers[2]["host"].(string); host != "10.88.0.12" {
 		t.Fatalf("expected third controller host to use mesh IP, got %q", host)
-	}
-}
-
-func TestRegisterPublicServiceInstanceWithClientUsesResolvedGatewayMetadata(t *testing.T) {
-	envFile := writeTestEnvFile(t, "LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
-	manifest := &inventory.Manifest{
-		Profile:    "dev",
-		RootDomain: "frameworks.network",
-		EnvFiles:   []string{envFile},
-		Hosts: map[string]inventory.Host{
-			"core-1": {
-				ExternalIP: "10.0.0.10",
-				Roles:      []string{"core"},
-			},
-		},
-		Clusters: map[string]inventory.ClusterConfig{
-			"media-a": {},
-		},
-		Services: map[string]inventory.ServiceConfig{
-			"livepeer-gateway": {
-				Enabled: true,
-				Host:    "core-1",
-				Port:    8935,
-			},
-		},
-	}
-	task := &orchestrator.Task{
-		Name:      "livepeer-gateway",
-		Type:      "livepeer-gateway",
-		ServiceID: "livepeer-gateway",
-		Host:      "core-1",
-		ClusterID: "media-a",
-		Phase:     orchestrator.PhaseApplications,
-	}
-	runtimeData := map[string]any{
-		"service_token": "svc-token",
-	}
-	registrar := &fakePublicServiceRegistrar{}
-
-	var out bytes.Buffer
-	if err := registerPublicServiceInstanceWithClient(context.Background(), &out, manifest, task, runtimeData, "", testLoadSharedEnv(t, manifest), nil, registrar); err != nil {
-		t.Fatalf("registerPublicServiceInstanceWithClient returned error: %v", err)
-	}
-	if len(registrar.reqs) != 1 {
-		t.Fatalf("expected one registration request, got %d", len(registrar.reqs))
-	}
-	if got := registrar.reqs[0].GetHealthEndpoint(); got != "/healthz" {
-		t.Fatalf("expected /healthz health endpoint, got %q", got)
-	}
-	if got := registrar.reqs[0].GetMetadata()[servicedefs.LivepeerGatewayMetadataWalletAddress]; got != "0xabc123" {
-		t.Fatalf("expected wallet metadata, got %q", got)
-	}
-	if got := registrar.reqs[0].GetMetadata()[servicedefs.LivepeerGatewayMetadataPublicHost]; got != "livepeer.media-a.frameworks.network" {
-		t.Fatalf("expected cluster-scoped public host, got %q", got)
-	}
-	if got := registrar.reqs[0].GetMetadata()[servicedefs.LivepeerGatewayMetadataAdminPort]; got != "7935" {
-		t.Fatalf("expected admin port metadata, got %q", got)
 	}
 }
 

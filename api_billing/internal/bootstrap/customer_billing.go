@@ -167,9 +167,7 @@ type PostCommitKind string
 const (
 	// PostCommitGrantClusterAccess invokes Quartermaster's
 	// BootstrapClusterAccess RPC — the service-token-gated entitlement entry
-	// point. SubscribeToCluster is intentionally not used here: it requires a
-	// user/tenant session (middleware.GetTenantID), which a service-token
-	// bootstrap caller doesn't have.
+	// point a bootstrap caller (no tenant session) is allowed to use.
 	PostCommitGrantClusterAccess PostCommitKind = "grant_cluster_access"
 	// PostCommitSetPrimaryCluster invokes UpdateTenant with primary_cluster_id.
 	PostCommitSetPrimaryCluster PostCommitKind = "set_primary_cluster"

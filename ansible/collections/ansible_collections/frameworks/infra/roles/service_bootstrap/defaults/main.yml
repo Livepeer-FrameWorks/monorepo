@@ -1,0 +1,36 @@
+---
+# service_bootstrap_service is the FrameWorks service whose `bootstrap`
+# subcommand to invoke (e.g. quartermaster, purser, commodore). The role
+# expects the binary at /opt/frameworks/<service>/<service> and an
+# EnvironmentFile at /etc/frameworks/<service>.env (matching go_service).
+service_bootstrap_service: ""
+
+# service_bootstrap_mode selects which subcommand the role runs:
+#   - "apply"    (default) — uploads the rendered file, runs `<service>
+#                bootstrap --check`, then `<service> bootstrap --file <path>`.
+#                service_bootstrap_yaml is required.
+#   - "validate" — runs `<service> bootstrap validate` only. No file upload,
+#                no apply. Used for cross-service invariant checks (today:
+#                purser bootstrap validate's platform-official-pricing
+#                coverage check).
+service_bootstrap_mode: apply
+
+# service_bootstrap_yaml is the rendered desired-state document the apply
+# subcommand will consume. Required when mode == "apply"; ignored otherwise.
+# The role writes it under /var/lib/frameworks/<service>/bootstrap.yaml at
+# mode 0600 owned by the service user, runs `<service> bootstrap --check`
+# then `<service> bootstrap`, and removes the file on success. On failure
+# it is moved to bootstrap-failed-<epoch>.yaml so an operator can inspect
+# what was attempted.
+service_bootstrap_yaml: ""
+
+# service_bootstrap_extra_args appends to the apply invocation (not the
+# --check, not validate). Currently only `--reset-credentials` for commodore
+# is exposed this way.
+service_bootstrap_extra_args: []
+
+service_bootstrap_user: frameworks
+service_bootstrap_group: frameworks
+service_bootstrap_install_dir: "/opt/frameworks/{{ service_bootstrap_service }}"
+service_bootstrap_state_dir: "/var/lib/frameworks/{{ service_bootstrap_service }}"
+service_bootstrap_env_file: "/etc/frameworks/{{ service_bootstrap_service }}.env"

@@ -459,11 +459,12 @@ The rendered file is exercised through:
   DB connection. Always available, always cheap.
 - `<service> bootstrap --dry-run --file <path>` — full reconcile inside a transaction
   that rolls back. Prints the change set.
-- `<service> bootstrap validate --file <path>` — cross-service invariants. Available
-  only for services that own a real cross-service invariant. Today Purser exposes
-  this and checks the post-reconcile platform state: every platform-official cluster
-  reported by Quartermaster must have a Purser pricing row. Services without such an
-  invariant do not expose a `validate` subcommand.
+- `<service> bootstrap validate` — cross-service post-state invariants. No file
+  input — the subcommand queries the service's own DB and sibling services' gRPC.
+  Available only for services that own a real cross-service invariant. Today Purser
+  exposes this and checks that every platform-official cluster reported by
+  Quartermaster has a Purser pricing row. Services without such an invariant do not
+  expose a `validate` subcommand.
 
 ---
 

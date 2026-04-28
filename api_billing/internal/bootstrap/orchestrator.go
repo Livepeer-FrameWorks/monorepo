@@ -11,11 +11,11 @@ type Sections struct {
 	BillingTierCatalog Result
 	ClusterPricing     Result
 	CustomerBilling    Result
-	// PostCommit is the cross-service work the dispatcher must run after the
-	// outer reconcile transaction commits — and skip when --dry-run rolls back.
-	// Today this is QM SubscribeToCluster + UpdateTenant(primary_cluster) for
-	// every customer in customer_billing, mirroring runtime
-	// ensureTierClusterAccess. The dispatcher dispatches per Op.Kind.
+	// PostCommit is the cross-service work the dispatcher runs after the
+	// outer reconcile transaction commits — and skips when --dry-run rolls
+	// back. Today: QM BootstrapClusterAccess + UpdateTenant(primary_cluster)
+	// for every customer in customer_billing, matching the runtime
+	// entitlement primitives. The dispatcher dispatches per Op.Kind.
 	PostCommit []PostCommitOp
 }
 
