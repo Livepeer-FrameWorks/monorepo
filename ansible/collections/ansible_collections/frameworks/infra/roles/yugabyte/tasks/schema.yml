@@ -18,6 +18,39 @@
     label: "{{ item.db }}"
   when: yugabyte_schema_items | default([]) | length > 0
 
+- name: Probe baseline schema state
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    login_db: "{{ item.db }}"
+    query: |
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = '{{ item.schema | default(item.db, true) }}'
+          AND table_type = 'BASE TABLE'
+      ) AS has_tables
+  register: yugabyte_schema_state_queries
+  changed_when: false
+  check_mode: false
+  loop: "{{ yugabyte_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  no_log: true
+  when: yugabyte_schema_items | default([]) | length > 0
+
+- name: Index baseline schema state by database
+  ansible.builtin.set_fact:
+    yugabyte_schema_has_tables_by_db: >-
+      {{ yugabyte_schema_has_tables_by_db | default({})
+         | combine({ item.item.db: (item.query_result[0].has_tables | default(false) | bool) }) }}
+  loop: "{{ yugabyte_schema_state_queries.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.db }}"
+  no_log: true
+
 - name: Copy baseline schema SQL files
   ansible.builtin.copy:
     src: "{{ item.src }}"
@@ -27,7 +60,9 @@
   loop_control:
     label: "{{ item.db }}"
   no_log: true
-  when: yugabyte_schema_items | default([]) | length > 0
+  when:
+    - yugabyte_schema_items | default([]) | length > 0
+    - not (yugabyte_schema_has_tables_by_db[item.db] | default(false))
 
 - name: Apply baseline schemas via YSQL
   community.postgresql.postgresql_script:
@@ -41,7 +76,9 @@
   loop_control:
     label: "{{ item.db }}"
   no_log: true
-  when: yugabyte_schema_items | default([]) | length > 0
+  when:
+    - yugabyte_schema_items | default([]) | length > 0
+    - not (yugabyte_schema_has_tables_by_db[item.db] | default(false))
 
 - name: Grant baseline schema ownership to application role
   community.postgresql.postgresql_query:
@@ -116,4 +153,6 @@
   loop_control:
     label: "{{ item.db }}"
   no_log: true
-  when: yugabyte_schema_items | default([]) | length > 0
+  when:
+    - yugabyte_schema_items | default([]) | length > 0
+    - not (yugabyte_schema_has_tables_by_db[item.db] | default(false))

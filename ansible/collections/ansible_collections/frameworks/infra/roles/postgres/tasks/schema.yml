@@ -15,6 +15,37 @@
     label: "{{ item.db }}"
   when: postgres_schema_items | default([]) | length > 0
 
+- name: Probe baseline schema state
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    login_port: "{{ postgres_port }}"
+    login_db: "{{ item.db }}"
+    query: |
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = '{{ item.schema | default(item.db, true) }}'
+          AND table_type = 'BASE TABLE'
+      ) AS has_tables
+  register: postgres_schema_state_queries
+  changed_when: false
+  check_mode: false
+  loop: "{{ postgres_schema_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}"
+  when: postgres_schema_items | default([]) | length > 0
+
+- name: Index baseline schema state by database
+  ansible.builtin.set_fact:
+    postgres_schema_has_tables_by_db: >-
+      {{ postgres_schema_has_tables_by_db | default({})
+         | combine({ item.item.db: (item.query_result[0].has_tables | default(false) | bool) }) }}
+  loop: "{{ postgres_schema_state_queries.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.db }}"
+
 - name: Copy baseline schema SQL files
   ansible.builtin.copy:
     src: "{{ item.src }}"
@@ -24,7 +55,9 @@
   loop_control:
     label: "{{ item.db }}"
   no_log: true
-  when: postgres_schema_items | default([]) | length > 0
+  when:
+    - postgres_schema_items | default([]) | length > 0
+    - not (postgres_schema_has_tables_by_db[item.db] | default(false))
 
 - name: Apply baseline schemas to target databases
   become: true
@@ -38,7 +71,9 @@
   loop_control:
     label: "{{ item.db }}"
   no_log: true
-  when: postgres_schema_items | default([]) | length > 0
+  when:
+    - postgres_schema_items | default([]) | length > 0
+    - not (postgres_schema_has_tables_by_db[item.db] | default(false))
 
 - name: Grant baseline schema ownership to application role
   become: true
@@ -113,4 +148,6 @@
   loop_control:
     label: "{{ item.db }}"
   no_log: true
-  when: postgres_schema_items | default([]) | length > 0
+  when:
+    - postgres_schema_items | default([]) | length > 0
+    - not (postgres_schema_has_tables_by_db[item.db] | default(false))

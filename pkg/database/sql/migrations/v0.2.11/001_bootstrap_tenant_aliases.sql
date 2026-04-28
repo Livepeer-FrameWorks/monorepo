@@ -1,11 +1,9 @@
 -- Bootstrap tenant alias mapping (Quartermaster).
 --
 -- The schema file (pkg/database/sql/schema/quartermaster.sql) carries the
--- canonical CREATE for this table; the schema is re-applied on every cluster
--- provision/migrate run with IF NOT EXISTS, so fresh and re-provisioned hosts
--- pick it up there. This migration exists so deployed environments that run
--- `cluster migrate` without a full re-provision also record the change in the
--- _migrations table.
+-- canonical CREATE for fresh schemas. This migration adds the table to
+-- existing Quartermaster schemas and records the change in the _migrations
+-- table.
 --
 -- Safe on every DB in postgres_databases: the body only fires when the
 -- `quartermaster` schema is present, so applying this migration to purser /
