@@ -610,10 +610,11 @@ func main() {
 		federationServer.SetArtifactCommandHandler(foghornServer)
 	}
 
-	// HA relay: register at QM to discover mesh address, enable cross-instance command forwarding.
+	// Register at QM to discover the mesh address used for cluster assignment
+	// and, when Redis is available, cross-instance command forwarding.
 	// QM derives the advertise address from the node's mesh identity (wireguard_ip > internal_ip).
 	var relayServer *foghorngrpc.RelayServer
-	if redisStore != nil && qmClient != nil {
+	if qmClient != nil {
 		grpcPort := config.GetEnvInt("FOGHORN_GRPC_PORT", controlPortFromBindAddr(controlAddr, 18019))
 		bsReq := &pb.BootstrapServiceRequest{
 			Type:      "foghorn",
@@ -644,7 +645,7 @@ func main() {
 			handlers.ApplyBootstrapMetadata(bsResp)
 		}
 
-		if advertiseAddr != "" {
+		if redisStore != nil && advertiseAddr != "" {
 			relayPool := foghornpool.NewPool(foghornpool.PoolConfig{
 				ServiceToken: serviceToken,
 				Timeout:      10 * time.Second,
