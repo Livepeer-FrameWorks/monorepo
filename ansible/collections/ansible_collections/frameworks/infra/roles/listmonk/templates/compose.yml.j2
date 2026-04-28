@@ -6,6 +6,8 @@ services:
     entrypoint: ["sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk"]
     ports:
       - "{{ listmonk_port }}:9000"
+    env_file:
+      - .env
     networks:
       - frameworks
     healthcheck:
