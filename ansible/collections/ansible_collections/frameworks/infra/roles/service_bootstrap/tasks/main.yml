@@ -41,6 +41,7 @@
           - "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
           - --check
       become_user: "{{ service_bootstrap_user }}"
+      become: true
       changed_when: false
 
     - name: Service_bootstrap | apply | run subcommand
@@ -66,6 +67,7 @@
             + (service_bootstrap_extra_args | default([]))
           }}
       become_user: "{{ service_bootstrap_user }}"
+      become: true
       register: service_bootstrap_apply
       changed_when: service_bootstrap_apply.rc == 0
 
@@ -100,4 +102,5 @@
       - bootstrap
       - validate
   become_user: "{{ service_bootstrap_user }}"
+  become: true
   changed_when: false
