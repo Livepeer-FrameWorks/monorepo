@@ -121,10 +121,15 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		"navigator", "chartroom", "foredeck", "logbook", "skipper", "chandler",
 		"deckhand", "metabase", "grafana",
 		"livepeer-gateway", "livepeer-signer":
-		return NewServiceRoleProvisioner(ServiceRoleConfig{
+		cfg := ServiceRoleConfig{
 			ServiceName: serviceName,
 			DefaultPort: port,
-		}, pool)
+		}
+		if serviceName == "livepeer-gateway" || serviceName == "livepeer-signer" {
+			cfg.DebianRuntimePackages = []string{"libva-drm2"}
+			cfg.PacmanRuntimePackages = []string{"libva"}
+		}
+		return NewServiceRoleProvisioner(cfg, pool)
 
 	default:
 		return nil, fmt.Errorf("provisioner not implemented for service: %s", serviceName)

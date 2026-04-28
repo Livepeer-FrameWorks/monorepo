@@ -33,6 +33,21 @@ argument_specs:
       go_service_env:
         type: dict
         required: false
+      go_service_runtime_packages:
+        type: list
+        elements: str
+        required: false
+        default: []
+      go_service_debian_runtime_packages:
+        type: list
+        elements: str
+        required: false
+        default: []
+      go_service_pacman_runtime_packages:
+        type: list
+        elements: str
+        required: false
+        default: []
       go_service_defer_start:
         type: bool
         required: false

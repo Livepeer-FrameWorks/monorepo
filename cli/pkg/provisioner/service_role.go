@@ -29,6 +29,12 @@ type ServiceRoleConfig struct {
 	// DefaultImage is used when the manifest supplies neither Image nor a
 	// gitops release-manifest entry.
 	DefaultImage string
+
+	// RuntimePackages are installed before native services start. Debian and
+	// Pacman variants cover distro-specific package names for the same sonames.
+	RuntimePackages       []string
+	DebianRuntimePackages []string
+	PacmanRuntimePackages []string
 }
 
 // NewServiceRoleProvisioner returns a Provisioner that picks compose_stack
@@ -132,14 +138,17 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		envAny[k] = v
 	}
 	vars := map[string]any{
-		"go_service_name":              cfg.ServiceName,
-		"go_service_artifact_url":      url,
-		"go_service_artifact_checksum": checksum,
-		"go_service_version":           firstNonEmpty(config.Version, metaString(config.Metadata, "version")),
-		"go_service_port":              port,
-		"go_service_env":               envAny,
-		"go_service_defer_start":       config.DeferStart,
-		"go_service_binary_name":       binaryName,
+		"go_service_name":                    cfg.ServiceName,
+		"go_service_artifact_url":            url,
+		"go_service_artifact_checksum":       checksum,
+		"go_service_version":                 firstNonEmpty(config.Version, metaString(config.Metadata, "version")),
+		"go_service_port":                    port,
+		"go_service_env":                     envAny,
+		"go_service_defer_start":             config.DeferStart,
+		"go_service_binary_name":             binaryName,
+		"go_service_runtime_packages":        cfg.RuntimePackages,
+		"go_service_debian_runtime_packages": cfg.DebianRuntimePackages,
+		"go_service_pacman_runtime_packages": cfg.PacmanRuntimePackages,
 	}
 	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
 		vars["go_service_internal_ca_bundle_pem"] = ca

@@ -23,6 +23,23 @@
     - /etc/frameworks
     - "{{ go_service_install_dir }}"
 
+- name: Resolve runtime packages
+  ansible.builtin.set_fact:
+    go_service_effective_runtime_packages: >-
+      {{
+        (
+          go_service_runtime_packages +
+          ((ansible_os_family == 'Debian') | ternary(go_service_debian_runtime_packages, [])) +
+          ((ansible_pkg_mgr == 'pacman') | ternary(go_service_pacman_runtime_packages, []))
+        ) | unique
+      }}
+
+- name: Install runtime packages
+  ansible.builtin.package:
+    name: "{{ go_service_effective_runtime_packages }}"
+    state: present
+  when: go_service_effective_runtime_packages | length > 0
+
 - name: Install unzip (zip archives only)
   ansible.builtin.package:
     name: unzip
@@ -164,4 +181,23 @@
     chown {{ go_service_user }}:{{ go_service_group }} "{{ go_service_install_sentinel }}" "{{ go_service_install_dir }}/{{ go_service_name }}"
   args:
     creates: "{{ go_service_install_sentinel }}"
+  when: not ansible_check_mode
+
+- name: Check native binary shared libraries
+  ansible.builtin.shell: |
+    if ! command -v ldd >/dev/null 2>&1; then
+      exit 0
+    fi
+    missing="$(
+      ldd "{{ go_service_install_dir }}/{{ go_service_name }}" 2>/dev/null |
+        awk '/not found/ {print}'
+    )"
+    if [ -n "$missing" ]; then
+      printf '%s\n' "$missing"
+    fi
+  args:
+    executable: /bin/bash
+  register: go_service_ldd_missing
+  changed_when: false
+  failed_when: go_service_ldd_missing.stdout | trim | length > 0
   when: not ansible_check_mode
