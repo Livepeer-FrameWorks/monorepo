@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,13 @@ import (
 func main() {
 	if version.HandleCLI() {
 		return
+	}
+
+	// Bootstrap subcommand dispatcher. The Ansible go_service role invokes the
+	// binary with no args to start the gRPC+HTTP server; "bootstrap" is the
+	// only subcommand and is invoked explicitly by the bootstrap role.
+	if len(os.Args) > 1 && os.Args[1] == "bootstrap" {
+		os.Exit(runBootstrapCommand(os.Args[2:]))
 	}
 
 	// Setup logger

@@ -90,6 +90,23 @@ CREATE INDEX IF NOT EXISTS idx_tenant_attribution_referral
     ON quartermaster.tenant_attribution (referral_code)
     WHERE referral_code IS NOT NULL;
 
+-- ============================================================================
+-- BOOTSTRAP TENANT ALIASES
+-- ============================================================================
+-- Stable, operator-readable handle the bootstrap-desired-state file uses to
+-- reference tenants without knowing the DB UUID. `quartermaster bootstrap`
+-- writes this row in the same transaction it creates a tenant; subsequent
+-- bootstrap runs resolve aliases through this table to find the same tenant.
+-- The `frameworks` alias is reserved for the system tenant.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS quartermaster.bootstrap_tenant_aliases (
+    alias       TEXT PRIMARY KEY,
+    tenant_id   UUID NOT NULL REFERENCES quartermaster.tenants(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_bootstrap_tenant_alias_format CHECK (alias ~ '^[a-z][a-z0-9-]{0,63}$')
+);
+
 CREATE TABLE IF NOT EXISTS quartermaster.referral_codes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(100) NOT NULL UNIQUE,

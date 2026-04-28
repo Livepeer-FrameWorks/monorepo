@@ -3703,10 +3703,7 @@ func (s *PurserServer) ensureTierClusterAccess(ctx context.Context, tenantID str
 		}
 		eligibleClusterIDs = append(eligibleClusterIDs, clusterID)
 
-		if _, subErr := s.quartermasterClient.SubscribeToCluster(ctx, &pb.SubscribeToClusterRequest{
-			TenantId:  tenantID,
-			ClusterId: clusterID,
-		}); subErr != nil {
+		if subErr := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID); subErr != nil {
 			s.logger.WithError(subErr).WithFields(logging.Fields{
 				"tenant_id":  tenantID,
 				"cluster_id": clusterID,

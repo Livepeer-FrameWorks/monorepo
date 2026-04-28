@@ -1742,6 +1742,53 @@ func (s *QuartermasterServer) ResolveTenant(ctx context.Context, req *pb.Resolve
 	return resp, nil
 }
 
+// ResolveTenantAliases maps each requested bootstrap alias to its persisted
+// tenant UUID via quartermaster.bootstrap_tenant_aliases. Aliases that do not
+// have a row yet are returned in the `unknown` list rather than failing the
+// whole call — callers (Purser/Commodore bootstrap) render a precise error
+// telling the operator to run quartermaster bootstrap first.
+//
+// SERVICE_TOKEN auth: the alias→UUID handoff is service-to-service only.
+func (s *QuartermasterServer) ResolveTenantAliases(ctx context.Context, req *pb.ResolveTenantAliasesRequest) (*pb.ResolveTenantAliasesResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "ResolveTenantAliases requires service token auth")
+	}
+	aliases := req.GetAliases()
+	if len(aliases) == 0 {
+		return &pb.ResolveTenantAliasesResponse{Mapping: map[string]string{}}, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT alias, tenant_id::text
+		FROM quartermaster.bootstrap_tenant_aliases
+		WHERE alias = ANY($1)
+	`, pq.Array(aliases))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "query alias map: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	mapping := make(map[string]string, len(aliases))
+	for rows.Next() {
+		var alias, id string
+		if scanErr := rows.Scan(&alias, &id); scanErr != nil {
+			return nil, status.Errorf(codes.Internal, "scan alias row: %v", scanErr)
+		}
+		mapping[alias] = id
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, status.Errorf(codes.Internal, "iterate alias rows: %v", rowsErr)
+	}
+
+	var unknown []string
+	for _, a := range aliases {
+		if _, ok := mapping[a]; !ok {
+			unknown = append(unknown, a)
+		}
+	}
+	return &pb.ResolveTenantAliasesResponse{Mapping: mapping, Unknown: unknown}, nil
+}
+
 // ListTenants lists all tenants with pagination
 func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenantsRequest) (*pb.ListTenantsResponse, error) {
 	// Parse bidirectional pagination
@@ -3139,6 +3186,68 @@ func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *pb.Gr
 		return nil, status.Errorf(codes.Internal, "failed to grant access: %v", err)
 	}
 
+	return &emptypb.Empty{}, nil
+}
+
+// BootstrapClusterAccess is the service-token bootstrap entitlement entry
+// point. Unlike SubscribeToCluster, it does not require a user/tenant session —
+// the calling service (Purser bootstrap, today) supplies tenant_id directly.
+// The server still enforces the is_platform_official boundary so a private
+// customer cluster's pricing rows can never be turned into entitlements via
+// this path.
+func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *pb.BootstrapClusterAccessRequest) (*emptypb.Empty, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "BootstrapClusterAccess requires service token auth")
+	}
+	tenantID := req.GetTenantId()
+	clusterID := req.GetClusterId()
+	if tenantID == "" || clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
+	}
+
+	// Validate tenant exists. tenant_cluster_access has no FK on tenant_id
+	// (its UUID type is unconstrained at the schema level), so without this
+	// check a typo'd UUID would silently produce an orphan access row.
+	var tenantExists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM quartermaster.tenants WHERE id = $1::uuid)`, tenantID,
+	).Scan(&tenantExists); err != nil {
+		return nil, status.Errorf(codes.Internal, "probe tenant: %v", err)
+	}
+	if !tenantExists {
+		return nil, status.Errorf(codes.NotFound, "tenant %q not found", tenantID)
+	}
+
+	var isPlatformOfficial, isActive bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT is_platform_official, is_active
+		FROM quartermaster.infrastructure_clusters
+		WHERE cluster_id = $1
+	`, clusterID).Scan(&isPlatformOfficial, &isActive)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.NotFound, "cluster %q not found", clusterID)
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "probe cluster: %v", err)
+	}
+	if !isPlatformOfficial {
+		return nil, status.Errorf(codes.FailedPrecondition, "cluster %q is not platform-official", clusterID)
+	}
+	if !isActive {
+		return nil, status.Errorf(codes.FailedPrecondition, "cluster %q is not active", clusterID)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenant_cluster_access
+			(tenant_id, cluster_id, access_level, subscription_status, is_active, granted_at, created_at, updated_at)
+		VALUES ($1::uuid, $2, 'shared', 'active', true, NOW(), NOW(), NOW())
+		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+			subscription_status = 'active',
+			is_active = true,
+			updated_at = NOW()
+	`, tenantID, clusterID); err != nil {
+		return nil, status.Errorf(codes.Internal, "upsert tenant_cluster_access: %v", err)
+	}
 	return &emptypb.Empty{}, nil
 }
 

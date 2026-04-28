@@ -1,0 +1,231 @@
+# Purser canonical billing-tier catalog.
+#
+# This file is embedded into the purser binary at build time and reconciled
+# into purser.billing_tiers by `purser bootstrap` on every run. It is the
+# authoritative source for production tier definitions; operator overlays in
+# the GitOps bootstrap file may add tiers or override mutable fields here.
+#
+# Schema notes (matches purser.billing_tiers):
+#
+#   AllocationDetails: { limit: <int|null>, unit: <string>, unit_price: <float> }
+#     limit: null = unlimited, otherwise included amount.
+#     unit: measurement unit (delivered_minutes, retention_days, gpu_hours, gb).
+#     unit_price: overage cost per unit (0 = no overage billing).
+#
+#   OverageRates: { bandwidth, storage, compute, processing } each AllocationDetails-shaped
+#     plus processing.h264_rate_per_min and processing.codec_multipliers.
+#
+#   BillingFeatures: typed flags (recording, analytics, api_access, custom_branding,
+#     sla, processing_customizable) plus support_level enum.
+#
+#   processes_live / processes_vod: raw MistServer process JSON arrays, with
+#     {{gateway_url}} placeholders that Foghorn substitutes at cache/dispatch
+#     time from its local cluster's Livepeer gateway.
+#
+# Enforcement limits (max_streams, max_viewers, bandwidth caps) live in
+# quartermaster.tenant_cluster_assignments — NOT here. This file is BILLING only.
+# Stripe IDs (stripe_product_id, stripe_price_id_*) are filled by Purser's
+# startup Stripe sync; the reconciler leaves them alone if already populated.
+
+tiers:
+  - tier_name: payg
+    display_name: Pay As You Go
+    description: Prepaid pay-as-you-go pricing with no included allocations.
+    base_price: 0.00
+    currency: EUR
+    billing_period: monthly
+    bandwidth_allocation:
+      limit: 0
+      unit: delivered_minutes
+      unit_price: 0.00049
+    storage_allocation:
+      limit: 0
+      unit: gb
+      unit_price: 0.01
+    compute_allocation:
+      limit: 0
+      unit: gpu_hours
+      unit_price: 0.50
+    features:
+      recording: true
+      analytics: true
+      api_access: true
+      support_level: community
+    support_level: community
+    sla_level: none
+    metering_enabled: true
+    overage_rates:
+      bandwidth: { limit: null, unit: delivered_minutes, unit_price: 0.00049 }
+      storage: { limit: null, unit: gb, unit_price: 0.01 }
+      compute: { limit: null, unit: gpu_hours, unit_price: 0.50 }
+      processing:
+        h264_rate_per_min: 0
+        codec_multipliers: { h264: 1.0, hevc: 1.5, vp9: 1.5, av1: 2.0 }
+    tier_level: 0
+    is_enterprise: false
+    is_default_prepaid: true
+    is_default_postpaid: false
+    processes_live: &standard_live |
+      [{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"480p","bitrate":512000,"fps":15,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":1024000,"fps":25,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1281x720"}],"track_inhibit":"video=<850x480","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]
+    processes_vod: &standard_vod |
+      [{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"480p","bitrate":512000,"fps":15,"height":480,"profile":"VP9Profile0","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":1024000,"fps":25,"height":720,"profile":"VP9Profile0","track_inhibit":"video=<1281x720"}],"track_inhibit":"video=<850x480"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
+
+  - tier_name: free
+    display_name: Free
+    description: Self-hosted with Livepeer transcoding. Watermarked player, no SLA.
+    base_price: 0.00
+    currency: EUR
+    billing_period: monthly
+    bandwidth_allocation: { limit: null, unit: delivered_minutes, unit_price: 0 }
+    storage_allocation: { limit: 30, unit: retention_days, unit_price: 0 }
+    compute_allocation: { limit: 0, unit: gpu_hours, unit_price: 0 }
+    features:
+      recording: false
+      analytics: true
+      api_access: true
+      support_level: community
+    support_level: community
+    sla_level: none
+    metering_enabled: false
+    overage_rates:
+      bandwidth: { limit: null, unit: delivered_minutes, unit_price: 0 }
+      storage: { limit: null, unit: gb, unit_price: 0 }
+      compute: { limit: null, unit: gpu_hours, unit_price: 0 }
+      processing:
+        h264_rate_per_min: 0
+        codec_multipliers: { h264: 1.0, hevc: 1.5, vp9: 1.5, av1: 2.0 }
+    tier_level: 1
+    is_enterprise: false
+    is_default_prepaid: false
+    is_default_postpaid: true
+    processes_live: *standard_live
+    processes_vod: *standard_vod
+
+  - tier_name: supporter
+    display_name: Supporter
+    description: 150K delivered mins, 10 GPU-hrs, hosted LB, custom subdomain. ~100-300 viewers.
+    base_price: 79.00
+    currency: EUR
+    billing_period: monthly
+    bandwidth_allocation: { limit: 150000, unit: delivered_minutes, unit_price: 0.00049 }
+    storage_allocation: { limit: 90, unit: retention_days, unit_price: 0 }
+    compute_allocation: { limit: 10, unit: gpu_hours, unit_price: 0.50 }
+    features:
+      recording: true
+      analytics: true
+      api_access: true
+      support_level: basic
+    support_level: basic
+    sla_level: none
+    metering_enabled: true
+    overage_rates:
+      bandwidth: { limit: null, unit: delivered_minutes, unit_price: 0.00049 }
+      storage: { limit: null, unit: gb, unit_price: 0.01 }
+      compute: { limit: null, unit: gpu_hours, unit_price: 0.50 }
+      processing:
+        h264_rate_per_min: 0
+        codec_multipliers: { h264: 1.0, hevc: 1.5, vp9: 1.5, av1: 2.0 }
+    tier_level: 2
+    is_enterprise: false
+    is_default_prepaid: false
+    is_default_postpaid: false
+    processes_live: *standard_live
+    processes_vod: *standard_vod
+
+  - tier_name: developer
+    display_name: Developer
+    description: 500K delivered mins, 50 GPU-hrs (priority), team features, advanced analytics. ~500-1K viewers.
+    base_price: 249.00
+    currency: EUR
+    billing_period: monthly
+    bandwidth_allocation: { limit: 500000, unit: delivered_minutes, unit_price: 0.00047 }
+    storage_allocation: { limit: 180, unit: retention_days, unit_price: 0 }
+    compute_allocation: { limit: 50, unit: gpu_hours, unit_price: 0.50 }
+    features:
+      recording: true
+      analytics: true
+      api_access: true
+      support_level: priority
+    support_level: priority
+    sla_level: standard
+    metering_enabled: true
+    overage_rates:
+      bandwidth: { limit: null, unit: delivered_minutes, unit_price: 0.00047 }
+      storage: { limit: null, unit: gb, unit_price: 0.008 }
+      compute: { limit: null, unit: gpu_hours, unit_price: 0.50 }
+      processing:
+        h264_rate_per_min: 0
+        codec_multipliers: { h264: 1.0, hevc: 1.5, vp9: 1.5, av1: 2.0 }
+    tier_level: 3
+    is_enterprise: false
+    is_default_prepaid: false
+    is_default_postpaid: false
+    processes_live: *standard_live
+    processes_vod: *standard_vod
+
+  - tier_name: production
+    display_name: Production
+    description: 2M delivered mins, 250 GPU-hrs, dedicated capacity, 24/7 support + SLA. ~2-5K viewers.
+    base_price: 999.00
+    currency: EUR
+    billing_period: monthly
+    bandwidth_allocation: { limit: 2000000, unit: delivered_minutes, unit_price: 0.00045 }
+    storage_allocation: { limit: 365, unit: retention_days, unit_price: 0 }
+    compute_allocation: { limit: 250, unit: gpu_hours, unit_price: 0.50 }
+    features:
+      recording: true
+      analytics: true
+      api_access: true
+      custom_branding: true
+      sla: true
+      support_level: enterprise
+    support_level: enterprise
+    sla_level: premium
+    metering_enabled: true
+    overage_rates:
+      bandwidth: { limit: null, unit: delivered_minutes, unit_price: 0.00045 }
+      storage: { limit: null, unit: gb, unit_price: 0.005 }
+      compute: { limit: null, unit: gpu_hours, unit_price: 0.50 }
+      processing:
+        h264_rate_per_min: 0
+        codec_multipliers: { h264: 1.0, hevc: 1.5, vp9: 1.5, av1: 2.0 }
+    tier_level: 4
+    is_enterprise: false
+    is_default_prepaid: false
+    is_default_postpaid: false
+    processes_live: *standard_live
+    processes_vod: *standard_vod
+
+  - tier_name: enterprise
+    display_name: Enterprise
+    description: Custom capacity, private deployments, dedicated support, custom SLAs. Contact us.
+    base_price: 0.00
+    currency: EUR
+    billing_period: monthly
+    bandwidth_allocation: { limit: null, unit: delivered_minutes, unit_price: 0 }
+    storage_allocation: { limit: null, unit: retention_days, unit_price: 0 }
+    compute_allocation: { limit: null, unit: gpu_hours, unit_price: 0 }
+    features:
+      recording: true
+      analytics: true
+      api_access: true
+      custom_branding: true
+      sla: true
+      support_level: dedicated
+      processing_customizable: true
+    support_level: dedicated
+    sla_level: custom
+    metering_enabled: true
+    overage_rates:
+      bandwidth: { limit: null, unit: delivered_minutes, unit_price: 0 }
+      storage: { limit: null, unit: gb, unit_price: 0 }
+      compute: { limit: null, unit: gpu_hours, unit_price: 0 }
+      processing:
+        h264_rate_per_min: 0
+        codec_multipliers: { h264: 1.0, hevc: 1.5, vp9: 1.5, av1: 2.0 }
+    tier_level: 5
+    is_enterprise: true
+    is_default_prepaid: false
+    is_default_postpaid: false
+    processes_live: *standard_live
+    processes_vod: *standard_vod

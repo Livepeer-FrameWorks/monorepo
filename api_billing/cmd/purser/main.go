@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"time"
 
@@ -29,6 +30,14 @@ import (
 func main() {
 	if version.HandleCLI() {
 		return
+	}
+
+	// `purser bootstrap …` runs reconcilers against the rendered desired-state
+	// file and exits — it does NOT start the gRPC server. No-arg invocation
+	// (the systemd / go_service Ansible role contract) still falls through to
+	// the serve flow below unchanged.
+	if len(os.Args) > 1 && os.Args[1] == "bootstrap" {
+		os.Exit(runBootstrapCommand(os.Args[2:]))
 	}
 
 	// Setup logger

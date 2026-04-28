@@ -157,6 +157,27 @@ func (c *GRPCClient) GetClusterRouting(ctx context.Context, req *pb.GetClusterRo
 	return c.tenant.GetClusterRouting(ctx, req)
 }
 
+// ResolveTenantAliases asks Quartermaster to map bootstrap aliases to tenant
+// UUIDs. Used by sibling services' bootstrap subcommands so they don't read
+// quartermaster.bootstrap_tenant_aliases directly. Aliases without a mapping
+// arrive in resp.Unknown rather than as an error so the caller can render a
+// precise message naming every missing alias.
+func (c *GRPCClient) ResolveTenantAliases(ctx context.Context, aliases []string) (*pb.ResolveTenantAliasesResponse, error) {
+	return c.tenant.ResolveTenantAliases(ctx, &pb.ResolveTenantAliasesRequest{Aliases: aliases})
+}
+
+// BootstrapClusterAccess grants a tenant access to a platform-official cluster
+// from a service-token caller. Used by sibling services' bootstrap subcommands
+// (Purser today) instead of SubscribeToCluster, which is tenant-context-only.
+// Idempotent at the server: re-running upserts the same row.
+func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string) error {
+	_, err := c.cluster.BootstrapClusterAccess(ctx, &pb.BootstrapClusterAccessRequest{
+		TenantId:  tenantID,
+		ClusterId: clusterID,
+	})
+	return err
+}
+
 // ListTenants lists tenants with cursor pagination
 func (c *GRPCClient) ListTenants(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListTenantsResponse, error) {
 	return c.tenant.ListTenants(ctx, &pb.ListTenantsRequest{

@@ -33,6 +33,13 @@ service TenantService {
   // Source: pkg/api/quartermaster/types.go:ResolveTenantRequest (alias to models)
   rpc ResolveTenant(ResolveTenantRequest) returns (ResolveTenantResponse);
 
+  // Resolve bootstrap aliases to tenant UUIDs. Used by sibling services'
+  // bootstrap subcommands (Purser, Commodore) so they don't read
+  // quartermaster.bootstrap_tenant_aliases directly. The map only contains
+  // entries that exist; unknown aliases are listed in `unknown` instead of
+  // failing the call so the caller can render a precise error.
+  rpc ResolveTenantAliases(ResolveTenantAliasesRequest) returns (ResolveTenantAliasesResponse);
+
   // Resolve cluster routing for a tenant/stream
   // Source: pkg/api/quartermaster/types.go:GetClusterRoutingRequest
   rpc GetClusterRouting(GetClusterRoutingRequest) returns (ClusterRoutingResponse);
@@ -86,6 +93,14 @@ service ClusterService {
 
   // Subscribe to a public/shared cluster
   rpc SubscribeToCluster(SubscribeToClusterRequest) returns (google.protobuf.Empty);
+
+  // BootstrapClusterAccess grants a tenant access to a platform-official
+  // cluster from a service-token-authenticated caller (sibling services'
+  // bootstrap subcommands). Unlike SubscribeToCluster — which requires a
+  // user/tenant session and only allows admins to override the tenant —
+  // this RPC takes the tenant_id directly and is intended for declarative
+  // bootstrap reconcile only. The server enforces is_platform_official.
+  rpc BootstrapClusterAccess(BootstrapClusterAccessRequest) returns (google.protobuf.Empty);
 
   // Unsubscribe from a cluster
   rpc UnsubscribeFromCluster(UnsubscribeFromClusterRequest) returns (google.protobuf.Empty);
@@ -630,6 +645,14 @@ message GrantClusterAccessRequest {
 }
 
 message SubscribeToClusterRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+}
+
+// BootstrapClusterAccessRequest is the service-token bootstrap entitlement
+// shape (see TenantService.BootstrapClusterAccess). tenant_id is required;
+// cluster_id is required and must be platform-official.
+message BootstrapClusterAccessRequest {
   string tenant_id = 1;
   string cluster_id = 2;
 }
@@ -1288,6 +1311,19 @@ service IngressService {
 message ResolveTenantRequest {
   string subdomain = 1;                 // json:"subdomain,omitempty"
   string domain = 2;                    // json:"domain,omitempty"
+}
+
+// ResolveTenantAliasesRequest carries the alias list the caller wants resolved.
+// Aliases follow the bootstrap charset ^[a-z][a-z0-9-]{0,63}$.
+message ResolveTenantAliasesRequest {
+  repeated string aliases = 1;
+}
+
+// ResolveTenantAliasesResponse maps known aliases to tenant UUIDs and lists
+// any aliases the server does not have a mapping for.
+message ResolveTenantAliasesResponse {
+  map<string, string> mapping = 1; // alias → tenant_id
+  repeated string unknown = 2;
 }
 
 // Source: pkg/models/tenants.go:ResolveTenantResponse (alias in types.go)

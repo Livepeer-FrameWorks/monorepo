@@ -20,19 +20,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TenantService_GetTenant_FullMethodName           = "/quartermaster.TenantService/GetTenant"
-	TenantService_ValidateTenant_FullMethodName      = "/quartermaster.TenantService/ValidateTenant"
-	TenantService_ResolveTenant_FullMethodName       = "/quartermaster.TenantService/ResolveTenant"
-	TenantService_GetClusterRouting_FullMethodName   = "/quartermaster.TenantService/GetClusterRouting"
-	TenantService_ListTenants_FullMethodName         = "/quartermaster.TenantService/ListTenants"
-	TenantService_CreateTenant_FullMethodName        = "/quartermaster.TenantService/CreateTenant"
-	TenantService_UpdateTenant_FullMethodName        = "/quartermaster.TenantService/UpdateTenant"
-	TenantService_DeleteTenant_FullMethodName        = "/quartermaster.TenantService/DeleteTenant"
-	TenantService_GetTenantCluster_FullMethodName    = "/quartermaster.TenantService/GetTenantCluster"
-	TenantService_UpdateTenantCluster_FullMethodName = "/quartermaster.TenantService/UpdateTenantCluster"
-	TenantService_GetTenantsBatch_FullMethodName     = "/quartermaster.TenantService/GetTenantsBatch"
-	TenantService_GetTenantsByCluster_FullMethodName = "/quartermaster.TenantService/GetTenantsByCluster"
-	TenantService_ListActiveTenants_FullMethodName   = "/quartermaster.TenantService/ListActiveTenants"
+	TenantService_GetTenant_FullMethodName            = "/quartermaster.TenantService/GetTenant"
+	TenantService_ValidateTenant_FullMethodName       = "/quartermaster.TenantService/ValidateTenant"
+	TenantService_ResolveTenant_FullMethodName        = "/quartermaster.TenantService/ResolveTenant"
+	TenantService_ResolveTenantAliases_FullMethodName = "/quartermaster.TenantService/ResolveTenantAliases"
+	TenantService_GetClusterRouting_FullMethodName    = "/quartermaster.TenantService/GetClusterRouting"
+	TenantService_ListTenants_FullMethodName          = "/quartermaster.TenantService/ListTenants"
+	TenantService_CreateTenant_FullMethodName         = "/quartermaster.TenantService/CreateTenant"
+	TenantService_UpdateTenant_FullMethodName         = "/quartermaster.TenantService/UpdateTenant"
+	TenantService_DeleteTenant_FullMethodName         = "/quartermaster.TenantService/DeleteTenant"
+	TenantService_GetTenantCluster_FullMethodName     = "/quartermaster.TenantService/GetTenantCluster"
+	TenantService_UpdateTenantCluster_FullMethodName  = "/quartermaster.TenantService/UpdateTenantCluster"
+	TenantService_GetTenantsBatch_FullMethodName      = "/quartermaster.TenantService/GetTenantsBatch"
+	TenantService_GetTenantsByCluster_FullMethodName  = "/quartermaster.TenantService/GetTenantsByCluster"
+	TenantService_ListActiveTenants_FullMethodName    = "/quartermaster.TenantService/ListActiveTenants"
 )
 
 // TenantServiceClient is the client API for TenantService service.
@@ -49,6 +50,12 @@ type TenantServiceClient interface {
 	// Resolve tenant by domain/subdomain
 	// Source: pkg/api/quartermaster/types.go:ResolveTenantRequest (alias to models)
 	ResolveTenant(ctx context.Context, in *ResolveTenantRequest, opts ...grpc.CallOption) (*ResolveTenantResponse, error)
+	// Resolve bootstrap aliases to tenant UUIDs. Used by sibling services'
+	// bootstrap subcommands (Purser, Commodore) so they don't read
+	// quartermaster.bootstrap_tenant_aliases directly. The map only contains
+	// entries that exist; unknown aliases are listed in `unknown` instead of
+	// failing the call so the caller can render a precise error.
+	ResolveTenantAliases(ctx context.Context, in *ResolveTenantAliasesRequest, opts ...grpc.CallOption) (*ResolveTenantAliasesResponse, error)
 	// Resolve cluster routing for a tenant/stream
 	// Source: pkg/api/quartermaster/types.go:GetClusterRoutingRequest
 	GetClusterRouting(ctx context.Context, in *GetClusterRoutingRequest, opts ...grpc.CallOption) (*ClusterRoutingResponse, error)
@@ -106,6 +113,16 @@ func (c *tenantServiceClient) ResolveTenant(ctx context.Context, in *ResolveTena
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ResolveTenantResponse)
 	err := c.cc.Invoke(ctx, TenantService_ResolveTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) ResolveTenantAliases(ctx context.Context, in *ResolveTenantAliasesRequest, opts ...grpc.CallOption) (*ResolveTenantAliasesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveTenantAliasesResponse)
+	err := c.cc.Invoke(ctx, TenantService_ResolveTenantAliases_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +243,12 @@ type TenantServiceServer interface {
 	// Resolve tenant by domain/subdomain
 	// Source: pkg/api/quartermaster/types.go:ResolveTenantRequest (alias to models)
 	ResolveTenant(context.Context, *ResolveTenantRequest) (*ResolveTenantResponse, error)
+	// Resolve bootstrap aliases to tenant UUIDs. Used by sibling services'
+	// bootstrap subcommands (Purser, Commodore) so they don't read
+	// quartermaster.bootstrap_tenant_aliases directly. The map only contains
+	// entries that exist; unknown aliases are listed in `unknown` instead of
+	// failing the call so the caller can render a precise error.
+	ResolveTenantAliases(context.Context, *ResolveTenantAliasesRequest) (*ResolveTenantAliasesResponse, error)
 	// Resolve cluster routing for a tenant/stream
 	// Source: pkg/api/quartermaster/types.go:GetClusterRoutingRequest
 	GetClusterRouting(context.Context, *GetClusterRoutingRequest) (*ClusterRoutingResponse, error)
@@ -267,6 +290,9 @@ func (UnimplementedTenantServiceServer) ValidateTenant(context.Context, *Validat
 }
 func (UnimplementedTenantServiceServer) ResolveTenant(context.Context, *ResolveTenantRequest) (*ResolveTenantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveTenant not implemented")
+}
+func (UnimplementedTenantServiceServer) ResolveTenantAliases(context.Context, *ResolveTenantAliasesRequest) (*ResolveTenantAliasesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveTenantAliases not implemented")
 }
 func (UnimplementedTenantServiceServer) GetClusterRouting(context.Context, *GetClusterRoutingRequest) (*ClusterRoutingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClusterRouting not implemented")
@@ -369,6 +395,24 @@ func _TenantService_ResolveTenant_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TenantServiceServer).ResolveTenant(ctx, req.(*ResolveTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_ResolveTenantAliases_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveTenantAliasesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).ResolveTenantAliases(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_ResolveTenantAliases_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).ResolveTenantAliases(ctx, req.(*ResolveTenantAliasesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -573,6 +617,10 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TenantService_ResolveTenant_Handler,
 		},
 		{
+			MethodName: "ResolveTenantAliases",
+			Handler:    _TenantService_ResolveTenantAliases_Handler,
+		},
+		{
 			MethodName: "GetClusterRouting",
 			Handler:    _TenantService_GetClusterRouting_Handler,
 		},
@@ -627,6 +675,7 @@ const (
 	ClusterService_ListClustersAvailable_FullMethodName      = "/quartermaster.ClusterService/ListClustersAvailable"
 	ClusterService_GrantClusterAccess_FullMethodName         = "/quartermaster.ClusterService/GrantClusterAccess"
 	ClusterService_SubscribeToCluster_FullMethodName         = "/quartermaster.ClusterService/SubscribeToCluster"
+	ClusterService_BootstrapClusterAccess_FullMethodName     = "/quartermaster.ClusterService/BootstrapClusterAccess"
 	ClusterService_UnsubscribeFromCluster_FullMethodName     = "/quartermaster.ClusterService/UnsubscribeFromCluster"
 	ClusterService_ListMySubscriptions_FullMethodName        = "/quartermaster.ClusterService/ListMySubscriptions"
 	ClusterService_ListMarketplaceClusters_FullMethodName    = "/quartermaster.ClusterService/ListMarketplaceClusters"
@@ -669,6 +718,13 @@ type ClusterServiceClient interface {
 	GrantClusterAccess(ctx context.Context, in *GrantClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Subscribe to a public/shared cluster
 	SubscribeToCluster(ctx context.Context, in *SubscribeToClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// BootstrapClusterAccess grants a tenant access to a platform-official
+	// cluster from a service-token-authenticated caller (sibling services'
+	// bootstrap subcommands). Unlike SubscribeToCluster — which requires a
+	// user/tenant session and only allows admins to override the tenant —
+	// this RPC takes the tenant_id directly and is intended for declarative
+	// bootstrap reconcile only. The server enforces is_platform_official.
+	BootstrapClusterAccess(ctx context.Context, in *BootstrapClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(ctx context.Context, in *UnsubscribeFromClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// List clusters the tenant is subscribed to
@@ -804,6 +860,16 @@ func (c *clusterServiceClient) SubscribeToCluster(ctx context.Context, in *Subsc
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, ClusterService_SubscribeToCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) BootstrapClusterAccess(ctx context.Context, in *BootstrapClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ClusterService_BootstrapClusterAccess_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1039,6 +1105,13 @@ type ClusterServiceServer interface {
 	GrantClusterAccess(context.Context, *GrantClusterAccessRequest) (*emptypb.Empty, error)
 	// Subscribe to a public/shared cluster
 	SubscribeToCluster(context.Context, *SubscribeToClusterRequest) (*emptypb.Empty, error)
+	// BootstrapClusterAccess grants a tenant access to a platform-official
+	// cluster from a service-token-authenticated caller (sibling services'
+	// bootstrap subcommands). Unlike SubscribeToCluster — which requires a
+	// user/tenant session and only allows admins to override the tenant —
+	// this RPC takes the tenant_id directly and is intended for declarative
+	// bootstrap reconcile only. The server enforces is_platform_official.
+	BootstrapClusterAccess(context.Context, *BootstrapClusterAccessRequest) (*emptypb.Empty, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error)
 	// List clusters the tenant is subscribed to
@@ -1116,6 +1189,9 @@ func (UnimplementedClusterServiceServer) GrantClusterAccess(context.Context, *Gr
 }
 func (UnimplementedClusterServiceServer) SubscribeToCluster(context.Context, *SubscribeToClusterRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SubscribeToCluster not implemented")
+}
+func (UnimplementedClusterServiceServer) BootstrapClusterAccess(context.Context, *BootstrapClusterAccessRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method BootstrapClusterAccess not implemented")
 }
 func (UnimplementedClusterServiceServer) UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnsubscribeFromCluster not implemented")
@@ -1359,6 +1435,24 @@ func _ClusterService_SubscribeToCluster_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClusterServiceServer).SubscribeToCluster(ctx, req.(*SubscribeToClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_BootstrapClusterAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BootstrapClusterAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).BootstrapClusterAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_BootstrapClusterAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).BootstrapClusterAccess(ctx, req.(*BootstrapClusterAccessRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1783,6 +1877,10 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SubscribeToCluster",
 			Handler:    _ClusterService_SubscribeToCluster_Handler,
+		},
+		{
+			MethodName: "BootstrapClusterAccess",
+			Handler:    _ClusterService_BootstrapClusterAccess_Handler,
 		},
 		{
 			MethodName: "UnsubscribeFromCluster",
