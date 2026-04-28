@@ -21,9 +21,9 @@ import "@livepeer-frameworks/player-wc/define";
 
 ```html
 <!-- unpkg -->
-<script src="https://unpkg.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+<script src="https://unpkg.com/@livepeer-frameworks/player-wc/fw-player.js"></script>
 <!-- or jsdelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/fw-player.js"></script>
 ```
 
 Shadow DOM encapsulates all CSS — host page styles won't break controls.
@@ -91,31 +91,47 @@ Provide your own controls via the `controls` slot. Access the controller for pro
 
 ## Slot-based Composition
 
-Provide custom controls via the `controls` slot:
+Provide custom controls via the `controls` slot and call the player element's exposed controller:
 
 ```html
-<fw-player content-id="pk_..." content-type="live" gateway-url="...">
+<fw-player id="slot-player" content-id="pk_..." content-type="live" gateway-url="...">
   <div slot="controls">
-    <fw-play-button></fw-play-button>
-    <fw-skip-button direction="back"></fw-skip-button>
-    <fw-skip-button direction="forward"></fw-skip-button>
-    <fw-time-display></fw-time-display>
-    <fw-volume-control></fw-volume-control>
-    <fw-fullscreen-button></fw-fullscreen-button>
+    <button type="button" data-action="play">Play/Pause</button>
+    <button type="button" data-action="back">Back 10s</button>
+    <button type="button" data-action="forward">Forward 10s</button>
+    <button type="button" data-action="mute">Mute</button>
+    <button type="button" data-action="fullscreen">Fullscreen</button>
   </div>
 </fw-player>
+
+<script>
+  const player = document.getElementById("slot-player");
+  player.addEventListener("click", (event) => {
+    const action = event.target?.dataset?.action;
+    if (action === "play") player.controller.togglePlay();
+    if (action === "back") player.controller.seekBy(-10000);
+    if (action === "forward") player.controller.seekBy(10000);
+    if (action === "mute") player.controller.toggleMute();
+    if (action === "fullscreen") player.controller.toggleFullscreen();
+  });
+</script>
 ```
 
 ## Standalone Sub-Components
 
-Use sub-components outside the player element with the `for` attribute:
+For bundled apps, import the package root to register the composable helper elements, then use them
+outside the player element with the `for` attribute:
+
+```ts
+import "@livepeer-frameworks/player-wc";
+```
 
 ```html
 <fw-player id="my-player" content-id="pk_..." content-type="live" gateway-url="..."></fw-player>
 
 <div class="external-controls">
   <fw-play-button for="my-player"></fw-play-button>
-  <fw-volume-control for="my-player"></fw-volume-control>
+  <fw-volume-button for="my-player"></fw-volume-button>
   <fw-time-display for="my-player"></fw-time-display>
   <fw-live-badge for="my-player"></fw-live-badge>
   <fw-fullscreen-button for="my-player"></fw-fullscreen-button>
@@ -128,28 +144,31 @@ Use sub-components outside the player element with the `for` attribute:
 | ------------------------ | ----------------------------------------------------- |
 | `<fw-play-button>`       | Play/pause toggle                                     |
 | `<fw-skip-button>`       | Skip forward/back (`direction="back"` or `"forward"`) |
-| `<fw-volume-control>`    | Volume slider with mute toggle                        |
+| `<fw-volume-button>`     | Mute/unmute toggle                                    |
 | `<fw-time-display>`      | Current time / duration                               |
 | `<fw-live-badge>`        | Live indicator + jump-to-live                         |
 | `<fw-fullscreen-button>` | Fullscreen toggle                                     |
 
 ## Attributes Reference
 
-| Attribute         | Type      | Default     | Description                       |
-| ----------------- | --------- | ----------- | --------------------------------- |
-| `content-id`      | `string`  | —           | Playback ID                       |
-| `content-type`    | `string`  | `"live"`    | `live`, `dvr`, `clip`, or `vod`   |
-| `gateway-url`     | `string`  | —           | Gateway GraphQL endpoint          |
-| `mist-url`        | `string`  | —           | Direct MistServer URL             |
-| `autoplay`        | `boolean` | `true`      | Auto-start playback               |
-| `muted`           | `boolean` | `false`     | Start muted                       |
-| `controls`        | `boolean` | `false`     | Compatibility no-op               |
-| `stock-controls`  | `boolean` | `false`     | Use browser-native video controls |
-| `native-controls` | `boolean` | `false`     | Alias for `stock-controls`        |
-| `theme`           | `string`  | `"default"` | Theme preset                      |
-| `playback-mode`   | `string`  | `"auto"`    | Protocol preference               |
-| `dev-mode`        | `boolean` | `false`     | Show dev panel                    |
-| `debug`           | `boolean` | `false`     | Debug logging                     |
+| Attribute         | Type      | Default     | Description                                                                   |
+| ----------------- | --------- | ----------- | ----------------------------------------------------------------------------- |
+| `content-id`      | `string`  | —           | Playback ID                                                                   |
+| `content-type`    | `string`  | `"live"`    | `live`, `dvr`, `clip`, or `vod`                                               |
+| `gateway-url`     | `string`  | —           | Gateway GraphQL endpoint                                                      |
+| `mist-url`        | `string`  | —           | Direct MistServer URL                                                         |
+| `auth-token`      | `string`  | —           | Bearer token for private playback                                             |
+| `thumbnail-url`   | `string`  | —           | Poster image before playback                                                  |
+| `autoplay`        | `boolean` | `true`      | Auto-start playback                                                           |
+| `muted`           | `boolean` | `false`     | Start muted                                                                   |
+| `controls`        | `boolean` | `false`     | Compatibility no-op                                                           |
+| `stock-controls`  | `boolean` | `false`     | Use browser-native video controls                                             |
+| `native-controls` | `boolean` | `false`     | Alias for `stock-controls`                                                    |
+| `theme`           | `string`  | `"default"` | Theme preset                                                                  |
+| `locale`          | `string`  | `"en"`      | Built-in UI locale                                                            |
+| `playback-mode`   | `string`  | `"auto"`    | Controls/dev-panel mode label; current WC initial selection does not apply it |
+| `dev-mode`        | `boolean` | `false`     | Show dev panel                                                                |
+| `debug`           | `boolean` | `false`     | Debug logging                                                                 |
 
 ## Theming
 

@@ -209,8 +209,8 @@ sudo iptables-save > /etc/iptables/rules.v4
 # Allow WireGuard port
 sudo ufw allow 51820/udp
 
-# Allow mesh network traffic
-sudo ufw allow from 10.18.0.0/16
+# Allow mesh network traffic (match your manifest's wireguard.mesh_cidr)
+sudo ufw allow from 10.88.0.0/16
 
 # Enable UFW
 sudo ufw enable
@@ -226,14 +226,14 @@ Service ports differ by component. Use the port table in `operators/architecture
 
 ```bash
 # From any node, ping other mesh nodes
-ping 10.18.0.1   # Central
-ping 10.18.1.21  # Regional EU
-ping 10.18.2.11  # YugabyteDB-1
-ping 10.18.3.11  # ClickHouse-1
+ping 10.88.0.1   # Central
+ping 10.88.1.21  # Regional EU
+ping 10.88.2.11  # YugabyteDB-1
+ping 10.88.3.11  # ClickHouse-1
 
 # Test with specific packet sizes
-ping -s 1400 10.18.0.1
-ping -s 8192 10.18.2.11
+ping -s 1400 10.88.0.1
+ping -s 8192 10.88.2.11
 ```
 
 ### Bandwidth Testing
@@ -248,7 +248,7 @@ sudo apt install iperf3
 iperf3 -s
 
 # From source node (client)
-iperf3 -c 10.18.x.x -t 30
+iperf3 -c 10.88.x.x -t 30
 ```
 
 ### Service Testing
@@ -257,13 +257,13 @@ iperf3 -c 10.18.x.x -t 30
 
 ```bash
 # YugabyteDB connection test
-telnet 10.18.2.11 5433
+telnet 10.88.2.11 5433
 
 # ClickHouse connection test
-telnet 10.18.3.11 9000
+telnet 10.88.3.11 9000
 
 # HTTP service test
-curl http://10.18.0.1:18001/health
+curl http://10.88.0.1:18001/health
 ```
 
 ### Monitoring Commands
@@ -310,7 +310,7 @@ ss -tuln | grep :51820
 
 1. Verify WireGuard interface is up: `ip addr show wg0`
 2. Check routing table: `ip route show table all`
-3. Test mesh connectivity: `ping 10.18.x.x`
+3. Test mesh connectivity: `ping 10.88.x.x`
 4. Verify firewall allows service ports
 
 ### Debug Commands
@@ -324,8 +324,8 @@ ip addr show wg0
 ip route show dev wg0
 
 # Network troubleshooting
-traceroute 10.18.x.x
-mtr 10.18.x.x
+traceroute 10.88.x.x
+mtr 10.88.x.x
 tcpdump -i wg0
 
 # Log analysis

@@ -2,29 +2,39 @@
 
 ## Status
 
-Partially implemented. Transport TLS works on the Foghorn↔Helmsman path via FQDN
-auto-detect and Navigator-backed wildcard cert in
-`api_balancing/internal/control`. The proposed platform-wide config pattern
-(`GRPC_USE_TLS` toggle in `pkg/config` with shared helpers) was not adopted — TLS setup
-is ad-hoc per service. mTLS is not implemented. See `docs/architecture/edge-auth.md`.
+Partially implemented. Shared gRPC TLS helpers now exist in `pkg/grpcutil`, and
+most service clients/servers use `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`,
+`GRPC_TLS_CA_PATH`, `GRPC_TLS_SERVER_NAME`, and `GRPC_ALLOW_INSECURE`. The
+original `GRPC_USE_TLS` toggle proposal was not adopted. Foghorn↔Helmsman
+transport TLS also supports file-based certificates and Navigator-backed
+wildcard certificates. mTLS is not implemented. See
+`docs/architecture/edge-auth.md`.
 
 ## TL;DR
 
-- gRPC traffic is mostly plaintext and relies on the WireGuard mesh for transport security.
-- Add an opt-in TLS/mTLS layer for gRPC with per-service rollout.
-- Keep insecure mode as default until multi-cluster or compliance requires TLS.
+- gRPC traffic can now use shared TLS helpers, but deployments may still allow insecure
+  transport via `GRPC_ALLOW_INSECURE`.
+- Continue hardening the rollout and add mTLS later if required.
+- Keep explicit insecure mode for trusted dev/mesh deployments.
 
 ## Current State
 
-- Many gRPC clients explicitly use `insecure.NewCredentials()`.
-- Foghorn control server has an env-gated TLS toggle, but most clients remain insecure.
-- Helmsman has TLS-related env vars but uses insecure creds today.
+- Shared server/client TLS helpers live in `pkg/grpcutil`.
+- Most service clients pass `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, and
+  `GRPC_TLS_SERVER_NAME` into their generated client config.
+- Most gRPC servers use `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, and
+  `GRPC_ALLOW_INSECURE`.
+- Foghorn control gRPC can use file-based certificates or Navigator-issued wildcard
+  certificates, and Helmsman can connect with TLS when configured.
+- mTLS/client certificate verification is not implemented.
 
 Evidence:
 
-- `pkg/clients` gRPC client implementations
-- `api_balancing/internal/control`
-- `api_sidecar/internal/config`
+- `pkg/grpcutil`
+- `pkg/clients/*/grpc_client.go`
+- `api_*/*/main.go` gRPC server setup
+- `api_balancing/internal/control/server.go`
+- `api_sidecar/internal/control/client.go`
 
 ## Problem / Motivation
 
@@ -45,15 +55,16 @@ Mesh-only encryption is acceptable for single-cluster deployments, but gRPC traf
 
 ## Proposal
 
-Introduce a common gRPC TLS config pattern in `pkg/config` and enforce it in all gRPC servers and clients:
+The common gRPC TLS config pattern that exists today is:
 
-- `GRPC_USE_TLS=true|false` (default: false)
 - `GRPC_TLS_CERT_PATH=/path/server.crt`
 - `GRPC_TLS_KEY_PATH=/path/server.key`
 - `GRPC_TLS_CA_PATH=/path/ca.crt`
-- (Optional) `GRPC_MTLS_ENABLED=true|false`
-- (Optional) `GRPC_TLS_CLIENT_CERT_PATH=/path/client.crt`
-- (Optional) `GRPC_TLS_CLIENT_KEY_PATH=/path/client.key`
+- `GRPC_TLS_SERVER_NAME=service.internal.example`
+- `GRPC_ALLOW_INSECURE=true|false`
+
+Future mTLS work would need additional client certificate settings and server-side
+client cert verification.
 
 ## Impact / Dependencies
 

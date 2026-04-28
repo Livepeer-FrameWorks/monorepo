@@ -13,23 +13,26 @@ Draft
 
 ## Current State
 
-MistServer's C++ Foghorn (`mistserver/lib/foghorn.cpp`, `mistserver/src/utils/util_foghorn.cpp`) implements a complete NAT hole punching coordination system: SHA256-authenticated UDP packets, NAT type classification (OPEN, CONSISTENT, PREDICTABLE, IMPENETRABLE), multi-attempt punching with port randomization, and background punch threads. MistServer's STUN library (`mistserver/lib/stun.cpp`) implements the full STUN protocol. `MistUtilFoghorn` runs as a standalone coordination server on port 7077.
+Upstream MistServer's C++ Foghorn (`lib/foghorn.cpp`, `src/utils/util_foghorn.cpp`) implements a complete NAT hole punching coordination system: SHA256-authenticated UDP packets, NAT type classification (OPEN, CONSISTENT, PREDICTABLE, IMPENETRABLE), multi-attempt punching with port randomization, and background punch threads. MistServer's STUN library (`lib/stun.cpp`) implements the full STUN protocol. `MistUtilFoghorn` runs as a standalone coordination server on port 7077.
+
+Those MistServer source files are upstream/external context, not files currently present in this monorepo. The repository currently carries MistServer deployment roles, not the C++ source tree.
 
 Nautophone (`mistserver/nautophone/`) provides a web UI and Node.js translator service for monitoring endpoint states.
 
-Go Foghorn (`api_balancing/`) replaced C++ MistUtilLoad (the load balancer) but has NOT absorbed C++ Foghorn's NAT traversal capabilities. The two Foghorns serve different purposes today.
+Go Foghorn (`api_balancing/`) replaced C++ MistUtilLoad-style load-balancing responsibilities in the platform, but it has NOT absorbed C++ Foghorn's NAT traversal capabilities. The two Foghorns serve different purposes today.
 
-SDKs partially support ICE server configuration: `npm_studio` WhipClient accepts optional `iceServers` in its config (`types.ts:88-90`). `npm_player` NativePlayer casts `iceServers` from the source via `as any` — it is NOT in the `StreamSource` interface.
+SDKs partially support ICE server configuration: `npm_studio` WhipClient accepts optional `iceServers` in its config (`types.ts`). `npm_player` NativePlayer and MistWebRTCPlayer cast `iceServers` from the source via `as any`; it is NOT in the public `StreamSource` interface.
 
-There is no platform-managed TURN/STUN infrastructure. Operators must deploy MistUtilFoghorn manually alongside edge nodes.
+There is no platform-managed TURN/STUN infrastructure and no repo-managed `MistUtilFoghorn` deployment path. Operators would need to manage that external binary/process themselves today.
 
 Evidence:
 
-- `mistserver/lib/foghorn.cpp`
-- `mistserver/lib/foghorn.h`
-- `mistserver/lib/stun.cpp`
-- `mistserver/src/utils/util_foghorn.cpp`
-- `mistserver/nautophone/`
+- Upstream MistServer `lib/foghorn.cpp`
+- Upstream MistServer `lib/foghorn.h`
+- Upstream MistServer `lib/stun.cpp`
+- Upstream MistServer `src/utils/util_foghorn.cpp`
+- Upstream MistServer `nautophone/`
+- `ansible/collections/ansible_collections/frameworks/infra/roles/mistserver/`
 - `npm_player/packages/core/src/core/PlayerInterface.ts`
 - `npm_studio/packages/core/src/types.ts`
 - `api_balancing/internal/balancer/balancer.go`
@@ -105,11 +108,12 @@ Foghorn injects `iceServers` into balancer responses with short-lived TURN crede
 
 ## References, Sources & Evidence
 
-- [Evidence] `mistserver/lib/foghorn.cpp` (NAT classification + hole punching)
-- [Evidence] `mistserver/lib/foghorn.h`
-- [Evidence] `mistserver/lib/stun.cpp` (STUN protocol implementation)
-- [Evidence] `mistserver/src/utils/util_foghorn.cpp` (coordination server)
-- [Evidence] `mistserver/nautophone/` (monitoring UI)
+- [External evidence] Upstream MistServer `lib/foghorn.cpp` (NAT classification + hole punching)
+- [External evidence] Upstream MistServer `lib/foghorn.h`
+- [External evidence] Upstream MistServer `lib/stun.cpp` (STUN protocol implementation)
+- [External evidence] Upstream MistServer `src/utils/util_foghorn.cpp` (coordination server)
+- [External evidence] Upstream MistServer `nautophone/` (monitoring UI)
+- [Evidence] `ansible/collections/ansible_collections/frameworks/infra/roles/mistserver/` (MistServer role only; no MistUtilFoghorn role found)
 - [Evidence] `api_balancing/internal/balancer/balancer.go` (current scoring model)
 - [Evidence] `npm_player/packages/core/src/core/PlayerInterface.ts` (iceServers via as any)
 - [Evidence] `npm_studio/packages/core/src/types.ts` (optional iceServers config)

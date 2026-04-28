@@ -12,13 +12,18 @@ Draft
 
 ## Current State
 
-- Helmsman uses presigned URLs for clip/DVR uploads and downloads.
-- Storage is still effectively local-first; there is no shared storage abstraction package yet.
+- Foghorn owns S3 credentials and generates presigned URLs for clip, DVR, thumbnail, and
+  VOD flows; Helmsman uses those URLs and does not hold S3 credentials.
+- Foghorn has an S3-compatible client and stable key helpers, but there is still no
+  provider-agnostic local/S3/hybrid storage abstraction package.
+- Edge playback/cache behavior remains local-first for warm assets.
 
 Evidence:
 
 - `api_sidecar/internal/handlers`
+- `api_sidecar/internal/control/client.go`
 - `api_balancing/internal/storage`
+- `api_balancing/internal/grpc/server.go`
 
 ## Problem / Motivation
 

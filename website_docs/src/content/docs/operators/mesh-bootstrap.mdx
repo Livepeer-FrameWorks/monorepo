@@ -168,7 +168,7 @@ hosts:
 - Stuck on seed after QM is up: `grep QUARTERMASTER /etc/privateer/privateer.env`; `ss -tnlp | grep 19002` on the QM host
 - Stale peer IP after rotation: `cat /var/lib/privateer/last_known_mesh.json`; restart privateer on the affected host
 - Which layer is live right now: `curl -s localhost:18012/metrics | grep privateer_layer_applied`
-- GitOps identity drifted from Quartermaster: `frameworks mesh wg audit --cluster <name>` — reports per-host differences and exits non-zero on any `gitops_seed` / `adopted_local` mismatch
+- GitOps identity drifted from Quartermaster: `frameworks mesh wg audit --cluster-filter <cluster_id>` — reports per-host differences and exits non-zero on any `gitops_seed` / `adopted_local` mismatch
 
 ## Key rotation
 

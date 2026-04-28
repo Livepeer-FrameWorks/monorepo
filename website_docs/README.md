@@ -11,13 +11,21 @@ This project is part of the FrameWorks pnpm workspace.
 pnpm install
 
 # Run dev server
-pnpm --filter website_docs dev
+pnpm --dir website_docs dev
 ```
 
 ## Build
 
 ```bash
-pnpm --filter website_docs build
+pnpm --dir website_docs build
+```
+
+## Validation
+
+```bash
+pnpm --dir website_docs check:links
+pnpm --dir website_docs check:graphql
+pnpm --dir website_docs check:sdk-imports
 ```
 
 ## Deployment

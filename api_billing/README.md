@@ -6,13 +6,13 @@ Billing and subscriptions. Orchestrates usage → invoice drafts → payments. W
 
 - **Self-hosted**: Track usage locally, disable payment integrations if running internal infrastructure
 - **Hybrid**: Bill for FrameWorks-hosted resources while self-hosting edge nodes
-- **Fully managed**: Stripe/Mollie hooks and payment creation are implemented, but end‑to‑end billing flows are still being wired
+- **Fully managed**: Stripe/Mollie hooks, subscription checkout flows, prepaid top-ups, and x402 settlement paths exist; invoice finalization, enrichment, and operational payment reconciliation still need careful end-to-end validation
 
 ## What it does
 
-- Accepts usage summaries from Periscope‑Query
+- Consumes usage summaries from the `billing.usage_reports` Kafka topic produced by Periscope‑Query
 - Writes draft and final invoices to `purser.billing_invoices` (status = draft/pending/paid/etc.)
-- Integrates with Stripe/Mollie webhooks and payment creation (crypto is placeholder)
+- Integrates with Stripe/Mollie webhooks, subscription checkout, prepaid card top-ups, crypto deposit-address top-ups, and x402 wallet/API settlement
 - Webhooks update invoice state
 
 ## Run (dev)
@@ -32,4 +32,4 @@ Health: `GET /health`.
 
 Notes
 
-- Some handlers are stubs or partial; see ROADMAP for missing invoicing/aggregation pieces.
+- Billing has working service surfaces across subscriptions, prepaid balance, usage records, card top-ups, crypto top-up addresses, and x402. Treat full invoice/payment reconciliation as the highest-risk integration area and verify against `api_billing/internal/handlers/jobs.go` and `api_billing/internal/grpc/server.go` before documenting a complete billing workflow.

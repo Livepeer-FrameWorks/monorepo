@@ -14,8 +14,8 @@ Draft
 
 **Existing infrastructure:**
 
-- HD wallet derivation: `api_billing/internal/handlers`
-- Crypto deposit detection: `api_billing/internal/handlers`
+- HD wallet derivation for invoice and prepaid deposit addresses: `api_billing/internal/handlers`
+- Crypto deposit and x402 settlement handling for tenant prepaid/invoice flows: `api_billing/internal/handlers`
 - Stream balances RFC: `docs/rfcs/stream-balances.md` (Draft)
 
 **Missing:**
@@ -23,6 +23,8 @@ Draft
 - ENS subdomain resolver
 - Subdomain → HD address mapping
 - ENS text record population
+- Arbitrary donation detection that maps deposits to creator/stream balances; current deposit flows are tenant billing flows.
+- Stream-specific balances to receive donations.
 
 Evidence:
 
@@ -138,11 +140,11 @@ CREATE TABLE purser.ens_subdomains (
 7. Deduct infrastructure costs, share excess with creator
 ```
 
-This reuses existing infrastructure:
+This would extend existing infrastructure:
 
 - `api_billing/internal/handlers` - address derivation
-- `api_billing/internal/handlers` - deposit detection
-- Stream balances (per stream-balances RFC)
+- `api_billing/internal/handlers` - deposit/x402 settlement patterns
+- Stream balances (per stream-balances RFC; not implemented yet)
 
 ### Text Record Population
 

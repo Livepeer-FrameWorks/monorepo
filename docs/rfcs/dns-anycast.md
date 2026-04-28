@@ -11,18 +11,21 @@ Draft
 
 ## Current State
 
-- Navigator (`api_dns`) exists in the repo and is intended to manage platform‑managed tenant subdomains, but it is not wired into dev runtime (no service in default dev compose).
+- Navigator (`api_dns`) exists, has build/test targets, and manages Cloudflare-backed DNS,
+  ACME/TLS bundle, and internal CA flows. It is still not a service in default dev compose.
 - There is no Anycast/BGP stack in dev or CI.
 - No PowerDNS/Galera/IXP tooling is present in this repo.
 
 Evidence:
 
 - `api_dns/`
+- `Makefile`
+- `config/env/base.env`
 - dev compose service definitions
 
 ## Problem / Motivation
 
-Managed DNS limits routing flexibility and introduces vendor lock-in. Anycast could enable lower latency and app-aware routing at the DNS layer. Separately, platform‑managed tenant subdomain provisioning is not implemented today for self-hosted edge clusters.
+Managed DNS limits routing flexibility and introduces vendor lock-in. Anycast could enable lower latency and app-aware routing at the DNS layer. Separately, the implemented DNS manager is Cloudflare-specific today; a self-hosted authoritative DNS path is still future work.
 
 ## Goals
 
@@ -99,7 +102,7 @@ These are complementary, not competing:
 - BGP: Fast failover (seconds), coarse-grained (entire prefix), no application awareness
 - Foghorn federation: Slower failover (depends on PeerHeartbeat 10s interval), fine-grained (per-stream, per-viewer), full application awareness
 
-Both are needed for production resilience.
+They can be complementary for production resilience.
 
 ## Cloudflare Dependency Risk
 

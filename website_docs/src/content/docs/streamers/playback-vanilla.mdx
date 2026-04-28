@@ -56,34 +56,34 @@ player.destroy();
 
 ## Queries (Read State)
 
-| Property       | Type                       | Description                                        |
-| -------------- | -------------------------- | -------------------------------------------------- |
-| `state`        | `PlayerState`              | Current lifecycle state                            |
-| `streamState`  | `StreamState \| null`      | Upstream stream status                             |
-| `endpoints`    | `ContentEndpoints \| null` | Resolved playback endpoints                        |
-| `metadata`     | `object`                   | Stream metadata from gateway                       |
-| `videoElement` | `HTMLVideoElement \| null` | Underlying video element                           |
-| `ready`        | `boolean`                  | Player initialized and ready                       |
-| `currentTime`  | `number`                   | Current position (milliseconds)                    |
-| `duration`     | `number`                   | Total duration in milliseconds (Infinity for live) |
-| `volume`       | `number`                   | Volume level (0-1)                                 |
-| `muted`        | `boolean`                  | Whether muted                                      |
-| `paused`       | `boolean`                  | Whether paused                                     |
-| `playing`      | `boolean`                  | Whether actively playing                           |
-| `buffering`    | `boolean`                  | Whether buffering                                  |
-| `started`      | `boolean`                  | Whether playback started at least once             |
-| `playbackRate` | `number`                   | Current speed                                      |
-| `loop`         | `boolean`                  | Looping enabled                                    |
-| `live`         | `boolean`                  | Whether live stream                                |
-| `nearLive`     | `boolean`                  | Whether near the live edge                         |
-| `fullscreen`   | `boolean`                  | Whether in fullscreen                              |
-| `pip`          | `boolean`                  | Whether in picture-in-picture                      |
-| `error`        | `string \| null`           | Current error message                              |
-| `quality`      | `PlaybackQuality \| null`  | Active quality level                               |
-| `abrMode`      | `'auto' \| 'manual'`       | ABR mode                                           |
-| `theme`        | `string`                   | Current theme                                      |
-| `size`         | `{ width, height }`        | Container dimensions                               |
-| `capabilities` | `Capabilities`             | Runtime feature detection                          |
+| Property       | Type                                          | Description                                        |
+| -------------- | --------------------------------------------- | -------------------------------------------------- |
+| `state`        | `PlayerState`                                 | Current lifecycle state                            |
+| `streamState`  | `StreamState \| null`                         | Upstream stream status                             |
+| `endpoints`    | `ContentEndpoints \| null`                    | Resolved playback endpoints                        |
+| `metadata`     | `object`                                      | Stream metadata from gateway                       |
+| `videoElement` | `HTMLVideoElement \| null`                    | Underlying video element                           |
+| `ready`        | `boolean`                                     | Player initialized and ready                       |
+| `currentTime`  | `number`                                      | Current position (milliseconds)                    |
+| `duration`     | `number`                                      | Total duration in milliseconds (Infinity for live) |
+| `volume`       | `number`                                      | Volume level (0-1)                                 |
+| `muted`        | `boolean`                                     | Whether muted                                      |
+| `paused`       | `boolean`                                     | Whether paused                                     |
+| `playing`      | `boolean`                                     | Whether actively playing                           |
+| `buffering`    | `boolean`                                     | Whether buffering                                  |
+| `started`      | `boolean`                                     | Whether playback started at least once             |
+| `playbackRate` | `number`                                      | Current speed                                      |
+| `loop`         | `boolean`                                     | Looping enabled                                    |
+| `live`         | `boolean`                                     | Whether live stream                                |
+| `nearLive`     | `boolean`                                     | Whether near the live edge                         |
+| `fullscreen`   | `boolean`                                     | Whether in fullscreen                              |
+| `pip`          | `boolean`                                     | Whether in picture-in-picture                      |
+| `error`        | `string \| null`                              | Current error message                              |
+| `quality`      | `PlaybackQuality \| null`                     | Active quality level                               |
+| `abrMode`      | `'auto' \| 'resize' \| 'bitrate' \| 'manual'` | ABR mode                                           |
+| `theme`        | `string`                                      | Current theme                                      |
+| `size`         | `{ width, height }`                           | Container dimensions                               |
+| `capabilities` | `Capabilities`                                | Runtime feature detection                          |
 
 ## Mutations (Change State)
 
@@ -104,13 +104,13 @@ player.destroy();
 | `skipBack(ms?)`        | `(milliseconds?) => void` | Skip backward (default 10000ms) |
 | `togglePlay()`         | `() => void`              | Toggle play/pause               |
 | `toggleMute()`         | `() => void`              | Toggle mute                     |
-| `toggleFullscreen()`   | `() => void`              | Toggle fullscreen               |
-| `togglePiP()`          | `() => void`              | Toggle picture-in-picture       |
+| `toggleFullscreen()`   | `() => Promise<void>`     | Toggle fullscreen               |
+| `togglePiP()`          | `() => Promise<void>`     | Toggle picture-in-picture       |
 | `getQualities()`       | `() => Quality[]`         | List available qualities        |
 | `selectQuality(id)`    | `(id) => void`            | Lock to specific quality        |
-| `retry()`              | `() => void`              | Retry current connection        |
-| `retryWithFallback()`  | `() => void`              | Retry with next endpoint        |
-| `reload()`             | `() => void`              | Full reload                     |
+| `retry()`              | `() => Promise<void>`     | Retry current connection        |
+| `retryWithFallback()`  | `() => Promise<boolean>`  | Retry with next endpoint        |
+| `reload()`             | `() => Promise<void>`     | Full reload                     |
 | `clearError()`         | `() => void`              | Dismiss error                   |
 | `getStats()`           | `() => Promise<unknown>`  | Playback statistics snapshot    |
 | `setThemeOverrides(o)` | `(overrides) => void`     | Apply theme overrides           |
@@ -120,23 +120,23 @@ player.destroy();
 ## Subscriptions — Events
 
 ```ts
-const unsub = player.on("stateChange", (state) => {
+const unsub = player.on("stateChange", ({ state }) => {
   console.log("State:", state);
 });
 unsub();
 ```
 
-| Event               | Payload                     | Description              |
-| ------------------- | --------------------------- | ------------------------ |
-| `stateChange`       | `PlayerState`               | State transition         |
-| `timeUpdate`        | `{ currentTime, duration }` | Position changed         |
-| `volumeChange`      | `{ volume, muted }`         | Volume/mute changed      |
-| `qualityChanged`    | `{ fromLevel?, toLevel }`   | Quality level changed    |
-| `fullscreenChange`  | `boolean`                   | Fullscreen state changed |
-| `pipChange`         | `{ isPiP }`                 | PiP state changed        |
-| `error`             | `{ error, code? }`          | Playback error           |
-| `streamStateChange` | `{ state }`                 | Upstream status changed  |
-| `metadataUpdate`    | `object`                    | Metadata updated         |
+| Event               | Payload                                         | Description              |
+| ------------------- | ----------------------------------------------- | ------------------------ |
+| `stateChange`       | `{ state, context? }`                           | State transition         |
+| `timeUpdate`        | `{ currentTime, duration }`                     | Position changed         |
+| `volumeChange`      | `{ volume, muted }`                             | Volume/mute changed      |
+| `qualityChanged`    | `{ fromLevel?, toLevel }`                       | Quality level changed    |
+| `fullscreenChange`  | `{ isFullscreen }`                              | Fullscreen state changed |
+| `pipChange`         | `{ isPiP }`                                     | PiP state changed        |
+| `error`             | `{ error, code? }`                              | Playback error           |
+| `streamStateChange` | `{ state }`                                     | Upstream status changed  |
+| `metadataUpdate`    | `{ currentTime, duration, bufferedAhead, ... }` | Metadata updated         |
 
 ## Subscriptions — Reactive State
 
@@ -236,20 +236,21 @@ if (player.capabilities.qualitySelection) player.selectQuality("720p");
 
 ## Options
 
-| Option         | Type                                | Default     | Description                                                                  |
-| -------------- | ----------------------------------- | ----------- | ---------------------------------------------------------------------------- |
-| `target`       | `string \| HTMLElement`             | —           | Container                                                                    |
-| `contentId`    | `string`                            | —           | Playback ID                                                                  |
-| `contentType`  | `string`                            | `"live"`    | Content type                                                                 |
-| `gatewayUrl`   | `string`                            | —           | Gateway GraphQL endpoint                                                     |
-| `mistUrl`      | `string`                            | —           | Direct MistServer URL                                                        |
-| `endpoints`    | `ContentEndpoints`                  | —           | Pre-resolved endpoints                                                       |
-| `autoplay`     | `boolean`                           | `true`      | Auto-start                                                                   |
-| `muted`        | `boolean`                           | `false`     | Start muted                                                                  |
-| `controls`     | `boolean`                           | `true`      | Show built-in controls                                                       |
-| `theme`        | `string`                            | `"default"` | Theme preset                                                                 |
-| `locale`       | `string`                            | `"en"`      | UI language                                                                  |
-| `playbackMode` | `string`                            | `"auto"`    | Protocol preference                                                          |
-| `forceType`    | `string`                            | —           | Force source type                                                            |
-| `skin`         | `string \| SkinDefinition \| false` | `"default"` | Skin for blueprint rendering (see [Advanced](/streamers/playback-advanced/)) |
-| `debug`        | `boolean`                           | `false`     | Debug logging                                                                |
+| Option           | Type                                | Default     | Description                                                                  |
+| ---------------- | ----------------------------------- | ----------- | ---------------------------------------------------------------------------- |
+| `target`         | `string \| HTMLElement`             | —           | Container                                                                    |
+| `contentId`      | `string`                            | —           | Playback ID                                                                  |
+| `contentType`    | `string`                            | `"live"`    | Content type                                                                 |
+| `gatewayUrl`     | `string`                            | —           | Gateway GraphQL endpoint                                                     |
+| `mistUrl`        | `string`                            | —           | Direct MistServer URL                                                        |
+| `endpoints`      | `ContentEndpoints`                  | —           | Pre-resolved endpoints                                                       |
+| `autoplay`       | `boolean`                           | `true`      | Auto-start                                                                   |
+| `muted`          | `boolean`                           | `false`     | Start muted                                                                  |
+| `controls`       | `boolean`                           | `true`      | Show built-in controls                                                       |
+| `poster`         | `string`                            | —           | Poster image before playback                                                 |
+| `theme`          | `string`                            | `"default"` | Theme preset                                                                 |
+| `themeOverrides` | `object`                            | —           | Per-token theme overrides                                                    |
+| `locale`         | `string`                            | `"en"`      | UI language                                                                  |
+| `playbackMode`   | `string`                            | `"auto"`    | Protocol preference                                                          |
+| `skin`           | `string \| SkinDefinition \| false` | `"default"` | Skin for blueprint rendering (see [Advanced](/streamers/playback-advanced/)) |
+| `debug`          | `boolean`                           | `false`     | Debug logging                                                                |

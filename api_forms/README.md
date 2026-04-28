@@ -1,20 +1,18 @@
-# Forms Service
+# Steward (Forms Service)
 
-Minimal contact API for handling contact form submissions. Go service using pkg/ infrastructure.
+Minimal contact/newsletter API for the marketing site. Steward accepts contact form submissions, optionally verifies Cloudflare Turnstile tokens, sends contact email through SMTP, and optionally subscribes newsletter signups through Listmonk.
 
 ## Run (dev)
 
 ```bash
-cd api_forms
-go mod download
-go run ./cmd/steward
+docker-compose up forms
 ```
 
 Configure the marketing site to point `VITE_CONTACT_API_URL` to this service.
 
 ## Configuration
 
-Environment variables (see `env.example`):
+Environment variables are generated from the repo-level `config/env` files. `api_forms/env.example` documents the service-local shape.
 
 - `PORT` - Service port (default: 18032)
 - `TURNSTILE_FORMS_SECRET_KEY` - Cloudflare Turnstile verification. Use test secret `1x0000000000000000000000000000000AA` for local development.
@@ -27,50 +25,22 @@ Environment variables (see `env.example`):
 
 ## Endpoints
 
-- `POST /api/contact`: Send contact email.
-- `POST /api/subscribe`: Subscribe email to newsletter (Listmonk).
+- `POST /api/contact`: Validate a contact request and send email through SMTP.
+- `POST /api/subscribe`: Subscribe email to the configured Listmonk list. Registered only when `LISTMONK_URL` is set.
+- `GET /health`: Standard service health endpoint.
+- `GET /metrics`: Prometheus metrics endpoint.
 
 ## Build
 
 ```bash
-cd api_forms
-CGO_ENABLED=0 go build -o steward ./cmd/steward
+make build-bin-steward
 ```
 
-## Build vs Buy Considerations
+## Current scope
 
-This service can be either built in-house or use third-party providers:
-
-- **Initial Options**
-  - Third-party services:
-    - Formspree
-    - Netlify Forms
-    - Other form backends
-  - Custom implementation (viable, small scope)
-
-- **Why Building is OK**
-  - Low implementation effort
-  - Avoids third-party lock-in
-  - Common requirements:
-    - Form validation
-    - Spam prevention
-    - File uploads
-    - Email notifications
-    - API access
-
-- **Implementation Scope**
-  Keep it focused:
-  - Form schema validation
-  - Submission handling
-  - Basic spam protection
-  - File upload support
-  - Email notifications
-  - Simple analytics
-
-## Integration Points
-
-- Frontend form components
-- Email service
-- File storage
-- Analytics tracking
-- Spam prevention
+- Contact form validation for name, email, and message.
+- Honeypot/behavior checks when Turnstile is not configured.
+- Optional Turnstile verification for contact and subscribe requests.
+- SMTP email delivery for contact requests.
+- Optional Listmonk subscription with duplicate handling.
+- Request counters for contact and subscribe outcomes.

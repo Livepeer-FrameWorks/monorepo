@@ -151,7 +151,7 @@ Foghorn prefers Commodore for canonical context and falls back to these fields w
 
 Schemas: `pkg/database/sql/schema` (clips, dvr_recordings), `pkg/database/sql/schema` (artifacts, artifact_nodes), `pkg/database/sql/clickhouse` (artifact_state_current, artifact_events).
 
-**Storage model**: `artifacts` = cold storage state (S3 is authoritative, 1 row per artifact). `artifact_nodes` = warm storage cache (which nodes have copies, N rows per artifact).
+**Storage model**: `artifacts` = canonical artifact lifecycle and cold-sync state (1 row per artifact). `artifact_nodes` = warm storage cache (which nodes have local copies, N rows per artifact).
 
 ## gRPC API
 
@@ -226,8 +226,9 @@ Helmsman -> Foghorn (ClipLifecycle event with request_id + clip_hash)
 FREEZE (warm -> cold):
   1. Foghorn sends FreezeRequest(artifact_hash) to Helmsman
   2. Helmsman uploads to S3, returns s3_url
-  3. Foghorn updates: artifacts.storage_location='s3', artifacts.s3_url=url
-  4. Foghorn updates: artifact_nodes SET is_orphaned=true (local copy stale)
+  3. Foghorn updates: artifacts.sync_status='synced', artifacts.s3_url=url
+  4. While the reporting node still has a warm copy, artifacts.storage_location remains 'local'
+  5. If a remote-origin warm copy is evicted later, Foghorn removes that node cache and may mark the artifact S3-resident
 
 DEFROST (cold -> warm):
   1. Foghorn sends DefrostRequest(artifact_hash, target_node_id) to Helmsman
@@ -335,12 +336,15 @@ Helmsman nodes manage local storage pressure independently to avoid disk exhaust
 | ------------------- | ------- | ------------------------------------------------------------- |
 | `cleanupThreshold`  | 90%     | Start eviction when disk usage exceeds this                   |
 | `targetThreshold`   | 80%     | Evict until disk usage falls below this                       |
-| `MinFreeBytes`      | 1 GiB   | Eviction also triggers when free space falls below this floor |
+| `MinFreeBytes`      | 1 GiB   | Write-path free-space guard used before local artifact writes |
 | `minRetentionHours` | 1 hour  | Never evict artifacts younger than this                       |
 
 > **Important:** Local storage retention is **best-effort**. Under disk pressure,
 > artifacts may be evicted from edge nodes before the 30-day retention window.
 > This does not change S3-backed copies or central database records.
+
+The cold-storage manager also has separate freeze thresholds: by default it starts
+freezing at 85% disk usage and targets 70% after freeze operations.
 
 ## Retention and Cleanup Jobs
 

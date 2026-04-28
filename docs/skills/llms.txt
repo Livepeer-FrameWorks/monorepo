@@ -4,7 +4,7 @@
 
 ## Docs
 
-- [MCP Integration](https://logbook.frameworks.network/streamers/mcp): Resources, tools, prompts, x402 payments
+- [MCP Integration](https://logbook.frameworks.network/agents/mcp): Resources, tools, prompts, x402 payments
 - [Skill File](https://frameworks.network/SKILL.md): Agent quick-start guide
 - [Agent Overview](https://logbook.frameworks.network/agents/overview): Discovery, auth, and capabilities
 - [Skipper Video Consultant](https://logbook.frameworks.network/agents/skipper): RAG-grounded streaming expertise

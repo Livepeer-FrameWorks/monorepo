@@ -9,6 +9,9 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
+    "check:links": "node scripts/check-internal-links.mjs",
+    "check:graphql": "node scripts/check-graphql-examples.mjs",
+    "check:sdk-imports": "node scripts/check-sdk-imports.mjs",
     "lint": "eslint src/",
     "format": "prettier --write 'src/**/*.{ts,mts,astro,md,mdx}'"
   },

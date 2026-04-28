@@ -12,9 +12,10 @@ Draft
 
 ## Current State
 
-- No standard exists for streaming endpoints in ENS text records.
+- No FrameWorks implementation exists for resolving or publishing streaming endpoints in ENS text records.
 - Streamers use platform-specific URLs.
 - Switching platforms requires rebuilding audience and updating all links.
+- `npm_player` resolves FrameWorks Gateway/Mist playback sources, but it does not expose an `ens` prop/config path today.
 
 Evidence:
 
@@ -186,3 +187,4 @@ const pc = new RTCPeerConnection();
 - [Source] Foghorn README: `api_balancing/README.md`
 - [Source] Stream data model: `pkg/models`
 - [Source] Playback resolution: `api_balancing/internal/control`
+- [Source] Player source/resolution: `npm_player/packages/core/src/core/GatewayClient.ts`, `npm_player/packages/core/src/core/PlayerController.ts`

@@ -22,7 +22,7 @@ Browser-based broadcasting — camera, screen share, or both with audio mixing. 
 
 | Package                                     | Use Case                                              |
 | ------------------------------------------- | ----------------------------------------------------- |
-| `@livepeer-frameworks/streamcrafter-react`  | React 18+ apps                                        |
+| `@livepeer-frameworks/streamcrafter-react`  | React 17+ apps                                        |
 | `@livepeer-frameworks/streamcrafter-svelte` | Svelte 5 apps                                         |
 | `@livepeer-frameworks/streamcrafter-wc`     | Web Components — Vue, Angular, CDN, plain HTML        |
 | `@livepeer-frameworks/streamcrafter-core`   | Vanilla JS, headless, or building custom integrations |
@@ -38,7 +38,14 @@ Not sure which package to use? See the [Integration Guide](/streamers/integratio
 
 ## Quick Start
 
-**Gateway Mode (Recommended)** — stream key resolves to the best ingest endpoint:
+**Direct WHIP Mode** — pass the WHIP endpoint shown in the dashboard:
+
+```tsx
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/your-stream-key" initialProfile="broadcast" />
+```
+
+**Gateway Resolution Mode** — where `resolveIngestEndpoint` is wired, the SDK can resolve the WHIP
+endpoint from a stream key:
 
 ```tsx
 import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
@@ -51,16 +58,11 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 />;
 ```
 
-**Direct Mode (Dev / BYO WHIP):**
-
-```tsx
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/your-stream-key" initialProfile="broadcast" />
-```
-
 <Aside type="note" title="Gateway vs Direct">
   There is **no default gateway**. Pass either `whipUrl` or (`gatewayUrl` + `streamKey`). If both
-  are provided, `whipUrl` takes priority. Gateway mode resolves the best ingest endpoint for your
-  stream.
+  are provided, `whipUrl` takes priority. The `gatewayUrl` path calls the public
+  `resolveIngestEndpoint` GraphQL field; use direct `whipUrl` unless that resolver is enabled in
+  your environment.
 </Aside>
 
 The drop-in component includes video preview, camera/screen share controls, quality selection, Go Live button, source management, and auto-reconnection.
@@ -73,7 +75,8 @@ Your WHIP ingest URL is shown in the FrameWorks dashboard under **Ingest URLs**:
 WHIP: %INGEST_URL%/webrtc/your-stream-key
 ```
 
-FrameWorks uses MistServer's `/webrtc/{streamKey}` path for WHIP ingest. In Gateway Mode, you only need the stream key — the WHIP URL is resolved for you.
+FrameWorks uses MistServer's `/webrtc/{streamKey}` path for WHIP ingest. Gateway resolution can hide
+the node URL when the ingest resolver is available; otherwise use the dashboard WHIP URL directly.
 
 <Aside type="caution" title="Stream Key is Secret">
   Your stream key grants permission to broadcast to your stream. Never share it publicly.
@@ -100,7 +103,8 @@ See the framework-specific pages for details on each level:
 
 ## Quality Profiles
 
-StreamCrafter includes three quality presets:
+The drop-in UI exposes three quality presets. The lower-level core type also accepts `auto` for
+custom integrations that want browser-selected defaults:
 
 | Profile        | Resolution | Use Case                    |
 | -------------- | ---------- | --------------------------- |

@@ -13,17 +13,17 @@ Draft
 
 ## Current State
 
-All services use raw `database/sql` with `lib/pq`. SQL is written inline in gRPC handlers across api_billing, api_control, api_balancing, and api_consultant. Every query result is mapped field-by-field via manual `.Scan()` calls. Tenant isolation relies entirely on application-level `WHERE tenant_id = $1` — there is no enforcement mechanism if a query omits the filter.
+Database-backed services mostly use raw `database/sql` with `lib/pq`. SQL is written inline in gRPC handlers and service stores across api_billing, api_control, api_balancing, api_tenants, api_dns, api_consultant, and related packages. Query results are commonly mapped field-by-field via manual `.Scan()` calls. Tenant isolation relies primarily on application-level `WHERE tenant_id = $1` and service-boundary discipline — there is no broad database-level RLS safety net if a query omits the filter.
 
-Schema definitions live in `pkg/database/sql/schema/` as monolithic SQL files (commodore.sql, purser.sql, foghorn.sql, quartermaster.sql, and others). The `pkg/database/sql/migrations/` directory exists but is empty (only `.gitkeep`). Schema changes are unversioned and unauditable.
+Baseline schema definitions live in `pkg/database/sql/schema/` as monolithic SQL files (commodore.sql, purser.sql, foghorn.sql, quartermaster.sql, and others). The `pkg/database/sql/migrations/` directory now contains at least one versioned migration (`v0.3.0/001_bootstrap_tenant_aliases.sql`), but migrations are still not the primary schema-authoring model and most schema history remains encoded in the monolithic baseline files.
 
-PG-specific features are used throughout: JSONB columns, `pq.Array` for array types, and pgvector in api_consultant for embedding similarity search. YugabyteDB is listed as a production alternative in cluster manifests — it is PG wire-compatible, so existing syntax works without changes.
+PG-specific features are used throughout: JSONB columns, `pq.Array` for array types, and pgvector in api_consultant for embedding similarity search. YugabyteDB is listed as a production alternative in cluster manifests and provisioner roles, but compatibility should be validated per feature instead of assumed for every PostgreSQL extension, index type, and RLS policy.
 
 Evidence:
 
 - `pkg/database/postgres.go`
 - `pkg/database/sql/schema/`
-- `pkg/database/sql/migrations/`
+- `pkg/database/sql/migrations/v0.3.0/001_bootstrap_tenant_aliases.sql`
 - `api_billing/internal/grpc/server.go`
 - `api_control/internal/grpc/server.go`
 - `api_balancing/internal/grpc/server.go`
@@ -67,7 +67,7 @@ Consolidate all SQL for a given service module into dedicated query files with s
 
 ## Impact / Dependencies
 
-- All services with database access: api_billing, api_control, api_balancing, api_consultant, api_commodore, api_gateway.
+- All services with database access: api_billing, api_control, api_balancing, api_tenants, api_dns, api_consultant, and related packages.
 - `pkg/database/` — connection setup needs RLS session variable injection.
 - `pkg/database/sql/schema/` — monolithic files become the basis for initial migration sequences.
 - CI pipeline — sqlc codegen verification step.
@@ -88,7 +88,7 @@ Consolidate all SQL for a given service module into dedicated query files with s
 
 ## Migration / Rollout
 
-1. **golang-migrate for all new schema changes.** Generate a baseline migration from existing schema files. All subsequent changes use numbered migration files.
+1. **Make versioned migrations the default for all new schema changes.** Generate or curate a baseline migration from existing schema files, then keep subsequent changes in numbered migration files.
 2. **Repository pattern.** Consolidate inline SQL into per-service query files. No tooling change — pure code organization.
 3. **sqlc for new queries.** Pilot in one service (api_billing or api_control). New queries use sqlc; existing queries remain unchanged.
 4. **Backfill existing queries.** Convert existing inline SQL to sqlc service-by-service.
@@ -105,7 +105,7 @@ Consolidate all SQL for a given service module into dedicated query files with s
 
 - [Evidence] `pkg/database/postgres.go`
 - [Evidence] `pkg/database/sql/schema/` (9 schema files)
-- [Evidence] `pkg/database/sql/migrations/` (empty, .gitkeep only)
+- [Evidence] `pkg/database/sql/migrations/v0.3.0/001_bootstrap_tenant_aliases.sql`
 - [Evidence] `api_billing/internal/grpc/server.go` (inline SQL + manual .Scan)
 - [Evidence] `api_control/internal/grpc/server.go` (inline SQL + manual .Scan)
 - [Evidence] `api_balancing/internal/grpc/server.go`

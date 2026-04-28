@@ -162,31 +162,11 @@ Five built-in locale packs: `en`, `es`, `fr`, `de`, `nl`.
 
 ```tsx
 // React — use built-in locale
-<Player
-  contentId="pk_..."
-  contentType="live"
-  options={{ locale: "de" }}
-/>
-
-// React — custom translations
-<Player
-  contentId="pk_..."
-  contentType="live"
-  options={{
-    translations: {
-      play: "Abspielen",
-      pause: "Pause",
-      mute: "Stummschalten",
-      unmute: "Ton einschalten",
-      fullscreen: "Vollbild",
-      exitFullscreen: "Vollbild beenden",
-    },
-  }}
-/>
+<Player contentId="pk_..." contentType="live" options={{ locale: "de" }} />
 ```
 
 ```ts
-// Vanilla — import locale pack
+// Vanilla — built-in locale
 import { getLocalePack } from "@livepeer-frameworks/player-core";
 
 const player = createPlayer({
@@ -197,6 +177,11 @@ const player = createPlayer({
 // Or fetch specific translation strings
 const deTranslations = getLocalePack("de");
 ```
+
+<Aside type="note" title="Custom player translations">
+  The player translation engine supports custom translation overrides internally, but the current
+  React, Svelte, and vanilla public facades only wire built-in locale selection.
+</Aside>
 
 ### Studio i18n
 
@@ -218,26 +203,6 @@ const studio = createStreamCrafter({
 ## Configurable Hotkeys
 
 ### Player Hotkeys
-
-Override default keyboard shortcuts:
-
-```tsx
-<Player
-  contentId="pk_..."
-  contentType="live"
-  options={{
-    keyMap: {
-      playPause: ["k"],
-      skipBack: ["j", "ArrowLeft"],
-      skipForward: ["l", "ArrowRight"],
-      volumeUp: ["ArrowUp"],
-      volumeDown: ["ArrowDown"],
-      toggleMute: ["m"],
-      toggleFullscreen: ["f"],
-    },
-  }}
-/>
-```
 
 Default player shortcuts:
 
@@ -264,6 +229,11 @@ Default player shortcuts:
 <Aside type="note" title="Live Constraints">
   Live-only streams disable seeking, skip, 2x hold, and frame-step. Live with DVR buffer enables
   these features.
+</Aside>
+
+<Aside type="note" title="Custom player hotkeys">
+  Custom player key maps are present in the core types, but they are not wired through the current
+  player facades. Treat the shortcuts above as fixed defaults for now.
 </Aside>
 
 ### Studio Hotkeys

@@ -2411,7 +2411,7 @@ input CreateEdgeClusterInput {
 Input for updating cluster marketplace settings.
 """
 input UpdateClusterMarketplaceInput {
-  "Marketplace visibility (PUBLIC, PRIVATE, INVITE_ONLY)."
+  "Marketplace visibility (PUBLIC, UNLISTED, PRIVATE)."
   visibility: ClusterVisibility
   "Pricing model for subscriptions."
   pricingModel: ClusterPricingModel

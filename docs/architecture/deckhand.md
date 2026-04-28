@@ -11,7 +11,7 @@ Chatwoot admin configuration must be done manually after deployment:
 3. Configure webhook URL: `http://deckhand:18015/webhooks/chatwoot`
 4. Enable events: `conversation_created`, `conversation_updated`, `message_created`, `message_updated`
 
-Chatwoot requires Redis for background jobs. Chatwoot does not support webhook HMAC ([#9354](https://github.com/chatwoot/chatwoot/issues/9354)) — security relies on Docker network isolation.
+Chatwoot requires Redis for background jobs. Deckhand also uses Redis when `REDIS_ADDR` is configured to deduplicate Chatwoot webhooks for 5 minutes. Chatwoot does not support webhook HMAC ([#9354](https://github.com/chatwoot/chatwoot/issues/9354)) — security relies on Docker network isolation.
 
 ## Architecture
 

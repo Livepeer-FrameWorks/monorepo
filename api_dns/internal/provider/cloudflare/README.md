@@ -1,6 +1,6 @@
-# CloudFlare API Client
+# Cloudflare API Client
 
-Go client for CloudFlare API v4, focused on DNS and Load Balancer management for FrameWorks infrastructure.
+Internal Go client for Cloudflare API v4, focused on DNS and Load Balancer management for Navigator.
 
 ## Features
 
@@ -15,7 +15,7 @@ Go client for CloudFlare API v4, focused on DNS and Load Balancer management for
 ### Initialize Client
 
 ```go
-import "frameworks/pkg/cloudflare"
+import "frameworks/api_dns/internal/provider/cloudflare"
 
 client := cloudflare.NewClient(
     "your-api-token",
@@ -110,13 +110,15 @@ createdLB, err := client.CreateLoadBalancer(lb)
 
 ## Environment Variables
 
-The CLI tool expects these environment variables:
+Navigator expects these environment variables:
 
 ```bash
 export CLOUDFLARE_API_TOKEN="your-api-token"
 export CLOUDFLARE_ZONE_ID="your-zone-id"
 export CLOUDFLARE_ACCOUNT_ID="your-account-id"
 ```
+
+For ACME DNS-01 challenges, Navigator also sets `CLOUDFLARE_DNS_API_TOKEN` from `CLOUDFLARE_API_TOKEN` when the DNS-specific variable is absent.
 
 ## API Token Permissions
 

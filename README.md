@@ -148,7 +148,7 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Data     | Decklog (metrics)        | 18026    | Prometheus metrics                                                                                             |
 | Data     | Kafka (external)         | 29092    | Host access                                                                                                    |
 | Data     | Kafka (internal)         | 9092     | Cluster access                                                                                                 |
-| Data     | Zookeeper                | 2181     | Kafka coordination                                                                                             |
+| Data     | Zookeeper                | 2181     | Optional standalone coordination service; Kafka uses KRaft and does not require ZooKeeper                      |
 | Data     | PostgreSQL               | 5432     | Primary database                                                                                               |
 | Data     | ClickHouse (HTTP)        | 8123     | Analytics database                                                                                             |
 | Data     | ClickHouse (Native)      | 9000     | Analytics database                                                                                             |
@@ -184,7 +184,6 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Support  | Deckhand (gRPC)          | 19006    | Support gRPC API                                                                                               |
 | AI       | Skipper                  | 18018    | AI video consultant HTTP                                                                                       |
 | AI       | Skipper (gRPC)           | 19007    | gRPC API                                                                                                       |
-| Data     | Chandler                 | 18020    | Static asset server (thumbnails, media assets)                                                                 |
 
 ## Documentation
 

@@ -14,12 +14,14 @@ Draft
 
 - Monitoring and alerting are handled via Prometheus/Grafana tooling in `infrastructure/`.
 - `api_incidents` is a stub (no implementation).
+- Skipper already has a `LookoutTrigger` consumer for the `lookout.incidents` Kafka topic, so the investigation side can consume incidents once Lookout publishes them.
 
 Evidence:
 
 - `infrastructure/prometheus/`
 - `infrastructure/grafana/`
 - `api_incidents/`
+- `api_consultant/internal/heartbeat/triggers.go`
 
 ## Problem / Motivation
 
@@ -55,8 +57,8 @@ can automatically investigate the root cause using its diagnostic tool chain and
 deliver a pre-investigated report alongside the alert.
 
 This is a **soft dependency** — Skipper's heartbeat agent works independently of
-Lookout, but integrating Lookout events enables immediate, event-driven investigation
-rather than waiting for the next heartbeat cycle.
+Lookout, and the Skipper-side Lookout Kafka trigger already exists. The missing
+piece is the Lookout service publishing tenant-scoped incident events.
 
 Incidents should be tenant-scoped and emitted via Kafka so Skipper can subscribe
 to the incident topic.
@@ -89,4 +91,5 @@ to the incident topic.
 - `infrastructure/prometheus/`
 - `infrastructure/grafana/`
 - `api_incidents/`
+- `api_consultant/internal/heartbeat/triggers.go`
 - [Related RFC] ./mcp-consultant/mcp-consultant.md — Skipper consumes Lookout incidents as investigation triggers

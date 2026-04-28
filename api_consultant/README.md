@@ -1,6 +1,6 @@
 # Skipper (AI Video Consultant)
 
-RAG-grounded, tool-augmented chat for streaming troubleshooting, configuration guidance, and automated diagnostics. **Bring your own LLM — runs with any OpenAI-compatible provider, local or hosted.**
+RAG-grounded, tool-augmented chat for streaming troubleshooting, configuration guidance, and automated diagnostics. **Bring your own LLM — OpenAI-compatible endpoints, Anthropic, and Ollama are supported.**
 
 ## Why Skipper?
 
@@ -10,13 +10,13 @@ RAG-grounded, tool-augmented chat for streaming troubleshooting, configuration g
 
 ## What it does
 
-- Multi-turn chat with SSE streaming and tool-use (up to 5 rounds per query)
+- Multi-turn chat with HTTP SSE and gRPC streaming plus tool use (default 6 tool rounds per query)
 - Knowledge base powered by pgvector — crawls sitemaps, chunks documents, serves semantic search
 - Confidence tagging on responses: `verified`, `sourced`, `best_guess`, `unknown`
 - MCP spoke: exposes `ask_consultant`, `search_knowledge`, `search_web` tools to the Gateway hub
 - MCP client: invokes Gateway tools (diagnostics, GraphQL, stream management) on behalf of the user
 - Heartbeat agent: periodic stream health analysis with email/WebSocket/MCP notifications
-- Usage metering and per-tenant rate limiting
+- Usage metering and optional per-tenant rate limiting
 
 ## Run (dev)
 

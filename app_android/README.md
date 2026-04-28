@@ -1,14 +1,20 @@
 # Android App (Scaffold)
 
-Status: Scaffold only. This module currently contains initial structure and placeholder code. It is not feature‑complete and should not be used in production.
+Status: experimental Android app scaffold. This module contains prototype camera, provider,
+and streaming code, but it is not feature-complete and should not be used in production.
 
 ---
 
 ## Current State
 
-- Project scaffolding and placeholder code only
-- No supported streaming protocols yet
-- No camera pipeline or controls yet
+- Project scaffolding plus prototype camera/provider screens
+- Experimental SRT path using MediaCodec and the Haivision SRT library
+- Incomplete WHIP/WebRTC path: peer connection and offer creation exist, but the WHIP HTTP
+  exchange is still a placeholder
+- Camera settings and some CameraX/Camera2 control plumbing exist, but the production camera
+  pipeline is not wired end-to-end
+- FrameWorks service integration is placeholder/mock code; current app code should not be
+  treated as matching the production Gateway API
 
 ### Intended Usage
 
@@ -21,8 +27,8 @@ Status: Scaffold only. This module currently contains initial structure and plac
 
 These are planned; timelines tracked in the roadmap:
 
-- Multi‑protocol ingest: SRT and WHIP/WebRTC
-- Camera pipeline with manual controls (focus, exposure, WB)
+- Production-grade multi-protocol ingest for SRT and WHIP/WebRTC
+- Camera pipeline with reliable manual controls (focus, exposure, WB)
 - Provider system: FrameWorks, static targets, custom endpoints
 - Stream configuration presets (resolution, fps, bitrate)
 - Basic stats overlay (bitrate, fps, dropped frames)
@@ -67,7 +73,7 @@ Optimized settings for different scenarios:
 - **Latency**: 1-5 seconds (configurable)
 - **Reliability**: Error correction, encryption, and adaptive bitrate
 - **Configuration**: Server, port, latency, encryption settings
-- **Implementation**: Official SRT library with native MediaCodec integration
+- **Implementation status**: Prototype MediaCodec encoder and SRT socket path
 
 ### WHIP (WebRTC-HTTP Ingestion Protocol)
 
@@ -75,3 +81,5 @@ Optimized settings for different scenarios:
 - **Latency**: Sub-second
 - **Reliability**: Modern web standard with automatic adaptation
 - **Configuration**: WHIP endpoint URL
+- **Implementation status**: WebRTC setup and offer creation exist; WHIP POST/answer handling is
+  not implemented yet

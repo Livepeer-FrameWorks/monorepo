@@ -40,13 +40,13 @@ Foghorn ranks eligible nodes using a weighted scoring system. **Higher score = b
 score := cpuScore + ramScore + bwScore + geoScore + streamBonus
 ```
 
-| Component    | Default Weight | Calculation                                 |
-| ------------ | -------------- | ------------------------------------------- |
-| CPU          | 500            | `WEIGHT - (cpu_pct * WEIGHT / 1000)`        |
-| RAM          | 500            | `WEIGHT - (ram_used * WEIGHT / ram_max)`    |
-| Bandwidth    | 1000           | `WEIGHT - (current_bw * WEIGHT / bw_limit)` |
-| Geo          | 1000           | `WEIGHT - (WEIGHT * normalized_distance)`   |
-| Stream bonus | +50            | If node already has the stream              |
+| Component    | Default Weight | Calculation                                               |
+| ------------ | -------------- | --------------------------------------------------------- |
+| CPU          | 500            | `WEIGHT - (cpu_pct * WEIGHT / 1000)`                      |
+| RAM          | 500            | `WEIGHT - (ram_used * WEIGHT / ram_max)`                  |
+| Bandwidth    | 1000           | `WEIGHT - ((up_speed + reserved_bw) * WEIGHT / bw_limit)` |
+| Geo          | 1000           | `WEIGHT - (WEIGHT * normalized_distance)`                 |
+| Stream bonus | +50            | If node already has the stream                            |
 
 ### Weight Configuration
 
@@ -149,13 +149,13 @@ The player:
 
 When a viewer's local cluster doesn't have the requested stream, Foghorn checks peer clusters before returning an error. This extends the single-cluster scoring with a two-phase remote lookup.
 
-### Phase 1: EdgeSummary Check (Cheap)
+### Phase 1: EdgeSummary Candidate Scoring (Cheap)
 
-PeerChannel exchanges `ClusterEdgeSummary` messages every 5 seconds. These are cached in Redis (`RemoteEdgeCache`, 60s TTL). Foghorn checks this cache first to see if any peer cluster has edges serving the stream — no RPC needed.
+PeerChannel exchanges `ClusterEdgeSummary` messages every 15 seconds. These are cached in Redis (`RemoteEdgeCache`, 60s TTL). Foghorn uses this cache to score candidate remote edges without a per-request RPC. The summary is capacity/topology data, not a per-stream availability proof.
 
 ### Phase 2: QueryStream RPC (On Demand)
 
-If EdgeSummary indicates a peer has the stream, Foghorn sends `QueryStream` to that peer's FoghornFederation service. The peer scores its local nodes (using the same weight algorithm) and returns `EdgeCandidate` entries with DTSC URLs, capacity data, and `IsOrigin` flags.
+If a remote candidate wins the summary-level comparison, Foghorn confirms it by sending `QueryStream` to that peer's FoghornFederation service. On cold start, when no EdgeSummary cache is available but peers exist, Foghorn fans out `QueryStream` directly. The peer scores its local nodes (using the same weight algorithm) and returns `EdgeCandidate` entries with DTSC URLs, capacity data, and `IsOrigin` flags.
 
 ### Remote Edge Scoring
 

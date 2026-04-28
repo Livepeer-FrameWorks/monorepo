@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Every cluster — official or community — uses the same domain naming pattern. The cluster slug differentiates them; root domains (no slug) load-balance across official clusters via GeoDNS.
+Every cluster — official or community — uses the same domain naming pattern. The cluster slug differentiates them; root domains (no slug) reconcile against active platform-official clusters when Navigator runs without a tenant context.
 
 ## Domain Pattern
 
@@ -17,12 +17,14 @@ Every cluster — official or community — uses the same domain naming pattern.
 | `foghorn.{slug}.{base}`     | Cluster | Points to this cluster's Foghorn instance(s)     |
 | `livepeer.{base}`           | Root    | GeoDNS across official cluster Livepeer gateways |
 | `livepeer.{slug}.{base}`    | Cluster | Points to this cluster's Livepeer gateway(s)     |
+| `edge.{base}`               | Root    | Edge pool across official edge nodes             |
+| `edge.{slug}.{base}`        | Cluster | Points to this cluster's edge pool               |
 | `edge-ingest.{base}`        | Root    | GeoDNS across official cluster ingest nodes      |
 | `edge-ingest.{slug}.{base}` | Cluster | Points to this cluster's ingest nodes            |
 | `edge-egress.{base}`        | Root    | GeoDNS across official cluster edge nodes        |
 | `edge-egress.{slug}.{base}` | Cluster | Points to this cluster's edge nodes              |
 
-Root domains load-balance across official clusters. Community clusters only have slug-qualified domains.
+Root domains are public service names. Slug-qualified domains are reconciled for cluster-scoped service types: `edge`, edge capability services, `telemetry`, `chandler`, `foghorn`, and `livepeer`.
 
 ## Protocol Routing
 
@@ -41,13 +43,16 @@ HTTP-based protocols (HLS, DASH, WHEP, MP4) go through Foghorn, which issues 307
 
 ### TTL
 
-Use 60-second TTL for latency-based records. Shorter TTLs increase DNS query volume without meaningful failover improvement.
+Navigator defaults both A-record and Cloudflare load-balancer TTLs to 60 seconds. Shorter TTLs increase DNS query volume without meaningful failover improvement.
 
 ### Health Checks
 
-- **Endpoint**: `GET /health` on Foghorn (HTTP port)
-- **Interval**: 30 seconds
-- **Failure threshold**: 3 consecutive failures before removing from pool
+- **Endpoint**: `GET` to the service health path, usually `/health`; service-specific paths come from the service registry
+- **Port**: the service's default HTTP health port; edge pools use `18008`
+- **Interval**: 60 seconds by default (`NAVIGATOR_CF_MONITOR_INTERVAL`)
+- **Timeout**: 5 seconds by default (`NAVIGATOR_CF_MONITOR_TIMEOUT`)
+- **Failure threshold**: 2 consecutive failures by default (`NAVIGATOR_CF_MONITOR_RETRIES`)
+- **Expected response**: HTTP `200`
 
 ### TLS Certificates
 
@@ -63,11 +68,13 @@ Use wildcard certificates issued via DNS-01 challenge (Let's Encrypt or equivale
 
 ## GeoDNS Strategy
 
-Use latency-based routing (Route53 latency records or Cloudflare Load Balancing) as the initial strategy:
+Navigator currently implements DNS through Cloudflare:
 
-1. Each official cluster registers its Foghorn, Livepeer gateway, ingest, and egress IPs in the DNS provider
-2. The provider routes queries to the closest healthy cluster based on measured latency
-3. Health checks remove unhealthy clusters from the pool automatically
+1. Quartermaster returns DNS-eligible nodes with non-empty `external_ip`.
+2. A service with one healthy IP gets an A record.
+3. A service with two or more healthy IPs gets a Cloudflare load balancer and pool.
+4. The load balancer is created with `steering_policy: geo`; Navigator does not currently configure Route53 or measured-latency routing.
+5. Health monitors remove unhealthy origins from the pool automatically.
 
 <Aside type="note">
   GeoDNS is a stopgap until anycast DNS with a custom backend resolver is justified — typically at

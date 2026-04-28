@@ -165,12 +165,17 @@ Event types are string constants emitted by services. The list below reflects cu
 - `billing.usage_reports`
 - `decklog_events_dlq`
 
-**Recommended retention defaults (ops‑configurable)**
+**Recommended production retention targets (ops-configurable)**
 
 - `analytics_events`: 7 days (short replay buffer; ClickHouse is source of truth)
 - `service_events`: 180 days (audit trail + API usage, compliance‑leaning)
 - `billing.usage_reports`: 365 days (billing safety and dispute window)
 - `decklog_events_dlq`: 90 days (triage and replay window)
+
+These are policy targets, not hardcoded service defaults. Local compose currently creates
+`analytics_events` and `service_events` with 7-day retention, and `billing.usage_reports`
+and `decklog_events_dlq` with 30-day retention. Native Kafka provisioning uses the broker
+default unless a manifest topic config overrides it.
 
 **DLQ**
 

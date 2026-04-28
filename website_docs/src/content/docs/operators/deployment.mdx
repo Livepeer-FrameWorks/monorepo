@@ -131,7 +131,7 @@ The FrameWorks CLI automates the complex orchestration of multi-tier infrastruct
   <LinkCard
     title="CLI Reference"
     href="/operators/cli-reference"
-    description="Complete CLI command documentation."
+    description="Grouped operator CLI overview."
   />
   <LinkCard
     title="Cluster Manifest"
@@ -150,11 +150,11 @@ The FrameWorks CLI automates the complex orchestration of multi-tier infrastruct
   />
 </CardGrid>
 
-### 2. Manual Deployment
+### 2. Manual Deployment Reference
 
-For operators who cannot or choose not to use the CLI:
+For operators who need to understand or debug what the CLI configures:
 
-- [Manual Deployment](/operators/deployment-manual) - Step-by-step bare metal deployment guide
+- [Manual Deployment](/operators/deployment-manual) - Advanced deployment explainer and break-glass reference
 - [Operations Reference](/operators/operations) - Post-deployment operations, debugging, tuning
 - [WireGuard Mesh Setup](/operators/wireguard)
 
@@ -185,7 +185,7 @@ For detailed architecture documentation including service tables, ports, deploym
 
 - Multi-tenant isolation at application layer
 - User roles exist, but API tokens are currently full-access; RBAC and finer permissions are planned.
-- API rate limiting is enforced at the gateway.
+- The Gateway has tenant-aware rate-limit middleware, but current free-tier product limits are not commercially enforced yet.
 - SSH key-based authentication for deployments
 
 For monitoring, operations, and CLI commands, see [CLI Reference](/operators/cli-reference) and [Operations](/operators/operations).

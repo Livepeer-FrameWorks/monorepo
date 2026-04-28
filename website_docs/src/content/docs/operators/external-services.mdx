@@ -11,26 +11,27 @@ External service credentials required by the platform.
 
 ## Credential Delivery
 
-The CLI automatically delivers credentials to each host during provisioning. Environment variables are merged in this order (later wins):
+The CLI automatically delivers credentials to each host during provisioning. Environment variables are assembled from:
 
-1. **CLI-derived** from manifest infrastructure config (`DATABASE_HOST`, `DATABASE_PORT`, `KAFKA_BROKERS`, `CLICKHOUSE_ADDR`, `CLUSTER_ID`, `NODE_ID`)
-2. **Shared env_files** from the manifest's top-level `env_files` field
-3. **Per-service env_file** from each service's `env_file` field
-4. **Inline config** from the service's `config` map
-5. **CLI auto-generated** — missing security secrets are filled with cryptographic random values
-6. **CLI-composed** — `DATABASE_URL` and `COOKIE_DOMAIN` are derived from merged values
+1. **CLI-derived infrastructure and service defaults** from manifest config (`DATABASE_HOST`, `DATABASE_PORT`, `KAFKA_BROKERS`, `CLICKHOUSE_ADDR`, `CLUSTER_ID`, `NODE_ID`)
+2. **Runtime provisioning values** such as the shared `SERVICE_TOKEN`, enrollment tokens, and internal TLS paths
+3. **Shared env_files** from the manifest's top-level `env_files` field
+4. **Per-service env_file** from each service's `env_file` field
+5. **Inline config** from the service, interface, or observability `config` map
+6. **CLI fill-ins** for values that are still unset, such as GeoIP paths and production runtime defaults
+7. **CLI-composed values** such as `DATABASE_URL`, `COOKIE_DOMAIN`, and `BRAND_DOMAIN` when the operator did not provide them explicitly
 
 The merged result is written to `/etc/frameworks/{service}.env` on each host.
 
 ### Credential Categories
 
-| Category               | Examples                                                      | Who Sets It                    |
-| ---------------------- | ------------------------------------------------------------- | ------------------------------ |
-| **Operator-provided**  | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP | You — in shared env files      |
-| **CLI auto-generated** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`         | CLI — when left as `change-me` |
-| **CLI-derived**        | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`              | CLI — from manifest            |
+| Category                    | Examples                                                      | Who Sets It                                       |
+| --------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
+| **Operator-provided**       | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP | You — in shared env files                         |
+| **Shared platform secrets** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`         | You — in shared env files for non-dev deployments |
+| **CLI-derived**             | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`              | CLI — from manifest                               |
 
-Auto-generated secrets use `crypto/rand` (64-char hex). The CLI generates them once and they persist across re-provisions via your shared env files.
+For dev-profile manifests, the CLI can replace missing or placeholder shared platform secrets with `crypto/rand` values for that provision run. Non-dev provisioning validates that shared platform secrets are present in your manifest `env_files`; keep them in an encrypted env file so re-provisioning uses stable values.
 
 ### Infrastructure Credential Flow
 
@@ -45,7 +46,7 @@ This ensures runtime services can connect with the same credentials the CLI prov
 
 1. Create `gitops/config/production.env` for non-secret operator config
 2. Copy the secret template: `cp config/env/secrets.env.example gitops/secrets/production.env`
-3. Set at minimum in `gitops/secrets/production.env`: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD` (security secrets can be left as `change-me`)
+3. Set at minimum in `gitops/secrets/production.env`: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, and `USAGE_HASH_SECRET`
 4. Set your public URLs and other non-secret operator inputs in `gitops/config/production.env`
 5. Reference both files in your cluster manifest:
    ```yaml
@@ -167,7 +168,7 @@ During provisioning, the CLI decrypts the hosts file, merges IPs and SSH targets
 - Domain added to Cloudflare
   - Required permissions: **Zone.DNS (Edit)** and **Account.Load Balancers (Edit)** (for multi-node)
 
-Navigator automates DNS record management based on inventory. See [DNS Automation](/operators/dns) for details.
+Navigator automates DNS record management based on inventory. By default, Cloudflare proxying is enabled for `chartroom`, `foredeck`, and `logbook`; set `NAVIGATOR_PROXY_SERVICES` to a comma-separated list of service types if you need different proxy behavior. See [DNS Automation](/operators/dns) for details.
 
 **Manual Steps:**
 
@@ -253,10 +254,10 @@ The CLI reads your cluster manifest to find the hosts running the target service
 The shared `pkg/geoip` reader caches lookups. Defaults are sensible for most deployments:
 
 ```bash
-GEOIP_CACHE_TTL=3600       # Positive cache TTL in seconds (default: 1h)
-GEOIP_CACHE_SWR=300        # Stale-while-revalidate window in seconds
-GEOIP_CACHE_NEG_TTL=600    # Negative (miss) cache TTL in seconds
-GEOIP_CACHE_MAX=10000      # Max cached entries
+GEOIP_CACHE_TTL=300s       # Positive cache TTL (default: 300s)
+GEOIP_CACHE_SWR=120s       # Stale-while-revalidate window (default: 120s)
+GEOIP_CACHE_NEG_TTL=60s    # Negative (miss) cache TTL (default: 60s)
+GEOIP_CACHE_MAX=50000      # Max cached entries
 ```
 
 ---

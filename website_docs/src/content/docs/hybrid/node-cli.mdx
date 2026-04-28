@@ -16,7 +16,7 @@ frameworks edge status --dir /opt/frameworks-edge
 
 Shows:
 
-- Container status (MistServer, Helmsman, edge-proxy)
+- Container status (MistServer, Helmsman, Caddy)
 - HTTPS health check against your configured domain
 
 ## Logs
@@ -76,7 +76,7 @@ Check TLS status:
 frameworks edge cert --dir /opt/frameworks-edge
 ```
 
-Shows certificate expiration and issuer. Caddy handles renewal automatically, but if something goes wrong:
+Shows certificate expiration and issuer. In token-provisioned edge deployments, Foghorn can push renewed TLS material through ConfigSeed and Helmsman reloads Caddy. If Caddy needs to reload local certificate state:
 
 ```bash
 # Reload Caddy to pick up new certificates
@@ -148,7 +148,7 @@ Check what your node is using:
 docker stats mistserver helmsman edge-proxy
 ```
 
-MistServer metrics are available at:
+MistServer metrics are available on the MistServer control interface. In the default Docker template that port is not published on the host; expose it intentionally or query it from a shell that has access to the container network:
 
 ```bash
 curl http://localhost:4242/api/stats
@@ -231,7 +231,7 @@ Foghorn will stop routing new ingest to this node.
 curl http://localhost:4242/api/streams
 ```
 
-Or via the dashboard under **Infrastructure → Nodes → [your node]**.
+Or via the dashboard under **Nodes → [your node]**.
 
 ### Clear recordings storage
 

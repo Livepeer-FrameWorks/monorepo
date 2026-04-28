@@ -10,7 +10,7 @@ Browser-based WHIP streaming SDK for **FrameWorks**. Camera, screen, or multi-so
 | Package                                     | Description                                                          |
 | ------------------------------------------- | -------------------------------------------------------------------- |
 | `@livepeer-frameworks/streamcrafter-core`   | Core streaming logic, WHIP client, WebCodecs encoder, vanilla facade |
-| `@livepeer-frameworks/streamcrafter-react`  | React component, composable sub-components, and hooks                |
+| `@livepeer-frameworks/streamcrafter-react`  | React 17/18/19 component, composable sub-components, and hooks       |
 | `@livepeer-frameworks/streamcrafter-svelte` | Svelte 5 component, composable sub-components, and stores            |
 | `@livepeer-frameworks/streamcrafter-wc`     | Lit Web Components (Shadow DOM, slots, CDN-ready)                    |
 
@@ -240,6 +240,9 @@ const isLive = studio.reactiveState.get("streaming");
 | `professional` | 1920x1080  | 8 Mbps        | 192 kbps      |
 | `broadcast`    | 1920x1080  | 4.5 Mbps      | 128 kbps      |
 | `conference`   | 1280x720   | 2.5 Mbps      | 96 kbps       |
+
+`QualityProfile` also accepts `auto`; current encoder settings resolve that to the broadcast
+profile.
 
 ### Multi-Source Streaming
 

@@ -24,13 +24,13 @@ Cluster A (tenant's preferred)              Cluster B (origin)
 
 ## Service Responsibilities
 
-| Component        | Role                                                                                                                                                                                             | Data                                                                                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| FederationServer | Handles inbound gRPC RPCs (QueryStream, NotifyOriginPull, PrepareArtifact, PeerChannel, CreateRemoteClip, CreateRemoteDVR, ListTenantArtifacts, MigrateArtifactMetadata, ForwardArtifactCommand) | Reads local LoadBalancer scores, writes ActiveReplication records                                                                       |
-| FederationClient | Pool wrapper for outbound unary RPCs to peer Foghorns                                                                                                                                            | Uses FoghornPool lazy connections                                                                                                       |
-| PeerManager      | Manages PeerChannel lifecycles, peer discovery, telemetry push/recv, leader election                                                                                                             | Redis leader lease, peer address map                                                                                                    |
-| RemoteEdgeCache  | Redis-backed cache for all cross-cluster state                                                                                                                                                   | remote_edges (30s TTL), remote_replications (5m), active_replications (5m), edge_summary (60s), stream_ads (15s), peer_heartbeats (30s) |
-| Quartermaster    | Peer discovery via `ListPeers(cluster_id)`                                                                                                                                                       | Returns peer cluster addresses and shared tenant lists                                                                                  |
+| Component        | Role                                                                                                                                                                                             | Data                                                                                                                                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FederationServer | Handles inbound gRPC RPCs (QueryStream, NotifyOriginPull, PrepareArtifact, PeerChannel, CreateRemoteClip, CreateRemoteDVR, ListTenantArtifacts, MigrateArtifactMetadata, ForwardArtifactCommand) | Reads local LoadBalancer scores, writes ActiveReplication records                                                                                                                                                                |
+| FederationClient | Pool wrapper for outbound unary RPCs to peer Foghorns                                                                                                                                            | Uses FoghornPool lazy connections                                                                                                                                                                                                |
+| PeerManager      | Manages PeerChannel lifecycles, peer discovery, telemetry push/recv, leader election                                                                                                             | Redis leader lease, peer address map                                                                                                                                                                                             |
+| RemoteEdgeCache  | Redis-backed cache for all cross-cluster state                                                                                                                                                   | remote_edges (30s), remote_replications (5m), active_replications (5m), edge_summary (60s), stream_ads (15s), playback_index (30s), remote_live_streams (30s), remote_artifacts (90s), stream_peers (60s), peer_heartbeats (30s) |
+| Quartermaster    | Peer discovery via `ListPeers(cluster_id)`                                                                                                                                                       | Returns peer cluster addresses and shared tenant lists                                                                                                                                                                           |
 
 ## Data Flows
 
@@ -53,7 +53,7 @@ Viewer → Foghorn A (tenant's cluster)
 
 ### PeerChannel Telemetry Exchange
 
-PeerChannel is a bidirectional gRPC stream carrying 9 message types via `oneof`:
+PeerChannel is a bidirectional gRPC stream carrying 8 payload types via `oneof`:
 
 | Message               | Interval                 | Direction | Purpose                                                                                                               |
 | --------------------- | ------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -186,7 +186,7 @@ Federation events carry `local_lat`, `local_lon`, `remote_lat`, `remote_lon` (al
 
 ## Key Files
 
-- `pkg/proto` - Service definition (9 RPCs, 9 PeerMessage types)
+- `pkg/proto` - Service definition (9 RPCs, 8 PeerMessage payload types)
 - `api_balancing/internal/federation` - FederationServer: all RPC handlers
 - `api_balancing/internal/federation` - FederationClient: pool wrapper for outbound RPCs
 - `api_balancing/internal/federation` - PeerManager: lifecycle, discovery, telemetry, leader election

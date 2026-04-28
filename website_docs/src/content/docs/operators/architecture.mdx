@@ -69,28 +69,27 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | **Support & Interfaces** |                            |          |                                                                     |
 | Deckhand                 | 18015 (HTTP), 19006 (gRPC) | Central  | Support messaging API (Chatwoot adapter)                            |
 | Skipper                  | 18018 (HTTP), 19007 (gRPC) | Central  | AI video consultant API                                             |
-| Web Console              | 18030                      | Central  | Main application interface                                          |
-| Marketing Site           | 18031                      | Central  | Public website                                                      |
+| Web Console              | 18030                      | Regional | Main application interface                                          |
+| Marketing Site           | 18031                      | Regional | Public website                                                      |
 | Forms                    | 18032                      | Central  | Contact form handling                                               |
 
 ### Infrastructure Components
 
-| Component                                    | Role                                       | Plane          | Port(s)                                           | Deploy Location                            |
-| -------------------------------------------- | ------------------------------------------ | -------------- | ------------------------------------------------- | ------------------------------------------ |
-| MistServer                                   | Media processing (ingest/transcode)        | Media          | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
-| Livepeer Gateway                             | Transcoding gateway (orchestrator routing) | Media          | 8935                                              | Edge (co-located with MistServer)          |
-| Livepeer Signer                              | ETH transaction signer for gateway         | Control        | 18016                                             | Central                                    |
-| PostgreSQL-compatible DB (Postgres/Yugabyte) | State & configuration database             | Control        | Operator-defined                                  | Central                                    |
-| ClickHouse                                   | Time-series analytics database             | Data           | 8123 (HTTP), 9000 (Native)                        | Central                                    |
-| Kafka                                        | Event streaming backbone                   | Data           | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
-| Zookeeper                                    | Kafka cluster management                   | Data           | 2181                                              | Central + Regional                         |
-| Privateer                                    | WireGuard mesh agent                       | Infrastructure | 18012 (API), 53/udp (DNS), 51820/udp (WireGuard)  | Central/Regional \*                        |
-| Nginx                                        | Reverse proxy & routing                    | Support        | 18090                                             | Central                                    |
-| VictoriaMetrics + vmagent                    | Metrics collection                         | Support        | Operator-defined                                  | Central + every backend and edge host      |
-| Grafana                                      | Metrics visualization                      | Support        | Operator-defined                                  | Central                                    |
-| Listmonk                                     | Newsletter/mailing list manager            | Support        | 9000 (service), 9001 (docker-compose host)        | Central                                    |
-
-| Foghorn Redis | 6379 | Foghorn state sync (HA) | Infrastructure | Regional |
+| Component                                    | Role                                                                                      | Plane          | Port(s)                                           | Deploy Location                            |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------- | ------------------------------------------ |
+| MistServer                                   | Media processing (ingest/transcode)                                                       | Media          | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
+| Livepeer Gateway                             | Transcoding gateway (orchestrator routing)                                                | Media          | 8935                                              | Edge (co-located with MistServer)          |
+| Livepeer Signer                              | ETH transaction signer for gateway                                                        | Control        | 18016                                             | Central                                    |
+| PostgreSQL-compatible DB (Postgres/Yugabyte) | State & configuration database                                                            | Control        | Operator-defined                                  | Central                                    |
+| ClickHouse                                   | Time-series analytics database                                                            | Data           | 8123 (HTTP), 9000 (Native)                        | Central                                    |
+| Kafka                                        | Event streaming backbone                                                                  | Data           | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
+| ZooKeeper                                    | Optional standalone coordination service; Kafka uses KRaft and does not require ZooKeeper | Data           | 2181                                              | Operator-defined, only when enabled        |
+| Privateer                                    | WireGuard mesh agent                                                                      | Infrastructure | 18012 (API), 53/udp (DNS), 51820/udp (WireGuard)  | Central/Regional \*                        |
+| Foghorn Redis                                | Foghorn HA state sync                                                                     | Infrastructure | 6379                                              | Regional                                   |
+| Nginx                                        | Reverse proxy & routing                                                                   | Support        | 18090                                             | Central                                    |
+| VictoriaMetrics + vmagent                    | Metrics collection                                                                        | Support        | Operator-defined                                  | Central + every backend and edge host      |
+| Grafana                                      | Metrics visualization                                                                     | Support        | Operator-defined                                  | Central                                    |
+| Listmonk                                     | Newsletter/mailing list manager                                                           | Support        | 9000 (service), 9001 (docker-compose host)        | Central                                    |
 
 _Navigator and Privateer are in testing. Production rollout is controlled and may not be enabled in every environment._
 
@@ -149,12 +148,12 @@ Quartermaster is the sole routing authority. Commodore resolves tenant-to-cluste
 
 **Deployment models:**
 
-| Model                | Description                                                                                                                                                                                                                |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Shared**           | Free rate-limited tier or premium shared tiers. All tenants share the same cluster, edges, and services.                                                                                                                   |
-| **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via [CLI](/operators/cli-reference) or [Manual Deployment](/operators/deployment-manual). |
-| **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                 |
-| **Open Marketplace** | Third-party operators publish clusters with pricing and access controls. Tenants subscribe to clusters via the marketplace. _(In progress)_                                                                                |
+| Model                | Description                                                                                                                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                                                                                               |
+| **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via the [CLI](/operators/cli-reference), with [Manual Deployment](/operators/deployment-manual) as an advanced reference. |
+| **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                                                 |
+| **Open Marketplace** | Third-party operators publish clusters with pricing and access controls. Tenants subscribe to clusters via the marketplace. _(In progress)_                                                                                                                |
 
 ---
 
@@ -282,7 +281,9 @@ graph TB
 Traffic routing and TLS termination vary by deployment tier:
 
 - **Development:** Nginx (via Docker Compose) handles local routing with self-signed or no TLS.
-- **Production (Edge):** Caddy handles automatic HTTPS via Let's Encrypt (HTTP-01 validation).
+- **Production (Edge):** Caddy serves edge traffic. Bootstrap templates start with internal TLS
+  and a 503 response; after enrollment, Foghorn pushes SiteConfig and TLS material to Helmsman,
+  which rewrites and reloads Caddy for viewer traffic.
   - Managed via CLI templates (`cli/internal/templates/edge/Caddyfile.tmpl`).
   - Supports HTTP/2, HTTP/3, and WebSocket upgrades natively.
 - **Production (Central/Regional):** Navigator manages public DNS via Cloudflare API.

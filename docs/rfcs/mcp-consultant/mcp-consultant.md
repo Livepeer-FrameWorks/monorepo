@@ -2,21 +2,24 @@
 
 ## Status
 
-Implemented (Phase 1) | Phase 2 in design
+Implemented through Phase 2, with Phase 3 partially implemented
 
 ## TL;DR
 
 - Phase 1 (implemented): MCP tools/resources/prompts so customer-side LLMs can diagnose streaming issues (BYO LLM).
-- Phase 2 (next): **Skipper** (`api_consultant`) MVP — chat + orchestration (**2A**) and grounding (**2B**: RAG + web search + confidence/citations). Premium, metered feature.
-- Phase 3 (deferred): Productization and expansion (**3A** heartbeat/investigations, **3B** metering/billing/tier gating, **3C** extra surfaces like docs-embedded chat + API/SDK polish).
+- Phase 2 (implemented): **Skipper** (`api_consultant`) chat + orchestration, pgvector RAG, web search, confidence/citations, dashboard/docs surfaces, HTTP SSE, gRPC streaming, and Gateway MCP `ask_consultant` proxy.
+- Phase 3 (partial): heartbeat investigations, notifications, tier gating, optional per-tenant rate limiting, and usage/metering hooks exist. Commercial billing enforcement and provider-cost calibration still need production usage data.
 - Research: `./references/` contains industry analysis backing these decisions.
 
 ## Current State
 
 - MCP server exists with diagnostic tools, knowledge resources, support history, and expert prompts.
 - Customers with MCP-capable clients (Claude Desktop, Cursor, etc.) can diagnose streaming issues via their own LLM.
-- No server-side LLM. Customers without MCP clients cannot access AI diagnostics.
-- No proactive monitoring or automated investigation.
+- Skipper provides server-side LLM orchestration through OpenAI-compatible endpoints, Anthropic, and Ollama.
+- Knowledge search uses PostgreSQL/pgvector, full-text search, optional reranking, optional HyDE, optional contextual retrieval, and optional web search through Tavily, Brave, or SearXNG.
+- The dashboard has an authenticated `/skipper` chat surface. The docs site includes an authenticated Skipper docs chat component. Skipper also exposes HTTP/SSE and gRPC chat APIs, plus an MCP spoke for Gateway `ask_consultant`.
+- The heartbeat agent runs periodic deterministic triage for eligible tenants, performs investigations when needed, stores reports, and can notify through email, WebSocket/Decklog, or MCP notification sessions.
+- Usage tracking records LLM/search/embedding usage in Skipper tables and can publish Decklog/Kafka usage events. Exact cost tables should be updated from real token/provider usage once deployments have measured traffic.
 
 ## Problem / Motivation
 
@@ -90,8 +93,8 @@ Phase 2 (Skipper):
 
 ┌──────────────────────────┐    ┌──────────────────────────┐
 │  Dashboard Chat Widget   │    │  Docs-Embedded Chat      │
-│  (authenticated, tenant) │    │  (unauthenticated,       │
-│                          │    │   knowledge only)         │
+│  (authenticated, tenant) │    │  (authenticated,         │
+│                          │    │   docs mode)              │
 └────────────┬─────────────┘    └────────────┬─────────────┘
              │                               │
              ▼                               ▼
@@ -127,14 +130,14 @@ Phase 2 (Skipper):
 
 ### Phased Approach
 
-| Phase        | Scope                                                                                 | Effort  | Dependencies         |
-| ------------ | ------------------------------------------------------------------------------------- | ------- | -------------------- |
-| **Phase 1**  | MCP consultant foundation (tools/resources/prompts; BYO LLM)                          | ~1 week | None                 |
-| **Phase 2A** | Skipper chat + orchestration (api_consultant HTTP+SSE, persistence, dashboard widget) | TBD     | LLM API key          |
-| **Phase 2B** | Grounding layer (pgvector RAG + web search + confidence/citations)                    | TBD     | LLM + search API key |
-| **Phase 3A** | Smart heartbeat agent + investigations + notifications                                | TBD     | Phase 2              |
-| **Phase 3B** | Metering/billing + tier gating + per-tenant rate limits                               | TBD     | Phase 2              |
-| **Phase 3C** | Extra surfaces (docs-embedded chat + API/SDK polish)                                  | TBD     | Phase 2              |
+| Phase        | Scope                                                                                 | Effort      | Dependencies                   |
+| ------------ | ------------------------------------------------------------------------------------- | ----------- | ------------------------------ |
+| **Phase 1**  | MCP consultant foundation (tools/resources/prompts; BYO LLM)                          | ~1 week     | None                           |
+| **Phase 2A** | Skipper chat + orchestration (api_consultant HTTP+SSE, persistence, dashboard widget) | Implemented | LLM provider                   |
+| **Phase 2B** | Grounding layer (pgvector RAG + web search + confidence/citations)                    | Implemented | LLM + optional search provider |
+| **Phase 3A** | Smart heartbeat agent + investigations + notifications                                | Partial     | Phase 2                        |
+| **Phase 3B** | Metering/billing + tier gating + per-tenant rate limits                               | Partial     | Phase 2                        |
+| **Phase 3C** | Extra surfaces (docs-embedded chat + API/SDK polish)                                  | Partial     | Phase 2                        |
 
 ---
 
@@ -156,8 +159,8 @@ Returns JSON with authoritative doc site entry points. The customer's LLM naviga
     {
       "name": "FrameWorks Docs",
       "description": "Platform documentation for streamers, operators, and selfhosters",
-      "index": "https://docs.framework.network/",
-      "sitemap": "https://docs.framework.network/sitemap.xml"
+      "index": "https://logbook.frameworks.network/",
+      "sitemap": "https://logbook.frameworks.network/sitemap-index.xml"
     },
     {
       "name": "MistServer Docs",
@@ -257,14 +260,14 @@ api_gateway/internal/mcp/
 ### Summary
 
 **Skipper** is a server-side AI video consultant that makes diagnostic capabilities
-accessible to all customers — not just those with MCP clients. It provides:
+accessible from the dashboard, docs site, APIs, and MCP clients. It provides:
 
 1. **Three-tier knowledge architecture** — RAG KB + live web search + LLM best guess (with confidence tagging)
 2. **Chat interface** — In-app widget, docs-embedded widget, and API endpoint
 3. **Smart heartbeat agent** — Periodic context-aware monitoring (OpenClaw pattern)
 4. **Provider-agnostic backends** — LLM and search providers configurable by operator
 
-Premium, metered feature billed per tenant via Purser.
+Skipper is tier-gated by configuration. Usage is tracked and can be emitted into the billing/event pipeline; production pricing should be derived from measured token usage, search-provider costs, and model/provider choices.
 
 See `./references/` for industry research backing these decisions.
 
@@ -342,15 +345,15 @@ pgvector in PostgreSQL. Fast retrieval (~50ms). Pre-indexed.
 
 **Sources to crawl/embed:**
 
-| Source                                   | Crawlable?                    | Method                        |
-| ---------------------------------------- | ----------------------------- | ----------------------------- |
-| FrameWorks docs (docs.framework.network) | Yes                           | Sitemap crawl                 |
-| MistServer docs (docs.mistserver.org)    | Yes (Docusaurus, ~1000 pages) | Sitemap crawl                 |
-| FFmpeg man pages (ffmpeg.org)            | Yes (10s crawl delay)         | Direct fetch                  |
-| FFmpeg GitHub docs                       | Yes                           | Git clone                     |
-| FrameWorks blog/encoding guides          | Yes (you write these)         | Sitemap crawl                 |
-| Human-curated pages (FFmpeg wiki etc.)   | Blocked for bots              | Human retrieves via admin API |
-| Operator-uploaded custom docs            | N/A                           | Upload API                    |
+| Source                                       | Crawlable?                    | Method                        |
+| -------------------------------------------- | ----------------------------- | ----------------------------- |
+| FrameWorks docs (logbook.frameworks.network) | Yes                           | Sitemap crawl                 |
+| MistServer docs (docs.mistserver.org)        | Yes (Docusaurus, ~1000 pages) | Sitemap crawl                 |
+| FFmpeg man pages (ffmpeg.org)                | Yes (10s crawl delay)         | Direct fetch                  |
+| FFmpeg GitHub docs                           | Yes                           | Git clone                     |
+| FrameWorks blog/encoding guides              | Yes (you write these)         | Sitemap crawl                 |
+| Human-curated pages (FFmpeg wiki etc.)       | Blocked for bots              | Human retrieves via admin API |
+| Operator-uploaded custom docs                | N/A                           | Upload API                    |
 
 Note: FFmpeg wiki (trac.ffmpeg.org) blocks AI crawlers. Web search fallback covers
 this gap — search engines have already indexed the wiki. Human curation of top 20-30
@@ -360,11 +363,11 @@ guides seeds the KB for faster retrieval of high-value content.
 
 **`api_consultant/`** service exposing HTTP API. Three surfaces:
 
-| Surface                            | Auth                         | Capabilities                               |
-| ---------------------------------- | ---------------------------- | ------------------------------------------ |
-| **In-app chat** (Svelte dashboard) | Authenticated, tenant-scoped | Full diagnostics + KB + web search         |
-| **Docs-embedded chat**             | Unauthenticated              | KB + web search only (no diagnostic tools) |
-| **API endpoint**                   | Authenticated, tenant-scoped | Full diagnostics + KB + web search         |
+| Surface                            | Auth                         | Capabilities                            |
+| ---------------------------------- | ---------------------------- | --------------------------------------- |
+| **In-app chat** (Svelte dashboard) | Authenticated, tenant-scoped | Full diagnostics + KB + web search      |
+| **Docs-embedded chat**             | Authenticated                | Docs/knowledge mode with tenant session |
+| **API endpoint**                   | Authenticated, tenant-scoped | Full diagnostics + KB + web search      |
 
 Chat flow:
 
@@ -374,7 +377,7 @@ Chat flow:
 4. Chain tools as needed, cite sources, tag confidence per section
 5. Stream response tokens via SSE (real-time typing effect)
 6. Collapsible details showing tool calls and raw data underneath final answer
-7. Log token usage for metering
+7. Log token/search usage for metering where provider data is available
 8. Store conversation in PostgreSQL
 
 **Conversation memory**: Store chat history in PostgreSQL. Recency-based retrieval.
@@ -390,7 +393,7 @@ every N minutes (configurable, default 30):
   3. LLM reviews context → decide: investigate, flag, or skip
   4. If investigate → chain tools → produce root cause report
   5. Deliver report via notification (email, MCP SSE, dashboard)
-  6. Log token usage for billing
+  6. Log token/search usage for billing/metering
 ```
 
 Also triggered by:
@@ -408,7 +411,9 @@ Most heartbeats should be silent (`HEARTBEAT_OK`).
 - **Rate limiting**: Per-tenant rate limits on chat messages and investigation triggers
 - **Operator config**: Operators set tier access + provide their own LLM/search API keys
 
-### Phase 2 Effort Estimate
+### Historical Phase 2 Estimate
+
+This table is a planning artifact from before implementation. Keep it only as rough historical context; update any public cost or staffing guidance with measured token usage, prompt shapes, provider pricing, and deployment choices.
 
 | Component                                         | Effort           |
 | ------------------------------------------------- | ---------------- |
@@ -429,21 +434,20 @@ Most heartbeats should be silent (`HEARTBEAT_OK`).
 | Testing + integration                             | ~1 week          |
 | **Total**                                         | **~11-13 weeks** |
 
-### Phase 2 Infrastructure
+### Current Infrastructure
 
-- `api_consultant/` — New Go service
+- `api_consultant/` — Go service
 - pgvector extension in PostgreSQL
-- ollama container in docker-compose.yml (optional, for self-hosted LLM)
-- SearXNG container in docker-compose.yml (optional, for self-hosted search)
-- LLM API key (required for MVP)
-- Search API key (required for MVP unless self-hosting SearXNG)
+- Ollama support is available through `pkg/llm` when operators provide an Ollama endpoint.
+- SearXNG support is available through `pkg/search` when operators provide a SearXNG endpoint.
+- External LLM and search API keys are optional when the operator uses self-hosted providers; otherwise configure OpenAI-compatible/Anthropic and Tavily/Brave credentials.
 
 ---
 
-## Phase 3: Enhancements (Deferred)
+## Phase 3: Remaining Enhancements
 
 - Conversation embeddings for semantic retrieval of past sessions
-- Self-hosted SearXNG + ollama for fully self-contained deployment
+- Fully packaged self-hosted SearXNG/Ollama deployment profiles
 - FrameWorks forum integration (when forum has content)
 - Auto-remediation suggestions with human approval gates
 - Multi-language support
@@ -453,8 +457,8 @@ Most heartbeats should be silent (`HEARTBEAT_OK`).
 ## Impact / Dependencies
 
 - Services: api_gateway (MCP), Periscope, Deckhand, Commodore, Purser (billing)
-- New service: `api_consultant/`
-- New libraries: `pkg/llm/`, `pkg/search/`
+- Service: `api_consultant/`
+- Libraries: `pkg/llm/`, `pkg/search/`
 - pgvector extension in PostgreSQL
 - Soft dependency: Lookout (incidents) — Skipper works without it, integrates when available
 - Existing:
@@ -492,8 +496,8 @@ Most heartbeats should be silent (`HEARTBEAT_OK`).
 1. ~~**Deckhand client**: Does `pkg/clients/deckhand/` exist?~~ **Answer**: Yes.
 2. ~~**Knowledge content**: Static resources or RAG?~~ **Answer**: Phase 1 curated directory. Phase 2 three-tier: RAG KB + web search + LLM best guess.
 3. ~~**Hallucination risk**: How to prevent LLM from guessing?~~ **Answer**: Confidence enum (`verified`/`sourced`/`best_guess`/`unknown`). Frontend styles by trust level. Web search covers blocked sources (FFmpeg wiki).
-4. **Model selection**: Which model for default? Needs benchmarking for tool-use quality.
-5. **Chat UI design**: Full page vs sidebar widget vs floating bubble — needs design input.
+4. **Model selection**: Which model/provider should be the default per deployment? Needs benchmarking for tool-use quality, latency, and token cost.
+5. ~~**Chat UI design**: Full page vs sidebar widget vs floating bubble — needs design input.~~ **Answer**: Dashboard page plus docs floating chat are implemented.
 6. **Heartbeat frequency**: Tenant-configurable or operator-fixed?
 7. **Notification channels**: Email + MCP SSE baseline. Webhooks? Slack?
 8. **Embedding model**: OpenAI ada-002? Local model via ollama?

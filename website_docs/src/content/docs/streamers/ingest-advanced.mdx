@@ -97,8 +97,8 @@ const studio = createStreamCrafter({
 ### Reconnection Events
 
 ```ts
-studio.on("reconnectionAttempt", ({ attempt, max }) => {
-  console.log(`Reconnecting: attempt ${attempt} of ${max}`);
+studio.on("reconnectionAttempt", ({ attempt, maxAttempts }) => {
+  console.log(`Reconnecting: attempt ${attempt} of ${maxAttempts}`);
 });
 
 studio.on("reconnectionSuccess", () => {
@@ -118,9 +118,10 @@ studio.reactiveState.on("reconnecting", (isReconnecting) => {
 });
 ```
 
-## Gateway Integration
+## Gateway Resolution
 
-In production, use Gateway Mode to automatically resolve the best WHIP ingest endpoint:
+The SDK can call the public `resolveIngestEndpoint` GraphQL field to resolve a WHIP endpoint from a
+stream key when that resolver is enabled in your environment:
 
 ```ts
 const studio = createStreamCrafter({
@@ -130,7 +131,7 @@ const studio = createStreamCrafter({
 });
 ```
 
-The gateway resolves your stream key to the optimal ingest node based on:
+When enabled, the resolver can choose an ingest node based on:
 
 - Geographic proximity
 - Node load and capacity
@@ -138,7 +139,7 @@ The gateway resolves your stream key to the optimal ingest node based on:
 
 ### Manual Gateway Resolution
 
-For custom UIs that need to resolve a WHIP URL before initializing:
+For custom UIs that need to resolve a WHIP URL before initializing in resolver-backed environments:
 
 ```ts
 import { IngestClient } from "@livepeer-frameworks/streamcrafter-core";

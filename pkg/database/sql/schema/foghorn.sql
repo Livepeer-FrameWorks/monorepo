@@ -3,7 +3,7 @@
 -- ============================================================================
 -- Manages artifact lifecycle, storage distribution, and node orchestration.
 -- Business registry (tenant, stream, metadata) is owned by Commodore.
--- See: docs/architecture/CLIP_DVR_REGISTRY.md for full architecture details.
+-- See: docs/architecture/clips-dvr.md for full architecture details.
 -- ============================================================================
 
 CREATE SCHEMA IF NOT EXISTS foghorn;

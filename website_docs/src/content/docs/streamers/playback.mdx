@@ -22,7 +22,7 @@ Playback options: drop-in components across React, Svelte, and Web Components, o
 
 | Package                              | Use Case                                              |
 | ------------------------------------ | ----------------------------------------------------- |
-| `@livepeer-frameworks/player-react`  | React 18+ apps                                        |
+| `@livepeer-frameworks/player-react`  | React 17+ apps                                        |
 | `@livepeer-frameworks/player-svelte` | Svelte 5 apps                                         |
 | `@livepeer-frameworks/player-wc`     | Web Components — Vue, Angular, CDN, plain HTML        |
 | `@livepeer-frameworks/player-core`   | Vanilla JS, headless, or building custom integrations |
@@ -105,13 +105,13 @@ import { Player } from "@livepeer-frameworks/player-react";
 
 ```bash
 # Play in VLC
-vlc %PLAY_URL%/play/abc123def.m3u8
+vlc %PLAY_URL%/play/abc123def/hls/index.m3u8
 
 # Embed in HTML (Safari, iOS)
-<video src="%PLAY_URL%/play/abc123def.m3u8" controls></video>
+<video src="%PLAY_URL%/play/abc123def/hls/index.m3u8" controls></video>
 
 # Record with ffmpeg
-ffmpeg -i %PLAY_URL%/play/abc123def/hls -c copy output.mp4
+ffmpeg -i %PLAY_URL%/play/abc123def/hls/index.m3u8 -c copy output.mp4
 ```
 
 ### JSON Response (Custom Players)
@@ -128,8 +128,8 @@ Returns all available protocols, primary and fallback nodes:
     "node_id": "edge-7",
     "base_url": "%EDGE_URL%",
     "outputs": {
-      "HLS": {"url": "%EDGE_URL%/hls/stream-id/index.m3u8"},
-      "WHEP": {"url": "%EDGE_URL%/webrtc/stream-id"}
+      "HLS": {"url": "%PLAY_URL%/play/stream-id/hls/index.m3u8"},
+      "WHEP": {"url": "%PLAY_URL%/play/stream-id/webrtc"}
     }
   },
   "fallbacks": [...]
@@ -169,7 +169,7 @@ The player SDK handles this automatically — `gatewayUrl` resolves to the corre
 <video id="video" controls></video>
 <script>
   const video = document.getElementById("video");
-  const hlsUrl = "%PLAY_URL%/play/{playback-id}.m3u8";
+  const hlsUrl = "%PLAY_URL%/play/{playback-id}/hls/index.m3u8";
   if (Hls.isSupported()) {
     const hls = new Hls();
     hls.loadSource(hlsUrl);
@@ -186,7 +186,7 @@ The player SDK handles this automatically — `gatewayUrl` resolves to the corre
 <link href="https://vjs.zencdn.net/8.0.4/video-js.css" rel="stylesheet" />
 <script src="https://vjs.zencdn.net/8.0.4/video.min.js"></script>
 <video-js id="my-video" class="video-js" controls data-setup="{}">
-  <source src="%PLAY_URL%/play/{playback-id}.m3u8" type="application/x-mpegURL" />
+  <source src="%PLAY_URL%/play/{playback-id}/hls/index.m3u8" type="application/x-mpegURL" />
 </video-js>
 ```
 

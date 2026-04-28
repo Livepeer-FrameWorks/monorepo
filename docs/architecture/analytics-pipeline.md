@@ -290,9 +290,9 @@ Notes:
 
 ### Cross-cluster billing attribution
 
-In multi-cluster deployments, every analytics event carries `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). Periscope Query generates per-cluster `UsageSummary` records for Purser, enabling settlement of inter-cluster traffic.
+In multi-cluster deployments, viewer/session billing events carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested) when that context is known. Other analytics families carry the cluster fields that match their domain; for example, stream lifecycle rows currently store the emitting `cluster_id`, while routing decisions store local and remote cluster IDs. Periscope Query generates per-cluster `UsageSummary` records for Purser from the viewer rollups, enabling settlement of inter-cluster traffic.
 
-See `docs/architecture/cross-cluster-billing.md` for the full attribution model, ClickHouse schema additions (`cluster_id` + `origin_cluster_id` on `viewer_connection_events`, `stream_event_log`, and their MVs), and the settlement query.
+See `docs/architecture/cross-cluster-billing.md` for the full attribution model, ClickHouse schema additions (`cluster_id` + `origin_cluster_id` on viewer connection events and viewer rollups; `cluster_id` only on stream lifecycle rows), and the settlement query.
 
 ## Gotchas
 

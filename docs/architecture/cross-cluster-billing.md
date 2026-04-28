@@ -9,9 +9,9 @@ infrastructure cost, not a tenant-facing billing item.
 Ingest:     MistServer -> Foghorn (PUSH_REWRITE) -> ValidateStreamKey -> cache {OriginClusterID}
 Viewer:     MistServer -> Foghorn (USER_NEW/END) -> cache hit: origin from cache
                                                   -> cache miss: ResolveIdentifier -> Quartermaster -> origin
-Analytics:  trigger -> Decklog -> Kafka -> Periscope Ingest -> ClickHouse (cluster_id + origin_cluster_id)
-                                                            -> MV rollup -> Periscope Query
-                                                            -> per-cluster UsageSummary -> Purser
+Analytics:  trigger -> Decklog -> Kafka -> Periscope Ingest -> ClickHouse
+                                                            -> viewer MV rollup with cluster_id + origin_cluster_id
+                                                            -> Periscope Query -> per-cluster UsageSummary -> Purser
 ```
 
 **Ingest path:** `sendTriggerToDecklog()` sets `trigger.ClusterId` from
@@ -19,20 +19,22 @@ Analytics:  trigger -> Decklog -> Kafka -> Periscope Ingest -> ClickHouse (clust
 `ValidateStreamKeyResponse` (ingest) and `ResolveIdentifierResponse` (federated
 viewer cache-miss path).
 
-**Query path:** `generateTenantUsageSummary` groups `tenant_viewer_daily` by
-`cluster_id`, emitting one `UsageSummary` per cluster. Non-cluster-scoped metrics
-(storage, processing, API calls) are attributed to the tenant's primary cluster.
+**Query path:** `generateTenantUsageSummary` reads `tenant_viewer_daily` grouped by
+`cluster_id` and `origin_cluster_id`, then attributes viewer/egress metrics to the
+serving `cluster_id` when present, falling back to `origin_cluster_id` and then the
+tenant's primary cluster for legacy rows. Non-cluster-scoped metrics (storage,
+processing, API calls) are attributed to the tenant's primary cluster.
 
 ## ClickHouse Schema
 
 | Table / MV                 | Cluster columns                                          | Engine           |
 | -------------------------- | -------------------------------------------------------- | ---------------- |
 | `viewer_connection_events` | `cluster_id`, `origin_cluster_id`                        | MergeTree        |
-| `stream_event_log`         | `cluster_id`, `origin_cluster_id`                        | MergeTree        |
+| `stream_event_log`         | `cluster_id`                                             | MergeTree        |
 | `viewer_hours_hourly` (MV) | `cluster_id`, `origin_cluster_id` in GROUP BY            | SummingMergeTree |
 | `tenant_viewer_daily` (MV) | `cluster_id`, `origin_cluster_id` in GROUP BY + ORDER BY | SummingMergeTree |
 
-`origin_cluster_id` is included in ORDER BY keys for rollup tables to prevent
+`origin_cluster_id` is included in ORDER BY keys for viewer rollup tables to prevent
 merge-collapse in AggregatingMergeTree/SummingMergeTree engines.
 
 ## Settlement Query

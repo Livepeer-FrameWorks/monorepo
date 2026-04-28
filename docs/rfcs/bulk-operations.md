@@ -17,6 +17,13 @@ Draft
 - No background job system for tenant-initiated async operations
 - Tenants needing bulk exports (analytics, audit logs) must build custom polling loops
 
+Internal evidence:
+
+- `pkg/graphql/schema.graphql`
+- `api_gateway/graph/schema.resolvers.go`
+- `api_gateway/internal/middleware/ratelimit.go`
+- no `BulkOperation` / `bulkOperationRunQuery` schema or resolver found
+
 ## Problem / Motivation
 
 Tenants with large stream libraries or high-volume analytics need to export data for:
@@ -164,5 +171,5 @@ Each line is a JSON object representing one node:
 
 - [Reference] https://shopify.dev/docs/api/usage/bulk-operations
 - [Reference] https://shopify.dev/docs/api/admin-graphql/latest/objects/BulkOperation
-- [Evidence] Shopify uses 7-day URL expiration, JSONL format
-- [Evidence] Shopify allows up to 5 concurrent operations (API version 2026-01+)
+- [Reference] Shopify uses JSONL output and expiring URLs for bulk operations; exact concurrency/expiry limits should be checked against Shopify docs when implementing.
+- [Evidence] FrameWorks currently has no `BulkOperation` GraphQL schema/resolver.

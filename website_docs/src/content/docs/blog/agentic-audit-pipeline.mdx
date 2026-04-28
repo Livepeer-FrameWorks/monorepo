@@ -1,9 +1,9 @@
 ---
-title: "How Seven AI Agents Audit Our Streaming Platform"
+title: "How Seven AI Agents Audited Our Streaming Platform"
 date: 2026-01-31
 authors:
   - frameworks
-excerpt: "We built a multi-agent pipeline that continuously audits our codebase, finds real bugs, implements fixes, and reviews its own PRs. Here's how it found race conditions, tenant isolation gaps, and data loss risks across 12 subsystems."
+excerpt: "We ran a multi-agent audit process across our codebase and are turning it into a repeatable pipeline. Here's how it found race conditions, tenant isolation gaps, and data loss risks across 12 subsystems."
 tags:
   - engineering
   - ai
@@ -16,9 +16,9 @@ Edge cases in distributed systems are easy to reason about in isolation. A viewe
 
 The problem is scale. FrameWorks has 12 subsystems — viewer routing, ingest, VOD, edge orchestration, analytics, billing, auth, MCP agent access, DNS, Skipper, WebSocket routing, and tenant management — each with its own failure modes. Edge cases multiply across service boundaries, and manual auditing doesn't catch them all. You review billing this week, and meanwhile a race condition in ingest goes unnoticed for months.
 
-We needed something that runs continuously, prioritizes what hasn't been reviewed recently, and actually fixes what it finds. Not a one-time security audit. An ongoing process.
+We needed something repeatable that prioritizes what has not been reviewed recently and can move from findings to fixes. Not a one-time security audit. An ongoing process.
 
-So we built a pipeline around seven AI agents. Each has a focused role. They coordinate through files and pull requests — no shared memory, no message bus. Git is the orchestration layer.
+So we ran an audit process around seven AI-agent roles, then documented the automation needed to make it a continuous pipeline. Each role has a focused responsibility. They coordinate through files and pull requests — no shared memory, no message bus. Git is the orchestration layer.
 
 ## The pipeline
 
@@ -35,7 +35,7 @@ graph TD
   CI -->|"tests pass"| HM["Human Merge"]
 ```
 
-Each cycle, the Sentinel selects up to three subsystems to audit based on how long it has been since they were last reviewed. The entire flow from audit to merged PR passes through multiple independent agents, each operating on the structured output of the previous one.
+In the planned continuous version, each cycle has the Sentinel select up to three subsystems to audit based on how long it has been since they were last reviewed. The entire flow from audit to merged PR passes through multiple independent agents, each operating on the structured output of the previous one.
 
 The key design principle: every agent writes its output to a file or a pull request. There is no orchestration service. The pipeline state is the state of the repository.
 
@@ -43,13 +43,16 @@ The key design principle: every agent writes its output to a file or a pull requ
 
 The design is built on the heartbeat pattern, adapted from the [OpenClaw](https://openclaw.ai/) project's heartbeat engine. Instead of running a fixed task on a schedule, the agent wakes up, assesses the current situation, and decides whether to act.
 
-We already use this pattern in production. Our Skipper monitoring agent runs on a 30-minute heartbeat, checking stream health for each tenant and making an LLM-driven decision:
+We already use this pattern in production. Our Skipper monitoring agent runs on a 30-minute default heartbeat, checks stream health for eligible tenants with active streams, and makes a deterministic triage decision:
 
 ```go
-type decisionPayload struct {
-    Action          string   `json:"action"`   // "investigate" | "flag" | "skip"
-    Reason          string   `json:"reason"`
-    MetricsReviewed []string `json:"metrics_reviewed"`
+type TriageResult struct {
+    Action       TriageAction
+    Reason       string
+    Trigger      string
+    Violations   []ThresholdViolation
+    Deviations   []Deviation
+    Correlations []MetricCorrelation
 }
 ```
 
@@ -71,12 +74,12 @@ func (a *Agent) Start(ctx context.Context) {
 }
 ```
 
-Each cycle iterates over eligible tenants and makes a per-tenant decision. Most of the time, the answer is "skip." The agent logs `HEARTBEAT_OK` and goes back to sleep.
+Each cycle iterates over eligible tenants and makes a per-tenant decision. Most of the time, the answer is `ok`. The agent logs `HEARTBEAT_OK` and goes back to sleep.
 
 ```go
-switch action {
+switch result.Action {
 case "investigate":
-    report, tokens, err := a.Investigate(ctx, tenantID, "heartbeat", decision.Reason, snapshot)
+    report, tokens, err := a.Investigate(ctx, tenantID, result.Trigger, result.Reason, snapshot, &result, streamAnomalies)
     // ...
 case "flag":
     // persist report for human review
@@ -91,13 +94,13 @@ default:
   that fires every week but only finds something worth auditing once a month is working correctly.
 </Aside>
 
-The audit pipeline applies the same pattern at a different scale: instead of checking stream health metrics every 30 minutes, it checks codebase staleness on a weekly cadence. Which subsystems have not been audited recently? Which have the highest risk weight? Only the stale, high-priority domains trigger an audit.
+The planned audit pipeline applies the same pattern at a different scale: instead of checking stream health metrics every 30 minutes, it checks codebase staleness on a weekly cadence. Which subsystems have not been audited recently? Which have the highest risk weight? Only the stale, high-priority domains trigger an audit.
 
 ## Agent-by-agent breakdown
 
 ### Sentinel
 
-The Sentinel handles domain selection. Each subsystem has a staleness score based on when it was last audited and a priority weight reflecting its risk profile:
+The Sentinel will handle domain selection once the continuous pipeline is automated. Each subsystem has a staleness score based on when it was last audited and a priority weight reflecting its risk profile:
 
 ```json
 {
@@ -108,9 +111,9 @@ The Sentinel handles domain selection. Each subsystem has a staleness score base
 }
 ```
 
-The scoring formula is `days_since_last_audit * priority_weight`. Billing gets a 1.5x multiplier because data loss means revenue impact. Stable subsystems like forms and ticketing get a 0.6x. The Sentinel picks the top three and dispatches them.
+The scoring formula is `days_since_last_audit * priority_weight`. Billing gets a 1.5x multiplier because data loss means revenue impact. Stable subsystems like forms and ticketing get a 0.6x. The planned Sentinel picks the top three and dispatches them.
 
-The Sentinel is not an LLM agent. The decision is deterministic -- a staleness score does not benefit from reasoning. Save the LLM compute for the parts that need it.
+The Sentinel does not need to be an LLM agent. The decision is deterministic -- a staleness score does not benefit from reasoning. Save the LLM compute for the parts that need it.
 
 ### Auditor
 
@@ -168,9 +171,9 @@ The PR goes through the standard CI pipeline: `make verify` (tidy, fmt, vet, tes
 
 The human is the last gate. Every PR, regardless of how many agents approved it, requires a human to merge it.
 
-## Results
+## Results From the Initial Audit
 
-We ran this pipeline across all 12 subsystems in 26 batches of three tasks each. The numbers:
+We ran the manually orchestrated version of this process across all 12 subsystems in 26 batches of three tasks each. The numbers:
 
 - **90 audit tasks** completed across **12 subsystems**
 - **26 batches** of 3 tasks each
@@ -223,10 +226,12 @@ The subsystem breakdown:
 
 ## What is next
 
+**Automated orchestration.** The domain staleness manifest, audit file convention, scripts, scheduled GitHub Actions workflow, and Makefile targets still need to be built before this is a continuous pipeline.
+
 **Severity-based routing.** Critical findings should immediately page the on-call human rather than waiting for a review cycle. Low findings could skip the Code Reviewer entirely and go straight from Implementer to CI.
 
-**Cross-subsystem audits.** The current pipeline audits one domain at a time. The most interesting bugs live at the boundaries: what happens when a billing enforcement check races against an ingest signal that crosses through the analytics pipeline? Multi-domain audits would trace these cross-cutting flows.
+**Cross-subsystem audits.** The current audit plan is domain-oriented. The most interesting bugs live at the boundaries: what happens when a billing enforcement check races against an ingest signal that crosses through the analytics pipeline? Multi-domain audits would trace these cross-cutting flows.
 
 **Feedback loop into priority weights.** When an audit cycle finds real bugs in a domain, its priority weight should increase. Domains that consistently come back clean should decay toward lower weights. The staleness manifest becomes a living document that reflects actual risk rather than initial estimates.
 
-**Incident-driven audits.** The runtime heartbeat agent already consumes incident events from a Kafka topic to trigger immediate investigations. The audit pipeline could do the same: when an anomaly detector flags something in production, schedule an audit of the affected domain rather than waiting for the next cycle.
+**Incident-driven audits.** The runtime heartbeat agent already runs periodic investigations when deterministic triage says a tenant needs attention. A future audit pipeline could also consume incident or anomaly signals: when production telemetry flags something, schedule an audit of the affected domain rather than waiting for the next cycle.

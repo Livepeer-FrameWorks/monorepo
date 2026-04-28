@@ -20,6 +20,8 @@ Evidence:
 - `npm_player/packages/core/src/core`
 - `api_tenants/internal/grpc`
 - `api_analytics_query/internal/grpc`
+- `api_balancing/internal/control/server.go`
+- `api_billing/internal/grpc/server.go`
 
 ## Problem / Motivation
 
@@ -69,3 +71,5 @@ Very large files increase cognitive load, slow reviews, and create merge conflic
 - `npm_player/packages/core/src/core`
 - `api_tenants/internal/grpc`
 - `api_analytics_query/internal/grpc`
+- `api_balancing/internal/control/server.go`
+- `api_billing/internal/grpc/server.go`

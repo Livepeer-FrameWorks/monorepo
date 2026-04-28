@@ -26,9 +26,9 @@ Routes streaming traffic to the best available media nodes based on:
 ### Edge Nodes (Helmsman)
 
 - Maintains persistent gRPC streams with all connected Helmsman instances
-- Receives all MistServer triggers forwarded by Helmsman
+- Receives configured MistServer triggers and synthetic lifecycle/storage/processing events forwarded by Helmsman
 - Sends responses for blocking triggers (stream key validation, viewer auth)
-- Dispatches commands: ClipPullRequest, DVRStartRequest, DVRStopRequest, ConfigSeed
+- Dispatches commands such as `ConfigSeed`, `ClipPullRequest`, `DVRStartRequest`, `DVRStopRequest`, `DVRDeleteRequest`, `FreezeRequest`, `DefrostRequest`, session-stop, push-target, thumbnail-upload, and processing-job requests
 - Tracks node health, capabilities, and stream state
 
 ### Control Plane (Commodore, Quartermaster)
@@ -41,13 +41,13 @@ Routes streaming traffic to the best available media nodes based on:
 ### Data Plane (Decklog)
 
 - Geo-enriches all events before forwarding
-- Batches and sends analytics events to Decklog gRPC
-- Event types: stream lifecycle, viewer connections, buffer states, DVR/clip lifecycle
+- Sends analytics and routing events to Decklog gRPC
+- Event types: stream lifecycle, viewer connections, buffer states, node/client lifecycle, routing decisions, storage, processing, DVR/clip/VOD lifecycle, and federation activity
 
 ### MistServer Compatibility
 
-- Provides 100% compatible load balancer API for MistServer nodes
-- Handles stream routing, origin lookup, ingest selection
+- Provides MistServer load-balancer compatibility endpoints used by edge nodes
+- Handles stream routing, origin lookup, ingest selection, stream stats, viewer counts, host status, and scoring weights
 
 ## Interfaces
 
@@ -78,7 +78,7 @@ GET /play/abc123def
 → Returns all protocols and fallbacks
 ```
 
-**Supported protocols:** HLS (`.m3u8`), DASH (`.mpd`), WebRTC (`.webrtc`), SRT, RTMP
+**Supported protocol hints:** HLS (`.m3u8`), DASH (`.mpd`), CMAF/LL-HLS, WebRTC/WHEP (`.webrtc`), SRT, RTMP, RTSP, MP4/WebM/MKV/TS/FLV/AAC, HDS, Smooth Streaming, DTSC, and Mist websocket outputs when present in the selected node outputs.
 
 Ops/diagnostics:
 
@@ -86,6 +86,9 @@ Ops/diagnostics:
 GET /nodes/overview              → List all nodes with capabilities
 GET /dashboard                   → Minimal status page
 GET /debug/cache/stream-context  → Cache inspection
+GET /debug/served-clusters       → Served-cluster inspection
+PUT /nodes/:node_id/mode         → Set node operational mode
+GET /nodes/:node_id/drain-status → Inspect drain progress
 ```
 
 MistServer compatibility endpoints (internal to MistServer nodes):

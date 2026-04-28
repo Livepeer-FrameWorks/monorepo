@@ -35,7 +35,7 @@ Key fields:
 
 Privacy note:
 
-- Raw client IP is redacted before emission (`client_ip` is empty); location is bucketized.
+- HTTP routing emission may carry raw `client_ip` into the internal `LoadBalancingData` event and ClickHouse table for operational attribution. Public/query-facing Periscope protobufs intentionally omit `client_ip`; location coordinates are bucketized before emission.
 
 ### Storage (ClickHouse)
 
@@ -50,6 +50,7 @@ Columns include:
 - `cluster_id LowCardinality(String)` (emitting cluster)
 - `remote_cluster_id LowCardinality(String)` (remote cluster for cross-cluster decisions; empty for local)
 - `internal_name String` (stream identifier)
+- `client_ip String` (stored internally; not exposed by the Periscope routing event response)
 
 ## Emission paths (Foghorn)
 

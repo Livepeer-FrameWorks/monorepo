@@ -12,17 +12,17 @@ The Bridge is the GraphQL API Gateway that provides a unified interface for all 
 
 - GraphQL API endpoint for web app, mobile, and developer APIs
 - Real-time subscriptions via WebSocket
-- Service aggregation from Commodore, Periscope, Purser, Signalman
+- Service aggregation from Commodore, Periscope, Purser, Quartermaster, Signalman, Deckhand, and optional Skipper
 - Authentication and authorization layer
 - Query optimization with DataLoader pattern
 
 ## Architecture
 
 - Framework: gqlgen (Go GraphQL server)
-- Caching: optional Redis for query results
+- Caching: request-scoped DataLoaders plus in-process caches for Periscope and Quartermaster-backed lookups
 - Auth: JWT or service token; minimal public allowlist (status, viewer endpoint resolve, ingest endpoint resolve); WebSocket authenticates on init
 - Subscriptions: WebSocket via Signalman
-- Service calls: gRPC (primary) with a few HTTP integrations where needed
+- Service calls: gRPC clients for control-plane services, batched Decklog usage reporting, and HTTP handlers for auth, webhooks, GraphQL, and MCP
 
 ## Run (dev)
 

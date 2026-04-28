@@ -15,11 +15,16 @@ Draft
 
 - Billing is tenant-level only (prepaid balances in Purser).
 - No stream-specific balance tables or APIs in the schema.
+- Referral attribution and referral-code tracking already exist in Quartermaster, but there is no Purser crediting/reward program for referrals yet.
+- No promo-code, volume-discount, or ENS-subdomain donation tables/APIs exist.
 
 Evidence:
 
-- `pkg/database/sql/schema`
+- `pkg/database/sql/schema/purser.sql`
+- `pkg/database/sql/schema/quartermaster.sql`
 - `api_billing/`
+- `api_tenants/internal/grpc/server.go`
+- `api_gateway/internal/handlers/auth.go`
 
 ## Problem / Motivation
 
@@ -123,7 +128,7 @@ type PromoCodeRedeemPayload {
 
 #### Referral Program
 
-Existing tenants refer new tenants; both receive credit.
+Existing tenants refer new tenants; both receive credit. Today the platform already captures referral codes during signup and tracks referral-code usage in Quartermaster; this section proposes the missing billing/reward layer.
 
 ```sql
 CREATE TABLE purser.referrals (

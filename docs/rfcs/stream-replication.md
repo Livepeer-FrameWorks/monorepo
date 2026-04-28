@@ -2,11 +2,11 @@
 
 ## Status
 
-Not implemented. Federation (see `docs/architecture/federation.md`) provides cross-cluster
-stream discovery and origin-pull, but there is no replication topology. All replication is
-direct origin→edge regardless of geography. The proposed topology model (origin/hub/edge
-roles, region-aware replication policy, per-stream controls like `max_replicas` and
-`allowed_regions`, loop prevention) has not been built.
+Partially implemented. Federation (see `docs/architecture/federation.md`) provides cross-cluster
+stream discovery, origin-pull, replication records/events, and loop-prevention checks. What is
+still missing is an explicit replication topology/policy model: origin/hub/edge roles,
+region-aware replication policy, and per-stream controls like `max_replicas` and
+`allowed_regions`.
 
 ## TL;DR
 
@@ -17,7 +17,8 @@ roles, region-aware replication policy, per-stream controls like `max_replicas` 
 ## Current State
 
 - Foghorn tracks per-node stream state including `replicated` and uses it to exclude replicated nodes from source selection.
-- Replication topology is implicit; no explicit graph or policy model.
+- Federation advertises stream edges, arranges origin-pull, stores active replication records, emits replication events, and blocks obvious replication loops.
+- Replication topology is still implicit; no explicit graph, hub role, region-aware policy, or per-stream policy model exists.
 
 Evidence:
 
@@ -34,7 +35,7 @@ Implicit replication rules lead to unstable behavior under churn, unclear origin
 
 - Explicit origin selection and stable topology.
 - Region-aware replication policy.
-- Loop prevention.
+- Extend the existing loop-prevention checks into an explicit topology/policy model.
 - Observable replication state.
 
 ## Non-Goals
@@ -84,6 +85,9 @@ Add policy fields per stream/tenant:
 ## References, Sources & Evidence
 
 - `api_balancing/internal/balancer`
+- `api_balancing/internal/handlers/handlers.go`
+- `api_balancing/internal/federation`
 - `api_balancing/internal/state`
 - `api_sidecar/internal/handlers`
-- `pkg/proto`
+- `pkg/proto/foghorn_federation.proto`
+- `pkg/proto/ipc.proto`

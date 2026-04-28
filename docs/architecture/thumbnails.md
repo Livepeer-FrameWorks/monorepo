@@ -4,9 +4,14 @@ Two systems. Single-frame preview images (poster, stream cards) and sprite sheet
 
 ## Source Files
 
+MistServer internals are upstream source files, not vendored in this monorepo:
+
 - Single-frame + MJPEG output: `mistserver/src/output/output_jpg.cpp`
 - Sprite sheet generator: `mistserver/src/process/process_thumbs.cpp`
 - ThumbVTT output: `mistserver/src/output/output_thumbvtt.cpp`
+
+FrameWorks integration points in this repo:
+
 - Connector provisioning: `api_sidecar/internal/config/manager.go` (ThumbVTT protocol)
 - Process provisioning: `api_sidecar/internal/config/manager.go` (STREAM_PROCESS trigger for live+/processing+, static config for vod+)
 - Player sprite manager: `npm_player/packages/core/src/core/ThumbnailSpriteManager.ts`

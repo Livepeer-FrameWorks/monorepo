@@ -15,8 +15,9 @@ Draft
 
 - No workflow automation system exists
 - Tenants must build custom integrations to react to events
-- Disabled "Automations" page exists in webapp (placeholder)
+- Webapp navigation has an "AI & Automation" group with "soon" entries for computer vision, transcription, and Daydream; no tenant workflow builder or disabled Automations route was found.
 - Events flow through Kafka but no tenant-configurable reactions
+- The VOD processing pipeline exists, but the AI trigger/event vocabulary in this RFC is still planned.
 
 ## Problem / Motivation
 
@@ -249,4 +250,5 @@ Two Commodore tables: `workflows` (tenant-scoped JSONB definitions) and `workflo
 - [Reference] https://help.shopify.com/en/manual/shopify-flow
 - [Reference] https://shopify.dev/docs/apps/build/flow
 - [Evidence] Shopify Flow uses trigger → condition → action model
-- [Evidence] Disabled automations page exists in webapp
+- [Evidence] `website_application/src/lib/navigation.ts` contains AI/automation "soon" nav entries; no workflow builder route was found.
+- [Evidence] `api_firehose`, `api_analytics_ingest`, and `api_balancing/internal/jobs/processing_dispatcher.go` cover current event/processing infrastructure, not tenant-configurable workflow execution.

@@ -1,6 +1,6 @@
 ---
 title: "Manual Deployment"
-description: "Step-by-step guide for deploying FrameWorks on bare metal servers without the CLI."
+description: "Advanced reference for understanding the deployment pieces behind the CLI provisioner."
 sidebar:
   order: 3
 ---
@@ -8,12 +8,16 @@ sidebar:
 import { Steps, Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Advanced Deployment">
-  This guide is for operators who cannot or choose not to use the automated CLI deployment. For most
-  users, we recommend `frameworks cluster provision` instead. See [CLI
+  The supported deployment path is the FrameWorks CLI, especially `frameworks cluster provision`.
+  This page explains the moving pieces behind that automation: supplementary services, service
+  ownership, mesh networking, database bootstrap, DNS, load balancing, and edge integration. Use it
+  as an operator reference or break-glass guide, not as the default install path. See [CLI
   Reference](/operators/cli-reference).
 </Aside>
 
-This guide walks through deploying FrameWorks services manually on bare metal servers. It assumes:
+FrameWorks deployment has several coordinated layers. The CLI and provisioning automation wire these
+layers together; the sections below describe what is being configured and why. Fully manual
+deployment assumes:
 
 - A private network (WireGuard mesh or VLAN) for backend communication
 - Edge nodes communicate over public internet (not on the mesh)
@@ -131,12 +135,13 @@ Configure your DNS provider with the following records. Exact steps vary by prov
 
 ### Required DNS Records
 
-| Type | Name | Content         | Notes         |
-| ---- | ---- | --------------- | ------------- |
-| A    | @    | `<central-ip>`  | Root domain   |
-| A    | app  | `<central-ip>`  | Web console   |
-| A    | api  | `<regional-ip>` | GraphQL API   |
-| A    | docs | `<central-ip>`  | Documentation |
+| Type | Name      | Content         | Notes                       |
+| ---- | --------- | --------------- | --------------------------- |
+| A    | @         | `<central-ip>`  | Marketing site (`foredeck`) |
+| A    | chartroom | `<central-ip>`  | Web console                 |
+| A    | bridge    | `<regional-ip>` | GraphQL API                 |
+| A    | logbook   | `<central-ip>`  | Documentation               |
+| A    | steward   | `<central-ip>`  | Forms API                   |
 
 ### Streaming Records
 
@@ -144,7 +149,9 @@ Configure your DNS provider with the following records. Exact steps vary by prov
 | ------- | ----------- | ------------------------ | ---------------- |
 | A/CNAME | edge        | Load balancer or edge IP | Edge pool domain |
 | A/CNAME | edge-ingest | Load balancer or edge IP | RTMP/WHIP ingest |
+| A/CNAME | edge-egress | Load balancer or edge IP | Viewer egress    |
 | A/CNAME | foghorn     | `<regional-ip>`          | Viewer routing   |
+| A/CNAME | livepeer    | `<regional-ip>`          | Livepeer gateway |
 
 ### Multi-Cluster Streaming Records
 
@@ -154,7 +161,9 @@ In multi-cluster deployments, each cluster gets its own set of streaming records
 | ---- | ------------------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
 | A    | `edge-ingest.{slug}.your-domain.com`  | Edge node IP(s)    | Cluster-scoped ingest                                                                 |
 | A    | `edge.{slug}.your-domain.com`         | Edge node IP(s)    | Cluster-scoped edge pool                                                              |
+| A    | `edge-egress.{slug}.your-domain.com`  | Edge node IP(s)    | Cluster-scoped egress                                                                 |
 | A    | `foghorn.{slug}.your-domain.com`      | Foghorn IP         | Cluster-scoped routing                                                                |
+| A    | `livepeer.{slug}.your-domain.com`     | Livepeer gateway   | Cluster-scoped Livepeer gateway                                                       |
 | A    | `{node_label}.{slug}.your-domain.com` | Individual edge IP | Per-edge direct addressing (`node_label` is the node ID with a single `edge-` prefix) |
 
 See [DNS Automation](/operators/dns) for details on per-edge A records and wildcard TLS certificates.
@@ -163,7 +172,7 @@ See [DNS Automation](/operators/dns) for details on per-edge A records and wildc
 
 If running multiple edge nodes, configure a load balancer:
 
-1. **Health Monitor**: HTTP check on `/api` (MistServer API endpoint)
+1. **Health Monitor**: HTTP check for the edge service health endpoint. Navigator-managed edge capability records use port `18008`; direct MistServer-only setups can instead check MistServer's `/api` endpoint.
 2. **Origin Pool**: Add all edge nodes with health monitoring
 3. **Load Balancer**: Geographic or round-robin steering
 
@@ -1095,12 +1104,13 @@ systemctl start helmsman
 
 Configure MistServer triggers to notify Helmsman:
 
-| Trigger       | URL                               | Events             |
-| ------------- | --------------------------------- | ------------------ |
-| STREAM_BUFFER | `http://localhost:18007/triggers` | Stream health      |
-| USER_NEW      | `http://localhost:18007/triggers` | Viewer connect     |
-| USER_END      | `http://localhost:18007/triggers` | Viewer disconnect  |
-| RECORDING\_\* | `http://localhost:18007/triggers` | Clip/DVR lifecycle |
+| Trigger           | URL                                                      | Events            |
+| ----------------- | -------------------------------------------------------- | ----------------- |
+| STREAM_BUFFER     | `http://localhost:18007/webhooks/mist/stream_buffer`     | Stream health     |
+| USER_NEW          | `http://localhost:18007/webhooks/mist/user_new`          | Viewer connect    |
+| USER_END          | `http://localhost:18007/webhooks/mist/user_end`          | Viewer disconnect |
+| RECORDING_END     | `http://localhost:18007/webhooks/mist/recording_end`     | Clip lifecycle    |
+| RECORDING_SEGMENT | `http://localhost:18007/webhooks/mist/recording_segment` | DVR lifecycle     |
 
 ---
 

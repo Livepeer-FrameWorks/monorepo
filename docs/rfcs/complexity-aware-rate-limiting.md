@@ -15,7 +15,7 @@ Modify the GraphQL API rate limiter to deduct tokens based on query complexity i
 The rate limiter in `api_gateway/internal/middleware` uses a token bucket algorithm that charges exactly 1 token per request:
 
 ```go
-bucket.tokens -= 1.0  // Line 157
+bucket.tokens -= 1.0
 ```
 
 This means a simple query like `{ tenant { id } }` costs the same as a complex analytics query fetching 1000+ rows.

@@ -109,12 +109,9 @@ For complete UI control, use `usePlayerController` directly:
 
 ```tsx
 import { usePlayerController } from "@livepeer-frameworks/player-react";
-import { useRef } from "react";
 
 function FullyCustomPlayer() {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const { state, controller } = usePlayerController({
+  const { containerRef, state, controller } = usePlayerController({
     contentId: "pk_...",
     contentType: "live",
     gatewayUrl: "%GATEWAY_URL%/graphql",
@@ -138,48 +135,49 @@ function FullyCustomPlayer() {
 
 ### Hook Return
 
-| Property       | Type                     | Description                                                  |
-| -------------- | ------------------------ | ------------------------------------------------------------ |
-| `state`        | `PlayerControllerState`  | Reactive state object (isPlaying, volume, currentTime, etc.) |
-| `controller`   | `PlayerControllerStore`  | Controller with methods (togglePlay, seek, setVolume, etc.)  |
-| `containerRef` | `RefObject<HTMLElement>` | Attach to the container div                                  |
+| Property            | Type                       | Description                                                  |
+| ------------------- | -------------------------- | ------------------------------------------------------------ |
+| `state`             | `PlayerControllerState`    | Reactive state object (isPlaying, volume, currentTime, etc.) |
+| `controller`        | `PlayerController \| null` | Controller instance for direct method calls                  |
+| `containerRef`      | `RefObject<HTMLElement>`   | Attach to the container div                                  |
+| `setDevModeOptions` | `function`                 | Runtime player/source/protocol override helper               |
 
 ### State Properties
 
-| Property                  | Type             | Description                  |
-| ------------------------- | ---------------- | ---------------------------- |
-| `state.state`             | `PlayerState`    | Current lifecycle state      |
-| `state.isPlaying`         | `boolean`        | Whether playing              |
-| `state.isPaused`          | `boolean`        | Whether paused               |
-| `state.isMuted`           | `boolean`        | Whether muted                |
-| `state.volume`            | `number`         | Volume (0-1)                 |
-| `state.currentTime`       | `number`         | Current position (seconds)   |
-| `state.duration`          | `number`         | Duration (Infinity for live) |
-| `state.isBuffering`       | `boolean`        | Whether buffering            |
-| `state.isFullscreen`      | `boolean`        | Whether in fullscreen        |
-| `state.isEffectivelyLive` | `boolean`        | Whether live content         |
-| `state.error`             | `string \| null` | Current error message        |
-
-````
+| Property                  | Type             | Description                                  |
+| ------------------------- | ---------------- | -------------------------------------------- |
+| `state.state`             | `PlayerState`    | Current lifecycle state                      |
+| `state.isPlaying`         | `boolean`        | Whether playing                              |
+| `state.isPaused`          | `boolean`        | Whether paused                               |
+| `state.isMuted`           | `boolean`        | Whether muted                                |
+| `state.volume`            | `number`         | Volume (0-1)                                 |
+| `state.currentTime`       | `number`         | Current position in milliseconds             |
+| `state.duration`          | `number`         | Duration in milliseconds (Infinity for live) |
+| `state.isBuffering`       | `boolean`        | Whether buffering                            |
+| `state.isFullscreen`      | `boolean`        | Whether in fullscreen                        |
+| `state.isEffectivelyLive` | `boolean`        | Whether live content                         |
+| `state.error`             | `string \| null` | Current error message                        |
 
 ## Props Reference
 
-| Prop | Type | Description |
-|------|------|-------------|
-| `contentId` | `string` | Playback ID (live/clip/DVR/VOD) |
-| `contentType` | `'live' \| 'dvr' \| 'clip' \| 'vod'` | Content type (affects presets and UI) |
-| `endpoints` | `ContentEndpoints` | Advanced: pass pre-resolved endpoints |
-| `thumbnailUrl` | `string` | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected. |
-| `theme` | `string` | Theme preset name |
-| `options.gatewayUrl` | `string` | Gateway GraphQL endpoint |
-| `options.mistUrl` | `string` | Direct MistServer base URL |
-| `options.autoplay` | `boolean` | Auto-start playback |
-| `options.muted` | `boolean` | Start muted (required for autoplay) |
-| `options.controls` | `boolean` | Show built-in controls |
-| `options.playbackMode` | `string` | Protocol preference (`low-latency`, `quality`, `vod`, `auto`) |
-| `options.forceType` | `string` | Force specific source type (e.g. `whep`) |
-| `options.debug` | `boolean` | Debug logging |
-| `onStateChange` | `function` | State transition callback |
+| Prop                     | Type                                 | Description                                                                                    |
+| ------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `contentId`              | `string`                             | Playback ID (live/clip/DVR/VOD)                                                                |
+| `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'` | Content type (affects presets and UI)                                                          |
+| `endpoints`              | `ContentEndpoints`                   | Advanced: pass pre-resolved endpoints                                                          |
+| `thumbnailUrl`           | `string`                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                       |
+| `options.gatewayUrl`     | `string`                             | Gateway GraphQL endpoint                                                                       |
+| `options.mistUrl`        | `string`                             | Direct MistServer base URL                                                                     |
+| `options.authToken`      | `string`                             | Bearer token for private playback                                                              |
+| `options.autoplay`       | `boolean`                            | Auto-start playback                                                                            |
+| `options.muted`          | `boolean`                            | Start muted (required for autoplay)                                                            |
+| `options.stockControls`  | `boolean`                            | Use browser-native video controls                                                              |
+| `options.theme`          | `string`                             | Theme preset name                                                                              |
+| `options.themeOverrides` | `object`                             | Per-token theme overrides                                                                      |
+| `options.locale`         | `string`                             | Built-in UI locale                                                                             |
+| `options.playbackMode`   | `string`                             | Initial controls/dev-panel mode label; use `setDevModeOptions` for runtime protocol preference |
+| `options.debug`          | `boolean`                            | Debug logging                                                                                  |
+| `onStateChange`          | `function`                           | State transition callback                                                                      |
 
 ## State Callbacks
 
@@ -195,18 +193,18 @@ function FullyCustomPlayer() {
     console.log("State:", state);
   }}
 />
-````
+```
 
 ## Playback Modes
 
 `playbackMode` controls protocol preference order:
 
-| Mode          | Preference                 | Use Case              |
-| ------------- | -------------------------- | --------------------- |
-| `low-latency` | WebRTC → MP4/WS → HLS/DASH | Real-time interaction |
-| `quality`     | MP4/WS → HLS/DASH → WebRTC | Stable, high quality  |
-| `vod`         | HLS/MP4 (penalize WHEP)    | Pre-recorded content  |
-| `auto`        | Balanced score-based       | Default               |
+| Mode          | Preference                                 | Use Case              |
+| ------------- | ------------------------------------------ | --------------------- |
+| `low-latency` | WebCodecs/WS → WHEP/WebRTC → MP4/WS → HLS  | Real-time interaction |
+| `quality`     | MP4/WS and WebCodecs/WS → HLS/MP4 → WebRTC | Stable, high quality  |
+| `vod`         | MP4/HLS/DASH → MP4/WS → WHEP/WebRTC        | Pre-recorded content  |
+| `auto`        | Balanced score-based                       | Default               |
 
 ```tsx
 <Player
@@ -216,8 +214,14 @@ function FullyCustomPlayer() {
 />
 ```
 
-### Force WHEP Only
+### Runtime Protocol Overrides
 
 ```tsx
-<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "...", forceType: "whep" }} />
+const { setDevModeOptions } = usePlayerController({
+  contentId: "pk_...",
+  contentType: "live",
+  gatewayUrl: "...",
+});
+
+void setDevModeOptions({ forceType: "whep" });
 ```

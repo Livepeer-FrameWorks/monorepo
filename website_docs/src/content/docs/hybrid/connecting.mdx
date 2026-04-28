@@ -17,8 +17,8 @@ curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/downl
 Override the version or install directory with environment variables:
 
 ```bash
-FRAMEWORKS_VERSION=v1.2.3 FRAMEWORKS_INSTALL_DIR=/usr/local/bin \
-  sh -c "$(curl -sSfL https://get.frameworks.network/install.sh)"
+curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | \
+  FRAMEWORKS_VERSION=v1.2.3 FRAMEWORKS_INSTALL_DIR=/usr/local/bin sh
 ```
 
 Keep the CLI up to date:
@@ -125,7 +125,7 @@ frameworks edge status --dir /opt/frameworks-edge
 
 This shows:
 
-- **Docker container status** for MistServer, Helmsman, and edge-proxy
+- **Docker container status** for MistServer, Helmsman, and Caddy
 - **HTTPS health check** against your configured `EDGE_DOMAIN`
 
 For enrollment and heartbeat status, check the dashboard—your node should appear under **Infrastructure → Network** once enrolled.
@@ -147,7 +147,7 @@ Your node will receive traffic when:
 
 ## Ingesting to Your Node
 
-Streamers can push directly to your node instead of the default ingest. Direct ingest requires MistServer ports to be exposed on the host; the default edge template only maps 80/443.
+Streamers can push directly to your node instead of the default ingest. Direct ingest requires MistServer ports to be exposed on the host. The default Docker edge template publishes only 80/443, so expose the non-HTTP ports in your deployment before using direct RTMP/SRT/RTSP ingest.
 
 Open/forward as needed:
 

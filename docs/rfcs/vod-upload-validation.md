@@ -8,7 +8,7 @@ Proposed
 
 - Presigned URLs for VOD uploads have no size/type enforcement
 - 2-hour expiry window is excessive for the threat model
-- No post-upload validation before marking assets ready
+- Post-upload processing now exists, but size/type hardening is still incomplete
 
 ## Current State
 
@@ -19,20 +19,22 @@ Issues identified:
 1. **No size enforcement**: User declares `sizeBytes` in GraphQL input, Foghorn calculates parts, but nothing enforces the declared size. Users can upload arbitrarily large files.
 2. **2-hour presign expiry**: the S3 storage client defaults to 2 hours. Industry standard is 5-15 minutes.
 3. **No Content-Type conditions**: `PresignUploadPart` call only sets bucket/key/uploadId/partNumber.
-4. **No post-upload validation**: `CompleteVodUpload` marks assets ready immediately. TODO at `grpc` for ffprobe validation is unimplemented.
+4. **Processing exists, but hard validation is incomplete**: `CompleteVodUpload` now marks assets `processing` and queues a VOD processing job. It does not currently enforce actual S3 object size against the declared `sizeBytes`, and this RFC's ffprobe-style hard validation is not fully implemented.
 
 Evidence:
 
 - `api_gateway/internal/resolvers` - sizeBytes passed without enforcement
 - `api_balancing/internal/storage` - 2-hour expiry
 - `api_balancing/internal/storage` - no conditions in presign
-- `api_balancing/internal/grpc` - TODO for validation
+- `api_balancing/internal/grpc` - upload completion and processing enqueue
+- `api_balancing/internal/grpc/vod_pipeline.go` - post-upload VOD processing lifecycle
+- `api_balancing/internal/jobs/processing_dispatcher.go` - processing dispatch
 
 ## Problem / Motivation
 
 - **Storage abuse**: Malicious users can exhaust storage quota by uploading larger files than declared
 - **URL leakage**: 2-hour window gives attackers time to exploit leaked URLs
-- **Invalid content**: Non-video files can be uploaded and marked ready, causing playback failures
+- **Invalid content**: Non-video files can be uploaded and fail late or produce poor processing/playback errors instead of being rejected immediately
 - **Billing mismatch**: Declared vs actual size could affect metering/billing accuracy
 
 ## Goals
@@ -56,7 +58,8 @@ Change default from 2 hours to 30 minutes in the S3 storage client. Still suffic
 
 ### 2. Post-upload size validation (medium effort)
 
-In `CompleteVodUpload`, after `CompleteMultipartUpload` succeeds:
+In `CompleteVodUpload`, after `CompleteMultipartUpload` succeeds and before/alongside
+processing enqueue:
 
 - Call `HeadObject` to get actual S3 object size
 - Compare against declared `sizeBytes` from `foghorn.vod_metadata`
@@ -82,7 +85,7 @@ Add S3 bucket policies:
 ## Impact / Dependencies
 
 - `api_balancing/internal/storage` - expiry change, add HeadObject
-- `api_balancing/internal/grpc` - validation in CompleteVodUpload
+- `api_balancing/internal/grpc` - validation in CompleteVodUpload / VOD pipeline
 - New: ffprobe integration (could use existing processing infrastructure)
 - Bucket policies via Terraform/infrastructure
 
@@ -112,5 +115,7 @@ Add S3 bucket policies:
 ## References, Sources & Evidence
 
 - [Evidence] `api_balancing/internal/storage` - 2-hour expiry
-- [Evidence] `api_balancing/internal/grpc` - TODO for validation
+- [Evidence] `api_balancing/internal/grpc/server.go` - multipart completion, `processing` status, VOD pipeline enqueue
+- [Evidence] `api_balancing/internal/grpc/vod_pipeline.go` - processing lifecycle
+- [Evidence] `api_balancing/internal/jobs/processing_dispatcher.go` - processing dispatch
 - [Reference] AWS presigned URL best practices: short expiry, post-upload validation

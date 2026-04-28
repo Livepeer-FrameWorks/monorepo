@@ -50,7 +50,7 @@ const studio = createStreamCrafter({
 
 ## Layout Modes
 
-The compositor ships with 15 built-in layout presets:
+The compositor ships with 17 built-in layout presets:
 
 | Mode          | Label              | Min Sources | Description                       |
 | ------------- | ------------------ | ----------- | --------------------------------- |
@@ -64,7 +64,9 @@ The compositor ships with 15 built-in layout presets:
 | `focus-l`     | Focus Left         | 2           | Large left, small right           |
 | `focus-r`     | Focus Right        | 2           | Small left, large right           |
 | `pip-dual-br` | Main + 2 PiP       | 3           | Main with two small overlays      |
-| `split-pip-r` | Split + PiP        | 3           | Side-by-side with small overlay   |
+| `pip-dual-bl` | Main + 2 PiP Left  | 3           | Main with two small left overlays |
+| `split-pip-l` | Split + PiP Left   | 3           | Side-by-side with left overlay    |
+| `split-pip-r` | Split + PiP Right  | 3           | Side-by-side with right overlay   |
 | `featured`    | Featured           | 3           | Large center, small sides         |
 | `featured-r`  | Featured Right     | 3           | Large right, small left stack     |
 | `grid`        | Grid               | 2+          | Equal-size grid                   |
@@ -75,7 +77,11 @@ The compositor ships with 15 built-in layout presets:
 **React (via hook):**
 
 ```tsx
-const { compositor } = useStreamCrafterV2({ whipUrl: "...", enableCompositor: true });
+const crafter = useStreamCrafterV2({ whipUrl: "..." });
+const compositor = useCompositor({
+  controller: crafter.getController(),
+  autoEnable: true,
+});
 
 compositor.applyLayout({ mode: "pip-br", scalingMode: "letterbox", pipScale: 0.25 });
 ```
@@ -83,16 +89,19 @@ compositor.applyLayout({ mode: "pip-br", scalingMode: "letterbox", pipScale: 0.2
 **Vanilla:**
 
 ```ts
-studio.controller.applyLayout({
+studio.sceneManager?.applyLayout({
   mode: "split-h",
   scalingMode: "crop",
 });
 ```
 
-**Web Components (via event):**
+**Web Components:**
 
 ```js
-studio.controller.applyLayout({ mode: "grid", scalingMode: "letterbox" });
+studio.pc
+  .getController()
+  ?.getSceneManager()
+  ?.applyLayout({ mode: "grid", scalingMode: "letterbox" });
 ```
 
 ### Cycling Source Order
@@ -114,16 +123,36 @@ Each layout supports three scaling modes that control how sources fill their all
 Scenes are named collections of layers with their own layout configurations. Switch between scenes for different broadcast segments.
 
 ```ts
+// React useCompositor hook or Svelte createCompositorStore
+const interview = compositor.createScene("interview");
+const soloCam = compositor.createScene("solo-cam");
+
+if (interview) {
+  await compositor.transitionTo(interview.id, {
+    type: "fade",
+    durationMs: 500,
+    easing: "ease-in-out",
+  });
+}
+```
+
+When you work directly with the core `SceneManager`, use the returned scene ID for later calls:
+
+```ts
+const sceneManager = studio.sceneManager;
+
 // Create a scene
-compositor.createScene("interview");
-compositor.createScene("solo-cam");
+const interview = sceneManager?.createScene("interview");
+sceneManager?.createScene("solo-cam");
 
 // Switch to a scene with a transition
-await compositor.transitionTo("interview", {
-  type: "fade",
-  durationMs: 500,
-  easing: "ease-in-out",
-});
+if (interview) {
+  await sceneManager?.transitionTo(interview.id, {
+    type: "fade",
+    durationMs: 500,
+    easing: "ease-in-out",
+  });
+}
 ```
 
 ### Transition Types
@@ -152,17 +181,20 @@ Each source in a scene becomes a layer with independent controls:
 ### Layer Operations
 
 ```ts
+const sceneId = compositor.activeSceneId;
+if (!sceneId) return;
+
 // Toggle visibility
-compositor.setLayerVisible(layerId, false);
+compositor.setLayerVisibility(sceneId, layerId, false);
 
 // Change opacity
-compositor.setLayerTransform(layerId, { opacity: 0.7 });
+compositor.updateLayerTransform(sceneId, layerId, { opacity: 0.7 });
 
-// Reorder layers (array of layer IDs, front to back)
-compositor.reorderLayers(["layer-1", "layer-2", "layer-3"]);
+// Reorder layers by layer ID
+compositor.reorderLayers(sceneId, ["layer-1", "layer-2", "layer-3"]);
 
 // Remove a layer
-compositor.removeLayer(layerId);
+compositor.removeLayer(sceneId, layerId);
 ```
 
 ## Renderer
@@ -189,6 +221,18 @@ import {
   SceneSwitcher,
   LayerList,
 } from "@livepeer-frameworks/streamcrafter-react";
+```
+
+**Svelte:**
+
+```svelte
+<script lang="ts">
+  import {
+    CompositorControls,
+    SceneSwitcher,
+    LayerList,
+  } from "@livepeer-frameworks/streamcrafter-svelte";
+</script>
 ```
 
 **Web Components:**

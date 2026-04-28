@@ -50,7 +50,7 @@ Producer pushes RTMP/SRT/WHIP to edge-ingest.{cluster}.{base}:1935
   → Node is now the origin for this stream
 ```
 
-**Origin identification**: A node is origin when `StreamInstanceState.Inputs > 0` and `StreamInstanceState.Replicated == false`. There is exactly one origin node per stream (the one receiving the producer's push).
+**Origin identification**: A node is treated as an origin candidate when `StreamInstanceState.Inputs > 0` and `StreamInstanceState.Replicated == false`. Duplicate ingest protection is intended to keep one active origin per stream, but source selection still treats origin as state-derived rather than a separate topology record.
 
 ### Intra-Cluster Replication: Origin → Edges
 
@@ -63,7 +63,7 @@ Viewer requests stream on Edge A2 (doesn't have it yet)
       1. GetBestNodeWithScore(stream, isSourceSelection=true)
          - Scans all nodes, finds A1 has Inputs > 0 and !Replicated
          - Rejects replicated nodes (rejectStreamReplicated)
-      2. BuildDTSCURI(A1, stream) → "dtsc://edge-a1.cluster.base:4200/live+stream"
+      2. Build source response → "dtsc://edge-a1.cluster.base:4200"
       3. Returns DTSC URL to MistServer
   → MistServer on A2 opens DTSC connection to A1, begins pulling
   → A2 starts serving viewers; state updated: Replicated=true on A2
@@ -98,7 +98,7 @@ Viewer → Foghorn A (stream not on any local edge)
       - Select local edge with capacity
       - NotifyOriginPull → Foghorn B (stream, source_node, dest_cluster, dest_node)
       - Foghorn B validates, stores ActiveReplicationRecord, returns DTSC URL
-      - Foghorn A tells Helmsman: "configure MistServer source = dtsc://B-edge:4200/..."
+      - Foghorn A records the in-flight pull and returns a local endpoint; MistServer starts the DTSC pull when its playback/source path asks for the stream
       - Store local ActiveReplicationRecord in Redis (5-min TTL bridge)
 
 4. MistServer on A2 pulls from B1 via DTSC over public internet
@@ -111,11 +111,11 @@ Viewer → Foghorn A (stream not on any local edge)
 
 MistServer asks Foghorn "where should I pull this stream from?" via HTTP `/?source=<stream>`.
 
-| Step | Logic                                                                                                                                                                                                 | Fallback |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| 1    | Local origin: `GetBestNodeWithScore(isSourceSelection=true)` — finds node with `Inputs > 0`, `!Replicated`                                                                                            | → step 2 |
-| 2    | Cross-cluster: `resolveRemoteSource()` — looks up origin_cluster_id (from streamContext cache or Commodore), calls `QueryStream(is_source_selection=true)` on origin Foghorn, returns remote DTSC URL | → step 3 |
-| 3    | Fallback: `dtsc://localhost:4200` — MistServer will accept a push or use local source                                                                                                                 | —        |
+| Step | Logic                                                                                                                                                                                                     | Fallback |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 1    | Local origin: `GetBestNodeWithScore(isSourceSelection=true)` — finds node with `Inputs > 0`, `!Replicated`; the HTTP handler returns `dtsc://<host>:4200`                                                 | → step 2 |
+| 2    | Cross-cluster: `resolveRemoteSource()` — looks up origin_cluster_id (from streamContext cache or Commodore), calls `QueryStream(is_source_selection=true)` on origin Foghorn, returns the peer's DTSC URL | → step 3 |
+| 3    | Fallback: `dtsc://localhost:4200` or the request's `fallback` query parameter — MistServer will accept a push or use local source                                                                         | —        |
 
 ### Source Resolution: `STREAM_SOURCE` trigger
 
@@ -123,7 +123,7 @@ MistServer asks Foghorn "where should I pull this stream from?" via HTTP `/?sour
 
 The trigger chain: MistServer → Helmsman webhook (`/webhooks/mist/stream_source`, blocking) → Helmsman parses and forwards via gRPC → Foghorn `processor.handleStreamSource()`.
 
-Helmsman is a passthrough here — no filtering, no stream-type checks. It parses the raw webhook body into protobuf and forwards to Foghorn. On abort or error, Helmsman returns empty string to MistServer (use default source).
+Helmsman mostly acts as a passthrough: it parses the raw webhook body into protobuf and forwards to Foghorn. The current exception is `processing+` streams, where Helmsman can return a local rewritten HLS manifest before forwarding if an active processing job has already produced one. On abort or error, Helmsman returns empty string to MistServer (use default source).
 
 Foghorn's handler routes by stream type:
 
@@ -133,12 +133,16 @@ Foghorn processor.handleStreamSource(trigger):
   If live stream (live+ prefix):
     → Abort (empty response → MistServer uses configured source / load balancer /?source= endpoint)
 
+  If processing+:
+    → Resolve to a local rewritten HLS manifest in Helmsman when present
+    → Otherwise Foghorn resolves a presigned S3 GET URL for the process input artifact
+
   If VOD/artifact:
     → ResolveArtifactInternalName via Commodore → get artifact_hash, origin_cluster_id
     → Check local state: FindNodeByArtifactHash(hash)
       → If found locally: return file path on the storage node
-    → If S3-synced: return presigned S3 GET URL
-    → If remote cluster (via ArtifactAdvertisement): PrepareArtifact RPC → presigned URL
+    → If remote cluster has the artifact metadata: trigger async defrost and return empty so MistServer retries/defaults
+    → Otherwise return empty
 ```
 
 ## Origin Tracking
@@ -210,10 +214,10 @@ The topology is **implicit and dynamic** — there is no fixed origin/hub/edge h
 - `api_balancing/internal/handlers` - `handleGetSource`: live stream source selection (HTTP)
 - `api_balancing/internal/handlers` - `resolveRemoteSource`: cross-cluster DTSC URL lookup
 - `api_balancing/internal/handlers` - `arrangeOriginPull`: cross-cluster origin-pull lifecycle
-- `api_sidecar/internal/handlers` - `HandleStreamSource`: Helmsman STREAM_SOURCE webhook handler (passthrough to Foghorn)
+- `api_sidecar/internal/handlers` - `HandleStreamSource`: Helmsman STREAM_SOURCE webhook handler (with `processing+` local manifest shortcut)
 - `api_sidecar/internal/config` - STREAM_SOURCE trigger registration (`sync: true`, no stream filter)
-- `api_balancing/internal/triggers` - `handleStreamSource`: Foghorn STREAM_SOURCE handler (skips live, resolves VOD/artifacts)
-- `api_balancing/internal/control` - `BuildDTSCURI`: constructs `dtsc://host:4200/live+stream` URLs
+- `api_balancing/internal/triggers` - `handleStreamSource`: Foghorn STREAM_SOURCE handler (skips live, resolves process/artifact sources)
+- `api_balancing/internal/control` - `BuildDTSCURI`: uses the node's DTSC output template and appends `live+<stream>` for federation/origin-pull URLs
 - `api_balancing/internal/balancer` - `rateNodeWithReason`: `isSourceSelection` filtering, `rejectStreamReplicated`
 - `api_balancing/internal/state` - `StreamInstanceState`: `Inputs`, `Replicated` fields
 - `api_balancing/internal/federation` - `checkReplicationCompletion`: clears ActiveReplication, broadcasts ReplicationEvent
@@ -221,8 +225,8 @@ The topology is **implicit and dynamic** — there is no fixed origin/hub/edge h
 
 ## Gotchas
 
-- **STREAM_SOURCE is a general MistServer trigger**. It fires when any stream's source setting is loaded — not just VOD. Helmsman forwards it as-is (no filtering). Foghorn's stream-source handler skips `live+` streams and only resolves VOD/artifacts. For live streams, MistServer falls back to its configured source (the load balancer's HTTP `/?source=` endpoint).
-- **DTSC port is 4200**. Hardcoded in `BuildDTSCURI`. MistServer's DTSC listener is always on port 4200.
+- **STREAM_SOURCE is a general MistServer trigger**. It fires when any stream's source setting is loaded — not just VOD. Helmsman forwards it to Foghorn except for the local `processing+` manifest shortcut. Foghorn's stream-source handler skips `live+` streams and resolves process/artifact sources. For live streams, MistServer falls back to its configured source (the load balancer's HTTP `/?source=` endpoint).
+- **DTSC port handling differs by path**. The HTTP `/?source=` handler returns `dtsc://<host>:4200` directly. Federation/origin-pull URLs use `BuildDTSCURI`, which derives the DTSC base from the node's advertised `DTSC` output template.
 - **No cascade within a cluster**. If origin goes down, replicas lose their source. There's no automatic promotion of a replica to "relay" for other replicas.
 - **ActiveReplication bridges a timing gap**. Between `NotifyOriginPull` (arrangement) and the stream actually appearing in local state (MistServer pulls and reports metrics), `ActiveReplicationRecord` in Redis (5-min TTL) tells subsequent viewers "a pull is in progress, serve from expected local edge."
 - **Cross-cluster replication is over public internet**. DTSC between MistServer nodes on different clusters traverses the public internet. No WireGuard mesh for edges. TLS on Foghorn gRPC; DTSC itself is unencrypted (media-only, no auth data).

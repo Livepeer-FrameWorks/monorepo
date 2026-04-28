@@ -97,20 +97,20 @@ const unsub = studio.on("stateChange", ({ state, context }) => {
 unsub();
 ```
 
-| Event                 | Payload                  | Description                      |
-| --------------------- | ------------------------ | -------------------------------- |
-| `stateChange`         | `{ state, context }`     | Lifecycle state transition       |
-| `sourceAdded`         | `{ source }`             | New source added                 |
-| `sourceRemoved`       | `{ sourceId }`           | Source removed                   |
-| `sourceUpdated`       | `{ source, changes }`    | Source properties changed        |
-| `qualityChanged`      | `QualityProfile`         | Quality profile changed          |
-| `statsUpdate`         | `Stats`                  | Streaming statistics update      |
-| `deviceChange`        | `MediaDeviceInfo[]`      | Available devices changed        |
-| `error`               | `{ error, recoverable }` | Error occurred                   |
-| `reconnectionAttempt` | `{ attempt, max }`       | Reconnection attempt started     |
-| `reconnectionSuccess` | `void`                   | Reconnection succeeded           |
-| `reconnectionFailed`  | `{ error }`              | All reconnection attempts failed |
-| `webCodecsActive`     | `boolean`                | WebCodecs encoder state changed  |
+| Event                 | Payload                        | Description                      |
+| --------------------- | ------------------------------ | -------------------------------- |
+| `stateChange`         | `{ state, context }`           | Lifecycle state transition       |
+| `sourceAdded`         | `{ source }`                   | New source added                 |
+| `sourceRemoved`       | `{ sourceId }`                 | Source removed                   |
+| `sourceUpdated`       | `{ source, changes }`          | Source properties changed        |
+| `qualityChanged`      | `{ profile, previousProfile }` | Quality profile changed          |
+| `statsUpdate`         | `IngestStats`                  | Streaming statistics update      |
+| `deviceChange`        | `{ devices }`                  | Available devices changed        |
+| `error`               | `{ error, recoverable }`       | Error occurred                   |
+| `reconnectionAttempt` | `{ attempt, maxAttempts }`     | Reconnection attempt started     |
+| `reconnectionSuccess` | `void`                         | Reconnection succeeded           |
+| `reconnectionFailed`  | `{ error }`                    | All reconnection attempts failed |
+| `webCodecsActive`     | `{ active }`                   | WebCodecs encoder state changed  |
 
 ## Subscriptions — Reactive State
 
@@ -146,20 +146,20 @@ const isLive = studio.reactiveState.get("streaming");
 
 ## Options
 
-| Option             | Type                    | Default             | Description                                  |
-| ------------------ | ----------------------- | ------------------- | -------------------------------------------- |
-| `target`           | `string \| HTMLElement` | —                   | Container element or selector                |
-| `whipUrl`          | `string`                | —                   | Direct WHIP ingest endpoint                  |
-| `gatewayUrl`       | `string`                | —                   | Gateway GraphQL endpoint                     |
-| `streamKey`        | `string`                | —                   | Stream key (with gatewayUrl)                 |
-| `profile`          | `string`                | `"broadcast"`       | Quality preset name                          |
-| `theme`            | `string`                | `"default"`         | Theme preset                                 |
-| `locale`           | `string`                | `"en"`              | UI language                                  |
-| `keyMap`           | `KeyMap`                | —                   | Custom hotkey bindings                       |
-| `reconnection`     | `ReconnectionConfig`    | `{ enabled: true }` | Reconnection settings                        |
-| `debug`            | `boolean`               | `false`             | Debug logging                                |
-| `enableCompositor` | `boolean`               | `true`              | Enable compositor                            |
-| `useWebCodecs`     | `boolean`               | auto                | WebCodecs encoder (auto-enabled on Chromium) |
+| Option             | Type                    | Default             | Description                                                      |
+| ------------------ | ----------------------- | ------------------- | ---------------------------------------------------------------- |
+| `target`           | `string \| HTMLElement` | —                   | Container element or selector                                    |
+| `whipUrl`          | `string`                | —                   | Direct WHIP ingest endpoint                                      |
+| `gatewayUrl`       | `string`                | —                   | Gateway GraphQL endpoint for resolver-backed ingest environments |
+| `streamKey`        | `string`                | —                   | Stream key used with `gatewayUrl`                                |
+| `profile`          | `string`                | `"broadcast"`       | Quality preset name                                              |
+| `theme`            | `string`                | `"default"`         | Theme preset                                                     |
+| `locale`           | `string`                | `"en"`              | UI language                                                      |
+| `keyMap`           | `KeyMap`                | —                   | Custom hotkey bindings                                           |
+| `reconnection`     | `ReconnectionConfig`    | `{ enabled: true }` | Reconnection settings                                            |
+| `debug`            | `boolean`               | `false`             | Debug logging                                                    |
+| `enableCompositor` | `boolean`               | `true`              | Enable compositor                                                |
+| `useWebCodecs`     | `boolean`               | auto                | WebCodecs encoder (auto-enabled on Chromium)                     |
 
 ## Headless Mode
 

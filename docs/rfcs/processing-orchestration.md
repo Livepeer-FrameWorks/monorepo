@@ -2,25 +2,30 @@
 
 ## Status
 
-Draft
+Partially implemented
 
 ## TL;DR
 
-- Add a unified orchestration layer for live + VOD processing.
-- Foghorn coordinates job routing and capacity-aware dispatch.
-- Processing jobs become a first-class workflow (queued → dispatched → completed).
+- A VOD processing orchestration path now exists.
+- Foghorn coordinates VOD job routing and dispatch to processing-capable Helmsman nodes.
+- Processing jobs are a first-class workflow (`queued` -> `dispatched`/`processing` -> `completed`/`failed`).
+- Live processing policy is still mostly outside this pipeline.
 
 ## Current State
 
-- Live processing is configured via Mist/Helmsman and is mostly implicit.
-- `foghorn.processing_jobs` exists but orchestration is minimal.
-- VOD uploads are marked ready without a processing pipeline.
+- Live processing is configured via Mist/Helmsman and remains mostly implicit.
+- `foghorn.processing_jobs` exists and is used by the VOD processing pipeline.
+- `CompleteVodUpload` marks assets `processing` and queues jobs rather than marking them ready immediately.
+- Foghorn runs a processing dispatcher that routes jobs to processing-capable nodes; Helmsman handles `ProcessingJobRequest` and reports progress/results.
 
 Evidence:
 
-- `pkg/database/sql/schema`
-- `api_balancing/internal/handlers`
-- `api_sidecar/`
+- `pkg/database/sql/schema/foghorn.sql`
+- `api_balancing/internal/grpc/server.go`
+- `api_balancing/internal/grpc/vod_pipeline.go`
+- `api_balancing/internal/jobs/processing_dispatcher.go`
+- `api_sidecar/internal/handlers/processing.go`
+- `pkg/proto/ipc.proto`
 
 ## Problem / Motivation
 
@@ -39,9 +44,10 @@ Processing decisions are implicit and inconsistent across live and VOD. A unifie
 
 ## Proposal
 
-- Treat Foghorn as the processing coordinator.
-- Use `foghorn.processing_jobs` for durable job state.
-- Add routing policy: gateway vs native nodes per codec and capacity.
+- Keep Foghorn as the processing coordinator for VOD.
+- Continue using `foghorn.processing_jobs` for durable job state.
+- Extend routing policy and lifecycle coverage beyond the current VOD path, including live
+  processing policies where needed.
 
 ## Impact / Dependencies
 
@@ -61,9 +67,10 @@ Processing decisions are implicit and inconsistent across live and VOD. A unifie
 
 ## Migration / Rollout
 
-1. Add explicit job creation for VOD uploads.
-2. Add minimal dispatcher for native processing nodes.
-3. Extend to live processing policies.
+1. Keep explicit job creation for VOD uploads.
+2. Keep the dispatcher for processing-capable nodes.
+3. Harden processing validation, retry, and output metadata.
+4. Extend to live processing policies.
 
 ## Open Questions
 

@@ -10,24 +10,28 @@ Edge sidecar that turns a MistServer node into a fully managed, hands-off media 
 
 ## What it does
 
-- Intercepts MistServer triggers (PUSH_REWRITE, PLAY_REWRITE, USER_NEW, STREAM_BUFFER, etc.)
-- Forwards all triggers to Foghorn for validation and routing decisions
+- Installs and handles MistServer triggers such as `PUSH_REWRITE`, `PLAY_REWRITE`, `STREAM_SOURCE`, `USER_NEW`, `USER_END`, `STREAM_BUFFER`, `STREAM_END`, `LIVE_TRACK_LIST`, recording, processing, and thumbnail triggers
+- Forwards configured MistServer triggers and synthetic lifecycle/storage/processing events to Foghorn for validation, routing, analytics, and orchestration decisions
 - Receives responses from Foghorn for blocking triggers (stream key validation, viewer auth)
 - Periodic health/metrics collection and reporting to Foghorn
-- Receives configuration (tenant_id, stream templates, geo info) from Foghorn via ConfigSeed
+- Receives configuration from Foghorn via `ConfigSeed`: canonical node ID, geo placement, tenant ID, stream templates, processing config, operational mode, TLS/CA material, public site config, telemetry remote-write config, and balancer base URL
 - Executes storage operations on Foghorn's behalf:
   - Clip generation (ClipPullRequest -> download from MistServer -> store locally)
   - DVR recording (DVRStartRequest/DVRStopRequest -> HLS segment capture)
-  - Artifact cleanup and deletion notifications
+  - Clip/DVR/VOD deletion notifications
+  - Freeze/defrost and incremental `.dtsh` sync for S3-backed storage
+  - Thumbnail upload requests for `poster.jpg`, `sprite.jpg`, and `sprite.vtt`
+  - Processing jobs for VOD/transcode workloads
+  - Session termination and push-target activation/deactivation commands
 
 ## Node capabilities
 
-Helmsman registers with Foghorn announcing its capabilities:
+Helmsman registers with Foghorn announcing boolean capability fields and role labels:
 
-- `CapIngest` - Can accept incoming streams (RTMP/SRT/WHIP)
-- `CapEdge` - Can serve viewers (HLS/WebRTC/DASH)
-- `CapStorage` - Has local/S3 storage for clips and DVR
-- `CapProcessing` - Can run transcoding/AI workloads
+- `cap_ingest` / `HELMSMAN_CAP_INGEST` - Can accept incoming streams (RTMP/SRT/WHIP)
+- `cap_edge` / `HELMSMAN_CAP_EDGE` - Can serve viewers (HLS/WebRTC/DASH)
+- `cap_storage` / `HELMSMAN_CAP_STORAGE` - Has local/S3 storage for clips, DVR, and VOD artifacts
+- `cap_processing` / `HELMSMAN_CAP_PROCESSING` - Can run processing workloads
 
 ## Communication
 
@@ -36,8 +40,8 @@ Helmsman registers with Foghorn announcing its capabilities:
 
 ## Event types (forwarded to Foghorn)
 
-- `stream-ingest`, `stream-view`, `stream-lifecycle`, `stream-buffer`, `stream-end`
-- `user-connection`, `push-lifecycle`, `recording-lifecycle`, `track-list`, `client-lifecycle`
+- MistServer trigger events: `PUSH_REWRITE`, `PLAY_REWRITE`, `STREAM_SOURCE`, `PUSH_OUT_START`, `PUSH_END`, `USER_NEW`, `USER_END`, `STREAM_BUFFER`, `STREAM_END`, `LIVE_TRACK_LIST`, `RECORDING_END`, `RECORDING_SEGMENT`, `STREAM_PROCESS`, `PROCESS_EXIT`, Livepeer/process segment completion, and `THUMBNAIL_UPDATED`
+- Synthetic events from polling and storage/process managers: `STREAM_LIFECYCLE_UPDATE`, `NODE_LIFECYCLE_UPDATE`, `CLIENT_LIFECYCLE_UPDATE`, `storage_lifecycle`, `storage_snapshot`, freeze/defrost progress/completion, processing job progress/results, and push-target status reports
 
 ## Deployment model
 

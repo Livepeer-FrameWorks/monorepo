@@ -2,23 +2,28 @@
 
 ## Status
 
-Draft
+Partially implemented
 
 ## TL;DR
 
-- Current analytics are mostly server-side QoS; true client QoE is missing.
-- Add client telemetry (npm_player) and/or Mist playback events to fill gaps.
-- Introduce new ClickHouse tables for playback events and session summaries.
+- Server-side QoS and client/network QoE tables exist.
+- Mist client lifecycle events feed `client_qoe_samples` and `client_qoe_5m`.
+- `npm_player` has telemetry reporting primitives, but a general public player telemetry ingest path is not fully productized.
 
 ## Current State
 
 - Periscope ingests server-side connection and stream health metrics.
-- No client-side playback telemetry pipeline is wired.
+- ClickHouse has `client_qoe_samples`, `client_qoe_5m`, `rebuffering_events`, and viewer session tables/materialized views.
+- Periscope Ingest writes Mist client lifecycle updates into `client_qoe_samples`.
+- Periscope Query and Gateway expose client QoE summaries/connections.
+- `npm_player` exports `TelemetryReporter` and MewsWsPlayer has an analytics endpoint option, but the broader SDK-to-platform telemetry product path still needs hardening and documentation.
 
 Evidence:
 
 - `pkg/database/sql/clickhouse`
 - `api_analytics_ingest/`
+- `api_analytics_query/`
+- `api_gateway/graph`
 - `npm_player/packages/core/src/core`
 
 ## Problem / Motivation
@@ -38,9 +43,9 @@ We cannot quantify viewer experience (TTFF, rebuffering, startup failures) with 
 
 ## Proposal
 
-- Add a client telemetry ingest endpoint for npm_player.
-- Evaluate MistServer playback events as a proxy for non-npm players.
-- Create two tables: `viewer_playback_events` and `viewer_session_summary`.
+- Harden and document the existing Mist client lifecycle QoE path.
+- Productize a client telemetry ingest endpoint/configuration for npm_player.
+- Decide whether the existing `client_qoe_*`, `rebuffering_events`, and viewer session tables cover the need, or whether additional playback-event/session-summary tables are still required.
 
 ## Impact / Dependencies
 

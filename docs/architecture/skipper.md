@@ -32,24 +32,24 @@ LLM can invoke these tools during orchestration. Local tools run inside the Skip
 | Tool               | Source                             | Purpose                          |
 | ------------------ | ---------------------------------- | -------------------------------- |
 | `search_knowledge` | pgvector store                     | RAG retrieval from embedded docs |
-| `search_web`       | pkg/search/ (Tavily/Brave/SearXNG) | Live web search                  |
+| `search_web`       | pkg/search/ (Tavily/Brave/SearXNG) | Live web search when configured  |
 
 **Gateway tools** (proxied via MCP client):
 
-| Tool                        | Purpose                                              |
-| --------------------------- | ---------------------------------------------------- |
-| `execute_query`             | Run arbitrary GraphQL queries/mutations against API  |
-| `introspect_schema`         | Discover available GraphQL types and fields          |
-| `generate_query`            | Generate GraphQL from template catalog               |
-| `diagnose_rebuffering`      | Rebuffering root-cause analysis                      |
-| `diagnose_buffer_health`    | Buffer underrun diagnostics                          |
-| `diagnose_packet_loss`      | Packet loss detection                                |
-| `diagnose_routing`          | Viewer routing analysis                              |
-| `get_stream_health_summary` | Overall stream health report                         |
-| `get_anomaly_report`        | Anomaly detection across metrics                     |
-| `create_stream`, etc.       | Full stream/clip/VOD/billing CRUD (see agent-access) |
+| Tool                        | Purpose                                                                          |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| `execute_query`             | Run GraphQL through the API, with mode-based mutation gating                     |
+| `introspect_schema`         | Discover available GraphQL types and fields                                      |
+| `generate_query`            | Generate GraphQL from template catalog                                           |
+| `diagnose_rebuffering`      | Rebuffering root-cause analysis                                                  |
+| `diagnose_buffer_health`    | Buffer underrun diagnostics                                                      |
+| `diagnose_packet_loss`      | Packet loss detection                                                            |
+| `diagnose_routing`          | Viewer routing analysis                                                          |
+| `get_stream_health_summary` | Overall stream health report                                                     |
+| `get_anomaly_report`        | Anomaly detection across metrics                                                 |
+| `create_stream`, etc.       | Direct dashboard/Gateway tool access to stream, clip, VOD, and billing mutations |
 
-The `execute_query` tool gives Skipper (and external MCP agents) full GraphQL access — listing streams, checking billing, fetching analytics — with authorization enforced by existing resolvers.
+The `execute_query` tool gives Skipper GraphQL access for listing streams, checking billing, fetching analytics, and other resolver-backed operations, with authorization enforced by existing resolvers. In docs mode and external `ask_consultant` spoke mode, GraphQL mutations are blocked; mutation tools are also removed from the tool list in those modes. Agents that intend to mutate resources should call the Gateway MCP mutation tools directly rather than asking the consultant to do it.
 
 ### Confidence Tagging
 
@@ -57,7 +57,7 @@ Every response section is tagged: `verified`, `sourced`, `best_guess`, or `unkno
 
 ### Docs Mode
 
-When `?mode=docs` is passed, Skipper restricts tool use to a read-only whitelist (knowledge search, schema introspection, stream reads, diagnostics). `execute_query` is blocked — docs-mode users can view generated queries via `generate_query` but cannot execute them. This powers the documentation site chat widget.
+When `?mode=docs` is passed, Skipper restricts tool use to a read-only whitelist (knowledge search, web search when configured, schema introspection, read-only `execute_query`, stream reads, support history, and diagnostics). GraphQL mutations through `execute_query` are blocked. This powers the documentation site chat widget.
 
 ### Conversation Persistence
 
@@ -110,11 +110,12 @@ Multi-turn conversations stored in `skipper_conversations` / `skipper_messages` 
 | `SKIPPER_SEARCH_LIMIT`              | Default result limit for `search_knowledge`                                  | `8`                  |
 | `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request                                 | `20`                 |
 | `SKIPPER_WEB_UI`                    | Enable embedded web UI at `/`                                                | `true`               |
+| `SKIPPER_WEB_UI_INSECURE`           | Allow embedded WebUI without `SKIPPER_API_KEY`                               | `false`              |
 | `SKIPPER_REQUIRED_TIER_LEVEL`       | Minimum subscription tier                                                    | `3`                  |
 | `SKIPPER_CHAT_RATE_LIMIT_PER_HOUR`  | Rate limit per tenant                                                        | `0` (unlimited)      |
 | `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)                                 | —                    |
 | `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge                                      | —                    |
-| `SKIPPER_API_KEY`                   | API key for admin WebUI authentication (see Web UI)                          | — (network-trust)    |
+| `SKIPPER_API_KEY`                   | API key for admin WebUI authentication (see Web UI)                          | —                    |
 | `GATEWAY_PUBLIC_URL`                | API Gateway base URL (MCP endpoint derived as `$URL/mcp`)                    | —                    |
 | `SKIPPER_SOCIAL_ENABLED`            | Enable event-driven social posting agent                                     | `false`              |
 | `SKIPPER_SOCIAL_INTERVAL`           | How often to check for noteworthy events                                     | `2h`                 |
@@ -127,7 +128,7 @@ Skipper includes an embedded web UI served at `/` when `SKIPPER_WEB_UI` is enabl
 
 Features: conversation sidebar, SSE-streamed chat, markdown rendering, confidence badges, citations, dark/light mode. The UI reads configuration from `<meta>` tags injected at serve time.
 
-**Authentication:** When `SKIPPER_API_KEY` is set, the admin WebUI requires authentication. Users enter the key once and receive an HMAC-signed session cookie (24h, httponly). When the key is not set, the WebUI uses network-trust (no client-side auth) and logs a warning on startup.
+**Authentication:** When `SKIPPER_API_KEY` is set, the admin WebUI requires authentication. Users enter the key once and receive an HMAC-signed session cookie (24h, httponly). When the key is not set, the WebUI is disabled unless `SKIPPER_WEB_UI_INSECURE=true` is set explicitly; insecure mode logs a startup warning.
 
 Set `SKIPPER_WEB_UI=false` to run in headless API-only mode.
 
@@ -329,4 +330,4 @@ The detector saves a baseline on first observation per content type. Subsequent 
 
 ## Standalone Mode (Planned)
 
-Skipper's internal dependencies are decoupled behind interfaces (Phase 1) so all platform components — gRPC clients, Kafka, billing — gracefully degrade to nil. Standalone mode will consolidate into the existing binary: when `JWT_SECRET` is absent, Skipper runs with API key auth, auto-migration, and no platform wiring. See `PLAN_SKIPPER_APPLIANCE.md` for details.
+Skipper's internal dependencies are decoupled behind interfaces so some platform integrations can degrade to nil, but the current binary is still platform-wired at startup: `DATABASE_URL`, `JWT_SECRET`, and `SERVICE_TOKEN` are required, and the WebUI's insecure mode only bypasses browser login for the embedded admin UI. A true standalone/appliance mode without platform JWT/service-token wiring remains planned.

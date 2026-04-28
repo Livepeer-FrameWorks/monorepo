@@ -21,15 +21,22 @@ version: v1
 type: cluster
 profile: production
 channel: stable # optional: stable (default) or rc
+root_domain: example.com # optional: used for Caddy routing and cookie domains
 env_files:
   - config/production.env
   - secrets/production.env
+hosts_file: clusters/production/hosts.enc.yaml # optional: SOPS-encrypted host inventory
+bootstrap_overlay: gitops/clusters/production/bootstrap.yaml # optional desired-state overlay
 hosts: {}
 clusters: {}
+wireguard: {}
 infrastructure: {}
 services: {}
 interfaces: {}
 observability: {}
+geoip: {}
+tls_bundles: {}
+ingress_sites: {}
 ```
 
 ## Top-Level Fields
@@ -105,6 +112,42 @@ env_files:
 
 ---
 
+### root_domain
+
+Base domain used by Caddy routing, public interface metadata, and production cookie-domain derivation.
+
+**Example:**
+
+```yaml
+root_domain: example.com
+```
+
+---
+
+### hosts_file
+
+Optional path to a SOPS-encrypted host inventory. When set, `frameworks cluster provision` merges sensitive host fields such as `external_ip`, `user`, and WireGuard private-key material from this file before validation.
+
+**Example:**
+
+```yaml
+hosts_file: clusters/production/hosts.enc.yaml
+```
+
+---
+
+### bootstrap_overlay
+
+Optional path to a bootstrap desired-state overlay. The CLI renders manifest-derived bootstrap state and then merges this overlay for operator-authored tenants, billing, cluster pricing, and service registry overrides that do not belong directly in the manifest.
+
+**Example:**
+
+```yaml
+bootstrap_overlay: gitops/clusters/production/bootstrap.yaml
+```
+
+---
+
 ### hosts
 
 Map of host definitions for SSH access and mesh identity. The CLI connects to
@@ -124,6 +167,7 @@ hosts:
   <hostname>:
     external_ip: <public-ip>
     user: <ssh-user>
+    cluster: <cluster-id>
     wireguard_ip: <mesh-ip>
     wireguard_public_key: <base64-public-key>
     wireguard_port: 51820
@@ -134,11 +178,14 @@ hosts:
 
 **Fields:**
 
-- `external_ip` (required) - Public IP address used for SSH/bootstrap and WireGuard endpoint dialing
-- `user` (required) - SSH username
+- `external_ip` (required unless provided by `hosts_file`) - Public IP address used for SSH/bootstrap and WireGuard endpoint dialing
+- `user` (required unless provided by `hosts_file`) - SSH username
+- `cluster` (optional) - Explicit cluster membership for this host. When one cluster is declared, hosts implicitly belong to it
 - `wireguard_ip` (required for Privateer-covered hosts) - GitOps-owned internal mesh address
 - `wireguard_public_key` (required for Privateer-covered hosts) - Public half of the host mesh identity
 - `wireguard_port` (required for Privateer-covered hosts) - Host WireGuard UDP listen port
+- `wireguard_private_key_file` (optional) - On-disk private-key path for adopted-local nodes
+- `wireguard_private_key_managed` (optional) - Set to `false` for adopted-local nodes whose key is preserved on disk
 - `roles` (optional) - Arbitrary tags used for human grouping
 - `labels` (optional) - Free-form metadata
 
@@ -257,6 +304,7 @@ PostgreSQL or YugabyteDB configuration.
 infrastructure:
   postgres:
     enabled: true
+    engine: postgres
     mode: native
     version: "15.14"
     host: central-01
@@ -269,12 +317,17 @@ infrastructure:
 **Fields:**
 
 - `enabled` (required)
+- `engine` (optional) - `postgres` by default, or `yugabyte`
 - `mode` (required) - `native`
 - `version` (required)
-- `host` (required) - Host name from `hosts`
+- `host` (required for single-node Postgres) - Host name from `hosts`
+- `nodes` (required for multi-node YugabyteDB) - List of `{host, id, rpc_port}` entries
 - `port` (required)
+- `replication_factor` (optional) - Defaults to the number of `nodes`
 - `databases` (optional)
 - `tuning` (optional) - key/value overrides for server tuning
+- `sql_access` (optional) - `direct` by default, or `ssh`
+- `password` (optional) - Database password override
 
 ---
 
@@ -303,6 +356,46 @@ infrastructure:
 - `host` (required)
 - `port` (required)
 - `databases` (optional)
+- `sql_access` (optional) - `direct` by default, or `ssh`
+
+---
+
+### redis
+
+Redis or Valkey cache instances. Use named instances when services need separate logical caches.
+
+**Format:**
+
+```yaml
+infrastructure:
+  redis:
+    enabled: true
+    engine: valkey
+    mode: native
+    version: "8.1"
+    instances:
+      - name: foghorn
+        host: central-01
+        port: 6379
+      - name: chatwoot
+        engine: redis
+        host: central-01
+        port: 6380
+```
+
+**Fields:**
+
+- `enabled` (required)
+- `engine` (optional) - Default engine for instances, `valkey` or `redis`
+- `mode` (required) - `docker` or `native`
+- `version` (optional)
+- `instances` (required)
+  - `name` (required)
+  - `engine` (optional) - Instance-level engine override
+  - `host` (required) - Host name from `hosts`
+  - `port` (required)
+  - `password` (optional)
+  - `config` (optional) - key/value overrides such as `maxmemory` or `appendonly`
 
 ---
 
@@ -369,6 +462,10 @@ infrastructure:
 - `brokers` (required) - at least 1; use 3+ for production
 - `topics` (optional)
 - `min_insync_replicas` (optional)
+- `delete_topic_enable` (optional)
+- `offsets_topic_replication_factor` (optional)
+- `transaction_state_log_replication_factor` (optional)
+- `transaction_state_log_min_isr` (optional)
 
 ---
 
@@ -473,11 +570,15 @@ For multi-node edge fleets, use a dedicated **edge manifest**.
 
 ```yaml
 version: v1
+channel: stable
 root_domain: example.com
 pool_domain: edge.example.com
 email: ops@example.com
 cluster_id: regional-production
+enrollment_token: fw_edge_...
+hosts_file: clusters/edge/hosts.enc.yaml
 fetch_cert: true
+mode: docker
 nodes:
   - name: edge-us-east-1
     ssh: admin@203.0.113.10
@@ -492,10 +593,14 @@ on the `frameworks edge provision` command when an explicit key is needed.
 
 **Fields:**
 
+- `channel` (optional) - `stable`, `rc`, or an explicit version such as `v0.2.0-rc3`
 - `root_domain` or `pool_domain` (at least one required)
 - `email` (ACME)
 - `cluster_id` (required when `register_qm: true`)
+- `enrollment_token` (optional) - Token used for edge bootstrap
+- `hosts_file` (optional) - SOPS-encrypted edge host inventory
 - `fetch_cert` (optional) - Fetch certs from Navigator
+- `mode` (optional) - Default node mode, `docker` by default or `native`
 - `nodes` (required)
 
 Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive remote-write URL and auth material from Foghorn during preregistration and subsequent `ConfigSeed` updates.
@@ -503,11 +608,12 @@ Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive rem
 **Node fields:**
 
 - `name` (required)
-- `ssh` (required) - `user@host`
+- `ssh` (required unless provided by `hosts_file`) - `user@host`
 - `subdomain` (optional)
 - `region` (optional)
 - `apply_tune` (optional)
 - `register_qm` (optional)
+- `mode` (optional) - Per-node override, `docker` or `native`
 - `labels` (optional)
 
 ---
@@ -517,12 +623,12 @@ Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive rem
 The CLI validates:
 
 - Required fields (`version`, `type`, hosts)
-- Host references used by infrastructure/services/interfaces
+- Host references used by Postgres, ClickHouse, ZooKeeper, Kafka, services, interfaces, and observability entries
 - If `clusters` is present, each entry must have `name` and `type`
 - If a service sets `cluster`, it must reference a defined cluster key
 - Cluster IDs (map keys) must be non-empty strings
 
-Unknown keys are ignored by the parser, but it’s best to keep manifests minimal and aligned with the schema above.
+Unknown keys are rejected by the parser. Keep manifests minimal and aligned with the schema above so typos and removed fields fail loudly.
 
 ## Remote Manifests (GitHub App)
 

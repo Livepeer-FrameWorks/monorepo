@@ -201,7 +201,8 @@ CREATE INDEX IF NOT EXISTS idx_commodore_stream_keys_stream_id ON commodore.stre
 -- External RTMP/SRT destinations for simultaneous restreaming.
 -- When a stream goes live, Foghorn activates enabled push targets on the
 -- origin node via Helmsman → MistServer push API.
--- TODO: Encrypt target_uri at rest (contains third-party platform stream keys)
+-- target_uri stores an application-encrypted payload because it contains
+-- third-party platform stream keys.
 -- ============================================================================
 
 -- Push targets for multistreaming to external platforms
@@ -214,7 +215,7 @@ CREATE TABLE IF NOT EXISTS commodore.push_targets (
     -- ===== TARGET CONFIG =====
     platform VARCHAR(50),                         -- 'twitch', 'youtube', 'facebook', 'kick', 'x', 'custom'
     name VARCHAR(255) NOT NULL,                   -- User-friendly label ("My Twitch")
-    target_uri VARCHAR(512) NOT NULL,             -- rtmp://live.twitch.tv/app/{stream_key}
+    target_uri VARCHAR(512) NOT NULL,             -- encrypted rtmp://live.twitch.tv/app/{stream_key}
     is_enabled BOOLEAN DEFAULT TRUE,
 
     -- ===== RUNTIME STATE =====
@@ -284,7 +285,7 @@ $$ LANGUAGE plpgsql;
 -- ============================================================================
 -- Business registry for clips and DVR recordings.
 -- Lifecycle/storage state is managed by Foghorn (foghorn.artifacts).
--- See: docs/architecture/CLIP_DVR_REGISTRY.md
+-- See: docs/architecture/clips-dvr.md
 -- ============================================================================
 
 -- Clip business registry (metadata only, lifecycle in Foghorn)

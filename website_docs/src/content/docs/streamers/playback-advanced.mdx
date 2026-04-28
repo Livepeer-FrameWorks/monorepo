@@ -90,10 +90,10 @@ interface SkinDefinition {
 const player = createPlayer({ ..., skin: false });
 // or equivalently
 const player = createPlayer({ ..., controls: false });
-
-// Native <video> controls
-const player = createPlayer({ ..., controls: "stock" });
 ```
+
+The current vanilla `createPlayer` config treats `controls` as a boolean. Use `skin` for custom UI
+or `controls: false` for headless playback.
 
 ## Blueprint System
 
@@ -270,12 +270,12 @@ Available properties: `paused`, `playing`, `currentTime`, `duration`, `volume`, 
 
 `playbackMode` controls the protocol preference order:
 
-| Mode          | Preference                 | Use Case              |
-| ------------- | -------------------------- | --------------------- |
-| `low-latency` | WebRTC → MP4/WS → HLS/DASH | Real-time interaction |
-| `quality`     | MP4/WS → HLS/DASH → WebRTC | Stable, high quality  |
-| `vod`         | HLS/MP4 (penalize WHEP)    | Pre-recorded content  |
-| `auto`        | Balanced score-based       | Default               |
+| Mode          | Preference                                 | Use Case              |
+| ------------- | ------------------------------------------ | --------------------- |
+| `low-latency` | WebCodecs/WS → WHEP/WebRTC → MP4/WS → HLS  | Real-time interaction |
+| `quality`     | MP4/WS and WebCodecs/WS → HLS/MP4 → WebRTC | Stable, high quality  |
+| `vod`         | MP4/HLS/DASH → MP4/WS → WHEP/WebRTC        | Pre-recorded content  |
+| `auto`        | Balanced score-based                       | Default               |
 
 ```ts
 const player = createPlayer({
@@ -297,12 +297,14 @@ const player = createPlayer({
 
 ## Adaptive Bitrate (ABR)
 
-The player includes a built-in ABR controller with two modes:
+The player includes a built-in ABR controller with four modes:
 
-| Mode     | Description                                                               |
-| -------- | ------------------------------------------------------------------------- |
-| `auto`   | Automatic quality selection based on viewport size and network conditions |
-| `manual` | User-selected quality level (disables automatic switching)                |
+| Mode      | Description                                                                      |
+| --------- | -------------------------------------------------------------------------------- |
+| `auto`    | Uses viewport resize ABR first, then bitrate monitoring if resize is unavailable |
+| `resize`  | Selects quality from viewport/container size changes                             |
+| `bitrate` | Monitors playback quality and steps down/up based on performance                 |
+| `manual`  | User-selected quality level; automatic switching is disabled                     |
 
 ```ts
 // Check current mode
@@ -349,14 +351,15 @@ player.selectQuality("720p");
 
 The player wraps multiple playback engines and selects the best one for each browser/protocol combination:
 
-| Engine       | Protocols      | Notes                              |
-| ------------ | -------------- | ---------------------------------- |
-| hls.js       | HLS (TS, CMAF) | Primary HLS engine for non-Safari  |
-| Video.js     | HLS, DASH      | Fallback multi-protocol engine     |
-| MewsWsPlayer | WebSocket MP4  | Custom MSE-based ultra-low-latency |
-| Native WHEP  | WebRTC         | Browser-native WebRTC              |
-| WebCodecs    | WebSocket      | Frame-accurate, background-safe    |
-| Native HLS   | HLS            | Safari native playback             |
+| Engine       | Protocols          | Notes                             |
+| ------------ | ------------------ | --------------------------------- |
+| hls.js       | HLS (TS, CMAF)     | Primary HLS engine for non-Safari |
+| Video.js     | HLS                | Fallback HLS engine               |
+| Dash.js      | DASH               | MPEG-DASH adaptive streaming      |
+| MewsWsPlayer | WebSocket MP4/WebM | Custom MSE-based low-latency      |
+| Native WHEP  | WebRTC             | Browser-native WebRTC             |
+| WebCodecs    | WebSocket          | Frame-accurate, background-safe   |
+| Native HLS   | HLS                | Safari native playback            |
 
 Protocol selection uses a scoring algorithm ported from MistServer's MistMetaPlayer, evaluating codec support, browser compatibility, and source priority.
 
@@ -405,8 +408,8 @@ if (player.capabilities.pip) {
   await player.requestPiP();
 }
 
-player.on("pipChange", (inPiP) => {
-  console.log("PiP:", inPiP);
+player.on("pipChange", ({ isPiP }) => {
+  console.log("PiP:", isPiP);
 });
 ```
 
@@ -419,8 +422,8 @@ if (player.capabilities.fullscreen) {
   await player.requestFullscreen();
 }
 
-player.on("fullscreenChange", (inFullscreen) => {
-  console.log("Fullscreen:", inFullscreen);
+player.on("fullscreenChange", ({ isFullscreen }) => {
+  console.log("Fullscreen:", isFullscreen);
 });
 ```
 
@@ -463,7 +466,7 @@ player.selectTextTrack(textTracks[0].id);
 ## Playback Statistics
 
 ```ts
-const stats = player.getStats();
+const stats = await player.getStats();
 ```
 
 ## Content Types

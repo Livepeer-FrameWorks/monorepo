@@ -14,7 +14,7 @@ Connects to FrameWorks Gateway (GraphQL) for automatic endpoint resolution or di
 
 | Package                              | Use Case                                       |
 | ------------------------------------ | ---------------------------------------------- |
-| `@livepeer-frameworks/player-react`  | React 18+ apps                                 |
+| `@livepeer-frameworks/player-react`  | React 17, 18, and 19 apps                      |
 | `@livepeer-frameworks/player-svelte` | Svelte 5 apps                                  |
 | `@livepeer-frameworks/player-wc`     | Web Components — Vue, Angular, CDN, plain HTML |
 | `@livepeer-frameworks/player-core`   | Vanilla JS, headless, or custom integrations   |
@@ -125,106 +125,108 @@ const player = createPlayer({
 
 All queries are synchronous getters on the player instance.
 
-| Property       | Type                          | Description                                        |
-| -------------- | ----------------------------- | -------------------------------------------------- |
-| `playerState`  | `PlayerState`                 | Current lifecycle state                            |
-| `state`        | `PlayerState`                 | Alias for `playerState`                            |
-| `streamState`  | `StreamState \| null`         | Upstream stream status                             |
-| `endpoints`    | `ContentEndpoints \| null`    | Resolved playback endpoints                        |
-| `metadata`     | `ContentMetadata \| null`     | Stream metadata from gateway                       |
-| `streamInfo`   | `StreamInfo \| null`          | Active stream sources and tracks                   |
-| `videoElement` | `HTMLVideoElement \| null`    | Underlying video element                           |
-| `ready`        | `boolean`                     | Player initialized and ready                       |
-| `currentTime`  | `number`                      | Current playback position (milliseconds)           |
-| `duration`     | `number`                      | Total duration in milliseconds (Infinity for live) |
-| `volume`       | `number`                      | Volume level (0-1)                                 |
-| `muted`        | `boolean`                     | Whether audio is muted                             |
-| `paused`       | `boolean`                     | Whether playback is paused                         |
-| `playing`      | `boolean`                     | Whether actively playing                           |
-| `buffering`    | `boolean`                     | Whether currently buffering                        |
-| `started`      | `boolean`                     | Whether playback has started at least once         |
-| `playbackRate` | `number`                      | Current playback speed                             |
-| `loop`         | `boolean`                     | Whether looping is enabled                         |
-| `live`         | `boolean`                     | Whether the stream is live                         |
-| `nearLive`     | `boolean`                     | Whether near the live edge                         |
-| `fullscreen`   | `boolean`                     | Whether in fullscreen                              |
-| `pip`          | `boolean`                     | Whether in picture-in-picture                      |
-| `error`        | `string \| null`              | Current error message                              |
-| `quality`      | `PlaybackQuality \| null`     | Active quality level                               |
-| `abrMode`      | `'auto' \| 'manual'`          | ABR selection mode                                 |
-| `playerInfo`   | `{ name, shortname } \| null` | Active player engine                               |
-| `sourceInfo`   | `{ url, type } \| null`       | Active source/protocol                             |
-| `theme`        | `string`                      | Current theme name                                 |
-| `size`         | `{ width, height }`           | Container dimensions                               |
-| `capabilities` | `PlayerCapabilities`          | Runtime feature detection                          |
+| Property       | Type                                          | Description                                        |
+| -------------- | --------------------------------------------- | -------------------------------------------------- |
+| `playerState`  | `PlayerState`                                 | Current lifecycle state                            |
+| `state`        | `PlayerState`                                 | Alias for `playerState`                            |
+| `streamState`  | `StreamState \| null`                         | Upstream stream status                             |
+| `endpoints`    | `ContentEndpoints \| null`                    | Resolved playback endpoints                        |
+| `metadata`     | `ContentMetadata \| null`                     | Stream metadata from gateway                       |
+| `streamInfo`   | `StreamInfo \| null`                          | Active stream sources and tracks                   |
+| `videoElement` | `HTMLVideoElement \| null`                    | Underlying video element                           |
+| `ready`        | `boolean`                                     | Player initialized and ready                       |
+| `currentTime`  | `number`                                      | Current playback position (milliseconds)           |
+| `duration`     | `number`                                      | Total duration in milliseconds (Infinity for live) |
+| `volume`       | `number`                                      | Volume level (0-1)                                 |
+| `muted`        | `boolean`                                     | Whether audio is muted                             |
+| `paused`       | `boolean`                                     | Whether playback is paused                         |
+| `playing`      | `boolean`                                     | Whether actively playing                           |
+| `buffering`    | `boolean`                                     | Whether currently buffering                        |
+| `started`      | `boolean`                                     | Whether playback has started at least once         |
+| `playbackRate` | `number`                                      | Current playback speed                             |
+| `loop`         | `boolean`                                     | Whether looping is enabled                         |
+| `live`         | `boolean`                                     | Whether the stream is live                         |
+| `nearLive`     | `boolean`                                     | Whether near the live edge                         |
+| `fullscreen`   | `boolean`                                     | Whether in fullscreen                              |
+| `pip`          | `boolean`                                     | Whether in picture-in-picture                      |
+| `error`        | `string \| null`                              | Current error message                              |
+| `quality`      | `PlaybackQuality \| null`                     | Active quality level                               |
+| `abrMode`      | `'auto' \| 'resize' \| 'bitrate' \| 'manual'` | ABR selection mode                                 |
+| `playerInfo`   | `{ name, shortname } \| null`                 | Active player engine                               |
+| `sourceInfo`   | `{ url, type } \| null`                       | Active source/protocol                             |
+| `theme`        | `string`                                      | Current theme name                                 |
+| `size`         | `{ width, height }`                           | Container dimensions                               |
+| `capabilities` | `PlayerCapabilities`                          | Runtime feature detection                          |
 
 ### Mutations (Change State)
 
 Setters assign directly; methods are called on the instance.
 
-| Mutation               | Signature                 | Description                          |
-| ---------------------- | ------------------------- | ------------------------------------ |
-| `volume`               | `set volume(n)`           | Set volume (0-1)                     |
-| `muted`                | `set muted(b)`            | Set mute state                       |
-| `playbackRate`         | `set playbackRate(n)`     | Set playback speed                   |
-| `loop`                 | `set loop(b)`             | Enable/disable looping               |
-| `abrMode`              | `set abrMode(m)`          | Switch ABR mode                      |
-| `theme`                | `set theme(t)`            | Switch theme preset                  |
-| `play()`               | `() => Promise<void>`     | Start playback                       |
-| `pause()`              | `() => void`              | Pause playback                       |
-| `seek(t)`              | `(milliseconds) => void`  | Seek to absolute time                |
-| `seekBy(d)`            | `(deltaMs) => void`       | Seek relative                        |
-| `jumpToLive()`         | `() => void`              | Jump to live edge                    |
-| `skipForward(ms?)`     | `(milliseconds?) => void` | Skip forward (default 10000ms)       |
-| `skipBack(ms?)`        | `(milliseconds?) => void` | Skip backward (default 10000ms)      |
-| `togglePlay()`         | `() => void`              | Toggle play/pause                    |
-| `toggleMute()`         | `() => void`              | Toggle mute                          |
-| `toggleLoop()`         | `() => void`              | Toggle loop                          |
-| `toggleFullscreen()`   | `() => Promise<void>`     | Toggle fullscreen                    |
-| `togglePiP()`          | `() => Promise<void>`     | Toggle picture-in-picture            |
-| `requestFullscreen()`  | `() => Promise<void>`     | Enter fullscreen                     |
-| `requestPiP()`         | `() => Promise<void>`     | Enter PiP                            |
-| `getQualities()`       | `() => Quality[]`         | List available quality levels        |
-| `selectQuality(id)`    | `(id) => void`            | Lock to a specific quality           |
-| `getTextTracks()`      | `() => Track[]`           | List text tracks                     |
-| `selectTextTrack(id)`  | `(id \| null) => void`    | Activate a text track                |
-| `getAudioTracks()`     | `() => Track[]`           | List audio tracks                    |
-| `selectAudioTrack(id)` | `(id) => void`            | Switch audio track                   |
-| `getTracks()`          | `() => Track[]`           | List all tracks (video, audio, text) |
-| `retry()`              | `() => Promise<void>`     | Retry current connection             |
-| `retryWithFallback()`  | `() => Promise<boolean>`  | Retry with next endpoint             |
-| `reload()`             | `() => Promise<void>`     | Full reload                          |
-| `clearError()`         | `() => void`              | Dismiss current error                |
-| `getStats()`           | `() => Promise<unknown>`  | Playback statistics snapshot         |
-| `setThemeOverrides(o)` | `(overrides) => void`     | Apply partial theme overrides        |
-| `clearTheme()`         | `() => void`              | Reset to default theme               |
-| `destroy()`            | `() => void`              | Tear down and release resources      |
+| Mutation                | Signature                             | Description                          |
+| ----------------------- | ------------------------------------- | ------------------------------------ |
+| `volume`                | `set volume(n)`                       | Set volume (0-1)                     |
+| `muted`                 | `set muted(b)`                        | Set mute state                       |
+| `playbackRate`          | `set playbackRate(n)`                 | Set playback speed                   |
+| `loop`                  | `set loop(b)`                         | Enable/disable looping               |
+| `abrMode`               | `set abrMode(m)`                      | Switch ABR mode                      |
+| `theme`                 | `set theme(t)`                        | Switch theme preset                  |
+| `play()`                | `() => Promise<void>`                 | Start playback                       |
+| `pause()`               | `() => void`                          | Pause playback                       |
+| `seek(t)`               | `(milliseconds) => void`              | Seek to absolute time                |
+| `seekBy(d)`             | `(deltaMs) => void`                   | Seek relative                        |
+| `jumpToLive()`          | `() => void`                          | Jump to live edge                    |
+| `skipForward(ms?)`      | `(milliseconds?) => void`             | Skip forward (default 10000ms)       |
+| `skipBack(ms?)`         | `(milliseconds?) => void`             | Skip backward (default 10000ms)      |
+| `togglePlay()`          | `() => void`                          | Toggle play/pause                    |
+| `toggleMute()`          | `() => void`                          | Toggle mute                          |
+| `toggleLoop()`          | `() => void`                          | Toggle loop                          |
+| `toggleFullscreen()`    | `() => Promise<void>`                 | Toggle fullscreen                    |
+| `togglePiP()`           | `() => Promise<void>`                 | Toggle picture-in-picture            |
+| `requestFullscreen()`   | `() => Promise<void>`                 | Enter fullscreen                     |
+| `requestPiP()`          | `() => Promise<void>`                 | Enter PiP                            |
+| `getQualities()`        | `() => Quality[]`                     | List available quality levels        |
+| `selectQuality(id)`     | `(id) => void`                        | Lock to a specific quality           |
+| `getTextTracks()`       | `() => Track[]`                       | List text tracks                     |
+| `selectTextTrack(id)`   | `(id \| null) => void`                | Activate a text track                |
+| `getAudioTracks()`      | `() => Track[]`                       | List audio tracks                    |
+| `selectAudioTrack(id)`  | `(id) => void`                        | Switch audio track                   |
+| `getTracks()`           | `() => Track[]`                       | List all tracks (video, audio, text) |
+| `retry()`               | `() => Promise<void>`                 | Retry current connection             |
+| `retryWithFallback()`   | `() => Promise<boolean>`              | Retry with next endpoint             |
+| `reload()`              | `() => Promise<void>`                 | Full reload                          |
+| `clearError()`          | `() => void`                          | Dismiss current error                |
+| `getStats()`            | `() => Promise<unknown>`              | Playback statistics snapshot         |
+| `snapshot()`            | `(type?, quality?) => string \| null` | Capture a frame as a data URL        |
+| `setRotation(deg)`      | `(degrees) => void`                   | Rotate direct-rendered video         |
+| `setMirror(horizontal)` | `(boolean) => void`                   | Mirror/flip direct-rendered video    |
+| `setThemeOverrides(o)`  | `(overrides) => void`                 | Apply partial theme overrides        |
+| `clearTheme()`          | `() => void`                          | Reset to default theme               |
+| `destroy()`             | `() => void`                          | Tear down and release resources      |
 
 ### Subscriptions — Events
 
 `on(event, listener)` returns an unsubscribe function.
 
 ```ts
-const unsub = player.on("stateChange", (state) => {
+const unsub = player.on("stateChange", ({ state }) => {
   console.log("New state:", state);
 });
 unsub();
 ```
 
-| Event               | Payload                     | Description                |
-| ------------------- | --------------------------- | -------------------------- |
-| `stateChange`       | `PlayerState`               | Lifecycle state transition |
-| `timeUpdate`        | `{ currentTime, duration }` | Position changed (ms)      |
-| `volumeChange`      | `{ volume, muted }`         | Volume or mute changed     |
-| `qualityChange`     | `Quality`                   | Quality level changed      |
-| `fullscreenChange`  | `boolean`                   | Fullscreen state changed   |
-| `pipChange`         | `boolean`                   | PiP state changed          |
-| `error`             | `PlayerError`               | Playback error             |
-| `errorCleared`      | —                           | Error dismissed            |
-| `streamStateChange` | `StreamState`               | Upstream status changed    |
-| `endpointsResolved` | `Endpoint[]`                | Gateway returned endpoints |
-| `metadataUpdate`    | `object`                    | Metadata updated           |
-| `tracksChange`      | `Track[]`                   | Available tracks changed   |
+| Event               | Payload                          | Description                |
+| ------------------- | -------------------------------- | -------------------------- |
+| `stateChange`       | `{ state, context? }`            | Lifecycle state transition |
+| `timeUpdate`        | `{ currentTime, duration }`      | Position changed (ms)      |
+| `volumeChange`      | `{ volume, muted }`              | Volume or mute changed     |
+| `qualityChanged`    | `{ fromLevel?, toLevel }`        | Quality level changed      |
+| `fullscreenChange`  | `{ isFullscreen }`               | Fullscreen state changed   |
+| `pipChange`         | `{ isPiP }`                      | PiP state changed          |
+| `error`             | `{ error, code? }`               | Playback error             |
+| `errorCleared`      | --                               | Error dismissed            |
+| `streamStateChange` | `{ state }`                      | Upstream status changed    |
+| `ready`             | `{ videoElement }`               | Video element is ready     |
+| `metadataUpdate`    | playback/session metadata object | Metadata updated           |
 
 ### Subscriptions — Reactive State
 

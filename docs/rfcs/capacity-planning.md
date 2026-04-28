@@ -2,19 +2,19 @@
 
 ## Status
 
-Draft
+Partially implemented
 
 ## TL;DR
 
 - Add configurable utilization thresholds to the edge balancer so saturated nodes can be excluded from routing.
-- Ship baseline Prometheus alert rules for edge saturation, peer health, and operational signals.
+- Expand baseline Prometheus alert rules for edge saturation, peer health, and operational signals.
 - Surface cluster-wide capacity reporting to support the N\*2 rule (never exceed 50% utilization).
 
 ## Current State
 
 Foghorn's balancer (`api_balancing/internal/balancer/balancer.go`) uses linear gradient scoring for CPU, RAM, bandwidth, and geo distance. The only hard cutoff is `BWAvailable == 0` — a node at 95% CPU still receives traffic, just with a very low score.
 
-Prometheus is configured (`infrastructure/prometheus/prometheus.yml`) with scrape targets for all services, but `alertmanagers.targets` is empty. No alert rules files exist anywhere in the infrastructure directory.
+Prometheus is configured (`infrastructure/prometheus/prometheus.yml`) with scrape targets for all services and loads `rules/*.yml`. A baseline `infrastructure/prometheus/rules/frameworks.yml` exists, but `alertmanagers.targets` is still empty and the rule set is narrower than this RFC's proposed edge/federation/TLS/replication coverage.
 
 There is no cluster-wide utilization reporting beyond per-edge telemetry within Foghorn's internal state.
 
@@ -22,6 +22,7 @@ Evidence:
 
 - `api_balancing/internal/balancer/balancer.go`
 - `infrastructure/prometheus/prometheus.yml`
+- `infrastructure/prometheus/rules/frameworks.yml`
 
 ## Problem / Motivation
 
@@ -34,7 +35,7 @@ The N\*2 capacity model (never exceed 50% utilization across the cluster) is a r
 ## Goals
 
 - Configurable per-resource exclusion thresholds (CPU, RAM, bandwidth) that remove nodes from routing when exceeded.
-- Baseline Prometheus alert rules shipped as part of the platform.
+- Expanded Prometheus alert rules for the platform's edge/federation/TLS/replication signals.
 - Cluster-wide capacity reporting: aggregate utilization vs total capacity across all edges.
 
 ## Non-Goals
@@ -94,7 +95,7 @@ Operators see aggregate numbers in their dashboards: "cluster is at 47% CPU, 32%
 
 ## Migration / Rollout
 
-1. **Prometheus alert rules.** No code change required — add configuration files to `infrastructure/prometheus/rules/`. Operators can adopt immediately.
+1. **Prometheus alert rules.** Extend the existing `infrastructure/prometheus/rules/frameworks.yml` coverage. Operators can adopt immediately once metrics exist.
 2. **Configurable thresholds in balancer.** Small code change to scoring logic, with tests. Feature is opt-in via configuration; no behavior change at default settings.
 3. **Cluster-wide capacity reporting.** New Prometheus metrics from Foghorn. Dashboard integration in Foredeck/Chartroom.
 

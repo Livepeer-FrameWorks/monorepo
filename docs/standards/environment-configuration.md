@@ -2,7 +2,7 @@
 
 ## Current Shape
 
-As of the April 2026 audit, the repo reads about 295 unique environment variables in code and declares about 339 across `.env`, `config/env/*.env`, and frontend example files.
+As of the April 2026 audit, a lightweight scan finds about 290 unique environment variables read in code and about 287 declared across `.env`, `config/env/*.env`, and frontend example files. Treat those numbers as drift indicators, not a contract: configgen output, shell scripts, compose interpolation, and generated examples can move the count without changing the supported operator surface.
 
 That surface is not all "real" configuration. A large part of it is derived or duplicated:
 
@@ -83,7 +83,12 @@ configgen derives all `VITE_*` from canonical public URLs:
 - `MARKETING_PUBLIC_URL` -> `VITE_MARKETING_SITE_URL`
 - `DOCS_PUBLIC_URL` -> `VITE_DOCS_SITE_URL`
 - `FORMS_PUBLIC_URL` -> `VITE_CONTACT_API_URL`
+- `STREAMING_INGEST_URL` -> `VITE_STREAMING_INGEST_URL`
+- `STREAMING_PLAY_URL` -> `VITE_STREAMING_PLAY_URL`
+- `STREAMING_EDGE_URL` -> `VITE_STREAMING_EDGE_URL`
 - `FROM_EMAIL` -> `VITE_CONTACT_EMAIL`
+- `TURNSTILE_AUTH_SITE_KEY` -> `VITE_TURNSTILE_AUTH_SITE_KEY`
+- `TURNSTILE_FORMS_SITE_KEY` -> `VITE_TURNSTILE_FORMS_SITE_KEY`
 
 Product constants (GITHUB_URL, LIVEPEER_URL, streaming ports/paths, BRAND_NAME, etc.) are hardcoded in `packages/site-config/index.ts`, not derived from env.
 
@@ -103,7 +108,7 @@ These are the best no-behavior-change cleanup candidates:
 
 1. Document `.env` as generated and stop treating it as an editable contract.
 2. Keep backend runtime checks on `BUILD_ENV` and avoid introducing parallel environment selectors.
-3. Document missing but real shared keys in examples: `GRPC_ALLOW_INSECURE`, `GRPC_TLS_*`, `ACME_ENV`, `CERT_ISSUANCE_TOKEN`, `FEDERATION_ENABLED`, `RERANKER_API_URL`, and `TURNSTILE_FAIL_OPEN`.
+3. Keep real operator-owned keys covered by examples and operator docs: shared gRPC TLS keys, `ACME_ENV`, `CERT_ISSUANCE_TOKEN`, `FEDERATION_ENABLED`, `RERANKER_API_URL`, `TURNSTILE_FAIL_OPEN`, and mesh-specific TLS names such as `QUARTERMASTER_GRPC_TLS_SERVER_NAME` / `NAVIGATOR_GRPC_TLS_SERVER_NAME`.
 4. Trim env-file-only drift that is not read by application code and is not a configgen source. Review items like unused compose-only wrappers separately from real dead keys.
 5. Keep feature-heavy domains isolated: Skipper AI, x402/crypto settlement, Navigator CA import, and Privateer mesh should not leak more shared globals than necessary.
 
@@ -142,26 +147,31 @@ Use `BUILD_ENV` as the repo-wide selector. Keep `NODE_ENV` only where frontend t
 
 Keep service defaults in code and only override generic `KAFKA_CLIENT_ID` or `KAFKA_GROUP_ID` when a deployment actually needs it.
 
-### Add to examples/docs because code really reads them
+### Keep covered in examples/docs because code really reads them
 
-These are real operator-owned inputs but are missing or under-documented in env examples:
+These are real operator-owned inputs that should stay covered by env examples and operator docs:
 
 - `GRPC_ALLOW_INSECURE`
 - `GRPC_TLS_CA_PATH`
 - `GRPC_TLS_CERT_PATH`
 - `GRPC_TLS_KEY_PATH`
 - `GRPC_TLS_SERVER_NAME`
+- `GRPC_TLS_PKI_DIR`
 - `ACME_ENV`
 - `CERT_ISSUANCE_TOKEN`
 - `FEDERATION_ENABLED`
 - `RERANKER_API_URL`
 - `TURNSTILE_FAIL_OPEN`
+- `QUARTERMASTER_GRPC_TLS_SERVER_NAME`
+- `NAVIGATOR_GRPC_TLS_SERVER_NAME`
 
-### Naming collisions to fix
+### Naming collisions already cleaned up
 
-These are especially confusing because the same key changes meaning across layers:
+ClickHouse naming used to be a confusing area, but the current configgen surface keeps the editable and derived forms split:
 
-- `CLICKHOUSE_HOST`: canonical input is a host name in `base.env`, but config generation rewrites it into `host:port` runtime form
+- `CLICKHOUSE_HOST` remains the canonical host-only input.
+- `CLICKHOUSE_ADDR` is the derived native ClickHouse `host:port` runtime address.
+- `CLICKHOUSE_PORT` is the derived HTTP port alias from `CLICKHOUSE_HTTP_PORT`.
 - Navigator endpoints are now split cleanly between `NAVIGATOR_GRPC_ADDR` and `NAVIGATOR_HTTP_URL`
 
 ## Practical Rule

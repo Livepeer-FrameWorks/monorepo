@@ -1,6 +1,6 @@
 # Foghorn HA - Redis State Externalization
 
-Foghorn runs as multiple instances per cluster with Redis as the shared state backend. All state mutations write through to Redis; each instance maintains an in-memory cache synced via pub/sub for sub-millisecond read performance.
+Foghorn can run as multiple instances per cluster with Redis as the shared state backend. Local stream/node/artifact state mutations write through to Redis, and each instance maintains an in-memory cache synced via pub/sub for sub-millisecond local routing reads. Federation, relay ownership, startup rehydration, and peer-address lookup also use Redis directly.
 
 ## Architecture
 
@@ -13,6 +13,8 @@ Foghorn runs as multiple instances per cluster with Redis as the shared state ba
                      │  {cluster_id}:nodes:*                │
                      │  {cluster_id}:artifacts:*            │
                      │  {cluster_id}:remote_edges:*         │
+                     │  {cluster_id}:remote_artifacts:*     │
+                     │  {cluster_id}:stream_ads:*           │
                      │  {cluster_id}:active_replications:*  │
                      │  {cluster_id}:leader:peer_manager    │
                      │                                      │
@@ -37,12 +39,12 @@ Foghorn runs as multiple instances per cluster with Redis as the shared state ba
 
 ## Service Responsibilities
 
-| Component                   | Role                                                                                   | Data                                                                                       |
-| --------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| StreamStateManager          | In-memory state + Redis write-through. Singleton accessed via `state.DefaultManager()` | Stream states, node states, artifacts, viewer sessions                                     |
-| RedisStateStore             | Redis CRUD operations, pub/sub publisher                                               | All `{cluster_id}:*` keys                                                                  |
-| PeerManager leader election | Redis SET NX for `{cluster_id}:leader:peer_manager`                                    | Only leader runs PeerChannel connections                                                   |
-| RemoteEdgeCache             | Federation-specific Redis cache (separate key namespace)                               | `remote_edges`, `remote_replications`, `active_replications`, `edge_summary`, `stream_ads` |
+| Component                   | Role                                                                                   | Data                                                                                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| StreamStateManager          | In-memory state + Redis write-through. Singleton accessed via `state.DefaultManager()` | Stream states, node states, artifacts, viewer sessions                                                                                                                                    |
+| RedisStateStore             | Redis CRUD operations, pub/sub publisher                                               | All `{cluster_id}:*` keys                                                                                                                                                                 |
+| PeerManager leader election | Redis SET NX for `{cluster_id}:leader:peer_manager`                                    | Only leader runs PeerChannel connections                                                                                                                                                  |
+| RemoteEdgeCache             | Federation-specific Redis cache (separate key namespace)                               | `remote_edges`, `remote_replications`, `active_replications`, `edge_summary`, `stream_ads`, `playback_index`, `remote_live_streams`, `remote_artifacts`, `stream_peers`, `peer_heartbeat` |
 
 ## Data Flows
 
@@ -57,7 +59,7 @@ Helmsman heartbeat → Foghorn instance
   → All other instances receive pub/sub → update their in-memory cache
 ```
 
-All 10 state mutation methods follow this pattern: update in-memory, write-through to Redis, publish notification.
+State mutation helpers follow this pattern: update in-memory, write-through to Redis, publish notification.
 
 ### Read Path
 
@@ -69,7 +71,7 @@ Viewer request → Foghorn instance (any)
   → Returns ranked node list
 ```
 
-Reads never hit Redis directly. The in-memory cache is kept fresh by pub/sub sync from other instances' writes.
+The local viewer-routing hot path reads the in-memory cache. Redis is still read directly for startup rehydration, HA command relay ownership, and federation caches such as remote edge summaries and stream advertisements.
 
 ### Command Relay (HA Forwarding)
 
@@ -140,7 +142,7 @@ Merge-not-replace: rehydration merges Redis data with any state already received
 | `{cluster_id}:streams:{stream_name}`                    | JSON: StreamState (node_id, tenant_id, status, tracks, viewers, buffer_state) | None (authoritative) |
 | `{cluster_id}:stream_instances:{stream_name}:{node_id}` | JSON: StreamInstanceState (per-node stream data)                              | None                 |
 | `{cluster_id}:nodes:{node_id}`                          | JSON: NodeState (base_url, geo, cpu, ram, bw, artifacts)                      | None                 |
-| `{cluster_id}:artifacts:{content_id}`                   | JSON: ArtifactState (node_id, size, type, cached_at)                          | None                 |
+| `{cluster_id}:artifacts:{node_id}`                      | JSON: list of artifacts stored on that node                                   | None                 |
 | `{cluster_id}:conn_owner:{node_id}`                     | String: `instanceID\|grpcAddr`                                                | 60s                  |
 
 ### Federation State (RemoteEdgeCache)
@@ -151,11 +153,13 @@ Merge-not-replace: rehydration merges Redis data with any state already received
 | `{cluster_id}:remote_replications:{stream_name}:{peer_cluster}` | JSON: ReplicationEvent (available, DTSC URL)            | 5m  |
 | `{cluster_id}:active_replications:{stream_name}`                | JSON: ActiveReplicationRecord (source, dest, DTSC URL)  | 5m  |
 | `{cluster_id}:edge_summary:{peer_cluster}`                      | JSON: EdgeSummaryRecord (smoothed per-edge data)        | 60s |
-| `{cluster_id}:stream_ad:{peer_cluster}:{internal_name}`         | JSON: StreamAdRecord (edges, playback_id, origin)       | 15s |
+| `{cluster_id}:stream_ads:{peer_cluster}:{internal_name}`        | JSON: StreamAdRecord (edges, playback_id, origin)       | 15s |
 | `{cluster_id}:playback_index:{playback_id}`                     | String: internal_name                                   | 30s |
+| `{cluster_id}:remote_live_streams:{tenant_id}:{internal_name}`  | JSON: RemoteLiveStreamEntry                             | 30s |
+| `{cluster_id}:remote_artifacts:{peer}:{artifact_hash}:{node}`   | JSON: RemoteArtifactEntry                               | 90s |
+| `{cluster_id}:stream_peers:{peer_cluster}`                      | JSON: active stream names for a stream-scoped peer      | 60s |
 | `{cluster_id}:leader:{role}`                                    | String: instance_id                                     | 15s |
 | `{cluster_id}:peer_addresses`                                   | Hash: cluster_id → addr                                 | 30s |
-| `{cluster_id}:remote_live:{internal_name}`                      | JSON: RemoteLiveStreamEntry (cluster_id, tenant_id)     | 30s |
 | `{cluster_id}:peer_heartbeat:{peer_cluster}`                    | JSON: PeerHeartbeatRecord (version, streams, BW, edges) | 30s |
 
 ### Pub/Sub Channel

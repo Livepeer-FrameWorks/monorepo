@@ -113,21 +113,30 @@ With the Player SDK, use `contentType="dvr"`. The player enables full seeking, s
 
 While a stream is live, the DVR buffer grows continuously. Viewers using the DVR playback ID can:
 
-- **Seek back** through the entire buffer — DVR windows can span weeks of continuous recording
+- **Seek back** through the available buffer for the recording's configured retention window
 - **Pause and resume** without losing their position
 - **Jump to live** to catch up to the real-time edge
 
 The trade-off is latency — DVR playback goes through HLS/DASH segments, so it's higher latency than a direct live WebRTC connection. But for live events, conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or start watching hours late and catch up.
 
 <Aside type="tip" title="Always-On Streams">
-  DVR buffers can span weeks of continuous streaming. This makes it ideal for always-on cameras,
-  24/7 broadcasts, and long-running live events where viewers drop in at any time and want to scrub
-  through everything that's happened.
+  DVR supports long-running streams. Runtime DVR starts default to a 30-day expiration when no
+  explicit expiration is supplied, and cluster or plan policy can configure different retention
+  windows.
 </Aside>
 
 ### Retention
 
-Recordings are retained for 30 days on the free tier. Paid tiers have longer retention (see [Billing](/streamers/billing)). Expired recordings are automatically cleaned up.
+Recording availability and retention have two layers:
+
+- Runtime DVR starts default to a 30-day expiration when no `expiresAt` is supplied.
+- The billing catalog seeds Free without DVR recording and paid plan policy with longer windows
+  (Supporter 90 days, Developer 180 days, Production 365 days, Enterprise custom).
+
+Current beta enforcement of billing-tier recording entitlements is not uniform across every DVR
+entry point. Treat the billing table as plan policy; runtime behavior is governed by the DVR request
+and cluster retention configuration until commercial enforcement is fully enabled. Foghorn's hourly
+retention job marks expired artifacts as deleted, then cleanup jobs remove files and stale records.
 
 ### Listing Recordings
 
@@ -140,6 +149,7 @@ query {
         playbackId
         title
         createdAt
+        expiresAt
         durationSeconds
         sizeBytes
         status

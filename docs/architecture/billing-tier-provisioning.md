@@ -80,15 +80,15 @@ Exactly one tier should have each flag set to `true`.
 
 ## Cluster Eligibility
 
-`ensureTierClusterAccess` queries `purser.cluster_pricing` for platform clusters the tier can access:
+`ensureTierClusterAccess` first asks Quartermaster for platform-official cluster IDs, then filters `purser.cluster_pricing` for clusters the tier can access:
 
 ```sql
-WHERE is_platform_official = true
+WHERE cluster_id = ANY(<quartermaster_official_cluster_ids>)
   AND required_tier_level <= <tier_level>
   AND (allow_free_tier = true OR <tier_level> > 0)
 ```
 
-The cluster with the highest `required_tier_level` is set as primary (most capable cluster the tier grants access to).
+Purser grants each eligible cluster through Quartermaster's service-token `BootstrapClusterAccess` RPC. The cluster with the highest `required_tier_level` is set as primary (most capable cluster the tier grants access to).
 
 ## Key Files
 
@@ -100,6 +100,6 @@ The cluster with the highest `required_tier_level` is set as primary (most capab
 
 ## Gotchas
 
-- Quartermaster's `CreateTenant` still auto-subscribes to `is_default_cluster=true` clusters as a safety net. Purser's cluster subscription uses `ON CONFLICT DO NOTHING` so the overlap is harmless.
-- Paid tier upgrades (Stripe/Mollie checkout) are blocked at the Gateway level (`api_gateway/internal/resolvers`). The Purser RPCs themselves remain unrestricted for admin operations.
+- Quartermaster's `CreateTenant` still auto-subscribes to the single `is_default_cluster=true` cluster as a safety net and sets `official_cluster_id`. Purser's later cluster provisioning is idempotent, so overlap is harmless.
+- Tier-specific paid subscription checkout is not active in the Gateway resolver path; wallet/prepaid accounts can still call `promoteToPaid`, which delegates to Purser and promotes to the default postpaid tier.
 - `PromoteToPaid` ignores the caller's `tier_id` and always resolves the default postpaid tier.

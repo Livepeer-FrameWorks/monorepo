@@ -11,10 +11,8 @@ An edge node pairs MistServer with Helmsman to connect your hardware to the Fram
 ## Get the CLI
 
 ```bash
-# Download
-curl -L %GITHUB_URL%/releases/latest/download/frameworks -o frameworks
-chmod +x frameworks
-sudo mv frameworks /usr/local/bin/
+# Install the latest release
+curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | sh
 
 # Verify
 frameworks version
@@ -33,7 +31,7 @@ frameworks edge deploy --ssh ubuntu@edge-1 --email ops@yourdomain.com
 frameworks edge deploy --ssh ubuntu@edge-1 --enrollment-token enroll_xxx
 ```
 
-When it finishes, `edge deploy` prints a five-line result block (vpc / enrollment / stack / https / node / domain) and suggests `edge status` and `edge doctor` as next steps.
+When it finishes, `edge deploy` prints a result block (`vpc`, `enrollment`, `stack`, `https`, `node`, `domain`) and suggests `edge status` and `edge doctor` as next steps.
 
 The rest of this page walks through the same workflow as individual commands when you need finer control.
 
@@ -110,9 +108,11 @@ The edge environment file contains the required settings:
 NODE_ID=edge-us-sea-1
 EDGE_PUBLIC_URL=https://stream.yourdomain.com/view
 FOGHORN_CONTROL_ADDR=foghorn.example.com:18019
+GRPC_TLS_CA_PATH=/etc/frameworks/pki/ca.crt
 EDGE_ENROLLMENT_TOKEN=your-enrollment-token
 EDGE_DOMAIN=stream.yourdomain.com
 ACME_EMAIL=ops@yourdomain.com
+DEPLOY_MODE=docker
 ```
 
 `NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path. `FOGHORN_CONTROL_ADDR` is the only Foghorn endpoint Helmsman needs at boot — the HTTP balancer base, TLS bundle, telemetry, and SiteConfig all arrive over the live gRPC `ConfigSeed` stream once Helmsman connects.
@@ -177,9 +177,11 @@ Health check: `curl http://localhost:18007/health`
 
 Reverse proxy. Provides:
 
-- Automatic HTTPS via Let’s Encrypt
-- Routes viewer traffic to MistServer
+- Bootstrap HTTPS during first start
+- Viewer routing after Helmsman receives and applies ConfigSeed
 - Terminates TLS
+
+The generated Caddyfile starts in bootstrap mode with internal TLS and a 503 response. Once Helmsman connects, Foghorn sends SiteConfig and TLS material over ConfigSeed, and Helmsman rewrites/reloads Caddy for live viewer traffic.
 
 ## Logs
 

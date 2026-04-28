@@ -13,12 +13,13 @@ import { Aside } from "@astrojs/starlight/components";
 
 ## Overview
 
-PostgreSQL schema changes are managed through versioned migrations:
+PostgreSQL and YugabyteDB schema changes are managed through embedded,
+versioned migrations:
 
-| Scenario      | What to use                                          |
-| ------------- | ---------------------------------------------------- |
-| Fresh install | Bootstrap schemas via `frameworks cluster init`      |
-| Upgrading     | Apply migrations from `pkg/database/sql/migrations/` |
+| Scenario      | What to use                                                                         |
+| ------------- | ----------------------------------------------------------------------------------- |
+| Fresh install | Bootstrap schemas via `frameworks cluster init`                                     |
+| Upgrading     | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/` |
 
 ## Migration structure
 
@@ -26,30 +27,33 @@ Migrations are organized by release version:
 
 ```
 pkg/database/sql/migrations/
-└── v1.1.0/
-    ├── 001_purser_add_invoice_field.sql
-    └── 002_commodore_add_stream_metadata.sql
+└── v0.3.0/
+    └── 001_bootstrap_tenant_aliases.sql
 ```
+
+The CLI embeds these files, expands them for each PostgreSQL/Yugabyte database
+listed in the manifest, and records applied files in that database's
+`_migrations` table.
 
 ## Upgrade procedure
 
 1. **Check release notes** for required migrations
-2. **Apply migrations** in order:
+2. **Apply migrations** through the CLI:
 
 ```bash
-psql -h <host> -d frameworks -f pkg/database/sql/migrations/v1.1.0/001_purser_add_invoice_field.sql
+frameworks cluster migrate
 ```
 
 3. **Verify** the changes:
 
 ```bash
-psql -h <host> -d frameworks -c "\d purser.billing_invoices"
+psql -h <host> -d quartermaster -c "SELECT version, seq, filename FROM _migrations ORDER BY version, seq;"
 ```
 
 4. **Deploy** new service versions:
 
 ```bash
-frameworks cluster upgrade purser --version v1.1.0
+frameworks cluster upgrade quartermaster --version v1.1.0
 ```
 
 ## Writing migrations
@@ -65,11 +69,21 @@ Guidelines for contributors:
 Example migration file:
 
 ```sql
--- Migration: v1.1.0/001_purser_add_invoice_field.sql
--- Required before: purser v1.1.0
+-- Migration: v0.3.0/001_bootstrap_tenant_aliases.sql
+-- Required before: quartermaster v0.3.0
 
-ALTER TABLE purser.billing_invoices
-  ADD COLUMN IF NOT EXISTS payment_intent_id TEXT;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'quartermaster') THEN
+        CREATE TABLE IF NOT EXISTS quartermaster.bootstrap_tenant_aliases (
+            alias       TEXT PRIMARY KEY,
+            tenant_id   UUID NOT NULL REFERENCES quartermaster.tenants(id) ON DELETE CASCADE,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    END IF;
+END
+$$;
 ```
 
 ## Rollback
@@ -83,7 +97,7 @@ ALTER TABLE purser.billing_invoices
 **"column does not exist" errors:**
 
 ```
-ERROR: column "payment_intent_id" of relation "billing_invoices" does not exist
+ERROR: relation "quartermaster.bootstrap_tenant_aliases" does not exist
 ```
 
 Cause: Service deployed before migration was applied.
@@ -92,5 +106,5 @@ Fix: Apply the migration, then restart the service.
 **Check table structure:**
 
 ```sql
-\d purser.billing_invoices
+\d quartermaster.bootstrap_tenant_aliases
 ```

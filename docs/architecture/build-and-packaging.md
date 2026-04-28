@@ -1,70 +1,65 @@
 # Build & Packaging - Multi-Platform Release Pipeline
 
-FrameWorks builds for 3 targets: `linux/amd64`, `linux/arm64`, `darwin/arm64`. Linux amd64 builds run on GitHub-hosted ubuntu runners. All arm64 and darwin builds run on a self-hosted Mac Mini ARM runner, eliminating QEMU emulation. darwin/amd64 (Intel Mac) is not supported — Apple is phasing out Rosetta 2 in macOS 28.
+FrameWorks releases Linux Docker images, Linux service binaries, a signed/notarized macOS CLI, signed/notarized macOS service binaries where supported, a macOS tray app, and a macOS `.pkg` installer.
+
+Current target set:
+
+- Docker images: `linux/amd64`, `linux/arm64`
+- CLI: `linux/amd64`, `linux/arm64`, `darwin/arm64`
+- Service binaries: `linux/amd64`, `linux/arm64`, plus `darwin/arm64` for services marked `darwin_binary=true` in `.github/release-components.json`
+
+Linux amd64 jobs run on GitHub-hosted `ubuntu-latest`. Linux arm64 image and service-binary jobs run on GitHub-hosted `ubuntu-24.04-arm`. macOS signing/notarization jobs run on the self-hosted `macos-arm64-self-hosted` runner. `darwin/amd64` is not produced.
 
 ## Architecture
 
 ```
-                  release.yml
-                       │
-        ┌──────────────┼──────────────┐
-        ▼              ▼              ▼
-  ubuntu-latest    Mac Mini ARM    ubuntu-latest
-  ┌────────────┐   ┌────────────┐  ┌────────────┐
-  │ Go amd64   │   │ Go arm64   │  │ Docker     │
-  │ binaries   │   │ Go darwin  │  │ amd64 imgs │
-  │            │   │ codesign   │  └────────────┘
-  └────────────┘   │ notarize   │
-                   │ .pkg build │
-                   │ Docker     │
-                   │ arm64 imgs │
-                   └────────────┘
-                        │
-                   ┌────┴────┐
-                   ▼         ▼
-              GitHub     Homebrew
-              Release    tap bump
+                         release.yml
+                              │
+        ┌─────────────────────┼──────────────────────┐
+        ▼                     ▼                      ▼
+  ubuntu-latest        ubuntu-24.04-arm      macos-arm64-self-hosted
+  ┌──────────────┐     ┌──────────────┐      ┌────────────────────┐
+  │ Docker amd64 │     │ Docker arm64 │      │ CLI darwin/arm64   │
+  │ svc linux/64 │     │ svc linux/64 │      │ svc darwin/arm64   │
+  │ CLI linux    │     │ webapps arm64│      │ tray app, .pkg     │
+  │ webapps amd64│     └──────────────┘      │ codesign/notarize  │
+  └──────────────┘                           └────────────────────┘
+                              │
+                     ┌────────┴────────┐
+                     ▼                 ▼
+                GitHub Release     Homebrew tap
 ```
 
 ## Runner Setup
 
-**Self-hosted runner:** `ddvtech-mac-mini-arm` at `macos-arm64-self-hosted` label.
+**Self-hosted runner:** `macos-arm64-self-hosted`.
 
 Installed software:
 
-- Go (latest), Meson, Ninja, pkg-config
-- FFmpeg, SRT, SRTP (MistServer deps)
-- `filosottile/musl-cross/musl-cross` (CGO linux cross-compilation)
-- Docker Desktop (linux/arm64 container builds, native ARM VM)
-  Certs are NOT on disk — injected at runtime via `apple-actions/import-codesign-certs@v2` from GitHub Secrets.
+- Go, Homebrew, Xcode/XcodeGen, and packaging/notarization tooling
+- Docker Desktop for any local Mac-runner container work
+
+Signing certificates are not expected to be preinstalled on disk. Release jobs import them into a temporary keychain from GitHub Secrets via `scripts/ci/setup-signing-keychain.sh` and clean up with `scripts/ci/cleanup-signing-keychain.sh`.
 
 ## Build Matrix
 
 ### Go Services (`release.yml`)
 
-| Target         | Runner        | CGO      | Notes                                          |
-| -------------- | ------------- | -------- | ---------------------------------------------- |
-| `linux/amd64`  | ubuntu-latest | zig musl | All services                                   |
-| `linux/arm64`  | Mac Mini      | zig musl | All services, native ARM                       |
-| `darwin/arm64` | Mac Mini      | No       | Non-CGO only (excludes quartermaster, foghorn) |
+| Target         | Runner                  | CGO      | Notes                                   |
+| -------------- | ----------------------- | -------- | --------------------------------------- |
+| `linux/amd64`  | ubuntu-latest           | zig musl | All services                            |
+| `linux/arm64`  | ubuntu-24.04-arm        | zig musl | All services, native ARM                |
+| `darwin/arm64` | macos-arm64-self-hosted | No       | Services with `darwin_binary=true` only |
 
-### MistServer (`build.yml` in mistserver repo)
+### External Media Dependencies
 
-MistServer is C++, built with Meson/Ninja.
-
-| Target                | Runner        | Method                               |
-| --------------------- | ------------- | ------------------------------------ |
-| `linux/amd64` binary  | ubuntu-latest | `apt-get` deps + meson               |
-| `linux/arm64` binary  | Mac Mini      | Alpine Docker container (native ARM) |
-| `darwin/arm64` binary | Mac Mini      | `brew` deps + meson                  |
-| Docker `linux/amd64`  | ubuntu-latest | buildx                               |
-| Docker `linux/arm64`  | Mac Mini      | buildx native (Docker Desktop)       |
-
-All targets: `WITH_AV=true` (transcoding required).
+The monorepo release manifest can include external MistServer and Livepeer release assets, but
+their build workflows live outside this repository. Treat those upstream workflows as the source
+of truth for their runner and compiler details.
 
 ### Docker Images
 
-Multi-arch manifests assembled from per-arch images pushed from separate runners. A `create-manifest` job runs after both arch-specific image jobs complete.
+Service and webapp Docker images are built per arch, then `merge-image-manifests` and `merge-webapp-manifests` assemble multi-arch tags for GHCR and Docker Hub.
 
 ## Code Signing & Notarization
 
@@ -112,10 +107,10 @@ Every tagged release publishes:
 - `frameworks-cli-v*-{linux-amd64,linux-arm64}.tar.gz`
 - `frameworks-cli-v*-darwin-arm64.zip` (primary macOS CLI artifact)
 - `frameworks-{service}-v*-{linux-amd64,linux-arm64}.tar.gz`
-- `frameworks-{service}-v*-darwin-arm64.zip`
+- `frameworks-{service}-v*-darwin-arm64.zip` for services marked `darwin_binary=true`
 - `frameworks-v*.pkg` (macOS installer: CLI + tray app)
 - `manifest.yaml` (machine-readable release metadata)
-- Docker images pushed to registry
+- service and webapp Docker images pushed to GHCR and Docker Hub
 
 ### .pkg Installer (`scripts/macos-pkg/`)
 
@@ -139,7 +134,8 @@ Auto-bumped on each release by `scripts/bump.sh` in the tap repo, triggered from
 
 ## Key Files
 
-- `.github/workflows/release.yml` — `build-arm64-and-darwin`, `build-darwin-pkg`, manifest jobs
+- `.github/workflows/release.yml` — image, binary, tray app, `.pkg`, manifest, GitHub release, and Homebrew tap jobs
+- `.github/release-components.json` — service/webapp release matrix and `darwin_binary` flags
 - `scripts/macos-pkg/build-pkg.sh` — .pkg build + sign + notarize
 - `scripts/macos-pkg/Distribution.xml` — Installer metadata
 - `scripts/install.sh` — curl-pipe-sh CLI installer
@@ -147,7 +143,6 @@ Auto-bumped on each release by `scripts/bump.sh` in the tap repo, triggered from
 
 ## Gotchas
 
-- MistServer linux/arm64 binary is built inside a Docker container on the Mac, not cross-compiled. Docker Desktop must be running.
 - Homebrew tap bump is `continue-on-error: true` — a failed tap update doesn't block the release.
 - The macOS CLI zip is the shipped notarized container and the only supported macOS CLI release asset.
 - The `GITOPS_APP_ID` variable (not secret) is reused for both gitops and homebrew-tap repo access. The app needs `repositories: homebrew-tap` in the token scope.

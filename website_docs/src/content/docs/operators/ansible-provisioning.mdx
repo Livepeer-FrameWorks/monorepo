@@ -6,9 +6,11 @@ description: How the FrameWorks CLI drives provisioning via Ansible roles and ho
 The CLI provisions, validates, and updates infrastructure by invoking
 `ansible-playbook` under the hood via the `apenella/go-ansible` v2 library.
 All role content lives in a single collection at `ansible/collections/ansible_collections/frameworks/infra`;
-external community content (Postgres, Redis, ClickHouse, Prometheus, Caddy) is
-pinned in `ansible/requirements.yml` and installed into `ansible/.cache/` by
-`make ansible-galaxy-install`.
+external community content (Postgres, Redis, ClickHouse, Prometheus,
+community.sops, Docker, and common modules) is pinned in
+`ansible/requirements.yml` and installed into `ansible/.cache/` by
+`make ansible-galaxy-install`. Caddy is installed by the in-tree
+`frameworks.infra.caddy` role rather than an external Galaxy role.
 
 ## Directory layout
 
@@ -28,8 +30,12 @@ ansible/
         ├── clickhouse/  (wraps idealista.clickhouse)
         ├── prometheus_stack/
         ├── caddy/
+        ├── nginx/
         ├── privateer/
+        ├── go_service/    (generic native Go service shape)
         ├── compose_stack/ (generic; consumers: chatwoot, listmonk, edge)
+        ├── chatwoot/
+        ├── listmonk/
         ├── mistserver/    (hand-written, edge media server)
         ├── helmsman/      (hand-written, edge sidecar)
         └── edge/          (meta-role; composes mistserver+helmsman+caddy
@@ -40,19 +46,19 @@ ansible/
 
 The CLI's subcommands map onto role tags:
 
-| CLI                           | Ansible tags                         | Flags            |
-| ----------------------------- | ------------------------------------ | ---------------- |
-| `cluster provision`           | `install,configure,service,validate` | —                |
-| `cluster provision --dry-run` | `install,configure,service`          | `--check --diff` |
-| `cluster doctor`              | (observed-state survey, no role run) | —                |
-| `cluster upgrade`             | `install,configure,service,validate` | —                |
-| `cluster upgrade --dry-run`   | `install,configure,service`          | `--check --diff` |
-| `cluster init`                | `init`                               | —                |
-| `cluster seed`                | `seed`                               | —                |
-| `cluster migrate`             | `migrate`                            | —                |
-| `cluster migrate --dry-run`   | `migrate`                            | `--check --diff` |
-| `cluster restart`             | `restart`                            | —                |
-| `cluster drift`               | (observed-state survey, no role run) | —                |
+| CLI                           | Ansible tags                                                           | Flags            |
+| ----------------------------- | ---------------------------------------------------------------------- | ---------------- |
+| `cluster provision`           | `install,configure,service,validate`                                   | —                |
+| `cluster provision --dry-run` | `install,configure,service`                                            | `--check --diff` |
+| `cluster doctor`              | (observed-state survey, no role run)                                   | —                |
+| `cluster upgrade`             | `install,configure,service,validate`                                   | —                |
+| `cluster upgrade --dry-run`   | `install,configure,service`                                            | `--check --diff` |
+| `cluster init`                | `init`; Postgres/Yugabyte also run `schema` and `migrate`              | —                |
+| `cluster seed`                | `seed`; ClickHouse seeds only with `--demo` and a `periscope` database | —                |
+| `cluster migrate`             | `migrate`                                                              | —                |
+| `cluster migrate --dry-run`   | `migrate`                                                              | `--check --diff` |
+| `cluster restart`             | `restart`                                                              | —                |
+| `cluster drift`               | (observed-state survey, no role run)                                   | —                |
 
 `cluster drift` and `cluster doctor` / `cluster status` are observed-state
 surveys built on top of the detect + health layers. They run direct port /
@@ -102,8 +108,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install frameworks CLI
         run: |
-          curl -sSfL https://github.com/frameworks-network/monorepo/releases/latest/download/frameworks-linux-amd64.tar.gz \
-            | tar -xz -C /usr/local/bin frameworks
+          curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | sh
       - name: Install Ansible runtime
         run: pip install "ansible-core==2.17.*"
       - name: Plan (check + diff)
@@ -125,8 +130,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install frameworks CLI
         run: |
-          curl -sSfL https://github.com/frameworks-network/monorepo/releases/latest/download/frameworks-linux-amd64.tar.gz \
-            | tar -xz -C /usr/local/bin frameworks
+          curl -sSfL https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/install.sh | sh
       - name: Install Ansible runtime
         run: pip install "ansible-core==2.17.*"
       - name: Cache Ansible collections

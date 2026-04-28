@@ -57,8 +57,13 @@ Token payload:
 - `kind` — must be `"edge_node"`
 - `usage_limit` — how many nodes can consume this token (for bulk provisioning)
 
-Tokens are created via the admin CLI (`skipper edge token create`) or the web UI.
-They are consumed atomically on use unless `usage_limit > 1`.
+Tokens are created through the dashboard/GraphQL and MCP cluster flows
+(`createPrivateCluster`, `createEnrollmentToken`, `create_private_cluster`,
+`create_enrollment_token`), by `frameworks edge deploy` via Bridge, or by
+admin CLI commands such as `frameworks admin clusters create-edge`,
+`frameworks admin clusters enrollment-token`, and
+`frameworks admin bootstrap-tokens create --kind edge_node`.
+They are consumed atomically during `BootstrapEdgeNode` unless `usage_limit > 1`.
 
 **Implementation:** `api_balancing/internal/control`
 
@@ -67,7 +72,7 @@ They are consumed atomically on use unless `usage_limit > 1`.
 Before Helmsman connects, the CLI can call `EdgeProvisioningService.PreRegisterEdge`
 to validate the enrollment token and receive node assignment data:
 
-1. Validates token via `ValidateBootstrapTokenEx` (with IP binding and consumption)
+1. Validates token via `ValidateBootstrapTokenEx` (with IP binding, without consumption)
 2. Uses the preferred human-readable node ID when provided and valid, otherwise generates a 6-byte hex fallback
 3. Constructs edge FQDN: `{node_label}.{cluster_slug}.{root_domain}` where `node_label` is the node ID with a single `edge-` prefix
 4. Constructs pool FQDN: `edge.{cluster_slug}.{root_domain}`

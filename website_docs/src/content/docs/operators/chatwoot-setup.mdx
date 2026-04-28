@@ -13,7 +13,10 @@ After starting Chatwoot for the first time:
 
 ### 1. Create Admin Account
 
-Visit `http://localhost:3000` (or your Chatwoot URL) and complete the setup wizard to create your admin account.
+Visit `http://localhost:18092` when using the local FrameWorks compose stack
+(or your deployed Chatwoot URL) and complete the setup wizard to create your
+admin account. Chatwoot still listens on port `3000` inside its container; the
+FrameWorks compose and Ansible defaults expose it on host port `18092`.
 
 ### 2. Get API Token
 
@@ -61,8 +64,8 @@ Go to **Settings → Custom Attributes** and add each of these:
 
 ```bash
 # Required
-CHATWOOT_SECRET_KEY=   # Generate with: openssl rand -hex 64
-CHATWOOT_API_TOKEN=    # From step 2 above
+CHATWOOT_SECRET_KEY=   # Chatwoot Rails secret; compose requires it, Ansible can generate it
+CHATWOOT_API_TOKEN=    # From step 2 above; Deckhand requires it
 
 # Defaults (usually don't need to change for docker-compose)
 CHATWOOT_HOST=chatwoot

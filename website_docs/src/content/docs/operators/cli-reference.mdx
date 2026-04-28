@@ -1,6 +1,6 @@
 ---
-title: "CLI Command Reference"
-description: "Complete reference for all FrameWorks CLI commands."
+title: "Operator CLI Reference"
+description: "Reference for common FrameWorks CLI workflows and operator commands."
 sidebar:
   order: 6
 ---
@@ -39,6 +39,7 @@ All `frameworks cluster *` subcommands share a persistent flag set for selecting
 | `--github-ref`             | `FRAMEWORKS_GITHUB_REF`             | Branch/tag for `--github-repo` (default `main`)                       |
 | `--cluster`                | `FRAMEWORKS_CLUSTER`                | Cluster name within the gitops repo                                   |
 | `--age-key`                | `SOPS_AGE_KEY_FILE`                 | Age private key for SOPS-encrypted files                              |
+| `--ssh-key`                | —                                   | SSH private key path, overriding ssh-agent/ssh config defaults        |
 | `--github-app-id`          | `FRAMEWORKS_GITHUB_APP_ID`          | GitHub App ID (for `--github-repo`)                                   |
 | `--github-installation-id` | `FRAMEWORKS_GITHUB_INSTALLATION_ID` | GitHub Installation ID                                                |
 | `--github-private-key`     | `FRAMEWORKS_GITHUB_PRIVATE_KEY`     | Path to GitHub App private-key PEM                                    |
@@ -148,6 +149,54 @@ frameworks cluster doctor --github-repo org/gitops --cluster production
 # With verbose output
 frameworks cluster doctor --verbose
 ```
+
+---
+
+### frameworks cluster status
+
+Compare deployed service versions against the available versions for the
+cluster's release channel.
+
+```bash
+frameworks cluster status
+frameworks cluster status --manifest /etc/frameworks/cluster.yaml
+frameworks cluster status --json
+```
+
+The report includes enabled services, interfaces, and observability workloads.
+It also prints control-plane readiness information when the active context has
+a system tenant ID from a previous provision run.
+
+---
+
+### frameworks cluster preflight
+
+Check host readiness before provisioning.
+
+```bash
+frameworks cluster preflight
+frameworks cluster preflight --domain example.com
+```
+
+Checks Docker/Compose, service manager availability, disk space, standard edge
+ports, ulimits, Linux sysctls, `/dev/shm`, optional DNS resolution, and
+infrastructure connectivity when a manifest source is configured.
+
+---
+
+### frameworks cluster drift
+
+Survey observed service state and fail when it diverges from the manifest.
+
+```bash
+frameworks cluster drift
+frameworks cluster drift --manifest /etc/frameworks/cluster.yaml
+frameworks cluster drift --output json
+```
+
+Drift states include `missing`, `stopped`, `wrong_mode`, and `wrong_version`.
+This is the CI-friendly observed-state check; it exits non-zero when any
+divergence is found.
 
 ---
 
@@ -280,6 +329,40 @@ frameworks cluster init postgres --manifest production.yaml
 
 ---
 
+### Additional Cluster Provisioning Commands
+
+| Command                                    | Purpose                                                                                                                                |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `frameworks cluster seed`                  | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                   |
+| `frameworks cluster migrate`               | Apply pending SQL migrations from `pkg/database/sql/migrations/`; use `--dry-run` for Ansible check/diff mode.                         |
+| `frameworks cluster sync-geoip`            | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                         |
+| `frameworks cluster set-channel <channel>` | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given. |
+
+**Examples:**
+
+```bash
+# Static seeds only
+frameworks cluster seed
+
+# Include demo tenant/user/stream records
+frameworks cluster seed --demo --force
+
+# Preview migrations without applying them
+frameworks cluster migrate --dry-run
+
+# Distribute a local GeoIP database and restart target services
+frameworks cluster sync-geoip \
+  --source file \
+  --file /path/to/GeoLite2-City.mmdb \
+  --services foghorn,quartermaster \
+  --restart
+
+# Move the cluster onto the release-candidate channel
+frameworks cluster set-channel rc
+```
+
+---
+
 ## Operations Commands
 
 ### frameworks cluster logs
@@ -383,11 +466,12 @@ frameworks cluster upgrade <service> [flags]
 **Flags:**
 
 - `--manifest string` - Cluster manifest file
-- `--version string` - Target version (default: `stable`)
+- `--version string` - Target version. Defaults to the manifest release channel, or `stable` if no channel is set.
 - `--dry-run` - Preview upgrade without executing
 - `--skip-validation` - Skip health validation after upgrade
 - `--yes` - Skip confirmation prompt
 - `--no-rollback` - Skip automatic rollback on health check failure
+- `--all` - Upgrade all enabled services in dependency order
 
 **Examples:**
 
@@ -403,6 +487,9 @@ frameworks cluster upgrade signalman --version stable --dry-run
 
 # Upgrade without validation
 frameworks cluster upgrade decklog --version stable --skip-validation
+
+# Upgrade all enabled services in dependency order
+frameworks cluster upgrade --all --yes
 ```
 
 <Aside type="caution" title="Database schema changes">
@@ -728,6 +815,31 @@ Displays node IDs, roles, internal/WireGuard IPs, last heartbeat, and agent stat
 
 ---
 
+### Additional Mesh Commands
+
+| Command                             | Purpose                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `frameworks mesh doctor`            | Simulate Privateer's runtime WireGuard apply policy for each manifest host and report validation failures.          |
+| `frameworks mesh join <ssh-target>` | Write Privateer's runtime-enrollment env file to a remote host over SSH. Requires `--token` and `--bootstrap-addr`. |
+| `frameworks mesh reconcile`         | Adopt `runtime_enrolled` nodes into GitOps. Use `--write-gitops` to mutate `cluster.yaml` and `hosts.enc.yaml`.     |
+| `frameworks mesh wg audit`          | Compare GitOps WireGuard identity against Quartermaster node state; exits non-zero on authoritative divergence.     |
+| `frameworks mesh wg promote <host>` | Finish `adopted_local` to `gitops_seed` promotion after `mesh wg rotate` and `cluster provision` converge.          |
+
+**Examples:**
+
+```bash
+frameworks mesh doctor --gitops-dir gitops --cluster production
+frameworks mesh wg audit --gitops-dir gitops --cluster production
+frameworks mesh join root@edge-2 \
+  --token <bootstrap-token> \
+  --bootstrap-addr https://bridge.example.com \
+  --cluster-id production
+frameworks mesh reconcile --write-gitops --gitops-dir gitops --cluster production
+frameworks mesh wg promote edge-2 --gitops-dir gitops --cluster production
+```
+
+---
+
 ## Admin Commands
 
 ### frameworks admin tokens
@@ -820,9 +932,10 @@ List and manage clusters.
 - `list` - List clusters
 - `create` - Create a cluster
 - `update` - Update a cluster
-- `access` - Manage tenant access (`list`, `grant`)
-- `invites` - Manage invites (`create`, `list`, `revoke`, `list-mine`, `accept`)
-- `subscriptions` - List cluster subscriptions
+- `access` - Manage tenant access (`frameworks admin clusters access list`, `frameworks admin clusters access grant`)
+- `invites` - Manage invites (`frameworks admin clusters invites create`, `frameworks admin clusters invites list`, `frameworks admin clusters invites revoke`, `frameworks admin clusters invites list-mine`, `frameworks admin clusters invites accept`)
+- `subscriptions` - List cluster subscriptions (`frameworks admin clusters subscriptions list`)
+- `migrate-artifacts` - Migrate artifact metadata from a source cluster for one tenant
 
 ```bash
 # List all clusters (shows name and ID)
@@ -848,6 +961,30 @@ frameworks admin clusters create \
 # Update cluster flags
 frameworks admin clusters update --cluster-id edge-eu --is-platform-official
 frameworks admin clusters update --cluster-id edge-eu --is-default-cluster
+
+# Grant a tenant access to a private/unlisted cluster
+frameworks admin clusters access grant --cluster-id edge-eu --tenant-id <tenant-id>
+
+# List cluster access rows for a tenant
+frameworks admin clusters access list --tenant-id <tenant-id>
+
+# Create and accept an invite
+frameworks admin clusters invites create \
+  --cluster-id edge-eu \
+  --owner-tenant-id <owner-tenant-id> \
+  --invited-tenant-id <invited-tenant-id>
+frameworks admin clusters invites list --cluster-id edge-eu --owner-tenant-id <owner-tenant-id>
+frameworks admin clusters invites list-mine --tenant-id <tenant-id>
+frameworks admin clusters invites accept --invite-token <invite-token>
+frameworks admin clusters invites revoke --invite-id <invite-id> --owner-tenant-id <owner-tenant-id>
+
+# List cluster subscriptions for a tenant
+frameworks admin clusters subscriptions list --tenant-id <tenant-id>
+
+# Migrate artifact metadata after moving a tenant between clusters
+frameworks admin clusters migrate-artifacts \
+  --tenant-id <tenant-id> \
+  --from-cluster <source-cluster-id>
 ```
 
 **Sample output:**
@@ -1369,6 +1506,27 @@ frameworks edge doctor --domain edge1.example.com
 
 ---
 
+### Additional Edge Commands
+
+| Command                          | Purpose                                                                                                         |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `frameworks edge drift`          | Survey observed edge service state, `.edge.env` keys, and HTTPS health; exits non-zero on divergence.           |
+| `frameworks edge diagnose media` | Run MistServer media diagnostics, including HLS validation and analyzer checks for active or specified streams. |
+| `frameworks edge mode [mode]`    | Read or change Helmsman node mode. Valid modes are `normal`, `draining`, and `maintenance`.                     |
+
+**Examples:**
+
+```bash
+frameworks edge drift --dir /opt/frameworks-edge --ssh admin@edge1.example.com
+frameworks edge diagnose media --ssh admin@edge1.example.com
+frameworks edge diagnose media \
+  --analyzer HLS \
+  --target http://localhost:8080/hls/live/index.m3u8
+frameworks edge mode draining --reason deploy --ssh admin@edge1.example.com
+```
+
+---
+
 ## Livepeer Commands
 
 Livepeer gateway management. Uses Quartermaster service discovery by default; override with `--gateway host:port`.
@@ -1639,7 +1797,10 @@ specific one. They error if the target context doesn't exist — use
 frameworks context set-persona platform --context platform-prod
 frameworks context set-gitops-source local --context platform-prod
 frameworks context set-gitops-path /path/to/gitops --context platform-prod
+frameworks context set-gitops-repo Livepeer-FrameWorks/gitops --context platform-prod
+frameworks context set-gitops-ref main --context platform-prod
 frameworks context set-gitops-cluster production --context platform-prod
+frameworks context set-gitops-manifest clusters/production/cluster.yaml --context platform-prod
 frameworks context set-age-key ~/.config/sops/age/keys.txt --context platform-prod
 ```
 
@@ -1761,6 +1922,21 @@ Deletes both `user_session` and `refresh_token` so a running tray can't silently
 
 ## Utility Commands
 
+### frameworks setup
+
+Run the interactive onboarding wizard. It captures the operator persona,
+Bridge/control-plane endpoints, and GitOps manifest defaults into a CLI
+context, then makes that context current.
+
+```bash
+frameworks setup
+```
+
+For non-interactive setup, use `frameworks context create <name>` followed by
+the relevant `frameworks context set-*` commands.
+
+---
+
 ### frameworks update
 
 Update the CLI to the latest version.
@@ -1834,6 +2010,26 @@ frameworks config env --context production
 - `--secrets` - Path to secrets env file (default: `config/env/secrets.env`)
 - `--output` - Output path (default: `.env`, use `-` for stdout)
 - `--context` - Value for `ENV_CONTEXT` (default: `dev`)
+
+---
+
+### Additional Config Commands
+
+| Command                               | Purpose                                                                                              |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `frameworks config set <key> <value>` | Store GitHub App settings used for GitHub-sourced manifests.                                         |
+| `frameworks config get <key>`         | Print a stored GitHub App setting.                                                                   |
+| `frameworks config path`              | Print the canonical config path or credential-store location. Supports `--kind config\|credentials`. |
+
+Supported `config set/get` keys are `github.app-id`,
+`github.installation-id`, `github.private-key`, `github.repo`, and
+`github.ref`.
+
+```bash
+frameworks config set github.repo org/gitops
+frameworks config get github.repo
+frameworks config path --kind credentials
+```
 
 ---
 

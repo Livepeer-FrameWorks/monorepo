@@ -1,6 +1,6 @@
 # Decklog (Event Firehose)
 
-Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant headers.
+Event ingress over gRPC. Validates analytics and service events, then publishes to Kafka with tenant headers.
 
 ## Why Decklog?
 
@@ -10,9 +10,10 @@ Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant 
 
 ## What it does
 
-- Receives batched events from Foghorn (gRPC streaming)
-- Validates schemas and maps to hyphenated event types
-- Publishes to `analytics_events` with `tenant_id` header
+- Receives enriched Mist trigger events from Foghorn via unary gRPC `SendEvent`
+- Receives service-plane events via unary gRPC `SendServiceEvent`
+- Validates tenant attribution and maps trigger payloads to analytics event types
+- Publishes analytics events to `analytics_events` and service-plane events to `service_events` with `tenant_id` headers
 
 ## Run (dev)
 
@@ -22,10 +23,12 @@ Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant 
 ## Port
 
 - gRPC: 18006
+- HTTP health/metrics: 18026 (`DECKLOG_METRICS_PORT`)
 
 ## Health
 
-- gRPC: `decklog.DecklogService/CheckHealth` (see docker-compose healthcheck example)
+- gRPC: `grpc.health.v1.Health/Check` (see docker-compose healthcheck example)
+- HTTP: `GET /health` on the metrics port
 
 Configuration lives in `config/env/base.env` and `config/env/secrets.env`. Generate `.env` with `make env` or `frameworks config env generate`, and keep secrets in the git-ignored `config/env/secrets.env`. Do not commit secrets.
 

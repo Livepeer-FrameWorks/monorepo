@@ -12,15 +12,16 @@ Draft
 
 ## Current State
 
-Rate limiting exists in `api_gateway/internal/middleware/ratelimit.go` as a token bucket per tenant. This is the only abuse protection mechanism.
+Rate limiting exists in `api_gateway/internal/middleware/ratelimit.go` as a token bucket per tenant. The Gateway also has authentication, public-operation allowlists, x402 settlement, and prepaid/suspension checks, but those are application/account gates rather than network-level security telemetry.
 
 GeoIP (`pkg/geoip/geoip.go`) is used for viewer routing decisions, not for blocking or reputation scoring.
 
-There is no JA3/JA4 TLS fingerprinting, no bot detection, no IP reputation services, and no connection-level telemetry. No DNS query logging exists — Navigator (`api_dns/`) uses the Cloudflare API for DNS management with no self-hosted DNS infrastructure. No WebRTC connection forensics are available (no platform-managed TURN/STUN; see the nat-traversal RFC).
+There is no JA3/JA4 TLS fingerprinting, no bot detection, no IP reputation services, and no connection-level security telemetry. No DNS query logging exists — Navigator (`api_dns/`) uses the Cloudflare API for DNS management with no self-hosted DNS infrastructure. No WebRTC connection forensics are available (no platform-managed TURN/STUN; see the nat-traversal RFC).
 
 Evidence:
 
 - `api_gateway/internal/middleware/ratelimit.go`
+- `api_gateway/internal/middleware/auth_request.go`
 - `pkg/geoip/geoip.go`
 - `api_dns/`
 

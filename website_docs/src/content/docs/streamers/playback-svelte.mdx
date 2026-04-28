@@ -116,7 +116,10 @@ For fully custom controls inside a `<Player>`, use Svelte 5 context. The `<Playe
 
 <div class="my-custom-controls">
   <p>State: {pc?.isPlaying ? "Playing" : "Paused"}</p>
-  <p>Time: {pc?.currentTime?.toFixed(1)}s / {pc?.duration}s</p>
+  <p>
+    Time: {((pc?.currentTime ?? 0) / 1000).toFixed(1)}s /
+    {((pc?.duration ?? 0) / 1000).toFixed(1)}s
+  </p>
 
   <button onclick={() => pc?.togglePlay()}>
     {pc?.isPlaying ? "Pause" : "Play"}
@@ -154,20 +157,20 @@ Then use it as children:
 
 The context object from `getContext("fw-player-controller")` provides:
 
-| Property            | Type             | Description                        |
-| ------------------- | ---------------- | ---------------------------------- |
-| `isPlaying`         | `boolean`        | Whether actively playing           |
-| `isPaused`          | `boolean`        | Whether paused                     |
-| `isMuted`           | `boolean`        | Whether muted                      |
-| `volume`            | `number`         | Volume (0-1)                       |
-| `currentTime`       | `number`         | Current playback position          |
-| `duration`          | `number`         | Total duration (Infinity for live) |
-| `isFullscreen`      | `boolean`        | Whether in fullscreen              |
-| `isEffectivelyLive` | `boolean`        | Whether live content               |
-| `isBuffering`       | `boolean`        | Whether buffering                  |
-| `isLoopEnabled`     | `boolean`        | Whether loop is on                 |
-| `error`             | `string \| null` | Current error                      |
-| `qualities`         | `Quality[]`      | Available quality levels           |
+| Property            | Type             | Description                                        |
+| ------------------- | ---------------- | -------------------------------------------------- |
+| `isPlaying`         | `boolean`        | Whether actively playing                           |
+| `isPaused`          | `boolean`        | Whether paused                                     |
+| `isMuted`           | `boolean`        | Whether muted                                      |
+| `volume`            | `number`         | Volume (0-1)                                       |
+| `currentTime`       | `number`         | Current playback position in milliseconds          |
+| `duration`          | `number`         | Total duration in milliseconds (Infinity for live) |
+| `isFullscreen`      | `boolean`        | Whether in fullscreen                              |
+| `isEffectivelyLive` | `boolean`        | Whether live content                               |
+| `isBuffering`       | `boolean`        | Whether buffering                                  |
+| `isLoopEnabled`     | `boolean`        | Whether loop is on                                 |
+| `error`             | `string \| null` | Current error                                      |
+| `qualities`         | `Quality[]`      | Available quality levels                           |
 
 | Method               | Description                  |
 | -------------------- | ---------------------------- |
@@ -177,18 +180,25 @@ The context object from `getContext("fw-player-controller")` provides:
 | `toggleLoop()`       | Toggle loop                  |
 | `setVolume(n)`       | Set volume (0-1)             |
 | `jumpToLive()`       | Jump to live edge            |
-| `seek(t)`            | Seek to time (seconds)       |
+| `seek(t)`            | Seek to time in milliseconds |
 | `selectQuality(id)`  | Select a quality level       |
 | `getQualities()`     | Get available quality levels |
 
 ## Props Reference
 
-| Prop            | Type                                 | Description                                                              |
-| --------------- | ------------------------------------ | ------------------------------------------------------------------------ |
-| `contentId`     | `string`                             | Playback ID                                                              |
-| `contentType`   | `'live' \| 'dvr' \| 'clip' \| 'vod'` | Content type                                                             |
-| `endpoints`     | `ContentEndpoints`                   | Pre-resolved endpoints                                                   |
-| `thumbnailUrl`  | `string`                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected. |
-| `theme`         | `string`                             | Theme preset                                                             |
-| `options`       | `PlayerOptions`                      | Configuration options                                                    |
-| `onStateChange` | `function`                           | State transition callback                                                |
+| Prop                     | Type                                 | Description                                                                                          |
+| ------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `contentId`              | `string`                             | Playback ID                                                                                          |
+| `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'` | Content type                                                                                         |
+| `endpoints`              | `ContentEndpoints`                   | Pre-resolved endpoints                                                                               |
+| `thumbnailUrl`           | `string`                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                             |
+| `options`                | `PlayerOptions`                      | Configuration options                                                                                |
+| `options.gatewayUrl`     | `string`                             | Gateway GraphQL endpoint                                                                             |
+| `options.mistUrl`        | `string`                             | Direct MistServer base URL                                                                           |
+| `options.authToken`      | `string`                             | Bearer token for private playback                                                                    |
+| `options.stockControls`  | `boolean`                            | Use browser-native video controls                                                                    |
+| `options.theme`          | `string`                             | Theme preset                                                                                         |
+| `options.themeOverrides` | `object`                             | Per-token theme overrides                                                                            |
+| `options.locale`         | `string`                             | Built-in UI locale                                                                                   |
+| `options.playbackMode`   | `string`                             | Initial controls/dev-panel mode label; use the store dev-mode helper for runtime protocol preference |
+| `onStateChange`          | `function`                           | State transition callback                                                                            |

@@ -23,7 +23,7 @@ Import the CSS once in your app:
 
 The `<StreamCrafter />` component is fully self-contained.
 
-**Gateway Mode (Recommended):**
+**Direct WHIP Mode:**
 
 ```svelte
 <script lang="ts">
@@ -31,14 +31,17 @@ The `<StreamCrafter />` component is fully self-contained.
   import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
 </script>
 
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
+```
+
+**Gateway Resolution Mode:**
+
+```svelte
 <StreamCrafter gatewayUrl="%GATEWAY_URL%/graphql" streamKey="abc-123" initialProfile="broadcast" />
 ```
 
-**Direct Mode:**
-
-```svelte
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
-```
+Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field. Use direct `whipUrl`
+unless that resolver is enabled in your environment.
 
 ## Composable Components
 
@@ -57,7 +60,7 @@ Pass a `children` snippet to replace the default UI with sub-components:
   import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
 </script>
 
-<StreamCrafter gatewayUrl="%GATEWAY_URL%/graphql" streamKey="my-key">
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/my-key">
   {#snippet children()}
     <div class="my-layout">
       <StudioStatusBadge />
@@ -109,26 +112,28 @@ For complete UI control, use `createStreamCrafterContextV2`:
 
 <div>
   <video bind:this={videoEl} autoplay muted />
-  <p>State: {crafter.state}</p>
-  <p>Sources: {crafter.sources.length}</p>
+  <p>State: {$crafter.state}</p>
+  <p>Sources: {$crafter.sources.length}</p>
   <button onclick={() => crafter.startCamera()}>Add Camera</button>
   <button onclick={() => crafter.startScreenShare({ audio: true })}>Share Screen</button>
   <button
-    onclick={() => (crafter.isStreaming ? crafter.stopStreaming() : crafter.startStreaming())}
+    onclick={() => ($crafter.isStreaming ? crafter.stopStreaming() : crafter.startStreaming())}
   >
-    {crafter.isStreaming ? "Stop" : "Go Live"}
+    {$crafter.isStreaming ? "Stop" : "Go Live"}
   </button>
 </div>
 ```
 
 <Aside type="note" title="Gateway in custom UI">
-  `createStreamCrafterContextV2` accepts `whipUrl` directly. For gateway resolution in a custom UI,
-  resolve a WHIP URL first with `IngestClient` from `@livepeer-frameworks/streamcrafter-core`.
+  `createStreamCrafterContextV2` accepts `whipUrl` directly. If your environment supports
+  `resolveIngestEndpoint`, resolve a WHIP URL first with `IngestClient` from
+  `@livepeer-frameworks/streamcrafter-core`.
 </Aside>
 
 ### Store Properties
 
-The store exposes reactive state via Svelte 5's `$state`:
+The store implements Svelte's store contract. Read reactive state with `$crafter` in markup or
+subscribe manually in script:
 
 | Property         | Type                  | Description               |
 | ---------------- | --------------------- | ------------------------- |

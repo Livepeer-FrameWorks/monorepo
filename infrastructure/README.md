@@ -1,6 +1,6 @@
 # FrameWorks Infrastructure (Dev Configs)
 
-Dev-only configuration used by the root dev compose configuration. These files help you run the full stack locally. Production deployment uses the CLI's edge templates.
+Dev-only configuration used by the root dev compose configuration. These files help you run the full stack locally. Production deployment uses the CLI provisioners, Ansible roles, and generated stack templates.
 
 ## What's Here
 
@@ -10,10 +10,10 @@ Dev-only configuration used by the root dev compose configuration. These files h
 - `clickhouse/*` — ClickHouse users and server config
 - `mistserver.conf` — MistServer config for local media tests
 
-**Used by CLI deployments (staging/prod):**
+**Referenced by CLI deployments (staging/prod):**
 
 - `prometheus/*` — Prometheus config and rules
-- `grafana/*` — Provisioning and dashboards
+- `grafana/*` — provisioning and dashboards
 
 ## How To Use It (local dev)
 
@@ -23,7 +23,7 @@ Dev-only configuration used by the root dev compose configuration. These files h
 
 ## Production
 
-- Production stacks, environment files, and system configs are generated and deployed via the FrameWorks CLI
+- Production stacks, environment files, and system configs are generated and deployed via `frameworks cluster ...` and `frameworks edge ...`
 - **DNS & Certificates**: Public DNS management (by Navigator, `api_dns`) and automated certificate issuance (ACME) are now handled by a dedicated service. This paves the way for our upcoming self-hosted Anycast DNS.
 - **Networking**: Internal WireGuard mesh orchestration and local DNS are managed by Privateer (`api_mesh`), ensuring secure, automated service-to-service communication.
 - See `cli/README.md` and `website_docs/` for deployment guides
@@ -31,5 +31,5 @@ Dev-only configuration used by the root dev compose configuration. These files h
 ## Related
 
 - Root `README.md` — services and ports overview
-- `cli/README.md` — edge deployment commands
+- `cli/README.md` — operator CLI command groups
 - `website_docs/` — deployment guides, DNS, WireGuard

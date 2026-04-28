@@ -10,8 +10,9 @@ import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 Multistreaming lets you push a single live broadcast to multiple external platforms at once. When your stream goes live, FrameWorks automatically pushes to every enabled target — no third-party restreaming service required.
 
 <Aside type="tip">
-  Multistreaming uses native MistServer push, so there's no re-encoding or added latency. Each
-  target receives the same bitstream directly from the origin node.
+  Multistreaming uses native MistServer push, so FrameWorks does not add a re-encoding step. Each
+  target receives the source bitstream from the origin node. Destination platforms can still add
+  their own buffering and latency.
 </Aside>
 
 ## How It Works
@@ -97,8 +98,9 @@ query {
 ```
 
 <Aside type="note">
-  The `targetUri` field is masked in API responses — the stream key portion is redacted (e.g.,
-  `rtmp://live.twitch.tv/app/live_****xxxx`). Full URIs are only used internally when pushing.
+  The `targetUri` field is masked in API responses: credentials, query params, and fragments are
+  removed, and the final path segment is partially redacted. Full URIs are stored encrypted and only
+  decrypted for internal push activation.
 </Aside>
 
 ### Update a Push Target

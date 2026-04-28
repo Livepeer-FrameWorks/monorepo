@@ -148,35 +148,46 @@ In OBS Studio, you can select your encoder under **Settings → Output → Encod
 
 ## Adaptive Bitrate (ABR)
 
-FrameWorks automatically generates lower-quality renditions of your stream so viewers on slower connections can watch without buffering. This is powered by the Livepeer transcoding network and requires no configuration on your part.
+FrameWorks generates lower-quality renditions of your stream so viewers on slower connections can watch without buffering. The default live-stream process configuration uses Livepeer Gateway for video ABR and local AV processes for audio compatibility.
 
 ### How It Works
 
-When you go live, the platform detects your input resolution and adds renditions dynamically:
+When you go live, the control plane attaches your tier's live process configuration to the stream.
+The standard live ladder is:
 
-| Input Resolution | Added Renditions                                   |
-| ---------------- | -------------------------------------------------- |
-| Above 1280×720   | 720p (1024 kbps, 25 fps) + 480p (512 kbps, 15 fps) |
-| Above 850×480    | 480p (512 kbps, 15 fps)                            |
-| Below 850×480    | No transcoding (source streamed as-is)             |
+| Source Video    | Added Renditions                                   |
+| --------------- | -------------------------------------------------- |
+| `>= 1281×720`   | 720p (1024 kbps, 25 fps) + 480p (512 kbps, 15 fps) |
+| `>= 850×480`    | 480p (512 kbps, 15 fps)                            |
+| Below `850×480` | No video ABR rendition                             |
 
-Audio is transcoded between AAC and Opus as needed for WebRTC-HLS compatibility — if you ingest with AAC, an Opus track is generated for WebRTC viewers, and vice versa.
+Live ABR outputs use `H264ConstrainedHigh`. VOD processing uses the same 480p/720p gates with
+`VP9Profile0`. Audio compatibility processes generate Opus when the incoming audio is not already
+Opus and AAC when it is not already AAC.
+
+Foghorn substitutes the local cluster's Livepeer Gateway URL into the Livepeer process entry at
+dispatch time. If no gateway is available, the Livepeer video process is stripped and the remaining
+audio-processing and thumbnail processes can still run.
 
 ### What This Means for You
 
-- **Stream at the highest quality your upload supports.** ABR handles delivering to viewers on weaker connections.
-- **Viewers automatically get the best quality their connection supports** via the HLS/DASH adaptive player.
-- **No extra cost on managed clusters.** Transcoding is included in delivery pricing. Self-hosted operators manage their own Livepeer gateway or use local MistServer transcoding.
+- **Stream at the highest quality your upload supports.** The default ladder adds lower 480p/720p
+  renditions when the source is large enough.
+- **Viewers automatically get the best available quality their connection supports** via the HLS/DASH
+  adaptive player.
+- **Self-hosted operators must provide transcoding capacity.** Configure a Livepeer Gateway if you
+  want the default video ABR ladder on your own cluster.
 
 <Aside type="note" title="When ABR Is Available">
-  ABR renditions are generated when a Livepeer transcoding gateway is available to the cluster. On
-  managed FrameWorks, this is always the case. Self-hosted operators need to configure a Livepeer
-  gateway for ABR to activate.
+  Video ABR renditions require the stream's process configuration and a Livepeer Gateway reachable
+  by the cluster handling the stream. Managed FrameWorks clusters include this path; self-hosted
+  clusters need to configure it.
 </Aside>
 
-### Future: Custom Transcoding Profiles
+### Custom Transcoding Profiles
 
-Per-stream transcoding configuration (custom rendition ladders, codec selection, local MistServer transcoding pipeline) is on the roadmap. Today the Livepeer-backed ladder is applied uniformly.
+The standard ladder is configured at the billing tier level. Enterprise tiers can use tenant-level
+processing overrides when `processing_customizable` is enabled.
 
 ## Avoid Common Pitfalls
 

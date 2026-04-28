@@ -24,9 +24,9 @@ Read `account://status` (MCP) or query `me` (GraphQL).
 
 ### 2. Balance
 
-Read `billing://balance` (MCP) or query `balance` (GraphQL).
+Read `billing://balance` (MCP) or query `prepaidBalance` / `billingStatus` (GraphQL).
 
-- Check `current_balance_cents` and `drain_rate_cents_per_hour`.
+- Check `balance_cents` and `drain_rate_cents_per_hour`.
 - Compute `estimated_hours_left = current_balance / drain_rate`.
 - **Alert human** if balance < $5 with active streams.
 - **Alert human** if `estimated_hours_left` < 2 hours.

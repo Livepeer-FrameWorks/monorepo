@@ -76,9 +76,9 @@ Location: `api_billing/internal/grpc`
 func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookRequest) (*pb.WebhookResponse, error) {
     switch req.Provider {
     case "stripe":
-        return s.processStripeWebhook(req)
+        return handlers.ProcessStripeWebhookGRPC(req.Body, req.Headers)
     case "mollie":
-        return s.processMollieWebhook(req)
+        return handlers.ProcessMollieWebhookGRPC(req.Body, req.Headers)
     default:
         return &pb.WebhookResponse{Success: false, Error: "unknown provider", StatusCode: 400}, nil
     }
@@ -116,6 +116,11 @@ Events handled:
 
 ## Idempotency
 
-Webhook events are deduplicated via `purser.webhook_events` (keyed on `provider` + `event_id`). Schema: `pkg/database/sql/schema`.
+Webhook events are recorded in `purser.webhook_events` (keyed on `provider` + `event_id`). Schema: `pkg/database/sql/schema`.
+
+Current provider behavior:
+
+- Stripe checks `purser.webhook_events` before processing and skips duplicate event IDs.
+- Mollie records a derived event ID after processing with `ON CONFLICT DO NOTHING`; it does not currently do the same pre-processing duplicate skip.
 
 **Security**: Webhook routes skip JWT auth (providers can't authenticate). Signature verification happens in the target service, not Gateway. Gateway enforces per-IP rate limits and rejects payloads >1MB.

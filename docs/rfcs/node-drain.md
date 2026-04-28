@@ -2,23 +2,32 @@
 
 ## Status
 
-Draft
+Partially implemented. Node-level `normal` / `draining` / `maintenance` operational modes exist through Foghorn HTTP/gRPC, Commodore/Gateway node-management surfaces, Helmsman control messages, and the CLI/API management flows. Per-role drain flags and DNS pool removal remain future work.
 
 ## TL;DR
 
 - Introduce a drain/maintenance state per node and role (ingest/edge/storage/processing).
-- Foghorn stops routing new traffic to drained roles while letting existing sessions complete.
+- Foghorn stops routing new traffic to drained nodes while letting existing sessions complete.
 - Optional DNS integration removes drained nodes from pooled records.
 
 ## Current State
 
-- No explicit drain state or drain APIs found in repo.
-- Routing decisions appear to rely on current node state/health without a maintenance flag.
+- Node-level operational modes exist: `normal`, `draining`, and `maintenance`.
+- Foghorn exposes `PUT /nodes/:node_id/mode` and `GET /nodes/:node_id/drain-status`.
+- Foghorn gRPC exposes `SetNodeOperationalMode`.
+- Commodore exposes a node-management RPC for setting operational mode, and Gateway/MCP can call the same node-management surface.
+- Helmsman/Foghorn IPC carries `ModeChangeRequest`, `Register.requested_mode`, node lifecycle `operational_mode`, and authoritative `ConfigSeed.operational_mode`.
+- Foghorn persists maintenance/mode state in `foghorn.node_maintenance`.
+- Not implemented yet: per-role drain state, TTL/expiry semantics, and Navigator DNS pool removal for drained nodes.
 
 Evidence:
 
-- No drain fields in `pkg/database/sql/schema/*` (search for "drain").
-- No drain RPCs in `pkg/proto/*`.
+- `pkg/database/sql/schema/foghorn.sql`
+- `pkg/proto/foghorn.proto`
+- `pkg/proto/commodore.proto`
+- `pkg/proto/ipc.proto`
+- `api_balancing/cmd/foghorn/main.go`
+- `api_balancing/internal/handlers`
 
 ## Problem / Motivation
 
@@ -38,9 +47,9 @@ Operators need to perform maintenance without disrupting active sessions. Withou
 
 ## Proposal
 
-- Add drain flags per node and role in Quartermaster.
-- Foghorn respects drain flags when selecting nodes.
-- Helmsman reports drain status in node lifecycle updates.
+- Keep the implemented node-level operational mode as the default drain primitive.
+- Add optional per-role drain flags if operators need to drain ingest, edge, storage, or processing independently.
+- Decide whether Quartermaster should persist desired operational mode, or whether Foghorn-local state plus Helmsman config seed remains authoritative enough.
 - Optional: api_dns removes drained nodes from pooled records while leaving per-node records.
 
 ## Impact / Dependencies
@@ -62,15 +71,16 @@ Operators need to perform maintenance without disrupting active sessions. Withou
 
 ## Migration / Rollout
 
-1. Add drain flags + APIs in Quartermaster.
-2. Update Foghorn routing to respect drain.
-3. Add Helmsman reporting.
+1. Keep current node-level mode API (`normal`, `draining`, `maintenance`) as Phase 1.
+2. Add per-role drain flags only if real maintenance workflows require them.
+3. Add TTL/expiry or stale-mode monitoring if stale drain states become a capacity risk.
 4. Optional DNS integration.
 
 ## Open Questions
 
-- Who is the authoritative source of drain state (Quartermaster vs Foghorn-local overrides)?
+- Who is the long-term authoritative source of desired drain state: Quartermaster, Foghorn-local overrides, or the current Foghorn → Helmsman config seed?
 - Should drain flags expire automatically?
+- Are per-role drain flags needed, or is node-level mode sufficient for the current edge architecture?
 
 ## References, Sources & Evidence
 

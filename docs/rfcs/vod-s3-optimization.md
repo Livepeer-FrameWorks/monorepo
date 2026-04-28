@@ -7,20 +7,24 @@ Draft
 ## TL;DR
 
 - Current VOD warmup blocks playback until full asset is downloaded locally.
-- VOD uploads are accepted as-is without preprocessing.
-- Move to S3 pull playback and a pre-processing pipeline.
+- VOD uploads now enter a processing pipeline after upload completion.
+- Move playback warmup toward S3 pull/proxy playback so first frame does not wait for
+  a full local download.
 
 ## Current State
 
 - Helmsman downloads full VOD assets to local disk via presigned URLs before Mist can serve.
-- Foghorn generates presigned URLs for VOD uploads; assets are marked ready after upload.
-- No VOD processing pipeline is enforced before playback.
+- Foghorn generates presigned URLs for multipart VOD uploads.
+- After multipart completion, Foghorn marks the asset `processing`, creates a processing
+  job, and does not serve it as ready until the processing pipeline completes.
+- S3 pull/proxy playback is not implemented yet.
 
 Evidence:
 
 - `api_sidecar/internal/handlers`
 - `api_balancing/internal/grpc`
 - `api_balancing/internal/storage`
+- `api_balancing/internal/jobs/processing_dispatcher.go`
 
 ## Problem / Motivation
 

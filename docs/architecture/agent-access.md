@@ -26,7 +26,7 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Gateway MCP (Hub)  bridge:18000/mcp           │
 │                                                                 │
-│  28 own tools + 1 proxied from Skipper spoke                    │
+│  37 Gateway-owned tools + 1 proxied Skipper tool                 │
 │  (ask_consultant)                                               │
 └─────────────────────────────────────────────────────────────────┘
          │                    │                    │
@@ -152,6 +152,7 @@ signature = signed.signature.hex()
 **Notes**
 
 - Header-based wallet auth is used for MCP/HTTP flows.
+- REST `POST /auth/wallet-login` sets HttpOnly auth cookies and returns user metadata.
 - GraphQL uses `walletLogin(input: WalletLoginInput!)` with the same address/message/signature fields.
 
 ### Auto-Provisioning
@@ -255,7 +256,7 @@ Implementation of [x402](https://github.com/coinbase/x402) for gasless USDC paym
 
 ### Token Limitation
 
-x402 only works with EIP-3009 tokens (USDC). ETH/LPT use the deposit flow.
+x402 currently settles USDC on Base and Arbitrum. ETH and LPT use the deposit flow. The schema leaves room for other EIP-3009 tokens, but the current runtime network registry exposes USDC contracts only.
 
 ### Testnet Support (Local Development Only)
 
@@ -282,24 +283,24 @@ Single private key used on all EVM chains (same address everywhere):
 
 Model Context Protocol integration for AI agent tool discovery, integrated into Gateway.
 
-**Summary**: 38 tools (13 categories), 18 resources (9 categories), 8 prompts. The Gateway acts as a **hub** — it owns 37 tools directly and proxies 1 tool (`ask_consultant`) from the Skipper spoke.
+**Summary**: 38 tools, 24 resources, 10 prompts. The Gateway acts as a **hub** — it owns 37 tools directly and proxies 1 tool (`ask_consultant`) from the Skipper spoke.
 
-| Category        | Tools                                                                                                                                                                                          | Resources                                                            | Source        |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------- |
-| Account & Auth  | `update_billing_details`                                                                                                                                                                       | `account://status`                                                   | Gateway       |
-| Payment         | `get_payment_options`, `submit_payment`                                                                                                                                                        | —                                                                    | Gateway       |
-| Billing         | `topup_balance`, `check_topup`                                                                                                                                                                 | `billing://balance`, `billing://pricing`, `billing://transactions`   | Gateway       |
-| Streams         | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`                                                                                                                        | `streams://list`, `streams://{id}`, `streams://{id}/health`          | Gateway       |
-| Clips           | `create_clip`, `delete_clip`                                                                                                                                                                   | —                                                                    | Gateway       |
-| DVR             | `start_dvr`, `stop_dvr`                                                                                                                                                                        | —                                                                    | Gateway       |
-| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset`                                                                                                             | `vod://list`, `vod://{artifact_hash}`                                | Gateway       |
-| Playback        | `resolve_playback_endpoint`                                                                                                                                                                    | —                                                                    | Gateway       |
-| Analytics       | —                                                                                                                                                                                              | `analytics://usage`, `analytics://viewers`, `analytics://geographic` | Gateway       |
-| QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)                                                                                                                      | —                                                                    | Gateway       |
-| Support         | `search_support_history`                                                                                                                                                                       | `support://conversations`, `support://conversations/{id}`            | Gateway       |
-| Knowledge       | `ask_consultant`                                                                                                                                                                               | `knowledge://sources`                                                | Skipper spoke |
-| Schema          | `introspect_schema`, `generate_query`, `execute_query`                                                                                                                                         | `schema://catalog`                                                   | Gateway       |
-| Infrastructure  | `browse_marketplace`, `subscribe_to_cluster`, `set_preferred_cluster`, `create_private_cluster`, `create_enrollment_token`, `get_node_info`, `manage_node`, `set_node_mode`, `get_node_health` | `nodes://list`, `nodes://{id}`                                       | Gateway       |
+| Category        | Tools                                                                                                                                                                                          | Resources                                                                                                                                             | Source        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| Account & Auth  | `update_billing_details`                                                                                                                                                                       | `account://status`                                                                                                                                    | Gateway       |
+| Payment         | `get_payment_options`, `submit_payment`                                                                                                                                                        | —                                                                                                                                                     | Gateway       |
+| Billing         | `topup_balance`, `check_topup`                                                                                                                                                                 | `billing://balance`, `billing://pricing`, `billing://transactions`                                                                                    | Gateway       |
+| Streams         | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`                                                                                                                        | `streams://list`, `streams://{id}`, `streams://{id}/health`                                                                                           | Gateway       |
+| Clips           | `create_clip`, `delete_clip`                                                                                                                                                                   | —                                                                                                                                                     | Gateway       |
+| DVR             | `start_dvr`, `stop_dvr`                                                                                                                                                                        | —                                                                                                                                                     | Gateway       |
+| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset`                                                                                                             | `vod://list`, `vod://{artifact_hash}`                                                                                                                 | Gateway       |
+| Playback        | `resolve_playback_endpoint`                                                                                                                                                                    | —                                                                                                                                                     | Gateway       |
+| Analytics       | —                                                                                                                                                                                              | `analytics://usage`, `analytics://viewers`, `analytics://geographic`, `analytics://routing`, `analytics://federation`, `analytics://network-topology` | Gateway       |
+| QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)                                                                                                                      | —                                                                                                                                                     | Gateway       |
+| Support         | `search_support_history`                                                                                                                                                                       | `support://conversations`, `support://conversations/{conversation_id}`                                                                                | Gateway       |
+| Knowledge       | `ask_consultant`                                                                                                                                                                               | `knowledge://sources`                                                                                                                                 | Skipper spoke |
+| Schema          | `introspect_schema`, `generate_query`, `execute_query`                                                                                                                                         | `schema://catalog`                                                                                                                                    | Gateway       |
+| Infrastructure  | `browse_marketplace`, `subscribe_to_cluster`, `set_preferred_cluster`, `create_private_cluster`, `create_enrollment_token`, `get_node_info`, `manage_node`, `set_node_mode`, `get_node_health` | `nodes://list`, `nodes://{id}`, `clusters://list`, `clusters://{id}`, `clusters://marketplace`                                                        | Gateway       |
 
 Code: `api_gateway/internal/mcp/` (tools, resources, prompts, preflight), `api_consultant/internal/` (mcpclient, mcpspoke, chat orchestrator). For full tool parameters, see the [public docs](https://logbook.frameworks.network/agents/mcp/).
 

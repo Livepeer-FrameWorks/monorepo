@@ -23,15 +23,14 @@ All configuration is through environment variables. The LLM and embedding provid
 
 Embedding models convert text into vectors for similarity search. Quality here affects every answer — bad retrieval poisons everything downstream.
 
-| Model                    | Run where    | Cost per 1M tokens | Notes                                                    |
-| ------------------------ | ------------ | -----------------: | -------------------------------------------------------- |
-| `nomic-embed-text`       | Ollama / CPU |               Free | Great quality, runs anywhere. Top pick for local.        |
-| `bge-m3`                 | Ollama / CPU |               Free | Multi-lingual, multi-granularity. Heavier but excellent. |
-| `text-embedding-3-small` | OpenAI API   |              $0.02 | Simple, 8K context, very cheap at scale.                 |
-| `text-embedding-3-large` | OpenAI API   |              $0.13 | Higher quality. Good if retrieval feels weak.            |
-| `voyage-3-large`         | Voyage API   |              $0.18 | Top-tier retrieval quality.                              |
+| Option                         | Run where                         | Notes                                                                                       |
+| ------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------- |
+| `nomic-embed-text`             | Ollama / local CPU or GPU         | Strong default for local deployments.                                                       |
+| `bge-m3`                       | Ollama / local CPU or GPU         | Multi-lingual, multi-granularity. Heavier but excellent.                                    |
+| Hosted embedding API           | OpenAI-compatible provider        | Simple operations path; verify current provider pricing.                                    |
+| Blueclaw / Livepeer-network AI | OpenAI-compatible or BYOC runtime | Good fit when you want network-provided inference/embeddings instead of separate SaaS APIs. |
 
-**Recommendation:** Start with `nomic-embed-text` via Ollama (free, local). If retrieval quality is insufficient, try `text-embedding-3-large`.
+**Recommendation:** Start with local or network-provided embeddings if available. If retrieval quality is insufficient, try a higher-quality hosted embedding model and re-crawl.
 
 <Aside type="caution" title="Embedding lock-in">
   Switching embedding models requires re-crawling all sources — vector dimensions may differ. Choose
@@ -72,44 +71,48 @@ RTX 3090/4090 (24GB) runs Q4_K_M of 32B models at ~15-25 tok/s — fine for chat
 
 The jump from 32B to 70B is ~10-15% better on hard queries. Usually not worth 2-3x the hardware for a domain consultant with good RAG.
 
-### LLM — API
+### LLM — Hosted or Network-Provided
 
-No hardware needed. All accessible via OpenRouter with a single integration, or directly from each provider.
+No local hardware needed. Skipper uses OpenAI-compatible chat and embedding endpoints, so hosted SaaS, [Blueclaw](https://blueclaw.network/), Livepeer-network inference, or a BYOC model container can all fit the same configuration shape when they expose compatible APIs.
 
-**Budget (&lt;$1/M tokens)**
+For Livepeer-network deployments, check the current Livepeer AI docs and ask in the [Livepeer Discord](https://discord.com/invite/livepeer) before planning around a custom model or BYOC container. Availability changes as model runners and orchestrator support evolve. BYOC is useful when the model you want is not exposed by a managed endpoint yet.
 
-| Model            | Provider  | Input / 1M | Output / 1M | Context |
-| ---------------- | --------- | ---------: | ----------: | ------: |
-| DeepSeek V3.2    | DeepSeek  |      $0.25 |       $0.38 |    128K |
-| GPT-4o Mini      | OpenAI    |      $0.15 |       $0.60 |    128K |
-| GPT-4.1 Mini     | OpenAI    |      $0.40 |       $1.60 |      1M |
-| Claude Haiku 4.5 | Anthropic |      $1.00 |       $5.00 |    200K |
-
-**Mid Tier (recommended)**
-
-| Model                 | Provider  | Input / 1M | Output / 1M | Context |
-| --------------------- | --------- | ---------: | ----------: | ------: |
-| **Claude Sonnet 4.5** | Anthropic |      $3.00 |      $15.00 |    200K |
-| GPT-4.1               | OpenAI    |      $2.00 |       $8.00 |      1M |
-| GPT-4o                | OpenAI    |      $2.50 |      $10.00 |    128K |
-
-**Premium**
-
-| Model           | Provider  | Input / 1M | Output / 1M | Context |
-| --------------- | --------- | ---------: | ----------: | ------: |
-| Claude Opus 4.5 | Anthropic |      $5.00 |      $25.00 |    200K |
-| GPT-5           | OpenAI    |      $1.25 |      $10.00 |       — |
+| Option                     | Best For                                     | Notes                                                                 |
+| -------------------------- | -------------------------------------------- | --------------------------------------------------------------------- |
+| Hosted SaaS model API      | Fastest path to production                   | Verify current pricing and data policy directly with the provider.    |
+| Blueclaw                   | OpenAI-compatible gateway for agents         | Can reduce vendor lock-in if it has the models you need.              |
+| Livepeer-network inference | Keeping inference spend and usage on-network | Good strategic fit when available for your target models.             |
+| Livepeer BYOC container    | Custom models or runtime control             | More operator work, but lets you bring models not exposed by default. |
 
 ### Cost Estimates
 
-Assuming ~2K input tokens and ~500 output tokens per response:
+<Aside type="caution" title="Estimates only">
+  We do not have enough production Skipper usage data yet to publish reliable per-chat cost
+  estimates. The table below is a planning aid, not a billing promise. We should replace it with
+  measured data once we have real prompt sizes, tool-call counts, conversation lengths, provider
+  choices, and model mix.
+</Aside>
 
-| Model              | 100/day |         1,000/day |         10,000/day |
-| ------------------ | ------: | ----------------: | -----------------: |
-| Local 32B (Ollama) |      $0 |                $0 | $0 (hardware only) |
-| DeepSeek V3.2      |   $0.03 |    $0.27 (~$8/mo) |    $2.70 (~$81/mo) |
-| GPT-4o Mini        |   $0.05 |   $0.48 (~$15/mo) |   $4.80 (~$144/mo) |
-| Claude Sonnet 4.5  |   $1.35 | $13.50 (~$405/mo) |     $135 (~$4K/mo) |
+Skipper cost depends on:
+
+- conversation history included in the prompt
+- retrieved knowledge chunks and citations
+- tool-call count and tool result size
+- whether query rewriting, HyDE, reranking, or web search are enabled
+- provider pricing, model choice, and whether inference runs locally or on-network
+
+Early planning shape:
+
+| Deployment shape                 | Cost profile                                       | When to choose it                                       |
+| -------------------------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| Local Ollama                     | Hardware and operations, no per-token API bill     | Self-hosted clusters with spare GPU capacity.           |
+| Blueclaw / Livepeer-network AI   | Network/provider pricing, less separate SaaS usage | Agents-first deployments and on-network usage goals.    |
+| Budget hosted SaaS model         | Usually low at modest chat volume                  | Fast setup when answer quality requirements are modest. |
+| Higher-quality hosted SaaS model | Can climb quickly with long prompts/tool results   | Harder support cases or premium account tiers.          |
+
+For budgeting, start by logging real `tokensInput`, `tokensOutput`, tool calls, and provider/model
+per request. Recalculate the table from production data instead of maintaining static vendor
+pricing in this page.
 
 ---
 
@@ -179,16 +182,17 @@ Assuming ~2K input tokens and ~500 output tokens per response:
 
 **Service:**
 
-| Variable                            | Purpose                                               | Default         |
-| ----------------------------------- | ----------------------------------------------------- | --------------- |
-| `SKIPPER_WEB_UI`                    | Enable standalone web UI at `/`                       | `true`          |
-| `SKIPPER_API_KEY`                   | API key for admin WebUI auth (omit for network-trust) | —               |
-| `SKIPPER_REQUIRED_TIER_LEVEL`       | Minimum subscription tier                             | `3`             |
-| `SKIPPER_CHAT_RATE_LIMIT_PER_HOUR`  | Rate limit per tenant                                 | `0` (unlimited) |
-| `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)          | —               |
-| `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge               | —               |
-| `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request          | `20`            |
-| `GATEWAY_PUBLIC_URL`                | API Gateway base URL for MCP tool access              | —               |
+| Variable                            | Purpose                                       | Default         |
+| ----------------------------------- | --------------------------------------------- | --------------- |
+| `SKIPPER_WEB_UI`                    | Enable standalone web UI at `/`               | `true`          |
+| `SKIPPER_API_KEY`                   | API key for admin WebUI auth                  | —               |
+| `SKIPPER_WEB_UI_INSECURE`           | Allow the standalone WebUI without an API key | `false`         |
+| `SKIPPER_REQUIRED_TIER_LEVEL`       | Minimum subscription tier                     | `3`             |
+| `SKIPPER_CHAT_RATE_LIMIT_PER_HOUR`  | Rate limit per tenant                         | `0` (unlimited) |
+| `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)  | —               |
+| `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge       | —               |
+| `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request  | `20`            |
+| `GATEWAY_PUBLIC_URL`                | API Gateway base URL for MCP tool access      | —               |
 
 **Social posting:**
 

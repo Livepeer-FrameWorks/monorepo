@@ -8,8 +8,8 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="note" title="Evolving Feature">
-  Multi-cluster support is production-ready for shared and dedicated tiers. The open marketplace is
-  in active development.
+  Multi-cluster operations are implemented for shared and dedicated clusters. The open marketplace
+  is still in active development.
 </Aside>
 
 ## What Is a Cluster?
@@ -24,12 +24,12 @@ Cross-cluster coordination is handled exclusively by the **FoghornFederation** g
 
 ## Deployment Models
 
-| Model                | Description                                                                                                                                                                                                                |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Shared**           | Free rate-limited tier or premium shared tiers. All tenants share the same cluster, edges, and services.                                                                                                                   |
-| **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via [CLI](/operators/cli-reference) or [Manual Deployment](/operators/deployment-manual). |
-| **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                 |
-| **Open Marketplace** | Third-party operators publish clusters with pricing and access controls. Tenants subscribe to clusters via the marketplace. _(In progress)_                                                                                |
+| Model                | Description                                                                                                                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                                                                                               |
+| **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via the [CLI](/operators/cli-reference), with [Manual Deployment](/operators/deployment-manual) as an advanced reference. |
+| **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                                                 |
+| **Open Marketplace** | Third-party operators publish clusters with pricing and access controls. Tenants subscribe to clusters via the marketplace. _(In progress)_                                                                                                                |
 
 ---
 
@@ -54,27 +54,34 @@ When the manifest has a `clusters` section, the CLI creates all clusters, regist
 
 ```bash
 frameworks admin clusters create \
-  --name "EU Production" \
-  --slug eu-prod \
-  --region eu-west \
-  --foghorn-count 2
+  --cluster-id eu-prod \
+  --cluster-name "EU Production" \
+  --cluster-type edge \
+  --base-url eu.frameworks.network \
+  --foghorn-count 2 \
+  --deployment-model shared
 ```
 
 This:
 
 1. Creates the cluster record in Quartermaster
 2. Claims N Foghorn instances from the pool (`--foghorn-count`)
-3. Sets up cluster-scoped DNS records via Navigator (if configured)
+
+Navigator-managed DNS and certificates are driven separately from node/service
+inventory and certificate status, not directly by `admin clusters create`.
 
 ### Foghorn Pool
 
-Foghorn instances are managed in a shared pool. Clusters claim instances on creation; instances can be drained and returned.
+Foghorn instances are managed in a shared pool. Clusters can claim idle instances on creation, assign idle instances later, drain instances gracefully, or release existing assignments back to the pool.
 
 ```bash
 # View pool status (shows per-cluster grouping)
 frameworks admin foghorn-pool status
 
-# Add an instance to the pool
+# Assign idle instances to a cluster
+frameworks admin foghorn-pool assign --cluster-id <CLUSTER_ID> --count 2
+
+# Release an assigned instance back to the pool
 frameworks admin foghorn-pool add --instance-id <UUID>
 
 # Drain an instance from its cluster (graceful)
@@ -93,11 +100,11 @@ Shows cluster health including Foghorn HA status, edge count, and wildcard certi
 
 ## Federation
 
-Foghorn instances discover peers via Quartermaster's `ListPeers` RPC. Federation is demand-driven — peer connections are opened when a viewer needs a stream that only exists on a remote cluster.
+Foghorn instances discover peers via Quartermaster's `ListPeers` RPC. The peer manager maintains long-lived PeerChannel connections for known peers, refreshes them periodically, and also accepts demand-driven peer hints from stream validation so new routing relationships do not wait for the next refresh.
 
 ### How It Works
 
-1. **PeerChannel**: Bidirectional gRPC streams between Foghorn peers exchange edge telemetry, stream advertisements, and replication events every 5 seconds
+1. **PeerChannel**: Bidirectional gRPC streams between Foghorn peers exchange edge telemetry, stream advertisements, cluster summaries, heartbeats, and replication/artifact events on their own intervals
 2. **QueryStream**: When a viewer's cluster doesn't have the stream, Foghorn asks the origin cluster for edge candidates
 3. **Origin-Pull**: If a local edge has capacity, Foghorn arranges a DTSC pull from the remote origin. Subsequent viewers are served locally
 4. **Redirect**: If no local capacity, the viewer is redirected (307) to the remote cluster's edge
@@ -137,11 +144,11 @@ The marketplace allows third-party operators to publish clusters that other tena
 
 Clusters can be configured with different visibility levels:
 
-| Visibility    | Who Can See           | Access                   |
-| ------------- | --------------------- | ------------------------ |
-| `private`     | Only the owner tenant | Direct access            |
-| `invite_only` | Invited tenants       | Via cluster invite token |
-| `public`      | All tenants           | Via subscription request |
+| Visibility | Who Can See               | Access                                           |
+| ---------- | ------------------------- | ------------------------------------------------ |
+| `private`  | Only the owner tenant     | Direct access or invite token for another tenant |
+| `unlisted` | Direct-link/invited users | Via cluster invite token                         |
+| `public`   | All tenants               | Via subscription request                         |
 
 ### Subscription Lifecycle
 
@@ -149,8 +156,8 @@ Clusters can be configured with different visibility levels:
 Tenant discovers cluster (marketplace UI or invite link)
   → RequestClusterSubscription (GraphQL mutation)
   → Cluster owner approves/rejects (ApproveClusterSubscription / RejectClusterSubscription)
-  → On approval: Quartermaster creates tenant_cluster_access record
-  → Purser creates cluster_subscription (billing)
+  → On approval: Quartermaster activates the tenant_cluster_access record
+  → Paid cluster checkout/subscription records are created by Purser's cluster-subscription flow
   → Tenant can now route streams through the cluster
 ```
 
@@ -160,10 +167,11 @@ Cluster operators can invite specific tenants:
 
 ```bash
 # Creates an invite token with optional expiry
-frameworks admin cluster-invites create \
+frameworks admin clusters invites create \
   --cluster-id <ID> \
-  --tenant-id <TENANT_UUID> \
-  --ttl 7d
+  --owner-tenant-id <OWNER_TENANT_UUID> \
+  --invited-tenant-id <INVITED_TENANT_UUID> \
+  --expires-in-days 7
 ```
 
 The invited tenant sees the cluster in their dashboard and can accept with one click.
@@ -250,7 +258,7 @@ See [DNS Automation](/operators/dns) for details.
 
 ## Billing Attribution
 
-Every analytics event carries `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). This enables per-cluster billing:
+Stream/viewer/artifact analytics carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). The billing rollups use those fields when they are present and attribute non-cluster-scoped usage, such as storage, processing, and API usage, to the tenant's primary cluster. This enables per-cluster billing:
 
 - **Periscope Query** generates per-cluster `UsageSummary` records
 - **Purser** stores these as per-cluster usage records

@@ -65,7 +65,7 @@ Multi-tenant live streaming platform with three access layers and crypto-native 
 | API Exploration | introspect schema, generate & execute queries | schema catalog                 | introspection                       |
 | Knowledge       | ask_consultant                                | knowledge://sources            | —                                   |
 
-MCP: 29 tools, 18 resources, 8 prompts — full discovery via `tools/list` and `resources/list`.
+MCP capabilities are registered by the Gateway at runtime. Use `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` for the current inventory instead of relying on a hard-coded count.
 GraphQL: introspection enabled at `/graphql` — full schema discovery built-in.
 
 ## Security Notes
@@ -151,8 +151,8 @@ Endpoint: `POST /graphql`
 Key operations:
 
 - Mutations: `createStream`, `updateStream`, `deleteStream`, `refreshStreamKey`
-- Queries: `streams`, `stream`, `me`, `balance`
-- Subscriptions: `streamHealthUpdated`
+- Queries: `streams`, `stream`, `me`, `billingStatus`, `prepaidBalance`
+- Subscriptions: `liveStreamEvents`, `liveViewerMetrics`, `liveFirehose`
 
 Authentication: same wallet headers or bearer token.
 
@@ -160,11 +160,11 @@ Authentication: same wallet headers or bearer token.
 
 - API requests are free; usage costs apply to viewer hours, storage, and processing.
 - Prepaid balance must be positive to run billable operations.
-- Use MCP `billing://balance` or GraphQL `balance` query to monitor balance and drain rate.
+- Use MCP `billing://balance` or GraphQL `prepaidBalance` / `billingStatus` queries to monitor balance and drain rate.
 
 ## Streaming Best Practices
 
-- **Check balance before creating streams.** Active streams drain balance continuously. Use `billing://balance` (MCP) or `balance` query (GraphQL) to check drain rate.
+- **Check balance before creating streams.** Active streams drain balance continuously. Use `billing://balance` (MCP) or `prepaidBalance` / `billingStatus` queries (GraphQL) to check drain rate.
 - **Monitor stream health.** Read `streams://{id}/health` periodically during live streams. Use QoE diagnostic tools if viewers report issues.
 - **Top up proactively.** Streams are terminated if balance drops below -$10. Use x402 auto-payment or `topup_balance` to maintain buffer.
 - **Clean up after yourself.** Delete streams, clips, and VOD assets you no longer need. Storage costs are ongoing.
@@ -254,7 +254,7 @@ Two management paths: use `set_node_mode` / `get_node_health` MCP tools when you
 Run every 15–30 minutes during active streaming, every few hours otherwise.
 
 1. **Account health**: Read `account://status`. Resolve any blockers.
-2. **Balance**: Read `billing://balance`. Alert human if < $5 with active streams.
+2. **Balance**: Read `billing://balance`. Alert human if `balance_cents` is below 500 with active streams.
 3. **Active streams**: Read `streams://list`. For each live stream, read `streams://{id}/health`. If `status: critical`, run `diagnose_rebuffering` and `diagnose_buffer_health`.
 4. **Skill updates**: Check `skill.json` version periodically (once/day).
 

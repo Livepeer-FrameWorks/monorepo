@@ -8,37 +8,45 @@ sidebar:
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="note" title="Deployment First">
-  This page covers post-deployment operations. For initial deployment, see: - [CLI
-  Reference](/operators/cli-reference) - Automated deployment - [Manual
-  Deployment](/operators/deployment-manual) - Step-by-step manual deployment
+  This page covers post-deployment operations. For initial deployment, start with the [CLI
+  Reference](/operators/cli-reference). Use [Manual Deployment](/operators/deployment-manual) as an
+  advanced reference for what the provisioner configures.
 </Aside>
 
 This page is an **operator reference** for those who have deployed FrameWorks and need to understand what's running, debug issues, or customize their setup.
 
 ## Directory Structure
 
-The CLI creates this standard layout on each server:
+CLI-managed Linux hosts use per-service directories rather than a single shared
+`bin/` directory:
 
 ```
 /opt/frameworks/
-├── bin/              # Service binaries
-├── config/           # Configuration files
-├── data/             # Persistent data (recordings, caches)
-└── logs/             # Service logs (if not using journald)
+├── quartermaster/       # Native Go service binary and install sentinel
+├── bridge/              # Native Go service binary and install sentinel
+├── chatwoot/            # Docker Compose stack directory
+├── edge/                # Edge Docker Compose stack directory
+└── ...                  # One directory per native service or compose stack
 
 /etc/frameworks/
 ├── quartermaster.env
 ├── commodore.env
 ├── purser.env
-├── inventory.json    # CLI inventory state (nodes + services)
+├── pki/              # Internal gRPC TLS material when enabled
+├── certs/            # Edge/runtime certificates when applicable
 └── ...               # Per-service environment files
 ```
 
-Create the structure manually:
+Native systemd units are named `frameworks-<service>.service` and run
+`/opt/frameworks/<service>/<service>` with `/etc/frameworks/<service>.env`.
+Docker-mode services keep their `docker-compose.yml` and `.env` files under
+`/opt/frameworks/<stack>/`.
+
+For manual native installs, create the base paths first:
 
 ```bash
-sudo mkdir -p /opt/frameworks/{bin,config,data,logs}
 sudo mkdir -p /etc/frameworks
+sudo mkdir -p /opt/frameworks/<service>
 sudo useradd -r -s /sbin/nologin frameworks 2>/dev/null || true
 sudo chown -R frameworks:frameworks /opt/frameworks /etc/frameworks
 ```
@@ -131,7 +139,7 @@ sudo ufw allow 4242/tcp     # MistServer controller (optional; keep internal whe
 
 The CLI applies these automatically with `frameworks edge tune --write`. For manual application:
 
-**Network tuning** (`/etc/sysctl.d/99-frameworks.conf`):
+**Network tuning** (`/etc/sysctl.d/frameworks-edge.conf`):
 
 ```bash
 net.core.rmem_max = 16777216
@@ -140,17 +148,17 @@ net.core.somaxconn = 8192
 net.ipv4.ip_local_port_range = 16384 65535
 ```
 
-**File descriptors** (`/etc/security/limits.d/frameworks.conf`):
+**File descriptors** (`/etc/security/limits.d/frameworks-edge.conf`):
 
 ```
-* soft nofile 65536
-* hard nofile 65536
+* soft nofile 1048576
+* hard nofile 1048576
 ```
 
 Apply changes:
 
 ```bash
-sudo sysctl -p /etc/sysctl.d/99-frameworks.conf
+sudo sysctl --system
 # Reboot or re-login for limits changes
 ```
 
@@ -269,17 +277,18 @@ clickhouse-client < pkg/database/sql/clickhouse/periscope.sql
 ### Kafka
 
 ```bash
-# Install Java
-sudo apt install -y openjdk-11-jdk
+# Install Java runtime
+sudo apt install -y openjdk-17-jre-headless
 
 # Download Kafka
 cd /opt
-sudo wget https://downloads.apache.org/kafka/3.6.0/kafka_2.13-3.6.0.tgz
-sudo tar -xzf kafka_2.13-3.6.0.tgz
-sudo mv kafka_2.13-3.6.0 kafka
+sudo wget https://downloads.apache.org/kafka/4.2.0/kafka_2.13-4.2.0.tgz
+sudo tar -xzf kafka_2.13-4.2.0.tgz
+sudo mv kafka_2.13-4.2.0 kafka
 
 # Start Kafka (KRaft mode, single-node)
-/opt/kafka/bin/kafka-storage.sh format -t $(cat /proc/sys/kernel/random/uuid) -c /opt/kafka/config/kraft/server.properties
+KAFKA_CLUSTER_ID=$(/opt/kafka/bin/kafka-storage.sh random-uuid)
+/opt/kafka/bin/kafka-storage.sh format -t "$KAFKA_CLUSTER_ID" -c /opt/kafka/config/kraft/server.properties
 /opt/kafka/bin/kafka-server-start.sh -daemon /opt/kafka/config/kraft/server.properties
 
 # Create required topics (shared cluster; run once from any broker)

@@ -7,19 +7,24 @@ Proposed. Phase 1 partially implemented for Edge API path only (Helmsman → Fog
 ## TL;DR
 
 - `JWT_SECRET` is shared across 8+ services. Any compromised service leaks the signing key.
-- Commodore already issues all JWTs but every service validates independently.
+- Commodore issues normal user/session JWTs. Skipper also mints a WebUI admin JWT
+  from the same shared `JWT_SECRET`.
 - Migrate to Commodore as the single token validation authority, then switch to asymmetric signing so the private key never leaves Commodore.
 
 ## Current State
 
 ### JWT tokens
 
-Commodore is the sole issuer — `auth.GenerateJWT()` is called only in:
+Commodore is the primary user/session issuer — `auth.GenerateJWT()` is called in:
 
-- `PasswordLogin` (`api_control/internal/grpc/server.go:2129`)
-- `RefreshToken` (`api_control/internal/grpc/server.go:2473`)
-- `WalletLogin` (`api_control/internal/grpc/server.go:3007`)
-- `WalletLoginWithX402` (`api_control/internal/grpc/server.go:3126`)
+- `PasswordLogin` (`api_control/internal/grpc/server.go`)
+- `RefreshToken` (`api_control/internal/grpc/server.go`)
+- `WalletLogin` (`api_control/internal/grpc/server.go`)
+- `WalletLoginWithX402` (`api_control/internal/grpc/server.go`)
+
+Skipper also calls `auth.GenerateJWT()` for the WebUI admin flow:
+
+- `api_consultant/cmd/skipper/main.go`
 
 JWTs carry `user_id`, `tenant_id`, `email`, `role` with 15-minute expiry.
 
@@ -29,7 +34,8 @@ JWTs carry `user_id`, `tenant_id`, `email`, `role` with 15-minute expiry.
 - gRPC interceptor (all services) — `pkg/middleware/grpc.go:104`
 - Skipper — `api_consultant/cmd/skipper/main.go:72`
 
-`JWT_SECRET` appears in `docker-compose.yml` for: Bridge, Commodore, Skipper, Quartermaster, Signalman, Periscope (ingest), Purser, Decklog.
+`JWT_SECRET` appears in `docker-compose.yml` for: Bridge, Commodore, Skipper,
+Quartermaster, Signalman, Periscope (ingest), Purser, and Decklog.
 
 ### API tokens
 
@@ -41,14 +47,16 @@ Static shared secret for service-to-service gRPC calls. Every client in `pkg/cli
 
 ### Edge API (already follows the target pattern)
 
-The Edge API validates tokens by delegating to the authority chain:
+The Edge API validates API tokens by delegating to the authority chain:
 
 1. Helmsman receives bearer token from tray app / CLI
 2. Sends `ValidateEdgeTokenRequest` to Foghorn over the control stream
 3. Foghorn calls `CommodoreClient.ValidateAPIToken()`
 4. Result cached in Helmsman with TTL
 
-This works for API tokens today. JWTs are not yet supported because Foghorn's handler only calls `ValidateAPIToken`, not a combined validation RPC.
+This works for API tokens today. JWTs are not yet supported because Foghorn's handler
+only calls `ValidateAPIToken`, not a combined validation RPC. The proposed
+`ValidateToken` RPC does not exist yet in `pkg/proto/commodore.proto`.
 
 ## Problem
 

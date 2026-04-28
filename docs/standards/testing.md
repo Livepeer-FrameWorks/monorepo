@@ -231,8 +231,8 @@ func (m *mockBillingClient) GetTenantLimits(ctx context.Context, tenantID string
 
 ### Required Checks
 
-- `make test` - All unit tests pass
-- `make lint` - Go + frontend lint checks pass
+- CI runs Go build, `make test-junit`, `make coverage`, Go lint with the baseline, frontend lint, frontend tests, and frontend build when relevant paths change.
+- Locally, `make test` runs the Go test suite and `make lint` runs the Go + frontend lint checks.
 
 ### Local CI Parity
 
@@ -240,8 +240,8 @@ func (m *mockBillingClient) GetTenantLimits(ctx context.Context, tenantID string
 
 ### Optional Checks
 
-- Mutation testing on changed files (PR gate)
-- Full mutation testing (nightly)
+- Mutation testing on changed files (nightly/manual, informational)
+- Full mutation testing (manual `all` scope)
 - Branch coverage reports
 
 ## References

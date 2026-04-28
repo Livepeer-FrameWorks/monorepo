@@ -2,24 +2,32 @@
 
 ## Status
 
-Draft (not implemented) — Service JWT with cluster_id claims is not yet built.
-Current model uses static `SERVICE_TOKEN` for S2S and enrollment tokens for
-edge auth. See `docs/architecture/edge-auth.md` for the implemented model.
+Draft (not implemented) — service JWTs with non-forgeable `cluster_id` claims are
+not built. Current model uses static `SERVICE_TOKEN` for S2S, bootstrap tokens for
+service/node provisioning, and enrollment tokens for edge auth. See
+`docs/architecture/edge-auth.md` for the implemented model.
 
 ## TL;DR
 
 - Current service-to-service auth uses a shared static `SERVICE_TOKEN`.
+- Desired-state/bootstrap flows now create service and node inventory through
+  Quartermaster, but those records are not yet used as signed runtime service identity.
 - Introduce a service JWT (or similar) to make `cluster_id` non-forgeable.
 - Quartermaster issues and validates service identity for registration.
 
 ## Current State
 
-- gRPC/HTTP middleware accepts either a shared `SERVICE_TOKEN` or a user JWT.
-- Services register with Quartermaster using shared token semantics.
+- gRPC middleware accepts either a shared `SERVICE_TOKEN` or a user JWT.
+- Shared gRPC clients forward a user JWT when present and fall back to the service token.
+- Service/node bootstrap tokens carry tenant/cluster/node constraints during provisioning,
+  but runtime S2S calls still use the static service token model.
 
 Evidence:
 
-- `pkg/middleware`
+- `pkg/middleware/grpc.go`
+- `pkg/clients/*/grpc_client.go`
+- `api_tenants/internal/bootstrap`
+- `api_tenants/internal/grpc/bootstrap_tokens.go`
 - `pkg/auth`
 
 ## Problem / Motivation

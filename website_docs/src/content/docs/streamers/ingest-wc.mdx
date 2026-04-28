@@ -21,9 +21,9 @@ import "@livepeer-frameworks/streamcrafter-wc/define";
 
 ```html
 <!-- unpkg -->
-<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/fw-streamcrafter.js"></script>
 <!-- or jsdelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/fw-streamcrafter.js"></script>
 ```
 
 Shadow DOM encapsulates all CSS — host page styles won't break controls.
@@ -37,7 +37,7 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
 ></fw-streamcrafter>
 ```
 
-**Gateway Mode:**
+**Gateway Resolution Mode:**
 
 ```html
 <fw-streamcrafter
@@ -46,6 +46,9 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
   initial-profile="broadcast"
 ></fw-streamcrafter>
 ```
+
+Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field. Use direct `whip-url`
+unless that resolver is enabled in your environment.
 
 The element includes the same full UI as the React/Svelte versions: video preview, camera/screen controls, quality selection, and connection status.
 
@@ -64,37 +67,37 @@ Set `controls="false"` to hide the built-in UI. The element still manages the st
   const studio = document.getElementById("studio");
 
   document.getElementById("go-live").addEventListener("click", () => {
-    studio.controller.startStreaming();
+    studio.pc.startStreaming();
   });
 
   document.getElementById("add-camera").addEventListener("click", () => {
-    studio.controller.startCamera();
+    studio.pc.startCamera();
   });
 </script>
 ```
 
 ### Controller Access
 
-The `.controller` property provides direct access to the underlying `IngestControllerHost`:
+The `.pc` property provides direct access to the underlying `IngestControllerHost`:
 
 ```js
 const studio = document.querySelector("fw-streamcrafter");
 
 // Read state
-studio.controller.getState(); // "idle" | "capturing" | "streaming" | ...
-studio.controller.isStreaming(); // boolean
-studio.controller.getSources(); // MediaSource[]
+studio.pc.getState(); // "idle" | "capturing" | "streaming" | ...
+studio.pc.isStreaming(); // boolean
+studio.pc.getSources(); // MediaSource[]
 
 // Actions
-await studio.controller.startCamera();
-await studio.controller.startScreenShare({ audio: true });
-await studio.controller.startStreaming();
-await studio.controller.stopStreaming();
-studio.controller.removeSource("camera-1");
-studio.controller.setSourceVolume("camera-1", 0.5);
+await studio.pc.startCamera();
+await studio.pc.startScreenShare({ audio: true });
+await studio.pc.startStreaming();
+await studio.pc.stopStreaming();
+studio.pc.removeSource("camera-1");
+studio.pc.setSourceVolume("camera-1", 0.5);
 
 // Events
-studio.controller.on("stateChange", ({ state }) => console.log(state));
+studio.pc.on("stateChange", ({ state }) => console.log(state));
 ```
 
 ## Slot-based Composition
@@ -143,8 +146,8 @@ Without `for`, sub-components look for the nearest ancestor `<fw-streamcrafter>`
 | Attribute           | Type      | Default       | Description                                                            |
 | ------------------- | --------- | ------------- | ---------------------------------------------------------------------- |
 | `whip-url`          | `string`  | —             | Direct WHIP ingest endpoint                                            |
-| `gateway-url`       | `string`  | —             | Gateway GraphQL endpoint                                               |
-| `stream-key`        | `string`  | —             | Stream key (used with gateway-url)                                     |
+| `gateway-url`       | `string`  | —             | Gateway GraphQL endpoint for resolver-backed ingest environments       |
+| `stream-key`        | `string`  | —             | Stream key used with `gateway-url`                                     |
 | `initial-profile`   | `string`  | `"broadcast"` | Quality preset                                                         |
 | `controls`          | `string`  | `""`          | Set to `"false"` for headless mode                                     |
 | `theme`             | `string`  | `"default"`   | Theme preset name                                                      |

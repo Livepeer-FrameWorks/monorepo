@@ -35,7 +35,7 @@ MistServer supports auto-push rules in its config, but we don't use them because
 1. User creates a push target via GraphQL (`createPushTarget` mutation)
 2. Gateway resolves to Commodore's `PushTargetService.CreatePushTarget` gRPC
 3. Commodore stores in `commodore.push_targets` table with `tenant_id` isolation
-4. Target URI is validated (`rtmp://`, `rtmps://`, `srt://` only)
+4. Target URI is validated (`rtmp://`, `rtmps://`, `srt://` only) and encrypted before storage
 5. Target is created with `is_enabled = true`, `status = 'idle'`
 
 ### Activation (Stream Goes Live)
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS commodore.push_targets (
     stream_id     UUID NOT NULL REFERENCES commodore.streams(id) ON DELETE CASCADE,
     platform      VARCHAR(50),
     name          VARCHAR(255) NOT NULL,
-    target_uri    VARCHAR(512) NOT NULL,
+    target_uri    VARCHAR(512) NOT NULL, -- encrypted application payload
     is_enabled    BOOLEAN DEFAULT TRUE,
     status        VARCHAR(50) DEFAULT 'idle',
     last_error    TEXT,
@@ -125,8 +125,8 @@ Internal RPCs (`GetStreamPushTargets`, `ValidateStreamKey`) return unmasked URIs
 - **Tenant isolation**: All queries filter by `tenant_id`
 - **URI validation**: Only `rtmp://`, `rtmps://`, `srt://` schemes accepted
 - **API masking**: Stream keys in target URIs are redacted in GraphQL responses
+- **At-rest encryption**: Commodore encrypts `target_uri` on create/update and decrypts it only for masked API responses or internal push RPCs
 - **Permission check**: Mutations require `streams:write` permission
-- **TODO**: Encrypt `target_uri` at rest (application-level AES-256-GCM)
 
 ## Existing MistServer Integration
 

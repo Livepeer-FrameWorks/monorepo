@@ -6,11 +6,21 @@ S3-backed asset proxy for stream media files. Serves posters, sprite sheets, and
 
 - Proxies allowed asset files (poster.jpg, sprite.jpg, sprite.vtt) from S3-compatible storage
 - LRU cache to avoid redundant S3 fetches
-- Tenant-scoped paths — assets are keyed by tenant and stream
+- Public asset route `GET /assets/:assetKey/:file`
+- S3 object path `thumbnails/{assetKey}/{file}`, optionally prefixed by `STORAGE_S3_PREFIX`
+- `assetKey` is the stream ID or artifact hash produced by the thumbnail pipeline; the public route is not a tenant/path hierarchy
 
 ## API
 
 HTTP only. Assets are served via Gin routes.
+
+Allowed files:
+
+```
+GET /assets/:assetKey/poster.jpg
+GET /assets/:assetKey/sprite.jpg
+GET /assets/:assetKey/sprite.vtt
+```
 
 ## Run (dev)
 

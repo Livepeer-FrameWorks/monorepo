@@ -2,12 +2,12 @@
 
 ## Summary
 
-FrameWorks currently tracks per-tenant usage well but has no acquisition attribution for
-how tenants/users arrive (marketing website, wallet login, x402, API, etc.). Operators need
-to answer: “where do our users come from?” and “how much FrameWorks network usage (including
-Livepeer processing) is attributable to each source.” This RFC proposes a data model and
-end-to-end capture pipeline to make attribution and network-wide reporting available for
-internal dashboards and exports.
+FrameWorks now has the core acquisition-attribution and network-usage plumbing, but it is
+not yet exposed through operator GraphQL/UI. Gateway captures attribution for wallet login
+paths, Quartermaster persists tenant attribution/referral code usage, Periscope Ingest writes
+tenant acquisition events, and Periscope Query has network/acquisition query RPCs. Remaining
+work is mainly coverage for all signup paths, operator-facing GraphQL/UI, exports, and
+operational validation.
 
 ## Goals
 
@@ -23,11 +23,29 @@ internal dashboards and exports.
 - No changes to customer-facing billing UI in this iteration.
 - No public stats endpoint in the initial rollout (optional phase 2).
 
+## Current implementation status
+
+Implemented:
+
+- `SignupAttribution` exists in `pkg/proto/common.proto`.
+- Quartermaster has `tenant_attribution` and `referral_codes` tables.
+- Gateway captures UTM/referrer/landing/referral fields for wallet login paths.
+- Quartermaster persists attribution on tenant creation and increments referral-code usage.
+- ClickHouse has `tenant_acquisition_events`.
+- Periscope Ingest writes `tenant_created` service events into `tenant_acquisition_events`.
+- Periscope Query implements `GetNetworkUsage`, `GetAcquisitionFunnel`, and `GetAcquisitionCohortUsage`.
+
+Still open:
+
+- Verify coverage for email/password, x402, and API-created tenants.
+- Add operator-only GraphQL and UI/export surfaces.
+- Document report date ranges and backfill limitations.
+
 ## Proposed data model
 
 ### 1) Attribution payload (proto)
 
-Add a shared `SignupAttribution` message and wire it through the control plane so that
+`SignupAttribution` exists and should be wired through every tenant creation path so that
 registration, wallet login, and x402 provisioning can pass attribution to tenant creation
 and event emitters.
 
@@ -44,18 +62,18 @@ Proposed fields:
 
 ### 2) Postgres: tenant attribution + referral codes
 
-In `quartermaster`, add:
+In `quartermaster`, the core tables already exist:
 
 - `tenant_attribution` keyed by `tenant_id` (1:1) with attribution columns
 - `referral_codes` for partner/affiliate tracking (optional, low risk)
 
 ### 3) ClickHouse: acquisition events + network rollups
 
-Add tables in the ClickHouse bootstrap schema:
+ClickHouse support exists for:
 
-- `tenant_acquisition_events` for raw acquisition events
-- `network usage` is queried by aggregating existing daily rollups (tenant_viewer_daily, processing_daily, api_usage_daily)
-- `acquisition cohort usage` is computed by joining tenant_acquisition_events with daily usage tables
+- `tenant_acquisition_events` for raw acquisition events.
+- `network usage` queried by aggregating existing daily rollups (`tenant_viewer_daily`, `processing_daily`, `api_usage_daily`).
+- `acquisition cohort usage` computed by joining `tenant_acquisition_events` with daily usage tables.
 
 ## Data flow changes
 
@@ -63,7 +81,7 @@ Note: network-wide usage is computed via query-time aggregation of existing dail
 
 ### Gateway (API)
 
-- Capture UTM parameters, `Referer`, and landing page from HTTP requests.
+- Capture UTM parameters, `Referer`, and landing page from HTTP requests. This exists for wallet login paths; remaining signup paths need verification.
 - Detect agent logins via user-agent.
 - Pass attribution into `Register`, `WalletLogin`, and `WalletLoginWithX402`.
 
@@ -79,19 +97,18 @@ Note: network-wide usage is computed via query-time aggregation of existing dail
 
 ### Analytics ingestion (Periscope)
 
-- Extend service event handling to insert `tenant_created` into ClickHouse
-  `tenant_acquisition_events`.
+- Service event handling inserts `tenant_created` into ClickHouse `tenant_acquisition_events`.
 
 ### Analytics query
 
-- Provide query endpoints for:
+- Query endpoints exist for:
   - `GetNetworkUsage`
   - `GetAcquisitionFunnel`
   - `GetAcquisitionCohortUsage`
 
 ### GraphQL / Operator UI
 
-- Expose operator-only queries for network usage and acquisition funnel/cohort analytics.
+- Expose operator-only queries for network usage and acquisition funnel/cohort analytics. This remains open at the GraphQL/UI layer.
 - UI can be deferred; data should be usable via Grafana/Metabase.
 
 ## Reporting outputs
@@ -103,11 +120,11 @@ Note: network-wide usage is computed via query-time aggregation of existing dail
 
 ## Rollout plan (phased)
 
-1. **Schema + proto**: add `SignupAttribution`, DB tables, ClickHouse tables.
-2. **Capture**: gateway + control plane pass attribution for all signup paths.
-3. **Ingest + rollups**: periscope ingest insertion; add rollups for network usage.
-4. **Query**: periscope query endpoints + operator GraphQL.
-5. **UI** (optional): internal dashboard or public stats endpoint.
+1. **Schema + proto**: done for `SignupAttribution`, Quartermaster tables, and ClickHouse `tenant_acquisition_events`.
+2. **Capture**: partially done; verify and fill all signup paths.
+3. **Ingest + rollups**: Periscope ingest/query support is present.
+4. **Query**: Periscope RPCs exist; operator GraphQL remains open.
+5. **UI** (optional): internal dashboard or public stats endpoint remains open.
 
 ## Risks and mitigations
 

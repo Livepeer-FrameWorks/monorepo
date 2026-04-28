@@ -13,7 +13,7 @@ Both the **Player** (playback) and **StreamCrafter** (ingest) offer four integra
 
 | Framework          | Player Package                          | Studio Package                                 |
 | ------------------ | --------------------------------------- | ---------------------------------------------- |
-| React 18+          | `@livepeer-frameworks/player-react`     | `@livepeer-frameworks/streamcrafter-react`     |
+| React 17+          | `@livepeer-frameworks/player-react`     | `@livepeer-frameworks/streamcrafter-react`     |
 | Svelte 5           | `@livepeer-frameworks/player-svelte`    | `@livepeer-frameworks/streamcrafter-svelte`    |
 | Vue, Angular, etc. | `@livepeer-frameworks/player-wc`        | `@livepeer-frameworks/streamcrafter-wc`        |
 | No framework / CDN | `@livepeer-frameworks/player-wc` (IIFE) | `@livepeer-frameworks/streamcrafter-wc` (IIFE) |
@@ -30,7 +30,7 @@ Use the component as-is. No custom UI work required.
 <Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }} />
 
 // Studio
-<StreamCrafter gatewayUrl="..." streamKey="..." />
+<StreamCrafter whipUrl="..." />
 ```
 
 Best for: Quick integration, prototyping, default look is acceptable.
@@ -52,7 +52,7 @@ Replace the default layout with framework sub-components. Mix our components wit
 </Player>
 
 // Studio — custom layout
-<StreamCrafter gatewayUrl="..." streamKey="...">
+<StreamCrafter whipUrl="...">
   <StudioPreview />
   <div className="my-sidebar">
     <StudioMixer />
@@ -63,6 +63,12 @@ Replace the default layout with framework sub-components. Mix our components wit
 ```
 
 Best for: Custom layouts, adding your own UI around standard controls, brand-specific styling.
+
+<Aside type="note" title="Studio Endpoint Resolution">
+  StreamCrafter components also accept `gatewayUrl` + `streamKey` and call the public
+  `resolveIngestEndpoint` GraphQL field. Use that mode only in environments where the ingest
+  resolver is enabled; otherwise pass the dashboard WHIP URL as `whipUrl`.
+</Aside>
 
 ---
 
@@ -165,7 +171,7 @@ Framework packages re-export core types. You only need to install one package pe
 </aside>
 
 <footer>
-  <button onclick="document.getElementById('studio').controller.startStreaming()">Go Live</button>
+  <button onclick="document.getElementById('studio').pc.startStreaming()">Go Live</button>
 </footer>
 ```
 
@@ -176,7 +182,7 @@ function LiveDashboard() {
   return (
     <div className="dashboard">
       <div className="broadcast">
-        <StreamCrafter gatewayUrl="..." streamKey="..." />
+        <StreamCrafter whipUrl="..." />
       </div>
       <div className="preview">
         <Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }} />
@@ -193,11 +199,11 @@ function LiveDashboard() {
 <html>
   <body>
     <!-- Player -->
-    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/fw-player.js"></script>
     <fw-player content-id="pk_..." content-type="live" gateway-url="..." autoplay muted></fw-player>
 
     <!-- Studio -->
-    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/fw-streamcrafter.js"></script>
     <fw-streamcrafter whip-url="..." initial-profile="broadcast"></fw-streamcrafter>
   </body>
 </html>

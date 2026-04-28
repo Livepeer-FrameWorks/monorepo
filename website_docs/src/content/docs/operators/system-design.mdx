@@ -38,7 +38,9 @@ FrameWorks isolates concerns into four distinct planes to ensure stability and s
 
 ### Event-Driven Analytics
 
-All analytics data originates as immutable events from the Edge (Media Plane), flowing through Kafka into ClickHouse for real-time visibility and historical queries.
+Most media/runtime analytics originate as immutable events from the Edge (Media Plane), flowing
+through Kafka into ClickHouse for real-time visibility and historical queries. Bridge and other
+control-plane services also emit service events such as API usage batches.
 
 ```mermaid
 graph LR
@@ -98,7 +100,7 @@ FrameWorks uses **keyset pagination** with opaque cursors for stable, efficient 
 
 | Limit                          | Default               | Config Variable                 |
 | ------------------------------ | --------------------- | ------------------------------- |
-| GraphQL complexity             | 2000                  | `GRAPHQL_COMPLEXITY_LIMIT`      |
+| GraphQL complexity             | 1000                  | `GRAPHQL_COMPLEXITY_LIMIT`      |
 | WebSocket connections/tenant   | 5                     | `WS_MAX_CONNECTIONS_PER_TENANT` |
 | API requests/tenant            | 100 req/min, burst 20 | Quartermaster tenant limits     |
 | Outbound HTTP connections/host | 100                   | (hardcoded shared HTTP client)  |
@@ -106,8 +108,11 @@ FrameWorks uses **keyset pagination** with opaque cursors for stable, efficient 
 | Health check concurrency       | 8                     | `QM_HEALTH_MAX_CONCURRENCY`     |
 | Max transcodes/node            | 0 (auto)              | `HELMSMAN_MAX_TRANSCODES`       |
 | Blocking trigger grace         | 2000 ms               | `HELMSMAN_BLOCKING_GRACE_MS`    |
-| Max concurrent streams         | Per billing tier      | Database                        |
-| Max concurrent viewers         | Per billing tier      | Database                        |
+| Cluster max concurrent streams | Cluster metadata      | Quartermaster database          |
+| Cluster max concurrent viewers | Cluster metadata      | Quartermaster database          |
+
+Pricing tiers include stream/viewer allowance fields, but runtime enforcement for paid-tier
+stream/viewer limits is not currently active.
 
 ### Node Operational Modes
 
@@ -179,6 +184,7 @@ The `analytics_events` Kafka topic serves as the central nervous system for plat
 | `storage_snapshot`      | Foghorn  | Storage usage snapshot                        | `storage_snapshots`                                        |
 | `storage_lifecycle`     | Foghorn  | Storage freeze/defrost lifecycle events       | `storage_events`                                           |
 | `process_billing`       | Foghorn  | Transcoding/processing usage events           | `processing_events`                                        |
+| `federation_event`      | Foghorn  | Cross-cluster peering and origin-pull events  | `federation_events`                                        |
 | `api_request_batch`     | Bridge   | Batched API request metrics                   | `api_requests`                                             |
 
 ### Artifact Events
@@ -214,7 +220,7 @@ Internal microservices trust each other but require authentication to prevent un
 
 - **Mechanism**: Long-lived, opaque API tokens.
 - **Purpose**: Programmatic access for external applications and scripts (as opposed to interactive user sessions).
-- **Management**: Created and managed via the GraphQL API (Commodore). Tokens have customizable permissions and expiration dates. Today, developer tokens are full-access; RBAC will tighten this.
+- **Management**: Created and managed via the GraphQL API (Commodore). Tokens have customizable permissions and expiration dates.
 - **Validation**: The Gateway validates the token against Commodore's `ValidateAPIToken` RPC. Valid tokens are exchanged for an internal context (User ID, Tenant ID) similar to JWTs.
 
 ### Bot Protection

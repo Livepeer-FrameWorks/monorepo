@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-FrameWorks billing is in beta. Today we offer a **Free shared cluster** and a **prepaid balance** model. Paid tiers below are planned as we roll out paid clusters.
+FrameWorks billing is in beta. Today the shared Free service is not enforcing paid-tier usage allowances for live streams, viewer connections, or delivered-minute usage. API request rate limits still apply for abuse protection. The prepaid and paid tiers below are seeded in the platform but are not commercially enforced yet.
 
 <Aside type="note">
   **Beta Pricing:** Current rates are beta pricing. As we scale, pricing may adjust—but you keep the
@@ -27,12 +27,13 @@ The delivered minutes price is **all-inclusive**: bandwidth, transcoding, and AB
 
 <Aside type="tip">
   **API requests are free.** Stream creation, analytics queries, configuration changes—all API
-  operations cost nothing. You only pay when viewers watch or you store recordings.
+  operations cost nothing, though API traffic is still subject to request throttling. You only pay
+  when viewers watch or you store recordings once commercial enforcement is enabled.
 </Aside>
 
 ## Free Tier
 
-Access to a shared cluster on a fair-use basis. No metering, no billing.
+Access to the shared Free service with no current tier-based caps on live streams or viewer connections. API request limits still apply.
 
 **Included:**
 
@@ -40,15 +41,20 @@ Access to a shared cluster on a fair-use basis. No metering, no billing.
 - Livepeer-backed transcoding
 - Analytics dashboard
 - API access
-- Recording (beta)
 
-**Limitations:**
+**Seeded limitations:**
 
-- 30-day recording retention (beta; plan-based in the future)
+- Recording is not included on the seeded Free tier
 - No GPU hours
 - Watermarked player
 - Community support only
 - No SLA
+
+<Aside type="note">
+  The Free tier's seeded feature set marks recording as unavailable, but billing-tier feature gates
+  are not fully enforced across the current beta runtime. Treat recording on Free as not part of the
+  plan, not as a guaranteed hard failure at every entry point.
+</Aside>
 
 ## Pay-As-You-Go (Current)
 
@@ -106,7 +112,7 @@ Pay via Stripe or Mollie. Funds credit immediately after checkout.
 
 ### Crypto
 
-Send ETH or USDC on Ethereum, Base, or Arbitrum. LPT is supported on Ethereum and Arbitrum.
+Create a USDC prepaid top-up deposit. ETH and LPT prepaid top-ups are not currently accepted by the prepaid top-up backend.
 
 **Confirmations:**
 
@@ -120,7 +126,7 @@ For programmatic clients, FrameWorks supports the [x402 protocol](https://www.x4
 
 When balance is insufficient, the API returns HTTP 402 with payment requirements. Clients sign an EIP-3009 authorization and retry with the `X-PAYMENT` (or `PAYMENT-SIGNATURE`) header to top up automatically.
 
-x402 supports USDC on Base and Arbitrum. For ETH/LPT, use the standard deposit flow.
+x402 supports USDC on Base and Arbitrum. Prepaid crypto top-ups currently accept USDC only.
 
 ## Invoicing
 
@@ -148,7 +154,7 @@ FrameWorks supports multiple deployment models with different billing characteri
 
 | Tier                   | Description                                                                                                                    | Billing                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| **Shared (Community)** | Free rate-limited access to a shared cluster.                                                                                  | No metering, fair-use.                               |
+| **Shared (Community)** | Free access to a shared cluster with API abuse limits and no current tier-based stream/viewer caps.                            | No current commercial metering; fair-use.            |
 | **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                                        | Per-resource metering (delivered minutes + storage). |
 | **Dedicated**          | Isolated cluster with dedicated Foghorn and edges — operated by FrameWorks or self-hosted on-premise.                          | Custom pricing via `cluster_pricing`.                |
 | **Hybrid**             | Self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared. | Per-cluster usage attribution.                       |

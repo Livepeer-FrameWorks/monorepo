@@ -167,11 +167,11 @@ WebCodecs injection also requires codec alignment (`WhipClient.canUseEncodedInse
 
 Core relies on workers for compositor + (optional) WebCodecs + RTP transforms:
 
-- `npm_studio/packages/core/dist/workers`
-- `npm_studio/packages/core/dist/workers`
-- `npm_studio/packages/core/dist/workers`
+- `npm_studio/packages/core/dist/workers/compositor.worker.js`
+- `npm_studio/packages/core/dist/workers/encoder.worker.js`
+- `npm_studio/packages/core/dist/workers/rtcTransform.worker.js`
 
-Workers are loaded using `new URL('../workers/<name>', import.meta.url)` first, with fallbacks like:
+Workers are loaded with bundler-managed `new URL(...)` paths first, then source/dist/public fallbacks like:
 
 - `/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/<name>`
 - `/workers/<name>`

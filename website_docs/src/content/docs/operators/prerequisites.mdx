@@ -173,10 +173,10 @@ FrameWorks requires several external services. See [External Services](/operator
 
 - Cloudflare (required if using Navigator-managed DNS; self-hosted Anycast DNS planned)
 - SSL/TLS certificates (ACME/Let's Encrypt managed via Navigator/Caddy, or bring your own)
-- SMTP provider (email notifications)
 
 **Optional:**
 
+- SMTP provider (required for contact forms, auth emails, billing notifications, and support/newsletter email)
 - Stripe (billing)
 - MaxMind GeoIP (geographic routing)
 
@@ -187,9 +187,8 @@ Once prerequisites are complete:
 1. **Create Cluster Manifest:** See [Cluster Manifest Reference](/operators/cluster-manifest)
 2. **Generate Mesh Identity:** `frameworks mesh wg generate --manifest <manifest> --hosts-file <hosts.enc.yaml>`
 3. **Check Mesh Identity:** `frameworks mesh wg check --manifest <manifest>`
-4. **Deploy Infrastructure:** `frameworks cluster provision --manifest <manifest> --only infrastructure`
-5. **Initialize Databases:** `frameworks cluster init all --manifest <manifest>`
-6. **Deploy Applications:** `frameworks cluster provision --manifest <manifest> --only applications`
-7. **Verify Health:** `frameworks cluster doctor --manifest <manifest>`
+4. **Run Host Preflight:** `frameworks cluster preflight --manifest <manifest>`
+5. **Provision + Initialize:** `frameworks cluster provision --manifest <manifest> --ready`
+6. **Verify Health:** `frameworks cluster doctor --manifest <manifest>`
 
-See [CLI Reference](/operators/cli-reference) for complete command documentation.
+See [CLI Reference](/operators/cli-reference) for the grouped operator command overview.

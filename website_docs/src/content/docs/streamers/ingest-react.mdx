@@ -21,7 +21,13 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
 The `<StreamCrafter />` component is fully self-contained with video preview, controls, and connection management.
 
-**Gateway Mode (Recommended):**
+**Direct WHIP Mode:**
+
+```tsx
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
+```
+
+**Gateway Resolution Mode:**
 
 ```tsx
 import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
@@ -39,11 +45,8 @@ function BroadcastPage() {
 }
 ```
 
-**Direct Mode (Dev / BYO WHIP):**
-
-```tsx
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
-```
+Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field. Use direct `whipUrl`
+unless that resolver is enabled in your environment.
 
 ## Composable Components
 
@@ -62,7 +65,7 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
 function CustomStudio() {
   return (
-    <StreamCrafter gatewayUrl="%GATEWAY_URL%/graphql" streamKey="my-key">
+    <StreamCrafter whipUrl="%INGEST_URL%/webrtc/my-key">
       <div className="my-layout">
         <StudioStatusBadge />
         <StudioPreview />
@@ -142,31 +145,31 @@ function FullyCustomBroadcaster() {
 ```
 
 <Aside type="note" title="Gateway in custom UI">
-  `useStreamCrafterV2` accepts `whipUrl` directly. If you need gateway resolution in a custom UI,
-  resolve a WHIP URL first with `IngestClient` from `@livepeer-frameworks/streamcrafter-core`, then
-  pass `whipUrl`.
+  `useStreamCrafterV2` accepts `whipUrl` directly. If your environment supports
+  `resolveIngestEndpoint`, resolve a WHIP URL first with `IngestClient` from
+  `@livepeer-frameworks/streamcrafter-core`, then pass `whipUrl`.
 </Aside>
 
 ### Hook Return Reference
 
-| Property                    | Type                              | Description               |
-| --------------------------- | --------------------------------- | ------------------------- |
-| `state`                     | `IngestState`                     | Current lifecycle state   |
-| `isStreaming`               | `boolean`                         | Whether currently live    |
-| `isCapturing`               | `boolean`                         | Whether media is captured |
-| `isReconnecting`            | `boolean`                         | Whether reconnecting      |
-| `sources`                   | `MediaSource[]`                   | Active media sources      |
-| `mediaStream`               | `MediaStream \| null`             | Combined output stream    |
-| `qualityProfile`            | `QualityProfile`                  | Current quality settings  |
-| `startCamera(opts?)`        | `() => Promise<void>`             | Add camera source         |
-| `startScreenShare(opts?)`   | `() => Promise<void>`             | Add screen share source   |
-| `startStreaming()`          | `() => Promise<void>`             | Go live                   |
-| `stopStreaming()`           | `() => Promise<void>`             | Stop streaming            |
-| `removeSource(id)`          | `(id: string) => void`            | Remove a source           |
-| `setSourceVolume(id, vol)`  | `(id, number) => void`            | Set source volume (0-1)   |
-| `setSourceMuted(id, muted)` | `(id, boolean) => void`           | Mute/unmute source        |
-| `setQualityProfile(name)`   | `(name: string) => Promise<void>` | Change quality profile    |
-| `controller`                | `IngestControllerV2`              | Direct controller access  |
+| Property                     | Type                                         | Description               |
+| ---------------------------- | -------------------------------------------- | ------------------------- |
+| `state`                      | `IngestState`                                | Current lifecycle state   |
+| `isStreaming`                | `boolean`                                    | Whether currently live    |
+| `isCapturing`                | `boolean`                                    | Whether media is captured |
+| `isReconnecting`             | `boolean`                                    | Whether reconnecting      |
+| `sources`                    | `MediaSource[]`                              | Active media sources      |
+| `mediaStream`                | `MediaStream \| null`                        | Combined output stream    |
+| `qualityProfile`             | `QualityProfile`                             | Current quality settings  |
+| `startCamera(opts?)`         | `() => Promise<MediaSource>`                 | Add camera source         |
+| `startScreenShare(opts?)`    | `() => Promise<MediaSource \| null>`         | Add screen share source   |
+| `startStreaming()`           | `() => Promise<void>`                        | Go live                   |
+| `stopStreaming()`            | `() => Promise<void>`                        | Stop streaming            |
+| `removeSource(id)`           | `(id: string) => void`                       | Remove a source           |
+| `setSourceVolume(id, vol)`   | `(id, number) => void`                       | Set source volume (0-1)   |
+| `setSourceMuted(id, muted)`  | `(id, boolean) => void`                      | Mute/unmute source        |
+| `setQualityProfile(profile)` | `(profile: QualityProfile) => Promise<void>` | Change quality profile    |
+| `getController()`            | `() => IngestControllerV2 \| null`           | Direct controller access  |
 
 ## State Callbacks
 

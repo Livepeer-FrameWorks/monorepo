@@ -10,8 +10,9 @@ import { Aside, Badge } from "@astrojs/starlight/components";
 For full context and status updates, see [GitHub Projects](https://github.com/orgs/Livepeer-FrameWorks/projects). Priorities evolve based on feedback and technical discovery.
 
 <Aside type="note" title="Status Key">
-  - **Done**: Live in production. - **In Progress**: Work is underway; may have rough edges. - **In
-  the Pipeline**: In design or early prototype. - **Planned**: On the backlog.
+  - **Done**: Implemented in the current platform; availability can still depend on deployment and
+  configuration. - **In Progress**: Work is underway; may have rough edges. - **In the Pipeline**:
+  In design or early prototype. - **Planned**: On the backlog.
 </Aside>
 
 ## Done
@@ -48,15 +49,15 @@ _Rotating highlight of recently shipped, production‑ready capabilities. For fu
   - Account, billing, stream, and analytics resources
   - Stream management tools (create, configure, playback)
   - Onboarding and troubleshooting prompts
-- **Skipper AI Video Consultant**: RAG-grounded streaming expert with full tool orchestration. [User Guide](/agents/skipper), [Operator Guide](/operators/skipper)
+- **Skipper AI Video Consultant**: RAG-grounded streaming expert with Gateway-backed tool orchestration where configured. [User Guide](/agents/skipper), [Operator Guide](/operators/skipper)
   - Knowledge base: 10+ curated documentation domains (FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, Livepeer, WebRTC, DASH) with pgvector semantic search
   - QoE diagnostic tools (rebuffering, buffer health, packet loss, routing, anomaly detection)
   - Stream management, billing, and GraphQL introspection via tool orchestration
   - Confidence tagging (verified / sourced / best_guess / unknown) with source citations
-  - Web search fallback (Tavily, Brave, SearXNG)
+  - Optional web search fallback (Tavily, Brave, SearXNG)
   - Background heartbeat monitoring with proactive alerts and notifications
-  - Billing and metering integration
-  - Available in dashboard, docs site widget, and via MCP for external agents
+  - Billing and metering integration for deployments that enable usage reporting
+  - Available in the dashboard, authenticated docs site widget, standalone WebUI, and via MCP for external agents
 - **Support Messaging**: Deckhand integration with Chatwoot for in-app support.
 - **Protocols**: x402 for machine-to-machine payments.
 
@@ -112,7 +113,8 @@ _Backlog items for future development cycles._
 
 ### Product
 
-- **Advanced Controls**: Per-stream transcoding targets.
+- **Advanced Controls**: User-facing controls for per-stream processing overrides; default
+  tier-level live/VOD process ladders and enterprise tenant overrides already exist.
 - **Teams**: Multi-user accounts, role-based permissions (RBAC), and audit logs.
 - **Help Center**: Integrated documentation and support hub.
 - **Mobile Apps**: Native iOS and Android applications.

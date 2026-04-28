@@ -10,7 +10,9 @@ import { Aside } from "@astrojs/starlight/components";
 Agents need a positive prepaid balance to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402** (inline, instant) and **crypto deposits** (on-chain transfer).
 
 <Aside type="tip">
-  API requests are free. You only pay for resource consumption: viewer delivery minutes and storage.
+  API requests are free but rate limited. Current beta does not commercially enforce paid-tier usage
+  allowances for stream count, viewer connections, or delivered minutes; prepaid balance still gates
+  agent write actions and suspension handling.
 </Aside>
 
 ## x402 Protocol
@@ -87,22 +89,26 @@ Call `submit_payment` with an auth-only x402 payload (authorization `value = "0"
 | Arbitrum | 42161    | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
 
 <Aside type="note">
-  x402 only works with USDC (EIP-3009 required). ETH and LPT use the crypto deposit flow below.
+  x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups currently accept USDC only.
 </Aside>
 
 ## Crypto Deposits
 
-For ETH, LPT, or larger USDC amounts, use the deposit flow:
+For non-x402 USDC top-ups, use the deposit flow:
 
-1. Call `topup_balance` with `amount_cents` and `asset` (USDC, ETH, or LPT).
+1. Call `topup_balance` with `amount_cents` and `asset: "USDC"`.
 2. Receive a unique deposit address and expiration time.
 3. Send the payment to that address on-chain.
 4. Call `check_topup` to monitor confirmation status.
 5. Balance updates automatically once confirmed.
 
+ETH and LPT prepaid top-ups are not currently accepted by the prepaid top-up backend.
+
 ## Preflight Errors
 
-Billable tools validate requirements before executing. When requirements aren't met, the error includes resolution guidance:
+Billable MCP tools validate positive prepaid balance before executing. Account status can also report
+billing detail blockers; x402 settlement enforces billing details for non-auth payments of €100 or
+more. When requirements aren't met, the error includes resolution guidance:
 
 **Missing billing details:**
 
@@ -132,12 +138,14 @@ Billable tools validate requirements before executing. When requirements aren't 
 ```
 
 <Aside type="caution">
-  x402 payments of €100 or more require billing details. Call `update_billing_details` first.
+  x402 payments of €100 or more require billing details. Account setup/preflight responses may ask
+  for billing details before that threshold; call `update_billing_details` to clear the blocker.
 </Aside>
 
 ## Cost Awareness
 
-Active streams incur ongoing costs. Monitor via the `billing://balance` resource:
+Prepaid usage deductions can move an account toward zero or negative balance. Monitor via the
+`billing://balance` resource:
 
 | Field                       | Description          |
 | --------------------------- | -------------------- |
@@ -145,4 +153,6 @@ Active streams incur ongoing costs. Monitor via the `billing://balance` resource
 | `drain_rate_cents_per_hour` | Current spend rate   |
 | `estimated_hours_left`      | Time until depletion |
 
-Streams are terminated if the balance drops below -$10. Top up proactively.
+At zero or below, prepaid accounts are blocked from new billable operations unless the request is
+settled with x402. If the balance drops below -$10, Purser suspends the tenant and asks
+Commodore/Foghorn to terminate active streams and sessions. Top up proactively.

@@ -1,6 +1,6 @@
 ---
-title: "ClickHouse Schema Migrations"
-description: "Versioned migrations for upgrading ClickHouse schemas."
+title: "ClickHouse Schema Updates"
+description: "Current ClickHouse bootstrap behavior and how to handle schema changes."
 sidebar:
   order: 8
 ---
@@ -13,14 +13,27 @@ import { Aside } from "@astrojs/starlight/components";
 
 ## Overview
 
-ClickHouse schema changes are managed through versioned migrations:
+ClickHouse currently has a bootstrap schema, not an implemented versioned
+migration runner:
 
-| Scenario      | What to use                                                     |
-| ------------- | --------------------------------------------------------------- |
-| Fresh install | Bootstrap schema via `frameworks cluster init`                  |
-| Upgrading     | Apply migrations from `pkg/database/sql/clickhouse/migrations/` |
+| Scenario      | What to use                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| Fresh install | `frameworks cluster init clickhouse` creates databases; apply the baseline schema manually |
+| Upgrading     | Manual SQL from release notes until a ClickHouse migration runner lands                    |
 
-## Migration structure
+The embedded baseline schema lives in `pkg/database/sql/clickhouse/periscope.sql`
+and is mounted automatically by the local Docker Compose ClickHouse service on a
+fresh container. In CLI-managed deployments, `frameworks cluster init
+clickhouse` creates the configured databases only; apply the baseline SQL with
+`clickhouse-client` until a ClickHouse schema/migration runner lands. The
+repository has a reserved `pkg/database/sql/clickhouse/migrations/` path, but
+there are no versioned ClickHouse migration files there today and `frameworks
+cluster migrate` does not apply ClickHouse migrations.
+
+## Planned migration structure
+
+When ClickHouse migrations are implemented, use the same release-versioned shape
+as PostgreSQL:
 
 Migrations are organized by release version:
 
@@ -33,8 +46,16 @@ pkg/database/sql/clickhouse/migrations/
 
 ## Upgrade procedure
 
-1. **Check release notes** for required migrations
-2. **Apply migrations** in order:
+Until the runner exists:
+
+1. **For a new CLI-managed cluster**, create the databases and apply the baseline schema:
+
+```bash
+frameworks cluster init clickhouse
+clickhouse-client -h <host> < pkg/database/sql/clickhouse/periscope.sql
+```
+
+2. **For upgrades**, check release notes for required ClickHouse DDL and apply the DDL in order:
 
 ```bash
 clickhouse-client -h <host> < pkg/database/sql/clickhouse/migrations/v1.1.0/001_add_filename_to_artifacts.sql
@@ -46,7 +67,7 @@ clickhouse-client -h <host> < pkg/database/sql/clickhouse/migrations/v1.1.0/001_
 clickhouse-client --query "DESCRIBE TABLE periscope.artifact_events" | grep filename
 ```
 
-4. **Deploy** new service versions:
+4. **Deploy** new service versions after the schema is in place:
 
 ```bash
 frameworks cluster upgrade periscope-ingest --version v1.1.0
@@ -72,7 +93,7 @@ Guidelines for contributors:
 1. **Use `IF NOT EXISTS` guards** - migrations must be idempotent
 2. **Prefer expand-only changes** - add columns/tables, avoid drops
 3. **Use Nullable for new columns** - safe for rollback (old code ignores them)
-4. **Update bootstrap schema** - the ClickHouse bootstrap schema must reflect final state
+4. **Update bootstrap schema** - `pkg/database/sql/clickhouse/periscope.sql` must reflect final state
 5. **One migration per logical change** - easier to track and debug
 
 Example migration file:
