@@ -42,6 +42,7 @@ type EdgeVars struct {
 	CaddyAdminAddr   string // Docker: "unix//run/caddy/admin.sock", Native: "localhost:2019"
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
 	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
+	MistServerImage  string // Docker image for local edge init; remote apply pins this from GitOps.
 	ChandlerUpstream string // Docker: "chandler:18020", Native: "localhost:18020"
 	TelemetryURL     string
 	TelemetryToken   string
@@ -79,6 +80,9 @@ func (v *EdgeVars) SetModeDefaults() {
 		} else {
 			v.ChandlerUpstream = "chandler:18020"
 		}
+	}
+	if v.MistServerImage == "" {
+		v.MistServerImage = "mistserver:latest"
 	}
 }
 
@@ -207,6 +211,7 @@ scrape_configs:
 		content = strings.ReplaceAll(content, "{{SITE_ADDRESS}}", vars.SiteAddress)
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
+		content = strings.ReplaceAll(content, "{{MISTSERVER_IMAGE}}", vars.MistServerImage)
 		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)
 		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
 		content = strings.ReplaceAll(content, "{{VMAGENT_EDGE_SERVICE}}", vmagentServiceBlock)

@@ -1,6 +1,6 @@
 ---
 # launchd has no native EnvironmentFile equivalent. Pattern: a shell wrapper
-# sources the env file, then exec-s MistServer. The plist loads the wrapper.
+# sources the env file, then execs MistController. The plist loads the wrapper.
 
 - name: Render env file
   ansible.builtin.copy:
@@ -30,7 +30,7 @@
           *=*) export "$line" ;;
         esac
       done < "{{ mistserver_darwin_conf_dir }}/mistserver.env"
-      exec "{{ mistserver_darwin_base_dir }}/mistserver/MistServer" \
+      exec "{{ mistserver_darwin_base_dir }}/mistserver/bin/MistController" \
         -a "${MIST_API_USERNAME}:${MIST_API_PASSWORD}"
     mode: "0755"
   notify: mistserver restart

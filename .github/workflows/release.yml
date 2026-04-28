@@ -1297,7 +1297,7 @@ jobs:
 
           TAG=$(echo "$RELEASE" | jq -re '.tag_name')
           RELEASE_URL=$(echo "$RELEASE" | jq -re '.html_url')
-          ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size}]')
+          ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size, checksum:(.digest // "")}]')
 
           # go-livepeer docker tags match git tags (metadata-action type=ref,event=tag)
           # Fetch digest directly from registry — no dependency on release assets
@@ -1347,7 +1347,7 @@ jobs:
           TAG=$(echo "$RELEASE" | jq -re '.tag_name')
           TAG_URL=$(echo "$RELEASE" | jq -re '.assets[] | select(.name=="docker-tag.txt") | .browser_download_url')
           RELEASE_URL=$(echo "$RELEASE" | jq -re '.html_url')
-          ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size}]')
+          ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size, checksum:(.digest // "")}]')
 
           DOCKER_TAG=$(curl -fsSL "$TAG_URL")
           DIGEST="sha256:$(docker buildx imagetools inspect "ghcr.io/livepeer-frameworks/mistserver:${DOCKER_TAG}" --raw | sha256sum | cut -d' ' -f1)"
@@ -1510,7 +1510,7 @@ jobs:
           mist_assets='${{ steps.mistserver.outputs.assets }}'
           if [[ -n "$mist_assets" && "$mist_assets" != "null" && "$mist_assets" != "[]" ]]; then
             echo "    binaries:" >> dist/manifest.yaml
-            echo "$mist_assets" | jq -r '.[] | "      - name: \(.name)\n        url: \(.url)" + (if .size then "\n        size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
+            echo "$mist_assets" | jq -r '.[] | "      - name: \(.name)\n        url: \(.url)" + (if (.checksum // "") != "" then "\n        checksum: \(.checksum)" else "" end) + (if .size then "\n        size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
           fi
 
           cat >> dist/manifest.yaml <<YAML
@@ -1524,7 +1524,7 @@ jobs:
           lp_assets='${{ steps.golivepeer.outputs.assets }}'
           if [[ -n "$lp_assets" && "$lp_assets" != "null" && "$lp_assets" != "[]" ]]; then
             echo "    binaries:" >> dist/manifest.yaml
-            echo "$lp_assets" | jq -r '.[] | select(.name | test("linux|darwin")) | "      - name: \(.name)\n        url: \(.url)" + (if .size then "\n        size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
+            echo "$lp_assets" | jq -r '.[] | select(.name | test("linux|darwin")) | "      - name: \(.name)\n        url: \(.url)" + (if (.checksum // "") != "" then "\n        checksum: \(.checksum)" else "" end) + (if .size then "\n        size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
           fi
 
           # Infrastructure Requirements (from config/infrastructure.yaml)

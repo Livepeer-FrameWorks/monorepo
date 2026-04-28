@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"frameworks/cli/internal/templates"
+	"frameworks/cli/pkg/gitops"
 )
 
 func TestEdgeProvisionConfig_PrimaryDomain(t *testing.T) {
@@ -104,6 +105,23 @@ func TestWriteEdgeTemplates_DockerMode(t *testing.T) {
 	}
 	if strings.Contains(string(composeContent), "./pki:/etc/frameworks/pki:ro") {
 		t.Error("docker compose should not mount ./pki read-only; Helmsman updates the CA bundle via ConfigSeed")
+	}
+}
+
+func TestWriteEdgeTemplates_DockerModeDefaultsMistServerImage(t *testing.T) {
+	tmpDir := t.TempDir()
+	vars := templates.EdgeVars{Mode: "docker"}
+
+	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
+		t.Fatalf("WriteEdgeTemplates failed: %v", err)
+	}
+
+	composeContent, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.edge.yml"))
+	if err != nil {
+		t.Fatalf("failed to read docker-compose.edge.yml: %v", err)
+	}
+	if !strings.Contains(string(composeContent), "image: mistserver:latest") {
+		t.Error("docker compose should default to mistserver:latest for local edge init")
 	}
 }
 
@@ -214,5 +232,49 @@ func TestParseUnameOutput(t *testing.T) {
 				t.Errorf("ParseUnameOutput() arch = %q, want %q", arch, tt.wantArch)
 			}
 		})
+	}
+}
+
+func TestEdgeExternalImagePinsDigest(t *testing.T) {
+	manifest := &gitops.Manifest{
+		ExternalDependencies: []gitops.ExternalDependency{{
+			Name:   "mistserver",
+			Image:  "ghcr.io/livepeer-frameworks/mistserver:development-c97caf1",
+			Digest: "sha256:abc123",
+		}},
+	}
+
+	got, err := edgeExternalImage(manifest, "mistserver")
+	if err != nil {
+		t.Fatalf("edgeExternalImage returned error: %v", err)
+	}
+	want := "ghcr.io/livepeer-frameworks/mistserver:development-c97caf1@sha256:abc123"
+	if got != want {
+		t.Fatalf("edgeExternalImage = %q, want %q", got, want)
+	}
+}
+
+func TestEdgeExternalBinaryMatchesMistServerReleaseAssetName(t *testing.T) {
+	manifest := &gitops.Manifest{
+		ExternalDependencies: []gitops.ExternalDependency{{
+			Name: "mistserver",
+			Binaries: []gitops.ExternalBinary{
+				{Name: "docker-tag.txt", URL: "https://example.test/docker-tag.txt"},
+				{Name: "mistserver-darwin-arm64-development-c97caf1.tar.gz", URL: "https://example.test/darwin.tar.gz"},
+				{Name: "mistserver-linux-amd64-development-c97caf1.tar.gz", URL: "https://example.test/linux-amd64.tar.gz", Checksum: "sha256:abc"},
+				{Name: "mistserver-linux-arm64-development-c97caf1.tar.gz", URL: "https://example.test/linux-arm64.tar.gz"},
+			},
+		}},
+	}
+
+	url, checksum, err := edgeExternalBinary(manifest, "mistserver", "linux-amd64")
+	if err != nil {
+		t.Fatalf("edgeExternalBinary returned error: %v", err)
+	}
+	if url != "https://example.test/linux-amd64.tar.gz" {
+		t.Fatalf("url = %q", url)
+	}
+	if checksum != "sha256:abc" {
+		t.Fatalf("checksum = %q", checksum)
 	}
 }

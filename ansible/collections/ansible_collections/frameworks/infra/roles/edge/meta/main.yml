@@ -35,6 +35,10 @@ argument_specs:
       edge_mist_api_password:
         type: str
         required: true
+      edge_mistserver_image:
+        type: str
+        required: false
+        default: mistserver:latest
       edge_acme_email:
         type: str
         required: false

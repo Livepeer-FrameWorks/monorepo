@@ -26,7 +26,7 @@ services:
     restart: unless-stopped
 
   mistserver:
-    image: mistserver:latest
+    image: "{{ edge_mistserver_image }}"
     container_name: mistserver
     command:
       - MistController

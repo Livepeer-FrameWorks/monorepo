@@ -4,13 +4,20 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+Type=simple
 User={{ mistserver_user }}
 Group={{ mistserver_group }}
-WorkingDirectory={{ mistserver_install_dir }}
+WorkingDirectory={{ mistserver_install_dir }}/bin
 EnvironmentFile={{ mistserver_env_file }}
-ExecStart={{ mistserver_install_dir }}/MistServer -a ${MIST_API_USERNAME}:${MIST_API_PASSWORD}
+Environment=MIST_LOG_SYSTEMD=1
+Environment=LD_LIBRARY_PATH={{ mistserver_install_dir }}/lib:{{ mistserver_install_dir }}/lib/x86_64-linux-gnu:{{ mistserver_install_dir }}/lib/aarch64-linux-gnu
+ExecStart={{ mistserver_install_dir }}/bin/MistController -c {{ mistserver_config_file }} -a ${MIST_API_USERNAME}:${MIST_API_PASSWORD}
+ExecStopPost=/bin/bash -c "rm -f /dev/shm/*Mst*"
+ExecReload=/bin/kill -s USR1 $MAINPID
 Restart=always
-RestartSec=5
+RestartSec=2
+TasksMax=infinity
+TimeoutStopSec=8
 LimitNOFILE=1048576
 
 [Install]

@@ -19,7 +19,7 @@ services:
     restart: unless-stopped
 
   mistserver:
-    image: mistserver:latest
+    image: {{MISTSERVER_IMAGE}}
     container_name: mistserver
     command: ["MistController", "-c", "/etc/mistserver.conf", "-a", "frameworks:{{MIST_API_PASSWORD}}"]
     shm_size: "1g"

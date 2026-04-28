@@ -27,7 +27,7 @@
   ansible.builtin.get_url:
     url: "{{ mistserver_artifact_url }}"
     dest: "/tmp/mistserver.tar.gz"
-    checksum: "{{ mistserver_artifact_checksum }}"
+    checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
     mode: "0644"
     timeout: 300
 
@@ -50,9 +50,30 @@
 - name: Ensure MistServer binary is executable and mark install sentinel
   ansible.builtin.shell: |
     set -e
-    chmod 0755 "{{ mistserver_install_dir }}/MistServer"
-    chown {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_dir }}/MistServer"
+    test -x "{{ mistserver_install_dir }}/bin/MistController"
+    find "{{ mistserver_install_dir }}/bin" -maxdepth 1 -type f -name 'Mist*' -exec chmod 0755 {} \;
+    chown -R {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_dir }}/bin"
+    [ ! -d "{{ mistserver_install_dir }}/lib" ] || chown -R {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_dir }}/lib"
     touch "{{ mistserver_install_sentinel }}"
     chown {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_sentinel }}"
   args:
     creates: "{{ mistserver_install_sentinel }}"
+
+- name: Preflight MistServer native binary shared libraries
+  ansible.builtin.shell: |
+    set -o pipefail
+    find "{{ mistserver_install_dir }}/bin" -maxdepth 1 -type f -name 'Mist*' -perm -111 -print0 \
+      | xargs -0 -r ldd 2>&1 \
+      | awk '/not found/ { print }'
+  args:
+    executable: /bin/bash
+  register: mistserver_ldd_missing
+  changed_when: false
+  failed_when: false
+
+- name: Fail when MistServer native binary dependencies are missing
+  ansible.builtin.fail:
+    msg: |
+      MistServer native artifact has unresolved shared libraries:
+      {{ mistserver_ldd_missing.stdout }}
+  when: mistserver_ldd_missing.stdout | trim | length > 0

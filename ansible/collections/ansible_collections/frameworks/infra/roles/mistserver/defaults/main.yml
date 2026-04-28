@@ -1,8 +1,8 @@
 ---
 # MistServer edge media server. Pinned artifact URL+checksum flow in from the
-# CLI (resolved out of the release manifest). Binary inside the tarball is
-# `MistServer` (capital-M) and takes `-a <user>:<password>` for API auth —
-# differences from a generic Go service that make go_service an ill fit.
+# CLI (resolved out of the release manifest). The upstream tarball keeps the
+# Mist* executables together under bin/; MistController is the service entry
+# point and takes `-a <user>:<password>` for API auth.
 
 mistserver_artifact_url: ""
 mistserver_artifact_checksum: ""
@@ -23,6 +23,7 @@ mistserver_user: frameworks
 mistserver_group: frameworks
 mistserver_install_dir: /opt/frameworks/mistserver
 mistserver_env_file: /etc/frameworks/mistserver.env
+mistserver_config_file: /etc/mistserver.conf
 mistserver_systemd_name: frameworks-mistserver
 mistserver_unit_path: "/etc/systemd/system/{{ mistserver_systemd_name }}.service"
 mistserver_port: 8080

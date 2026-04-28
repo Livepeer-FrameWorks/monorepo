@@ -33,6 +33,10 @@ edge_telemetry_token: ""
 # mistserver (-a frameworks:<pw>) and helmsman (MIST_API_PASSWORD env).
 edge_mist_api_password: ""
 
+# Docker-mode MistServer image. Remote cluster applies pass the GitOps-pinned
+# image@digest; local/bootstrap workflows can still use the historical tag.
+edge_mistserver_image: mistserver:latest
+
 # Pinned artifacts. Each sub-role receives its own vars; these top-level
 # keys let the Go caller hand the full set in one map.
 edge_mistserver_artifact_url: ""

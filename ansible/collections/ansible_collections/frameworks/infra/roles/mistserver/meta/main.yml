@@ -31,6 +31,10 @@ argument_specs:
         type: str
         required: false
         default: frameworks
+      mistserver_config_file:
+        type: str
+        required: false
+        default: /etc/mistserver.conf
       mistserver_env:
         type: dict
         required: false

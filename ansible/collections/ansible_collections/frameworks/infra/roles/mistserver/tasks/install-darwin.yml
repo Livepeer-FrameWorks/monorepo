@@ -30,7 +30,7 @@
   ansible.builtin.get_url:
     url: "{{ mistserver_artifact_url }}"
     dest: "/tmp/mistserver.tar.gz"
-    checksum: "{{ mistserver_artifact_checksum }}"
+    checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
     mode: "0644"
     timeout: 300
 
@@ -49,7 +49,8 @@
 - name: Ensure MistServer binary is executable and mark install sentinel
   ansible.builtin.shell: |
     set -e
-    chmod 0755 "{{ mistserver_darwin_base_dir }}/mistserver/MistServer"
+    test -x "{{ mistserver_darwin_base_dir }}/mistserver/bin/MistController"
+    find "{{ mistserver_darwin_base_dir }}/mistserver/bin" -maxdepth 1 -type f -name 'Mist*' -exec chmod 0755 {} \;
     touch "{{ mistserver_install_sentinel }}"
   args:
     creates: "{{ mistserver_install_sentinel }}"

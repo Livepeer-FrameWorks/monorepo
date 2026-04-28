@@ -119,9 +119,10 @@ func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, confi
 
 // edgeRoleVars builds the extra-vars map the frameworks.infra.edge role
 // expects. Pinned artifacts are resolved from the release manifest named by
-// config.Version. Native mode without Version errors out — edge native
-// installs require a pinned release. Docker mode skips artifact resolution
-// because containers carry their own binaries.
+// config.Version. Native mode without Version errors out because native
+// installs require pinned tarballs. Docker mode can run without a release
+// selector for local workflows, but uses the pinned MistServer image when one
+// is available.
 func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map[string]any, error) {
 	mode := config.resolvedMode()
 
@@ -148,17 +149,35 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_key_pem":           config.KeyPEM,
 		"edge_ca_bundle_pem":     config.CABundlePEM,
 		"edge_mist_api_password": mistPass,
+		"edge_mistserver_image":  "mistserver:latest",
 		"edge_apply_tuning":      config.ApplyTuning && remoteOS != "darwin",
 		"edge_darwin_domain":     darwinDomain,
+	}
+
+	var manifest *gitops.Manifest
+	if strings.TrimSpace(config.Version) != "" {
+		var err error
+		manifest, err = fetchEdgeManifest(config.Version)
+		if err != nil {
+			return nil, err
+		}
+		if image, err := edgeExternalImage(manifest, "mistserver"); err != nil {
+			return nil, err
+		} else if image != "" {
+			vars["edge_mistserver_image"] = image
+		}
 	}
 
 	if mode != "native" {
 		return vars, nil
 	}
 
-	manifest, err := fetchEdgeManifest(config.Version)
-	if err != nil {
-		return nil, err
+	if manifest == nil {
+		var err error
+		manifest, err = fetchEdgeManifest(config.Version)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	arch := remoteOS + "-" + remoteArch
@@ -212,16 +231,32 @@ func fetchEdgeManifest(version string) (*gitops.Manifest, error) {
 	return manifest, nil
 }
 
+func edgeExternalImage(manifest *gitops.Manifest, name string) (string, error) {
+	dep := manifest.GetExternalDependency(name)
+	if dep == nil {
+		return "", fmt.Errorf("edge: release manifest has no external_dependency entry for %q", name)
+	}
+	if dep.Image == "" {
+		return "", nil
+	}
+	if dep.Digest == "" {
+		return dep.Image, nil
+	}
+	return dep.Image + "@" + dep.Digest, nil
+}
+
 func edgeExternalBinary(manifest *gitops.Manifest, name, arch string) (string, string, error) {
 	dep := manifest.GetExternalDependency(name)
 	if dep == nil {
 		return "", "", fmt.Errorf("edge: release manifest has no external_dependency entry for %q", name)
 	}
-	bin := dep.GetBinary(arch)
-	if bin == nil || bin.URL == "" {
-		return "", "", fmt.Errorf("edge: release manifest %s entry has no binary URL for arch %q", name, arch)
+	for i := range dep.Binaries {
+		bin := &dep.Binaries[i]
+		if strings.Contains(bin.Name, arch) && bin.URL != "" {
+			return bin.URL, bin.Checksum, nil
+		}
 	}
-	return bin.URL, bin.Checksum, nil
+	return "", "", fmt.Errorf("edge: release manifest %s entry has no binary URL for arch %q", name, arch)
 }
 
 func edgeServiceBinary(manifest *gitops.Manifest, name, remoteOS, remoteArch string) (string, string, error) {
