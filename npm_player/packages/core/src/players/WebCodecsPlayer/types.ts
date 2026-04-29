@@ -555,6 +555,12 @@ export interface WebCodecsPlayerOptions {
    * - 'native': Always use MediaStreamTrackGenerator (browser default)
    */
   renderMode?: RenderMode;
+  /** Live catch-up tuning for Mist fast-forward behavior */
+  liveCatchup?: {
+    cooldownMs?: number;
+    thresholdMs?: number;
+    requestMs?: number;
+  };
   /** Enable developer mode (extra debugging) */
   devMode?: boolean;
 }

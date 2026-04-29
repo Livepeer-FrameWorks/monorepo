@@ -14,6 +14,7 @@ export interface TrackInfo {
   height?: number;
   bps?: number;
   fpks?: number;
+  size?: number;
 }
 
 /**
@@ -62,8 +63,12 @@ export function translateCodec(track: TrackInfo): string {
       case "FLAC":
         return "flac";
       case "PCM":
-      case "PCMS16LE":
+      case "PCMS16LE": {
+        const size = track.size ?? (codec === "PCMS16LE" ? 16 : undefined);
+        if (size === 8) return "pcm-u8";
+        if (size === 16 || size === 24 || size === 32) return `pcm-s${size}`;
         return "pcm";
+      }
       default:
         return codec.toLowerCase();
     }
@@ -93,6 +98,10 @@ export function translateCodec(track: TrackInfo): string {
         return "vp09.00.10.08"; // Profile 0, Level 1.0, 8-bit
       case "AV1":
         return "av01.0.01M.08"; // Main Profile, Level 2.1, 8-bit
+      case "UYVY":
+      case "YUYV":
+      case "NV12":
+        return "video/nv12";
       case "THEORA":
         return "theora";
       default:

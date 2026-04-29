@@ -266,6 +266,11 @@ function logVerbose(msg: string): void {
   log(msg);
 }
 
+function isRawVideoCodec(codec: string): boolean {
+  const normalized = codec.toUpperCase();
+  return normalized === "UYVY" || normalized === "YUYV" || normalized === "NV12";
+}
+
 // ============================================================================
 // Message Handling
 // ============================================================================
@@ -279,7 +284,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
 
     case "configure":
-      handleConfigure(msg);
+      void handleConfigure(msg);
       break;
 
     case "receive":
@@ -387,7 +392,7 @@ function handleCreate(msg: MainToWorkerMessage & { type: "create" }): void {
   sendAck(uid, idx);
 }
 
-function handleConfigure(msg: MainToWorkerMessage & { type: "configure" }): void {
+async function handleConfigure(msg: MainToWorkerMessage & { type: "configure" }): Promise<void> {
   const { idx, header, uid } = msg;
 
   log(`Received configure for track ${idx}, header length=${header?.byteLength ?? "null"}`);
@@ -411,7 +416,7 @@ function handleConfigure(msg: MainToWorkerMessage & { type: "configure" }): void
   try {
     if (pipeline.track.type === "video") {
       log(`Configuring video decoder for track ${idx}...`);
-      configureVideoDecoder(pipeline, header);
+      await configureVideoDecoder(pipeline, header);
     } else if (pipeline.track.type === "audio") {
       log(`Configuring audio decoder for track ${idx}...`);
       configureAudioDecoder(pipeline, header);
@@ -431,6 +436,12 @@ async function configureVideoDecoder(
   description?: Uint8Array
 ): Promise<void> {
   const track = pipeline.track;
+
+  if (isRawVideoCodec(track.codec)) {
+    log(`Raw ${track.codec} video detected - will create NV12 VideoFrames directly`);
+    pipeline.configured = true;
+    return;
+  }
 
   // JPEG frames are decoded through ImageDecoder instead of VideoDecoder.
   if (track.codec === "JPEG" || track.codec.toLowerCase() === "jpeg") {
@@ -592,7 +603,8 @@ function emitWasmFrame(pipeline: PipelineState, output: WasmDecodedOutput): void
  * Map MistServer audio codec names to WebCodecs-compatible codec strings
  * Per W3C AAC WebCodecs Registration: https://www.w3.org/TR/webcodecs-aac-codec-registration/
  */
-function mapAudioCodec(codec: string, codecstring?: string): string {
+function mapAudioCodec(track: PipelineState["track"]): string {
+  const { codec, codecstring } = track;
   // If we have a full codec string like "mp4a.40.2", use it
   if (codecstring && codecstring.startsWith("mp4a.")) {
     return codecstring;
@@ -615,10 +627,17 @@ function mapAudioCodec(codec: string, codecstring?: string): string {
     case "ac3":
     case "ac-3":
       return "ac-3";
+    case "pcm": {
+      if (track.size === 8) return "pcm-u8";
+      if (track.size === 16 || track.size === 24 || track.size === 32) {
+        return `pcm-s${track.size}`;
+      }
+      return "pcm";
+    }
     case "pcm_s16le":
     case "pcm_s32le":
     case "pcm_f32le":
-      return "pcm-" + normalized.replace("pcm_", "").replace("le", "-le");
+      return "pcm-" + normalized.replace("pcm_", "").replace("le", "");
     default:
       log(`Unknown audio codec: ${codec}, trying as-is`);
       return codecstring || codec;
@@ -628,7 +647,7 @@ function mapAudioCodec(codec: string, codecstring?: string): string {
 function configureAudioDecoder(pipeline: PipelineState, description?: Uint8Array): void {
   const track = pipeline.track;
 
-  const codec = mapAudioCodec(track.codec, track.codecstring);
+  const codec = mapAudioCodec(track);
   log(`Audio codec mapping: ${track.codec} -> ${codec}`);
 
   const config: AudioDecoderInit = {
@@ -965,6 +984,11 @@ function decodeChunk(
   try {
     // JPEG frames are decoded through ImageDecoder instead of VideoDecoder.
     const codec = pipeline.track.codec;
+    if (isRawVideoCodec(codec)) {
+      decodeRawVideoFrame(pipeline, chunk);
+      return;
+    }
+
     if (codec === "JPEG" || codec.toLowerCase() === "jpeg") {
       decodeJpegFrame(pipeline, chunk);
       return;
@@ -1057,6 +1081,32 @@ function decodeChunk(
   }
 }
 
+function decodeRawVideoFrame(
+  pipeline: PipelineState,
+  chunk: { type: "key" | "delta"; timestamp: number; data: Uint8Array }
+): void {
+  if (pipeline.closed) return;
+
+  const width = pipeline.track.width;
+  const height = pipeline.track.height;
+  if (!width || !height) {
+    log(`Raw video track ${pipeline.idx} missing dimensions`, "error");
+    return;
+  }
+
+  try {
+    const frame = new VideoFrame(chunk.data, {
+      format: "NV12",
+      timestamp: chunk.timestamp,
+      codedWidth: width,
+      codedHeight: height,
+    });
+    handleDecodedFrame(pipeline, frame);
+  } catch (err) {
+    log(`Raw ${pipeline.track.codec} frame decode error on track ${pipeline.idx}: ${err}`, "error");
+  }
+}
+
 /**
  * Decode a JPEG frame with ImageDecoder.
  * ImageDecoder is simpler than VideoDecoder for still images
@@ -1069,7 +1119,23 @@ async function decodeJpegFrame(
 
   // Check if ImageDecoder is available
   if (typeof ImageDecoder === "undefined") {
-    log("ImageDecoder not available - JPEG streams not supported", "error");
+    if (typeof createImageBitmap === "undefined") {
+      log("ImageDecoder/createImageBitmap not available - JPEG streams not supported", "error");
+      return;
+    }
+
+    try {
+      const jpegData = new Uint8Array(chunk.data);
+      const blob = new Blob([jpegData.buffer as ArrayBuffer], { type: "image/jpeg" });
+      const bitmap = await createImageBitmap(blob);
+      const frame = new VideoFrame(bitmap, {
+        timestamp: chunk.timestamp,
+      });
+      bitmap.close();
+      handleDecodedFrame(pipeline, frame);
+    } catch (err) {
+      log(`JPEG createImageBitmap decode error on track ${pipeline.idx}: ${err}`, "error");
+    }
     return;
   }
 

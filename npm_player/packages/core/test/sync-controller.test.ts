@@ -72,4 +72,27 @@ describe("SyncController fast-forward handshake parity", () => {
 
     expect(speedReasons.includes("slowdown")).toBe(true);
   });
+
+  it("uses custom live catchup request tuning", () => {
+    const ffRequests: number[] = [];
+    const sync = new SyncController({
+      isLive: true,
+      onFastForwardRequest: (ms) => ffRequests.push(ms),
+      liveCatchup: {
+        cooldownMs: 0,
+        thresholdMs: 10_000,
+        requestMs: 7_000,
+      },
+    });
+
+    const desired = sync.getDesiredBuffer();
+    sync.evaluateBuffer(desired, {
+      playRateCurr: "auto",
+      serverCurrentMs: 1_000,
+      serverEndMs: 9_000,
+      serverJitterMs: 100,
+    });
+
+    expect(ffRequests).toEqual([7_000]);
+  });
 });

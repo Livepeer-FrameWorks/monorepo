@@ -59,6 +59,11 @@ function isSafari(): boolean {
   return /^((?!chrome|android).)*safari/i.test(ua);
 }
 
+function isRawVideoCodec(codec: string): boolean {
+  const normalized = codec.toUpperCase();
+  return normalized === "UYVY" || normalized === "YUYV" || normalized === "NV12";
+}
+
 // Import inline worker (bundled via rollup-plugin-web-worker-loader)
 
 /**
@@ -255,10 +260,35 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     try {
       switch (track.type) {
         case "video": {
+          if (isRawVideoCodec(track.codec)) {
+            const supported = (() => {
+              try {
+                new VideoFrame(new Uint8Array(6), {
+                  format: "NV12",
+                  codedWidth: 2,
+                  codedHeight: 2,
+                  timestamp: 0,
+                  layout: [
+                    { offset: 0, stride: 2 },
+                    { offset: 4, stride: 2 },
+                  ],
+                }).close();
+                return true;
+              } catch {
+                return false;
+              }
+            })();
+            result = { supported, config: { codec: "video/nv12" } };
+            break;
+          }
+
           // Special handling for JPEG - uses ImageDecoder
           if (track.codec === "JPEG") {
             if (!("ImageDecoder" in window)) {
-              result = { supported: false, config: { codec: "image/jpeg" } };
+              result = {
+                supported: "createImageBitmap" in window,
+                config: { codec: "image/jpeg" },
+              };
             } else {
               // @ts-ignore - ImageDecoder may not have types
               const isSupported = await (window as any).ImageDecoder.isTypeSupported("image/jpeg");
@@ -540,6 +570,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       audioClockProvider: this.audioRenderer
         ? () => this.audioRenderer?.getCurrentTime() ?? 0
         : undefined,
+      liveCatchup: wcOptions.liveCatchup,
       onSpeedChange: (main, tweak) => {
         this.sendToWorker({
           type: "frametiming",

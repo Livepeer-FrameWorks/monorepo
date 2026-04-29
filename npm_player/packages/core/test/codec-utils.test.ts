@@ -27,9 +27,18 @@ describe("CodecUtils", () => {
       ["VORBIS", "vorbis"],
       ["FLAC", "flac"],
       ["PCM", "pcm"],
-      ["PCMS16LE", "pcm"],
+      ["PCMS16LE", "pcm-s16"],
     ])("%s → %s", (codec, expected) => {
       expect(translateCodec({ codec, type: "audio" })).toBe(expected);
+    });
+
+    it.each([
+      [8, "pcm-u8"],
+      [16, "pcm-s16"],
+      [24, "pcm-s24"],
+      [32, "pcm-s32"],
+    ])("maps PCM size %i to %s", (size, expected) => {
+      expect(translateCodec({ codec: "PCM", type: "audio", size })).toBe(expected);
     });
 
     it("unknown audio codec returns lowercase", () => {
@@ -53,6 +62,9 @@ describe("CodecUtils", () => {
       ["VP8", "vp8"],
       ["VP9", "vp09.00.10.08"],
       ["AV1", "av01.0.01M.08"],
+      ["UYVY", "video/nv12"],
+      ["YUYV", "video/nv12"],
+      ["NV12", "video/nv12"],
       ["THEORA", "theora"],
     ])("%s → %s (no init data)", (codec, expected) => {
       expect(translateCodec({ codec, type: "video" })).toBe(expected);
