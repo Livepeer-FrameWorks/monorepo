@@ -91,8 +91,8 @@ func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *
 	}
 }
 
-// mapToStruct converts a map[string]interface{} to a protobuf Struct
-func mapToStruct(m map[string]interface{}) *structpb.Struct {
+// mapToStruct converts a map[string]any to a protobuf Struct
+func mapToStruct(m map[string]any) *structpb.Struct {
 	if m == nil {
 		return nil
 	}
@@ -423,7 +423,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 	`, tenantID, primaryClusterID).Scan(&tenantResourceLimits)
 
 	if err == nil && len(tenantResourceLimits) > 0 {
-		var limits map[string]interface{}
+		var limits map[string]any
 		if json.Unmarshal(tenantResourceLimits, &limits) == nil {
 			// Check max_streams tenant limit
 			if maxStreams, ok := limits["max_streams"].(float64); ok && maxStreams > 0 {
@@ -653,9 +653,9 @@ func (s *QuartermasterServer) ensureServiceExists(ctx context.Context, serviceTy
 // BootstrapService handles service registration with idempotent instance management
 func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error) {
 	type queryExecutor interface {
-		ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
-		QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
-		QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+		QueryRowContext(context.Context, string, ...any) *sql.Row
 	}
 
 	serviceType := req.GetType()
@@ -763,7 +763,8 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		var nodeClusterID string
 		var resolvedNodeIP sql.NullString
 		err := exec.QueryRowContext(ctx, `
-			SELECT cluster_id, wireguard_ip::text
+			SELECT cluster_id,
+			       COALESCE(wireguard_ip::text, internal_ip::text, external_ip::text)
 			FROM quartermaster.infrastructure_nodes
 			WHERE node_id = $1
 		`, *req.NodeId).Scan(&nodeClusterID, &resolvedNodeIP)
@@ -776,10 +777,9 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		if nodeClusterID != clusterID {
 			return nil, status.Errorf(codes.InvalidArgument, "node '%s' belongs to cluster '%s', not '%s'", *req.NodeId, nodeClusterID, clusterID)
 		}
-		if !resolvedNodeIP.Valid || strings.TrimSpace(resolvedNodeIP.String) == "" {
-			return nil, status.Errorf(codes.FailedPrecondition, "node '%s' has no registered WireGuard mesh address", *req.NodeId)
+		if resolvedNodeIP.Valid {
+			nodeIP = strings.TrimSpace(resolvedNodeIP.String)
 		}
-		nodeIP = resolvedNodeIP.String
 	}
 
 	advHost := ""
@@ -792,7 +792,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		}
 	}
 	if advHost == "" {
-		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered mesh address)")
+		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered node address)")
 	}
 
 	// 3. Get or create service record (serialized via advisory lock to prevent TOCTOU races)
@@ -1065,7 +1065,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	tenantID := middleware.GetTenantID(ctx)
 
 	// Build dynamic query
-	args := []interface{}{serviceType}
+	args := []any{serviceType}
 	argIdx := 2
 
 	whereClause := "WHERE s.type = $1 AND si.status IN ('running','starting','active')"
@@ -1798,7 +1798,7 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenan
 	}
 
 	// Build dynamic query
-	args := []interface{}{}
+	args := []any{}
 	argIdx := 1
 	whereClause := ""
 
@@ -2076,7 +2076,7 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 
 	userID := middleware.GetUserID(ctx)
 	var updates []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 	changedFields := []string{}
 	var previousClusterID sql.NullString
@@ -2269,7 +2269,7 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 
 	userID := middleware.GetUserID(ctx)
 	var updates []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 	changedFields := []string{}
 	var previousClusterID sql.NullString
@@ -2523,7 +2523,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 
 	// Base WHERE clause for filtering by subscription or ownership
 	baseWhere := ""
-	baseCountArgs := []interface{}{}
+	baseCountArgs := []any{}
 
 	if ownerTenantID != "" {
 		baseWhere = `
@@ -2552,8 +2552,8 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	// Build WHERE clause for filters
 	where := ""
 	countWhere := ""
-	args := append([]interface{}{}, baseCountArgs...)
-	countArgs := append([]interface{}{}, baseCountArgs...)
+	args := append([]any{}, baseCountArgs...)
+	countArgs := append([]any{}, baseCountArgs...)
 	argIdx := len(baseCountArgs) + 1
 
 	// Add any additional filters from the request
@@ -2820,7 +2820,7 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 
 	userID := middleware.GetUserID(ctx)
 	var updates []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if req.ClusterName != nil {
@@ -2979,7 +2979,7 @@ func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *pb
 	}
 
 	baseWhere := "WHERE a.tenant_id = $1 AND c.is_active = true"
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	argIdx := 2
 
 	// Get total count
@@ -3079,7 +3079,7 @@ func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *pb
 	}
 
 	baseWhere := "WHERE is_active = true AND deployment_model = 'shared'"
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	// Get total count
@@ -3365,7 +3365,7 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 			WHERE tenant_id = $1 AND is_active = true
 		)
 	`
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	argIdx := 2
 
 	// Get total count
@@ -3375,7 +3375,7 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 		s.logger.WithError(countErr).WithField("tenant_id", tenantID).Error("ListMySubscriptions: count query failed")
 		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
-	s.logger.WithFields(map[string]interface{}{
+	s.logger.WithFields(map[string]any{
 		"tenant_id":   tenantID,
 		"total_count": total,
 	}).Info("ListMySubscriptions: found subscribed clusters")
@@ -3565,7 +3565,7 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 
 	// Base WHERE clause to secure visibility
 	baseWhere := ""
-	baseArgs := []interface{}{}
+	baseArgs := []any{}
 
 	if tenantID != "" {
 		// Authenticated: Subscribed or Owned
@@ -3592,8 +3592,8 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	// Build WHERE clause for filters
 	where := baseWhere
 	countWhere := baseWhere
-	args := append([]interface{}{}, baseArgs...)
-	countArgs := append([]interface{}{}, baseArgs...)
+	args := append([]any{}, baseArgs...)
+	countArgs := append([]any{}, baseArgs...)
 	argIdx := len(baseArgs) + 1
 
 	if req.GetClusterId() != "" {
@@ -3729,7 +3729,7 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	tenantID := middleware.GetTenantID(ctx)
 
 	baseWhere := ""
-	baseArgs := []interface{}{}
+	baseArgs := []any{}
 
 	if tenantID != "" {
 		baseWhere = `
@@ -3773,8 +3773,8 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 // Edge nodes run helmsman+mistserver and register at Foghorn, not via
 // BootstrapService. Health is determined by last_heartbeat (refreshed by
 // Foghorn → ReportAliveNodes), not by service_instance status.
-func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWhere string, baseArgs []interface{}, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
-	args := append([]interface{}{}, baseArgs...)
+func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWhere string, baseArgs []any, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
+	args := append([]any{}, baseArgs...)
 	args = append(args, models.NodeTypeEdge)
 	where := baseWhere + fmt.Sprintf(" AND n.node_type = $%d AND n.external_ip IS NOT NULL AND n.external_ip <> ''", len(baseArgs)+1)
 	argIdx := len(args) + 1
@@ -3787,7 +3787,7 @@ func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWher
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	healthArgs := append([]interface{}{}, args...)
+	healthArgs := append([]any{}, args...)
 	healthArgs = append(healthArgs, staleThreshold)
 	healthWhere := where + fmt.Sprintf(" AND n.last_heartbeat > NOW() - ($%d * INTERVAL '1 second')", argIdx)
 
@@ -3833,9 +3833,9 @@ func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWher
 // listHealthyServiceNodes returns nodes with healthy service instances matching the type.
 // Used for platform services (bridge, foghorn, chartroom, etc.) that register
 // via BootstrapService and have service_instance health tracking.
-func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseWhere string, baseArgs []interface{}, serviceTypeFilter string, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
+func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseWhere string, baseArgs []any, serviceTypeFilter string, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
 	where := baseWhere
-	args := append([]interface{}{}, baseArgs...)
+	args := append([]any{}, baseArgs...)
 	argIdx := len(baseArgs) + 1
 
 	if serviceTypeFilter != "" {
@@ -3860,7 +3860,7 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	healthArgs := append([]interface{}{}, args...)
+	healthArgs := append([]any{}, args...)
 	healthArgs = append(healthArgs, staleThreshold)
 	healthWhere := where + fmt.Sprintf(" AND si.health_status = 'healthy' AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", argIdx)
 
@@ -4181,14 +4181,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	servedClusters := req.GetServedClusterIds()
 
 	if tokenClusterID != "" && len(servedClusters) > 0 {
-		served := false
-		for _, sc := range servedClusters {
-			if sc == tokenClusterID {
-				served = true
-				break
-			}
-		}
-		if !served {
+		if !slices.Contains(servedClusters, tokenClusterID) {
 			return nil, status.Errorf(codes.PermissionDenied,
 				"token is bound to cluster %s, not served by this instance", tokenClusterID)
 		}
@@ -4244,12 +4237,12 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	}
 
 	// Create node
-	var extIP interface{} = nil
+	var extIP any = nil
 	if ips := req.GetIps(); len(ips) > 0 {
 		extIP = ips[0]
 	}
 
-	var lat, lng interface{}
+	var lat, lng any
 	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
 		if geo := s.geoipReader.Lookup(ipStr); geo != nil {
 			geobucket.BucketGeoData(geo)
@@ -4282,7 +4275,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 			}
 		}
 
-		var ipsLiteral interface{} = nil
+		var ipsLiteral any = nil
 		if len(ips) > 0 {
 			ipsLiteral = "{" + strings.Join(ips, ",") + "}"
 		}
@@ -4944,7 +4937,7 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 	}
 	expiresAt := time.Now().Add(duration)
 
-	var metadataJSON interface{} = nil
+	var metadataJSON any = nil
 	if metadata := req.GetMetadata(); metadata != nil && len(metadata.GetFields()) > 0 {
 		encoded, marshalErr := json.Marshal(metadata.AsMap())
 		if marshalErr != nil {
@@ -4989,7 +4982,7 @@ func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *pb.L
 	}
 
 	where := "WHERE 1=1"
-	args := []interface{}{}
+	args := []any{}
 	argIdx := 1
 
 	if req.GetKind() != "" {
@@ -5212,7 +5205,7 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 		}
 	}
 	if len(metadataJSON) > 0 {
-		var metadataMap map[string]interface{}
+		var metadataMap map[string]any
 		if json.Unmarshal(metadataJSON, &metadataMap) == nil && len(metadataMap) > 0 {
 			resp.Metadata = mapToStruct(metadataMap)
 		}
@@ -5517,7 +5510,7 @@ func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServ
 		}
 		if len(tagsJSON) > 0 {
 			// Parse tags as JSON into Struct
-			var tagsMap map[string]interface{}
+			var tagsMap map[string]any
 			if err := json.Unmarshal(tagsJSON, &tagsMap); err == nil {
 				svc.Tags = mapToStruct(tagsMap)
 			}
@@ -5582,13 +5575,13 @@ func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *pb.L
 		}
 
 		if configBlob.Valid && configBlob.String != "" {
-			var configMap map[string]interface{}
+			var configMap map[string]any
 			if err := json.Unmarshal([]byte(configBlob.String), &configMap); err == nil {
 				svc.ConfigBlob = mapToStruct(configMap)
 			}
 		}
 		if envVars.Valid && envVars.String != "" {
-			var envMap map[string]interface{}
+			var envMap map[string]any
 			if err := json.Unmarshal([]byte(envVars.String), &envMap); err == nil {
 				svc.EnvironmentVars = mapToStruct(envMap)
 			}
@@ -5641,8 +5634,8 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 	// Build WHERE clause for filters
 	where := "WHERE 1=1"
 	countWhere := "WHERE 1=1"
-	args := []interface{}{}
-	countArgs := []interface{}{}
+	args := []any{}
+	countArgs := []any{}
 	argIdx := 1
 
 	if req.GetClusterId() != "" {
@@ -5881,8 +5874,8 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTL
 
 	where := "WHERE 1=1"
 	countWhere := "WHERE 1=1"
-	args := []interface{}{}
-	countArgs := []interface{}{}
+	args := []any{}
+	countArgs := []any{}
 	argIdx := 1
 
 	if req.GetClusterId() != "" {
@@ -5929,7 +5922,7 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTL
 		}
 		bundle.Domains = unmarshalStringSliceJSON(domainsJSON)
 		if len(metadataJSON) > 0 {
-			var metadataMap map[string]interface{}
+			var metadataMap map[string]any
 			if json.Unmarshal(metadataJSON, &metadataMap) == nil {
 				bundle.Metadata = mapToStruct(metadataMap)
 			}
@@ -6056,8 +6049,8 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 
 	where := "WHERE 1=1"
 	countWhere := "WHERE 1=1"
-	args := []interface{}{}
-	countArgs := []interface{}{}
+	args := []any{}
+	countArgs := []any{}
 	argIdx := 1
 
 	if req.GetClusterId() != "" {
@@ -6114,7 +6107,7 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 		}
 		site.Domains = unmarshalStringSliceJSON(domainsJSON)
 		if len(metadataJSON) > 0 {
-			var metadataMap map[string]interface{}
+			var metadataMap map[string]any
 			if json.Unmarshal(metadataJSON, &metadataMap) == nil {
 				site.Metadata = mapToStruct(metadataMap)
 			}
@@ -6165,7 +6158,7 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 
 func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID string) (*pb.ListServicesHealthResponse, error) {
 	where := "WHERE 1=1"
-	args := []interface{}{}
+	args := []any{}
 	if serviceID != "" {
 		where = "WHERE service_id = $1"
 		args = append(args, serviceID)
@@ -6694,7 +6687,7 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 
 	// Build base WHERE with visibility filtering
 	var baseWhere string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 	if publicOnly {
 		baseWhere = `
@@ -6968,7 +6961,7 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 
 	// Build update query
 	var updates []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if req.Visibility != nil {
@@ -7389,7 +7382,7 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 	}
 
 	baseWhere := "WHERE i.cluster_id = $1"
-	args := []interface{}{clusterID}
+	args := []any{clusterID}
 	argIdx := 2
 
 	// Get total count
@@ -7456,7 +7449,7 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 			invite.ClusterName = &clusterName.String
 		}
 		if resourceLimits.Valid {
-			var limitsMap map[string]interface{}
+			var limitsMap map[string]any
 			if json.Unmarshal([]byte(resourceLimits.String), &limitsMap) == nil {
 				invite.ResourceLimits = mapToStruct(limitsMap)
 			}
@@ -7513,7 +7506,7 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 	}
 
 	baseWhere := "WHERE i.invited_tenant_id = $1 AND i.status = 'pending' AND (i.expires_at IS NULL OR i.expires_at > NOW())"
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	argIdx := 2
 
 	// Get total count
@@ -7576,7 +7569,7 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 			invite.ClusterName = &clusterName
 		}
 		if resourceLimits.Valid {
-			var limitsMap map[string]interface{}
+			var limitsMap map[string]any
 			if json.Unmarshal([]byte(resourceLimits.String), &limitsMap) == nil {
 				invite.ResourceLimits = mapToStruct(limitsMap)
 			}
@@ -7860,7 +7853,7 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 	}
 
 	baseWhere := "WHERE a.cluster_id = $1 AND a.subscription_status = 'pending_approval'"
-	args := []interface{}{clusterID}
+	args := []any{clusterID}
 	argIdx := 2
 
 	// Get total count
@@ -8167,7 +8160,7 @@ func scanClusterSubscription(rows *sql.Rows) (*pb.ClusterSubscription, error) {
 		sub.TenantName = &tenantName.String
 	}
 	if resourceLimits.Valid {
-		var limitsMap map[string]interface{}
+		var limitsMap map[string]any
 		if json.Unmarshal([]byte(resourceLimits.String), &limitsMap) == nil {
 			sub.ResourceLimits = mapToStruct(limitsMap)
 		}
@@ -8224,7 +8217,7 @@ func scanClusterSubscriptionRow(row *sql.Row) (*pb.ClusterSubscription, error) {
 		sub.TenantName = &tenantName.String
 	}
 	if resourceLimits.Valid {
-		var limitsMap map[string]interface{}
+		var limitsMap map[string]any
 		if json.Unmarshal([]byte(resourceLimits.String), &limitsMap) == nil {
 			sub.ResourceLimits = mapToStruct(limitsMap)
 		}
@@ -8323,7 +8316,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 // unaryInterceptor logs gRPC requests
 func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()
 		resp, err := handler(ctx, req)
 		logger.WithFields(logging.Fields{

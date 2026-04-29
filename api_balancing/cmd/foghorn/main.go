@@ -610,9 +610,9 @@ func main() {
 		federationServer.SetArtifactCommandHandler(foghornServer)
 	}
 
-	// Register at QM to discover the mesh address used for cluster assignment
+	// Register at QM to discover the advertise address used for cluster assignment
 	// and, when Redis is available, cross-instance command forwarding.
-	// QM derives the advertise address from the node's mesh identity (wireguard_ip > internal_ip).
+	// QM resolves the address as wireguard_ip > internal_ip > external_ip.
 	var relayServer *foghorngrpc.RelayServer
 	if qmClient != nil {
 		grpcPort := config.GetEnvInt("FOGHORN_GRPC_PORT", controlPortFromBindAddr(controlAddr, 18019))
