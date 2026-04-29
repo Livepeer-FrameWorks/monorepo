@@ -48,27 +48,33 @@ All values in Kbps. These assume H.264 CBR encoding with a 2-second keyframe int
 
 When a Livepeer gateway is available, FrameWorks automatically creates lower-quality renditions from your source stream. The source track is always served as-is (passthrough) alongside the transcoded renditions.
 
-| Rendition | Resolution | Bitrate    | FPS | H.264 Profile    | Min Input Resolution |
-| --------- | ---------- | ---------- | --- | ---------------- | -------------------- |
-| 480p      | 480p       | 512 Kbps   | 15  | Constrained High | 850x480              |
-| 720p      | 720p       | 1,024 Kbps | 25  | Constrained High | 1,281x720            |
+| Rendition | Resolution | Bitrate    | FPS    | H.264 Profile    | Min Input Resolution |
+| --------- | ---------- | ---------- | ------ | ---------------- | -------------------- |
+| 360p      | 360p       | 900 Kbps   | Source | Constrained High | 640x360              |
+| 480p      | 480p       | 1,600 Kbps | Source | Constrained High | 850x480              |
+| 720p      | 720p       | 3,200 Kbps | Source | Constrained High | 1,280x720            |
+| 1080p     | 1080p      | 6,500 Kbps | Source | Constrained High | 1,920x1080           |
 
 Audio is always transcoded to both Opus (120 Kbps, for WebRTC playback) and AAC (for HLS/native playback) alongside the video renditions.
 
 ### What This Means in Practice
 
-A 1080p60 stream at 6,000 Kbps produces three playback options:
+A 1080p60 stream at 8,000 Kbps produces five playback options:
 
-1. Source: 1080p at 60 fps, 6,000 Kbps (untranscoded passthrough)
-2. 720p: 720p at 25 fps, 1,024 Kbps
-3. 480p: 480p at 15 fps, 512 Kbps
+1. Source: 1080p at 60 fps, 8,000 Kbps (untranscoded passthrough)
+2. 1080p: 1080p at source fps, 6,500 Kbps
+3. 720p: 720p at source fps, 3,200 Kbps
+4. 480p: 480p at source fps, 1,600 Kbps
+5. 360p: 360p at source fps, 900 Kbps
 
-A 720p30 stream at 3,000 Kbps produces two playback options:
+A 720p30 stream at 4,500 Kbps produces four playback options:
 
-1. Source: 720p at 30 fps, 3,000 Kbps (passthrough)
-2. 480p: 480p at 15 fps, 512 Kbps
+1. Source: 720p at 30 fps, 4,500 Kbps (passthrough)
+2. 720p: 720p at source fps, 3,200 Kbps
+3. 480p: 480p at source fps, 1,600 Kbps
+4. 360p: 360p at source fps, 900 Kbps
 
-A 480p stream or below is served as source-only (no ABR renditions generated).
+A 480p stream produces 480p and 360p renditions. A 360p stream produces a 360p rendition. Lower-resolution streams are served as source-only.
 
 ### Recommended Ingest Settings for FrameWorks
 
