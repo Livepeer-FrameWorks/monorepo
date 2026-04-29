@@ -23,14 +23,96 @@
     - /etc/frameworks
     - "{{ go_service_install_dir }}"
 
+- name: Ensure service state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ omit if ansible_check_mode else go_service_user }}"
+    group: "{{ omit if ansible_check_mode else go_service_group }}"
+    mode: "0750"
+  loop: "{{ go_service_state_dirs }}"
+  when: go_service_state_dirs | length > 0
+
+- name: Render service files
+  ansible.builtin.copy:
+    dest: "{{ item.path }}"
+    content: "{{ item.content }}"
+    owner: "{{ omit if ansible_check_mode else go_service_user }}"
+    group: "{{ omit if ansible_check_mode else go_service_group }}"
+    mode: "{{ item.mode | default('0600') }}"
+  loop: "{{ go_service_files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  no_log: true
+  when: go_service_files | length > 0
+
+- name: Read expected Livepeer keystore file
+  ansible.builtin.slurp:
+    src: "{{ go_service_livepeer_expected_keystore_path }}"
+  register: go_service_livepeer_keystore_slurp
+  no_log: true
+  when: go_service_livepeer_expected_keystore_path | length > 0
+
+- name: Parse expected Livepeer keystore file
+  ansible.builtin.set_fact:
+    go_service_livepeer_keystore_json: "{{ go_service_livepeer_keystore_slurp.content | b64decode | from_json }}"
+  no_log: true
+  when: go_service_livepeer_expected_keystore_path | length > 0
+
+- name: Validate expected Livepeer keystore format
+  ansible.builtin.assert:
+    that:
+      - go_service_livepeer_keystore_json.address is defined
+      - go_service_livepeer_keystore_json.address | string | length > 0
+      - go_service_livepeer_keystore_json.crypto is defined
+      - go_service_livepeer_keystore_json.crypto is mapping
+      - go_service_livepeer_keystore_json.id is defined
+      - go_service_livepeer_keystore_json.version is defined
+      - go_service_livepeer_keystore_json.version | int == 3
+    fail_msg: >-
+      {{ go_service_name }} keystore must be a geth/Web3 v3 key JSON with
+      address, crypto, id, and version=3.
+  when: go_service_livepeer_expected_keystore_path | length > 0
+
+- name: Validate expected Livepeer wallet address
+  ansible.builtin.assert:
+    that:
+      - >-
+        (go_service_livepeer_keystore_json.address | lower | regex_replace('^0x', '')) ==
+        (go_service_livepeer_expected_wallet_address | lower | regex_replace('^0x', ''))
+    fail_msg: >-
+      {{ go_service_name }} keystore address does not match go_service_livepeer_expected_wallet_address.
+  when:
+    - go_service_livepeer_expected_keystore_path | length > 0
+    - go_service_livepeer_expected_wallet_address | length > 0
+
+- name: Find Livepeer keystore files
+  ansible.builtin.find:
+    paths: "{{ go_service_livepeer_expected_keystore_dir }}"
+    file_type: file
+    recurse: false
+  register: go_service_livepeer_keystore_files
+  when: go_service_livepeer_expected_keystore_dir | length > 0
+
+- name: Assert Livepeer keystore directory only contains the provisioned key
+  ansible.builtin.assert:
+    that:
+      - go_service_livepeer_keystore_files.files | length == 1
+      - go_service_livepeer_keystore_files.files[0].path == go_service_livepeer_expected_keystore_path
+    fail_msg: >-
+      {{ go_service_name }} keystore directory must contain only
+      {{ go_service_livepeer_expected_keystore_path }}; found {{
+      go_service_livepeer_keystore_files.files | map(attribute='path') | list }}.
+  when: go_service_livepeer_expected_keystore_dir | length > 0
+
 - name: Resolve runtime packages
   ansible.builtin.set_fact:
     go_service_effective_runtime_packages: >-
       {{
         (
           go_service_runtime_packages +
-          ((ansible_os_family == 'Debian') | ternary(go_service_debian_runtime_packages, [])) +
-          ((ansible_pkg_mgr == 'pacman') | ternary(go_service_pacman_runtime_packages, []))
+          ((ansible_facts['os_family'] == 'Debian') | ternary(go_service_debian_runtime_packages, [])) +
+          ((ansible_facts['pkg_mgr'] == 'pacman') | ternary(go_service_pacman_runtime_packages, []))
         ) | unique
       }}
 
@@ -106,6 +188,10 @@
     checksum: "{{ go_service_artifact_checksum }}"
     mode: "0644"
     timeout: 300
+  register: go_service_artifact_download
+  until: go_service_artifact_download is succeeded
+  retries: 5
+  delay: 10
   when:
     - not ansible_check_mode
     - go_service_reinstall_required | default(true)

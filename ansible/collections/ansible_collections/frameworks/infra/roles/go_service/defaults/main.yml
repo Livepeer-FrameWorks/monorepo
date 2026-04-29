@@ -10,9 +10,15 @@ go_service_artifact_checksum: ""
 go_service_version: ""
 go_service_port: 0
 go_service_env: {}
+go_service_args: []
+go_service_files: []
 go_service_runtime_packages: []
 go_service_debian_runtime_packages: []
 go_service_pacman_runtime_packages: []
+go_service_state_dirs: []
+go_service_livepeer_expected_keystore_path: ""
+go_service_livepeer_expected_keystore_dir: ""
+go_service_livepeer_expected_wallet_address: ""
 go_service_internal_ca_bundle_pem: ""
 go_service_internal_tls_cert_pem: ""
 go_service_internal_tls_key_pem: ""

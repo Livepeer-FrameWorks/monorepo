@@ -33,6 +33,16 @@ argument_specs:
       go_service_env:
         type: dict
         required: false
+      go_service_args:
+        type: list
+        elements: str
+        required: false
+        default: []
+      go_service_files:
+        type: list
+        elements: dict
+        required: false
+        default: []
       go_service_runtime_packages:
         type: list
         elements: str
@@ -48,6 +58,23 @@ argument_specs:
         elements: str
         required: false
         default: []
+      go_service_state_dirs:
+        type: list
+        elements: str
+        required: false
+        default: []
+      go_service_livepeer_expected_keystore_path:
+        type: str
+        required: false
+        default: ""
+      go_service_livepeer_expected_keystore_dir:
+        type: str
+        required: false
+        default: ""
+      go_service_livepeer_expected_wallet_address:
+        type: str
+        required: false
+        default: ""
       go_service_defer_start:
         type: bool
         required: false

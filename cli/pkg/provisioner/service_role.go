@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -35,6 +36,12 @@ type ServiceRoleConfig struct {
 	RuntimePackages       []string
 	DebianRuntimePackages []string
 	PacmanRuntimePackages []string
+
+	// StateDirs are writable data directories required by native services.
+	StateDirs []string
+
+	// Args are appended to ExecStart for native services.
+	Args []string
 }
 
 // NewServiceRoleProvisioner returns a Provisioner that picks compose_stack
@@ -133,22 +140,45 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		port = cfg.DefaultPort
 	}
 	envMap := buildServiceEnvMap(config)
+	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
+		applyLivepeerNativeEnvDefaults(envMap, cfg.StateDirs)
+	}
+	files := []map[string]string{}
+	livepeerKeystorePath := ""
+	livepeerKeystoreDir := ""
+	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
+		var err error
+		files, livepeerKeystorePath, livepeerKeystoreDir, err = livepeerNativeFiles(envMap, cfg.StateDirs)
+		if err != nil {
+			return nil, err
+		}
+	}
 	envAny := make(map[string]any, len(envMap))
 	for k, v := range envMap {
 		envAny[k] = v
 	}
+	args := cfg.Args
+	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
+		args = livepeerNativeArgs(cfg.ServiceName, envMap, cfg.StateDirs)
+	}
 	vars := map[string]any{
-		"go_service_name":                    cfg.ServiceName,
-		"go_service_artifact_url":            url,
-		"go_service_artifact_checksum":       checksum,
-		"go_service_version":                 firstNonEmpty(config.Version, metaString(config.Metadata, "version")),
-		"go_service_port":                    port,
-		"go_service_env":                     envAny,
-		"go_service_defer_start":             config.DeferStart,
-		"go_service_binary_name":             binaryName,
-		"go_service_runtime_packages":        cfg.RuntimePackages,
-		"go_service_debian_runtime_packages": cfg.DebianRuntimePackages,
-		"go_service_pacman_runtime_packages": cfg.PacmanRuntimePackages,
+		"go_service_name":                             cfg.ServiceName,
+		"go_service_artifact_url":                     url,
+		"go_service_artifact_checksum":                checksum,
+		"go_service_version":                          firstNonEmpty(config.Version, metaString(config.Metadata, "version")),
+		"go_service_port":                             port,
+		"go_service_env":                              envAny,
+		"go_service_args":                             nonNilStringSlice(args),
+		"go_service_files":                            files,
+		"go_service_defer_start":                      config.DeferStart,
+		"go_service_binary_name":                      binaryName,
+		"go_service_runtime_packages":                 nonNilStringSlice(cfg.RuntimePackages),
+		"go_service_debian_runtime_packages":          nonNilStringSlice(cfg.DebianRuntimePackages),
+		"go_service_pacman_runtime_packages":          nonNilStringSlice(cfg.PacmanRuntimePackages),
+		"go_service_state_dirs":                       nonNilStringSlice(cfg.StateDirs),
+		"go_service_livepeer_expected_keystore_path":  livepeerKeystorePath,
+		"go_service_livepeer_expected_keystore_dir":   livepeerKeystoreDir,
+		"go_service_livepeer_expected_wallet_address": envMap["eth_acct_addr"],
 	}
 	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
 		vars["go_service_internal_ca_bundle_pem"] = ca
@@ -160,6 +190,112 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		vars["go_service_internal_tls_key_pem"] = key
 	}
 	return vars, nil
+}
+
+func nonNilStringSlice(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func applyLivepeerNativeEnvDefaults(env map[string]string, stateDirs []string) {
+	if len(stateDirs) == 0 || stateDirs[0] == "" {
+		return
+	}
+	if env["LP_DATADIR"] == "" {
+		env["LP_DATADIR"] = stateDirs[0]
+	}
+	if env["HOME"] == "" {
+		env["HOME"] = stateDirs[0]
+	}
+}
+
+func livepeerNativeFiles(env map[string]string, stateDirs []string) ([]map[string]string, string, string, error) {
+	if len(stateDirs) == 0 || stateDirs[0] == "" {
+		return nil, "", "", nil
+	}
+
+	stateDir := stateDirs[0]
+	files := []map[string]string{}
+	keystorePath := ""
+	keystoreDir := ""
+	if env["keystore_path"] == "" && env["LIVEPEER_ETH_KEYSTORE_B64"] != "" {
+		content, err := base64.StdEncoding.DecodeString(env["LIVEPEER_ETH_KEYSTORE_B64"])
+		if err != nil {
+			return nil, "", "", fmt.Errorf("livepeer keystore: decode LIVEPEER_ETH_KEYSTORE_B64: %w", err)
+		}
+		path := filepath.Join(stateDir, "keystore", "key.json")
+		env["keystore_path"] = path
+		keystorePath = path
+		keystoreDir = filepath.Dir(path)
+		files = append(files, map[string]string{
+			"path":    path,
+			"content": string(content),
+			"mode":    "0600",
+		})
+		delete(env, "LIVEPEER_ETH_KEYSTORE_B64")
+	}
+	if env["eth_password"] == "" && env["LIVEPEER_ETH_KEYSTORE_PASSWORD"] != "" {
+		path := filepath.Join(stateDir, "eth-password")
+		env["eth_password"] = path
+		files = append(files, map[string]string{
+			"path":    path,
+			"content": env["LIVEPEER_ETH_KEYSTORE_PASSWORD"],
+			"mode":    "0600",
+		})
+		delete(env, "LIVEPEER_ETH_KEYSTORE_PASSWORD")
+	}
+	return files, keystorePath, keystoreDir, nil
+}
+
+func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []string) []string {
+	args := []string{}
+	switch serviceName {
+	case "livepeer-gateway":
+		args = append(args, "-gateway")
+	case "livepeer-signer":
+		args = append(args, "-remoteSigner")
+	}
+
+	if env["LP_DATADIR"] == "" && len(stateDirs) > 0 && stateDirs[0] != "" {
+		args = append(args, "-dataDir="+stateDirs[0])
+	} else if v := env["LP_DATADIR"]; v != "" {
+		args = append(args, "-dataDir="+v)
+	} else if v := firstNonEmpty(env["data_dir"], env["datadir"]); v != "" {
+		args = append(args, "-dataDir="+v)
+	}
+
+	for _, mapping := range []struct {
+		envKey string
+		flag   string
+	}{
+		{"network", "network"},
+		{"http_addr", "httpAddr"},
+		{"http_ingest", "httpIngest"},
+		{"cli_addr", "cliAddr"},
+		{"rtmp_addr", "rtmpAddr"},
+		{"remote_signer_url", "remoteSignerUrl"},
+		{"auth_webhook_url", "authWebhookUrl"},
+		{"gateway_host", "gatewayHost"},
+		{"max_sessions", "maxSessions"},
+		{"max_price_per_unit", "maxPricePerUnit"},
+		{"pixels_per_unit", "pixelsPerUnit"},
+		{"max_ticket_ev", "maxTicketEV"},
+		{"deposit_multiplier", "depositMultiplier"},
+		{"eth_url", "ethUrl"},
+		{"eth_acct_addr", "ethAcctAddr"},
+		{"orch_webhook_url", "orchWebhookUrl"},
+		{"remote_discovery", "remoteDiscovery"},
+		{"keystore_path", "ethKeystorePath"},
+		{"eth_password", "ethPassword"},
+	} {
+		if value, ok := env[mapping.envKey]; ok {
+			args = append(args, "-"+mapping.flag+"="+value)
+		}
+	}
+
+	return args
 }
 
 func buildServiceEnvMap(config ServiceConfig) map[string]string {

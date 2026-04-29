@@ -128,6 +128,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		if serviceName == "livepeer-gateway" || serviceName == "livepeer-signer" {
 			cfg.DebianRuntimePackages = []string{"libva-drm2"}
 			cfg.PacmanRuntimePackages = []string{"libva"}
+			stateDir := fmt.Sprintf("/var/lib/frameworks/%s", serviceName)
+			cfg.StateDirs = []string{stateDir, stateDir + "/keystore"}
 		}
 		return NewServiceRoleProvisioner(cfg, pool)
 

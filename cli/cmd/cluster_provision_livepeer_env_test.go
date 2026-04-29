@@ -182,6 +182,97 @@ func TestBuildServiceEnvVarsRewritesGlobalGatewayHostToClusterScopedDNS(t *testi
 	}
 }
 
+func TestBuildServiceEnvVarsSelectsLivepeerRPCPoolByGatewayHostOrder(t *testing.T) {
+	envFile := writeTestEnvFile(t, ""+
+		"LIVEPEER_ETH_URLS=https://rpc-one.example,https://rpc-two.example\n"+
+		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
+
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		EnvFiles:   []string{envFile},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-central-primary": {Name: "Media Central Primary"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {
+				Enabled: true,
+				Hosts:   []string{"gateway-a", "gateway-b"},
+				Config: map[string]string{
+					"network": "arbitrum-one-mainnet",
+				},
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "livepeer-gateway@gateway-b",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
+		Host:      "gateway-b",
+		ClusterID: "media-central-primary",
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["eth_url"]; got != "https://rpc-two.example" {
+		t.Fatalf("expected second gateway to use second RPC URL, got %q", got)
+	}
+}
+
+func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
+	envFile := writeTestEnvFile(t, ""+
+		"LIVEPEER_ETH_URLS=https://rpc-one.example\n"+
+		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
+
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		EnvFiles:   []string{envFile},
+		Clusters: map[string]inventory.ClusterConfig{
+			"core-central-primary": {Name: "Core Central Primary"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {
+				Enabled: true,
+				Host:    "central-eu-1",
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "livepeer-gateway",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway",
+		Host:      "central-eu-1",
+		ClusterID: "core-central-primary",
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest))
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	want := map[string]string{
+		"network":            "arbitrum-one-mainnet",
+		"http_addr":          ":8935",
+		"http_ingest":        "true",
+		"cli_addr":           ":7935",
+		"rtmp_addr":          "",
+		"max_sessions":       "500",
+		"max_price_per_unit": "1200",
+		"pixels_per_unit":    "1",
+		"max_ticket_ev":      "3000000000000",
+		"deposit_multiplier": "1",
+		"eth_url":            "https://rpc-one.example",
+		"gateway_host":       "livepeer.core-central-primary.frameworks.network",
+	}
+	for key, wantValue := range want {
+		if got := env[key]; got != wantValue {
+			t.Fatalf("%s got %q, want %q", key, got, wantValue)
+		}
+	}
+}
+
 func writeTestEnvFile(t *testing.T, content string) string {
 	t.Helper()
 

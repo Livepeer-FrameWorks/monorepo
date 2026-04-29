@@ -29,6 +29,158 @@ func TestServiceNativeVarsIncludesRuntimePackages(t *testing.T) {
 	assertStringSlice(t, vars["go_service_pacman_runtime_packages"], []string{"libva"})
 }
 
+func TestServiceNativeVarsDefaultsRuntimePackagesToEmptyLists(t *testing.T) {
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "quartermaster",
+		DefaultPort: 18002,
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:      "native",
+		Version:   "vtest",
+		BinaryURL: "https://example.test/quartermaster.tar.gz",
+		Metadata:  map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars: %v", err)
+	}
+
+	assertStringSlice(t, vars["go_service_runtime_packages"], []string{})
+	assertStringSlice(t, vars["go_service_debian_runtime_packages"], []string{})
+	assertStringSlice(t, vars["go_service_pacman_runtime_packages"], []string{})
+}
+
+func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "livepeer-gateway",
+		DefaultPort: 8935,
+		StateDirs:   []string{"/var/lib/frameworks/livepeer-gateway", "/var/lib/frameworks/livepeer-gateway/keystore"},
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:      "native",
+		Version:   "vtest",
+		BinaryURL: "https://example.test/livepeer.tar.gz",
+		EnvVars: map[string]string{
+			"network":            "arbitrum-one-mainnet",
+			"http_addr":          ":8935",
+			"http_ingest":        "true",
+			"cli_addr":           ":7935",
+			"rtmp_addr":          "",
+			"auth_webhook_url":   "http://foghorn.internal:18008/webhooks/livepeer/auth",
+			"gateway_host":       "livepeer.media.example",
+			"max_sessions":       "500",
+			"max_price_per_unit": "1200",
+			"pixels_per_unit":    "1",
+			"max_ticket_ev":      "3000000000000",
+			"deposit_multiplier": "1",
+			"remote_signer_url":  "http://127.0.0.1:18016",
+			"eth_url":            "https://arb.example",
+			"eth_acct_addr":      "0xabc123",
+			"orch_webhook_url":   "https://orch.example",
+			"remote_discovery":   "true",
+			"keystore_path":      "/etc/frameworks/livepeer-keystore",
+		},
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars: %v", err)
+	}
+
+	assertStringSlice(t, vars["go_service_state_dirs"], []string{"/var/lib/frameworks/livepeer-gateway", "/var/lib/frameworks/livepeer-gateway/keystore"})
+	env, ok := vars["go_service_env"].(map[string]any)
+	if !ok {
+		t.Fatalf("go_service_env got %T, want map[string]any", vars["go_service_env"])
+	}
+	if got := env["LP_DATADIR"]; got != "/var/lib/frameworks/livepeer-gateway" {
+		t.Fatalf("LP_DATADIR got %v", got)
+	}
+	if got := env["HOME"]; got != "/var/lib/frameworks/livepeer-gateway" {
+		t.Fatalf("HOME got %v", got)
+	}
+	assertStringSlice(t, vars["go_service_args"], []string{
+		"-gateway",
+		"-dataDir=/var/lib/frameworks/livepeer-gateway",
+		"-network=arbitrum-one-mainnet",
+		"-httpAddr=:8935",
+		"-httpIngest=true",
+		"-cliAddr=:7935",
+		"-rtmpAddr=",
+		"-remoteSignerUrl=http://127.0.0.1:18016",
+		"-authWebhookUrl=http://foghorn.internal:18008/webhooks/livepeer/auth",
+		"-gatewayHost=livepeer.media.example",
+		"-maxSessions=500",
+		"-maxPricePerUnit=1200",
+		"-pixelsPerUnit=1",
+		"-maxTicketEV=3000000000000",
+		"-depositMultiplier=1",
+		"-ethUrl=https://arb.example",
+		"-ethAcctAddr=0xabc123",
+		"-orchWebhookUrl=https://orch.example",
+		"-remoteDiscovery=true",
+		"-ethKeystorePath=/etc/frameworks/livepeer-keystore",
+	})
+}
+
+func TestServiceNativeVarsMaterializesLivepeerKeystoreFiles(t *testing.T) {
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "livepeer-gateway",
+		DefaultPort: 8935,
+		StateDirs:   []string{"/var/lib/frameworks/livepeer-gateway", "/var/lib/frameworks/livepeer-gateway/keystore"},
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:      "native",
+		Version:   "vtest",
+		BinaryURL: "https://example.test/livepeer.tar.gz",
+		EnvVars: map[string]string{
+			"LIVEPEER_ETH_KEYSTORE_B64":      "eyJhZGRyZXNzIjoiMHhhYmMifQo=",
+			"LIVEPEER_ETH_KEYSTORE_PASSWORD": "secret-password",
+		},
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars: %v", err)
+	}
+
+	assertStringSlice(t, vars["go_service_args"], []string{
+		"-gateway",
+		"-dataDir=/var/lib/frameworks/livepeer-gateway",
+		"-ethKeystorePath=/var/lib/frameworks/livepeer-gateway/keystore/key.json",
+		"-ethPassword=/var/lib/frameworks/livepeer-gateway/eth-password",
+	})
+
+	files, ok := vars["go_service_files"].([]map[string]string)
+	if !ok {
+		t.Fatalf("go_service_files got %T, want []map[string]string", vars["go_service_files"])
+	}
+	if len(files) != 2 {
+		t.Fatalf("go_service_files got %v, want 2 files", files)
+	}
+	if files[0]["path"] != "/var/lib/frameworks/livepeer-gateway/keystore/key.json" {
+		t.Fatalf("unexpected keystore path: %v", files[0])
+	}
+	if files[0]["content"] != "{\"address\":\"0xabc\"}\n" {
+		t.Fatalf("unexpected keystore content: %q", files[0]["content"])
+	}
+	if files[1]["path"] != "/var/lib/frameworks/livepeer-gateway/eth-password" {
+		t.Fatalf("unexpected password path: %v", files[1])
+	}
+	if files[1]["content"] != "secret-password" {
+		t.Fatalf("unexpected password content: %q", files[1]["content"])
+	}
+	env, ok := vars["go_service_env"].(map[string]any)
+	if !ok {
+		t.Fatalf("go_service_env got %T, want map[string]any", vars["go_service_env"])
+	}
+	if _, ok := env["LIVEPEER_ETH_KEYSTORE_B64"]; ok {
+		t.Fatal("LIVEPEER_ETH_KEYSTORE_B64 should not remain in service env")
+	}
+	if _, ok := env["LIVEPEER_ETH_KEYSTORE_PASSWORD"]; ok {
+		t.Fatal("LIVEPEER_ETH_KEYSTORE_PASSWORD should not remain in service env")
+	}
+	if got := vars["go_service_livepeer_expected_keystore_path"]; got != "/var/lib/frameworks/livepeer-gateway/keystore/key.json" {
+		t.Fatalf("unexpected expected keystore path: %v", got)
+	}
+	if got := vars["go_service_livepeer_expected_keystore_dir"]; got != "/var/lib/frameworks/livepeer-gateway/keystore" {
+		t.Fatalf("unexpected expected keystore dir: %v", got)
+	}
+}
+
 func assertStringSlice(t *testing.T, got any, want []string) {
 	t.Helper()
 	gotSlice, ok := got.([]string)

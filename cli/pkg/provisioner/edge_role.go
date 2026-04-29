@@ -156,14 +156,16 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 
 	var manifest *gitops.Manifest
 	if strings.TrimSpace(config.Version) != "" {
-		var err error
-		manifest, err = fetchEdgeManifest(config.Version)
-		if err != nil {
-			return nil, err
+		var manifestErr error
+		manifest, manifestErr = fetchEdgeManifest(config.Version)
+		if manifestErr != nil {
+			return nil, manifestErr
 		}
-		if image, err := edgeExternalImage(manifest, "mistserver"); err != nil {
-			return nil, err
-		} else if image != "" {
+		image, imageErr := edgeExternalImage(manifest, "mistserver")
+		if imageErr != nil {
+			return nil, imageErr
+		}
+		if image != "" {
 			vars["edge_mistserver_image"] = image
 		}
 	}
@@ -173,10 +175,10 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	}
 
 	if manifest == nil {
-		var err error
-		manifest, err = fetchEdgeManifest(config.Version)
-		if err != nil {
-			return nil, err
+		var manifestErr error
+		manifest, manifestErr = fetchEdgeManifest(config.Version)
+		if manifestErr != nil {
+			return nil, manifestErr
 		}
 	}
 

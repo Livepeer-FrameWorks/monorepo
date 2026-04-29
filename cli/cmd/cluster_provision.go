@@ -3389,6 +3389,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		return nil, err
 	}
 
+	if baseName == "livepeer-gateway" || baseName == "livepeer-signer" {
+		applyLivepeerRPCPool(env, livepeerServiceHostIndex(task, manifest))
+	}
 	normalizeServiceEnvVars(baseName, env)
 	if baseName == "livepeer-gateway" {
 		applyDefaultLivepeerGatewayHost(env, manifest, task.ClusterID)
@@ -3419,7 +3422,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if dbPort == "" {
 			dbPort = "5432"
 		}
-		userInfo := dbUser
+		var userInfo string
 		if dbPass != "" {
 			userInfo = url.UserPassword(dbUser, dbPass).String()
 		} else {
@@ -3518,6 +3521,7 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 	switch serviceID {
 	case "livepeer-gateway":
 		normalizeLivepeerEnvVars(env)
+		applyLivepeerGatewayRuntimeDefaults(env)
 		setEnvIfEmpty(env, "auth_webhook_url", "LIVEPEER_AUTH_WEBHOOK_URL")
 		if strings.TrimSpace(env["auth_webhook_url"]) == "" {
 			env["auth_webhook_url"] = defaultLivepeerGatewayAuthWebhookURL
@@ -3525,6 +3529,90 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 	case "livepeer-signer":
 		normalizeLivepeerEnvVars(env)
 	}
+}
+
+func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
+	defaults := map[string]string{
+		"network":            "arbitrum-one-mainnet",
+		"http_addr":          ":8935",
+		"http_ingest":        "true",
+		"cli_addr":           ":7935",
+		"rtmp_addr":          "",
+		"max_sessions":       "500",
+		"max_price_per_unit": "1200",
+		"pixels_per_unit":    "1",
+		"max_ticket_ev":      "3000000000000",
+		"deposit_multiplier": "1",
+	}
+	for key, value := range defaults {
+		if _, ok := env[key]; !ok {
+			env[key] = value
+		}
+	}
+}
+
+func applyLivepeerRPCPool(env map[string]string, index int) {
+	if strings.TrimSpace(env["eth_url"]) != "" || strings.TrimSpace(env["LIVEPEER_ETH_URL"]) != "" {
+		return
+	}
+	for _, key := range livepeerRPCPoolEnvKeys(env) {
+		urls := splitLivepeerRPCURLs(env[key])
+		if len(urls) == 0 {
+			continue
+		}
+		if index < 0 {
+			index = 0
+		}
+		env["eth_url"] = urls[index%len(urls)]
+		return
+	}
+}
+
+func livepeerRPCPoolEnvKeys(env map[string]string) []string {
+	keys := []string{"eth_urls", "LIVEPEER_ETH_URLS"}
+	switch strings.ToLower(strings.TrimSpace(env["network"])) {
+	case "", "arbitrum", "arbitrum-mainnet", "arbitrum-one-mainnet":
+		return append(keys, "ARBITRUM_RPC_ENDPOINTS")
+	case "arbitrum-sepolia":
+		return append(keys, "ARBITRUM_SEPOLIA_RPC_ENDPOINTS")
+	case "base", "base-mainnet":
+		return append(keys, "BASE_RPC_ENDPOINTS")
+	case "base-sepolia":
+		return append(keys, "BASE_SEPOLIA_RPC_ENDPOINTS")
+	case "ethereum", "ethereum-mainnet", "mainnet":
+		return append(keys, "ETH_RPC_ENDPOINTS")
+	default:
+		return keys
+	}
+}
+
+func splitLivepeerRPCURLs(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if value := strings.TrimSpace(field); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func livepeerServiceHostIndex(task *orchestrator.Task, manifest *inventory.Manifest) int {
+	if task == nil || manifest == nil {
+		return 0
+	}
+	svc, ok := manifest.Services[task.ServiceID]
+	if !ok {
+		return 0
+	}
+	for i, host := range serviceHosts(svc) {
+		if host == task.Host {
+			return i
+		}
+	}
+	return 0
 }
 
 func removeNavigatorInternalCAEnv(env map[string]string) {

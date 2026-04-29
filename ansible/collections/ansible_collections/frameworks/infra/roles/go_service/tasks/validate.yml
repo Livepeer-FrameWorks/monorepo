@@ -8,6 +8,25 @@
         timeout: 15
       when: go_service_port | int > 0
 
+    - name: Find Livepeer keystore files after start
+      ansible.builtin.find:
+        paths: "{{ go_service_livepeer_expected_keystore_dir }}"
+        file_type: file
+        recurse: false
+      register: go_service_validate_livepeer_keystore_files
+      when: go_service_livepeer_expected_keystore_dir | length > 0
+
+    - name: Assert Livepeer did not create or select a different keystore
+      ansible.builtin.assert:
+        that:
+          - go_service_validate_livepeer_keystore_files.files | length == 1
+          - go_service_validate_livepeer_keystore_files.files[0].path == go_service_livepeer_expected_keystore_path
+        fail_msg: >-
+          {{ go_service_name }} keystore directory changed after service start;
+          expected only {{ go_service_livepeer_expected_keystore_path }}, found {{
+          go_service_validate_livepeer_keystore_files.files | map(attribute='path') | list }}.
+      when: go_service_livepeer_expected_keystore_dir | length > 0
+
   rescue:
     - name: Capture go_service systemctl status
       ansible.builtin.command:
@@ -20,6 +39,35 @@
       register: go_service_validate_status
       changed_when: false
       failed_when: false
+      when: go_service_livepeer_expected_keystore_dir | length == 0
+
+    - name: Capture Livepeer safe systemctl state
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - "frameworks-{{ go_service_name }}"
+          - "--no-pager"
+          - "-p"
+          - Id
+          - "-p"
+          - LoadState
+          - "-p"
+          - ActiveState
+          - "-p"
+          - SubState
+          - "-p"
+          - Result
+          - "-p"
+          - ExecMainCode
+          - "-p"
+          - ExecMainStatus
+          - "-p"
+          - NRestarts
+      register: go_service_validate_status
+      changed_when: false
+      failed_when: false
+      when: go_service_livepeer_expected_keystore_dir | length > 0
 
     - name: Capture go_service journal
       ansible.builtin.command:
@@ -34,6 +82,27 @@
       changed_when: false
       failed_when: false
 
+    - name: Capture Livepeer keystore diagnostics
+      ansible.builtin.shell: |
+        set -e
+        dir="{{ go_service_livepeer_expected_keystore_dir }}"
+        expected="{{ go_service_livepeer_expected_keystore_path }}"
+        wallet="{{ go_service_livepeer_expected_wallet_address }}"
+        printf 'expected_keystore_path=%s\n' "$expected"
+        printf 'expected_wallet_address=%s\n' "$wallet"
+        if [ -d "$dir" ]; then
+          printf 'keystore_dir=%s\n' "$dir"
+          find "$dir" -maxdepth 1 -type f -printf '%f %s bytes\n'
+        else
+          printf 'keystore_dir_missing=%s\n' "$dir"
+        fi
+      args:
+        executable: /bin/bash
+      register: go_service_validate_livepeer_keystore
+      changed_when: false
+      failed_when: false
+      when: go_service_livepeer_expected_keystore_dir | length > 0
+
     - name: Fail with go_service diagnostics
       ansible.builtin.fail:
         msg: |-
@@ -43,3 +112,8 @@
 
           journalctl:
           {{ go_service_validate_journal.stdout | default('(no output)') }}
+          {% if go_service_validate_livepeer_keystore.stdout is defined and (go_service_validate_livepeer_keystore.stdout | length > 0) %}
+
+          livepeer keystore:
+          {{ go_service_validate_livepeer_keystore.stdout }}
+          {% endif %}
