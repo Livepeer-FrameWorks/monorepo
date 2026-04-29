@@ -254,7 +254,7 @@ export interface MistStreamInfo {
   error?: string;
   on_error?: string;
   perc?: number;
-  type?: "live" | "vod";
+  type?: "live" | "live+vod" | "vod";
   hasVideo?: boolean;
   hasAudio?: boolean;
   unixoffset?: number;

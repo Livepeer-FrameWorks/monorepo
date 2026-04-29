@@ -77,6 +77,7 @@ export class SyncController {
   private maxServerDelaysSamples = 3;
 
   // Live catchup tracking
+  private liveCatchupEnabled = true;
   private lastLiveCatchup = 0;
   private liveCatchupCooldown = 2000;
   private liveCatchupThresholdMs = 5000;
@@ -122,11 +123,14 @@ export class SyncController {
       /** Provide audio clock for A/V sync (returns seconds from AudioContext.currentTime) */
       audioClockProvider?: () => number;
       /** Live catch-up tuning (upstream parity: configurable thresholds) */
-      liveCatchup?: {
-        cooldownMs?: number;
-        thresholdMs?: number;
-        requestMs?: number;
-      };
+      liveCatchup?:
+        | boolean
+        | number
+        | {
+            cooldownMs?: number;
+            thresholdMs?: number;
+            requestMs?: number;
+          };
     } = {}
   ) {
     this.profile = options.profile ?? getLatencyProfile("low");
@@ -134,7 +138,13 @@ export class SyncController {
     this.onSpeedChange = options.onSpeedChange;
     this.onFastForwardRequest = options.onFastForwardRequest;
     this.audioClockProvider = options.audioClockProvider ?? null;
-    if (options.liveCatchup) {
+    if (options.liveCatchup === false || options.liveCatchup === 0) {
+      this.liveCatchupEnabled = false;
+    } else if (options.liveCatchup === true) {
+      this.liveCatchupThresholdMs = 60000;
+    } else if (typeof options.liveCatchup === "number") {
+      this.liveCatchupThresholdMs = options.liveCatchup * 1000;
+    } else if (options.liveCatchup) {
       this.liveCatchupCooldown = options.liveCatchup.cooldownMs ?? this.liveCatchupCooldown;
       this.liveCatchupThresholdMs = options.liveCatchup.thresholdMs ?? this.liveCatchupThresholdMs;
       this.liveCatchupRequestMs = options.liveCatchup.requestMs ?? this.liveCatchupRequestMs;
@@ -425,6 +435,7 @@ export class SyncController {
       // fast-forward above takes priority; this only fires when bucket stays normal.
       this._speedBucket === "normal" &&
       this.isLive &&
+      this.liveCatchupEnabled &&
       playRateCurr !== "fast-forward" &&
       serverCurrentMs !== undefined &&
       serverEndMs !== undefined &&
@@ -519,6 +530,10 @@ export class SyncController {
         this.resetBufferRequestState();
       }
     }
+  }
+
+  getServerPlayRate(): number | "auto" | "fast-forward" {
+    return this.serverPlayRateCurr;
   }
 
   /**

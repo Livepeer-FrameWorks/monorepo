@@ -43,6 +43,8 @@ export interface MistTimeUpdate {
   paused?: boolean;
   /** Whether at live point */
   live_point?: boolean;
+  /** Current server-side playback rate */
+  play_rate_curr?: number | "auto" | "fast-forward";
 }
 
 export interface MistSignalingEvents {
@@ -210,6 +212,7 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
           tracks: payload.tracks as string[] | undefined,
           paused: payload.paused as boolean | undefined,
           live_point: payload.live_point as boolean | undefined,
+          play_rate_curr: payload.play_rate_curr as number | "auto" | "fast-forward" | undefined,
         });
         break;
 

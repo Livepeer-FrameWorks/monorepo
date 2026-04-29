@@ -20,6 +20,7 @@ import type {
   ErrorHandlingEvents,
   ClassifiedError,
 } from "./PlayerInterface";
+import { isLiveStreamType } from "./PlayerInterface";
 import { ErrorCode } from "./PlayerInterface";
 import { ErrorClassifier, type RecoveryAction } from "./ErrorClassifier";
 import { scorePlayer, isProtocolBlacklisted } from "./scorer";
@@ -930,7 +931,7 @@ export class PlayerManager {
       const previousProtocol = this.cachedSelection?.source.type || "unknown";
 
       // Capture playhead for VOD streams before destroying the player
-      const isLive = this.lastStreamInfo.type === "live";
+      const isLive = isLiveStreamType(this.lastStreamInfo.type);
       const savedTimeMs =
         !isLive && this.currentPlayer?.getCurrentTime ? this.currentPlayer.getCurrentTime() : null;
 

@@ -51,6 +51,7 @@ import type {
   IPlayer,
   PlayerOptions as CorePlayerOptions,
 } from "./PlayerInterface";
+import { isLiveStreamType } from "./PlayerInterface";
 
 // ============================================================================
 // Types
@@ -866,8 +867,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (mist) {
       merged.mist = this.sanitizeMistInfo(mist);
       if (mist.type) {
-        merged.contentType = mist.type;
-        merged.isLive = mist.type === "live";
+        merged.contentType = isLiveStreamType(mist.type) ? "live" : "vod";
+        merged.isLive = isLiveStreamType(mist.type);
       }
       if (streamStatus) {
         merged.status = streamStatus;
@@ -1150,8 +1151,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       return metaType as ContentType;
     }
     const mistType = this.streamState?.streamInfo?.type;
-    if (mistType === "live" || mistType === "vod") {
-      return mistType;
+    if (mistType) {
+      return isLiveStreamType(mistType) ? "live" : "vod";
     }
     if (metadata?.isLive === true) {
       return "live";
@@ -3134,9 +3135,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           const onSeekableChange = () => {
             this.updateSeekingState();
           };
+          const onBufferLow = () => {
+            this.qualityMonitor?.recordBufferLow();
+          };
           playerForListener.on("seekablechange", onSeekableChange);
+          playerForListener.on("bufferlow", onBufferLow);
           this.cleanupFns.push(() => {
             playerForListener.off("seekablechange", onSeekableChange);
+            playerForListener.off("bufferlow", onBufferLow);
           });
         }
         // Initialize sub-controllers after video is ready
@@ -3450,6 +3456,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.qualityMonitor = new QualityMonitor({
       sampleInterval: 1000,
       protocol,
+      onQualityDegraded: (quality) => {
+        this.abrController?.handleQualityDegraded(quality);
+      },
       onFallbackRequest: ({ score }) => {
         if (this.isDestroyed || this._isTransitioning || this._qualityFallbackInProgress) return;
         const activeShortname =

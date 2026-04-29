@@ -28,7 +28,7 @@ export interface MistReporterStats {
   videoWidth: number | null;
   playerHeight: number | null;
   playerWidth: number | null;
-  tracks: string | null;
+  tracks: string[] | null;
   nLog: number;
 }
 
@@ -75,7 +75,7 @@ export class MistReporter {
     firstPlayback: number | null;
     playbackScore: number;
     autoplay: "success" | "muted" | "failed" | null;
-    tracks: string | null;
+    tracks: string[] | null;
   };
 
   // Time tracking state
@@ -230,7 +230,7 @@ export class MistReporter {
     } else if (key === "autoplay") {
       this._stats.autoplay = value as "success" | "muted" | "failed" | null;
     } else if (key === "tracks") {
-      this._stats.tracks = value as string | null;
+      this._stats.tracks = value as string[] | null;
     }
     // Other keys (computed) are read-only
   }
@@ -377,7 +377,7 @@ export class MistReporter {
    * Update current tracks
    */
   setTracks(tracks: string[]): void {
-    this._stats.tracks = tracks.join(",");
+    this._stats.tracks = tracks.slice();
   }
 
   /**

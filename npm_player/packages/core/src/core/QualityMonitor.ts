@@ -105,6 +105,7 @@ export class QualityMonitor {
   // Reference: player.js:654-665 - triggers "nextCombo" after sustained poor quality
   private consecutivePoorSamples = 0;
   private fallbackTriggered = false;
+  private bufferPressureSamples = 0;
 
   // Seek suppression: upstream resets monitor on seeking/seeked events, but
   // MediaStream sources (WebCodecs) never fire those. Use a time window instead.
@@ -171,6 +172,7 @@ export class QualityMonitor {
     this.lastBytesTime = 0;
     this.consecutivePoorSamples = 0;
     this.fallbackTriggered = false;
+    this.bufferPressureSamples = 0;
     this.playbackScoreHistory = [];
     this.playbackScore = 1.0;
 
@@ -241,6 +243,9 @@ export class QualityMonitor {
 
     const quality = this.calculateQuality(video);
     this.history.push(quality);
+    if (this.bufferPressureSamples > 0) {
+      this.bufferPressureSamples--;
+    }
 
     // Keep rolling window
     if (this.history.length > ROLLING_WINDOW_SIZE) {
@@ -409,6 +414,10 @@ export class QualityMonitor {
       score -= latencyPenalty;
     }
 
+    // Protocol-specific buffer managers can report low-buffer pressure even
+    // when the browser video element has no native buffered ranges.
+    score -= Math.min(30, this.bufferPressureSamples * 5);
+
     return Math.max(0, Math.round(score));
   }
 
@@ -575,6 +584,14 @@ export class QualityMonitor {
   }
 
   /**
+   * Record low-buffer pressure from a player-specific buffer manager.
+   * This is the Frameworks equivalent of MistPlayer rawws ABR badness.
+   */
+  recordBufferLow(): void {
+    this.bufferPressureSamples = Math.min(6, this.bufferPressureSamples + 1);
+  }
+
+  /**
    * Check if playback quality is poor based on score
    * Uses protocol-specific thresholds (MistPlayer-style)
    * WebRTC: 0.95 (strict), HLS/DASH/HTML5: 0.75 (lenient)
@@ -598,6 +615,7 @@ export class QualityMonitor {
   resetFallbackState(): void {
     this.consecutivePoorSamples = 0;
     this.fallbackTriggered = false;
+    this.bufferPressureSamples = 0;
   }
 
   /**
@@ -610,6 +628,7 @@ export class QualityMonitor {
     this.playbackScore = 1.0;
     this.consecutivePoorSamples = 0;
     this.fallbackTriggered = false;
+    this.bufferPressureSamples = 0;
     this.seekSuppressUntil = performance.now() + 10_000;
   }
 

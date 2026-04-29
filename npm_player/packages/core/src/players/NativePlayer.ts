@@ -1,4 +1,5 @@
 import { BasePlayer } from "../core/PlayerInterface";
+import { isLiveStreamType } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import { MistControlChannel } from "../core/MistControlChannel";
 import {
@@ -68,6 +69,8 @@ export class NativePlayerImpl extends BasePlayer {
   private whepBufferWindow = 0;
   private whepBeginMs = 0;
   private whepEndMs = 0;
+  private whepPlayRate: number | "auto" | "fast-forward" = "auto";
+  private currentOptions: PlayerOptions | null = null;
 
   // Reference html5.js features
   private liveDurationProxy: LiveDurationProxy | null = null;
@@ -264,6 +267,7 @@ export class NativePlayerImpl extends BasePlayer {
     this.container = container;
     this.currentSourceUrl = source.url;
     this.currentMimeType = source.type;
+    this.currentOptions = options;
     this.isMP3Source = source.type === "html5/audio/mp3";
     container.classList.add("fw-player-container");
 
@@ -290,7 +294,7 @@ export class NativePlayerImpl extends BasePlayer {
     // Use LiveDurationProxy for all live streams (non-WHEP)
     // WHEP handles its own live edge via signaling
     // This enables seeking and jump-to-live for native MP4/WebM/HLS live streams
-    const isLiveStream = streamInfo?.type === "live";
+    const isLiveStream = isLiveStreamType(streamInfo?.type);
     if (source.type !== "whep" && isLiveStream) {
       // Upstream html5.js:158-160: force loop=false for live
       video.loop = false;
@@ -708,6 +712,12 @@ export class NativePlayerImpl extends BasePlayer {
     };
   }
 
+  private getLiveCatchupWindowMs(): number | null {
+    const value = this.currentOptions?.liveCatchup;
+    if (!value) return null;
+    return typeof value === "number" ? value * 1000 : 60000;
+  }
+
   /**
    * Set up MistControl data channel event handlers for WHEP seeking.
    * Mirrors upstream util.js ControlChannelAPI behavior.
@@ -743,6 +753,22 @@ export class NativePlayerImpl extends BasePlayer {
       this.whepBufferWindow = update.end - update.begin;
       this.whepBeginMs = update.begin;
       this.whepEndMs = update.end === 0 ? update.current : update.end;
+      const liveCatchupWindowMs = this.getLiveCatchupWindowMs();
+      const distanceToLiveMs = update.end - update.current;
+      if (this.whepIsLive && update.play_rate_curr !== "fast-forward") {
+        if (
+          update.play_rate_curr === "auto" &&
+          (!liveCatchupWindowMs || distanceToLiveMs > liveCatchupWindowMs)
+        ) {
+          control.setSpeed(1);
+        } else if (
+          update.play_rate_curr === 1 &&
+          liveCatchupWindowMs &&
+          distanceToLiveMs < liveCatchupWindowMs
+        ) {
+          control.setSpeed("auto");
+        }
+      }
       this.emit("seekablechange", {
         start: update.begin,
         end: this.whepEndMs,
@@ -764,12 +790,21 @@ export class NativePlayerImpl extends BasePlayer {
       video.play().catch(() => {});
     });
 
-    // Handle at_dead_point: seek to buffer midpoint (upstream util.js:1697-1708)
+    control.on("speed_changed", ({ play_rate_curr }) => {
+      if (this.destroyed) return;
+      this.whepPlayRate = play_rate_curr;
+    });
+
+    // Handle at_dead_point recovery near the start of the available buffer.
     control.on("pause", (msg) => {
       if (this.destroyed) return;
       if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
-        const seekTo = (msg.begin + msg.end) / 2;
+        const isSlowed = typeof this.whepPlayRate === "number" && this.whepPlayRate < 1;
+        const seekTo = msg.begin + (isSlowed ? 1000 : 5000);
         if (!isNaN(seekTo) && seekTo > 0) {
+          if (isSlowed) {
+            control.setSpeed("auto");
+          }
           control.seek(seekTo);
           return;
         }

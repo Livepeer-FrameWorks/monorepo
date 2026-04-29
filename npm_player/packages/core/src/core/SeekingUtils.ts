@@ -12,6 +12,7 @@
  */
 
 import type { MistStreamInfo } from "../types";
+import { isLiveStreamType } from "./PlayerInterface";
 
 // ============================================================================
 // Types
@@ -382,7 +383,7 @@ export function isLiveContent(
 
   // MistServer type
   if (mistStreamInfo?.type) {
-    return mistStreamInfo.type === "live";
+    return isLiveStreamType(mistStreamInfo.type);
   }
 
   // Fallback: non-finite duration indicates live

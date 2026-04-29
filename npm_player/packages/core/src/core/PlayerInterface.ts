@@ -46,7 +46,13 @@ export interface StreamInfo {
     /** MistServer SHM buffer window size in milliseconds */
     buffer_window?: number;
   };
-  type?: "live" | "vod";
+  type?: MistStreamType;
+}
+
+export type MistStreamType = "live" | "live+vod" | "vod";
+
+export function isLiveStreamType(type: string | null | undefined): boolean {
+  return type === "live" || type === "live+vod";
 }
 
 export interface PlayerOptions {
@@ -78,6 +84,11 @@ export interface PlayerOptions {
   dashConfig?: Record<string, unknown>;
   /** Video.js VHS configuration override (merged with defaults) */
   vhsConfig?: Record<string, unknown>;
+  /**
+   * Enable MistServer live catch-up auto-speed near the live edge.
+   * A number is interpreted as seconds from the live edge, matching Mist embed behavior.
+   */
+  liveCatchup?: boolean | number;
 }
 
 export interface PlayerCapability {
@@ -105,6 +116,8 @@ export interface PlayerEvents {
   reloadrequested: { reason: string };
   /** Seekable range changed (values in ms) */
   seekablechange: { start: number; end: number; bufferWindow: number };
+  /** Player-internal buffer manager reported low buffer pressure (values in ms) */
+  bufferlow: { current: number; desired: number };
 }
 
 /**

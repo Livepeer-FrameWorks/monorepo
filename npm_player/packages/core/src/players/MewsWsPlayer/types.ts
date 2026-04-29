@@ -20,7 +20,7 @@ export interface OnTimeMessage extends MewsMessage {
     current: number; // Current playback position (ms)
     end?: number; // End of buffered range (ms)
     begin?: number; // Beginning of buffered range (ms)
-    play_rate_curr?: "auto" | number; // Current server playback rate
+    play_rate_curr?: "auto" | "fast-forward" | number; // Current server playback rate
     jitter?: number; // Server-estimated jitter (ms)
     tracks?: string[]; // Currently active track IDs
   };
@@ -45,12 +45,19 @@ export interface SeekAckMessage extends MewsMessage {
 export interface SetSpeedAckMessage extends MewsMessage {
   type: "set_speed";
   data?: {
-    play_rate_curr?: "auto" | number;
+    play_rate_curr?: "auto" | "fast-forward" | number;
+    play_rate_prev?: "auto" | "fast-forward" | number;
   };
 }
 
 export interface PauseMessage extends MewsMessage {
   type: "pause";
+  data?: {
+    paused?: boolean;
+    reason?: string;
+    begin?: number;
+    end?: number;
+  };
 }
 
 export interface MewsCommand {
@@ -66,6 +73,7 @@ export interface RequestCodecDataCommand extends MewsCommand {
 export interface SeekCommand extends MewsCommand {
   type: "seek";
   seek_time: number;
+  ff_add?: number;
 }
 
 export interface SetSpeedCommand extends MewsCommand {

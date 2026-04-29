@@ -556,11 +556,14 @@ export interface WebCodecsPlayerOptions {
    */
   renderMode?: RenderMode;
   /** Live catch-up tuning for Mist fast-forward behavior */
-  liveCatchup?: {
-    cooldownMs?: number;
-    thresholdMs?: number;
-    requestMs?: number;
-  };
+  liveCatchup?:
+    | boolean
+    | number
+    | {
+        cooldownMs?: number;
+        thresholdMs?: number;
+        requestMs?: number;
+      };
   /** Enable developer mode (extra debugging) */
   devMode?: boolean;
 }

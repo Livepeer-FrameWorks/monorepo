@@ -160,8 +160,8 @@ describe("MistReporter", () => {
 
     it("set tracks", () => {
       const r = new MistReporter();
-      r.set("tracks", "video1,audio1");
-      expect(r.getStats().tracks).toBe("video1,audio1");
+      r.set("tracks", ["video1", "audio1"]);
+      expect(r.getStats().tracks).toEqual(["video1", "audio1"]);
     });
 
     it("add increments nWaiting", () => {
@@ -200,10 +200,10 @@ describe("MistReporter", () => {
       expect(r.getStats().autoplay).toBe("failed");
     });
 
-    it("setTracks joins array", () => {
+    it("setTracks preserves array", () => {
       const r = new MistReporter();
       r.setTracks(["video1", "audio2"]);
-      expect(r.getStats().tracks).toBe("video1,audio2");
+      expect(r.getStats().tracks).toEqual(["video1", "audio2"]);
     });
   });
 

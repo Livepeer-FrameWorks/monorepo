@@ -15,6 +15,7 @@
  */
 
 import { BasePlayer } from "../../core/PlayerInterface";
+import { isLiveStreamType } from "../../core/PlayerInterface";
 import type {
   StreamSource,
   StreamInfo,
@@ -495,7 +496,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.verboseDebugging = wcOptions.verboseDebug ?? false;
 
     // Determine stream type from server API (streamInfo.type), not MIME (source.type)
-    this.streamType = streamInfo?.type === "live" ? "live" : "vod";
+    this.streamType = isLiveStreamType(streamInfo?.type) ? "live" : "vod";
 
     // Select latency profile
     const profileName =
@@ -587,6 +588,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         this.wsController?.fastForward(ms);
       },
     });
+    this.syncController.on("bufferlow", (data) => this.emit("bufferlow", data));
 
     // Initialize WebSocket - URL should already be .raw from source selection
     this.wsController = new WebSocketController(source.url, {
@@ -1573,7 +1575,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
   /**
    * Handle server-initiated pause (e.g., server-side buffer underrun).
-   * OG util.js:1696-1710: if reason is "at_dead_point", seek to midpoint of available buffer.
+   * Latest upstream seeks near the buffer start and restores auto speed if we had slowed down.
    * Otherwise, per rawws.js:661-662, pause frame timing so the worker stops outputting frames.
    */
   private handleServerPause(msg: {
@@ -1583,13 +1585,18 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     end?: number;
   }): void {
     if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
-      const seekTo = (msg.begin + msg.end) / 2;
+      const serverRate = this.syncController?.getServerPlayRate();
+      const isSlowed = typeof serverRate === "number" && serverRate < 1;
+      const seekTo = msg.begin + (isSlowed ? 1000 : 5000);
       if (!isNaN(seekTo) && seekTo > 0) {
-        this.log("At dead point: seeking to midpoint of available buffer");
+        this.log("At dead point: seeking near available buffer start");
+        if (isSlowed) {
+          this.wsController?.setSpeed("auto");
+        }
         this.wsController?.seek(seekTo);
         return;
       }
-      this.log("At dead point: seek target invalid — pausing");
+      this.log("At dead point: seek target invalid; pausing");
     }
 
     if (msg.paused) {

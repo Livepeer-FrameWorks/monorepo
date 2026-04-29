@@ -79,6 +79,12 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     return false;
   }
 
+  private getLiveCatchupWindowMs(): number | null {
+    const value = this.currentOptions?.liveCatchup;
+    if (!value) return null;
+    return typeof value === "number" ? value * 1000 : 60000;
+  }
+
   /**
    * Load MistServer's WebRTC browser equalizer script for browser-specific fixes.
    * This is non-fatal if it fails to load.
@@ -723,12 +729,16 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
       video.dispatchEvent(new CustomEvent("ratechange", { detail: { play_rate_curr } }));
     });
 
-    // Handle at_dead_point: seek to buffer midpoint (upstream util.js:1697-1708)
+    // Handle at_dead_point recovery near the start of the available buffer.
     this.signaling.on("pause_request", (msg) => {
       if (this.destroyed) return;
       if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
-        const seekTo = (msg.begin + msg.end) / 2;
+        const isSlowed = typeof this.playRate === "number" && this.playRate < 1;
+        const seekTo = msg.begin + (isSlowed ? 1000 : 5000);
         if (!isNaN(seekTo) && seekTo > 0) {
+          if (isSlowed) {
+            this.signaling?.setSpeed("auto");
+          }
           this.signaling?.seek(seekTo / 1000).catch(() => {});
           return;
         }
@@ -769,6 +779,23 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
     // Track buffer window (P2)
     this.bufferWindow = update.end - update.begin;
+
+    const liveCatchupWindowMs = this.getLiveCatchupWindowMs();
+    const distanceToLiveMs = update.end - update.current;
+    if (this.isLiveStream && this.signaling && update.play_rate_curr !== "fast-forward") {
+      if (
+        update.play_rate_curr === "auto" &&
+        (!liveCatchupWindowMs || distanceToLiveMs > liveCatchupWindowMs)
+      ) {
+        this.signaling.setSpeed(1);
+      } else if (
+        update.play_rate_curr === 1 &&
+        liveCatchupWindowMs &&
+        distanceToLiveMs < liveCatchupWindowMs
+      ) {
+        this.signaling.setSpeed("auto");
+      }
+    }
 
     // Notify controller of updated seekable range
     const endMs = update.end === 0 ? update.current : update.end;

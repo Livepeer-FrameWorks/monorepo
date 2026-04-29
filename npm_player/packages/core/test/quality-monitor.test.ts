@@ -595,6 +595,31 @@ describe("QualityMonitor", () => {
       const qm = new QualityMonitor();
       expect(qm.hasFallbackTriggered()).toBe(false);
     });
+
+    it("recordBufferLow lowers quality for player-managed buffers", () => {
+      const onQualityDegraded = vi.fn();
+      const qm = new QualityMonitor({
+        onQualityDegraded,
+        sampleInterval: 100,
+        thresholds: { minScore: 95 },
+      });
+
+      const video = createMockVideo({
+        getVideoPlaybackQuality: vi.fn(() => ({
+          totalVideoFrames: 1000,
+          droppedVideoFrames: 0,
+        })),
+      });
+
+      qm.start(video);
+      qm.recordBufferLow();
+      qm.recordBufferLow();
+      vi.advanceTimersByTime(100);
+
+      expect(onQualityDegraded).toHaveBeenCalled();
+      expect(qm.getCurrentQuality()?.score).toBeLessThan(95);
+      qm.stop();
+    });
   });
 
   // ===========================================================================
