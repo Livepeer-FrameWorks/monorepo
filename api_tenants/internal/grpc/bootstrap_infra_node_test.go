@@ -160,7 +160,7 @@ func TestBootstrapInfrastructureNode_IdempotentReturnsExisting(t *testing.T) {
 	// Idempotent check: node already exists in same cluster.
 	// New behaviour: return full assigned identity so a retrying client can
 	// recover without any server-side cleanup.
-	mock.ExpectQuery("SELECT cluster_id, wireguard_ip::text, wireguard_listen_port FROM quartermaster.infrastructure_nodes").
+	mock.ExpectQuery(`SELECT cluster_id, host\(wireguard_ip\), wireguard_listen_port FROM quartermaster.infrastructure_nodes`).
 		WithArgs("node-existing").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "wireguard_ip", "wireguard_listen_port"}).
 			AddRow("cluster-1", "10.88.0.2", int32(51820)))
@@ -172,7 +172,7 @@ func TestBootstrapInfrastructureNode_IdempotentReturnsExisting(t *testing.T) {
 	mock.ExpectQuery(`SELECT n.node_name, n.wireguard_public_key`).
 		WithArgs("node-existing", "cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
-	mock.ExpectQuery(`SELECT s.type, n.wireguard_ip::text`).
+	mock.ExpectQuery(`SELECT s.type, host\(n\.wireguard_ip\)`).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
 
@@ -214,7 +214,7 @@ func TestBootstrapInfrastructureNode_ExistingNodeDifferentCluster(t *testing.T) 
 			AddRow("tok-1", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil))
 
 	// Node exists but in a different cluster
-	mock.ExpectQuery("SELECT cluster_id, wireguard_ip::text, wireguard_listen_port FROM quartermaster.infrastructure_nodes").
+	mock.ExpectQuery(`SELECT cluster_id, host\(wireguard_ip\), wireguard_listen_port FROM quartermaster.infrastructure_nodes`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "wireguard_ip", "wireguard_listen_port"}).
 			AddRow("cluster-other", nil, nil))
@@ -257,7 +257,7 @@ func TestBootstrapInfrastructureNode_FallbackCluster(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("fallback-cluster"))
 
 	// Node doesn't exist yet
-	mock.ExpectQuery("SELECT cluster_id, wireguard_ip::text, wireguard_listen_port FROM quartermaster.infrastructure_nodes").
+	mock.ExpectQuery(`SELECT cluster_id, host\(wireguard_ip\), wireguard_listen_port FROM quartermaster.infrastructure_nodes`).
 		WithArgs(sqlmock.AnyArg()). // auto-generated node-{uuid}
 		WillReturnError(sql.ErrNoRows)
 
@@ -267,7 +267,7 @@ func TestBootstrapInfrastructureNode_FallbackCluster(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wg_mesh_cidr", "wg_listen_port"}).AddRow("10.88.0.0/16", int32(51820)))
 
 	// Taken-IPs lookup for allocator.
-	mock.ExpectQuery(`SELECT wireguard_ip::text`).
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\)`).
 		WithArgs("fallback-cluster").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip"}))
 
@@ -341,7 +341,7 @@ func TestBootstrapInfrastructureNode_ReplayWithSpentToken(t *testing.T) {
 	mock.ExpectQuery(`SELECT n.node_name, n.wireguard_public_key`).
 		WithArgs("node-existing", "cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
-	mock.ExpectQuery(`SELECT s.type, n.wireguard_ip::text`).
+	mock.ExpectQuery(`SELECT s.type, host\(n\.wireguard_ip\)`).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"type", "wireguard_ip"}))
 

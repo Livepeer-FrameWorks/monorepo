@@ -76,51 +76,52 @@ Multi-turn conversations stored in `skipper_conversations` / `skipper_messages` 
 
 ## Environment Variables
 
-| Variable                            | Purpose                                                                      | Default              |
-| ----------------------------------- | ---------------------------------------------------------------------------- | -------------------- |
-| `LLM_PROVIDER`                      | LLM backend: openai, anthropic, ollama                                       | —                    |
-| `LLM_MODEL`                         | Model identifier                                                             | —                    |
-| `LLM_API_KEY`                       | API credentials                                                              | —                    |
-| `LLM_API_URL`                       | Custom endpoint (OpenRouter, local Ollama)                                   | Provider default     |
-| `LLM_MAX_TOKENS`                    | Max output tokens per response                                               | `4096`               |
-| `EMBEDDING_PROVIDER`                | Embedding backend: openai, ollama                                            | `LLM_PROVIDER`       |
-| `EMBEDDING_MODEL`                   | Embedding model                                                              | `LLM_MODEL`          |
-| `EMBEDDING_API_KEY`                 | Embedding API credentials                                                    | `LLM_API_KEY`        |
-| `EMBEDDING_API_URL`                 | Embedding endpoint                                                           | `LLM_API_URL`        |
-| `UTILITY_LLM_PROVIDER`              | Cheap LLM for background tasks (contextual retrieval, query rewriting, HyDE) | `LLM_PROVIDER`       |
-| `UTILITY_LLM_MODEL`                 | Utility LLM model                                                            | `LLM_MODEL`          |
-| `UTILITY_LLM_API_KEY`               | Utility LLM credentials                                                      | `LLM_API_KEY`        |
-| `UTILITY_LLM_API_URL`               | Utility LLM endpoint                                                         | `LLM_API_URL`        |
-| `RERANKER_PROVIDER`                 | Cross-encoder reranker: cohere, jina, or generic                             | — (keyword fallback) |
-| `RERANKER_MODEL`                    | Reranker model (e.g. `rerank-v3.5`, `jina-reranker-v2-base-multilingual`)    | —                    |
-| `RERANKER_API_KEY`                  | Reranker API credentials                                                     | `LLM_API_KEY`        |
-| `RERANKER_API_URL`                  | Reranker endpoint (required for generic provider)                            | Provider default     |
-| `SKIPPER_ENABLE_HYDE`               | Enable Hypothetical Document Embeddings for search_knowledge                 | `false`              |
-| `SEARCH_PROVIDER`                   | Search backend: tavily, brave, searxng                                       | —                    |
-| `SEARCH_API_KEY`                    | Search API credentials                                                       | —                    |
-| `SEARCH_API_URL`                    | Custom search endpoint                                                       | Provider default     |
-| `SITEMAPS`                          | Comma-separated sitemap URLs                                                 | —                    |
-| `SKIPPER_SITEMAPS_DIR`              | Directory of source files (re-read each cycle)                               | —                    |
-| `CRAWL_INTERVAL`                    | Refresh interval for crawling                                                | `24h`                |
-| `CHUNK_TOKEN_LIMIT`                 | Max BPE tokens per chunk                                                     | `500`                |
-| `CHUNK_TOKEN_OVERLAP`               | Overlap tokens between chunks                                                | `50`                 |
-| `SKIPPER_ENABLE_RENDERING`          | Enable headless Chrome for JS-rendered pages                                 | `false`              |
-| `SKIPPER_CONTEXTUAL_RETRIEVAL`      | Use utility LLM to prepend context before embedding                          | `false`              |
-| `SKIPPER_LINK_DISCOVERY`            | Discover and crawl same-domain links                                         | `false`              |
-| `SKIPPER_SEARCH_LIMIT`              | Default result limit for `search_knowledge`                                  | `8`                  |
-| `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request                                 | `20`                 |
-| `SKIPPER_WEB_UI`                    | Enable embedded web UI at `/`                                                | `true`               |
-| `SKIPPER_WEB_UI_INSECURE`           | Allow embedded WebUI without `SKIPPER_API_KEY`                               | `false`              |
-| `SKIPPER_REQUIRED_TIER_LEVEL`       | Minimum subscription tier                                                    | `3`                  |
-| `SKIPPER_CHAT_RATE_LIMIT_PER_HOUR`  | Rate limit per tenant                                                        | `0` (unlimited)      |
-| `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)                                 | —                    |
-| `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge                                      | —                    |
-| `SKIPPER_API_KEY`                   | API key for admin WebUI authentication (see Web UI)                          | —                    |
-| `GATEWAY_PUBLIC_URL`                | API Gateway base URL (MCP endpoint derived as `$URL/mcp`)                    | —                    |
-| `SKIPPER_SOCIAL_ENABLED`            | Enable event-driven social posting agent                                     | `false`              |
-| `SKIPPER_SOCIAL_INTERVAL`           | How often to check for noteworthy events                                     | `2h`                 |
-| `SKIPPER_SOCIAL_MAX_PER_DAY`        | Max posts per day (`0` = unlimited)                                          | `2`                  |
-| `SKIPPER_SOCIAL_NOTIFY_EMAIL`       | Email to send draft tweets to (required when enabled)                        | —                    |
+| Variable                            | Purpose                                                                       | Default                      |
+| ----------------------------------- | ----------------------------------------------------------------------------- | ---------------------------- |
+| `LLM_PROVIDER`                      | LLM backend: openai, anthropic, ollama                                        | —                            |
+| `LLM_MODEL`                         | Model identifier                                                              | —                            |
+| `LLM_API_KEY`                       | API credentials                                                               | —                            |
+| `LLM_API_URL`                       | Custom endpoint (OpenRouter, local Ollama)                                    | Provider default             |
+| `LLM_MAX_TOKENS`                    | Max output tokens per response                                                | `4096`                       |
+| `EMBEDDING_PROVIDER`                | Embedding backend: openai, ollama                                             | `LLM_PROVIDER`               |
+| `EMBEDDING_MODEL`                   | Embedding model                                                               | `LLM_MODEL`                  |
+| `EMBEDDING_API_KEY`                 | Embedding API credentials                                                     | `LLM_API_KEY`                |
+| `EMBEDDING_API_URL`                 | Embedding endpoint                                                            | `LLM_API_URL`                |
+| `UTILITY_LLM_PROVIDER`              | Cheap LLM for background tasks (contextual retrieval, query rewriting, HyDE)  | `LLM_PROVIDER`               |
+| `UTILITY_LLM_MODEL`                 | Utility LLM model                                                             | `LLM_MODEL`                  |
+| `UTILITY_LLM_API_KEY`               | Utility LLM credentials                                                       | `LLM_API_KEY`                |
+| `UTILITY_LLM_API_URL`               | Utility LLM endpoint                                                          | `LLM_API_URL`                |
+| `RERANKER_PROVIDER`                 | Cross-encoder reranker: cohere, jina, or generic                              | — (keyword fallback)         |
+| `RERANKER_MODEL`                    | Reranker model (e.g. `rerank-v3.5`, `jina-reranker-v2-base-multilingual`)     | —                            |
+| `RERANKER_API_KEY`                  | Reranker API credentials                                                      | `LLM_API_KEY`                |
+| `RERANKER_API_URL`                  | Reranker endpoint (required for generic provider)                             | Provider default             |
+| `SKIPPER_ENABLE_HYDE`               | Enable Hypothetical Document Embeddings for search_knowledge                  | `false`                      |
+| `SEARCH_PROVIDER`                   | Search backend: tavily, brave, searxng                                        | —                            |
+| `SEARCH_API_KEY`                    | Search API credentials                                                        | —                            |
+| `SEARCH_API_URL`                    | Custom search endpoint                                                        | Provider default             |
+| `SITEMAPS`                          | Comma-separated sitemap URLs                                                  | —                            |
+| `SKIPPER_SITEMAPS_DIR`              | Directory of source files (re-read each cycle)                                | —                            |
+| `CRAWL_INTERVAL`                    | Refresh interval for crawling                                                 | `24h`                        |
+| `CHUNK_TOKEN_LIMIT`                 | Max BPE tokens per chunk                                                      | `500`                        |
+| `CHUNK_TOKEN_OVERLAP`               | Overlap tokens between chunks                                                 | `50`                         |
+| `SKIPPER_ENABLE_RENDERING`          | Enable headless Chrome for JS-rendered pages                                  | `false`                      |
+| `SKIPPER_CONTEXTUAL_RETRIEVAL`      | Use utility LLM to prepend context before embedding                           | `false`                      |
+| `SKIPPER_LINK_DISCOVERY`            | Discover and crawl same-domain links                                          | `false`                      |
+| `SKIPPER_SEARCH_LIMIT`              | Default result limit for `search_knowledge`                                   | `8`                          |
+| `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request                                  | `20`                         |
+| `SKIPPER_WEB_UI`                    | Enable embedded web UI at `/`                                                 | `true`                       |
+| `SKIPPER_WEB_UI_INSECURE`           | Allow embedded WebUI without `SKIPPER_API_KEY`                                | `false`                      |
+| `SKIPPER_REQUIRED_TIER_LEVEL`       | Minimum subscription tier                                                     | `3`                          |
+| `SKIPPER_CHAT_RATE_LIMIT_PER_HOUR`  | Rate limit per tenant                                                         | `0` (unlimited)              |
+| `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)                                  | —                            |
+| `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge                                       | —                            |
+| `SKIPPER_API_KEY`                   | API key for admin WebUI authentication (see Web UI)                           | —                            |
+| `GATEWAY_MCP_URL`                   | Internal Gateway MCP endpoint for platform tools                              | derived from Bridge mesh URL |
+| `GATEWAY_PUBLIC_URL`                | Public API Gateway base URL; fallback for MCP when `GATEWAY_MCP_URL` is unset | —                            |
+| `SKIPPER_SOCIAL_ENABLED`            | Enable event-driven social posting agent                                      | `false`                      |
+| `SKIPPER_SOCIAL_INTERVAL`           | How often to check for noteworthy events                                      | `2h`                         |
+| `SKIPPER_SOCIAL_MAX_PER_DAY`        | Max posts per day (`0` = unlimited)                                           | `2`                          |
+| `SKIPPER_SOCIAL_NOTIFY_EMAIL`       | Email to send draft tweets to (required when enabled)                         | —                            |
 
 ## Web UI
 

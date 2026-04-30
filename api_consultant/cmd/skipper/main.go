@@ -305,7 +305,8 @@ func main() {
 
 	// Connect to the Gateway MCP for platform tools (diagnostics, streams, etc.).
 	var gatewayClient *mcpclient.GatewayClient
-	if mcpURL := cfg.GatewayMCPURL(); mcpURL != "" {
+	var gatewayTools chat.GatewayToolCaller
+	if mcpURL := cfg.GatewayMCPEndpoint(); mcpURL != "" {
 		var connectErr error
 		gatewayClient, connectErr = mcpclient.New(context.Background(), mcpclient.Config{
 			GatewayURL:   mcpURL,
@@ -313,9 +314,9 @@ func main() {
 			Logger:       logger,
 		})
 		if connectErr != nil {
-			logger.WithError(connectErr).Warn("Failed to connect to Gateway MCP - platform tools disabled")
-			gatewayClient = nil
+			logger.WithError(connectErr).Fatal("Failed to connect to Gateway MCP")
 		} else {
+			gatewayTools = gatewayClient
 			defer func() { _ = gatewayClient.Close() }()
 		}
 	} else {
@@ -354,7 +355,7 @@ func main() {
 		Reranker:        reranker,
 		QueryRewriter:   queryRewriter,
 		HyDE:            hyde,
-		Gateway:         gatewayClient,
+		Gateway:         gatewayTools,
 		Diagnostics:     baselineEvaluator,
 		SearchLimit:     cfg.SearchLimit,
 		GlobalTenantID:  globalTenantID,

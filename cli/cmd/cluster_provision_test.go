@@ -691,11 +691,11 @@ func TestBuildServiceEnvVarsUsesMeshHostsForBackendDependencies(t *testing.T) {
 	if env["CLICKHOUSE_ADDR"] != "yuga-eu-1.internal:9000" {
 		t.Fatalf("expected CLICKHOUSE_ADDR to use mesh host, got %q", env["CLICKHOUSE_ADDR"])
 	}
-	if env["REDIS_FOGHORN_ADDR"] != "central-eu-1.internal:6379" {
-		t.Fatalf("expected REDIS_FOGHORN_ADDR to use mesh host, got %q", env["REDIS_FOGHORN_ADDR"])
+	if env["REDIS_FOGHORN_ADDR"] != "127.0.0.1:6379" {
+		t.Fatalf("expected REDIS_FOGHORN_ADDR to use loopback for colocated Redis, got %q", env["REDIS_FOGHORN_ADDR"])
 	}
-	if env["REDIS_CHATWOOT_ADDR"] != "central-eu-1.internal:6380" {
-		t.Fatalf("expected REDIS_CHATWOOT_ADDR to use mesh host, got %q", env["REDIS_CHATWOOT_ADDR"])
+	if env["REDIS_CHATWOOT_ADDR"] != "127.0.0.1:6380" {
+		t.Fatalf("expected REDIS_CHATWOOT_ADDR to use loopback for colocated Redis, got %q", env["REDIS_CHATWOOT_ADDR"])
 	}
 	if _, ok := env["CHANDLER_HOST"]; ok {
 		t.Fatalf("expected CHANDLER_HOST not to be auto-generated as an internal dependency, got %q", env["CHANDLER_HOST"])
@@ -856,8 +856,10 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		},
 		{
 			serviceID: "skipper",
-			want:      nil,
-			keys:      []string{"DATABASE_URL", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "GATEWAY_PUBLIC_URL", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+			want: map[string]string{
+				"GATEWAY_MCP_URL": "http://bridge.internal:18090/mcp",
+			},
+			keys: []string{"DATABASE_URL", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "GATEWAY_PUBLIC_URL", "GATEWAY_MCP_URL", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
 		},
 	}
 

@@ -164,12 +164,7 @@
     go_service_reinstall_required: >-
       {{
         not (go_service_bin_stat.stat.exists | default(false)) or
-        not (go_service_install_sentinel_stat.stat.exists | default(false)) or
-        (go_service_installed_version.rc | default(1)) != 0 or
-        (
-          go_service_version | length > 0 and
-          go_service_installed_version.stdout | default('') != go_service_version
-        )
+        not (go_service_install_sentinel_stat.stat.exists | default(false))
       }}
 
 - name: Report pending reinstall under --check
@@ -177,7 +172,8 @@
     msg: >-
       {{ go_service_name }} would reinstall:
       installed={{ go_service_installed_version.stdout | default('(missing)') }},
-      desired={{ go_service_version | default('(unset)') }}
+      desired={{ go_service_version | default('(unset)') }},
+      sentinel={{ go_service_install_sentinel }}
   changed_when: go_service_reinstall_required | bool
   when: ansible_check_mode
 

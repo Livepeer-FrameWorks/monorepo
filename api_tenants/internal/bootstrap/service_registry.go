@@ -107,7 +107,7 @@ func ensureServiceCatalogRow(ctx context.Context, exec DBTX, e ServiceRegistryEn
 // supplied. Fails loud if the node lacks a registered mesh address.
 func resolveNodeAdvertiseHost(ctx context.Context, exec DBTX, clusterID, nodeID string) (string, error) {
 	const q = `
-		SELECT cluster_id, COALESCE(wireguard_ip::text, '')
+		SELECT cluster_id, COALESCE(host(wireguard_ip), '')
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1`
 	var nodeCluster, wgIP string

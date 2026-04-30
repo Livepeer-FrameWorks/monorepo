@@ -33,6 +33,7 @@ type Config struct {
 	KafkaBrokers        []string
 	KafkaClusterID      string
 	GatewayPublicURL    string
+	GatewayMCPURL       string
 	AdminTenantID       string
 	Sitemaps            []string
 	SitemapsDir         string
@@ -61,9 +62,12 @@ type Config struct {
 	SocialNotifyEmail   string
 }
 
-// GatewayMCPURL returns the MCP endpoint URL derived from the gateway base.
-// Returns empty string when GatewayPublicURL is unset.
-func (c Config) GatewayMCPURL() string {
+// GatewayMCPEndpoint returns the MCP endpoint URL. Internal deployments can
+// set GatewayMCPURL to bypass public DNS and reach Bridge over the mesh.
+func (c Config) GatewayMCPEndpoint() string {
+	if c.GatewayMCPURL != "" {
+		return strings.TrimRight(c.GatewayMCPURL, "/")
+	}
 	if c.GatewayPublicURL == "" {
 		return ""
 	}
@@ -107,6 +111,7 @@ func LoadConfig() Config {
 		KafkaBrokers:        brokers,
 		KafkaClusterID:      config.GetEnv("KAFKA_CLUSTER_ID", "local"),
 		GatewayPublicURL:    config.GetEnv("GATEWAY_PUBLIC_URL", ""),
+		GatewayMCPURL:       config.GetEnv("GATEWAY_MCP_URL", ""),
 		AdminTenantID:       config.GetEnv("SKIPPER_ADMIN_TENANT_ID", ""),
 		Sitemaps:            parseSitemapList(config.GetEnv("SITEMAPS", "")),
 		SitemapsDir:         config.GetEnv("SKIPPER_SITEMAPS_DIR", ""),

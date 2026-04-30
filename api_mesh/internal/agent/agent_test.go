@@ -1037,6 +1037,37 @@ func TestSyncRejectsManagedSelfIdentityMismatch(t *testing.T) {
 	}
 }
 
+func TestSyncAcceptsManagedSelfIdentityWithCIDRResponse(t *testing.T) {
+	peerKey := mustGenPubB64(t)
+	client := &fakeMeshClient{syncResponses: []meshSyncResult{{
+		resp: &pb.InfrastructureSyncResponse{
+			WireguardIp:   "10.0.0.10/32",
+			WireguardPort: 51820,
+			Peers: []*pb.InfrastructurePeer{
+				{
+					PublicKey:  peerKey,
+					Endpoint:   "10.0.0.1:51820",
+					AllowedIps: []string{"10.0.0.2/32"},
+					KeepAlive:  25,
+					NodeName:   "edge-1",
+				},
+			},
+		},
+	}}}
+	wg := &fakeWireguard{pubKey: "public-key", privKey: "private-key"}
+	dns := &fakeDNS{}
+	agent := newTestAgent(t, client, wg, dns)
+
+	agent.sync()
+
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected wireguard apply with CIDR self identity, got %d", len(wg.applied))
+	}
+	if got := agent.consecutiveFails.Load(); got != 0 {
+		t.Fatalf("expected no consecutive failures, got %d", got)
+	}
+}
+
 func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
 	peer1Key := mustGenPubB64(t)
 	peer2Key := mustGenPubB64(t)

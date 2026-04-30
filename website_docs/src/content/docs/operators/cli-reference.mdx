@@ -442,6 +442,9 @@ frameworks cluster restart bridge --validate
 
 Upgrade services to new versions from GitOps manifests.
 
+For the production rollout sequence, including migrations and rollback
+behavior, see [Running Cluster Upgrades](/operators/running-upgrades).
+
 **Usage:**
 
 ```bash
@@ -495,7 +498,8 @@ frameworks cluster upgrade --all --yes
 <Aside type="caution" title="Database schema changes">
   Service upgrades may require schema migrations. For ClickHouse changes, apply `ALTER TABLE`
   statements **before** upgrading services. See [ClickHouse
-  Migrations](/operators/clickhouse-migrations).
+  Migrations](/operators/clickhouse-migrations). For PostgreSQL/YugabyteDB migrations, run
+  `frameworks cluster migrate` before upgrading services that depend on the new schema.
 </Aside>
 
 ---

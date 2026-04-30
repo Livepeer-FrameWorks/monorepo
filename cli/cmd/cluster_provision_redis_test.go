@@ -75,3 +75,80 @@ func TestBuildTaskConfig_RedisInstanceEngineOverridesManifest(t *testing.T) {
 		t.Fatalf("expected engine redis, got %v", got)
 	}
 }
+
+func TestBuildTaskConfig_RedisInstanceConfigIncludesRoleKeys(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{
+						Name: "foghorn",
+						Host: "control-1",
+						Config: map[string]string{
+							"bind":      "10.88.0.2",
+							"maxmemory": "256mb",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:       "redis-foghorn",
+		Type:       "redis",
+		ServiceID:  "redis",
+		InstanceID: "foghorn",
+		Host:       "control-1",
+		Phase:      orchestrator.PhaseInfrastructure,
+	}, manifest, map[string]interface{}{}, false, "", nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+
+	if got := cfg.Metadata["bind"]; got != "10.88.0.2" {
+		t.Fatalf("expected bind role key, got %v", got)
+	}
+	if got := cfg.Metadata["redis_bind"]; got != "10.88.0.2" {
+		t.Fatalf("expected redis_bind compatibility key, got %v", got)
+	}
+	if got := cfg.Metadata["maxmemory"]; got != "256mb" {
+		t.Fatalf("expected maxmemory role key, got %v", got)
+	}
+	if got := cfg.Metadata["redis_maxmemory"]; got != "256mb" {
+		t.Fatalf("expected redis_maxmemory compatibility key, got %v", got)
+	}
+}
+
+func TestBuildTaskConfig_RedisDefaultsBindToLoopbackAndMeshIP(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"control-1": {WireguardIP: "10.88.0.2"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{Name: "foghorn", Host: "control-1"},
+				},
+			},
+		},
+	}
+
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:       "redis-foghorn",
+		Type:       "redis",
+		ServiceID:  "redis",
+		InstanceID: "foghorn",
+		Host:       "control-1",
+		Phase:      orchestrator.PhaseInfrastructure,
+	}, manifest, map[string]interface{}{}, false, "", nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+
+	if got := cfg.Metadata["bind"]; got != "127.0.0.1 10.88.0.2" {
+		t.Fatalf("expected Redis to bind loopback and mesh IP by default, got %v", got)
+	}
+}

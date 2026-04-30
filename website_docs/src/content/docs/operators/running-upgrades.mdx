@@ -1,0 +1,117 @@
+---
+title: "Running Cluster Upgrades"
+description: "How to upgrade an existing FrameWorks cluster without re-provisioning it from scratch."
+sidebar:
+  order: 10
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Do not use provision as the normal upgrade path">
+  `frameworks cluster provision` converges the full manifest and may run install, configure,
+  service, validation, and initialization tasks. Use it for initial deployment or intentional
+  reconciliation, not as the routine way to roll a running cluster forward.
+</Aside>
+
+Use `frameworks cluster upgrade` for service binaries and images, and
+`frameworks cluster migrate` for PostgreSQL/YugabyteDB schema migrations. The
+upgrade command downloads or pulls the target release artifact, lets the role
+restart the service when the artifact or config changes, validates health, and
+rolls back on health-check failure unless `--no-rollback` is set.
+
+## Recommended flow
+
+<Steps>
+1. Check the current state:
+
+    ```bash
+    frameworks cluster status
+    ```
+
+2. Preview database migrations:
+
+   ```bash
+   frameworks cluster migrate --dry-run
+   ```
+
+3. Preview the service or cluster upgrade:
+
+   ```bash
+   frameworks cluster upgrade quartermaster --version stable --dry-run
+   frameworks cluster upgrade --all --dry-run
+   ```
+
+4. Apply PostgreSQL/YugabyteDB migrations before upgrading services that depend
+   on new schema:
+
+   ```bash
+   frameworks cluster migrate
+   ```
+
+5. Upgrade one service, or all enabled services in dependency order:
+
+   ```bash
+   frameworks cluster upgrade quartermaster --version stable --yes
+   frameworks cluster upgrade --all --yes
+   ```
+
+6. Verify health after the rollout:
+
+   ```bash
+   frameworks cluster status
+   frameworks cluster doctor
+   ```
+
+</Steps>
+
+## Version selection
+
+`--version` accepts:
+
+| Value        | Meaning                                     |
+| ------------ | ------------------------------------------- |
+| `stable`     | Latest stable release manifest              |
+| `rc`         | Latest release-candidate manifest           |
+| `v0.0.0-rc1` | Specific release manifest                   |
+| omitted      | The cluster's configured channel, or stable |
+
+Set the default channel with:
+
+```bash
+frameworks cluster set-channel stable
+frameworks cluster set-channel rc
+```
+
+## Migrations
+
+PostgreSQL and YugabyteDB migrations are managed by `frameworks cluster
+migrate`. Run them before deploying service versions that require new tables,
+columns, or indexes.
+
+ClickHouse migrations are not applied by `cluster migrate`. For ClickHouse
+schema changes, follow the release notes and the [ClickHouse Migrations](/operators/clickhouse-migrations)
+runbook before upgrading analytics services.
+
+## Rollback behavior
+
+If health validation fails, `cluster upgrade` attempts to roll the service back
+to the previously detected version. Keep rollback enabled for normal production
+rollouts.
+
+Use `--no-rollback` only when you want to inspect a failed upgraded service in
+place:
+
+```bash
+frameworks cluster upgrade bridge --version rc --no-rollback
+```
+
+## When to use provision
+
+Use `frameworks cluster provision` for:
+
+- first deployment of a cluster,
+- adding a new service or host to the manifest,
+- repairing drift where you intentionally want a full converge,
+- re-rendering infrastructure after changing role inputs.
+
+For routine release rollouts, use `cluster upgrade` plus `cluster migrate`.

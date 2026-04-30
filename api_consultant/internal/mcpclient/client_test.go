@@ -134,6 +134,23 @@ func TestNewGatewayClient_EmptyURL(t *testing.T) {
 	}
 }
 
+func TestNilGatewayClientIsSafe(t *testing.T) {
+	var gc *GatewayClient
+
+	if tools := gc.AvailableTools(); len(tools) != 0 {
+		t.Fatalf("expected no tools from nil client, got %v", tools)
+	}
+	if gc.HasTool("diagnose_rebuffering") {
+		t.Fatal("nil client should not report tools")
+	}
+	if _, err := gc.CallTool(context.Background(), "diagnose_rebuffering", nil); err == nil {
+		t.Fatal("expected call error from nil client")
+	}
+	if err := gc.Close(); err != nil {
+		t.Fatalf("nil client close should be a no-op, got %v", err)
+	}
+}
+
 func testMCPServer(t *testing.T) *httptest.Server {
 	t.Helper()
 

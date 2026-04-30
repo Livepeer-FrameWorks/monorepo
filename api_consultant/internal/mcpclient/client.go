@@ -101,6 +101,9 @@ func New(ctx context.Context, cfg Config) (*GatewayClient, error) {
 // AvailableTools returns the Gateway tools converted to llm.Tool format,
 // filtered by the allowlist if one was configured.
 func (gc *GatewayClient) AvailableTools() []llm.Tool {
+	if gc == nil {
+		return nil
+	}
 	gc.mu.RLock()
 	defer gc.mu.RUnlock()
 	return gc.tools
@@ -108,6 +111,9 @@ func (gc *GatewayClient) AvailableTools() []llm.Tool {
 
 // HasTool reports whether the named tool is available from the Gateway.
 func (gc *GatewayClient) HasTool(name string) bool {
+	if gc == nil {
+		return false
+	}
 	gc.mu.RLock()
 	defer gc.mu.RUnlock()
 	_, ok := gc.toolIndex[name]
@@ -118,6 +124,9 @@ func (gc *GatewayClient) HasTool(name string) bool {
 // ctx (via ctxkeys.KeyJWTToken) and injected into the HTTP request so the
 // Gateway authenticates the call for the correct tenant.
 func (gc *GatewayClient) CallTool(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
+	if gc == nil {
+		return "", fmt.Errorf("mcpclient: gateway client is not connected")
+	}
 	gc.mu.RLock()
 	_, allowed := gc.toolIndex[name]
 	gc.mu.RUnlock()
@@ -202,6 +211,9 @@ func (gc *GatewayClient) tryReconnect(ctx context.Context) error {
 
 // Close shuts down the MCP client session.
 func (gc *GatewayClient) Close() error {
+	if gc == nil {
+		return nil
+	}
 	if gc.session != nil {
 		return gc.session.Close()
 	}

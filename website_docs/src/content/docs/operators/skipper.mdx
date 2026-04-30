@@ -182,17 +182,18 @@ pricing in this page.
 
 **Service:**
 
-| Variable                            | Purpose                                       | Default         |
-| ----------------------------------- | --------------------------------------------- | --------------- |
-| `SKIPPER_WEB_UI`                    | Enable standalone web UI at `/`               | `true`          |
-| `SKIPPER_API_KEY`                   | API key for admin WebUI auth                  | —               |
-| `SKIPPER_WEB_UI_INSECURE`           | Allow the standalone WebUI without an API key | `false`         |
-| `SKIPPER_REQUIRED_TIER_LEVEL`       | Minimum subscription tier                     | `3`             |
-| `SKIPPER_CHAT_RATE_LIMIT_PER_HOUR`  | Rate limit per tenant                         | `0` (unlimited) |
-| `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)  | —               |
-| `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge       | —               |
-| `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request  | `20`            |
-| `GATEWAY_PUBLIC_URL`                | API Gateway base URL for MCP tool access      | —               |
+| Variable                            | Purpose                                                                       | Default                      |
+| ----------------------------------- | ----------------------------------------------------------------------------- | ---------------------------- |
+| `SKIPPER_WEB_UI`                    | Enable standalone web UI at `/`                                               | `true`                       |
+| `SKIPPER_API_KEY`                   | API key for admin WebUI auth                                                  | —                            |
+| `SKIPPER_WEB_UI_INSECURE`           | Allow the standalone WebUI without an API key                                 | `false`                      |
+| `SKIPPER_REQUIRED_TIER_LEVEL`       | Minimum subscription tier                                                     | `3`                          |
+| `SKIPPER_CHAT_RATE_LIMIT_PER_HOUR`  | Rate limit per tenant                                                         | `0` (unlimited)              |
+| `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)                                  | —                            |
+| `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge                                       | —                            |
+| `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request                                  | `20`                         |
+| `GATEWAY_MCP_URL`                   | Internal Gateway MCP endpoint for platform tools                              | derived from Bridge mesh URL |
+| `GATEWAY_PUBLIC_URL`                | Public API Gateway base URL; fallback for MCP when `GATEWAY_MCP_URL` is unset | —                            |
 
 **Social posting:**
 
