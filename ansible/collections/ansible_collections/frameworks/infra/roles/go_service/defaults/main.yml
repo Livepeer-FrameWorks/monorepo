@@ -9,6 +9,7 @@ go_service_artifact_url: "" # pinned tarball/zip URL
 go_service_artifact_checksum: ""
 go_service_version: ""
 go_service_port: 0
+go_service_validate_timeout: 15
 go_service_env: {}
 go_service_args: []
 go_service_files: []

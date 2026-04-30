@@ -34,3 +34,19 @@
     that: compose_stack_running_count | default(0) | int > 0
     fail_msg: "compose_stack[{{ compose_stack_name }}]: no running containers"
   when: not (compose_stack_render_only | default(false) | bool)
+
+- name: Wait for compose HTTP health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ compose_stack_service.port | default(0) }}{{ compose_stack_service.health_path | default('') }}"
+    method: GET
+    status_code: 200
+  register: compose_stack_health
+  changed_when: false
+  retries: "{{ ((compose_stack_validate_timeout | int) / 2) | round(0, 'ceil') | int }}"
+  delay: 2
+  until: compose_stack_health.status == 200
+  when:
+    - not (compose_stack_render_only | default(false) | bool)
+    - compose_stack_service | default({}) | length > 0
+    - compose_stack_service.port | default(0) | int > 0
+    - (compose_stack_service.health_path | default('')) | length > 0

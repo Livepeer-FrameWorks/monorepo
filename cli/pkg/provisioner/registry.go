@@ -125,6 +125,13 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 			ServiceName: serviceName,
 			DefaultPort: port,
 		}
+		switch serviceName {
+		case "metabase":
+			cfg.ContainerPort = 3000
+			cfg.HealthPath = "/api/health"
+		case "grafana":
+			cfg.HealthPath = "/api/health"
+		}
 		if serviceName == "livepeer-gateway" || serviceName == "livepeer-signer" {
 			cfg.DebianRuntimePackages = []string{"libva-drm2"}
 			cfg.PacmanRuntimePackages = []string{"libva"}

@@ -11,9 +11,9 @@
 #                                  (used by service-specific roles whose
 #                                  compose shape is non-generic, e.g.
 #                                  chatwoot app+sidekiq)
-#   compose_stack_service          {image, port, health_path} dict for the
-#                                  single-service generic shape; role
-#                                  renders compose from the packaged
+#   compose_stack_service          {image, port, container_port, health_path}
+#                                  dict for the single-service generic shape;
+#                                  role renders compose from the packaged
 #                                  templates/generic-compose.yml.j2
 
 compose_stack_name: ""
@@ -24,6 +24,7 @@ compose_stack_service: {}
 compose_stack_env: {}
 compose_stack_pull: "policy" # policy | always | missing | never
 compose_stack_wait: true
+compose_stack_validate_timeout: 120
 compose_stack_recreate: auto # auto | always | never
 compose_stack_manage_docker: true
 compose_stack_docker_service: docker

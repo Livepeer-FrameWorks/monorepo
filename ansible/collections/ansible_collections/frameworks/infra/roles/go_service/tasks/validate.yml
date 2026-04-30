@@ -1,12 +1,27 @@
 ---
 - name: Validate Go service listener
   block:
+    - name: Wait for Livepeer health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ go_service_port }}/healthz"
+        method: GET
+        status_code: 200
+      register: go_service_validate_livepeer_health
+      retries: "{{ ((go_service_validate_timeout | int) / 2) | round(0, 'ceil') | int }}"
+      delay: 2
+      until: go_service_validate_livepeer_health.status == 200
+      when:
+        - go_service_port | int > 0
+        - go_service_livepeer_expected_keystore_dir | length > 0
+
     - name: Wait for service port (when defined)
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ go_service_port }}"
-        timeout: 15
-      when: go_service_port | int > 0
+        timeout: "{{ go_service_validate_timeout }}"
+      when:
+        - go_service_port | int > 0
+        - go_service_livepeer_expected_keystore_dir | length == 0
 
     - name: Find Livepeer keystore files after start
       ansible.builtin.find:

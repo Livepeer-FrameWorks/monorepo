@@ -24,8 +24,12 @@ type ServiceRoleConfig struct {
 	DefaultPort int
 
 	// HealthPath defaults to "/health" when empty; surfaces in the generated
-	// compose healthcheck for docker mode.
+	// compose HTTP validation for docker mode.
 	HealthPath string
+
+	// ContainerPort is the port the container listens on in docker mode.
+	// DefaultPort remains the host-facing port published by Docker.
+	ContainerPort int
 
 	// DefaultImage is used when the manifest supplies neither Image nor a
 	// gitops release-manifest entry.
@@ -109,6 +113,11 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 	if port == 0 {
 		port = cfg.DefaultPort
 	}
+	containerPort := metaIntOr(config.Metadata, "container_port", cfg.ContainerPort)
+	if containerPort == 0 {
+		containerPort = port
+	}
+	healthPath := firstNonEmpty(metaString(config.Metadata, "health_path"), cfg.HealthPath)
 	image, err := resolveGenericImage(cfg, config)
 	if err != nil {
 		return nil, err
@@ -121,10 +130,12 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 	return map[string]any{
 		"compose_stack_name":        cfg.ServiceName,
 		"compose_stack_project_dir": "/opt/frameworks/" + cfg.ServiceName,
+		"compose_stack_wait":        false,
 		"compose_stack_service": map[string]any{
-			"image":       image,
-			"port":        port,
-			"health_path": cfg.HealthPath,
+			"image":          image,
+			"port":           port,
+			"container_port": containerPort,
+			"health_path":    healthPath,
 		},
 		"compose_stack_env": envAny,
 	}, nil
@@ -161,12 +172,17 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
 		args = livepeerNativeArgs(cfg.ServiceName, envMap, cfg.StateDirs)
 	}
+	validateTimeout := 15
+	if cfg.ServiceName == "livepeer-gateway" {
+		validateTimeout = 120
+	}
 	vars := map[string]any{
 		"go_service_name":                             cfg.ServiceName,
 		"go_service_artifact_url":                     url,
 		"go_service_artifact_checksum":                checksum,
 		"go_service_version":                          firstNonEmpty(config.Version, metaString(config.Metadata, "version")),
 		"go_service_port":                             port,
+		"go_service_validate_timeout":                 validateTimeout,
 		"go_service_env":                              envAny,
 		"go_service_args":                             nonNilStringSlice(args),
 		"go_service_files":                            files,
@@ -283,6 +299,7 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 		{"pixels_per_unit", "pixelsPerUnit"},
 		{"max_ticket_ev", "maxTicketEV"},
 		{"deposit_multiplier", "depositMultiplier"},
+		{"block_polling_interval", "blockPollingInterval"},
 		{"eth_url", "ethUrl"},
 		{"eth_acct_addr", "ethAcctAddr"},
 		{"orch_webhook_url", "orchWebhookUrl"},

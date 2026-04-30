@@ -7,6 +7,39 @@ import (
 	"frameworks/cli/pkg/inventory"
 )
 
+func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) {
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:   "metabase",
+		DefaultPort:   3001,
+		ContainerPort: 3000,
+		HealthPath:    "/api/health",
+		DefaultImage:  "metabase/metabase:v0.59.1",
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:     "docker",
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	if got := vars["compose_stack_wait"]; got != false {
+		t.Fatalf("compose_stack_wait got %v, want false", got)
+	}
+	service, ok := vars["compose_stack_service"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_service got %T, want map[string]any", vars["compose_stack_service"])
+	}
+	if got := service["port"]; got != 3001 {
+		t.Fatalf("port got %v, want 3001", got)
+	}
+	if got := service["container_port"]; got != 3000 {
+		t.Fatalf("container_port got %v, want 3000", got)
+	}
+	if got := service["health_path"]; got != "/api/health" {
+		t.Fatalf("health_path got %v, want /api/health", got)
+	}
+}
+
 func TestServiceNativeVarsIncludesRuntimePackages(t *testing.T) {
 	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
 		ServiceName:           "livepeer-gateway",
@@ -58,24 +91,25 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		Version:   "vtest",
 		BinaryURL: "https://example.test/livepeer.tar.gz",
 		EnvVars: map[string]string{
-			"network":            "arbitrum-one-mainnet",
-			"http_addr":          ":8935",
-			"http_ingest":        "true",
-			"cli_addr":           ":7935",
-			"rtmp_addr":          "",
-			"auth_webhook_url":   "http://foghorn.internal:18008/webhooks/livepeer/auth",
-			"gateway_host":       "livepeer.media.example",
-			"max_sessions":       "500",
-			"max_price_per_unit": "1200",
-			"pixels_per_unit":    "1",
-			"max_ticket_ev":      "3000000000000",
-			"deposit_multiplier": "1",
-			"remote_signer_url":  "http://127.0.0.1:18016",
-			"eth_url":            "https://arb.example",
-			"eth_acct_addr":      "0xabc123",
-			"orch_webhook_url":   "https://orch.example",
-			"remote_discovery":   "true",
-			"keystore_path":      "/etc/frameworks/livepeer-keystore",
+			"network":                "arbitrum-one-mainnet",
+			"http_addr":              ":8935",
+			"http_ingest":            "true",
+			"cli_addr":               ":7935",
+			"rtmp_addr":              "",
+			"auth_webhook_url":       "http://foghorn.internal:18008/webhooks/livepeer/auth",
+			"gateway_host":           "livepeer.media.example",
+			"max_sessions":           "500",
+			"max_price_per_unit":     "1200",
+			"pixels_per_unit":        "1",
+			"max_ticket_ev":          "3000000000000",
+			"deposit_multiplier":     "1",
+			"block_polling_interval": "20",
+			"remote_signer_url":      "http://127.0.0.1:18016",
+			"eth_url":                "https://arb.example",
+			"eth_acct_addr":          "0xabc123",
+			"orch_webhook_url":       "https://orch.example",
+			"remote_discovery":       "true",
+			"keystore_path":          "/etc/frameworks/livepeer-keystore",
 		},
 		Metadata: map[string]any{},
 	}, RoleBuildHelpers{})
@@ -94,6 +128,9 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 	if got := env["HOME"]; got != "/var/lib/frameworks/livepeer-gateway" {
 		t.Fatalf("HOME got %v", got)
 	}
+	if got := vars["go_service_validate_timeout"]; got != 120 {
+		t.Fatalf("go_service_validate_timeout got %v, want 120", got)
+	}
 	assertStringSlice(t, vars["go_service_args"], []string{
 		"-gateway",
 		"-dataDir=/var/lib/frameworks/livepeer-gateway",
@@ -110,6 +147,7 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		"-pixelsPerUnit=1",
 		"-maxTicketEV=3000000000000",
 		"-depositMultiplier=1",
+		"-blockPollingInterval=20",
 		"-ethUrl=https://arb.example",
 		"-ethAcctAddr=0xabc123",
 		"-orchWebhookUrl=https://orch.example",

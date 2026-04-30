@@ -928,6 +928,46 @@ func TestBuildServiceEnvVarsEscapesDatabaseURLPassword(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsUsesSharedPeriscopeDatabaseRole(t *testing.T) {
+	envFile := writeTestEnvFile(t, testSharedSecrets+"DATABASE_PASSWORD=periscope-pass\n")
+	manifest := &inventory.Manifest{
+		Profile:  "dev",
+		EnvFiles: []string{envFile},
+		Hosts: map[string]inventory.Host{
+			"central-eu-1": {WireguardIP: "10.88.0.10"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Host:    "central-eu-1",
+				Port:    5432,
+			},
+		},
+	}
+	task := &orchestrator.Task{
+		Name:      "periscope-query",
+		Type:      "periscope-query",
+		ServiceID: "periscope-query",
+		Host:      "central-eu-1",
+		Phase:     orchestrator.PhaseApplications,
+	}
+
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest))
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+	parsed, err := url.Parse(env["DATABASE_URL"])
+	if err != nil {
+		t.Fatalf("DATABASE_URL should parse: %v", err)
+	}
+	if got := parsed.User.Username(); got != "periscope" {
+		t.Fatalf("expected periscope database user, got %q", got)
+	}
+	if got := strings.TrimPrefix(parsed.Path, "/"); got != "periscope" {
+		t.Fatalf("expected periscope database name, got %q", got)
+	}
+}
+
 func TestBuildTaskConfigKafkaUsesMeshControllerQuorumAddresses(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{

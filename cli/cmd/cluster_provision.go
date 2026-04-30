@@ -3407,6 +3407,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if manifest.RootDomain != "" && env["BRAND_DOMAIN"] == "" {
 		env["BRAND_DOMAIN"] = manifest.RootDomain
 	}
+	applySharedPostgresDatabaseDefaults(baseName, env)
 	if env["DATABASE_USER"] == "" {
 		env["DATABASE_USER"] = strings.ReplaceAll(task.ServiceID, "-", "_")
 	}
@@ -3436,6 +3437,18 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	return env, nil
+}
+
+func applySharedPostgresDatabaseDefaults(serviceID string, env map[string]string) {
+	switch serviceID {
+	case "periscope-query", "periscope-ingest":
+		if env["DATABASE_USER"] == "" {
+			env["DATABASE_USER"] = "periscope"
+		}
+		if env["DATABASE_NAME"] == "" {
+			env["DATABASE_NAME"] = "periscope"
+		}
+	}
 }
 
 func isDevProfile(manifest *inventory.Manifest) bool {
@@ -3533,16 +3546,17 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 
 func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 	defaults := map[string]string{
-		"network":            "arbitrum-one-mainnet",
-		"http_addr":          ":8935",
-		"http_ingest":        "true",
-		"cli_addr":           ":7935",
-		"rtmp_addr":          "",
-		"max_sessions":       "500",
-		"max_price_per_unit": "1200",
-		"pixels_per_unit":    "1",
-		"max_ticket_ev":      "3000000000000",
-		"deposit_multiplier": "1",
+		"network":                "arbitrum-one-mainnet",
+		"http_addr":              ":8935",
+		"http_ingest":            "true",
+		"cli_addr":               ":7935",
+		"rtmp_addr":              "",
+		"max_sessions":           "500",
+		"max_price_per_unit":     "1200",
+		"pixels_per_unit":        "1",
+		"max_ticket_ev":          "3000000000000",
+		"deposit_multiplier":     "1",
+		"block_polling_interval": "20",
 	}
 	for key, value := range defaults {
 		if _, ok := env[key]; !ok {

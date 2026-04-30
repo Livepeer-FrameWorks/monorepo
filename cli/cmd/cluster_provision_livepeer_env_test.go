@@ -253,18 +253,19 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"network":            "arbitrum-one-mainnet",
-		"http_addr":          ":8935",
-		"http_ingest":        "true",
-		"cli_addr":           ":7935",
-		"rtmp_addr":          "",
-		"max_sessions":       "500",
-		"max_price_per_unit": "1200",
-		"pixels_per_unit":    "1",
-		"max_ticket_ev":      "3000000000000",
-		"deposit_multiplier": "1",
-		"eth_url":            "https://rpc-one.example",
-		"gateway_host":       "livepeer.core-central-primary.frameworks.network",
+		"network":                "arbitrum-one-mainnet",
+		"http_addr":              ":8935",
+		"http_ingest":            "true",
+		"cli_addr":               ":7935",
+		"rtmp_addr":              "",
+		"max_sessions":           "500",
+		"max_price_per_unit":     "1200",
+		"pixels_per_unit":        "1",
+		"max_ticket_ev":          "3000000000000",
+		"deposit_multiplier":     "1",
+		"block_polling_interval": "20",
+		"eth_url":                "https://rpc-one.example",
+		"gateway_host":           "livepeer.core-central-primary.frameworks.network",
 	}
 	for key, wantValue := range want {
 		if got := env[key]; got != wantValue {

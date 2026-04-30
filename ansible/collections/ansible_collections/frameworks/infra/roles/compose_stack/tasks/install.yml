@@ -40,8 +40,9 @@
 #   - callers with a specific shape (chatwoot, listmonk) hand in a fully
 #     rendered docker-compose.yml as `compose_stack_compose_content`;
 #   - callers that want the generic single-service shape pass a
-#     `compose_stack_service` dict ({image, port, health_path}) and this
-#     role renders the compose from templates/generic-compose.yml.j2.
+#     `compose_stack_service` dict ({image, port, container_port,
+#     health_path}) and this role renders the compose from
+#     templates/generic-compose.yml.j2.
 - name: Render docker-compose.yml (explicit content)
   ansible.builtin.copy:
     dest: "{{ compose_stack_project_dir }}/docker-compose.yml"
