@@ -3776,7 +3776,7 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWhere string, baseArgs []any, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
 	args := append([]any{}, baseArgs...)
 	args = append(args, models.NodeTypeEdge)
-	where := baseWhere + fmt.Sprintf(" AND n.node_type = $%d AND n.external_ip IS NOT NULL AND n.external_ip <> ''", len(baseArgs)+1)
+	where := baseWhere + fmt.Sprintf(" AND n.node_type = $%d AND n.external_ip IS NOT NULL", len(baseArgs)+1)
 	argIdx := len(args) + 1
 
 	var totalNodes int32
@@ -3844,13 +3844,13 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 		argIdx++
 	}
 
-	where += " AND n.external_ip IS NOT NULL AND n.external_ip <> ''"
+	where += " AND n.external_ip IS NOT NULL"
 
 	servicesJoin := "\n\t\tJOIN quartermaster.services s ON si.service_id = s.service_id"
 	siJoin := `
 		JOIN quartermaster.service_instances si
 			ON si.cluster_id = n.cluster_id
-			AND (si.node_id = n.node_id OR si.advertise_host = n.external_ip OR si.advertise_host = n.internal_ip)`
+			AND (si.node_id = n.node_id OR si.advertise_host = n.external_ip::text OR si.advertise_host = n.internal_ip::text)`
 
 	var totalNodes int32
 	if err := s.db.QueryRowContext(ctx,

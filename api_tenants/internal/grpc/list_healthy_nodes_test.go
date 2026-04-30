@@ -3,6 +3,9 @@ package grpc
 import (
 	"context"
 	"database/sql/driver"
+	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -368,6 +371,54 @@ func TestListHealthyNodesForDNS_NoFilterReturnsAllHealthyNodes(t *testing.T) {
 	}
 	if len(resp.GetNodes()) != 2 {
 		t.Fatalf("expected 2 returned nodes, got %d", len(resp.GetNodes()))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestListHealthyNodesForDNS_QueriesCastInetAddressesForAdvertiseHost(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if strings.Contains(actualSQL, "external_ip <> ''") {
+			return fmt.Errorf("query compares inet external_ip to empty string: %s", actualSQL)
+		}
+		if strings.Contains(actualSQL, "si.advertise_host = n.external_ip OR") || strings.Contains(actualSQL, "si.advertise_host = n.internal_ip)") {
+			return fmt.Errorf("query compares advertise_host text directly to inet column: %s", actualSQL)
+		}
+		matched, matchErr := regexp.MatchString(expectedSQL, actualSQL)
+		if matchErr != nil {
+			return matchErr
+		}
+		if !matched {
+			return fmt.Errorf("actual sql did not match %q: %s", expectedSQL, actualSQL)
+		}
+		return nil
+	})))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	svcType := "bridge"
+
+	mock.ExpectQuery(`(?s)si\.advertise_host = n\.external_ip::text.*si\.advertise_host = n\.internal_ip::text`).
+		WithArgs(svcType).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	mock.ExpectQuery(`(?s)si\.advertise_host = n\.external_ip::text.*si\.advertise_host = n\.internal_ip::text`).
+		WithArgs(svcType, int32(300)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	mock.ExpectQuery(`(?s)si\.advertise_host = n\.external_ip::text.*si\.advertise_host = n\.internal_ip::text`).
+		WithArgs(svcType, int32(300)).
+		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
+
+	if _, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+		ServiceType: &svcType,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
