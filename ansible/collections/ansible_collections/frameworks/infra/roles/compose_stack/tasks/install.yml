@@ -19,12 +19,107 @@
 
 - name: Install Docker Engine packages
   ansible.builtin.package:
-    name: "{{ compose_stack_docker_packages_by_family[ansible_facts.os_family] | default(compose_stack_docker_packages) }}"
+    name: "{{ compose_stack_docker_engine_packages_by_family[ansible_facts.os_family] | default(compose_stack_docker_engine_packages) }}"
     state: present
   when:
     - compose_stack_manage_docker | bool
     - not (compose_stack_render_only | default(false) | bool)
     - not ansible_check_mode
+
+- name: Check Docker Compose plugin
+  ansible.builtin.command:
+    argv: [docker, compose, version]
+  register: compose_stack_compose_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
+
+- name: Install Docker Compose package
+  ansible.builtin.package:
+    name: "{{ compose_stack_docker_compose_packages_by_family[ansible_facts.os_family] | default(compose_stack_docker_compose_packages) }}"
+    state: present
+  register: compose_stack_compose_package_install
+  failed_when: false
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
+    - not ansible_check_mode
+    - compose_stack_compose_probe.rc | default(1) != 0
+
+- name: Re-check Docker Compose plugin after package install
+  ansible.builtin.command:
+    argv: [docker, compose, version]
+  register: compose_stack_compose_package_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
+    - compose_stack_compose_probe.rc | default(1) != 0
+
+- name: Resolve Docker Compose plugin architecture
+  ansible.builtin.set_fact:
+    compose_stack_compose_plugin_arch: >-
+      {{ {'x86_64': 'x86_64', 'amd64': 'x86_64', 'aarch64': 'aarch64', 'arm64': 'aarch64'}[ansible_architecture] | default('') }}
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
+    - compose_stack_compose_probe.rc | default(1) != 0
+    - compose_stack_compose_package_probe.rc | default(1) != 0
+
+- name: Fail when Docker Compose fallback architecture is unsupported
+  ansible.builtin.fail:
+    msg: "Docker Compose package is unavailable and no fallback binary mapping exists for architecture {{ ansible_architecture }}"
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
+    - compose_stack_compose_probe.rc | default(1) != 0
+    - compose_stack_compose_package_probe.rc | default(1) != 0
+    - compose_stack_compose_plugin_arch | default('') | length == 0
+
+- name: Ensure Docker Compose plugin directory
+  ansible.builtin.file:
+    path: "{{ compose_stack_compose_plugin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
+    - not ansible_check_mode
+    - compose_stack_compose_probe.rc | default(1) != 0
+    - compose_stack_compose_package_probe.rc | default(1) != 0
+
+- name: Install Docker Compose plugin binary fallback
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/docker/compose/releases/download/{{ compose_stack_compose_plugin_version
+      }}/docker-compose-linux-{{ compose_stack_compose_plugin_arch }}
+    dest: "{{ compose_stack_compose_plugin_dir }}/docker-compose"
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
+    - not ansible_check_mode
+    - compose_stack_compose_probe.rc | default(1) != 0
+    - compose_stack_compose_package_probe.rc | default(1) != 0
+
+- name: Verify Docker Compose plugin
+  ansible.builtin.command:
+    argv: [docker, compose, version]
+  register: compose_stack_compose_final_probe
+  changed_when: false
+  check_mode: false
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
 
 - name: Ensure Docker service is running
   ansible.builtin.service:

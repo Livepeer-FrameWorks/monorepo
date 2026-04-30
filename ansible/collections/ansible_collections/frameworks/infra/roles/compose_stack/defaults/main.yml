@@ -28,13 +28,20 @@ compose_stack_validate_timeout: 120
 compose_stack_recreate: auto # auto | always | never
 compose_stack_manage_docker: true
 compose_stack_docker_service: docker
-compose_stack_docker_packages:
+compose_stack_docker_engine_packages:
   - docker.io
+compose_stack_docker_compose_packages:
   - docker-compose-plugin
-compose_stack_docker_packages_by_family:
-  Debian: [docker.io, docker-compose-plugin]
-  Archlinux: [docker, docker-compose]
-  RedHat: [docker, docker-compose-plugin]
+compose_stack_docker_engine_packages_by_family:
+  Debian: [docker.io]
+  Archlinux: [docker]
+  RedHat: [docker]
+compose_stack_docker_compose_packages_by_family:
+  Debian: [docker-compose-plugin]
+  Archlinux: [docker-compose]
+  RedHat: [docker-compose-plugin]
+compose_stack_compose_plugin_version: v2.32.4
+compose_stack_compose_plugin_dir: /usr/local/lib/docker/cli-plugins
 # compose_stack_render_only writes compose + .env but skips docker compose
 # up (and the validate-tag `docker compose ps` probe). Used by molecule
 # scenarios that want to exercise rendering without a docker daemon.
