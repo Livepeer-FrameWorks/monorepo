@@ -158,11 +158,27 @@ func NewPeerManager(cfg PeerManagerConfig) *PeerManager {
 	return pm
 }
 
+func (pm *PeerManager) SetOwnerTenantID(ownerTenantID string) {
+	if ownerTenantID == "" {
+		return
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.ownerTenantID = ownerTenantID
+}
+
 // emitFederationEvent sends a topology/lifecycle event to Decklog (fire-and-forget).
 // Automatically enriches with local/remote geo from self-geo and peer cache.
 func (pm *PeerManager) emitFederationEvent(data *pb.FederationEventData) {
 	pm.enrichFederationEventGeo(data)
 
+	if data.GetTenantId() == "" {
+		pm.logger.WithFields(logging.Fields{
+			"event_type":    data.GetEventType().String(),
+			"local_cluster": data.GetLocalCluster(),
+		}).Warn("Skipping federation event without tenant_id")
+		return
+	}
 	if pm.decklogClient == nil {
 		return
 	}
@@ -174,8 +190,13 @@ func (pm *PeerManager) emitFederationEvent(data *pb.FederationEventData) {
 }
 
 func (pm *PeerManager) enrichFederationEventGeo(data *pb.FederationEventData) {
-	if data.TenantId == nil && pm.ownerTenantID != "" {
-		data.TenantId = &pm.ownerTenantID
+	if data.TenantId == nil {
+		pm.mu.RLock()
+		tenantID := pm.ownerTenantID
+		pm.mu.RUnlock()
+		if tenantID != "" {
+			data.TenantId = &tenantID
+		}
 	}
 	if data.LocalCluster == "" {
 		data.LocalCluster = pm.clusterID

@@ -481,13 +481,54 @@ func main() {
 		logger.Info("S3 cold storage disabled (no STORAGE_S3_BUCKET configured)")
 	}
 
+	// Initialize handlers with injected clients before bootstrap metadata is applied.
+	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader, geoipCache)
+
+	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
+
+	// Register at QM before federation starts so leadership events have stable
+	// cluster ownership metadata. QM resolves the address as wireguard_ip >
+	// internal_ip > external_ip.
+	advertiseAddr := ""
+	if qmClient != nil {
+		grpcPort := config.GetEnvInt("FOGHORN_GRPC_PORT", controlPortFromBindAddr(controlAddr, 18019))
+		bsReq := &pb.BootstrapServiceRequest{
+			Type:      "foghorn",
+			Version:   version.Version,
+			Protocol:  "grpc",
+			Port:      int32(grpcPort),
+			ClusterId: &foghornCfg.ClusterID,
+		}
+		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
+			bsReq.NodeId = &nodeID
+		}
+		if host := config.GetEnv("FOGHORN_HOST", ""); host != "" {
+			bsReq.AdvertiseHost = &host
+		}
+
+		retryCfg := qmbootstrap.DefaultRetryConfig("foghorn")
+		retryCfg.AttemptTimeout = 10 * time.Second
+		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		bsResp, bsErr := qmbootstrap.BootstrapServiceWithRetry(bootstrapCtx, qmClient, bsReq, logger, retryCfg)
+		bootstrapCancel()
+		if bsErr != nil {
+			logger.WithError(bsErr).Warn("BootstrapService failed — HA relay and federation tenant attribution degraded")
+		}
+		if bsResp != nil {
+			advertiseAddr = bsResp.GetAdvertiseAddr()
+			handlers.ApplyBootstrapMetadata(bsResp)
+		}
+	}
+	_, bootstrapOwnerTenantID := handlers.GetClusterInfo()
+
 	// --- Federation (cross-cluster stream routing) ---
 	federationEnabled := config.GetEnv("FEDERATION_ENABLED", "false") == "true"
 	var federationServer *federation.FederationServer
 	var peerManager *federation.PeerManager
 	var remoteEdgeCache *federation.RemoteEdgeCache
 	var fedClient *federation.FederationClient
-	if federationEnabled && redisClient != nil && qmClient != nil {
+	var relayServer *foghorngrpc.RelayServer
+	if federationEnabled && redisClient != nil && qmClient != nil && bootstrapOwnerTenantID != "" {
 		remoteEdgeCache = federation.NewRemoteEdgeCache(redisClient, foghornCfg.ClusterID, logger)
 
 		federationServer = federation.NewFederationServer(federation.FederationServerConfig{
@@ -513,6 +554,7 @@ func main() {
 			Cache:         remoteEdgeCache,
 			Logger:        logger,
 			DecklogClient: decklogClient,
+			OwnerTenantID: bootstrapOwnerTenantID,
 			SelfGeoFunc:   handlers.GetSelfGeo,
 		})
 		defer peerManager.Close()
@@ -524,11 +566,8 @@ func main() {
 
 		logger.WithField("cluster_id", foghornCfg.ClusterID).Info("Federation enabled")
 	} else if federationEnabled {
-		logger.Warn("Federation enabled but missing prerequisites (redis and/or quartermaster)")
+		logger.WithField("has_owner_tenant", bootstrapOwnerTenantID != "").Warn("Federation enabled but missing prerequisites (redis, quartermaster, and/or bootstrap owner tenant)")
 	}
-
-	// Initialize handlers with injected clients
-	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader, geoipCache)
 
 	// Initialize trigger processor (Lifted from Handlers)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
@@ -583,7 +622,6 @@ func main() {
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
 	control.SetDecklogClient(decklogClient)
 	control.SetDVRStopRegistry(foghornServer)
-	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)
@@ -610,57 +648,21 @@ func main() {
 		federationServer.SetArtifactCommandHandler(foghornServer)
 	}
 
-	// Register at QM to discover the advertise address used for cluster assignment
-	// and, when Redis is available, cross-instance command forwarding.
-	// QM resolves the address as wireguard_ip > internal_ip > external_ip.
-	var relayServer *foghorngrpc.RelayServer
-	if qmClient != nil {
-		grpcPort := config.GetEnvInt("FOGHORN_GRPC_PORT", controlPortFromBindAddr(controlAddr, 18019))
-		bsReq := &pb.BootstrapServiceRequest{
-			Type:      "foghorn",
-			Version:   version.Version,
-			Protocol:  "grpc",
-			Port:      int32(grpcPort),
-			ClusterId: &foghornCfg.ClusterID,
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			bsReq.NodeId = &nodeID
-		}
-		if host := config.GetEnv("FOGHORN_HOST", ""); host != "" {
-			bsReq.AdvertiseHost = &host
-		}
+	if redisStore != nil && advertiseAddr != "" {
+		relayPool := foghornpool.NewPool(foghornpool.PoolConfig{
+			ServiceToken: serviceToken,
+			Timeout:      10 * time.Second,
+			Logger:       logger,
+		})
+		defer relayPool.Close()
 
-		retryCfg := qmbootstrap.DefaultRetryConfig("foghorn")
-		retryCfg.AttemptTimeout = 10 * time.Second
-		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 60*time.Second)
-		bsResp, bsErr := qmbootstrap.BootstrapServiceWithRetry(bootstrapCtx, qmClient, bsReq, logger, retryCfg)
-		bootstrapCancel()
-		if bsErr != nil {
-			logger.WithError(bsErr).Warn("BootstrapService failed — HA relay disabled")
-		}
+		control.InitRelay(redisStore, instanceID, advertiseAddr, &relayPoolAdapter{pool: relayPool}, logger)
+		relayServer = foghorngrpc.NewRelayServer(logger)
 
-		advertiseAddr := ""
-		if bsResp != nil {
-			advertiseAddr = bsResp.GetAdvertiseAddr()
-			handlers.ApplyBootstrapMetadata(bsResp)
-		}
-
-		if redisStore != nil && advertiseAddr != "" {
-			relayPool := foghornpool.NewPool(foghornpool.PoolConfig{
-				ServiceToken: serviceToken,
-				Timeout:      10 * time.Second,
-				Logger:       logger,
-			})
-			defer relayPool.Close()
-
-			control.InitRelay(redisStore, instanceID, advertiseAddr, &relayPoolAdapter{pool: relayPool}, logger)
-			relayServer = foghorngrpc.NewRelayServer(logger)
-
-			logger.WithFields(logging.Fields{
-				"instance_id":    instanceID,
-				"advertise_addr": advertiseAddr,
-			}).Info("HA command relay enabled")
-		}
+		logger.WithFields(logging.Fields{
+			"instance_id":    instanceID,
+			"advertise_addr": advertiseAddr,
+		}).Info("HA command relay enabled")
 	}
 
 	// Start unified gRPC server with both Helmsman control and Foghorn control plane services

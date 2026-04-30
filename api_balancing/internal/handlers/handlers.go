@@ -1760,8 +1760,18 @@ func emitFederationEvent(data *pb.FederationEventData) {
 	if decklogClient == nil {
 		return
 	}
-	if data.TenantId == nil && ownerTenantID != "" {
-		data.TenantId = &ownerTenantID
+	if data.TenantId == nil {
+		tenantID := ownerTenantID
+		if tenantID != "" {
+			data.TenantId = &tenantID
+		}
+	}
+	if data.GetTenantId() == "" {
+		logger.WithFields(logging.Fields{
+			"event_type":    data.GetEventType().String(),
+			"local_cluster": data.GetLocalCluster(),
+		}).Warn("Skipping federation event without tenant_id")
+		return
 	}
 	if data.LocalCluster == "" {
 		data.LocalCluster = clusterID

@@ -136,6 +136,41 @@ func TestEnrichFederationEventGeo_UsesPeerClusterForRemoteGeo(t *testing.T) {
 	}
 }
 
+func TestEnrichFederationEventGeo_LeavesTenantUnsetWithoutOwner(t *testing.T) {
+	pm := &PeerManager{
+		clusterID:     "local-cluster",
+		logger:        testLogger(),
+		peers:         map[string]*peerState{},
+		streamPeers:   make(map[string]map[string]bool),
+		metricHistory: make(map[string][]metricSample),
+	}
+
+	data := &pb.FederationEventData{EventType: pb.FederationEventType_LEADER_ACQUIRED}
+	pm.enrichFederationEventGeo(data)
+
+	if data.TenantId != nil {
+		t.Fatalf("tenant_id = %q, want unset", data.GetTenantId())
+	}
+}
+
+func TestSetOwnerTenantIDUpdatesFederationEventEnrichment(t *testing.T) {
+	pm := &PeerManager{
+		clusterID:     "local-cluster",
+		logger:        testLogger(),
+		peers:         map[string]*peerState{},
+		streamPeers:   make(map[string]map[string]bool),
+		metricHistory: make(map[string][]metricSample),
+	}
+	pm.SetOwnerTenantID("tenant-real")
+
+	data := &pb.FederationEventData{EventType: pb.FederationEventType_LEADER_ACQUIRED}
+	pm.enrichFederationEventGeo(data)
+
+	if data.GetTenantId() != "tenant-real" {
+		t.Fatalf("tenant_id = %q, want tenant-real", data.GetTenantId())
+	}
+}
+
 // newTestPeerManager creates a PeerManager suitable for unit tests.
 // It does not start the background run() goroutine.
 func newTestPeerManager(t *testing.T, clusterID string, cache *RemoteEdgeCache, isLeader bool) *PeerManager {
