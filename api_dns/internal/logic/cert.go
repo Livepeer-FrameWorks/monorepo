@@ -210,7 +210,7 @@ func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, do
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to create cloudflare provider: %w", err)
 	}
-	if challengeErr := client.SetDNS01Provider(provider); challengeErr != nil {
+	if challengeErr := client.SetDNS01Provider(&resilientDNSProvider{provider: provider}); challengeErr != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to set DNS provider: %w", challengeErr)
 	}
 
@@ -242,6 +242,42 @@ func (m *CertManager) obtainCertificate(ctx context.Context, tenantID string, do
 	}
 
 	return string(certificates.Certificate), string(certificates.PrivateKey), expiry, nil
+}
+
+type resilientDNSProvider struct {
+	provider challenge.Provider
+}
+
+func (p *resilientDNSProvider) Present(domain, token, keyAuth string) error {
+	err := p.provider.Present(domain, token, keyAuth)
+	if isCloudflareDuplicateTXTError(err) {
+		return nil
+	}
+	return err
+}
+
+func (p *resilientDNSProvider) CleanUp(domain, token, keyAuth string) error {
+	err := p.provider.CleanUp(domain, token, keyAuth)
+	if isCloudflareUnknownRecordCleanupError(err) {
+		return nil
+	}
+	return err
+}
+
+func isCloudflareDuplicateTXTError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "81058") && strings.Contains(msg, "identical record already exists")
+}
+
+func isCloudflareUnknownRecordCleanupError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cloudflare") && strings.Contains(msg, "unknown record id")
 }
 
 type legoClient struct {

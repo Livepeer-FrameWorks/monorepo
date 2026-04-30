@@ -217,6 +217,65 @@ func TestIssueCertificateFailureDoesNotPersistCertificate(t *testing.T) {
 	require.Equal(t, 0, fakeStore.saveCertCalled)
 }
 
+func TestIssueCertificateToleratesExistingCloudflareChallengeRecord(t *testing.T) {
+	ctx := context.Background()
+	notAfter := time.Now().Add(10 * time.Hour)
+	certPEM, keyPEM := buildTestCert(t, notAfter)
+
+	provider := &fakeDNSProvider{
+		presentErr: errors.New("cloudflare: failed to create TXT record: [status code 400] 81058: An identical record already exists"),
+	}
+	acme := &fakeACMEClient{
+		resource: &certificate.Resource{
+			Certificate: certPEM,
+			PrivateKey:  keyPEM,
+		},
+	}
+	fakeStore := &fakeStore{
+		getCertFunc: func(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
+			return nil, store.ErrNotFound
+		},
+		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
+			return nil
+		},
+		getTLSBundleFunc: func(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+			return nil, store.ErrNotFound
+		},
+		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
+			return nil
+		},
+		getAccountFunc: func(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error) {
+			return nil, store.ErrNotFound
+		},
+		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
+			return nil
+		},
+	}
+
+	manager := NewCertManager(fakeStore)
+	manager.acmeClientFactory = func(config *lego.Config) (acmeClient, error) {
+		return acme, nil
+	}
+	manager.dnsProviderFactory = func() (challenge.Provider, error) {
+		return provider, nil
+	}
+
+	_, _, _, err := manager.IssueCertificate(ctx, "", "example.com", "me@example.com")
+	require.NoError(t, err)
+	require.Equal(t, 1, provider.presentCalls)
+	require.Equal(t, 1, fakeStore.saveCertCalled)
+}
+
+func TestResilientDNSProviderToleratesUnknownCloudflareCleanupRecord(t *testing.T) {
+	provider := &fakeDNSProvider{
+		cleanupErr: errors.New("cloudflare: unknown record ID for '_acme-challenge.example.com.'"),
+	}
+	wrapped := &resilientDNSProvider{provider: provider}
+
+	require.NoError(t, wrapped.CleanUp("example.com", "token", "keyAuth"))
+	require.Equal(t, 1, provider.cleanupCalls)
+}
+
 func TestEnsureTLSBundleObtainsAndPersistsBundle(t *testing.T) {
 	ctx := context.Background()
 	notAfter := time.Now().Add(24 * time.Hour)
