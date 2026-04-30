@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"frameworks/cli/pkg/ansiblerun"
 	"frameworks/cli/pkg/detect"
@@ -131,6 +133,11 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 		"compose_stack_name":        cfg.ServiceName,
 		"compose_stack_project_dir": "/opt/frameworks/" + cfg.ServiceName,
 		"compose_stack_wait":        false,
+		"compose_stack_registry_auth": composeRegistryAuthFromEnv(
+			config.EnvVars,
+			image,
+		),
+		"compose_stack_require_registry_auth": composeRegistryAuthRequired(image),
 		"compose_stack_service": map[string]any{
 			"image":          image,
 			"port":           port,
@@ -139,6 +146,74 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 		},
 		"compose_stack_env": envAny,
 	}, nil
+}
+
+func composeRegistryAuthFromEnv(env map[string]string, image string) map[string]any {
+	if env == nil {
+		env = map[string]string{}
+	}
+
+	registry := firstNonEmpty(
+		registryEnv(env, "DOCKER_REGISTRY"),
+		registryEnv(env, "CONTAINER_REGISTRY"),
+		registryEnv(env, "REGISTRY_URL"),
+		registryEnv(env, "REGISTRY_HOST"),
+	)
+	if registry == "" && strings.HasPrefix(image, "ghcr.io/") {
+		registry = "ghcr.io"
+	}
+
+	username := firstNonEmpty(
+		registryEnv(env, "DOCKER_USERNAME"),
+		registryEnv(env, "DOCKER_USER"),
+		registryEnv(env, "REGISTRY_USERNAME"),
+		registryEnv(env, "REGISTRY_USER"),
+		registryEnv(env, "GHCR_USERNAME"),
+		registryEnv(env, "GHCR_USER"),
+		registryEnv(env, "GHCR_OWNER"),
+		registryEnv(env, "GITHUB_ACTOR"),
+		registryEnv(env, "GITHUB_USERNAME"),
+		registryEnv(env, "GITHUB_USER"),
+	)
+	password := firstNonEmpty(
+		registryEnv(env, "DOCKER_PASSWORD"),
+		registryEnv(env, "DOCKER_TOKEN"),
+		registryEnv(env, "REGISTRY_PASSWORD"),
+		registryEnv(env, "REGISTRY_TOKEN"),
+		registryEnv(env, "GHCR_TOKEN"),
+		registryEnv(env, "GHCR_PAT"),
+		registryEnv(env, "CR_PAT"),
+		registryEnv(env, "GITHUB_TOKEN"),
+		registryEnv(env, "GITHUB_PAT"),
+		registryEnv(env, "GITHUB_PACKAGES_TOKEN"),
+		registryEnv(env, "PACKAGE_REGISTRY_TOKEN"),
+		registryEnv(env, "CONTAINER_REGISTRY_TOKEN"),
+		registryEnv(env, "REGISTRY_PAT"),
+	)
+
+	if username == "" || password == "" {
+		return map[string]any{}
+	}
+
+	auth := map[string]any{
+		"username": username,
+		"password": password,
+	}
+	if registry != "" {
+		auth["registry_url"] = registry
+	}
+	return auth
+}
+
+func registryEnv(env map[string]string, key string) string {
+	if v := env[key]; v != "" {
+		return v
+	}
+	return os.Getenv(key)
+}
+
+func composeRegistryAuthRequired(image string) bool {
+	return strings.HasPrefix(image, "ghcr.io/livepeer-frameworks/")
 }
 
 func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {

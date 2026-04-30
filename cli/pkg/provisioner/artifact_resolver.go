@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"frameworks/cli/pkg/gitops"
@@ -88,7 +89,7 @@ func imageFromReleaseManifest(name, platformChannel string, metadata map[string]
 		return "", err
 	}
 	if svc, err := manifest.GetServiceInfo(name); err == nil && svc.FullImage != "" {
-		return svc.FullImage, nil
+		return selectedReleaseImage(svc, metadata)
 	}
 	if infra := manifest.GetInfrastructure(name); infra != nil && infra.Image != "" {
 		return infra.Image, nil
@@ -99,6 +100,56 @@ func imageFromReleaseManifest(name, platformChannel string, metadata map[string]
 		}
 	}
 	return "", fmt.Errorf("service %s not found in release manifest", name)
+}
+
+func selectedReleaseImage(svc *gitops.ServiceInfo, metadata map[string]any) (string, error) {
+	requested := normalizeImageRegistry(firstNonEmpty(
+		metaString(metadata, "image_registry"),
+		os.Getenv("FRAMEWORKS_IMAGE_REGISTRY"),
+	))
+	if requested == "" || requested == "default" {
+		requested = "dockerhub"
+	}
+
+	if len(svc.Images) == 0 {
+		if requested != "dockerhub" && !imageRegistryMatches(svc.Image, requested) {
+			return "", fmt.Errorf("release manifest has no %q image entry for %s", requested, svc.Name)
+		}
+		return svc.FullImage, nil
+	}
+
+	img, ok := svc.Images[requested]
+	if !ok || img.Image == "" {
+		return "", fmt.Errorf("release manifest has no %q image entry for %s", requested, svc.Name)
+	}
+	if img.Digest == "" {
+		return img.Image, nil
+	}
+	return fmt.Sprintf("%s@%s", img.Image, img.Digest), nil
+}
+
+func normalizeImageRegistry(registry string) string {
+	switch strings.ToLower(strings.TrimSpace(registry)) {
+	case "", "default":
+		return ""
+	case "dockerhub", "docker.io", "hub.docker.com":
+		return "dockerhub"
+	case "ghcr", "ghcr.io":
+		return "ghcr"
+	default:
+		return strings.ToLower(strings.TrimSpace(registry))
+	}
+}
+
+func imageRegistryMatches(image, registry string) bool {
+	switch registry {
+	case "ghcr":
+		return strings.HasPrefix(image, "ghcr.io/")
+	case "dockerhub":
+		return !strings.Contains(strings.SplitN(image, "/", 2)[0], ".")
+	default:
+		return strings.HasPrefix(image, registry+"/")
+	}
 }
 
 func binaryFromExternalDependency(name, osName, arch string, manifest *gitops.Manifest) (*gitops.ExternalBinary, string) {

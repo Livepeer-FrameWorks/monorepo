@@ -361,6 +361,7 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				Version:   svc.ServiceVersion,
 				Image:     svc.Image,
 				Digest:    svc.Digest,
+				Images:    svc.Images,
 				FullImage: fmt.Sprintf("%s@%s", svc.Image, svc.Digest),
 				Binaries:  make(map[string]Artifact),
 			}
@@ -377,6 +378,7 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				Version:   "",
 				Image:     iface.Image,
 				Digest:    iface.Digest,
+				Images:    iface.Images,
 				FullImage: fmt.Sprintf("%s@%s", iface.Image, iface.Digest),
 				Binaries:  make(map[string]Artifact),
 			}, nil

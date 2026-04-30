@@ -69,6 +69,61 @@ infrastructure:
 	}
 }
 
+func TestImageFromReleaseManifestDefaultsToDockerHubRegistryImage(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+interfaces:
+  - name: chartroom
+    image: livepeerframeworks/frameworks-chartroom:vtest
+    digest: sha256:dockerhub
+    images:
+      dockerhub:
+        image: livepeerframeworks/frameworks-chartroom:vtest
+        digest: sha256:dockerhub
+      ghcr:
+        image: ghcr.io/livepeer-frameworks/frameworks-chartroom:vtest
+        digest: sha256:ghcr
+`)
+
+	image, err := imageFromReleaseManifest("chartroom", "stable", map[string]any{
+		"gitops_repository": repo,
+	})
+	if err != nil {
+		t.Fatalf("imageFromReleaseManifest: %v", err)
+	}
+	if image != "livepeerframeworks/frameworks-chartroom:vtest@sha256:dockerhub" {
+		t.Fatalf("image = %q", image)
+	}
+}
+
+func TestImageFromReleaseManifestCanSelectGHCRRegistryImage(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+interfaces:
+  - name: chartroom
+    image: livepeerframeworks/frameworks-chartroom:vtest
+    digest: sha256:dockerhub
+    images:
+      dockerhub:
+        image: livepeerframeworks/frameworks-chartroom:vtest
+        digest: sha256:dockerhub
+      ghcr:
+        image: ghcr.io/livepeer-frameworks/frameworks-chartroom:vtest
+        digest: sha256:ghcr
+`)
+
+	image, err := imageFromReleaseManifest("chartroom", "stable", map[string]any{
+		"gitops_repository": repo,
+		"image_registry":    "ghcr",
+	})
+	if err != nil {
+		t.Fatalf("imageFromReleaseManifest: %v", err)
+	}
+	if image != "ghcr.io/livepeer-frameworks/frameworks-chartroom:vtest@sha256:ghcr" {
+		t.Fatalf("image = %q", image)
+	}
+}
+
 func TestBinaryFromExternalDependencyFindsLivepeerArtifact(t *testing.T) {
 	repo := writeTestGitopsRelease(t, `
 platform_version: vtest

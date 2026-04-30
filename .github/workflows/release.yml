@@ -276,14 +276,19 @@ jobs:
               "${DH}:${TAG}-amd64" \
               "${DH}:${TAG}-arm64"
 
-            DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+            GHCR_DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+            DH_DIGEST="sha256:$(docker buildx imagetools inspect "${DH}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
             SVCVER=$(jq -r .service_version "dist/arch-digest-${SVC}-amd64.json")
 
             cat > "final/image-${SVC}.json" <<JSON
           {
             "name": "${SVC}",
-            "image": "${GHCR}:${TAG}",
-            "digest": "${DIGEST}",
+            "image": "${DH}:${TAG}",
+            "digest": "${DH_DIGEST}",
+            "dockerhub_image": "${DH}:${TAG}",
+            "dockerhub_digest": "${DH_DIGEST}",
+            "ghcr_image": "${GHCR}:${TAG}",
+            "ghcr_digest": "${GHCR_DIGEST}",
             "service_version": "${SVCVER}",
             "git_commit": "${{ github.sha }}"
           }
@@ -643,13 +648,18 @@ jobs:
               "${DH}:${TAG}-amd64" \
               "${DH}:${TAG}-arm64"
 
-            DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+            GHCR_DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+            DH_DIGEST="sha256:$(docker buildx imagetools inspect "${DH}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
 
             cat > "final/image-${APP}.json" <<JSON
           {
             "name": "${APP}",
-            "image": "${GHCR}:${TAG}",
-            "digest": "${DIGEST}",
+            "image": "${DH}:${TAG}",
+            "digest": "${DH_DIGEST}",
+            "dockerhub_image": "${DH}:${TAG}",
+            "dockerhub_digest": "${DH_DIGEST}",
+            "ghcr_image": "${GHCR}:${TAG}",
+            "ghcr_digest": "${GHCR_DIGEST}",
             "git_commit": "${{ github.sha }}"
           }
           JSON
@@ -1388,6 +1398,10 @@ jobs:
             image=$(jq -r .image "$f")
             digest=$(jq -r .digest "$f")
             svcver=$(jq -r .service_version "$f")
+            dockerhub_image=$(jq -r '.dockerhub_image // empty' "$f")
+            dockerhub_digest=$(jq -r '.dockerhub_digest // empty' "$f")
+            ghcr_image=$(jq -r '.ghcr_image // empty' "$f")
+            ghcr_digest=$(jq -r '.ghcr_digest // empty' "$f")
 
             cat >> dist/manifest.yaml <<YAML
             - name: ${name}
@@ -1395,6 +1409,17 @@ jobs:
               image: ${image}
               digest: ${digest}
           YAML
+            if [[ -n "$dockerhub_image" && -n "$ghcr_image" ]]; then
+              cat >> dist/manifest.yaml <<YAML
+              images:
+                dockerhub:
+                  image: ${dockerhub_image}
+                  digest: ${dockerhub_digest}
+                ghcr:
+                  image: ${ghcr_image}
+                  digest: ${ghcr_digest}
+          YAML
+            fi
           done
 
           # Native Binaries (for bare-metal deployment).
@@ -1485,6 +1510,10 @@ jobs:
 
             image=$(jq -r .image "$f")
             digest=$(jq -r .digest "$f")
+            dockerhub_image=$(jq -r '.dockerhub_image // empty' "$f")
+            dockerhub_digest=$(jq -r '.dockerhub_digest // empty' "$f")
+            ghcr_image=$(jq -r '.ghcr_image // empty' "$f")
+            ghcr_digest=$(jq -r '.ghcr_digest // empty' "$f")
 
             bundle="${name}-build.tar.gz"
 
@@ -1494,6 +1523,17 @@ jobs:
               digest: ${digest}
               static_bundle: ${bundle}
           YAML
+            if [[ -n "$dockerhub_image" && -n "$ghcr_image" ]]; then
+              cat >> dist/manifest.yaml <<YAML
+              images:
+                dockerhub:
+                  image: ${dockerhub_image}
+                  digest: ${dockerhub_digest}
+                ghcr:
+                  image: ${ghcr_image}
+                  digest: ${ghcr_digest}
+          YAML
+            fi
           done
 
           # External Dependencies (MistServer from separate repo)

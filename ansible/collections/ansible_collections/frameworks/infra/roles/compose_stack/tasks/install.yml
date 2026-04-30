@@ -64,7 +64,14 @@
 - name: Resolve Docker Compose plugin architecture
   ansible.builtin.set_fact:
     compose_stack_compose_plugin_arch: >-
-      {{ {'x86_64': 'x86_64', 'amd64': 'x86_64', 'aarch64': 'aarch64', 'arm64': 'aarch64'}[ansible_architecture] | default('') }}
+      {{
+        {
+          'x86_64': 'x86_64',
+          'amd64': 'x86_64',
+          'aarch64': 'aarch64',
+          'arm64': 'aarch64'
+        }[ansible_facts.architecture] | default('')
+      }}
   when:
     - compose_stack_manage_docker | bool
     - not (compose_stack_render_only | default(false) | bool)
@@ -73,7 +80,9 @@
 
 - name: Fail when Docker Compose fallback architecture is unsupported
   ansible.builtin.fail:
-    msg: "Docker Compose package is unavailable and no fallback binary mapping exists for architecture {{ ansible_architecture }}"
+    msg: >-
+      Docker Compose package is unavailable and no fallback binary mapping
+      exists for architecture {{ ansible_facts.architecture }}
   when:
     - compose_stack_manage_docker | bool
     - not (compose_stack_render_only | default(false) | bool)
@@ -169,6 +178,36 @@
     group: root
     mode: "0600"
   when: compose_stack_env | length > 0
+  no_log: true
+
+- name: Fail when Docker registry authentication is required
+  ansible.builtin.fail:
+    msg: >-
+      Docker registry authentication is required for {{
+      compose_stack_service.image | default('this compose stack') }}, but
+      compose_stack_registry_auth.username/password were not provided.
+      Set GHCR_USERNAME/GHCR_TOKEN, GITHUB_USER/CR_PAT, or
+      DOCKER_USERNAME/DOCKER_PASSWORD in the service env.
+  when:
+    - compose_stack_require_registry_auth | bool
+    - not (compose_stack_render_only | default(false) | bool)
+    - not ansible_check_mode
+    - >-
+      (compose_stack_registry_auth.username | default('')) | length == 0
+      or (compose_stack_registry_auth.password | default('')) | length == 0
+
+- name: Authenticate Docker registry
+  community.docker.docker_login:
+    registry_url: "{{ compose_stack_registry_auth.registry_url | default(omit) }}"
+    username: "{{ compose_stack_registry_auth.username }}"
+    password: "{{ compose_stack_registry_auth.password }}"
+    reauthorize: true
+  when:
+    - compose_stack_registry_auth | length > 0
+    - (compose_stack_registry_auth.username | default('')) | length > 0
+    - (compose_stack_registry_auth.password | default('')) | length > 0
+    - not (compose_stack_render_only | default(false) | bool)
+    - not ansible_check_mode
   no_log: true
 
 - name: Apply compose stack

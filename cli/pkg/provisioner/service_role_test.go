@@ -40,6 +40,142 @@ func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) 
 	}
 }
 
+func TestServiceComposeVarsPassesRegistryAuthForGHCRImages(t *testing.T) {
+	clearRegistryAuthEnv(t)
+
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:  "chartroom",
+		DefaultPort:  18030,
+		DefaultImage: "ghcr.io/livepeer-frameworks/frameworks-chartroom:latest",
+	}, inventory.Host{Name: "regional-us-1"}, ServiceConfig{
+		Mode: "docker",
+		EnvVars: map[string]string{
+			"GITHUB_ACTOR": "frameworks-bot",
+			"GHCR_TOKEN":   "secret",
+		},
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	auth, ok := vars["compose_stack_registry_auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_registry_auth got %T, want map[string]any", vars["compose_stack_registry_auth"])
+	}
+	if got := auth["registry_url"]; got != "ghcr.io" {
+		t.Fatalf("registry_url got %v, want ghcr.io", got)
+	}
+	if got := auth["username"]; got != "frameworks-bot" {
+		t.Fatalf("username got %v, want frameworks-bot", got)
+	}
+	if got := auth["password"]; got != "secret" {
+		t.Fatalf("password got %v, want secret", got)
+	}
+	if got := vars["compose_stack_require_registry_auth"]; got != true {
+		t.Fatalf("compose_stack_require_registry_auth got %v, want true", got)
+	}
+}
+
+func TestServiceComposeVarsOmitsIncompleteRegistryAuth(t *testing.T) {
+	clearRegistryAuthEnv(t)
+
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:  "chartroom",
+		DefaultPort:  18030,
+		DefaultImage: "ghcr.io/livepeer-frameworks/frameworks-chartroom:latest",
+	}, inventory.Host{Name: "regional-us-1"}, ServiceConfig{
+		Mode: "docker",
+		EnvVars: map[string]string{
+			"GHCR_TOKEN": "secret",
+		},
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	auth, ok := vars["compose_stack_registry_auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_registry_auth got %T, want map[string]any", vars["compose_stack_registry_auth"])
+	}
+	if len(auth) != 0 {
+		t.Fatalf("compose_stack_registry_auth got %v, want empty", auth)
+	}
+	if got := vars["compose_stack_require_registry_auth"]; got != true {
+		t.Fatalf("compose_stack_require_registry_auth got %v, want true", got)
+	}
+}
+
+func TestServiceComposeVarsAcceptsCommonGHCRPATNames(t *testing.T) {
+	clearRegistryAuthEnv(t)
+
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:  "chartroom",
+		DefaultPort:  18030,
+		DefaultImage: "ghcr.io/livepeer-frameworks/frameworks-chartroom:latest",
+	}, inventory.Host{Name: "regional-us-1"}, ServiceConfig{
+		Mode: "docker",
+		EnvVars: map[string]string{
+			"GITHUB_USER": "frameworks-bot",
+			"CR_PAT":      "secret",
+		},
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	auth, ok := vars["compose_stack_registry_auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_registry_auth got %T, want map[string]any", vars["compose_stack_registry_auth"])
+	}
+	if got := auth["registry_url"]; got != "ghcr.io" {
+		t.Fatalf("registry_url got %v, want ghcr.io", got)
+	}
+	if got := auth["username"]; got != "frameworks-bot" {
+		t.Fatalf("username got %v, want frameworks-bot", got)
+	}
+	if got := auth["password"]; got != "secret" {
+		t.Fatalf("password got %v, want secret", got)
+	}
+}
+
+func clearRegistryAuthEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"DOCKER_REGISTRY",
+		"CONTAINER_REGISTRY",
+		"REGISTRY_URL",
+		"REGISTRY_HOST",
+		"DOCKER_USERNAME",
+		"DOCKER_USER",
+		"REGISTRY_USERNAME",
+		"REGISTRY_USER",
+		"GHCR_USERNAME",
+		"GHCR_USER",
+		"GHCR_OWNER",
+		"GITHUB_ACTOR",
+		"GITHUB_USERNAME",
+		"GITHUB_USER",
+		"DOCKER_PASSWORD",
+		"DOCKER_TOKEN",
+		"REGISTRY_PASSWORD",
+		"REGISTRY_TOKEN",
+		"GHCR_TOKEN",
+		"GHCR_PAT",
+		"CR_PAT",
+		"GITHUB_TOKEN",
+		"GITHUB_PAT",
+		"GITHUB_PACKAGES_TOKEN",
+		"PACKAGE_REGISTRY_TOKEN",
+		"CONTAINER_REGISTRY_TOKEN",
+		"REGISTRY_PAT",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestServiceNativeVarsIncludesRuntimePackages(t *testing.T) {
 	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
 		ServiceName:           "livepeer-gateway",

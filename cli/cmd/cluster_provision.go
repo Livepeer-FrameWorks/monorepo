@@ -552,6 +552,11 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				outcome, err := provisionTask(gCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, releaseRepos)
 				stopProgress()
 				if err != nil {
+					if task.Type == "privateer" {
+						diagCtx, diagCancel := context.WithTimeout(ctx, 20*time.Second)
+						capturePrivateerDiagnostics(diagCtx, cmd.OutOrStdout(), host, sshPool)
+						diagCancel()
+					}
 					return fmt.Errorf("failed to provision %s: %w", task.Name, err)
 				}
 
@@ -2815,7 +2820,7 @@ func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interv
 
 const (
 	provisionDetectTimeout     = 10 * time.Second
-	provisionApplyTimeout      = 2 * time.Minute
+	provisionApplyTimeout      = 10 * time.Minute
 	provisionValidateTimeout   = 75 * time.Second
 	provisionInitializeTimeout = 2 * time.Minute
 	quartermasterRPCTimeout    = 5 * time.Second
@@ -2933,6 +2938,54 @@ ss -ltnp 2>/dev/null | awk '$4 ~ /:(18002|19002)$/ { print }'
 echo
 echo "== addresses =="
 ip -br addr show 2>/dev/null
+`)
+	if err != nil {
+		fmt.Fprintf(out, "    diagnostics failed: %v\n", err)
+		return
+	}
+	text := strings.TrimSpace(result.Stdout)
+	if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
+		if text != "" {
+			text += "\n"
+		}
+		text += "stderr:\n" + stderr
+	}
+	if text == "" {
+		text = "(no output)"
+	}
+	fmt.Fprintln(out, text)
+}
+
+func capturePrivateerDiagnostics(ctx context.Context, out io.Writer, host inventory.Host, pool *ssh.Pool) {
+	fmt.Fprintf(out, "\n  Privateer diagnostics for %s before rollback:\n", host.Name)
+	base := provisioner.NewBaseProvisioner("privateer-diagnostics", pool)
+	result, err := base.RunCommand(ctx, host, `
+set +e
+echo "== systemctl status frameworks-privateer =="
+systemctl status frameworks-privateer --no-pager --full
+echo
+echo "== systemctl status frameworks-privateer-resolved =="
+systemctl status frameworks-privateer-resolved --no-pager --full
+echo
+echo "== journalctl -u frameworks-privateer -n 200 =="
+journalctl -u frameworks-privateer -n 200 --no-pager -o short-iso
+echo
+echo "== listeners 18012/53 =="
+ss -ltnup 2>/dev/null | awk '$5 ~ /:(18012|53)$/ || $4 ~ /:(18012|53)$/ { print }'
+echo
+echo "== wg0 =="
+ip -br addr show wg0 2>/dev/null
+wg show wg0 2>/dev/null
+echo
+echo "== privateer health =="
+curl -fsS --max-time 3 http://127.0.0.1:18012/health 2>&1
+echo
+echo "== .internal resolver =="
+resolvectl status wg0 2>/dev/null
+getent hosts quartermaster.internal 2>&1
+echo
+echo "== privateer env keys =="
+test -f /etc/privateer/privateer.env && sed 's/=.*/=<redacted>/' /etc/privateer/privateer.env
 `)
 	if err != nil {
 		fmt.Fprintf(out, "    diagnostics failed: %v\n", err)

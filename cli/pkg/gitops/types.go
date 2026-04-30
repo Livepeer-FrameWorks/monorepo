@@ -36,10 +36,17 @@ type ExternalBinary struct {
 
 // ServiceEntry represents a single service in the manifest
 type ServiceEntry struct {
-	Name           string `yaml:"name"`
-	ServiceVersion string `yaml:"service_version"`
-	Image          string `yaml:"image"`
-	Digest         string `yaml:"digest"`
+	Name           string                   `yaml:"name"`
+	ServiceVersion string                   `yaml:"service_version"`
+	Image          string                   `yaml:"image"`
+	Digest         string                   `yaml:"digest"`
+	Images         map[string]RegistryImage `yaml:"images,omitempty"`
+}
+
+// RegistryImage is an alternate registry location for the same release image.
+type RegistryImage struct {
+	Image  string `yaml:"image"`
+	Digest string `yaml:"digest"`
 }
 
 // NativeBinary represents native binaries for a service
@@ -60,10 +67,11 @@ type Artifact struct {
 
 // InterfaceEntry represents an interface service (chartroom, foredeck)
 type InterfaceEntry struct {
-	Name         string `yaml:"name"`
-	Image        string `yaml:"image"`
-	Digest       string `yaml:"digest"`
-	StaticBundle string `yaml:"static_bundle,omitempty"`
+	Name         string                   `yaml:"name"`
+	Image        string                   `yaml:"image"`
+	Digest       string                   `yaml:"digest"`
+	StaticBundle string                   `yaml:"static_bundle,omitempty"`
+	Images       map[string]RegistryImage `yaml:"images,omitempty"`
 }
 
 // InfrastructureEntry represents an infrastructure component pinned by a
@@ -106,6 +114,7 @@ type ServiceInfo struct {
 	Version   string
 	Image     string
 	Digest    string
+	Images    map[string]RegistryImage
 	Binaries  map[string]Artifact
 	FullImage string
 }
