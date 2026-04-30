@@ -22,6 +22,7 @@ import type {
   TrackInfo,
 } from "./types";
 import { parseRawChunk, formatChunkForLog } from "./RawChunkParser";
+import { ServerDelayTracker } from "../../core/mist/server-delay";
 
 /** Connection states */
 export type ConnectionState =
@@ -71,60 +72,6 @@ const DEFAULTS: Required<WebSocketControllerOptions> = {
   maxReconnectDelayMs: 30000,
   connectionTimeoutMs: 5000,
 };
-
-/**
- * Server delay tracker for estimating round-trip time
- */
-class ServerDelayTracker {
-  private delays: number[] = [];
-  private pending = new Map<string, number>();
-  private maxSamples = 3;
-
-  /**
-   * Start timing a request
-   */
-  startTiming(requestType: string): void {
-    this.pending.set(requestType, performance.now());
-  }
-
-  /**
-   * Complete timing and record delay
-   */
-  completeTiming(requestType: string): number | null {
-    const startTime = this.pending.get(requestType);
-    if (startTime === undefined) {
-      return null;
-    }
-
-    this.pending.delete(requestType);
-    const delay = performance.now() - startTime;
-
-    this.delays.push(delay);
-    if (this.delays.length > this.maxSamples) {
-      this.delays.shift();
-    }
-
-    return delay;
-  }
-
-  /**
-   * Get average server delay
-   */
-  getAverageDelay(): number {
-    if (this.delays.length === 0) {
-      return 0;
-    }
-    return this.delays.reduce((sum, d) => sum + d, 0) / this.delays.length;
-  }
-
-  /**
-   * Clear all pending timings
-   */
-  clear(): void {
-    this.pending.clear();
-    this.delays = [];
-  }
-}
 
 /**
  * WebSocketController - Manages raw frame WebSocket connection
@@ -242,7 +189,7 @@ export class WebSocketController {
     // Track timing for certain commands
     const timedCommands = ["seek", "set_speed", "request_codec_data"];
     if (timedCommands.includes(command.type)) {
-      this.serverDelay.startTiming(command.type);
+      this.serverDelay.beginRequest(command.type);
     }
 
     const message = JSON.stringify(command);
@@ -430,11 +377,11 @@ export class WebSocketController {
 
       // Complete timing for responses
       if (message.type === "codec_data") {
-        this.serverDelay.completeTiming("request_codec_data");
+        this.serverDelay.resolveRequest("request_codec_data");
       } else if (message.type === "seek") {
-        this.serverDelay.completeTiming("seek");
+        this.serverDelay.resolveRequest("seek");
       } else if (message.type === "set_speed") {
-        this.serverDelay.completeTiming("set_speed");
+        this.serverDelay.resolveRequest("set_speed");
       }
 
       // Route to appropriate handler

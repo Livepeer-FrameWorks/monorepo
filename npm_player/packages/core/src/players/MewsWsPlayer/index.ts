@@ -20,6 +20,7 @@ import { SourceBufferManager } from "./SourceBufferManager";
 import { translateCodec } from "../../core/CodecUtils";
 import { getBrowserInfo, isFileProtocol, isIPadWithBrokenHEVC } from "../../core/detector";
 import { formatQualityLabel } from "../../core/TimeFormat";
+import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
 import type { MewsMessage, AnalyticsConfig, OnTimeMessage, MewsMessageListener } from "./types";
 
 export class MewsWsPlayerImpl extends BasePlayer {
@@ -800,18 +801,15 @@ export class MewsWsPlayerImpl extends BasePlayer {
    */
   private handlePause(msg: MewsMessage): void {
     const data = msg.data || {};
-    if (data.reason === "at_dead_point" && data.begin !== undefined && data.end !== undefined) {
-      const isSlowed = this.requestedRate < 1;
-      const seekTo = data.begin + (isSlowed ? 1000 : 5000);
-      if (!isNaN(seekTo) && seekTo > 0) {
-        if (isSlowed) {
-          this.requestedRate = 1;
-          if (this.videoElement) this.videoElement.playbackRate = 1;
-          this.send({ type: "set_speed", play_rate: "auto" });
-        }
-        this.send({ type: "seek", seek_time: seekTo, ff_add: this.getForwardBufferMs() });
-        return;
+    const recovery = decideDeadPointRecovery(data, this.requestedRate);
+    if (recovery.kind === "seek_recover") {
+      if (recovery.resetSpeedToAuto) {
+        this.requestedRate = 1;
+        if (this.videoElement) this.videoElement.playbackRate = 1;
+        this.send({ type: "set_speed", play_rate: "auto" });
       }
+      this.send({ type: "seek", seek_time: recovery.seekToMs, ff_add: this.getForwardBufferMs() });
+      return;
     }
     if (this.sbManager) {
       this.sbManager.paused = true;

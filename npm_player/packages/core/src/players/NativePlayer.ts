@@ -2,6 +2,7 @@ import { BasePlayer } from "../core/PlayerInterface";
 import { isLiveStreamType } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import { MistControlChannel } from "../core/MistControlChannel";
+import { decideDeadPointRecovery } from "../core/mist/dead-point-recovery";
 import {
   checkProtocolMismatch,
   getBrowserInfo,
@@ -798,16 +799,13 @@ export class NativePlayerImpl extends BasePlayer {
     // Handle at_dead_point recovery near the start of the available buffer.
     control.on("pause", (msg) => {
       if (this.destroyed) return;
-      if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
-        const isSlowed = typeof this.whepPlayRate === "number" && this.whepPlayRate < 1;
-        const seekTo = msg.begin + (isSlowed ? 1000 : 5000);
-        if (!isNaN(seekTo) && seekTo > 0) {
-          if (isSlowed) {
-            control.setSpeed("auto");
-          }
-          control.seek(seekTo);
-          return;
+      const recovery = decideDeadPointRecovery(msg, this.whepPlayRate);
+      if (recovery.kind === "seek_recover") {
+        if (recovery.resetSpeedToAuto) {
+          control.setSpeed("auto");
         }
+        control.seek(recovery.seekToMs);
+        return;
       }
       if (msg.paused) video.pause();
     });

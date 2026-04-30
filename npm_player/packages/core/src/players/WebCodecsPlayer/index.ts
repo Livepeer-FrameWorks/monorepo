@@ -47,6 +47,7 @@ import {
   hasNativeMediaStreamTrackGenerator,
 } from "./polyfills/MediaStreamTrackGenerator";
 import { translateCodec, buildDescription } from "../../core/CodecUtils";
+import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
 import { WebGLRenderer } from "../../rendering/WebGLRenderer";
 import { CanvasRenderer } from "../../rendering/CanvasRenderer";
 import { AudioWorkletRenderer } from "../../rendering/AudioWorkletRenderer";
@@ -1584,18 +1585,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     begin?: number;
     end?: number;
   }): void {
-    if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
-      const serverRate = this.syncController?.getServerPlayRate();
-      const isSlowed = typeof serverRate === "number" && serverRate < 1;
-      const seekTo = msg.begin + (isSlowed ? 1000 : 5000);
-      if (!isNaN(seekTo) && seekTo > 0) {
-        this.log("At dead point: seeking near available buffer start");
-        if (isSlowed) {
-          this.wsController?.setSpeed("auto");
-        }
-        this.wsController?.seek(seekTo);
-        return;
+    const recovery = decideDeadPointRecovery(msg, this.syncController?.getServerPlayRate());
+    if (recovery.kind === "seek_recover") {
+      this.log("At dead point: seeking near available buffer start");
+      if (recovery.resetSpeedToAuto) {
+        this.wsController?.setSpeed("auto");
       }
+      this.wsController?.seek(recovery.seekToMs);
+      return;
+    }
+    if (recovery.kind === "pause_only") {
       this.log("At dead point: seek target invalid; pausing");
     }
 

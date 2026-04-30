@@ -18,6 +18,7 @@ import type {
   PlayerCapability,
 } from "../../core/PlayerInterface";
 import { MistSignaling, type MistTimeUpdate } from "../../core/MistSignaling";
+import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
 import { checkWebRTCCodecCompatibility } from "../../core/detector";
 
 export class MistWebRTCPlayerImpl extends BasePlayer {
@@ -732,16 +733,13 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     // Handle at_dead_point recovery near the start of the available buffer.
     this.signaling.on("pause_request", (msg) => {
       if (this.destroyed) return;
-      if (msg.reason === "at_dead_point" && msg.begin !== undefined && msg.end !== undefined) {
-        const isSlowed = typeof this.playRate === "number" && this.playRate < 1;
-        const seekTo = msg.begin + (isSlowed ? 1000 : 5000);
-        if (!isNaN(seekTo) && seekTo > 0) {
-          if (isSlowed) {
-            this.signaling?.setSpeed("auto");
-          }
-          this.signaling?.seek(seekTo / 1000).catch(() => {});
-          return;
+      const recovery = decideDeadPointRecovery(msg, this.playRate);
+      if (recovery.kind === "seek_recover") {
+        if (recovery.resetSpeedToAuto) {
+          this.signaling?.setSpeed("auto");
         }
+        this.signaling?.seek(recovery.seekToMs / 1000).catch(() => {});
+        return;
       }
       if (msg.paused && this.videoElement) {
         this.videoElement.pause();
