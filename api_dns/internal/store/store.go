@@ -155,9 +155,25 @@ func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Cert
 	if err != nil {
 		return fmt.Errorf("encrypt certificate key: %w", err)
 	}
+	if tenantID == "" {
+		query := `
+			INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at)
+			VALUES (NULL, $1, $2, $3, $4, NOW())
+			ON CONFLICT (domain) WHERE tenant_id IS NULL DO UPDATE SET
+				cert_pem = EXCLUDED.cert_pem,
+				key_pem = EXCLUDED.key_pem,
+				expires_at = EXCLUDED.expires_at,
+				updated_at = NOW()
+			RETURNING id, tenant_id, created_at
+		`
+		return s.db.QueryRowContext(ctx, query,
+			cert.Domain, cert.CertPEM, encryptedKey, cert.ExpiresAt,
+		).Scan(&cert.ID, &cert.TenantID, &cert.CreatedAt)
+	}
+
 	query := `
 		INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at)
-		VALUES (NULLIF($1, '')::uuid, $2, $3, $4, $5, NOW())
+		VALUES ($1::uuid, $2, $3, $4, $5, NOW())
 		ON CONFLICT (tenant_id, domain) DO UPDATE SET
 			cert_pem = EXCLUDED.cert_pem,
 			key_pem = EXCLUDED.key_pem,
@@ -215,9 +231,23 @@ func (s *Store) SaveACMEAccount(ctx context.Context, tenantID string, acc *ACMEA
 	if err != nil {
 		return fmt.Errorf("encrypt ACME private key: %w", err)
 	}
+	if tenantID == "" {
+		query := `
+			INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem)
+			VALUES (NULL, $1, $2, $3)
+			ON CONFLICT (email) WHERE tenant_id IS NULL DO UPDATE SET
+				registration_json = EXCLUDED.registration_json,
+				private_key_pem = EXCLUDED.private_key_pem
+			RETURNING id, tenant_id, created_at
+		`
+		return s.db.QueryRowContext(ctx, query,
+			acc.Email, acc.Registration, encryptedKey,
+		).Scan(&acc.ID, &acc.TenantID, &acc.CreatedAt)
+	}
+
 	query := `
 		INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem)
-		VALUES (NULLIF($1, '')::uuid, $2, $3, $4)
+		VALUES ($1::uuid, $2, $3, $4)
 		ON CONFLICT (tenant_id, email) DO UPDATE SET
 			registration_json = EXCLUDED.registration_json,
 			private_key_pem = EXCLUDED.private_key_pem

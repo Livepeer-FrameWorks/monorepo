@@ -258,6 +258,37 @@ func TestSaveACMEAccount(t *testing.T) {
 	}
 }
 
+func TestSaveACMEAccountPlatformUsesPartialUniqueUpsert(t *testing.T) {
+	now := time.Now()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	acc := &ACMEAccount{
+		Email:         "admin@example.com",
+		Registration:  `{"status":"valid"}`,
+		PrivateKeyPEM: "private-key-pem",
+	}
+
+	mock.ExpectQuery(`ON CONFLICT \(email\) WHERE tenant_id IS NULL DO UPDATE`).
+		WithArgs(acc.Email, acc.Registration, acc.PrivateKeyPEM).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("acme-1", nil, now))
+
+	store := NewStore(db, nil)
+	if err := store.SaveACMEAccount(context.Background(), "", acc); err != nil {
+		t.Fatalf("SaveACMEAccount: %v", err)
+	}
+	if acc.TenantID.Valid {
+		t.Fatalf("expected platform ACME account tenant_id to remain NULL")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestStoreSaveCertificateUpsert(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -283,6 +314,38 @@ func TestStoreSaveCertificateUpsert(t *testing.T) {
 	}
 	if cert.ID != "cert-1" {
 		t.Fatalf("unexpected cert id: %s", cert.ID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestStoreSavePlatformCertificateUsesPartialUniqueUpsert(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	cert := &Certificate{
+		Domain:    "*.frameworks.network",
+		CertPEM:   "cert",
+		KeyPEM:    "key",
+		ExpiresAt: now,
+	}
+
+	mock.ExpectQuery(`ON CONFLICT \(domain\) WHERE tenant_id IS NULL DO UPDATE`).
+		WithArgs(cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("cert-1", nil, now))
+
+	store := NewStore(db, nil)
+	if err := store.SaveCertificate(context.Background(), "", cert); err != nil {
+		t.Fatalf("SaveCertificate: %v", err)
+	}
+	if cert.TenantID.Valid {
+		t.Fatalf("expected platform certificate tenant_id to remain NULL")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
