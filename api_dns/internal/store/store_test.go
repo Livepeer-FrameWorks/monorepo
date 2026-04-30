@@ -289,3 +289,35 @@ func TestStoreSaveCertificateUpsert(t *testing.T) {
 		t.Fatalf("expectations: %v", err)
 	}
 }
+
+func TestGetInternalCARootAllowsNullKey(t *testing.T) {
+	now := time.Now()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"role", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at"}).
+		AddRow("root_cert_only", "root-cert", nil, now.Add(365*24*time.Hour), now, now)
+
+	mock.ExpectQuery(`FROM navigator\.internal_ca\s+WHERE role = \$1`).
+		WithArgs("root_cert_only").
+		WillReturnRows(rows)
+
+	store := NewStore(db, nil)
+	ca, err := store.GetInternalCA(context.Background(), "root_cert_only")
+	if err != nil {
+		t.Fatalf("GetInternalCA: %v", err)
+	}
+	if ca.CertPEM != "root-cert" {
+		t.Fatalf("cert pem = %q, want root-cert", ca.CertPEM)
+	}
+	if ca.KeyPEM != "" {
+		t.Fatalf("key pem = %q, want empty string for root cert-only CA", ca.KeyPEM)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}

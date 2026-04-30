@@ -400,14 +400,18 @@ func (s *Store) GetInternalCA(ctx context.Context, role string) (*InternalCA, er
 	`
 
 	var ca InternalCA
+	var keyPEM sql.NullString
 	err := s.db.QueryRowContext(ctx, query, role).Scan(
-		&ca.Role, &ca.CertPEM, &ca.KeyPEM, &ca.ExpiresAt, &ca.CreatedAt, &ca.UpdatedAt,
+		&ca.Role, &ca.CertPEM, &keyPEM, &ca.ExpiresAt, &ca.CreatedAt, &ca.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	if keyPEM.Valid {
+		ca.KeyPEM = keyPEM.String
 	}
 	if ca.KeyPEM != "" {
 		if ca.KeyPEM, err = s.decryptField(ca.KeyPEM); err != nil {
