@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,6 +83,83 @@ type serviceInstance struct {
 	port                                           int
 }
 
+type serviceHealthCounts struct {
+	Checked   int `json:"checked"`
+	Healthy   int `json:"healthy"`
+	Unhealthy int `json:"unhealthy"`
+	Skipped   int `json:"skipped"`
+}
+
+type serviceHealthSummary struct {
+	mu       sync.Mutex
+	services map[string]*serviceHealthCounts
+}
+
+func newServiceHealthSummary() *serviceHealthSummary {
+	return &serviceHealthSummary{
+		services: map[string]*serviceHealthCounts{},
+	}
+}
+
+func (s *serviceHealthSummary) recordResult(serviceID, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	counts := s.countsFor(serviceID)
+	counts.Checked++
+	switch status {
+	case "healthy":
+		counts.Healthy++
+	default:
+		counts.Unhealthy++
+	}
+}
+
+func (s *serviceHealthSummary) recordSkipped(serviceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.countsFor(serviceID).Skipped++
+}
+
+func (s *serviceHealthSummary) countsFor(serviceID string) *serviceHealthCounts {
+	serviceID = strings.TrimSpace(serviceID)
+	if serviceID == "" {
+		serviceID = "unknown"
+	}
+	counts := s.services[serviceID]
+	if counts == nil {
+		counts = &serviceHealthCounts{}
+		s.services[serviceID] = counts
+	}
+	return counts
+}
+
+func (s *serviceHealthSummary) snapshot() (map[string]serviceHealthCounts, []string, []string, []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	byService := make(map[string]serviceHealthCounts, len(s.services))
+	var healthyServices, unhealthyServices, skippedServices []string
+	for serviceID, counts := range s.services {
+		copied := *counts
+		byService[serviceID] = copied
+		if counts.Healthy > 0 {
+			healthyServices = append(healthyServices, serviceID)
+		}
+		if counts.Unhealthy > 0 {
+			unhealthyServices = append(unhealthyServices, serviceID)
+		}
+		if counts.Skipped > 0 {
+			skippedServices = append(skippedServices, serviceID)
+		}
+	}
+	sort.Strings(healthyServices)
+	sort.Strings(unhealthyServices)
+	sort.Strings(skippedServices)
+	return byService, healthyServices, unhealthyServices, skippedServices
+}
+
 func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -130,10 +208,12 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 
 	var wg sync.WaitGroup
 	var checked, healthy, unhealthy, skipped int32
+	serviceSummary := newServiceHealthSummary()
 	for _, it := range list {
 		if it.host == "" || it.port == 0 {
 			logger.WithField("instance_id", it.id).WithField("service", it.serviceID).Warn("Skipping health check: missing host or port")
 			atomic.AddInt32(&skipped, 1)
+			serviceSummary.recordSkipped(it.serviceID)
 			continue
 		}
 		proto := strings.ToLower(strings.TrimSpace(it.proto))
@@ -149,6 +229,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 			if it.path == "" {
 				logger.WithField("instance_id", it.id).WithField("service", it.serviceID).Warn("Skipping HTTP health check: no path configured")
 				atomic.AddInt32(&skipped, 1)
+				serviceSummary.recordSkipped(it.serviceID)
 				continue
 			}
 			wg.Add(1)
@@ -165,6 +246,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if err != nil {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
+					serviceSummary.recordResult(ii.serviceID, status)
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check request failed")
 					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
 						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
@@ -184,6 +266,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 					atomic.AddInt32(&healthy, 1)
 					logger.WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check passed")
 				}
+				serviceSummary.recordResult(ii.serviceID, status)
 				if resp != nil {
 					_ = resp.Body.Close()
 				}
@@ -207,6 +290,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if err != nil {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
+					serviceSummary.recordResult(ii.serviceID, status)
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check TLS config failed")
 					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
 						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
@@ -221,6 +305,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if err != nil {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
+					serviceSummary.recordResult(ii.serviceID, status)
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check dial failed")
 					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
 						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
@@ -237,18 +322,27 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 					atomic.AddInt32(&healthy, 1)
 					logger.WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check passed")
 				}
+				serviceSummary.recordResult(ii.serviceID, status)
 				_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
 			}(it)
 			continue
 		}
+		logger.WithField("instance_id", it.id).WithField("service", it.serviceID).WithField("protocol", proto).Warn("Skipping health check: unsupported protocol")
+		atomic.AddInt32(&skipped, 1)
+		serviceSummary.recordSkipped(it.serviceID)
 	}
 	wg.Wait()
+	serviceHealth, healthyServices, unhealthyServices, skippedServices := serviceSummary.snapshot()
 	summary := logger.
 		WithField("queued", len(list)).
 		WithField("checked", atomic.LoadInt32(&checked)).
 		WithField("healthy", atomic.LoadInt32(&healthy)).
 		WithField("unhealthy", atomic.LoadInt32(&unhealthy)).
-		WithField("skipped", atomic.LoadInt32(&skipped))
+		WithField("skipped", atomic.LoadInt32(&skipped)).
+		WithField("service_health", serviceHealth).
+		WithField("healthy_services", healthyServices).
+		WithField("unhealthy_services", unhealthyServices).
+		WithField("skipped_services", skippedServices)
 	if atomic.LoadInt32(&unhealthy) > 0 || atomic.LoadInt32(&skipped) > 0 {
 		summary.Warn("Health poller completed with unhealthy or skipped instances")
 	} else {
