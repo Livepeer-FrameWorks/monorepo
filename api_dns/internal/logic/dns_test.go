@@ -1312,8 +1312,10 @@ func TestLoadProxyServices_Default(t *testing.T) {
 	// Unset the env var to test default behavior
 	t.Setenv("NAVIGATOR_PROXY_SERVICES", "")
 	proxy := loadProxyServices()
-	if !proxy["chartroom"] || !proxy["foredeck"] || !proxy["logbook"] {
-		t.Fatalf("expected chartroom, foredeck, logbook in defaults, got %v", proxy)
+	for _, svc := range []string{"bridge", "chandler", "chartroom", "chatwoot", "foredeck", "listmonk", "logbook", "steward"} {
+		if !proxy[svc] {
+			t.Fatalf("expected %s in default proxied services, got %v", svc, proxy)
+		}
 	}
 	if proxy["edge-egress"] {
 		t.Fatal("edge-egress should not be proxied by default")

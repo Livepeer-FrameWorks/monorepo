@@ -146,9 +146,14 @@ func loadProxyServices() map[string]bool {
 	env := strings.TrimSpace(os.Getenv("NAVIGATOR_PROXY_SERVICES"))
 	if env == "" {
 		return map[string]bool{
+			"bridge":    true,
+			"chandler":  true,
 			"chartroom": true,
+			"chatwoot":  true,
 			"foredeck":  true,
+			"listmonk":  true,
 			"logbook":   true,
+			"steward":   true,
 		}
 	}
 

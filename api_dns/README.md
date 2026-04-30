@@ -26,7 +26,7 @@ Configuration comes from the top-level `config/env` stack. Generate `.env` with 
 ## Optional env vars
 
 - `ACME_ENV` (`production` or `staging`, default: `production`)
-- `NAVIGATOR_PROXY_SERVICES` (comma-separated service types to proxy via Cloudflare; default: `chartroom,foredeck,logbook`)
+- `NAVIGATOR_PROXY_SERVICES` (comma-separated service types to proxy via Cloudflare; default: `bridge,chandler,chartroom,chatwoot,foredeck,listmonk,logbook,steward`)
 - `NAVIGATOR_CERT_ALLOWED_SUFFIXES` (comma-separated domain suffix allowlist; default: `BRAND_DOMAIN`)
 - `NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS` (default: `60`)
 - `NAVIGATOR_DNS_TTL_A_RECORD` / `NAVIGATOR_DNS_TTL_LB` (default: `60`)
