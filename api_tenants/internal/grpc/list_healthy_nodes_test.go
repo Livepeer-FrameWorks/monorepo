@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -56,6 +57,89 @@ func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []
 		"active",      // status (matches the healthWhere SQL filter applied by tests)
 		now,           // created_at
 		now,           // updated_at
+	}
+}
+
+func TestListHealthyNodesForDNS_ServiceAuthUsesAllActiveClusters(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+	svcType := "bridge"
+	serviceScope := `(?s)WHERE n\.cluster_id IN \(\s*SELECT c\.cluster_id FROM quartermaster\.infrastructure_clusters c\s*WHERE c\.is_active = true\s*\).*AND s\.type = \$1`
+
+	mock.ExpectQuery(serviceScope).
+		WithArgs(svcType).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	mock.ExpectQuery(serviceScope).
+		WithArgs(svcType, int32(300)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	mock.ExpectQuery(serviceScope).
+		WithArgs(svcType, int32(300)).
+		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "private-cluster", "node-1", "core", "1.2.3.4")...))
+
+	resp, err := server.ListHealthyNodesForDNS(ctx, &pb.ListHealthyNodesForDNSRequest{
+		ServiceType: &svcType,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetNodes()) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(resp.GetNodes()))
+	}
+	if got := resp.GetNodes()[0].GetClusterId(); got != "private-cluster" {
+		t.Fatalf("expected private-cluster, got %s", got)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestListHealthyNodesForDNS_AnonymousUsesPlatformOfficialClusters(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	svcType := "bridge"
+	publicScope := `(?s)WHERE n\.cluster_id IN \(\s*SELECT c\.cluster_id FROM quartermaster\.infrastructure_clusters c\s*WHERE c\.is_platform_official = true AND c\.is_active = true\s*\).*AND s\.type = \$1`
+
+	mock.ExpectQuery(publicScope).
+		WithArgs(svcType).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	mock.ExpectQuery(publicScope).
+		WithArgs(svcType, int32(300)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	mock.ExpectQuery(publicScope).
+		WithArgs(svcType, int32(300)).
+		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "platform-cluster", "node-1", "core", "1.2.3.4")...))
+
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+		ServiceType: &svcType,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetNodes()) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(resp.GetNodes()))
+	}
+	if got := resp.GetNodes()[0].GetClusterId(); got != "platform-cluster" {
+		t.Fatalf("expected platform-cluster, got %s", got)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
 

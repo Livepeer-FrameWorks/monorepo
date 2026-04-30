@@ -2569,7 +2569,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 			) OR c.owner_tenant_id = $1)
 		`
 		baseCountArgs = append(baseCountArgs, tenantID)
-	} else if middleware.IsServiceCall(ctx) {
+	} else if ctxkeys.GetAuthType(ctx) == "service" {
 		// Service-to-service calls (e.g. Navigator) see all active clusters.
 		baseWhere = `
 			WHERE c.is_active = true
@@ -3773,6 +3773,13 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 			)
 		`
 		baseArgs = append(baseArgs, tenantID)
+	} else if ctxkeys.GetAuthType(ctx) == "service" {
+		baseWhere = `
+			WHERE n.cluster_id IN (
+				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
+				WHERE c.is_active = true
+			)
+		`
 	} else {
 		baseWhere = `
 			WHERE n.cluster_id IN (
