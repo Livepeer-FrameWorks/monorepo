@@ -4,8 +4,21 @@
     name: "{{ redis_service_name }}"
     state: restarted
 
+- name: Set Redis bind addresses after restart
+  ansible.builtin.set_fact:
+    redis_bind_addresses: "{{ redis_bind_interface.split() }}"
+
+- name: Assert Redis bind addresses are configured after restart
+  ansible.builtin.assert:
+    that:
+      - redis_bind_addresses | length > 0
+    fail_msg: "Redis bind interface cannot be empty."
+
 - name: Wait for redis TCP listener after restart
   ansible.builtin.wait_for:
-    host: "{{ redis_bind_interface }}"
+    host: "{{ item }}"
     port: "{{ redis_port }}"
     timeout: 30
+  loop: "{{ redis_bind_addresses }}"
+  loop_control:
+    label: "{{ item }}:{{ redis_port }}"

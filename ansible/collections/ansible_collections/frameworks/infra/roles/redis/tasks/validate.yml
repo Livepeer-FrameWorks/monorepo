@@ -26,11 +26,33 @@
     fail_msg: >-
       Redis service not running; checked {{ redis_service_candidates | join(', ') }}.
 
+- name: Set Redis bind addresses
+  ansible.builtin.set_fact:
+    redis_bind_addresses: "{{ redis_bind_interface.split() }}"
+
+- name: Assert Redis bind addresses are configured
+  ansible.builtin.assert:
+    that:
+      - redis_bind_addresses | length > 0
+    fail_msg: "Redis bind interface cannot be empty."
+
+- name: Select Redis CLI ping host
+  ansible.builtin.set_fact:
+    redis_ping_host: >-
+      {{
+        '127.0.0.1' if '127.0.0.1' in redis_bind_addresses else
+        '::1' if '::1' in redis_bind_addresses else
+        redis_bind_addresses[0]
+      }}
+
 - name: Wait for TCP listener
   ansible.builtin.wait_for:
-    host: "{{ redis_bind_interface }}"
+    host: "{{ item }}"
     port: "{{ redis_port }}"
     timeout: 30
+  loop: "{{ redis_bind_addresses }}"
+  loop_control:
+    label: "{{ item }}:{{ redis_port }}"
 
 - name: Discover Redis CLI
   ansible.builtin.shell: |
@@ -44,7 +66,7 @@
 - name: PING via redis-cli (authed when password set)
   ansible.builtin.command:
     argv: >-
-      {{ [redis_cli_binary.stdout, '-h', redis_bind_interface, '-p', redis_port | string]
+      {{ [redis_cli_binary.stdout, '-h', redis_ping_host, '-p', redis_port | string]
          + (['-a', redis_password] if redis_password | length > 0 else [])
          + ['PING'] }}
   register: redis_ping
