@@ -857,7 +857,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		{
 			serviceID: "skipper",
 			want: map[string]string{
-				"GATEWAY_MCP_URL": "http://bridge.internal:18090/mcp",
+				"GATEWAY_MCP_URL": "http://bridge.internal:18000/mcp",
 			},
 			keys: []string{"DATABASE_URL", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "GATEWAY_PUBLIC_URL", "GATEWAY_MCP_URL", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
 		},

@@ -285,6 +285,18 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseApplications)
 			task.ClusterID = p.manifest.HostCluster(hostName)
 			task.DependsOn = coreDeps
+			if name == "skipper" {
+				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {
+					bridgeHosts := resolveHosts(bridge)
+					if len(bridgeHosts) > 1 {
+						for _, bridgeHost := range bridgeHosts {
+							task.DependsOn = append(task.DependsOn, "bridge@"+bridgeHost)
+						}
+					} else {
+						task.DependsOn = append(task.DependsOn, "bridge")
+					}
+				}
+			}
 			graph.AddTask(task)
 		}
 	}

@@ -282,3 +282,35 @@ func TestPlan_AllPhasesStillHaveCompleteDeps(t *testing.T) {
 		}
 	}
 }
+
+func TestPlan_SkipperDependsOnBridge(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core1": {ExternalIP: "10.0.0.1", WireguardIP: "10.88.0.2", Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Host: "core1"},
+			"bridge":        {Enabled: true, Host: "core1"},
+			"skipper":       {Enabled: true, Host: "core1"},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err != nil {
+		t.Fatalf("Plan(--only applications) failed: %v", err)
+	}
+
+	var skipper *Task
+	for _, task := range plan.AllTasks {
+		if task.Name == "skipper" {
+			skipper = task
+			break
+		}
+	}
+	if skipper == nil {
+		t.Fatal("expected skipper task")
+	}
+	if !slices.Contains(skipper.DependsOn, "bridge") {
+		t.Fatalf("expected skipper to depend on bridge, got %v", skipper.DependsOn)
+	}
+}

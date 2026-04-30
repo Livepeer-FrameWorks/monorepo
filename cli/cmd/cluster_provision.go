@@ -393,7 +393,7 @@ func collectRuntimeForReadinessOnly(_ *cobra.Command, manifest *inventory.Manife
 	// readiness recheck. Keep this separate from the provision runtimeData
 	// map so changes to one don't leak into the other.
 	data := map[string]any{}
-	if qmAddr, err := resolveServiceGRPCAddr(manifest, "quartermaster", 19002); err == nil {
+	if qmAddr, err := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); err == nil {
 		data["quartermaster_grpc_addr"] = qmAddr
 	}
 	cfg, err := fwcfg.Load()
@@ -420,6 +420,22 @@ func controlPlaneDetail(r readiness.Report) string {
 		return "1 warning — see Next"
 	}
 	return fmt.Sprintf("%d warnings — see Next", len(r.Warnings))
+}
+
+func defaultPort(serviceID string) int {
+	port, ok := servicedefs.DefaultPort(serviceID)
+	if !ok {
+		panic(fmt.Sprintf("missing default port for service %q", serviceID))
+	}
+	return port
+}
+
+func defaultGRPCPort(serviceID string) int {
+	port, ok := servicedefs.DefaultGRPCPort(serviceID)
+	if !ok {
+		panic(fmt.Sprintf("missing default gRPC port for service %q", serviceID))
+	}
+	return port
 }
 
 func adminDetail(exists bool, bootstrapEmail string) string {
@@ -622,7 +638,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				return fmt.Errorf("resolve system tenant: %w", idErr)
 			}
 			runtimeData["system_tenant_id"] = systemTenantID
-			if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", 19002); addrErr == nil {
+			if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); addrErr == nil {
 				runtimeData["quartermaster_grpc_addr"] = qmAddr
 			}
 
@@ -793,9 +809,9 @@ func buildControlPlaneReport(ctx context.Context, manifest *inventory.Manifest, 
 	// surfaces as a warning rather than degrading silently to Checked=false.
 	// validateControlPlane treats len(Warnings)==0 as success, so silent
 	// resolution failures must not be possible during provisioning.
-	qm, qmErr := serviceEndpointFor(ctx, manifest, sess, "quartermaster", 19002, caPEM)
-	commodore, commodoreErr := serviceEndpointFor(ctx, manifest, sess, "commodore", 19001, caPEM)
-	purser, purserErr := serviceEndpointFor(ctx, manifest, sess, "purser", 19003, caPEM)
+	qm, qmErr := serviceEndpointFor(ctx, manifest, sess, "quartermaster", defaultGRPCPort("quartermaster"), caPEM)
+	commodore, commodoreErr := serviceEndpointFor(ctx, manifest, sess, "commodore", defaultGRPCPort("commodore"), caPEM)
+	purser, purserErr := serviceEndpointFor(ctx, manifest, sess, "purser", defaultGRPCPort("purser"), caPEM)
 
 	report := readiness.ControlPlaneReadiness(ctx, readiness.ControlPlaneInputs{
 		SystemTenantID:   systemTenantID,
@@ -1127,7 +1143,7 @@ func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData m
 		return "", "", fmt.Errorf("quartermaster host not found in manifest")
 	}
 
-	grpcPort := 19002
+	grpcPort := defaultGRPCPort("quartermaster")
 	if qmSvc.GRPCPort != 0 {
 		grpcPort = qmSvc.GRPCPort
 	}
@@ -1885,10 +1901,10 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			}
 		}
 		if hasPKI {
-			config.Metadata["navigator_http_url"] = "https://navigator.internal:18010"
+			config.Metadata["navigator_http_url"] = fmt.Sprintf("https://navigator.internal:%d", defaultPort("navigator"))
 			config.Metadata["navigator_http_ca_file"] = "/etc/frameworks/pki/ca.crt"
 		} else {
-			config.Metadata["navigator_http_url"] = "http://navigator:18010"
+			config.Metadata["navigator_http_url"] = fmt.Sprintf("http://navigator:%d", defaultPort("navigator"))
 		}
 		if serviceToken, ok := runtimeData["service_token"].(string); ok && serviceToken != "" {
 			config.Metadata["service_token"] = serviceToken
@@ -1957,7 +1973,7 @@ func quartermasterMeshGRPCAddr(manifest *inventory.Manifest) string {
 	}
 	port := svc.GRPCPort
 	if port == 0 {
-		port = 19002
+		port = defaultGRPCPort("quartermaster")
 	}
 	return fmt.Sprintf("%s:%d", addr, port)
 }
@@ -3184,7 +3200,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// Service-specific required env vars
 	baseName := task.ServiceID
 	if baseName == "foghorn" {
-		env["FOGHORN_CONTROL_BIND_ADDR"] = ":18019"
+		env["FOGHORN_CONTROL_BIND_ADDR"] = fmt.Sprintf(":%d", defaultGRPCPort("foghorn"))
 		// Wire REDIS_URL from the foghorn Redis instance for HA state sync
 		if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
 			env["REDIS_URL"] = fmt.Sprintf("redis://%s", addr)
@@ -3203,14 +3219,14 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 	if baseName == "navigator" {
-		env["NAVIGATOR_PORT"] = "18010"
-		env["NAVIGATOR_GRPC_PORT"] = "18011"
+		env["NAVIGATOR_PORT"] = strconv.Itoa(defaultPort("navigator"))
+		env["NAVIGATOR_GRPC_PORT"] = strconv.Itoa(defaultGRPCPort("navigator"))
 	}
 	if baseName == "bridge" {
 		if skipper, ok := manifest.Services["skipper"]; ok && skipper.Enabled {
 			port := skipper.Port
 			if port == 0 {
-				port = 18018
+				port = defaultPort("skipper")
 			}
 			env["SKIPPER_SPOKE_URL"] = fmt.Sprintf("http://skipper.internal:%d/mcp/spoke", port)
 		}
@@ -3219,7 +3235,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if bridge, ok := manifest.Services["bridge"]; ok && bridge.Enabled {
 			port := bridge.Port
 			if port == 0 {
-				port = 18090
+				port = defaultPort("bridge")
 			}
 			env["GATEWAY_MCP_URL"] = fmt.Sprintf("http://bridge.internal:%d/mcp", port)
 		}
@@ -3233,7 +3249,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if baseName == "privateer" {
 		if navSvc, ok := manifest.Services["navigator"]; ok && navSvc.Enabled {
 			if navHost := manifestMeshHostname(manifest, navSvc.Host); navHost != "" && env["NAVIGATOR_GRPC_ADDR"] == "" {
-				env["NAVIGATOR_GRPC_ADDR"] = fmt.Sprintf("%s:18011", navHost)
+				env["NAVIGATOR_GRPC_ADDR"] = fmt.Sprintf("%s:%d", navHost, defaultGRPCPort("navigator"))
 			}
 		}
 	}

@@ -53,7 +53,7 @@ func quartermasterDialEndpoint(
 	if err != nil {
 		return "", "", "", false, err
 	}
-	addr, name, ins, err := resolveServiceDial(ctx, manifest, sess, "quartermaster", 19002)
+	addr, name, ins, err := resolveServiceDial(ctx, manifest, sess, "quartermaster", defaultGRPCPort("quartermaster"))
 	if err != nil {
 		return "", "", "", false, err
 	}
